@@ -5,31 +5,22 @@ using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.Tests;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
 
 public sealed class ProfilesSectionViewModelTests : IDisposable
 {
-    private readonly string _tempDir;
-
-    public ProfilesSectionViewModelTests()
-    {
-        _tempDir = Path.Join(
-            Path.GetTempPath(),
-            "TypeWhisper.Linux.Tests_" + Guid.NewGuid().ToString("N")
-        );
-        Directory.CreateDirectory(_tempDir);
-    }
+    private readonly string _tempDir = TestPaths.CreateTempDirectory(
+        "TypeWhisper.ProfilesSectionViewModelTests"
+    );
 
     public void Dispose()
     {
         try
         {
-            if (Directory.Exists(_tempDir))
-            {
-                Directory.Delete(_tempDir, true);
-            }
+            TestPaths.DeleteDirectory(_tempDir);
         }
         catch
         {
@@ -235,7 +226,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         return activeWindow;
     }
 
-    private static PluginManager CreatePluginManager()
+    private PluginManager CreatePluginManager()
     {
         var activeWindow = new Mock<IActiveWindowService>();
         var profiles = new Mock<IProfileService>();
@@ -244,11 +235,12 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         profiles.SetupGet(p => p.Profiles).Returns([]);
 
         return new PluginManager(
-            new PluginLoader(),
+            new PluginLoader(Path.Join(_tempDir, "PluginData")),
             new PluginEventBus(),
             activeWindow.Object,
             profiles.Object,
-            settings.Object
+            settings.Object,
+            []
         );
     }
 }

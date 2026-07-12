@@ -3,6 +3,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.Tests;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -16,15 +17,16 @@ public sealed class PluginHostServicesTests : IDisposable
     public PluginHostServicesTests()
     {
         _profiles.Setup(p => p.Profiles).Returns(new List<Profile>());
-        _tempDir = Path.Join(Path.GetTempPath(), $"tw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
+        _tempDir = TestPaths.CreateTempDirectory(
+            "TypeWhisper.PluginHostServicesTests"
+        );
     }
 
     public void Dispose()
     {
         try
         {
-            Directory.Delete(_tempDir, true);
+            TestPaths.DeleteDirectory(_tempDir);
         }
         catch
         {
@@ -92,7 +94,32 @@ public sealed class PluginHostServicesTests : IDisposable
         Assert.Empty(services.Localization.AvailableLanguages);
     }
 
-    private PluginHostServices CreateServices(Action? onCapabilitiesChanged = null)
+    [Fact]
+    public void PluginDataDirectory_UsesInjectedRoot()
+    {
+        var services = CreateServices();
+
+        var directory = services.PluginDataDirectory;
+
+        Assert.Equal(Path.Join(_tempDir, "PluginData", "test-plugin"), directory);
+        Assert.True(Directory.Exists(directory));
+    }
+
+    [Fact]
+    public void PluginAssetDirectory_WithSettingsAndNoCustomPath_UsesInjectedRoot()
+    {
+        var settings = new Mock<ISettingsService>();
+        settings.Setup(s => s.Current).Returns(new AppSettings());
+        var services = CreateServices(settings: settings.Object);
+
+        Assert.Equal(services.PluginDataDirectory, services.PluginAssetDirectory);
+        Assert.StartsWith(Path.Join(_tempDir, "PluginData"), services.PluginAssetDirectory);
+    }
+
+    private PluginHostServices CreateServices(
+        Action? onCapabilitiesChanged = null,
+        ISettingsService? settings = null
+    )
     {
         return new PluginHostServices(
             "test-plugin",
@@ -100,7 +127,9 @@ public sealed class PluginHostServicesTests : IDisposable
             _activeWindow.Object,
             _eventBus.Object,
             _profiles.Object,
-            onCapabilitiesChanged: onCapabilitiesChanged
+            settings,
+            onCapabilitiesChanged,
+            pluginDataRoot: Path.Join(_tempDir, "PluginData")
         );
     }
 }

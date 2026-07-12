@@ -23,7 +23,11 @@ public static class LocalModelStoragePaths
     /// <summary>
     /// Resolves the active plugin asset directory for large model and runtime files.
     /// </summary>
-    public static string ResolvePluginAssetDirectory(AppSettings? settings, string? pluginId)
+    public static string ResolvePluginAssetDirectory(
+        AppSettings? settings,
+        string? pluginId,
+        string? defaultPluginDataPath = null
+    )
     {
         // Reject (rather than silently strip) path separators: stripping would map
         // distinct IDs like "com/test/id" and "id" onto the same directory and risk
@@ -41,7 +45,10 @@ public static class LocalModelStoragePaths
         if (settings is null
             || AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is null)
         {
-            return Path.Join(TypeWhisperEnvironment.PluginDataPath, safePluginId);
+            return Path.Join(
+                defaultPluginDataPath ?? TypeWhisperEnvironment.PluginDataPath,
+                safePluginId
+            );
         }
 
         return Path.Join(

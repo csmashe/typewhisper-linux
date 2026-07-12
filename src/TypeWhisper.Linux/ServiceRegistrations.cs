@@ -64,7 +64,7 @@ internal static class ServiceRegistrations
 
         // Plugin subsystem
         services.AddSingleton<PluginEventBus>();
-        services.AddSingleton<PluginLoader>();
+        services.AddSingleton(new PluginLoader(TypeWhisperEnvironment.PluginDataPath));
         services.AddSingleton<PluginManager>();
         services.AddSingleton<PluginRegistryService>();
         services.AddSingleton<ModelManagerService>();
@@ -107,7 +107,9 @@ internal static class ServiceRegistrations
         services.AddSingleton<AudioFileService>();
         services.AddSingleton<IFileTranscriptionProcessor, FileTranscriptionProcessor>();
         services.AddSingleton<AudioPlaybackService>();
-        services.AddSingleton<SessionAudioFileService>();
+        services.AddSingleton(
+            new SessionAudioFileService(TypeWhisperEnvironment.AudioPath)
+        );
         services.AddSingleton<SoundFeedbackService>();
         services.AddSingleton<SpeechFeedbackService>();
         // The concrete backends are intentionally NOT registered: BackendSelector

@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
-using TypeWhisper.Core;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -72,7 +71,14 @@ public sealed class PluginLoader
 
     private readonly List<PluginLoadFailure> _lastLoadFailures = [];
 
+    public PluginLoader(string pluginDataRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pluginDataRoot);
+        PluginDataRoot = Path.GetFullPath(pluginDataRoot);
+    }
+
     public IReadOnlyList<PluginLoadFailure> LastLoadFailures => _lastLoadFailures;
+    internal string PluginDataRoot { get; }
 
     public List<LoadedPlugin> DiscoverAndLoad(IEnumerable<string> searchDirectories)
     {
@@ -221,7 +227,7 @@ public sealed class PluginLoader
         if (instance is IPluginDataLocationAware dataLocationAware)
         {
             dataLocationAware.SetDataDirectory(
-                Path.Join(TypeWhisperEnvironment.PluginDataPath, manifest.Id)
+                Path.Join(PluginDataRoot, manifest.Id)
             );
         }
 

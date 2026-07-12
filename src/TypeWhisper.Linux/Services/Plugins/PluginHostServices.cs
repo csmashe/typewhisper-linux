@@ -27,6 +27,7 @@ public sealed class PluginHostServices : IPluginHostServices
     private readonly PluginLocalization _localization;
     private readonly Action? _onCapabilitiesChanged;
     private readonly string _pluginDataDirectory;
+    private readonly string _pluginDataRoot;
     private readonly ISettingsService? _settings;
     private readonly IErrorLogService? _errorLog;
     private readonly string _pluginErrorCategory;
@@ -49,7 +50,8 @@ public sealed class PluginHostServices : IPluginHostServices
         Action? onCapabilitiesChanged = null,
         IErrorLogService? errorLog = null,
         string? errorCategory = null,
-        string? pluginDisplayName = null
+        string? pluginDisplayName = null,
+        string? pluginDataRoot = null
     )
     {
         _pluginId = pluginId;
@@ -63,7 +65,8 @@ public sealed class PluginHostServices : IPluginHostServices
         _pluginErrorCategory = string.IsNullOrWhiteSpace(errorCategory) ? ErrorCategory.Plugin : errorCategory;
         _pluginDisplayName = string.IsNullOrWhiteSpace(pluginDisplayName) ? pluginId : pluginDisplayName;
         _localization = new PluginLocalization(pluginDirectory);
-        _pluginDataDirectory = Path.Join(TypeWhisperEnvironment.PluginDataPath, pluginId);
+        _pluginDataRoot = pluginDataRoot ?? TypeWhisperEnvironment.PluginDataPath;
+        _pluginDataDirectory = Path.Join(_pluginDataRoot, pluginId);
         _settingsFilePath = Path.Join(_pluginDataDirectory, "settings.json");
     }
 
@@ -85,7 +88,11 @@ public sealed class PluginHostServices : IPluginHostServices
         {
             return _settings is null
                 ? PluginDataDirectory
-                : LocalModelStorageService.ResolveAvailablePluginAssetDirectory(_settings.Current, _pluginId);
+                : LocalModelStorageService.ResolveAvailablePluginAssetDirectory(
+                    _settings.Current,
+                    _pluginId,
+                    _pluginDataRoot
+                );
         }
     }
 

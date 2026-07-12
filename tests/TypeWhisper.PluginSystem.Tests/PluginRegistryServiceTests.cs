@@ -5,6 +5,7 @@ using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Tests;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -12,13 +13,18 @@ public sealed class PluginRegistryServiceTests : IDisposable
 {
     private readonly Mock<IActiveWindowService> _activeWindow = new();
     private readonly PluginEventBus _eventBus = new();
-    private readonly PluginLoader _loader = new();
+    private readonly PluginLoader _loader;
     private readonly Mock<IProfileService> _profiles = new();
     private readonly Mock<ISettingsService> _settings = new();
+    private readonly string _tempRoot;
     private PluginManager? _manager;
 
     public PluginRegistryServiceTests()
     {
+        _tempRoot = TestPaths.CreateTempDirectory(
+            "TypeWhisper.PluginSystem.PluginRegistryServiceTests"
+        );
+        _loader = new PluginLoader(Path.Join(_tempRoot, "PluginData"));
         _profiles.Setup(p => p.Profiles).Returns(new List<Profile>());
         _settings.Setup(s => s.Current).Returns(new AppSettings());
     }
@@ -26,6 +32,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
     public void Dispose()
     {
         _manager?.Dispose();
+        TestPaths.DeleteDirectory(_tempRoot);
     }
 
     [Fact]
@@ -222,7 +229,8 @@ public sealed class PluginRegistryServiceTests : IDisposable
             _eventBus,
             _activeWindow.Object,
             _profiles.Object,
-            _settings.Object
+            _settings.Object,
+            []
         );
         return _manager;
     }

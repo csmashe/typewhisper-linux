@@ -5,6 +5,7 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.Tests;
 
 namespace TypeWhisper.Linux.Tests;
 
@@ -23,11 +24,12 @@ internal static class TestPluginManagerFactory
         profiles.SetupGet(service => service.Profiles).Returns([]);
 
         var pluginManager = new PluginManager(
-            new PluginLoader(),
+            new PluginLoader(TestPaths.NewTempPath("TypeWhisper.TestPluginManager.PluginData")),
             new PluginEventBus(),
             activeWindow.Object,
             profiles.Object,
-            settings.Object
+            settings.Object,
+            []
         );
 
         if (llmProviders is not null)

@@ -50,4 +50,8 @@
         <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj"/>
         <ProjectReference Include="..\..\src\TypeWhisper.Linux\TypeWhisper.Linux.csproj"/>
     </ItemGroup>
+
+    <ItemGroup>
+        <Compile Include="../TestPaths.cs" Link="TestPaths.cs"/>
+    </ItemGroup>
 </Project>

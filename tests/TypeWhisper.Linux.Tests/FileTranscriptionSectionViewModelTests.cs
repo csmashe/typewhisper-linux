@@ -1,23 +1,22 @@
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.Tests;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
 
 public sealed class FileTranscriptionSectionViewModelTests : IDisposable
 {
-    private readonly string _tempDir =
-        Path.Join(Path.GetTempPath(), "TypeWhisper.FileQueue.Tests_" + Guid.NewGuid().ToString("N"));
-
-    public FileTranscriptionSectionViewModelTests() => Directory.CreateDirectory(_tempDir);
+    private readonly string _tempDir = TestPaths.CreateTempDirectory(
+        "TypeWhisper.FileTranscriptionSectionViewModelTests"
+    );
 
     public void Dispose()
     {
         try
         {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
+            TestPaths.DeleteDirectory(_tempDir);
         }
         catch
         {
@@ -71,7 +70,7 @@ public sealed class FileTranscriptionSectionViewModelTests : IDisposable
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         var commands = new SystemCommandAvailabilityService();
         var audioFiles = new AudioFileService(commands);
-        var watchFolder = new WatchFolderService();
+        var watchFolder = new WatchFolderService(Path.Join(_tempDir, "watch-folder-data"));
         return new FileTranscriptionSectionViewModel(new StubProcessor(), settings, audioFiles, watchFolder);
     }
 

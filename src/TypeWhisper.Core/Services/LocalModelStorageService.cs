@@ -59,9 +59,14 @@ public sealed class LocalModelStorageService
     /// <summary>
     /// Resolves and validates the active plugin asset directory.
     /// </summary>
-    public static string ResolveAvailablePluginAssetDirectory(AppSettings? settings, string pluginId)
+    public static string ResolveAvailablePluginAssetDirectory(
+        AppSettings? settings,
+        string pluginId,
+        string? defaultPluginDataPath = null
+    )
     {
-        var directory = LocalModelStoragePaths.ResolvePluginAssetDirectory(settings, pluginId);
+        var directory =
+            LocalModelStoragePaths.ResolvePluginAssetDirectory(settings, pluginId, defaultPluginDataPath);
         if (settings is null
             || AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is null)
         {

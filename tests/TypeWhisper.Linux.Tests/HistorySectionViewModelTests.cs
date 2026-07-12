@@ -4,31 +4,22 @@ using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.Tests;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
 
 public sealed class HistorySectionViewModelTests : IDisposable
 {
-    private readonly string _tempDir;
-
-    public HistorySectionViewModelTests()
-    {
-        _tempDir = Path.Join(
-            Path.GetTempPath(),
-            "TypeWhisper.History.Tests_" + Guid.NewGuid().ToString("N")
-        );
-        Directory.CreateDirectory(_tempDir);
-    }
+    private readonly string _tempDir = TestPaths.CreateTempDirectory(
+        "TypeWhisper.HistorySectionViewModelTests"
+    );
 
     public void Dispose()
     {
         try
         {
-            if (Directory.Exists(_tempDir))
-            {
-                Directory.Delete(_tempDir, true);
-            }
+            TestPaths.DeleteDirectory(_tempDir);
         }
         catch
         {
@@ -150,7 +141,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
             history,
             dictionary,
             settings ?? CreateSettingsService(),
-            new SessionAudioFileService(),
+            new SessionAudioFileService(Path.Join(_tempDir, "audio")),
             // AudioPlaybackService opens audio hardware in its constructor — not
             // available in CI. GetUninitializedObject bypasses the constructor so
             // tests that never trigger audio playback don't fail on device init.

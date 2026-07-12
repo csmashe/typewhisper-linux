@@ -4,6 +4,7 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.Tests;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -11,7 +12,7 @@ public sealed class PluginManagerTests : IDisposable
 {
     private readonly Mock<IActiveWindowService> _activeWindow = new();
     private readonly PluginEventBus _eventBus = new();
-    private readonly PluginLoader _loader = new();
+    private readonly PluginLoader _loader;
     private readonly string _pluginSearchDir;
     private readonly Mock<IProfileService> _profiles = new();
     private readonly Mock<ISettingsService> _settings = new();
@@ -19,11 +20,10 @@ public sealed class PluginManagerTests : IDisposable
 
     public PluginManagerTests()
     {
-        _pluginSearchDir = Path.Join(
-            Path.GetTempPath(),
-            "TypeWhisper.PluginManagerTests_" + Guid.NewGuid().ToString("N")
+        _pluginSearchDir = TestPaths.CreateTempDirectory(
+            "TypeWhisper.PluginManagerTests"
         );
-        Directory.CreateDirectory(_pluginSearchDir);
+        _loader = new PluginLoader(Path.Join(_pluginSearchDir, "PluginData"));
         _profiles.Setup(p => p.Profiles).Returns(new List<Profile>());
         _settings.Setup(s => s.Current).Returns(new AppSettings());
     }
@@ -33,10 +33,7 @@ public sealed class PluginManagerTests : IDisposable
         _manager?.Dispose();
         try
         {
-            if (Directory.Exists(_pluginSearchDir))
-            {
-                Directory.Delete(_pluginSearchDir, true);
-            }
+            TestPaths.DeleteDirectory(_pluginSearchDir);
         }
         catch
         {
@@ -212,11 +209,12 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
         mockPlugin.Setup(p => p.SupportedModels).Returns(new List<PluginModelInfo>());
 
         _manager = new PluginManager(
-            new PluginLoader(),
+            new PluginLoader(TestPaths.NewTempPath("TypeWhisper.PluginManagerData")),
             _eventBus,
             _activeWindow.Object,
             _profiles.Object,
-            _settings.Object
+            _settings.Object,
+            []
         );
 
         Assert.False(_manager.IsEnabled("com.test.fake"));
@@ -234,11 +232,12 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
             .Callback<AppSettings>(s => savedSettings = s);
 
         _manager = new PluginManager(
-            new PluginLoader(),
+            new PluginLoader(TestPaths.NewTempPath("TypeWhisper.PluginManagerData")),
             _eventBus,
             _activeWindow.Object,
             _profiles.Object,
-            _settings.Object
+            _settings.Object,
+            []
         );
 
         await _manager.DisablePluginAsync("com.test.notfound");

@@ -6,6 +6,7 @@ using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.Tests;
 // ReSharper disable PropertyCanBeMadeInitOnly.Local
 
 namespace TypeWhisper.PluginSystem.Tests;
@@ -14,7 +15,9 @@ public class ModelManagerServiceTests
 {
     private readonly Mock<IActiveWindowService> _activeWindow = new();
     private readonly PluginEventBus _eventBus = new();
-    private readonly PluginLoader _loader = new();
+    private readonly PluginLoader _loader = new(
+        TestPaths.NewTempPath("TypeWhisper.ModelManagerServiceTests.PluginData")
+    );
     private readonly Mock<IProfileService> _profiles = new();
     private readonly Mock<ISettingsService> _settings = new();
 

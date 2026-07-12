@@ -1479,16 +1479,18 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
             }
 
             // Mirror the real client: a successful bootstrap primes the focus state.
-            if (BootstrapResult is { } seeded)
+            if (BootstrapResult is not { } seeded)
             {
-                CurrentFocusedElement = seeded;
-                if (!RecentFocusedElements.Contains(seeded))
-                {
-                    RecentFocusedElements.Insert(0, seeded);
-                }
+                return Task.FromResult(BootstrapResult);
             }
 
-            return Task.FromResult(BootstrapResult);
+            CurrentFocusedElement = seeded;
+            if (!RecentFocusedElements.Contains(seeded))
+            {
+                RecentFocusedElements.Insert(0, seeded);
+            }
+
+            return Task.FromResult<AtSpiElementRef?>(seeded);
         }
 
         public Task<string?> TryReadTextAsync(AtSpiElementRef element, int maxLength)

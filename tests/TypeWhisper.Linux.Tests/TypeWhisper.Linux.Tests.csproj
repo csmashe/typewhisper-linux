@@ -18,4 +18,8 @@
     <ItemGroup>
         <ProjectReference Include="..\..\src\TypeWhisper.Linux\TypeWhisper.Linux.csproj"/>
     </ItemGroup>
+
+    <ItemGroup>
+        <Compile Include="../TestPaths.cs" Link="TestPaths.cs"/>
+    </ItemGroup>
 </Project>

@@ -537,7 +537,8 @@ public sealed class PluginManager : IDisposable
                 },
                 _errorLog,
                 ResolveErrorCategory(plugin),
-                plugin.Manifest.Name
+                plugin.Manifest.Name,
+                _loader.PluginDataRoot
             );
 
             await plugin.Instance.ActivateAsync(hostServices);

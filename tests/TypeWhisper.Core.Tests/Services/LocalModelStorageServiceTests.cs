@@ -1,23 +1,22 @@
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Tests;
 
 namespace TypeWhisper.Core.Tests.Services;
 
 /// <summary>Covers <see cref="LocalModelStorageService" /> and path resolution: custom-path normalization, asset migration, and reset.</summary>
 public sealed class LocalModelStorageServiceTests : IDisposable
 {
-    private readonly string _tempRoot =
-        Path.Join(Path.GetTempPath(), $"tw-storage-test-{Guid.NewGuid():N}");
-
-    public LocalModelStorageServiceTests() => Directory.CreateDirectory(_tempRoot);
+    private readonly string _tempRoot = TestPaths.CreateTempDirectory(
+        "TypeWhisper.LocalModelStorageServiceTests"
+    );
 
     public void Dispose()
     {
         try
         {
-            if (Directory.Exists(_tempRoot))
-                Directory.Delete(_tempRoot, recursive: true);
+            TestPaths.DeleteDirectory(_tempRoot);
         }
         catch (IOException)
         {
@@ -41,14 +40,19 @@ public sealed class LocalModelStorageServiceTests : IDisposable
     }
 
     [Fact]
-    public void ResolvePluginAssetDirectory_NoCustomPath_UsesPluginDataPath()
+    public void ResolvePluginAssetDirectory_NoCustomPath_UsesProvidedPluginDataPath()
     {
         var settings = new AppSettings { LocalModelStoragePath = null };
+        var pluginDataPath = Path.Join(_tempRoot, "PluginData");
 
-        var resolved = LocalModelStoragePaths.ResolvePluginAssetDirectory(settings, "com.typewhisper.whisper-cpp");
+        var resolved = LocalModelStoragePaths.ResolvePluginAssetDirectory(
+            settings,
+            "com.typewhisper.whisper-cpp",
+            pluginDataPath
+        );
 
         Assert.Equal(
-            Path.Join(TypeWhisperEnvironment.PluginDataPath, "com.typewhisper.whisper-cpp"),
+            Path.Join(pluginDataPath, "com.typewhisper.whisper-cpp"),
             resolved);
     }
 
