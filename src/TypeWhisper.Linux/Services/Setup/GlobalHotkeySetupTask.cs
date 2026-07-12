@@ -153,6 +153,14 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         var install = await _accessHelper.InstallAsync(ct).ConfigureAwait(false);
         if (!install.Success)
         {
+            // A refusal (foreign file / symlink at our path) must NOT hand the user
+            // the manual command aimed at the file the guard protected — surface the
+            // refusal's own message + detail (they say to move/rename it) instead.
+            if (install.Refused)
+            {
+                return new SetupActionOutcome(false, install.Message, install.Detail);
+            }
+
             return new SetupActionOutcome(
                 false,
                 install.Cancelled

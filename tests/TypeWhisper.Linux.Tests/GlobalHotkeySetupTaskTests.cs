@@ -54,7 +54,10 @@ public sealed class GlobalHotkeySetupTaskTests
         // `input`-group join. (A non-logind usermod fallback follows, but guarded
         // so logind users pasting the block never actually join the group.)
         Assert.Equal(InputAccessSetupHelper.ManualInstallCommand(), state.CopyCommand);
-        Assert.StartsWith("sudo tee", state.CopyCommand!);
+        // The write is fronted by a privileged guard block, so pasting it never
+        // follows a symlink or truncates foreign config at our path.
+        Assert.StartsWith("sudo sh -c", state.CopyCommand!);
+        Assert.Contains(InputAccessSetupHelper.UdevRulePath, state.CopyCommand!);
         Assert.Contains("uaccess", state.CopyCommand!);
     }
 
