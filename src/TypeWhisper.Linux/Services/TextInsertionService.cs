@@ -256,32 +256,44 @@ public sealed class TextInsertionService
         // step (after the paste) misses it every time and waits out the full timeout.
         var pasteWatch = _pasteConfirmation?.BeginWatch();
 
-        if (!await TrySendPasteAsync())
+        // Until the watch is handed to RestorePreviousClipboardAsync (which owns its disposal),
+        // any throw from the paste/enter path must still release the AT-SPI subscription.
+        var watchHandedOff = false;
+        try
         {
-            pasteWatch?.Dispose();
-
-            // Prefer the platform's diagnostic (e.g. "compositor unsupported")
-            // over the generic retries-exhausted reason.
-            if (LastFailureReason == InsertionFailureReason.None)
+            if (!await TrySendPasteAsync())
             {
-                LastFailureReason = InsertionFailureReason.PasteRetriesExhausted;
+                // Prefer the platform's diagnostic (e.g. "compositor unsupported")
+                // over the generic retries-exhausted reason.
+                if (LastFailureReason == InsertionFailureReason.None)
+                {
+                    LastFailureReason = InsertionFailureReason.PasteRetriesExhausted;
+                }
+
+                LogInsertionFallback(
+                    "Auto paste fell back to clipboard: Ctrl+V could not be sent after retries."
+                );
+                return InsertionResult.CopiedToClipboard;
             }
 
-            LogInsertionFallback(
-                "Auto paste fell back to clipboard: Ctrl+V could not be sent after retries."
-            );
-            return InsertionResult.CopiedToClipboard;
-        }
+            if (autoEnter && !await _platform.SendEnterAsync())
+            {
+                LogInsertionFallback("Auto paste sent Ctrl+V, but Enter could not be sent.");
+            }
 
-        if (autoEnter && !await _platform.SendEnterAsync())
+            // Awaited inline (not fire-and-forget) so rapid consecutive dictations stay
+            // serialized: the next insertion's clipboard snapshot must not race this restore.
+            watchHandedOff = true;
+            await RestorePreviousClipboardAsync(text, previousClipboard, pasteWatch);
+            return InsertionResult.Pasted;
+        }
+        finally
         {
-            LogInsertionFallback("Auto paste sent Ctrl+V, but Enter could not be sent.");
+            if (!watchHandedOff)
+            {
+                pasteWatch?.Dispose();
+            }
         }
-
-        // Awaited inline (not fire-and-forget) so rapid consecutive dictations stay
-        // serialized: the next insertion's clipboard snapshot must not race this restore.
-        await RestorePreviousClipboardAsync(text, previousClipboard, pasteWatch);
-        return InsertionResult.Pasted;
     }
 
     /// <summary>

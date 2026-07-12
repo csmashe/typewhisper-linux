@@ -8,49 +8,6 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class LearnedCorrectionsFeedbackPresenterTests
 {
-    // Captures the presenter's scheduled auto-hide so a test can fire it deterministically
-    // instead of waiting real seconds. Re-arming disposes the prior handle (Fired flips false),
-    // mirroring how a re-armed DispatcherTimer supersedes the last one.
-    private sealed class FakeScheduler
-    {
-        private ScheduledDelay? _pending;
-
-        public TimeSpan? LastDelay => _pending?.Delay;
-
-        public IDisposable Schedule(TimeSpan delay, Action callback)
-        {
-            var entry = new ScheduledDelay(delay, callback);
-            _pending = entry;
-            return entry;
-        }
-
-        // Fires the currently pending (un-disposed) delay, if any.
-        public void FirePending()
-        {
-            _pending?.Fire();
-        }
-
-        private sealed class ScheduledDelay(TimeSpan delay, Action callback) : IDisposable
-        {
-            private bool _cancelled;
-
-            public TimeSpan Delay { get; } = delay;
-
-            public void Fire()
-            {
-                if (!_cancelled)
-                {
-                    callback();
-                }
-            }
-
-            public void Dispose()
-            {
-                _cancelled = true;
-            }
-        }
-    }
-
     private static (LearnedCorrectionsFeedbackPresenter Presenter, Mock<IDictionaryService> Dictionary,
         FakeScheduler Scheduler, List<LearnedCorrectionsFeedback> Emitted) CreateSut()
     {

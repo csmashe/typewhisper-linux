@@ -365,7 +365,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             {
                 outcome = await RegisterTextChangedAsync(conn).ConfigureAwait(false)
                     ? true
-                    : (bool?)null;
+                    : null;
             }
             else if (await DeregisterTextChangedAsync(conn).ConfigureAwait(false))
             {

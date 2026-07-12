@@ -885,50 +885,52 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
 
             var batch = new List<CorrectionSuggestion>();
             foreach (var suggestion in suggestions)
-            // De-fuse any edit already learned this session from the genuinely new one (see
-            // SplitAtLearnedWords) before applying the gates below.
-            foreach (var (original, replacement) in SplitAtLearnedWords(
-                         suggestion,
-                         state.LearnedByOriginal
-                     ))
             {
-                // Silent auto-learn holds a higher bar than the review-first history flow: only
-                // persist when the replacement is a plausible recognition/spelling fix of the
-                // original. CorrectionSuggestionService only rejects majority rewrites once the
-                // total token count exceeds 3, so without this a short "call mom" -> "email dad"
-                // change of intent would be silently learned as a correction.
-                if (!IsLikelyRecognitionFix(original, replacement))
+                // De-fuse any edit already learned this session from the genuinely new one (see
+                // SplitAtLearnedWords) before applying the gates below.
+                foreach (var (original, replacement) in SplitAtLearnedWords(
+                             suggestion,
+                             state.LearnedByOriginal
+                         ))
                 {
-                    // Redact the raw strings: they can contain sensitive target-app text.
-                    Trace.WriteLine(
-                        "[TargetAppLearning] Rejected low-similarity edit (likely a change of intent)."
-                    );
-                    continue;
-                }
-
-                if (state.LearnedByOriginal.TryGetValue(original, out var previous))
-                {
-                    // Identical to what we already learned this session — skip so a non-final
-                    // idle commit followed by an identical final commit doesn't inflate
-                    // TimesCorrected.
-                    if (string.Equals(previous.Replacement, replacement, StringComparison.Ordinal))
+                    // Silent auto-learn holds a higher bar than the review-first history flow: only
+                    // persist when the replacement is a plausible recognition/spelling fix of the
+                    // original. CorrectionSuggestionService only rejects majority rewrites once the
+                    // total token count exceeds 3, so without this a short "call mom" -> "email dad"
+                    // change of intent would be silently learned as a correction.
+                    if (!IsLikelyRecognitionFix(original, replacement))
                     {
-                        continue;
-                    }
-
-                    // The user kept typing words after the correction was already complete, so
-                    // the diff now appends them to the replacement (e.g. "Kubernetes" then
-                    // "Kubernetes now"). Keep the earlier, correct value rather than widen it.
-                    if (IsWidening(previous.Replacement, replacement))
-                    {
+                        // Redact the raw strings: they can contain sensitive target-app text.
                         Trace.WriteLine(
-                            "[TargetAppLearning] Ignoring widened replacement (kept earlier value)."
+                            "[TargetAppLearning] Rejected low-similarity edit (likely a change of intent)."
                         );
                         continue;
                     }
-                }
 
-                batch.Add(new CorrectionSuggestion(original, replacement));
+                    if (state.LearnedByOriginal.TryGetValue(original, out var previous))
+                    {
+                        // Identical to what we already learned this session — skip so a non-final
+                        // idle commit followed by an identical final commit doesn't inflate
+                        // TimesCorrected.
+                        if (string.Equals(previous.Replacement, replacement, StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
+
+                        // The user kept typing words after the correction was already complete, so
+                        // the diff now appends them to the replacement (e.g. "Kubernetes" then
+                        // "Kubernetes now"). Keep the earlier, correct value rather than widen it.
+                        if (IsWidening(previous.Replacement, replacement))
+                        {
+                            Trace.WriteLine(
+                                "[TargetAppLearning] Ignoring widened replacement (kept earlier value)."
+                            );
+                            continue;
+                        }
+                    }
+
+                    batch.Add(new CorrectionSuggestion(original, replacement));
+                }
             }
 
             if (batch.Count == 0)

@@ -271,42 +271,4 @@ public sealed class LearnedCorrectionsNotificationServiceTests : IDisposable
 
         public sealed record ShowCall(uint ReplacesId, string Summary, bool WithUndoAction, uint ResultId);
     }
-
-    // Captures the presenter's scheduled auto-hide (injected via the service) so a test can
-    // fire it deterministically instead of waiting real seconds. Mirrors the scheduler in
-    // LearnedCorrectionsFeedbackPresenterTests: re-arming disposes the prior handle.
-    private sealed class FakeScheduler
-    {
-        private ScheduledDelay? _pending;
-
-        public IDisposable Schedule(TimeSpan delay, Action callback)
-        {
-            var entry = new ScheduledDelay(callback);
-            _pending = entry;
-            return entry;
-        }
-
-        public void FirePending()
-        {
-            _pending?.Fire();
-        }
-
-        private sealed class ScheduledDelay(Action callback) : IDisposable
-        {
-            private bool _cancelled;
-
-            public void Fire()
-            {
-                if (!_cancelled)
-                {
-                    callback();
-                }
-            }
-
-            public void Dispose()
-            {
-                _cancelled = true;
-            }
-        }
-    }
 }
