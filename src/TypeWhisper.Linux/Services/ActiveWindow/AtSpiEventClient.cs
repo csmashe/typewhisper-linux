@@ -71,12 +71,38 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     // (ROLE_FRAME = 23) which shares the same AtspiRole enum.
     private const uint RolePasswordText = 40;
 
+    // AtspiStateType bit positions within GetState's first bitfield word. ACTIVE marks a
+    // toolkit's currently activated top-level window; FOCUSED the widget holding keyboard
+    // focus. FOCUSED is 12 — 11 is FOCUSABLE, a classic off-by-one when reading the enum.
+    private const int StateActiveBit = 1;
+    private const int StateFocusedBit = 12;
+
+    // Bounds for the cold-start focus bootstrap (TryBootstrapFocusAsync): how many top-level
+    // windows per application get a state probe, and the breadth-first budget inside an
+    // active window. Generous enough to reach a focused widget nested in structural panes
+    // (LibreOffice Writer's caret paragraph sits ~4 levels down) while keeping the one-off
+    // scan bounded against pathological trees.
+    private const int MaxBootstrapWindowsPerApp = 8;
+    private const int MaxBootstrapDepth = 10;
+    private const int MaxBootstrapNodesPerWindow = 250;
+
+    // How many FOCUSED elements one bootstrap seeds into the focus history. More than one
+    // matters: a structural node can hold FOCUSED without any Text interface (LibreOffice's
+    // document frame), so consumers need the sibling candidates too.
+    private const int MaxBootstrapSeeds = 4;
+
     // One-shot calls target arbitrary third-party apps, and a hung target (stopped process,
     // busy main loop) would otherwise pin the awaiting task forever — Tmds.DBus 0.92 applies
     // no timeout of its own — stalling the serialized commit chain with it. WaitAsync leaves
     // the pending reply entry behind until the reply or a disconnect arrives; that is
     // bounded and far preferable to an unbounded stall.
     private static readonly TimeSpan s_callTimeout = TimeSpan.FromSeconds(4);
+
+    // Hard ceiling on one cold-start focus walk. Every underlying call is already bounded by
+    // s_callTimeout, but a degraded tree with hundreds of slow-but-not-hung nodes could sum
+    // those per-call timeouts into minutes and stall the arm long after the correction happened.
+    // When it trips, the arm proceeds without focus and the next dictation retries.
+    private static readonly TimeSpan s_bootstrapDeadline = TimeSpan.FromSeconds(5);
 
     private static readonly MessageValueReader<string> s_readString =
         static (m, _) => m.GetBodyReader().ReadString();
@@ -86,6 +112,27 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     private static readonly MessageValueReader<uint> s_readUInt32 =
         static (m, _) => m.GetBodyReader().ReadUInt32();
+
+    // Reads Accessible.GetState's "au" reply — two 32-bit words of AtspiStateType bits. Only
+    // word 0 is needed (ACTIVE=1 and FOCUSED=12 both live there).
+    private static readonly MessageValueReader<uint> s_readStateSetWord0 =
+        static (m, _) =>
+        {
+            var reader = m.GetBodyReader();
+            var end = reader.ReadArrayStart(DBusType.UInt32);
+            uint word0 = 0;
+            var index = 0;
+            while (reader.HasNext(end))
+            {
+                var value = reader.ReadUInt32();
+                if (index++ == 0)
+                {
+                    word0 = value;
+                }
+            }
+
+            return word0;
+        };
 
     // GetExtents' reply body is a single D-Bus struct "(iiii)" = (x, y, width, height) in screen
     // pixels. AlignStruct() advances to the 8-byte struct boundary (a no-op when the struct leads
@@ -205,7 +252,23 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     // connection (unique names are never recycled within a bus lifetime). Behind _focusLock.
     private readonly HashSet<string> _pokedApps = [];
 
+    // Per-app poke tasks still running on the current connection, keyed by unique bus name, so
+    // a second concurrent sweep joins the in-flight work instead of treating a not-yet-unlocked
+    // app as done. Behind _focusLock; an entry moves to _pokedApps on success or is dropped on
+    // failure so a later arm retries it.
+    private readonly Dictionary<string, Task> _pokesInFlight = [];
+
     private AtSpiElementRef? _currentFocused;
+
+    // In-flight cold-start focus scan, so concurrent bootstrap callers share one walk
+    // instead of each traversing the bus. Behind _focusLock; cleared when the scan settles.
+    private Task<AtSpiElementRef?>? _focusBootstrap;
+
+    // Cancels the in-flight bootstrap: fires on its own deadline (s_bootstrapDeadline) and is
+    // tripped by StopAsync so a scan started on a now-dead connection cannot seed focus from it.
+    // Paired with _focusBootstrap and identity-checked so a settling old scan never clears a
+    // newer connection's slot. Behind _focusLock.
+    private CancellationTokenSource? _focusBootstrapCts;
     private DBusConnection? _connection;
     private bool _disposed;
     private bool _loggedUnavailable;
@@ -497,9 +560,17 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             {
                 _currentFocused = null;
                 _recentFocused.Clear();
+                // A scan still in flight ran against the dead connection; cancel it (so it can't
+                // seed focus from a torn-down element) and drop it so the next bootstrap on a
+                // fresh connection starts its own walk instead of joining it.
+                _focusBootstrapCts?.Cancel();
+                _focusBootstrap = null;
+                _focusBootstrapCts = null;
                 // Unique names may outlive our connection, but a fresh connection re-pokes
-                // cheaply and correctly (apps keep their unlocked state anyway).
+                // cheaply and correctly (apps keep their unlocked state anyway). In-flight pokes
+                // against the dead connection settle on their own; drop their bookkeeping.
                 _pokedApps.Clear();
+                _pokesInFlight.Clear();
             }
 
             // Deliberately NOT touching _textChangedRefCount: the registration dies with the
@@ -646,25 +717,51 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         {
             var apps = await GetChildrenAsync(conn, RegistryBusName, RegistryRootPath)
                 .ConfigureAwait(false);
+            var pokes = new List<Task>();
             foreach (var app in apps)
             {
-                bool alreadyPoked;
+                Task pokeTask;
                 lock (_focusLock)
                 {
-                    alreadyPoked = !_pokedApps.Add(app.BusName);
+                    // Bail if a reset swapped the connection out from under this sweep: StopAsync
+                    // clears _pokesInFlight under this same lock, so inserting here afterwards
+                    // would orphan an entry its connection-guarded finally then refuses to remove,
+                    // permanently blocking that app's poke on the fresh connection. This check and
+                    // the insert below share one lock acquisition, so they can't straddle a clear.
+                    if (!ReferenceEquals(_connection, conn))
+                    {
+                        break;
+                    }
+
+                    if (_pokedApps.Contains(app.BusName))
+                    {
+                        // Already unlocked on this connection; nothing left to wait for.
+                        continue;
+                    }
+
+                    // Launched concurrently per app: a hung target must not stall the others'
+                    // pokes. The first sweep to reach an app starts its poke; a concurrent sweep
+                    // joins that same in-flight task rather than skipping the app, so its WhenAll
+                    // can't return before the tree is actually unlocked. On failure the app is
+                    // dropped from both sets so a later arm retries it — a transient D-Bus error
+                    // must never leave an app permanently skipped with its tree still locked.
+                    if (!_pokesInFlight.TryGetValue(app.BusName, out var existing))
+                    {
+                        existing = PokeAppAndTrackAsync(conn, app);
+                        _pokesInFlight[app.BusName] = existing;
+                    }
+
+                    pokeTask = existing;
                 }
 
-                if (alreadyPoked)
-                {
-                    continue;
-                }
-
-                // Fire-and-forget per app: a hung target must not stall the sweep. The
-                // optimistic Add above dedupes concurrent sweeps; on failure we un-mark the
-                // app so a later arm retries it — a transient D-Bus error must never leave an
-                // app permanently skipped with its tree still locked.
-                _ = PokeAppAndTrackAsync(conn, app);
+                pokes.Add(pokeTask);
             }
+
+            // Awaited in aggregate (every underlying call is time-bounded) so this task's
+            // completion means the sweep is done — including in-flight pokes started by a
+            // concurrent sweep — before the cold-start focus bootstrap scans a first-contact
+            // app's freshly unlocked tree.
+            await Task.WhenAll(pokes).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -674,13 +771,354 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     private async Task PokeAppAndTrackAsync(DBusConnection conn, AtSpiElementRef appRoot)
     {
-        if (!await PokeAppAsync(conn, appRoot).ConfigureAwait(false))
+        // Force asynchronous completion so the caller's publish into _pokesInFlight lands
+        // BEFORE this task can finish: a poke that failed synchronously (connection
+        // disposed right after enumeration) would otherwise be stored already-completed, and
+        // later sweeps would join that dead task forever instead of retrying the still-locked
+        // tree. The finally then always clears the slot so a failure is retried.
+        await Task.Yield();
+        var poked = false;
+        try
+        {
+            poked = await PokeAppAsync(conn, appRoot).ConfigureAwait(false);
+        }
+        finally
         {
             lock (_focusLock)
             {
-                _pokedApps.Remove(appRoot.BusName);
+                // Only touch bookkeeping if this poke's connection is still current: a reset may
+                // have swapped connections (StopAsync already cleared both sets) and even
+                // re-added the same bus name for a fresh poke — removing or promoting that on the
+                // strength of this dead connection's work would let a cold sweep return before
+                // the new tree is unlocked.
+                if (ReferenceEquals(_connection, conn))
+                {
+                    // Leave the in-flight set the moment work finishes; promote to _pokedApps
+                    // only on success so a failure (transient D-Bus error, app gone) is retried
+                    // by a later arm rather than recorded as unlocked.
+                    _pokesInFlight.Remove(appRoot.BusName);
+                    if (poked)
+                    {
+                        _pokedApps.Add(appRoot.BusName);
+                    }
+                }
             }
         }
+    }
+
+    public Task<AtSpiElementRef?> TryBootstrapFocusAsync()
+    {
+        var conn = _connection;
+        if (conn is null)
+        {
+            return Task.FromResult<AtSpiElementRef?>(null);
+        }
+
+        lock (_focusLock)
+        {
+            if (_currentFocused is { } known)
+            {
+                // A real focus event has been seen; the event path is authoritative.
+                return Task.FromResult<AtSpiElementRef?>(known);
+            }
+
+            // Concurrent callers join the in-flight scan rather than each walking the bus.
+            if (_focusBootstrap is { } inFlight)
+            {
+                return inFlight;
+            }
+
+            var cts = new CancellationTokenSource(s_bootstrapDeadline);
+            _focusBootstrapCts = cts;
+            return _focusBootstrap = BootstrapFocusAsync(conn, cts);
+        }
+    }
+
+    // Background startup seed: poke first, THEN scan. A Chromium/Electron target that is already
+    // focused at connect exposes only a toplevel-window stub until poked, so scanning first would
+    // seed that stub as authoritative focus and the cold-start arm — seeing non-null focus —
+    // would take the warm path and never reveal the real editor. Poking before the walk lets it
+    // find the actual field. Fully background: connecting must stay fast, and the poke sweep
+    // joins any concurrent first-arm sweep rather than duplicating it.
+    private async Task SeedStartupFocusAsync()
+    {
+        try
+        {
+            await PokeAccessibilityTreesAsync().ConfigureAwait(false);
+            await TryBootstrapFocusAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[AtSpiEventClient] startup focus seed failed: {ex.Message}");
+        }
+    }
+
+    // Wrapper that guarantees the in-flight-scan slot is cleared once the scan settles. The
+    // leading Yield forces asynchronous completion so a synchronously-failing scan can't run
+    // its finally BEFORE the caller's slot assignment lands — that would cache a settled task
+    // forever and disable every future bootstrap on this connection.
+    private async Task<AtSpiElementRef?> BootstrapFocusAsync(DBusConnection conn, CancellationTokenSource cts)
+    {
+        await Task.Yield();
+        try
+        {
+            // A real focus event that landed while the walk ran is authoritative — prefer it
+            // over the walk's own (possibly empty) result rather than reporting no focus.
+            return await ScanForFocusedElementAsync(conn, cts.Token).ConfigureAwait(false)
+                ?? CurrentFocusedElement;
+        }
+        catch (OperationCanceledException)
+        {
+            // The deadline tripped or StopAsync tore down the connection mid-scan; hand back any
+            // event-sourced focus that arrived meanwhile, else the next dictation retries.
+            Trace.WriteLine("[AtSpiEventClient] focus bootstrap cancelled before a FOCUSED element was found.");
+            return CurrentFocusedElement;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[AtSpiEventClient] focus bootstrap failed: {ex.Message}");
+            return CurrentFocusedElement;
+        }
+        finally
+        {
+            lock (_focusLock)
+            {
+                // Surrender the slot only if it is still ours: a StopAsync/reset (or a newer
+                // scan) may already have installed a different CTS, and clearing that would
+                // disable the live scan's dedup.
+                if (ReferenceEquals(_focusBootstrapCts, cts))
+                {
+                    _focusBootstrap = null;
+                    _focusBootstrapCts = null;
+                }
+            }
+
+            // Cancel before disposing: an early return (one app yielded focus while others were
+            // still probing) leaves those per-app tasks running, and Dispose alone would drop the
+            // deadline timer without signalling them — so they'd keep issuing timeout-bound D-Bus
+            // probes detached. Cancelling first lets the token bound them too. No-op if the scan
+            // already completed or StopAsync cancelled it.
+            await cts.CancelAsync().ConfigureAwait(false);
+            cts.Dispose();
+        }
+    }
+
+    // Locates the element currently holding keyboard focus by walking the a11y tree: find
+    // the application window carrying the ACTIVE state, then breadth-first-search its
+    // subtree for FOCUSED nodes. Only used when no state-changed:focused signal has been
+    // observed on this connection — AT-SPI has no "who has focus right now?" query. The walk
+    // itself also materializes lazily-built trees (Qt/KF6 creates accessibles on demand), so
+    // it doubles as the first-contact unlock for those apps. Collection.GetMatches could do
+    // this server-side in one call, but toolkit support for Collection is too patchy to rely
+    // on; the bounded walk works everywhere.
+    private async Task<AtSpiElementRef?> ScanForFocusedElementAsync(
+        DBusConnection conn,
+        CancellationToken ct
+    )
+    {
+        var apps = await GetChildrenAsync(conn, RegistryBusName, RegistryRootPath, ct)
+            .ConfigureAwait(false);
+
+        // Every app's active-window probe runs concurrently, and each result is walked the
+        // moment that app finishes — NOT after a barrier — so one hung bridge that eats the whole
+        // deadline can't keep the responsive app that actually holds the focus from being
+        // searched. Per-app failures resolve to empty lists (FindActiveWindowsAsync never throws).
+        var windowTasks = apps.Select(app => FindActiveWindowsAsync(conn, app, ct)).ToList();
+        while (windowTasks.Count > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            var done = await Task.WhenAny(windowTasks).ConfigureAwait(false);
+            windowTasks.Remove(done);
+
+            foreach (var window in done.Result)
+            {
+                var focused = await FindFocusedElementsAsync(conn, window, ct)
+                    .ConfigureAwait(false);
+                if (focused.Count == 0)
+                {
+                    continue;
+                }
+
+                // SeedFocus re-checks cancellation while holding _focusLock — the same lock
+                // StopAsync cancels under — so a reset racing this walk can't have its cleared
+                // focus repopulated with an element from the torn-down connection.
+                return SeedFocus(focused, ct);
+            }
+        }
+
+        Trace.WriteLine("[AtSpiEventClient] focus bootstrap found no FOCUSED element.");
+        return null;
+    }
+
+    // The top-level windows of one application that report the ACTIVE state (the window the
+    // compositor currently has activated). Never throws; a failing app yields none.
+    private static async Task<List<AtSpiElementRef>> FindActiveWindowsAsync(
+        DBusConnection conn,
+        AtSpiElementRef appRoot,
+        CancellationToken ct
+    )
+    {
+        var active = new List<AtSpiElementRef>();
+        List<AtSpiElementRef> windows;
+        try
+        {
+            windows = await GetChildrenAsync(conn, appRoot.BusName, appRoot.ObjectPath, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[AtSpiEventClient] bootstrap window enumeration of {appRoot.BusName} failed: {ex.Message}"
+            );
+            return active;
+        }
+
+        foreach (var window in windows.Take(MaxBootstrapWindowsPerApp))
+        {
+            if (ct.IsCancellationRequested)
+            {
+                break;
+            }
+
+            try
+            {
+                var states = await GetStateWord0Async(conn, window, ct).ConfigureAwait(false);
+                if (HasState(states, StateActiveBit))
+                {
+                    active.Add(window);
+                }
+            }
+            catch (Exception ex)
+            {
+                // One defunct window must not skip its siblings.
+                Trace.WriteLine(
+                    $"[AtSpiEventClient] bootstrap state read on {appRoot.BusName} failed: {ex.Message}"
+                );
+            }
+        }
+
+        return active;
+    }
+
+    // Bounded BFS below an active window collecting elements that carry FOCUSED. Collects up
+    // to MaxBootstrapSeeds rather than stopping at the first hit: a shallow hit can be a
+    // structural container with no readable text while the widget that matters sits deeper.
+    private static async Task<List<AtSpiElementRef>> FindFocusedElementsAsync(
+        DBusConnection conn,
+        AtSpiElementRef window,
+        CancellationToken ct
+    )
+    {
+        var found = new List<AtSpiElementRef>();
+        var queue = new Queue<(AtSpiElementRef Node, int Depth)>();
+        queue.Enqueue((window, 0));
+        var visited = 0;
+
+        while (
+            queue.Count > 0
+            && visited < MaxBootstrapNodesPerWindow
+            && found.Count < MaxBootstrapSeeds
+            && !ct.IsCancellationRequested
+        )
+        {
+            var (node, depth) = queue.Dequeue();
+            visited++;
+            try
+            {
+                var states = await GetStateWord0Async(conn, node, ct).ConfigureAwait(false);
+                if (HasState(states, StateFocusedBit))
+                {
+                    found.Add(node);
+                }
+
+                // Stop descending once the seed cap is hit (or the depth limit): otherwise this
+                // node's children fetch still runs before the while-condition re-checks, and a
+                // hung leaf there could burn the deadline and make SeedFocus discard the
+                // already-complete result as cancelled.
+                if (found.Count >= MaxBootstrapSeeds || depth >= MaxBootstrapDepth)
+                {
+                    continue;
+                }
+
+                foreach (
+                    var child in await GetChildrenAsync(conn, node.BusName, node.ObjectPath, ct)
+                        .ConfigureAwait(false)
+                )
+                {
+                    queue.Enqueue((child, depth + 1));
+                }
+            }
+            catch (Exception ex)
+            {
+                // A defunct node aborts only its own subtree, not the walk.
+                Trace.WriteLine($"[AtSpiEventClient] bootstrap walk step failed: {ex.Message}");
+            }
+        }
+
+        return found;
+    }
+
+    // Installs the bootstrap result exactly as the focus signal handler would have — unless a
+    // real event arrived mid-scan (the event is fresher; keep it). The deepest match becomes
+    // current (BFS order is shallow-first, and the deepest FOCUSED node is the widget
+    // itself); every match lands in the recent history so consumers' candidate fallback can
+    // probe the one with readable text. FocusChanged is deliberately NOT raised: this
+    // reconstructs state a missed past event should have left behind — focus didn't move now.
+    private AtSpiElementRef SeedFocus(List<AtSpiElementRef> found, CancellationToken ct)
+    {
+        lock (_focusLock)
+        {
+            // Atomic with StopAsync's cancel+clear (both under _focusLock): if a reset already
+            // won the lock, bail instead of seeding an element from the dead connection.
+            ct.ThrowIfCancellationRequested();
+
+            if (_currentFocused is { } raced)
+            {
+                return raced;
+            }
+
+            foreach (var element in found)
+            {
+                _recentFocused.Remove(element);
+                _recentFocused.Insert(0, element);
+            }
+
+            while (_recentFocused.Count > RecentFocusCapacity)
+            {
+                _recentFocused.RemoveAt(RecentFocusCapacity);
+            }
+
+            _currentFocused = found[^1];
+            return found[^1];
+        }
+    }
+
+    private static async Task<uint> GetStateWord0Async(
+        DBusConnection conn,
+        AtSpiElementRef element,
+        CancellationToken ct = default
+    )
+    {
+        MessageBuffer message;
+        using (var writer = conn.GetMessageWriter())
+        {
+            writer.WriteMethodCallHeader(
+                destination: element.BusName,
+                path: element.ObjectPath,
+                @interface: AccessibleInterface,
+                member: "GetState"
+            );
+            message = writer.CreateMessage();
+        }
+
+        return await conn.CallMethodAsync(message, s_readStateSetWord0)
+            .WaitAsync(s_callTimeout, ct)
+            .ConfigureAwait(false);
+    }
+
+    private static bool HasState(uint stateWord0, int bit)
+    {
+        return (stateWord0 & (1u << bit)) != 0;
     }
 
     // Chromium/Electron apps join the a11y bus (when org.a11y.Status.IsEnabled was true at
@@ -761,7 +1199,8 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     private static async Task<List<AtSpiElementRef>> GetChildrenAsync(
         DBusConnection conn,
         string busName,
-        string objectPath
+        string objectPath,
+        CancellationToken ct = default
     )
     {
         MessageBuffer message;
@@ -777,7 +1216,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
 
         return await conn.CallMethodAsync(message, s_readElementRefArray)
-            .WaitAsync(s_callTimeout)
+            .WaitAsync(s_callTimeout, ct)
             .ConfigureAwait(false);
     }
 
@@ -868,6 +1307,12 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             // Fresh connection: re-arm the one-reset-per-connection guard so a later
             // disconnect of THIS connection schedules its own reconnect.
             Interlocked.Exchange(ref _resetScheduled, 0);
+
+            // The listener only observes focus changes from here on — AT-SPI replays
+            // nothing — so the field the user is ALREADY in would stay unknown until they
+            // refocus something. Seed it in the background; connecting must stay fast, and
+            // a cold-start arm additionally awaits its own bootstrap if this hasn't landed.
+            _ = SeedStartupFocusAsync();
 
             return true;
         }

@@ -63,6 +63,59 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Arm_WithNoFocusEventSeen_BootstrapsFocusAndStillLearns()
+    {
+        // Cold start: the user focused the field before the AT-SPI client connected, so no
+        // focus event was ever observed. The arm must bootstrap the focused element instead
+        // of silently skipping (the "first dictation is a dud" bug).
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = null, BootstrapResult = s_field
+        };
+        using var service = CreateService(client, enabled: true);
+
+        client.TextToReturn = "I deployed to kubernets today";
+        await service.ArmAsync("I deployed to kubernets today");
+        Assert.Equal(1, client.BootstrapCalls);
+
+        client.TextToReturn = "I deployed to Kubernetes today";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherAppField);
+        await AwaitCommit(service);
+
+        var correction = Assert.Single(_dictionary.GetCorrections());
+        Assert.Equal("kubernets", correction.Original);
+        Assert.Equal("Kubernetes", correction.Replacement);
+    }
+
+    [Fact]
+    public async Task Arm_WhenBootstrapFindsNothing_SkipsWithoutArming()
+    {
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = null };
+        using var service = CreateService(client, enabled: true);
+
+        await service.ArmAsync("hello world");
+
+        Assert.Equal(1, client.BootstrapCalls);
+        // Nothing armed: no text-changed lease was taken and no baseline read happened.
+        Assert.Equal(0, client.AcquireCount);
+        Assert.Equal(0, client.TextReadCalls);
+    }
+
+    [Fact]
+    public async Task Arm_WithKnownFocusedElement_DoesNotBootstrap()
+    {
+        // Warm path: a focus event has been seen, so the arm must not pay for a scan.
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(client, enabled: true);
+
+        client.TextToReturn = "hello world";
+        await service.ArmAsync("hello world");
+
+        Assert.Equal(0, client.BootstrapCalls);
+    }
+
+    [Fact]
     public async Task Arm_ThenFocusOutCommit_ReleasesTextChangedLease()
     {
         // The text-changed registration is what floods the a11y bus, so it must be held only
@@ -1411,6 +1464,31 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         {
             PokeCalls++;
             return Task.CompletedTask;
+        }
+
+        // What a cold-start bootstrap scan "finds"; null models a scan that located nothing.
+        public AtSpiElementRef? BootstrapResult { get; init; }
+        public int BootstrapCalls { get; private set; }
+
+        public Task<AtSpiElementRef?> TryBootstrapFocusAsync()
+        {
+            BootstrapCalls++;
+            if (CurrentFocusedElement is { } known)
+            {
+                return Task.FromResult<AtSpiElementRef?>(known);
+            }
+
+            // Mirror the real client: a successful bootstrap primes the focus state.
+            if (BootstrapResult is { } seeded)
+            {
+                CurrentFocusedElement = seeded;
+                if (!RecentFocusedElements.Contains(seeded))
+                {
+                    RecentFocusedElements.Insert(0, seeded);
+                }
+            }
+
+            return Task.FromResult(BootstrapResult);
         }
 
         public Task<string?> TryReadTextAsync(AtSpiElementRef element, int maxLength)

@@ -1792,6 +1792,11 @@ public sealed class TextInsertionServiceTests
             return Task.CompletedTask;
         }
 
+        public Task<AtSpiElementRef?> TryBootstrapFocusAsync()
+        {
+            return Task.FromResult<AtSpiElementRef?>(null);
+        }
+
         public bool HasTextChangedSubscribers => TextChanged is not null;
 
         // Total AcquireTextChangedEvents calls and how many leases remain undisposed. The paste

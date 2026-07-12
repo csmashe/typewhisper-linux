@@ -61,6 +61,12 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
     // the field (Wayland can return from the injection tool before the app has applied it).
     private static readonly TimeSpan s_defaultBaselineRetryDelay = TimeSpan.FromMilliseconds(150);
 
+    // How long a cold-start arm waits for the first-contact poke sweep before bootstrapping
+    // focus. The sweep normally finishes in milliseconds; this only caps the wait when some
+    // app on the bus is hung (its calls each time out) — proceeding without its unlock is
+    // better than stalling the arm. Not a test seam: fakes complete the sweep synchronously.
+    private static readonly TimeSpan s_coldStartPokeWait = TimeSpan.FromSeconds(2);
+
     private readonly IAtSpiEventClient _client;
     private readonly IDictionaryService _dictionary;
     private readonly IErrorLogService _errorLog;
@@ -90,7 +96,11 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
     private bool _disposed;
     private Timer? _idleTimer;
     private bool _initialized;
-    private bool _loggedSkip;
+
+    // Skip reasons already surfaced to the error log — once per distinct reason, so the
+    // cold-start "no focused element" message isn't swallowed by an earlier "AT-SPI
+    // unavailable" entry (or vice versa). Guarded by _gate.
+    private readonly HashSet<string> _loggedSkips = new(StringComparer.Ordinal);
     private bool _subscribed;
     private Timer? _timeoutTimer;
 
@@ -238,17 +248,44 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
 
         // Unlock any Chromium/Electron app that joined the a11y bus since the client started
         // (their tree stays a stub until poked — see PokeAccessibilityTreesAsync). Runs after
-        // the opt-out re-check above so a disable mid-connect stops this cross-app sweep, but
-        // before the focused-element check below so a late app that exposes no focused node
-        // yet — the bootstrap case this sweep exists for — is still unlocked for its next arm.
-        // Fire-and-forget: the unlock takes effect for the NEXT dictation into that app;
-        // holding this arm for it would delay every arm for a rare first-contact case.
-        _ = _client.PokeAccessibilityTreesAsync();
+        // the opt-out re-check above so a disable mid-connect stops this cross-app sweep. Not
+        // awaited on the warm path — holding every arm for a rare first-contact case would
+        // delay all of them; the cold-start branch below waits for it, bounded, where the
+        // unlock actually matters.
+        var pokeSweep = _client.PokeAccessibilityTreesAsync();
 
         var focused = _client.CurrentFocusedElement;
+        if (focused is null)
+        {
+            // Cold start: no focus event has been observed on this connection — the user
+            // focused the field BEFORE the client's listener existed (first dictation after
+            // launch, or after a bus reset) and AT-SPI never replays it, so waiting cannot
+            // recover. Without this branch that first dictation is a silent dud. Give the
+            // first-contact sweep a bounded window to unlock lazily-built trees (Qt/KF6,
+            // Chromium expose stubs until touched), then actively scan for the FOCUSED
+            // element.
+            await Task.WhenAny(pokeSweep, Task.Delay(s_coldStartPokeWait)).ConfigureAwait(false);
+            if (IsOptedOut())
+            {
+                DisarmIfCurrent(armSequence);
+                return;
+            }
+
+            focused = await _client.TryBootstrapFocusAsync().ConfigureAwait(false);
+            if (IsOptedOut())
+            {
+                DisarmIfCurrent(armSequence);
+                return;
+            }
+        }
+
         if (focused is not { IsValid: true } element)
         {
-            Trace.WriteLine("[TargetAppLearning] No focused AT-SPI element to track; skipping.");
+            // Surfaced to the error log (once per reason): the user-visible symptom is just
+            // "nothing was learned", indistinguishable from every other silent skip without it.
+            LogSkipOnce(
+                "No focused element found on the accessibility bus; correction learning skipped this dictation."
+            );
             return;
         }
 
@@ -1107,12 +1144,14 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
     private void LogSkipOnce(string message)
     {
         Trace.WriteLine($"[TargetAppLearning] {message}");
-        if (_loggedSkip)
+        lock (_gate)
         {
-            return;
+            if (!_loggedSkips.Add(message))
+            {
+                return;
+            }
         }
 
-        _loggedSkip = true;
         _errorLog.AddEntry(message, ErrorCategory.Detection);
     }
 

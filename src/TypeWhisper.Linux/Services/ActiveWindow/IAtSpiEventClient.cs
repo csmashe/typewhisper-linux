@@ -115,7 +115,23 @@ public interface IAtSpiEventClient
     ///     expose only a stub tree until an assistive tool makes such a call — it is their
     ///     "someone is reading me" signal — so this unlocks their text for correction
     ///     learning. Harmless no-op for other toolkits; per-app failures are swallowed.
-    ///     No-op when the client is not connected.
+    ///     No-op when the client is not connected. The returned task completes when the
+    ///     whole sweep has finished (every underlying call is time-bounded), so a caller
+    ///     that needs the unlock NOW — the cold-start focus bootstrap — can await it.
     /// </summary>
     Task PokeAccessibilityTreesAsync();
+
+    /// <summary>
+    ///     Actively locates the element currently holding keyboard focus. The client only
+    ///     ever observes focus changes that happen AFTER its listener registered — AT-SPI
+    ///     replays nothing — so when the user focused the target field before the client
+    ///     connected, <see cref="CurrentFocusedElement" /> stays <c>null</c> and waiting
+    ///     cannot recover it. This scans the active window's subtree for the FOCUSED state,
+    ///     primes <see cref="CurrentFocusedElement" /> and the recent-focus history with
+    ///     what it finds, and returns the element. Returns the already-known element
+    ///     immediately when a focus event has been seen; <c>null</c> when nothing holds
+    ///     focus, the scan budget ran out, or the client is not connected. Bounded and
+    ///     best-effort; concurrent callers share one in-flight scan.
+    /// </summary>
+    Task<AtSpiElementRef?> TryBootstrapFocusAsync();
 }
