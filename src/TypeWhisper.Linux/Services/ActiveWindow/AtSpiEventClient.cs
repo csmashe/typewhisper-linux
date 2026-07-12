@@ -1234,6 +1234,14 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         "org.freedesktop.DBus.Error.Disconnected"
     ];
 
+    // at-spi2-core 2.52 (Ubuntu/Mint) answers a property Get for an interface the element does not
+    // implement with the *generic* error name and the literal text "Get failed", where 2.60
+    // (Fedora) answers InvalidArgs. Same meaning — "no Text interface here" — so match the name and
+    // the text together. Never match the bare name: org.freedesktop.DBus.Error.Failed is D-Bus's
+    // catch-all, and suppressing all of it would hide real faults.
+    private const string GenericErrorName = "org.freedesktop.DBus.Error.Failed";
+    private const string PropertyGetFailureText = "Get failed";
+
     // AT-SPI text reads run against whatever third-party app holds focus, so failure is expected,
     // not exceptional: terminals / TUIs / Claude Code don't implement org.a11y.atspi.Text, and an
     // accessible can vanish between the focus signal and the read. Tmds surfaces these as
@@ -1247,16 +1255,25 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             return true;
         }
 
-        if (ex is not DBusErrorReplyException)
+        return ex is DBusErrorReplyException && IsBenignReadErrorMessage(ex.Message);
+    }
+
+    // Split out as a pure string predicate so the classification is unit-testable: Tmds exposes no
+    // public way to construct a DBusErrorReplyException with a chosen error name.
+    internal static bool IsBenignReadErrorMessage(string message)
+    {
+        if (
+            Array.Exists(
+                s_benignReadErrorNames,
+                name => message.StartsWith(name, StringComparison.Ordinal)
+            )
+        )
         {
-            return false;
+            return true;
         }
 
-        var message = ex.Message;
-        return Array.Exists(
-            s_benignReadErrorNames,
-            name => message.StartsWith(name, StringComparison.Ordinal)
-        );
+        return message.StartsWith(GenericErrorName, StringComparison.Ordinal)
+            && message.Contains(PropertyGetFailureText, StringComparison.Ordinal);
     }
 
     private void LogOnce(string message)
