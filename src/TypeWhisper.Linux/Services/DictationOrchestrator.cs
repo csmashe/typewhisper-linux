@@ -1495,7 +1495,8 @@ public sealed class DictationOrchestrator : IDisposable
                     && !translate
                 )
                 {
-                    // Clean streaming result — skip the redundant batch call.
+                    // Streaming finalized cleanly within its deadlines — skip
+                    // the redundant batch call.
                     result = new PluginTranscriptionResult(
                         context.StreamingFinalText!,
                         languageHint,
@@ -1504,9 +1505,10 @@ public sealed class DictationOrchestrator : IDisposable
                 }
                 else
                 {
-                    // Streaming faulted or produced nothing — fall back to batch
-                    // on the captured WAV. The audio tap is non-destructive so
-                    // the WAV is complete regardless of streaming state.
+                    // Streaming faulted, timed out, or produced nothing — fall
+                    // back to batch on the captured WAV. The audio tap is
+                    // non-destructive so the WAV is complete regardless of
+                    // streaming state.
                     result = await plugin.TranscribeAsync(
                         wav,
                         languageHint,
@@ -3487,6 +3489,14 @@ public sealed class DictationOrchestrator : IDisposable
             try
             {
                 finalText = await coordinator.FinalizeAsync(ct);
+            }
+            catch (TimeoutException ex)
+            {
+                Trace.WriteLine(
+                    $"[Dictation] Streaming finalize deadline exhausted; "
+                    + $"using complete-WAV batch fallback: {ex.Message}"
+                );
+                finalizeThrew = true;
             }
             catch (Exception ex)
             {
