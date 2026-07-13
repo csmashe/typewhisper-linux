@@ -90,7 +90,7 @@ public sealed class DictationOrchestrator : IDisposable
     // both read the stale timestamp and both pass the gap check. DateTime can't
     // be volatile, so a lock is required.
     private readonly Lock _toggleDebounceLock = new();
-    private readonly SemaphoreSlim _toggleGate = new(1, 1);
+    private readonly DictationToggleGate _toggleGate = new();
     private readonly ITranslationService _translation;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
     private CancellationTokenSource? _activeDictationCts;
@@ -475,27 +475,31 @@ public sealed class DictationOrchestrator : IDisposable
 
         // If we're still recording, route through StopAsync with the cancel
         // flag set. StopAsync owns the toggle gate and the recording-cleanup
-        // ordering; piggy-backing on it keeps the lifecycle consistent.
+        // ordering; piggy-backing on it keeps the lifecycle consistent. Pass the
+        // cancel intent explicitly so a racing StartAsync that clears the shared
+        // _cancelRequested flag between here and the gate probe can't downgrade
+        // this discard to a normal save.
         if (_audio.IsRecording)
         {
             _cancelRequested = true;
-            await StopAsync();
+            await StopAsync(cancelRequested: true);
         }
     }
 
     public async Task<int> StartAsync(string? forcedProfileId = null)
     {
-        if (!await _toggleGate.WaitAsync(0))
+        if (!_toggleGate.TryBeginStartup(() => _cancelRequested = false))
         {
             return 0;
         }
 
-        int startedSessionId;
+        var startedSessionId = 0;
+        DictationDeferredStop pendingStop;
         try
         {
             if (_audio.IsRecording)
             {
-                return 0;
+                goto StartupComplete;
             }
 
             // Reject starts while the session is locked/inactive: the HTTP API and control socket
@@ -506,7 +510,7 @@ public sealed class DictationOrchestrator : IDisposable
             if (!_sessionActivityMonitor.IsInputAllowed)
             {
                 Trace.WriteLine("[Dictation] Start rejected: session locked or inactive.");
-                return 0;
+                goto StartupComplete;
             }
 
             _audio.WhisperModeEnabled = _settings.Current.WhisperModeEnabled;
@@ -525,7 +529,7 @@ public sealed class DictationOrchestrator : IDisposable
                 var message = BuildRecordingStartFailureMessage(ex);
                 ReportStatus(message);
                 ShowFeedback(message, true);
-                return 0;
+                goto StartupComplete;
             }
 
             if (!_audio.IsRecording)
@@ -533,7 +537,7 @@ public sealed class DictationOrchestrator : IDisposable
                 var message = BuildRecordingStartFailureMessage(null);
                 ReportStatus(message);
                 ShowFeedback(message, true);
-                return 0;
+                goto StartupComplete;
             }
 
             // Set overlay to "Recording…" after the stream is confirmed open but
@@ -655,7 +659,6 @@ public sealed class DictationOrchestrator : IDisposable
             // Arm the per-dictation CTS after setup succeeds. CancelAsync uses
             // this to abort an in-flight pipeline; Escape is armed here so it
             // only fires while a dictation is live.
-            _cancelRequested = false;
             _activeDictationCts = new CancellationTokenSource();
             _hotkey.IsCancelShortcutEnabled = true;
 
@@ -903,13 +906,40 @@ public sealed class DictationOrchestrator : IDisposable
                 ClearSessionInFlight(startedSessionId);
                 startedSessionId = 0;
             }
+
+            // ReSharper disable once BadControlBracesIndent -- the `goto StartupComplete` label is deliberately deindented; the brace-indent nit is a byproduct of that layout.
+        StartupComplete:;
         }
         finally
         {
-            _toggleGate.Release();
+            pendingStop = _toggleGate.CompleteStartupAndRelease();
+        }
+
+        if (pendingStop.HasPendingStop)
+        {
+            await ForwardDeferredStopAsync(pendingStop);
         }
 
         return startedSessionId;
+    }
+
+    // Honors a stop queued while this startup held the gate. Restore _cancelRequested *before*
+    // re-acquiring so an ordinary stop that wins the release-window race still folds in the discard
+    // intent instead of saving audio the user canceled. If another startup holds the gate, the stop
+    // is re-queued (cancel intent intact) and that startup honors it.
+    private async Task ForwardDeferredStopAsync(DictationDeferredStop deferredStop)
+    {
+        if (deferredStop.WasCancel)
+        {
+            _cancelRequested = true;
+        }
+
+        if (_toggleGate.TryAcquireForStop(deferredStop.WasCancel) != DictationStopGateResult.Acquired)
+        {
+            return;
+        }
+
+        await StopWhileHoldingGateAsync().ConfigureAwait(false);
     }
 
     /// <summary>
@@ -985,11 +1015,27 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    public async Task StopAsync()
+    public Task StopAsync()
     {
-        if (!await _toggleGate.WaitAsync(0))
+        // External stops carry no cancel intent of their own; the private overload folds any
+        // in-flight discard in via _cancelRequested.
+        return StopAsync(cancelRequested: false);
+    }
+
+    private async Task StopAsync(bool cancelRequested)
+    {
+        // Fold both intent sources into the gate so a stop deferred behind an in-progress startup
+        // keeps its discard semantics even if a racing start clears the shared _cancelRequested flag.
+        var wasCancel = cancelRequested || _cancelRequested;
+        if (_toggleGate.TryAcquireForStop(wasCancel) != DictationStopGateResult.Acquired)
         {
             return;
+        }
+
+        // Owning the gate directly: make the shared flag agree with the intent so teardown discards.
+        if (wasCancel)
+        {
+            _cancelRequested = true;
         }
 
         await StopWhileHoldingGateAsync().ConfigureAwait(false);
