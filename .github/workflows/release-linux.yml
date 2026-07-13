@@ -56,6 +56,27 @@ jobs:
             exit 1
           fi
 
+          TAG_REF="refs/tags/$TAG"
+          REMOTE_TAG_REFS=$(git ls-remote origin "$TAG_REF" "${TAG_REF}^{}")
+          if [ -n "$REMOTE_TAG_REFS" ]; then
+            TAG_COMMIT=$(printf '%s\n' "$REMOTE_TAG_REFS" \
+              | awk -v ref="${TAG_REF}^{}" '$2 == ref { print $1; exit }')
+            if [ -z "$TAG_COMMIT" ]; then
+              TAG_COMMIT=$(printf '%s\n' "$REMOTE_TAG_REFS" \
+                | awk -v ref="$TAG_REF" '$2 == ref { print $1; exit }')
+            fi
+
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              echo "ERROR: remote tag '$TAG' points at $TAG_COMMIT, but this workflow is building $GITHUB_SHA." >&2
+              echo "Refusing to publish artifacts built from different source code." >&2
+              exit 1
+            fi
+
+            echo "Verified remote tag $TAG points at workflow commit $GITHUB_SHA."
+          else
+            echo "Remote tag $TAG does not exist; release creation will pin it to workflow commit $GITHUB_SHA."
+          fi
+
           IS_PRERELEASE="false"
           case "$VERSION" in
             *-*) IS_PRERELEASE="true" ;;
@@ -144,11 +165,59 @@ jobs:
 
           EXISTING_DRAFT=$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null || echo "")
 
+          # Re-checks the remote tag right before touching the release, closing the race with
+          # prepare's provenance gate. Mismatch -> exit (the only defence on create: gh silently
+          # ignores --target once the tag exists). Absent -> return 1: create paths pin the tag
+          # via --target, upload paths refuse. Also what makes --clobber safe below.
+          verify_remote_tag_matches_build() {
+            local tag_ref remote_tag_refs ls_remote_status tag_commit
+            tag_ref="refs/tags/$TAG"
+            remote_tag_refs=$(git ls-remote origin "$tag_ref" "${tag_ref}^{}")
+            ls_remote_status=$?
+            if [ "$ls_remote_status" -ne 0 ]; then
+              echo "ERROR: could not query remote tag '$TAG' (git ls-remote exited $ls_remote_status)." >&2
+              echo "Refusing to proceed unverified: a network/auth failure must not be read as an absent tag." >&2
+              exit 1
+            fi
+
+            if [ -z "$remote_tag_refs" ]; then
+              return 1
+            fi
+
+            tag_commit=$(printf '%s\n' "$remote_tag_refs" \
+              | awk -v ref="${tag_ref}^{}" '$2 == ref { print $1; exit }')
+            if [ -z "$tag_commit" ]; then
+              tag_commit=$(printf '%s\n' "$remote_tag_refs" \
+                | awk -v ref="$tag_ref" '$2 == ref { print $1; exit }')
+            fi
+
+            if [ "$tag_commit" != "$GITHUB_SHA" ]; then
+              echo "ERROR: remote tag '$TAG' points at $tag_commit, but this workflow built $GITHUB_SHA." >&2
+              echo "Refusing to publish or replace release assets built from different source code." >&2
+              exit 1
+            fi
+
+            return 0
+          }
+
+          # A mismatch exits inside the function; the else branch only means the tag is absent.
+          if verify_remote_tag_matches_build; then
+            TAG_PRESENT="true"
+          else
+            TAG_PRESENT="false"
+          fi
+
           EDIT_ARGS=(--draft=false)
           CREATE_FLAGS=()
           if [ "$IS_PRERELEASE" = "true" ]; then
             EDIT_ARGS+=(--prerelease)
             CREATE_FLAGS+=(--prerelease)
+          fi
+
+          if { [ "$EXISTING_DRAFT" = "true" ] || [ "$EXISTING_DRAFT" = "false" ]; } && [ "$TAG_PRESENT" != "true" ]; then
+            echo "ERROR: release '$TAG' exists, but its remote tag does not." >&2
+            echo "Refusing to replace release assets without a tag pinned to $GITHUB_SHA." >&2
+            exit 1
           fi
 
           if [ "$EXISTING_DRAFT" = "true" ]; then
@@ -163,7 +232,7 @@ jobs:
             fi
           elif [ -f "$NOTES_FILE" ]; then
             echo "Using curated release notes from $NOTES_FILE"
-            CREATE_ARGS=("$TAG" release-assets/* --title "$TAG" --notes-file "$NOTES_FILE")
+            CREATE_ARGS=("$TAG" release-assets/* --title "$TAG" --notes-file "$NOTES_FILE" --target "$GITHUB_SHA")
             CREATE_ARGS+=("${CREATE_FLAGS[@]}")
             gh release create "${CREATE_ARGS[@]}"
           else
@@ -229,7 +298,7 @@ jobs:
               NOTES="Maintenance release ${TAG}"
             fi
 
-            CREATE_ARGS=("$TAG" release-assets/* --title "$TAG" --notes "$(printf '%b' "$NOTES")")
+            CREATE_ARGS=("$TAG" release-assets/* --title "$TAG" --notes "$(printf '%b' "$NOTES")" --target "$GITHUB_SHA")
             CREATE_ARGS+=("${CREATE_FLAGS[@]}")
             gh release create "${CREATE_ARGS[@]}"
           fi
