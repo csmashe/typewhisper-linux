@@ -55,6 +55,33 @@ internal sealed class ShortcutDispatcher
     }
 
     /// <summary>
+    ///     Clears physical key-down bookkeeping when an input source is detached without release
+    ///     transitions (e.g. session lock), and unconditionally requests a dictation discard: a
+    ///     Toggle (or short Hybrid tap) recording outlives its key press, so held-key state
+    ///     cannot tell whether one is active. Discard (not stop) so nothing is transcribed or
+    ///     typed into the lock screen; idempotent when nothing is recording.
+    /// </summary>
+    public void ResetState()
+    {
+        lock (_lock)
+        {
+            _profileDictationKeyDown.Clear();
+            _profileTextKeyDown.Clear();
+            _promptActionKeyDown.Clear();
+            _cancelKeyDown = false;
+            _copyLastKeyDown = false;
+            _dictationKeyDown = false;
+            _dictationKeyDownTime = default;
+            _promptKeyDown = false;
+            _recentKeyDown = false;
+            _transformSelectionKeyDown = false;
+        }
+
+        // Main and profile dictation share one recording session, so a single discard covers both.
+        Raise(DictationDiscardRequested, nameof(DictationDiscardRequested));
+    }
+
+    /// <summary>
     ///     Drives the state machine from a backend-neutral key event. Returns
     ///     silently if no shortcut set is currently registered.
     /// </summary>
@@ -79,6 +106,10 @@ internal sealed class ShortcutDispatcher
     public event Action? DictationToggleRequested;
     public event Action? DictationStartRequested;
     public event Action? DictationStopRequested;
+
+    // Raised only by ResetState on session-loss teardown: discard the recording without
+    // transcription or text insertion (distinct from the user-driven stop/cancel keys).
+    public event Action? DictationDiscardRequested;
     public event Action? PromptPaletteRequested;
     public event Action? TransformSelectionRequested;
     public event Action? RecentTranscriptionsRequested;

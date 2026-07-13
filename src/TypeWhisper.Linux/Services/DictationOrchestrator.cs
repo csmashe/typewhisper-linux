@@ -5,6 +5,7 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Models;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.Hotkey.Evdev;
 using TypeWhisper.Linux.Services.SpokenCommand;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -49,6 +50,10 @@ public sealed class DictationOrchestrator : IDisposable
     // deliberate tap-tap.
     private static readonly TimeSpan s_toggleDebounce = TimeSpan.FromMilliseconds(350);
 
+    // Bound the wait for the toggle gate during session-loss teardown so a stuck start/stop can't
+    // hang the lock handler; long enough to outlast a normal StartAsync's synchronous setup.
+    private static readonly TimeSpan s_sessionLossGateTimeout = TimeSpan.FromSeconds(5);
+
     private readonly ActiveWindowService _activeWindow;
     private readonly AudioRecordingService _audio;
     private readonly IAudioDuckingService _audioDucking;
@@ -72,6 +77,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly PromptProcessingService _promptProcessing;
     private readonly RecentTranscriptionsService _recentTranscriptions;
     private readonly Lock _recordingSessionLock = new();
+    private readonly ISessionActivityMonitor _sessionActivityMonitor;
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly ISettingsService _settings;
     private readonly ISnippetService _snippets;
@@ -92,9 +98,17 @@ public sealed class DictationOrchestrator : IDisposable
     // Cancels an in-flight spoken command (its LLM stream + typing). Distinct from
     // _activeDictationCts, which only covers the recording/transcription phase and is nulled once
     // recording stops — a command runs after that, so it needs its own Escape-reachable source.
+    // Holds the NEWEST command (what Escape targets); _activeCommandCtsSet holds them all.
     private CancellationTokenSource? _activeCommandCts;
+
+    // Guarded by itself. Two dictations stopped in quick succession can reach spoken-command
+    // processing concurrently; a session-loss discard must cancel all of them so an older command
+    // can never keep synthesizing selection-copy or streamed typing behind the lock screen.
+    private readonly HashSet<CancellationTokenSource> _activeCommandCtsSet = [];
     private EventHandler? _cancelHandler;
+    private EventHandler? _sessionActivityHandler;
     private volatile bool _cancelRequested;
+
     private bool _disposed;
     private EventHandler<string>? _hookFailedHandler;
     private bool _initialized;
@@ -120,6 +134,7 @@ public sealed class DictationOrchestrator : IDisposable
     private bool _silenceStopRequested;
     private EventHandler? _startHandler;
     private EventHandler? _stopHandler;
+    private EventHandler? _discardHandler;
     private StreamingTranscriptionCoordinator? _streamingCoordinator;
     private string? _streamingLanguageHint;
     private string? _streamingModelId;
@@ -156,7 +171,8 @@ public sealed class DictationOrchestrator : IDisposable
         SystemCommandAvailabilityService commands,
         TargetAppCorrectionLearningService targetAppLearning,
         IDetectionFailureTracker failureTracker,
-        IErrorLogService errorLog
+        IErrorLogService errorLog,
+        ISessionActivityMonitor sessionActivityMonitor
     )
     {
         _hotkey = hotkey;
@@ -187,6 +203,7 @@ public sealed class DictationOrchestrator : IDisposable
         _targetAppLearning = targetAppLearning;
         _failureTracker = failureTracker;
         _errorLog = errorLog;
+        _sessionActivityMonitor = sessionActivityMonitor;
     }
 
     public bool IsRecording => _audio.IsRecording;
@@ -239,6 +256,11 @@ public sealed class DictationOrchestrator : IDisposable
             _hotkey.DictationStopRequested -= _stopHandler;
         }
 
+        if (_discardHandler is not null)
+        {
+            _hotkey.DictationDiscardRequested -= _discardHandler;
+        }
+
         if (_cancelHandler is not null)
         {
             _hotkey.CancelRequested -= _cancelHandler;
@@ -247,6 +269,11 @@ public sealed class DictationOrchestrator : IDisposable
         if (_hookFailedHandler is not null)
         {
             _hotkey.HookFailed -= _hookFailedHandler;
+        }
+
+        if (_sessionActivityHandler is not null)
+        {
+            _sessionActivityMonitor.InputAllowedChanged -= _sessionActivityHandler;
         }
 
         // Stop any active recording and undo ducking/media-pause before teardown
@@ -337,9 +364,34 @@ public sealed class DictationOrchestrator : IDisposable
         // target field's focus before the user dictates into it.
         _targetAppLearning.Initialize();
 
+        // Arm the session-activity monitor so the StartAsync/insertion lock guards observe real
+        // lock state on every backend. The evdev backend also initializes it (idempotent), but on
+        // X11/SharpHook or Wayland-without-evdev nothing else would, leaving IsInputAllowed stuck
+        // at its default-true and the guards inert. Fire-and-forget: a slow/absent system bus must
+        // not block startup, and an absent logind just leaves the legacy input-allowed fallback.
+        FireAndLog(
+            () => _sessionActivityMonitor.InitializeAsync(CancellationToken.None),
+            nameof(ISessionActivityMonitor.InitializeAsync)
+        );
+
+        // Subscribe directly so a lock aborts an active recording on EVERY backend. The evdev
+        // backend raises DictationDiscardRequested on lock, but SharpHook (all X11 sessions and the
+        // Wayland fallback) does not; without this, a toggle recording started before the lock would
+        // keep capturing behind the lock screen because the start/insertion guards only block new work.
+        _sessionActivityHandler = (_, _) =>
+        {
+            if (!_sessionActivityMonitor.IsInputAllowed)
+            {
+                FireAndLog(AbortForSessionLossAsync, nameof(AbortForSessionLossAsync));
+            }
+        };
+        _sessionActivityMonitor.InputAllowedChanged += _sessionActivityHandler;
+
         _toggleHandler = (_, _) => FireAndLog(() => ToggleAsync(), nameof(ToggleAsync));
         _startHandler = (_, _) => FireAndLog(() => StartAsync(), nameof(StartAsync));
         _stopHandler = (_, _) => FireAndLog(StopAsync, nameof(StopAsync));
+        _discardHandler = (_, _) =>
+            FireAndLog(AbortForSessionLossAsync, nameof(AbortForSessionLossAsync));
         _cancelHandler = (_, _) => FireAndLog(CancelAsync, nameof(CancelAsync));
         _hookFailedHandler = (_, message) =>
         {
@@ -353,6 +405,7 @@ public sealed class DictationOrchestrator : IDisposable
         _hotkey.DictationToggleRequested += _toggleHandler;
         _hotkey.DictationStartRequested += _startHandler;
         _hotkey.DictationStopRequested += _stopHandler;
+        _hotkey.DictationDiscardRequested += _discardHandler;
         _hotkey.CancelRequested += _cancelHandler;
         _hotkey.HookFailed += _hookFailedHandler;
         try
@@ -364,13 +417,21 @@ public sealed class DictationOrchestrator : IDisposable
             _hotkey.DictationToggleRequested -= _toggleHandler;
             _hotkey.DictationStartRequested -= _startHandler;
             _hotkey.DictationStopRequested -= _stopHandler;
+            _hotkey.DictationDiscardRequested -= _discardHandler;
             _hotkey.CancelRequested -= _cancelHandler;
             _hotkey.HookFailed -= _hookFailedHandler;
+            if (_sessionActivityHandler is not null)
+            {
+                _sessionActivityMonitor.InputAllowedChanged -= _sessionActivityHandler;
+            }
+
             _toggleHandler = null;
             _startHandler = null;
             _stopHandler = null;
+            _discardHandler = null;
             _cancelHandler = null;
             _hookFailedHandler = null;
+            _sessionActivityHandler = null;
             throw;
         }
 
@@ -410,36 +471,7 @@ public sealed class DictationOrchestrator : IDisposable
     /// </summary>
     public async Task CancelAsync()
     {
-        // A spoken command runs after recording stops, so its cancellation source is separate from
-        // the recording CTS. Cancel it first so Escape aborts a long command mid-stream/typing.
-        var commandCts = _activeCommandCts;
-        if (commandCts is not null)
-        {
-            try
-            {
-                await commandCts.CancelAsync();
-            }
-            catch (ObjectDisposedException)
-            {
-                /* command already finished and disposed it */
-            }
-        }
-
-        // Cancel the in-flight async work first so a long-running TranscribeAsync
-        // or pipeline call begins unwinding immediately, even if we have to
-        // wait for the toggle gate below.
-        var cts = _activeDictationCts;
-        if (cts is not null)
-        {
-            try
-            {
-                await cts.CancelAsync();
-            }
-            catch (ObjectDisposedException)
-            {
-                /* StopAsync just disposed it — nothing to cancel. */
-            }
-        }
+        await CancelInFlightWorkAsync().ConfigureAwait(false);
 
         // If we're still recording, route through StopAsync with the cancel
         // flag set. StopAsync owns the toggle gate and the recording-cleanup
@@ -463,6 +495,17 @@ public sealed class DictationOrchestrator : IDisposable
         {
             if (_audio.IsRecording)
             {
+                return 0;
+            }
+
+            // Reject starts while the session is locked/inactive: the HTTP API and control socket
+            // call StartAsync directly, bypassing the hotkey path, and the discard event only
+            // aborts work already in flight. Checked under the gate so a concurrent session-loss
+            // discard (which holds the gate across its stop) can't slip its transition between
+            // this check and opening the microphone.
+            if (!_sessionActivityMonitor.IsInputAllowed)
+            {
+                Trace.WriteLine("[Dictation] Start rejected: session locked or inactive.");
                 return 0;
             }
 
@@ -818,6 +861,48 @@ public sealed class DictationOrchestrator : IDisposable
                 }
             });
             _recordingSnapshotTask = recordingSnapshotTask;
+
+            // Final in-gate re-check: a lock can land during the slow synchronous setup above, and
+            // while StartAsync holds the gate a concurrent session-loss discard times out and bails
+            // without stopping audio — so tear the just-started recording down here. Mirrors the
+            // full post-start-failure teardown so no streaming coordinator, live-frame sink,
+            // partial loop or late snapshot survives to send buffered audio or repopulate state.
+            if (!_sessionActivityMonitor.IsInputAllowed)
+            {
+                Trace.WriteLine("[Dictation] Session locked during start; rolling back recording.");
+                RollBackStartedRecording();
+                _ = await StopPartialTranscriptionSessionAsync();
+
+                StreamingTranscriptionCoordinator? rolledBackCoordinator;
+                CancellationTokenSource? rolledBackStartupCts;
+                lock (_recordingSessionLock)
+                {
+                    // Advance the generation so the background snapshot task drops its writes and
+                    // never publishes RecordingStartedEvent or restores stale profile fields.
+                    _recordingSession++;
+                    rolledBackCoordinator = _streamingCoordinator;
+                    rolledBackStartupCts = _streamingStartupCts;
+                    _streamingCoordinator = null;
+                    _streamingStartupCts = null;
+                    _streamingProviderId = null;
+                    _streamingModelId = null;
+                    _streamingLanguageHint = null;
+                }
+
+                _audio.LiveFrameSink = null;
+                _ = await TeardownStreamingSessionAsync(
+                    rolledBackCoordinator,
+                    rolledBackStartupCts,
+                    false,
+                    CancellationToken.None
+                );
+
+                _hotkey.IsCancelShortcutEnabled = false;
+                _activeDictationCts?.Dispose();
+                _activeDictationCts = null;
+                ClearSessionInFlight(startedSessionId);
+                startedSessionId = 0;
+            }
         }
         finally
         {
@@ -827,6 +912,79 @@ public sealed class DictationOrchestrator : IDisposable
         return startedSessionId;
     }
 
+    /// <summary>
+    ///     Discards any active recording because the login session became inactive/locked. Unlike
+    ///     <see cref="StopAsync" /> it forces the cancel/discard path so audio is dropped without
+    ///     transcription or text insertion — synthesized paste/type must not reach the lock screen.
+    /// </summary>
+    public async Task AbortForSessionLossAsync()
+    {
+        _cancelRequested = true;
+
+        // Cancel in-flight transcription / spoken command(s) / insertion first: the session can lock
+        // after StopAsync already stopped capture and released its gate, in which case the stop
+        // below is a no-op but a completed transcription could still type into the lock screen.
+        await CancelInFlightWorkAsync(cancelAllCommands: true).ConfigureAwait(false);
+
+        // Unlike StopAsync's non-blocking probe, block (bounded) for the gate so a discard isn't
+        // silently dropped while a start/stop is mid-flight. Keep the gate across the stop (rather
+        // than release/reacquire) so a concurrent start can't slip in and record behind the lock.
+        if (!await _toggleGate.WaitAsync(s_sessionLossGateTimeout).ConfigureAwait(false))
+        {
+            Trace.WriteLine("[Dictation] Session-loss discard timed out waiting for the toggle gate.");
+            return;
+        }
+
+        // _cancelRequested makes the stop discard the audio without transcription or insertion.
+        _cancelRequested = true;
+        await StopWhileHoldingGateAsync().ConfigureAwait(false);
+    }
+
+    // Cancels the spoken-command source(s) first (they run after recording stops) then the
+    // recording source, so a long-running command or transcription unwinds immediately.
+    // cancelAllCommands widens the scope from the newest command (Escape/IPC cancel) to all of them.
+    private async Task CancelInFlightWorkAsync(bool cancelAllCommands = false)
+    {
+        CancellationTokenSource[] commandSources;
+        if (cancelAllCommands)
+        {
+            lock (_activeCommandCtsSet)
+            {
+                commandSources = [.. _activeCommandCtsSet];
+            }
+        }
+        else
+        {
+            var newest = _activeCommandCts;
+            commandSources = newest is null ? [] : [newest];
+        }
+
+        foreach (var commandCts in commandSources)
+        {
+            try
+            {
+                await commandCts.CancelAsync();
+            }
+            catch (ObjectDisposedException)
+            {
+                /* command already finished and disposed it */
+            }
+        }
+
+        var cts = _activeDictationCts;
+        if (cts is not null)
+        {
+            try
+            {
+                await cts.CancelAsync();
+            }
+            catch (ObjectDisposedException)
+            {
+                /* StopAsync just disposed it — nothing to cancel. */
+            }
+        }
+    }
+
     public async Task StopAsync()
     {
         if (!await _toggleGate.WaitAsync(0))
@@ -834,6 +992,12 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
+        await StopWhileHoldingGateAsync().ConfigureAwait(false);
+    }
+
+    // Runs the stop teardown assuming the caller already owns _toggleGate; the finally releases it.
+    private async Task StopWhileHoldingGateAsync()
+    {
         var earlyCleanupDone = false;
         var wasRecording = false;
         var gateReleased = false;
@@ -1655,6 +1819,18 @@ public sealed class DictationOrchestrator : IDisposable
                 await YieldFocusForInsertionAsync().ConfigureAwait(false);
             }
 
+            // Final lock check before synthesizing any keystroke. A session-loss discard cancels
+            // recording, but a normal stop nulls _activeDictationCts and releases the gate before
+            // transcription finishes, so a lock landing during transcription cannot reach that
+            // token — this authoritative check keeps synthesized paste/type off the lock screen.
+            if (!_sessionActivityMonitor.IsInputAllowed)
+            {
+                Trace.WriteLine("[Dictation] Insertion suppressed: session locked or inactive.");
+                ReportStatus(context, "Canceled");
+                ShowFeedback(context, "Canceled", false, true);
+                return;
+            }
+
             // Pad with a trailing space so back-to-back dictations don't run
             // together. Only the insertion and TextInsertedEvent use this;
             // history, recent transcriptions, and completion events keep the
@@ -1964,13 +2140,34 @@ public sealed class DictationOrchestrator : IDisposable
     )
     {
         // Recording's CTS is nulled and Escape disarmed by now, so give the command its own linked
-        // source and re-arm Escape so a long stream/typing pass can be cancelled.
+        // source and re-arm Escape so a long stream/typing pass can be cancelled. Register in the
+        // set so a session-loss discard cancels this command even if a newer one overwrites the
+        // Escape-target field.
         using var commandCts = CancellationTokenSource.CreateLinkedTokenSource(cancelToken);
+        lock (_activeCommandCtsSet)
+        {
+            _activeCommandCtsSet.Add(commandCts);
+        }
+
         _activeCommandCts = commandCts;
         _hotkey.IsCancelShortcutEnabled = true;
         var commandToken = commandCts.Token;
+
         try
         {
+            // Reject a spoken command born after the session locked, WITHOUT synthesizing any
+            // keystroke into the lock screen. Registering commandCts before this check makes it
+            // atomic against a concurrent session-loss discard: a discard landing after
+            // registration cancels commandCts (caught here), one landing before is caught by this
+            // IsInputAllowed read. Inside the try so the ownership-aware finally (set removal +
+            // conditional Escape disarm) still runs.
+            if (!_sessionActivityMonitor.IsInputAllowed || commandToken.IsCancellationRequested)
+            {
+                Trace.WriteLine("[Dictation] Spoken command suppressed: session locked or inactive.");
+                PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
+                return null;
+            }
+
             if (!_promptProcessing.IsAnyProviderAvailable)
             {
                 var noProvider = Localization.Loc.Instance["Command.NoProvider"];
@@ -2193,6 +2390,11 @@ public sealed class DictationOrchestrator : IDisposable
         }
         finally
         {
+            lock (_activeCommandCtsSet)
+            {
+                _activeCommandCtsSet.Remove(commandCts);
+            }
+
             if (ReferenceEquals(_activeCommandCts, commandCts))
             {
                 _activeCommandCts = null;

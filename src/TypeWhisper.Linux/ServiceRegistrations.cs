@@ -115,6 +115,9 @@ internal static class ServiceRegistrations
         // The concrete backends are intentionally NOT registered: BackendSelector
         // mints fresh instances per Resolve() (they're disposed on backend switch,
         // so a shared singleton would be reused after disposal).
+        // The logind monitor is process-scoped and each fresh evdev backend owns only
+        // its event subscription; the DI container tears down the shared D-Bus matches.
+        services.AddSingleton<ISessionActivityMonitor, LogindSessionActivityMonitor>();
         services.AddSingleton<BackendSelector>();
         services.AddSingleton<HotkeyService>();
 

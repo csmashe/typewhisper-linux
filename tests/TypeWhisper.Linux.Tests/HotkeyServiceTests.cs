@@ -863,6 +863,12 @@ public sealed class HotkeyServiceTests
             remove { }
         }
 
+        public event EventHandler? DictationDiscardRequested
+        {
+            add { }
+            remove { }
+        }
+
         public event EventHandler? PromptPaletteRequested
         {
             add { }

@@ -9,13 +9,11 @@ namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 ///     <see cref="FileShare.ReadWrite" /> so the kernel keeps delivering to
 ///     every other reader on the same node.
 /// </summary>
-internal sealed class EvdevDeviceReader : IAsyncDisposable
+internal sealed class EvdevDeviceReader : IEvdevDeviceReader
 {
-    public delegate void KeyEventHandler(string devicePath, int linuxKeyCode, bool pressed);
-
     private readonly CancellationTokenSource _cts = new();
     private readonly Action<string, Exception> _onFailure;
-    private readonly KeyEventHandler _onKeyEvent;
+    private readonly Action<string, int, bool> _onKeyEvent;
 
     private int _disposed;
     private Task? _readLoop;
@@ -23,7 +21,7 @@ internal sealed class EvdevDeviceReader : IAsyncDisposable
 
     public EvdevDeviceReader(
         string path,
-        KeyEventHandler onKeyEvent,
+        Action<string, int, bool> onKeyEvent,
         Action<string, Exception> onFailure
     )
     {
@@ -41,6 +39,21 @@ internal sealed class EvdevDeviceReader : IAsyncDisposable
             return;
         }
 
+        // Close the kernel fd before awaiting cancellation callbacks. Revoked udev ACLs do not
+        // affect an already-open fd, so lock/session transitions depend on DisposeAsync closing
+        // the stream synchronously at entry rather than only suppressing later callbacks.
+        var stream = Interlocked.Exchange(ref _stream, null);
+        try
+        {
+            // ReSharper disable once MethodHasAsyncOverload -- synchronous Dispose is deliberate:
+            // it closes the kernel fd at entry (see comment above); DisposeAsync would defer it.
+            stream?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[EvdevReader] Dispose stream threw: {ex.Message}");
+        }
+
         try
         {
             await _cts.CancelAsync();
@@ -48,18 +61,6 @@ internal sealed class EvdevDeviceReader : IAsyncDisposable
         catch
         {
             /* already disposed */
-        }
-
-        try
-        {
-            if (_stream is not null)
-            {
-                await _stream.DisposeAsync().ConfigureAwait(false);
-            }
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[EvdevReader] Dispose stream threw: {ex.Message}");
         }
 
         if (_readLoop is not null)

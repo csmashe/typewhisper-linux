@@ -144,6 +144,45 @@ public sealed class ShortcutDispatcherTests
     }
 
     [Fact]
+    public void ResetState_WhilePushToTalkHeld_FiresDiscard()
+    {
+        // Session lock closes the input fd while the dictation key is held: no release event
+        // will arrive, so ResetState must emit the discard itself.
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(Set(RecordingMode.PushToTalk));
+        var start = 0;
+        var discard = 0;
+        var stop = 0;
+        d.DictationStartRequested += () => start++;
+        d.DictationDiscardRequested += () => discard++;
+        d.DictationStopRequested += () => stop++;
+
+        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        d.ResetState();
+
+        Assert.Equal(1, start);
+        Assert.Equal(1, discard);
+        Assert.Equal(0, stop);
+    }
+
+    [Fact]
+    public void ResetState_AfterToggleRecordingStarted_FiresDiscard()
+    {
+        // Toggle recording stays active after the key is released, so ResetState must emit the
+        // (idempotent) discard unconditionally rather than keying off held-key state.
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(Set(RecordingMode.Toggle));
+        var discard = 0;
+        d.DictationDiscardRequested += () => discard++;
+
+        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        d.Handle(KeyCode.VcSpace, ModifierMask.None, false);
+        d.ResetState();
+
+        Assert.Equal(1, discard);
+    }
+
+    [Fact]
     public void OsAutoRepeat_DoesNotDoubleFire()
     {
         var d = new ShortcutDispatcher();
