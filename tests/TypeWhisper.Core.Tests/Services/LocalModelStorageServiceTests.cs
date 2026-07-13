@@ -98,6 +98,196 @@ public sealed class LocalModelStorageServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_DefaultLayout_MigratesSiblingPluginAssetsAndSavesPath()
+    {
+        var defaultRoot = Path.Join(_tempRoot, "default");
+        var defaultModelRoot = Path.Join(defaultRoot, "Models");
+        var defaultPluginDataRoot = Path.Join(defaultRoot, "PluginData");
+        var target = Path.Join(_tempRoot, "target-from-default");
+        var builtInModel = Path.Join(defaultModelRoot, "built-in-model.bin");
+        var whisperModel = Path.Join(
+            defaultPluginDataRoot,
+            "com.typewhisper.whisper-cpp",
+            "Models",
+            "ggml-base.bin");
+        var whisperRuntime = Path.Join(
+            defaultPluginDataRoot,
+            "com.typewhisper.whisper-cpp",
+            "Runtimes",
+            "whisper-cuda",
+            "1.8.1",
+            "libwhisper.so");
+        var sherpaModel = Path.Join(
+            defaultPluginDataRoot,
+            "com.typewhisper.sherpa-onnx",
+            "Models",
+            "encoder.onnx");
+        var sherpaRuntime = Path.Join(
+            defaultPluginDataRoot,
+            "com.typewhisper.sherpa-onnx",
+            "Runtimes",
+            "sherpa-onnx.dll");
+        Directory.CreateDirectory(defaultModelRoot);
+        Directory.CreateDirectory(Path.GetDirectoryName(whisperModel)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(whisperRuntime)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(sherpaModel)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(sherpaRuntime)!);
+        await File.WriteAllTextAsync(builtInModel, "built-in");
+        await File.WriteAllTextAsync(whisperModel, "whisper");
+        await File.WriteAllTextAsync(whisperRuntime, "whisper-runtime");
+        await File.WriteAllTextAsync(sherpaModel, "sherpa-model");
+        await File.WriteAllTextAsync(sherpaRuntime, "sherpa-runtime");
+
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = null });
+        var unloaded = false;
+        var service = new LocalModelStorageService(
+            settings,
+            () => unloaded = true,
+            defaultModelStoragePath: defaultModelRoot,
+            defaultPluginDataPath: defaultPluginDataRoot);
+
+        Assert.Equal(defaultModelRoot, service.ResolvedModelStoragePath);
+
+        await service.MoveDownloadsAndUsePathAsync(target);
+
+        Assert.True(unloaded);
+        Assert.Equal(
+            "built-in",
+            await File.ReadAllTextAsync(Path.Join(target, "built-in-model.bin")));
+        Assert.Equal(
+            "whisper",
+            await File.ReadAllTextAsync(Path.Join(
+                target,
+                LocalModelStoragePaths.PluginDataFolderName,
+                "com.typewhisper.whisper-cpp",
+                "Models",
+                "ggml-base.bin")));
+        Assert.Equal(
+            "whisper-runtime",
+            await File.ReadAllTextAsync(Path.Join(
+                target,
+                LocalModelStoragePaths.PluginDataFolderName,
+                "com.typewhisper.whisper-cpp",
+                "Runtimes",
+                "whisper-cuda",
+                "1.8.1",
+                "libwhisper.so")));
+        Assert.Equal(
+            "sherpa-model",
+            await File.ReadAllTextAsync(Path.Join(
+                target,
+                LocalModelStoragePaths.PluginDataFolderName,
+                "com.typewhisper.sherpa-onnx",
+                "Models",
+                "encoder.onnx")));
+        Assert.Equal(
+            "sherpa-runtime",
+            await File.ReadAllTextAsync(Path.Join(
+                target,
+                LocalModelStoragePaths.PluginDataFolderName,
+                "com.typewhisper.sherpa-onnx",
+                "Runtimes",
+                "sherpa-onnx.dll")));
+        Assert.False(File.Exists(builtInModel));
+        Assert.False(File.Exists(whisperModel));
+        Assert.False(File.Exists(whisperRuntime));
+        Assert.False(File.Exists(sherpaModel));
+        Assert.False(File.Exists(sherpaRuntime));
+        Assert.Equal(Path.GetFullPath(target), settings.Current.LocalModelStoragePath);
+    }
+
+    [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_DefaultLayout_TargetIsDefaultModelsRoot_MigratesSiblingPluginAssets()
+    {
+        var defaultRoot = Path.Join(_tempRoot, "default-target-is-models-root");
+        var defaultModelRoot = Path.Join(defaultRoot, "Models");
+        var defaultPluginDataRoot = Path.Join(defaultRoot, "PluginData");
+        var whisperModel = Path.Join(
+            defaultPluginDataRoot,
+            "com.typewhisper.whisper-cpp",
+            "Models",
+            "ggml-base.bin");
+        Directory.CreateDirectory(defaultModelRoot);
+        Directory.CreateDirectory(Path.GetDirectoryName(whisperModel)!);
+        await File.WriteAllTextAsync(whisperModel, "whisper");
+
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = null });
+        var unloaded = false;
+        var service = new LocalModelStorageService(
+            settings,
+            () => unloaded = true,
+            defaultModelStoragePath: defaultModelRoot,
+            defaultPluginDataPath: defaultPluginDataRoot);
+
+        // Exercises the PathsEqual short-circuit branch.
+        await service.MoveDownloadsAndUsePathAsync(defaultModelRoot);
+
+        Assert.True(unloaded);
+        Assert.Equal(
+            "whisper",
+            await File.ReadAllTextAsync(Path.Join(
+                defaultModelRoot,
+                LocalModelStoragePaths.PluginDataFolderName,
+                "com.typewhisper.whisper-cpp",
+                "Models",
+                "ggml-base.bin")));
+        Assert.False(File.Exists(whisperModel));
+        Assert.Equal(Path.GetFullPath(defaultModelRoot), settings.Current.LocalModelStoragePath);
+    }
+
+    [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_DefaultLayout_LeavesUnknownPluginFolderAlone()
+    {
+        var defaultRoot = Path.Join(_tempRoot, "default-with-unknown-plugin");
+        var defaultModelRoot = Path.Join(defaultRoot, "Models");
+        var defaultPluginDataRoot = Path.Join(defaultRoot, "PluginData");
+        var target = Path.Join(_tempRoot, "target-with-unknown-plugin");
+        var unknownPluginSettings = Path.Join(
+            defaultPluginDataRoot,
+            "com.example.unknown",
+            "settings.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(unknownPluginSettings)!);
+        await File.WriteAllTextAsync(unknownPluginSettings, "{}");
+
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = null });
+        var service = new LocalModelStorageService(
+            settings,
+            defaultModelStoragePath: defaultModelRoot,
+            defaultPluginDataPath: defaultPluginDataRoot);
+
+        await service.MoveDownloadsAndUsePathAsync(target);
+
+        Assert.True(File.Exists(unknownPluginSettings));
+        Assert.False(File.Exists(Path.Join(
+            target,
+            LocalModelStoragePaths.PluginDataFolderName,
+            "com.example.unknown",
+            "settings.json")));
+    }
+
+    [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_TargetNestedUnderPluginAssetSource_Throws()
+    {
+        var defaultRoot = Path.Join(_tempRoot, "default-for-nested-target");
+        var defaultModelRoot = Path.Join(defaultRoot, "Models");
+        var defaultPluginDataRoot = Path.Join(defaultRoot, "PluginData");
+        var target = Path.Join(defaultPluginDataRoot, "nested-target");
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = null });
+        var service = new LocalModelStorageService(
+            settings,
+            defaultModelStoragePath: defaultModelRoot,
+            defaultPluginDataPath: defaultPluginDataRoot);
+
+        var ex = await Assert.ThrowsAsync<LocalModelStorageUnavailableException>(() =>
+            service.MoveDownloadsAndUsePathAsync(target));
+
+        Assert.Equal(LocalModelStorageUnavailableReason.NestedUnderCurrentFolder, ex.Reason);
+        Assert.Equal(Path.GetFullPath(target), ex.Path);
+        Assert.Equal(defaultPluginDataRoot, ex.CurrentPath);
+        Assert.Null(settings.Current.LocalModelStoragePath);
+    }
+
+    [Fact]
     public void ResetToDefault_ClearsCustomPath()
     {
         var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = "/data/models" });

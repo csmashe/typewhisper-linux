@@ -10,15 +10,16 @@ public static class LocalModelStoragePaths
     /// <summary>Name of the plugin-asset subfolder created under a custom model-storage root.</summary>
     public const string PluginDataFolderName = "PluginData";
 
-    private static string DefaultModelStoragePath => TypeWhisperEnvironment.ModelsPath;
-
     /// <summary>
     /// Resolves the active local model storage path.
     /// </summary>
-    public static string ResolveModelStoragePath(AppSettings settings) =>
+    public static string ResolveModelStoragePath(
+        AppSettings settings,
+        string? defaultModelStoragePath = null
+    ) =>
         AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is { } customPath
             ? Path.GetFullPath(customPath)
-            : DefaultModelStoragePath;
+            : defaultModelStoragePath ?? TypeWhisperEnvironment.ModelsPath;
 
     /// <summary>
     /// Resolves the active plugin asset directory for large model and runtime files.
