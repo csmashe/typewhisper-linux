@@ -1,6 +1,8 @@
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using TypeWhisper.Core;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -11,6 +13,13 @@ public sealed class SettingsBackupService
 {
     private const string ManifestEntryName = "typewhisper-backup.json";
 
+    // The real manifest is a few hundred bytes; cap it so a decompression-bomb
+    // manifest can't be materialized into memory before shape validation runs.
+    private const long MaxManifestBytes = 64 * 1024;
+
+    private const string ManifestApp = "TypeWhisper";
+    private const string ManifestKind = "settings-backup";
+
     private static readonly string[] s_rootFiles =
     [
         "settings.json",
@@ -20,7 +29,13 @@ public sealed class SettingsBackupService
 
     private static readonly string[] s_backupDirectoryRoots = ["Data", "PluginData"];
 
-    private static readonly string[] s_restoreDirectoryRoots = ["Data", "PluginData", "Plugins"];
+    private static readonly string[] s_manifestIncludes =
+        ["settings", "linux-preferences", "data", "plugin-data"];
+
+    private static readonly string[] s_manifestExcludes = ["models", "audio", "logs", "plugins"];
+
+    // .so is matched separately to also catch versioned sonames (libfoo.so.12).
+    private static readonly string[] s_executableExtensions = [".dll", ".dylib", ".exe"];
 
     private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
@@ -62,11 +77,11 @@ public sealed class SettingsBackupService
         {
             var manifest = new
             {
-                app = "TypeWhisper",
-                kind = "settings-backup",
+                app = ManifestApp,
+                kind = ManifestKind,
                 createdUtc = DateTimeOffset.UtcNow,
-                includes = new[] { "settings", "linux-preferences", "data", "plugin-data" },
-                excludes = new[] { "models", "audio", "logs", "plugins" }
+                includes = s_manifestIncludes,
+                excludes = s_manifestExcludes
             };
             var manifestEntry = archive.CreateEntry(ManifestEntryName, CompressionLevel.Optimal);
             using (var writer = new StreamWriter(manifestEntry.Open()))
@@ -93,7 +108,13 @@ public sealed class SettingsBackupService
                 )
                 {
                     var relativePath = Path.GetRelativePath(_basePath, path);
-                    if (ShouldSkipPortableEntry(relativePath))
+                    // Skip model assets and executables (re-downloadable runtimes):
+                    // restore drops executables, so exporting them would bloat the
+                    // archive with files it can never restore.
+                    if (
+                        ShouldSkipPortableEntry(relativePath)
+                        || IsExecutableEntry(NormalizeEntryName(relativePath))
+                    )
                     {
                         continue;
                     }
@@ -149,6 +170,13 @@ public sealed class SettingsBackupService
                     continue;
                 }
 
+                // Drop executables validation tolerated under exported roots, so no
+                // native runtime from an untrusted archive ever reaches disk.
+                if (IsExecutableEntry(NormalizeEntryName(entry.FullName)))
+                {
+                    continue;
+                }
+
                 var targetPath = GetSafeDestinationPath(tempDir, entry.FullName);
                 Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
                 entry.ExtractToFile(targetPath, true);
@@ -171,7 +199,7 @@ public sealed class SettingsBackupService
                 File.Copy(restoredPath, targetPath, true);
             }
 
-            foreach (var root in s_restoreDirectoryRoots)
+            foreach (var root in s_backupDirectoryRoots)
             {
                 var restoredRoot = Path.Join(tempDir, root);
                 if (!Directory.Exists(restoredRoot))
@@ -236,17 +264,15 @@ public sealed class SettingsBackupService
 
     private static void ValidateArchive(ZipArchive archive)
     {
-        if (archive.GetEntry(ManifestEntryName) is null)
-        {
-            throw new InvalidDataException("This is not a TypeWhisper settings backup.");
-        }
+        var manifestEntries = archive
+            .Entries.Where(entry =>
+                string.Equals(entry.FullName, ManifestEntryName, StringComparison.Ordinal)
+            )
+            .ToArray();
 
         foreach (var entry in archive.Entries)
         {
-            if (
-                entry.FullName.Length == 0
-                || entry.FullName.EndsWith('/')
-            )
+            if (entry.FullName.Length == 0)
             {
                 continue;
             }
@@ -256,27 +282,127 @@ public sealed class SettingsBackupService
                 continue;
             }
 
-            if (!IsAllowedEntry(entry.FullName))
+            var normalized = NormalizeEntryName(entry.FullName);
+            var isDirectory = normalized.EndsWith('/');
+            var validatedPath = isDirectory ? normalized.TrimEnd('/') : normalized;
+
+            if (IsPluginEntry(validatedPath))
             {
+                throw new InvalidDataException(Loc.Instance["About.BackupContainsPlugins"]);
+            }
+
+            // Executables are never written on restore (see extraction loop): a
+            // plugin installer trusts an existing runtime file without re-verifying
+            // its checksum, so a crafted .so under a runtime path would be loaded
+            // and run on next launch. Under the exported roots we skip (not reject)
+            // to keep legacy archives — whose exporter bundled runtimes — restorable;
+            // outside them an executable has no legitimate origin, so fail closed.
+            if (!isDirectory && IsExecutableEntry(validatedPath))
+            {
+                if (IsWithinBackupDirectoryRoot(validatedPath))
+                {
+                    continue;
+                }
+
                 throw new InvalidDataException(
-                    $"Backup contains an unsupported path: {entry.FullName}"
+                    Loc.Instance.GetString("About.BackupExecutablePath", entry.FullName)
                 );
             }
 
-            _ = GetSafeDestinationPath(Path.GetTempPath(), entry.FullName);
+            if (!IsAllowedEntry(validatedPath, isDirectory))
+            {
+                throw new InvalidDataException(
+                    Loc.Instance.GetString("About.BackupUnsupportedPath", entry.FullName)
+                );
+            }
+
+            _ = GetSafeDestinationPath(Path.GetTempPath(), validatedPath);
+        }
+
+        if (manifestEntries.Length != 1)
+        {
+            throw new InvalidDataException(Loc.Instance["About.BackupInvalid"]);
+        }
+
+        ValidateManifest(manifestEntries[0]);
+    }
+
+    private static void ValidateManifest(ZipArchiveEntry manifestEntry)
+    {
+        if (manifestEntry.Length > MaxManifestBytes)
+        {
+            throw new InvalidDataException(Loc.Instance["About.BackupInvalidManifest"]);
+        }
+
+        BackupManifest? manifest;
+        try
+        {
+            using var stream = manifestEntry.Open();
+            manifest = JsonSerializer.Deserialize<BackupManifest>(stream);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or InvalidDataException)
+        {
+            throw new InvalidDataException(Loc.Instance["About.BackupInvalidManifest"], ex);
+        }
+
+        if (
+            manifest is null
+            || !string.Equals(manifest.App, ManifestApp, StringComparison.Ordinal)
+            || !string.Equals(manifest.Kind, ManifestKind, StringComparison.Ordinal)
+            || manifest.CreatedUtc is null
+            || manifest.Includes is null
+            || !manifest.Includes.SequenceEqual(s_manifestIncludes, StringComparer.Ordinal)
+            || manifest.Excludes is null
+            || !manifest.Excludes.SequenceEqual(s_manifestExcludes, StringComparer.Ordinal)
+        )
+        {
+            throw new InvalidDataException(Loc.Instance["About.BackupInvalidManifest"]);
         }
     }
 
-    private static bool IsAllowedEntry(string entryName)
+    private static bool IsAllowedEntry(string entryName, bool isDirectory)
     {
-        var normalized = NormalizeEntryName(entryName);
-        if (s_rootFiles.Contains(normalized, StringComparer.Ordinal))
+        if (!isDirectory && s_rootFiles.Contains(entryName, StringComparer.Ordinal))
         {
             return true;
         }
 
-        return s_restoreDirectoryRoots.Any(root =>
-            normalized.StartsWith(root + "/", StringComparison.Ordinal)
+        return s_backupDirectoryRoots.Any(root =>
+            isDirectory && string.Equals(entryName, root, StringComparison.Ordinal)
+            || entryName.StartsWith(root + "/", StringComparison.Ordinal)
+        );
+    }
+
+    private static bool IsPluginEntry(string entryName)
+    {
+        return string.Equals(entryName, "Plugins", StringComparison.Ordinal)
+            || entryName.StartsWith("Plugins/", StringComparison.Ordinal);
+    }
+
+    private static bool IsExecutableEntry(string entryName)
+    {
+        var fileName = entryName[(entryName.LastIndexOf('/') + 1)..];
+
+        // Versioned sonames (libcudart.so.12) are native code with a numeric final
+        // "extension", so match ".so" anywhere in the suffix, not just at the end.
+        if (
+            fileName.EndsWith(".so", StringComparison.OrdinalIgnoreCase)
+            || fileName.Contains(".so.", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return true;
+        }
+
+        return s_executableExtensions.Contains(
+            Path.GetExtension(fileName),
+            StringComparer.OrdinalIgnoreCase
+        );
+    }
+
+    private static bool IsWithinBackupDirectoryRoot(string entryName)
+    {
+        return s_backupDirectoryRoots.Any(root =>
+            entryName.StartsWith(root + "/", StringComparison.Ordinal)
         );
     }
 
@@ -297,19 +423,41 @@ public sealed class SettingsBackupService
             || normalized.Split('/').Any(part => part is "" or "." or "..")
         )
         {
-            throw new InvalidDataException($"Backup contains an unsafe path: {entryName}");
+            throw new InvalidDataException(
+                Loc.Instance.GetString("About.BackupUnsafePath", entryName)
+            );
         }
 
         var fullRoot = Path.GetFullPath(rootPath)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var destination = Path.GetFullPath(Path.Join(fullRoot, normalized));
         return !destination.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-            ? throw new InvalidDataException($"Backup contains an unsafe path: {entryName}")
+            ? throw new InvalidDataException(
+                Loc.Instance.GetString("About.BackupUnsafePath", entryName)
+            )
             : destination;
     }
 
     private static string NormalizeEntryName(string path)
     {
-        return path.Replace('\\', '/').TrimStart('/');
+        return path.Replace('\\', '/');
+    }
+
+    private sealed class BackupManifest
+    {
+        [JsonPropertyName("app")]
+        public string? App { get; init; }
+
+        [JsonPropertyName("kind")]
+        public string? Kind { get; init; }
+
+        [JsonPropertyName("createdUtc")]
+        public DateTimeOffset? CreatedUtc { get; init; }
+
+        [JsonPropertyName("includes")]
+        public string[]? Includes { get; init; }
+
+        [JsonPropertyName("excludes")]
+        public string[]? Excludes { get; init; }
     }
 }
