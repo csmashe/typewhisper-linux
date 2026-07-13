@@ -60,6 +60,22 @@ public sealed class InputAccessSetupHelperTests
         Assert.Contains("/run/elogind/seats", cmd);
     }
 
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("/run/systemd/seats", true)]
+    [InlineData("/run/elogind/seats", true)]
+    public void SeatManagerDetection_uses_the_manual_commands_runtime_directories(
+        string? existingDirectory,
+        bool expected
+    )
+    {
+        var result = InputAccessSetupHelper.IsSeatManagerPresent(
+            path => path == existingDirectory
+        );
+
+        Assert.Equal(expected, result);
+    }
+
     // The manual command can't rely on the pkexec-script guards, so it fronts its
     // own write with the same symlink / non-regular / foreign-marker checks. These
     // tests execute it against a temp path to prove it refuses foreign targets.

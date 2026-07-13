@@ -715,6 +715,8 @@
   "Shortcuts.KeyboardAccessBannerHint": "Unter Wayland benötigt TypeWhisper Lesezugriff auf Tastaturgeräte, um Ihre Diktattaste zu erkennen, während andere Apps im Fokus sind. Die Einrichtung installiert eine kleine udev-Regel, die dies Ihrer Sitzung sofort gewährt – kein Neustart. Sie können auch den Befehl unten ausführen; auf Systemen ohne systemd-logind fügt er Sie als Fallback zur input-Gruppe hinzu, was nach erneutem Ab- und Anmelden wirksam wird.",
   "Shortcuts.KeyboardAccessForeignConfigRefused": "TypeWhisper hat {0} nicht geändert, da der Pfad bereits vorhanden und keine reguläre Datei im Besitz von TypeWhisper ist.",
   "Shortcuts.KeyboardAccessForeignConfigRefusedDetail": "Prüfen Sie den vorhandenen Pfad. Wenn TypeWhisper ihn verwalten soll, verschieben Sie ihn oder benennen Sie ihn um und führen Sie die Einrichtung erneut aus.",
+  "Shortcuts.KeyboardAccessNotConfirmed": "Der Tastaturzugriff konnte nicht bestätigt werden, obwohl die Zugriffsregel installiert ist.",
+  "Shortcuts.KeyboardAccessNotConfirmedDetail": "Schließen Sie die Tastatur an bzw. verbinden Sie sie neu, stellen Sie sicher, dass dies die aktive lokale Sitzung ist, und melden Sie sich bei Bedarf ab und wieder an. Versuchen Sie es anschließend erneut. TypeWhisper hat Sie nicht zur input-Gruppe hinzugefügt, da systemd-logind oder elogind vorhanden ist.",
   "Shortcuts.KeyboardAccessSymlinkRefused": "TypeWhisper hat {0} nicht geändert, da es sich um einen symbolischen Link handelt.",
   "Shortcuts.KeyboardAccessSymlinkRefusedDetail": "Prüfen und entfernen oder ersetzen Sie den symbolischen Link und führen Sie die Einrichtung anschließend erneut aus.",
   "Shortcuts.MainCapture": "Hauptaufnahme",

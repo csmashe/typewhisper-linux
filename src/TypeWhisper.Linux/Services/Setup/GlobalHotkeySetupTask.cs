@@ -31,6 +31,7 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
     // session environment, /dev/input, /etc/group, or resolving a live backend.
     private readonly Func<bool> _isWayland;
     private readonly Func<bool> _hasKeyboardAccess;
+    private readonly Func<bool> _isSeatManagerPresent;
     private readonly Func<bool> _userListedInInputGroupFile;
     private readonly Func<bool> _ruleInstalled;
     private readonly Func<CancellationToken, Task> _onAccessGranted;
@@ -46,6 +47,7 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
             runner,
             accessHelper,
             InputDeviceAccessCheck.HasKeyboardAccess,
+            InputAccessSetupHelper.IsSeatManagerPresent,
             UserListedInInputGroupFile,
             InputAccessSetupHelper.IsRuleInstalled,
             hotkey.SwitchBackendAsync
@@ -58,6 +60,7 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         IProcessRunner runner,
         InputAccessSetupHelper accessHelper,
         Func<bool> hasKeyboardAccess,
+        Func<bool> isSeatManagerPresent,
         Func<bool> userListedInInputGroupFile,
         Func<bool> ruleInstalled,
         Func<CancellationToken, Task> onAccessGranted
@@ -67,6 +70,7 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         _runner = runner;
         _accessHelper = accessHelper;
         _hasKeyboardAccess = hasKeyboardAccess;
+        _isSeatManagerPresent = isSeatManagerPresent;
         _userListedInInputGroupFile = userListedInInputGroupFile;
         _ruleInstalled = ruleInstalled;
         _onAccessGranted = onAccessGranted;
@@ -170,10 +174,21 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
             );
         }
 
-        // No logind (Devuan, Alpine without elogind): the rule's GROUP="input"
-        // fallback only grants access once the user joins that group and re-logs.
+        // A failed re-probe doesn't prove logind is absent (udev may still be
+        // settling, session inactive, no keyboard connected) — never broaden to
+        // the input group while a seat manager is present.
         if (!_hasKeyboardAccess())
         {
+            if (_isSeatManagerPresent())
+            {
+                return new SetupActionOutcome(
+                    false,
+                    Loc.Instance["Shortcuts.KeyboardAccessNotConfirmed"],
+                    Loc.Instance["Shortcuts.KeyboardAccessNotConfirmedDetail"]
+                );
+            }
+
+            // Genuine non-logind host (Devuan, Alpine without elogind).
             return await AddToInputGroupFallbackAsync(ct).ConfigureAwait(false);
         }
 
@@ -197,7 +212,8 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
     /// <summary>
     ///     Non-logind last resort: add the user to the <c>input</c> group so the
     ///     rule's <c>GROUP="input"</c> clause grants access after a re-login. Only
-    ///     reached when the uaccess ACL didn't take effect (no systemd-logind).
+    ///     reached after the shared seat-directory check confirms that neither
+    ///     systemd-logind nor elogind is present.
     /// </summary>
     private async Task<SetupActionOutcome> AddToInputGroupFallbackAsync(CancellationToken ct)
     {

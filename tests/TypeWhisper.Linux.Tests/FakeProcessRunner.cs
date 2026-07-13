@@ -20,6 +20,7 @@ internal sealed class FakeProcessRunner : IProcessRunner
     public ProcessRunResult Default { get; init; } = Success();
 
     /// <summary>The <c>standardInput</c> piped to the most recent invocation (e.g. a pkexec heredoc).</summary>
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global  recording surface for stdin assertions; kept even when a given run only checks Invocations
     public string? LastStandardInput { get; private set; }
 
     public Task<ProcessRunResult> RunAsync(
@@ -126,6 +127,7 @@ internal sealed class FakeProcessRunner : IProcessRunner
     public sealed record Invocation(
         string FileName,
         IReadOnlyList<string> Args,
+        // ReSharper disable once NotAccessedPositionalProperty.Global  part of the recorded invocation shape; available for stdin assertions
         string? StandardInput = null,
         TimeSpan? Timeout = null
     );

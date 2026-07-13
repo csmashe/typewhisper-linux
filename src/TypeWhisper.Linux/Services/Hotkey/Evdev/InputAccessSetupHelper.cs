@@ -30,6 +30,14 @@ namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 /// </summary>
 public sealed class InputAccessSetupHelper
 {
+    // One list keeps IsSeatManagerPresent and ManualInstallCommand's shell
+    // condition agreeing on what "no seat manager" means.
+    private static readonly string[] s_seatManagerDirectoryPaths =
+    [
+        "/run/systemd/seats",
+        "/run/elogind/seats"
+    ];
+
     // System config dir holding the udev rule. Always /etc in production. Tests
     // redirect it via SysConfDirOverride so InstallAsync / RemoveAsync stay
     // hermetic instead of reading or writing the host's real /etc.
@@ -87,6 +95,22 @@ public sealed class InputAccessSetupHelper
     public static bool IsRuleInstalled()
     {
         return File.Exists(UdevRulePath);
+    }
+
+    /// <summary>
+    ///     True when systemd-logind or elogind exposes its seat runtime directory.
+    ///     Deliberately a filesystem check, not D-Bus: manager presence is what
+    ///     gates the <c>input</c>-group fallback, even if the session can't reach it.
+    /// </summary>
+    public static bool IsSeatManagerPresent()
+    {
+        return IsSeatManagerPresent(Directory.Exists);
+    }
+
+    internal static bool IsSeatManagerPresent(Func<string, bool> directoryExists)
+    {
+        ArgumentNullException.ThrowIfNull(directoryExists);
+        return Array.Exists(s_seatManagerDirectoryPaths, path => directoryExists(path));
     }
 
     /// <summary>
@@ -384,12 +408,20 @@ public sealed class InputAccessSetupHelper
                // keyboard). There it joins the input group and asks for a re-login.
                + "# Only on systems without systemd-logind/elogind (where uaccess is\n"
                + "# inert): join the input group, then log out and back in.\n"
-               + "if [ ! -d /run/systemd/seats ] && [ ! -d /run/elogind/seats ]; then\n"
+               + $"if {SeatManagerAbsentShellCondition()}; then\n"
                // ${SUDO_USER:-$USER}: the body runs as root under sudo, so bare
                // $USER would join root, not the invoking user.
                + "  usermod -aG input \"${SUDO_USER:-$USER}\"\n"
                + "fi\n"
                + "'";
+    }
+
+    private static string SeatManagerAbsentShellCondition()
+    {
+        return string.Join(
+            " && ",
+            s_seatManagerDirectoryPaths.Select(path => $"[ ! -d \"{path}\" ]")
+        );
     }
 
     private static bool IsFileOwnedByTypeWhisper(string path)

@@ -715,6 +715,8 @@
   "Shortcuts.KeyboardAccessBannerHint": "En Wayland, TypeWhisper necesita acceso de lectura a los dispositivos de teclado para detectar tu tecla de dictado mientras otras apps están en foco. La configuración instala una pequeña regla de udev que lo concede a tu sesión de inmediato, sin reiniciar. También puedes ejecutar el comando de abajo; en sistemas sin systemd-logind te añade al grupo input como alternativa, que surte efecto después de cerrar sesión y volver a iniciarla.",
   "Shortcuts.KeyboardAccessForeignConfigRefused": "TypeWhisper no modificó {0} porque la ruta ya existe y no es un archivo normal propiedad de TypeWhisper.",
   "Shortcuts.KeyboardAccessForeignConfigRefusedDetail": "Revisa la ruta existente. Si quieres que TypeWhisper la gestione, muévela o cámbiale el nombre y vuelve a ejecutar la configuración.",
+  "Shortcuts.KeyboardAccessNotConfirmed": "No se pudo confirmar el acceso al teclado aunque la regla de acceso está instalada.",
+  "Shortcuts.KeyboardAccessNotConfirmedDetail": "Conecta o vuelve a conectar el teclado, asegúrate de que esta sea la sesión local activa y, si es necesario, cierra sesión y vuelve a iniciarla; después, vuelve a intentarlo. TypeWhisper no te añadió al grupo input porque se detectó systemd-logind o elogind.",
   "Shortcuts.KeyboardAccessSymlinkRefused": "TypeWhisper no modificó {0} porque es un enlace simbólico.",
   "Shortcuts.KeyboardAccessSymlinkRefusedDetail": "Revisa y elimina o sustituye el enlace simbólico y vuelve a ejecutar la configuración.",
   "Shortcuts.MainCapture": "Captura principal",

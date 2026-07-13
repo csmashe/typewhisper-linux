@@ -128,7 +128,7 @@ public sealed class GlobalHotkeySetupTaskTests
     }
 
     [Fact]
-    public async Task RunAction_installs_rule_then_satisfies_in_session_without_reboot()
+    public async Task RunAction_with_seat_manager_and_successful_reprobe_succeeds_without_group_fallback()
     {
         using var env = new PkexecOnPath();
         var runner = new FakeProcessRunner();
@@ -138,6 +138,7 @@ public sealed class GlobalHotkeySetupTaskTests
         var task = Build(
             isWayland: true,
             hasAccess: Seq(false, true),
+            seatManagerPresent: () => true,
             runner: runner,
             onGranted: _ =>
             {
@@ -158,7 +159,7 @@ public sealed class GlobalHotkeySetupTaskTests
     }
 
     [Fact]
-    public async Task RunAction_falls_back_to_input_group_when_access_still_denied()
+    public async Task RunAction_without_seat_manager_falls_back_to_input_group_when_access_still_denied()
     {
         using var env = new PkexecOnPath();
         var runner = new FakeProcessRunner();
@@ -169,6 +170,7 @@ public sealed class GlobalHotkeySetupTaskTests
         var task = Build(
             isWayland: true,
             hasAccess: () => false,
+            seatManagerPresent: () => false,
             runner: runner,
             onGranted: _ =>
             {
@@ -184,6 +186,34 @@ public sealed class GlobalHotkeySetupTaskTests
         Assert.Equal(Loc.Instance["Setup.GlobalHotkeyReloginToActivate"], outcome.Detail);
         Assert.Contains(runner.Invocations, i => i.FileName == "pkexec" && i.Args.Contains("usermod"));
         // Access never became available, so the backend is not hot-swapped.
+        Assert.False(granted);
+    }
+
+    [Fact]
+    public async Task RunAction_with_seat_manager_and_failed_reprobe_does_not_use_group_fallback()
+    {
+        using var env = new PkexecOnPath();
+        var runner = new FakeProcessRunner();
+        var granted = false;
+        var task = Build(
+            isWayland: true,
+            hasAccess: () => false,
+            seatManagerPresent: () => true,
+            runner: runner,
+            onGranted: _ =>
+            {
+                granted = true;
+                return Task.CompletedTask;
+            }
+        );
+
+        var outcome = await task.RunActionAsync(CancellationToken.None);
+
+        Assert.False(outcome.Success);
+        Assert.Equal(Loc.Instance["Shortcuts.KeyboardAccessNotConfirmed"], outcome.Message);
+        Assert.Equal(Loc.Instance["Shortcuts.KeyboardAccessNotConfirmedDetail"], outcome.Detail);
+        Assert.Contains(runner.Invocations, i => i.FileName == "pkexec" && i.Args.Contains("/bin/sh"));
+        Assert.DoesNotContain(runner.Invocations, i => i.Args.Contains("usermod"));
         Assert.False(granted);
     }
 
@@ -207,6 +237,7 @@ public sealed class GlobalHotkeySetupTaskTests
     private static GlobalHotkeySetupTask Build(
         bool isWayland = true,
         Func<bool>? hasAccess = null,
+        Func<bool>? seatManagerPresent = null,
         Func<bool>? listedInGroup = null,
         Func<bool>? ruleInstalled = null,
         IProcessRunner? runner = null,
@@ -220,6 +251,7 @@ public sealed class GlobalHotkeySetupTaskTests
             runner,
             helper,
             hasAccess ?? (() => false),
+            seatManagerPresent ?? (() => true),
             listedInGroup ?? (() => false),
             ruleInstalled ?? (() => false),
             onGranted ?? (_ => Task.CompletedTask)
