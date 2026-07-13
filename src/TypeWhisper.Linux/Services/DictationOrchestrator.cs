@@ -2249,12 +2249,16 @@ public sealed class DictationOrchestrator : IDisposable
             ReportStatus(context, applyingStatus);
 
             // Streaming types each chunk directly, so it may only run where that matches what the
-            // one-shot insert would do: auto-paste on, and either the user forced DirectTyping or an
-            // Auto target the app policy already types into (terminals, browsers, Codex). Everything
-            // else (copy-only, or an Auto GUI/unknown target the one-shot would paste) instead
-            // generates the result in one pass and routes it through that one-shot insert.
+            // one-shot insert would do: auto-paste on, a non-terminal target, and either the user
+            // forced DirectTyping or an Auto target the app policy already types into (browsers,
+            // Codex). A terminal result must be generated in one pass because a later stream chunk
+            // can introduce a newline; the one-shot insertion can then safely paste multiline text
+            // with Ctrl+Shift+V while preserving direct typing for a single-line result. Everything
+            // else (copy-only, or an Auto GUI/unknown target the one-shot would paste) also routes
+            // through that one-shot insert.
             var strategy = ResolveInsertionStrategy(context.AppProcess);
             var canStreamDirectly = _settings.Current.AutoPaste
+                && !TextInsertionService.IsTerminalApp(context.AppProcess)
                 && (strategy is TextInsertionStrategy.DirectTyping
                     || (strategy is TextInsertionStrategy.Auto
                         && TextInsertionService.AppPrefersDirectTyping(context.AppProcess, context.AppTitle)));
@@ -2285,6 +2289,7 @@ public sealed class DictationOrchestrator : IDisposable
                 input,
                 wrapInput,
                 context.Capture,
+                context.AppProcess,
                 async () =>
                 {
                     SetOverlayState(state =>
@@ -2461,6 +2466,7 @@ public sealed class DictationOrchestrator : IDisposable
         string input,
         bool wrapInput,
         LlmCallCapture? capture,
+        string? targetProcessName,
         Func<Task<bool>> onFirstType,
         CancellationToken token
     )
@@ -2551,7 +2557,11 @@ public sealed class DictationOrchestrator : IDisposable
                 }
             }
 
-            if (await _textInsertion.TypeStreamChunkAsync(text).ConfigureAwait(false))
+            if (
+                await _textInsertion
+                    .TypeStreamChunkAsync(text, targetProcessName)
+                    .ConfigureAwait(false)
+            )
             {
                 typedAnything = true;
             }

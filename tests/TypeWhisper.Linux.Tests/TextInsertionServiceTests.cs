@@ -410,6 +410,113 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task InsertTextAsync_terminal_multiline_focus_failure_fails_closed_without_typing()
+    {
+        // Multiline text into a terminal must NOT fall back to direct typing
+        // (Shift+Return still submits partial shell commands).
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "other",
+            ActivateSucceeds = false
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "line1\nline2",
+            true,
+            "term-window",
+            "konsole"
+        );
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        // The aborted insert restores the user's clipboard rather than leaving dictated text behind.
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_verify_failure_fails_closed_without_typing()
+    {
+        // The clipboard never serves our text, so Ctrl+Shift+V would paste nothing/stale.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            ClipboardReadResults = new Queue<string?>(
+                [
+                    "previous", // snapshot
+                    "previous", "previous", "previous", "previous", // verify pass 1
+                    "previous", "previous", "previous", "previous" // verify pass 2 after re-set
+                ]
+            )
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "line1\nline2",
+            true,
+            "term-window",
+            "konsole"
+        );
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_fail_closed_clears_staged_text_when_no_prior_clipboard()
+    {
+        // With no prior clipboard to restore, a Failed result that left the staged
+        // dictated text on the clipboard would contradict "could not be copied": clear it.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = null,
+            ActiveWindowId = "other",
+            ActivateSucceeds = false
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal(string.Empty, platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_fail_closed_keeps_newer_clipboard_copy()
+    {
+        // The user copied something new after we staged the dictated text but before the
+        // insert failed; the ownership check must leave that newer copy intact.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "other",
+            ActivateSucceeds = false,
+            ClipboardReadResults = new Queue<string?>(
+                [
+                    "previous", // snapshot before staging
+                    "user-copied-this-later" // ownership check during fail-closed restore
+                ]
+            )
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.False(platform.PasteSent);
+        // Clipboard was last set to the staged text; the ownership check saw the newer copy
+        // and declined to restore, so no further clipboard write occurred.
+        Assert.Equal("line1\nline2", platform.Clipboard);
+    }
+
+    [Fact]
     public async Task InsertTextAsync_missing_clipboard_tool_returns_specific_result()
     {
         var platform = new FakeTextInsertionPlatform
@@ -521,6 +628,125 @@ public sealed class TextInsertionServiceTests
         Assert.False(platform.PasteSent);
     }
 
+    [Fact]
+    public async Task InsertTextAsync_explicit_direct_typing_keeps_terminal_single_line_direct()
+    {
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "one line",
+            targetProcessName: "kitty",
+            strategy: TextInsertionStrategy.DirectTyping
+        );
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("one line", platform.TypedText);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Theory]
+    [InlineData(TextInsertionStrategy.Auto, "line one\nline two")]
+    [InlineData(TextInsertionStrategy.DirectTyping, "line one\r\nline two")]
+    [InlineData(TextInsertionStrategy.DirectTyping, "line one\rline two")]
+    public async Task InsertTextAsync_terminal_multiline_uses_terminal_clipboard_paste(
+        TextInsertionStrategy strategy,
+        string text
+    )
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            text,
+            targetProcessName: "kitty",
+            strategy: strategy
+        );
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.True(platform.PasteSent);
+        Assert.True(platform.LastPasteUsedTerminalShortcut);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_non_terminal_multiline_keeps_direct_typing()
+    {
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "line one\nline two",
+            targetProcessName: "firefox",
+            targetWindowTitle: "Example"
+        );
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("line one\nline two", platform.TypedText);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_without_clipboard_tool_fails_closed()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            ClipboardSetAvailable = false,
+            PasteAvailable = true
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "echo unsafe\nsecond command",
+            targetProcessName: "kitty",
+            strategy: TextInsertionStrategy.DirectTyping
+        );
+
+        Assert.Equal(InsertionResult.MissingClipboardTool, result);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_when_paste_chord_fails_fails_closed()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = false
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "echo unsafe\nsecond command",
+            targetProcessName: "kitty"
+        );
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.Equal(3, platform.PasteAttemptCount);
+        Assert.True(platform.LastPasteUsedTerminalShortcut);
+        Assert.Null(platform.TypedText);
+    }
+
+    [Fact]
+    public async Task TypeStreamChunkAsync_terminal_multiline_never_reaches_direct_typing()
+    {
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.TypeStreamChunkAsync("line one\nline two", "kitty");
+
+        Assert.False(result);
+        Assert.Null(platform.TypedText);
+    }
+
     [Theory]
     [InlineData("firefox", "Example")]
     [InlineData("zen", "Teamwork — Zen Browser")]
@@ -568,6 +794,7 @@ public sealed class TextInsertionServiceTests
 
         Assert.Equal(InsertionResult.Pasted, result);
         Assert.True(platform.PasteSent);
+        Assert.False(platform.LastPasteUsedTerminalShortcut);
         Assert.Null(platform.TypedText);
         Assert.Equal("previous", platform.Clipboard);
     }
@@ -591,6 +818,7 @@ public sealed class TextInsertionServiceTests
 
         Assert.Equal(InsertionResult.Pasted, result);
         Assert.True(platform.PasteSent);
+        Assert.True(platform.LastPasteUsedTerminalShortcut);
         Assert.Null(platform.TypedText);
         Assert.Equal("previous", platform.Clipboard);
     }
@@ -915,6 +1143,71 @@ public sealed class TextInsertionServiceTests
         var call = Assert.Single(runner.Calls);
         Assert.Equal("wtype", call.FileName);
         Assert.Equal(["-M", "ctrl", "v", "-m", "ctrl"], call.Arguments);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_Wtype_TerminalPasteUsesCtrlShiftV()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner.Run
+        );
+
+        var result = await platform.SendPasteAsync(useTerminalShortcut: true);
+
+        Assert.True(result);
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal("wtype", call.FileName);
+        Assert.Equal(
+            ["-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"],
+            call.Arguments
+        );
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_Xdotool_TerminalPasteUsesCtrlShiftV()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("X11", true, false),
+            runner.Run
+        );
+
+        var result = await platform.SendPasteAsync(useTerminalShortcut: true);
+
+        Assert.True(result);
+        Assert.All(runner.Calls, call => Assert.Equal("xdotool", call.FileName));
+        Assert.Equal(
+            [
+                ["keydown", "--clearmodifiers", "Control_L"],
+                ["keydown", "--clearmodifiers", "Shift_L"],
+                ["key", "v"],
+                ["keyup", "Shift_L"],
+                ["keyup", "Control_L"]
+            ],
+            runner.Calls.Select(call => call.Arguments).ToArray()
+        );
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_Ydotool_TerminalPasteUsesCtrlShiftV()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, false, "gnome", true, true),
+            runner.Run
+        );
+
+        var result = await platform.SendPasteAsync(useTerminalShortcut: true);
+
+        Assert.True(result);
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal("ydotool", call.FileName);
+        Assert.Equal(
+            ["key", "--key-delay", "25", "29:1", "42:1", "47:1", "47:0", "42:0", "29:0"],
+            call.Arguments
+        );
     }
 
     [Fact]
@@ -1598,6 +1891,7 @@ public sealed class TextInsertionServiceTests
         public Queue<bool>? PasteResults { get; init; }
         public bool PasteSent { get; private set; }
         public int PasteAttemptCount { get; private set; }
+        public bool LastPasteUsedTerminalShortcut { get; private set; }
         public bool EnterSent { get; private set; }
         public string? TypedText { get; private set; }
 
@@ -1666,10 +1960,11 @@ public sealed class TextInsertionServiceTests
         // AT-SPI event "during" the paste.
         public Action? OnPasteSent { get; init; }
 
-        public Task<bool> SendPasteAsync()
+        public Task<bool> SendPasteAsync(bool useTerminalShortcut = false)
         {
             PasteSent = true;
             PasteAttemptCount++;
+            LastPasteUsedTerminalShortcut = useTerminalShortcut;
             OnPasteSent?.Invoke();
             return Task.FromResult(
                 PasteResults?.Count > 0 ? PasteResults.Dequeue() : PasteSucceeds

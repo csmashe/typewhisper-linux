@@ -57,7 +57,7 @@ public sealed class TextInsertionService
     private const int PasteAttemptCount = 3;
     private static readonly TimeSpan s_focusDelay = TimeSpan.FromMilliseconds(100);
 
-    // After Ctrl+V we hold our text on the clipboard this long before restoring the user's
+    // After the paste chord we hold our text on the clipboard this long before restoring the user's
     // previous content. On Wayland the target reads the clipboard asynchronously, so restoring
     // too soon races the paste: the app reads back the restored (old) content and nothing lands.
     // 200 ms was marginal for GTK apps and lost the race outright once accessibility is active
@@ -71,7 +71,7 @@ public sealed class TextInsertionService
     private static readonly TimeSpan s_pasteRetryDelay = TimeSpan.FromMilliseconds(75);
 
     // Pre-paste readiness: wl-copy forks a child to own the selection, and until that
-    // child is actually serving, GTK's async Ctrl+V read finds nothing (or the user's
+    // child is actually serving, GTK's async paste read finds nothing (or the user's
     // stale previous clipboard when wl-copy silently died) and inserts nothing. Verify
     // the clipboard serves OUR text before sending the keystroke — happy path is a
     // single ~20-50 ms read; the retry delay only accrues while the serve is late.
@@ -84,7 +84,7 @@ public sealed class TextInsertionService
 
     // Env-gated per-paste diagnostics (TW_PASTE_DIAG=1): verify attempts, restore
     // gate (confirmed vs floor) + elapsed, and whether AT-SPI knew a focused element
-    // at Ctrl+V time — the signal that would justify a future pre-paste focus gate.
+    // at paste time — the signal that would justify a future pre-paste focus gate.
     private static readonly bool s_pasteDiagEnabled =
         Environment.GetEnvironmentVariable("TW_PASTE_DIAG") == "1";
 
@@ -171,6 +171,11 @@ public sealed class TextInsertionService
             autoPaste = false;
         }
 
+        var targetIsTerminal = IsTerminalApp(targetProcessName);
+        var requiresSafeTerminalPaste =
+            autoPaste && targetIsTerminal && ContainsLineBreak(text);
+        var pasteShortcut = targetIsTerminal ? "Ctrl+Shift+V" : "Ctrl+V";
+
         if (autoPaste && !_platform.IsPasteAvailable)
         {
             LastFailureReason = InsertionFailureReason.NoWaylandTypingTool;
@@ -179,6 +184,10 @@ public sealed class TextInsertionService
 
         var shouldTypeDirectly =
             autoPaste
+            // Shift+Return is still Return in ordinary terminal protocols, so direct-typing
+            // multiline text can submit each partial line as a shell command — overriding
+            // even an explicit DirectTyping preference.
+            && !requiresSafeTerminalPaste
             && strategy switch
             {
                 TextInsertionStrategy.DirectTyping => true,
@@ -231,28 +240,32 @@ public sealed class TextInsertionService
             LogInsertionFallback(
                 "Auto paste fell back to clipboard: target window could not be focused."
             );
-            return InsertionResult.CopiedToClipboard;
+            return requiresSafeTerminalPaste
+                ? await FailTerminalMultilineAsync(text, previousClipboard)
+                : InsertionResult.CopiedToClipboard;
         }
 
         if (!await VerifyClipboardServesAsync(text))
         {
             LogInsertionFallback(
                 "Auto paste fell back to clipboard: the clipboard never served the dictated text, "
-                + "so Ctrl+V was not sent (it would have pasted nothing or stale content)."
+                + $"so {pasteShortcut} was not sent (it would have pasted nothing or stale content)."
             );
-            return InsertionResult.CopiedToClipboard;
+            return requiresSafeTerminalPaste
+                ? await FailTerminalMultilineAsync(text, previousClipboard)
+                : InsertionResult.CopiedToClipboard;
         }
 
         if (s_pasteDiagEnabled)
         {
             var focusKnown = _pasteConfirmation?.HasFocusedElement;
             PasteDiag(
-                $"focused element known at Ctrl+V: {focusKnown?.ToString() ?? "n/a (AT-SPI not running)"}"
+                $"focused element known at {pasteShortcut}: {focusKnown?.ToString() ?? "n/a (AT-SPI not running)"}"
             );
         }
 
         // Arm the confirmation watch BEFORE the keystroke: the target's text-changed
-        // fires while Ctrl+V is being processed, so a subscription made in the restore
+        // fires while the paste chord is being processed, so a subscription made in the restore
         // step (after the paste) misses it every time and waits out the full timeout.
         var pasteWatch = _pasteConfirmation?.BeginWatch();
 
@@ -261,7 +274,7 @@ public sealed class TextInsertionService
         var watchHandedOff = false;
         try
         {
-            if (!await TrySendPasteAsync())
+            if (!await TrySendPasteAsync(targetIsTerminal))
             {
                 // Prefer the platform's diagnostic (e.g. "compositor unsupported")
                 // over the generic retries-exhausted reason.
@@ -271,14 +284,16 @@ public sealed class TextInsertionService
                 }
 
                 LogInsertionFallback(
-                    "Auto paste fell back to clipboard: Ctrl+V could not be sent after retries."
+                    $"Auto paste fell back to clipboard: {pasteShortcut} could not be sent after retries."
                 );
-                return InsertionResult.CopiedToClipboard;
+                return requiresSafeTerminalPaste
+                    ? await FailTerminalMultilineAsync(text, previousClipboard)
+                    : InsertionResult.CopiedToClipboard;
             }
 
             if (autoEnter && !await _platform.SendEnterAsync())
             {
-                LogInsertionFallback("Auto paste sent Ctrl+V, but Enter could not be sent.");
+                LogInsertionFallback($"Auto paste sent {pasteShortcut}, but Enter could not be sent.");
             }
 
             // Awaited inline (not fire-and-forget) so rapid consecutive dictations stay
@@ -299,10 +314,17 @@ public sealed class TextInsertionService
     /// <summary>
     ///     Types a chunk of streamed text directly via the platform typing backend — no clipboard,
     ///     no per-chunk focus delay — for streaming a spoken-command result onto the page. The caller
-    ///     ensures the target holds focus.
+    ///     ensures the target holds focus. Terminal multiline chunks are rejected defensively; the
+    ///     orchestrator normally keeps recognized terminals out of streaming entirely so their
+    ///     completed result can use the content-aware one-shot policy.
     /// </summary>
-    public Task<bool> TypeStreamChunkAsync(string text)
+    public Task<bool> TypeStreamChunkAsync(string text, string? targetProcessName = null)
     {
+        if (IsTerminalApp(targetProcessName) && ContainsLineBreak(text))
+        {
+            return Task.FromResult(false);
+        }
+
         return _platform.TypeTextAsync(text);
     }
 
@@ -320,9 +342,10 @@ public sealed class TextInsertionService
     /// <summary>
     ///     Whether the Auto insertion policy would deliver to this target by direct typing based on
     ///     the app alone (terminals, supported browsers, Codex windows) — independent of text content.
-    ///     Lets a streaming caller decide up front whether typing each chunk matches what the one-shot
-    ///     insert would do, or whether it must defer to the content-aware one-shot path (clipboard
-    ///     paste for GUI targets, ASCII-safety for unknown ones).
+    ///     Lets a streaming caller decide whether typing each chunk matches what the one-shot insert
+    ///     would do, or whether it must defer to the content-aware one-shot path (clipboard paste for
+    ///     GUI targets, ASCII-safety for unknown ones). Because a stream's eventual newline content is
+    ///     unknown, streaming callers must additionally exclude terminal processes.
     /// </summary>
     public static bool AppPrefersDirectTyping(string? processName, string? windowTitle)
     {
@@ -406,7 +429,7 @@ public sealed class TextInsertionService
 
     /// <summary>
     ///     Confirms the clipboard actually serves <paramref name="expected" /> before we
-    ///     send Ctrl+V, with one clipboard re-set + re-verify when the first pass fails
+    ///     send the paste chord, with one clipboard re-set + re-verify when the first pass fails
     ///     (wl-copy occasionally dies before its serving child takes over the selection).
     /// </summary>
     private async Task<bool> VerifyClipboardServesAsync(string expected)
@@ -453,6 +476,45 @@ public sealed class TextInsertionService
         return false;
     }
 
+    /// <summary>
+    ///     Fail-closed exit for terminal multiline auto-paste. The clipboard already holds our
+    ///     staged text but no keystroke was sent, so — unlike the paste path — there is no
+    ///     in-flight transfer to protect. Back the staged text out so the Failed result stays
+    ///     honest ("could not be copied or pasted"). Ownership-checked like the post-paste
+    ///     restore: if the user copied something newer while the insert was failing, leave
+    ///     their copy alone rather than clobbering it with the stale snapshot.
+    /// </summary>
+    private async Task<InsertionResult> FailTerminalMultilineAsync(
+        string stagedText,
+        string? previousClipboard
+    )
+    {
+        var current = await _platform.TryGetClipboardTextAsync();
+        var stillOurs =
+            current is not null
+            && string.Equals(
+                current.TrimEnd('\n'),
+                stagedText.TrimEnd('\n'),
+                StringComparison.Ordinal
+            );
+
+        if (!stillOurs)
+        {
+            return InsertionResult.Failed;
+        }
+
+        try
+        {
+            await _platform.SetClipboardTextAsync(previousClipboard ?? string.Empty);
+        }
+        catch
+        {
+            /* best effort restore */
+        }
+
+        return InsertionResult.Failed;
+    }
+
     private async Task RestorePreviousClipboardAsync(
         string pastedText,
         string? previousClipboard,
@@ -463,7 +525,7 @@ public sealed class TextInsertionService
         {
             // Nothing to restore — no restore write can cut off the in-flight paste,
             // so there is nothing to wait for either. Still drop the watch armed
-            // before Ctrl+V: its event subscription must not outlive the insertion.
+            // before the paste chord: its event subscription must not outlive the insertion.
             watch?.Dispose();
             return;
         }
@@ -522,11 +584,11 @@ public sealed class TextInsertionService
         }
     }
 
-    private async Task<bool> TrySendPasteAsync()
+    private async Task<bool> TrySendPasteAsync(bool useTerminalShortcut)
     {
         for (var attempt = 1; attempt <= PasteAttemptCount; attempt++)
         {
-            if (await _platform.SendPasteAsync())
+            if (await _platform.SendPasteAsync(useTerminalShortcut))
             {
                 return true;
             }
@@ -704,6 +766,11 @@ public sealed class TextInsertionService
         return true;
     }
 
+    private static bool ContainsLineBreak(string text)
+    {
+        return text.AsSpan().IndexOfAny('\r', '\n') >= 0;
+    }
+
     /// <summary>
     ///     Env-gated (TW_PASTE_DIAG=1) per-paste diagnostic trace. Off by default so the
     ///     hot path stays silent; used to validate the paste-readiness fix in the field.
@@ -753,7 +820,13 @@ internal interface ITextInsertionPlatform
     Task DelayAsync(TimeSpan delay);
     string? GetActiveWindowId();
     Task<bool> ActivateWindowAsync(string windowId);
-    Task<bool> SendPasteAsync();
+
+    /// <summary>
+    ///     Synthesizes a paste. When <paramref name="useTerminalShortcut" /> is true,
+    ///     sends Ctrl+Shift+V (terminals map plain Ctrl+V to readline quoted-insert);
+    ///     otherwise Ctrl+V.
+    /// </summary>
+    Task<bool> SendPasteAsync(bool useTerminalShortcut = false);
     Task<bool> TypeTextAsync(string text);
 
     /// <summary>
@@ -959,14 +1032,22 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                == 0;
     }
 
-    public async Task<bool> SendPasteAsync()
+    public async Task<bool> SendPasteAsync(bool useTerminalShortcut = false)
     {
         return await WalkChainAsync(async backend =>
             backend switch
             {
-                InputBackend.Wtype => await RunWtypeAsync("-M", "ctrl", "v", "-m", "ctrl"),
-                InputBackend.Xdotool => await SendModifiedKeyAsync("Control_L", "v"),
-                InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.PasteArgs()),
+                InputBackend.Wtype => useTerminalShortcut
+                    ? await RunWtypeAsync("-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl")
+                    : await RunWtypeAsync("-M", "ctrl", "v", "-m", "ctrl"),
+                InputBackend.Xdotool => useTerminalShortcut
+                    ? await SendModifiedKeyAsync(["Control_L", "Shift_L"], "v")
+                    : await SendModifiedKeyAsync("Control_L", "v"),
+                InputBackend.Ydotool => await RunYdotoolAsync(
+                    useTerminalShortcut
+                        ? YdotoolBackend.TerminalPasteArgs()
+                        : YdotoolBackend.PasteArgs()
+                ),
                 _ => false
             }
         );
@@ -977,10 +1058,10 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         // Map newlines to Shift+Enter rather than a bare Return so that
         // dictated paragraph breaks insert a newline instead of submitting
         // in chat boxes (Slack / Discord / web chat / Claude's box), where
-        // Enter sends. Shift+Enter inserts a newline in effectively every
-        // app — editors, terminals, chat — so this is safe across all
-        // direct-typed targets. The clipboard-paste path is unaffected
-        // (pasted multiline text does not trigger a submit).
+        // Enter sends. The strategy layer must keep terminal multiline text
+        // out of this method: terminal protocols still deliver Shift+Return
+        // as Return, which can submit partial shell commands. The clipboard-
+        // paste path is unaffected (pasted multiline text does not submit).
         return WalkChainAsync(backend => TypeWithNewlinesAsync(backend, text));
     }
 
