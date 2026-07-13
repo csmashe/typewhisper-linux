@@ -175,6 +175,7 @@ public static class OpenAiChatHelper
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
+        var receivedTerminalSignal = false;
 
         while (await reader.ReadLineAsync(ct) is { } rawLine)
         {
@@ -205,10 +206,23 @@ public static class OpenAiChatHelper
                 throw new InvalidOperationException(error);
             }
 
-            if (ParseChatCompletionStreamDelta(payload) is { Length: > 0 } delta)
+            var delta = ParseChatCompletionStreamDelta(payload, out var hasFinishReason);
+            // Some compatible providers close cleanly after a non-null finish_reason
+            // instead of sending [DONE]. Do not stop here: usage or [DONE] may follow.
+            receivedTerminalSignal |= hasFinishReason;
+
+            if (delta is { Length: > 0 })
             {
                 yield return delta;
             }
+        }
+
+        if (!receivedTerminalSignal)
+        {
+            throw new InvalidOperationException(
+                "Incomplete chat completion stream: connection closed without a terminal "
+                + "frame ([DONE] or a non-null finish_reason)."
+            );
         }
     }
 
@@ -221,6 +235,20 @@ public static class OpenAiChatHelper
     // ReSharper disable once UnusedParameter.Global
     internal static string? ParseChatCompletionStreamDelta(string dataPayload)
     {
+        return ParseChatCompletionStreamDelta(dataPayload, out _);
+    }
+
+    /// <summary>
+    ///     Extracts a content delta and reports whether <c>choices[0].finish_reason</c>
+    ///     carries a valid terminal value. Invalid/contentless frames remain non-fatal
+    ///     and return <c>null</c>.
+    /// </summary>
+    private static string? ParseChatCompletionStreamDelta(
+        string dataPayload,
+        out bool hasFinishReason
+    )
+    {
+        hasFinishReason = false;
         JsonDocument doc;
         try
         {
@@ -234,10 +262,23 @@ public static class OpenAiChatHelper
         using (doc)
         {
             var root = doc.RootElement;
-            if (root.TryGetProperty("choices", out var choices)
-                && choices.ValueKind == JsonValueKind.Array
-                && choices.GetArrayLength() > 0
-                && choices[0].TryGetProperty("delta", out var delta)
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("choices", out var choices)
+                || choices.ValueKind != JsonValueKind.Array
+                || choices.GetArrayLength() == 0
+                || choices[0].ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            var firstChoice = choices[0];
+            // finish_reason is only ever null (still streaming) or a non-empty string
+            // ("stop", "length", ...); anything else must not mask a truncated stream.
+            hasFinishReason = firstChoice.TryGetProperty("finish_reason", out var finishReason)
+                              && finishReason.ValueKind == JsonValueKind.String
+                              && !string.IsNullOrEmpty(finishReason.GetString());
+
+            if (firstChoice.TryGetProperty("delta", out var delta)
                 && delta.TryGetProperty("content", out var content)
                 && content.ValueKind == JsonValueKind.String)
             {

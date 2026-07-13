@@ -113,6 +113,104 @@ public sealed class SharedHelperStreamingCohortTests
         Assert.Equal("server had an error", ex.Message);
     }
 
+    [Fact]
+    public async Task ProcessStreamingAsync_ThrowsOnEofAfterPartialDeltasWithoutTerminalFrame()
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":null}]}",
+            "");
+        var chunks = new List<string>();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => StreamCerebrasSseAsync(sse, chunks));
+
+        Assert.Equal(["Hel", "lo"], chunks);
+        Assert.Contains("Incomplete chat completion stream", ex.Message);
+        Assert.Contains("without a terminal frame", ex.Message);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_FinishReasonThenEof_CompletesWithFullText()
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}",
+            "");
+        var chunks = new List<string>();
+
+        await StreamCerebrasSseAsync(sse, chunks);
+
+        Assert.Equal(["Hel", "lo"], chunks);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_FinishReasonThenDone_CompletesWithFullText()
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}",
+            "",
+            "data: [DONE]",
+            "");
+        var chunks = new List<string>();
+
+        await StreamCerebrasSseAsync(sse, chunks);
+
+        Assert.Equal(["Hel", "lo"], chunks);
+    }
+
+    [Theory]
+    [InlineData("false")]
+    [InlineData("true")]
+    [InlineData("0")]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    [InlineData("\"\"")]
+    public async Task ProcessStreamingAsync_NonStringFinishReason_ThrowsIncompleteStream(
+        string finishReasonJson)
+    {
+        // A provider emitting a bogus finish_reason on ordinary chunks must not
+        // count as terminal and mask a truncated stream.
+        var sse = string.Join(
+            "\n",
+            $"data: {{\"choices\":[{{\"delta\":{{\"content\":\"Hel\"}},\"finish_reason\":{finishReasonJson}}}]}}",
+            "",
+            $"data: {{\"choices\":[{{\"delta\":{{\"content\":\"lo\"}},\"finish_reason\":{finishReasonJson}}}]}}",
+            "");
+        var chunks = new List<string>();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => StreamCerebrasSseAsync(sse, chunks));
+
+        Assert.Equal(["Hel", "lo"], chunks);
+        Assert.Contains("Incomplete chat completion stream", ex.Message);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_EmptyBody_ThrowsIncompleteStream()
+    {
+        // A zero-frame 200 response is not a successful empty completion. Throwing here
+        // makes LlmStreamPump fault, preserving the callers' existing batch-fallback intent.
+        var chunks = new List<string>();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => StreamCerebrasSseAsync("", chunks));
+
+        Assert.Empty(chunks);
+        Assert.Contains("Incomplete chat completion stream", ex.Message);
+    }
+
     private static void AssertStreamBody(string? body, string expectedModel)
     {
         using var doc = JsonDocument.Parse(body!);
@@ -190,6 +288,26 @@ public sealed class SharedHelperStreamingCohortTests
 
         Assert.Single(chunks);
         Assert.Equal("bulk", chunks[0]);
+    }
+
+    private static async Task StreamCerebrasSseAsync(string sse, List<string> chunks)
+    {
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "test-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new CerebrasPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await foreach (var chunk in sut.ProcessStreamingAsync(
+                           "system", "user", "model", CancellationToken.None))
+        {
+            chunks.Add(chunk);
+        }
     }
 
     private sealed class CapturingHandler(
