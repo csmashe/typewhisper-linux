@@ -120,14 +120,18 @@ public sealed class LocalModelStorageService
             return;
         }
 
-        if (IsNestedUnder(targetRoot, pluginAssetSourceRoot))
+        // Equality as well as nesting: the plugin-asset root is a sibling of the default models
+        // root, so selecting it verbatim slips past the source-equality and models-nesting guards
+        // and would migrate assets into a degenerate PluginData/PluginData tree.
+        if (PathsEqual(targetRoot, pluginAssetSourceRoot)
+            || IsNestedUnder(targetRoot, pluginAssetSourceRoot))
         {
             throw new LocalModelStorageUnavailableException(
                 LocalModelStorageUnavailableReason.NestedUnderCurrentFolder,
                 targetRoot,
                 string.Format(
                     CultureInfo.InvariantCulture,
-                    "Target model storage folder '{0}' must not be inside the current plugin asset folder '{1}'.",
+                    "Target model storage folder '{0}' must not be, or be inside, the current plugin asset folder '{1}'.",
                     targetRoot,
                     pluginAssetSourceRoot),
                 currentPath: pluginAssetSourceRoot);

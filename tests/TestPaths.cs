@@ -16,6 +16,17 @@ internal static class TestPaths
     public static string NewTempPath(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        // Keep generated paths inside the temp dir. EnsureIsolated only blocks the production
+        // root, so a rooted name or one with separators could otherwise escape via Path.Join /
+        // GetFullPath (e.g. a "../.." name).
+        if (Path.IsPathRooted(name)
+            || name.Contains(Path.DirectorySeparatorChar)
+            || name.Contains(Path.AltDirectorySeparatorChar))
+        {
+            throw new ArgumentException(
+                "Temp path name must not be rooted or contain directory separators.", nameof(name));
+        }
+
         return EnsureIsolated(
             Path.Join(Path.GetTempPath(), $"{name}-{Guid.NewGuid():N}")
         );

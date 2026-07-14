@@ -139,6 +139,11 @@ jobs:
       - prepare
       - build
     runs-on: ubuntu-latest
+    # Serialize same-tag runs so an overlapping re-push / dispatch can't race through
+    # verification and release creation; different tags still proceed independently.
+    concurrency:
+      group: release-${{ needs.prepare.outputs.tag }}
+      cancel-in-progress: false
     permissions:
       contents: write
 

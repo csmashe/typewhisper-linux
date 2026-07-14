@@ -71,6 +71,15 @@ public partial class DictationSectionViewModel : ObservableObject
     // bridge button is offered (a toggle on an unreadable bus could only fail).
     private bool _accessibilityBridgeStateKnown;
 
+    // Monotonic token for bridge-state refreshes. Async bus reads can complete out of order
+    // (multiple refreshes overlap on startup and around a toggle), so each refresh captures the
+    // generation it started with and applies its result only if newer than the last one applied.
+    private int _accessibilityBridgeRefreshGeneration;
+
+    // Highest refresh generation whose read actually landed. Advanced only when a value is
+    // applied, so a newer read that fails (null) cannot suppress an older read that succeeded.
+    private int _accessibilityBridgeAppliedGeneration;
+
     [ObservableProperty]
     private string _accessibilityBridgeStatus = "";
 
@@ -1445,18 +1454,33 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private async Task RefreshAccessibilityBridgeStateAsync()
     {
+        var generation = ++_accessibilityBridgeRefreshGeneration;
         var activated = await _a11yBus.IsActivatedAsync();
-        if (activated is { } value)
+
+        // A null read (bus timeout / transient failure) applies nothing, so it must not
+        // invalidate another refresh's valid result — arbitration is on the newest *applied*
+        // value below, never on the newest *started* request.
+        if (activated is not { } value)
         {
-            Dispatcher.UIThread.Post(() =>
-            {
-                _accessibilityBridgeStateKnown = true;
-                AccessibilityBridgeActivated = value;
-                // The activated setter only notifies on a change; the state-known flip alone
-                // (false -> false read) must still reveal the setup panel.
-                OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
-            });
+            return;
         }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            // Drop this result only if a newer refresh has already applied one; a slower older
+            // read still lands when the newer read failed and posted nothing.
+            if (generation <= _accessibilityBridgeAppliedGeneration)
+            {
+                return;
+            }
+
+            _accessibilityBridgeAppliedGeneration = generation;
+            _accessibilityBridgeStateKnown = true;
+            AccessibilityBridgeActivated = value;
+            // The activated setter only notifies on a change; the state-known flip alone
+            // (false -> false read) must still reveal the setup panel.
+            OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
+        });
     }
 
     partial void OnLiveTranscriptionEnabledChanged(bool value)

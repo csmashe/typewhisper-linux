@@ -399,7 +399,9 @@ public sealed class InputAccessSetupHelper
                + "EOF\n"
                + "udevadm control --reload\n"
                + "udevadm trigger --subsystem-match=input --action=change\n"
-               + "udevadm settle --timeout=5\n"
+               // || true so a settle timeout under set -e can't stop the script before the
+               // input-group fallback below, matching the privileged install path.
+               + "udevadm settle --timeout=5 || true\n"
                // Self-correcting fallback. TAG+="uaccess" grants keyboard access on
                // systems with a logind/elogind seat manager (the common case), so
                // this only acts where uaccess is inert — detected directly by the

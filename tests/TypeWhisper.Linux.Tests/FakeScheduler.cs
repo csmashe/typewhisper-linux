@@ -19,7 +19,11 @@ internal sealed class FakeScheduler
 
     public void FirePending()
     {
-        _pending?.Fire();
+        // Consume the handle before firing so a fired one-shot can't be fired twice, and a
+        // callback that re-arms during Fire installs a fresh _pending rather than being cleared.
+        var pending = _pending;
+        _pending = null;
+        pending?.Fire();
     }
 
     private sealed class ScheduledDelay(TimeSpan delay, Action callback) : IDisposable
