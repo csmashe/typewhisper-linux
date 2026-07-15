@@ -797,6 +797,10 @@ public sealed class PluginManager : IDisposable
             Trace.WriteLine(
                 $"[PluginManager] Failed to migrate API key for {pluginId}: {ex.Message}"
             );
+            _errorLog?.AddEntry(
+                $"Failed to migrate API key for plugin '{pluginId}': {ex.Message}",
+                ErrorCategory.Plugin
+            );
             return false;
         }
     }

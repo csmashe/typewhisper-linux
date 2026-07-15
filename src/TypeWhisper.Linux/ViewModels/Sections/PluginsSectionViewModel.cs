@@ -2,6 +2,8 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
@@ -62,6 +64,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         "com.typewhisper.openai-compatible"
     ];
 
+    private readonly IErrorLogService? _errorLog;
     private readonly Dictionary<string, LoadedPlugin> _pluginById = [];
     private readonly PluginManager _pluginManager;
 
@@ -71,9 +74,10 @@ public partial class PluginsSectionViewModel : ObservableObject
     [ObservableProperty]
     private string _summary = "";
 
-    public PluginsSectionViewModel(PluginManager pluginManager)
+    public PluginsSectionViewModel(PluginManager pluginManager, IErrorLogService? errorLog = null)
     {
         _pluginManager = pluginManager;
+        _errorLog = errorLog;
         _pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(Refresh);
         Refresh();
     }
@@ -218,9 +222,9 @@ public partial class PluginsSectionViewModel : ObservableObject
         // ReSharper disable once ConvertIfStatementToSwitchStatement — see above; the checks are independent.
         if (loaded.Instance is IPluginSettingsProvider provider)
         {
-            foreach (var field in row.SettingFields)
+            if (!await TrySaveFlatSettingsAsync(row, loaded, provider))
             {
-                await provider.SetSettingValueAsync(field.Key, field.Value);
+                return;
             }
         }
 
@@ -234,7 +238,22 @@ public partial class PluginsSectionViewModel : ObservableObject
                     ))
                     .ToList();
 
-                var result = await collectionProvider.SetItemsAsync(collection.Key, items);
+                PluginSettingsValidationResult result;
+                try
+                {
+                    result = await collectionProvider.SetItemsAsync(collection.Key, items);
+                }
+                catch (Exception ex)
+                {
+                    _errorLog?.AddEntry(
+                        $"Plugin '{loaded.Manifest.Name}' failed to save collection '{collection.Key}': {ex.Message}",
+                        ErrorCategory.Plugin
+                    );
+                    row.Status = Loc.Instance["Plugins.SettingsSaveFailed"];
+                    await LoadPluginSettingsAsync(row, true);
+                    return;
+                }
+
                 if (result.IsSuccess)
                 {
                     continue;
@@ -261,14 +280,41 @@ public partial class PluginsSectionViewModel : ObservableObject
             return;
         }
 
-        foreach (var field in row.SettingFields)
+        if (!await TrySaveFlatSettingsAsync(row, loaded, provider))
         {
-            await provider.SetSettingValueAsync(field.Key, field.Value);
+            return;
         }
 
         var result = await provider.ValidateAsync();
         row.Status = result?.Message ?? Loc.Instance["Plugins.NoValidationAvailable"];
         await LoadPluginSettingsAsync(row, true);
+    }
+
+    private async Task<bool> TrySaveFlatSettingsAsync(
+        PluginRow row,
+        LoadedPlugin loaded,
+        IPluginSettingsProvider provider
+    )
+    {
+        foreach (var field in row.SettingFields)
+        {
+            try
+            {
+                await provider.SetSettingValueAsync(field.Key, field.Value);
+            }
+            catch (Exception ex)
+            {
+                _errorLog?.AddEntry(
+                    $"Plugin '{loaded.Manifest.Name}' failed to save setting '{field.Key}': {ex.Message}",
+                    ErrorCategory.Plugin
+                );
+                row.Status = Loc.Instance["Plugins.SettingsSaveFailed"];
+                await LoadPluginSettingsAsync(row, true);
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private async Task LoadPluginSettingsAsync(PluginRow row, bool preserveStatus = false)

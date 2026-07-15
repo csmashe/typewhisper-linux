@@ -482,6 +482,7 @@
   "Plugins.NoHostNeutralSettings": "This plugin does not expose host-neutral settings yet.",
   "Plugins.NoValidationAvailable": "No validation available.",
   "Plugins.SettingsSaved": "Settings saved.",
+  "Plugins.SettingsSaveFailed": "Settings could not be saved. See the error log for details.",
   "Plugins.SummaryFailed": " · {0} failed to load",
   "Plugins.SummaryLoaded": "{0} plugin(s) loaded",
   "Plugins.UnableToLoadSettings": "Unable to load plugin settings.",

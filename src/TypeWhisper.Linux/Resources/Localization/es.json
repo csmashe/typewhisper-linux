@@ -482,6 +482,7 @@
   "Plugins.NoHostNeutralSettings": "Este plugin aún no ofrece ajustes independientes del host.",
   "Plugins.NoValidationAvailable": "No hay validación disponible.",
   "Plugins.SettingsSaved": "Ajustes guardados.",
+  "Plugins.SettingsSaveFailed": "No se pudieron guardar los ajustes. Consulte el registro de errores para más detalles.",
   "Plugins.SummaryFailed": " · {0} no se pudieron cargar",
   "Plugins.SummaryLoaded": "{0} plugin(s) cargado(s)",
   "Plugins.UnableToLoadSettings": "No se pudieron cargar los ajustes del plugin.",

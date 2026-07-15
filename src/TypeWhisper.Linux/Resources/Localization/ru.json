@@ -482,6 +482,7 @@
   "Plugins.NoHostNeutralSettings": "Этот плагин пока не предоставляет хост-независимых настроек.",
   "Plugins.NoValidationAvailable": "Проверка недоступна.",
   "Plugins.SettingsSaved": "Настройки сохранены.",
+  "Plugins.SettingsSaveFailed": "Не удалось сохранить настройки. Подробности см. в журнале ошибок.",
   "Plugins.SummaryFailed": " · не удалось загрузить: {0}",
   "Plugins.SummaryLoaded": "Загружено плагинов: {0}",
   "Plugins.UnableToLoadSettings": "Не удалось загрузить настройки плагина.",
