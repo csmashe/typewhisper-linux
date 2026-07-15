@@ -8,17 +8,31 @@ public static class AtomicFileWrite
 {
     public static void WriteAllText(string path, string contents)
     {
+        WriteAllTextCore(path, contents, replaceExisting: true);
+    }
+
+    /// <summary>
+    ///     Atomically creates <paramref name="path" /> with complete text content. Throws an
+    ///     <see cref="IOException" /> without changing the destination when it already exists.
+    /// </summary>
+    public static void WriteAllTextCreateNew(string path, string contents)
+    {
+        WriteAllTextCore(path, contents, replaceExisting: false);
+    }
+
+    private static void WriteAllTextCore(string path, string contents, bool replaceExisting)
+    {
         var tempPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            // Make the temp file owner-only *before* writing contents, so secrets are never
-            // briefly world-readable to other local users.
             if (OperatingSystem.IsWindows())
             {
                 File.WriteAllText(tempPath, contents);
             }
-            else
+            else if (replaceExisting)
             {
+                // Replace path: make the temp owner-only *before* writing, so secret contents
+                // are never briefly world-readable to other local users.
                 using (
                     new FileStream(
                         tempPath,
@@ -35,8 +49,14 @@ public static class AtomicFileWrite
 
                 File.WriteAllText(tempPath, contents);
             }
+            else
+            {
+                // New file: let the umask govern the mode so exports in shared output folders
+                // stay readable to their consumers.
+                File.WriteAllText(tempPath, contents);
+            }
 
-            if (File.Exists(path))
+            if (replaceExisting && File.Exists(path))
             {
                 // File.Replace brings the temp file's inode (and mode) into the destination, so
                 // copy the destination's mode over first to preserve its permissions.
@@ -49,7 +69,6 @@ public static class AtomicFileWrite
             }
             else
             {
-                // New file: the owner-only mode set above carries over via the move.
                 File.Move(tempPath, path);
             }
         }

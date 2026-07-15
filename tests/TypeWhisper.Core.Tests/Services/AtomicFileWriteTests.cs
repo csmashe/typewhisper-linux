@@ -42,6 +42,57 @@ public sealed class AtomicFileWriteTests
         Assert.Equal(before, File.ReadAllBytes(failurePath.FilePath));
         Assert.Empty(failurePath.TemporaryFiles);
     }
+
+    [Fact]
+    public void WriteAllTextCreateNew_CreatesCompleteDestinationWithoutTempFile()
+    {
+        var directory = Path.Join(
+            Path.GetTempPath(),
+            "tw-atomic-create-new-" + Guid.NewGuid().ToString("N")
+        );
+        Directory.CreateDirectory(directory);
+        var path = Path.Join(directory, "data.json");
+
+        try
+        {
+            AtomicFileWrite.WriteAllTextCreateNew(path, "complete new content");
+
+            Assert.Equal("complete new content", File.ReadAllText(path));
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public void WriteAllTextCreateNew_WhenDestinationExists_LeavesItUntouchedAndCleansTempFile()
+    {
+        var directory = Path.Join(
+            Path.GetTempPath(),
+            "tw-atomic-create-new-collision-" + Guid.NewGuid().ToString("N")
+        );
+        Directory.CreateDirectory(directory);
+        var path = Path.Join(directory, "data.json");
+
+        try
+        {
+            File.WriteAllBytes(path, [0, 1, 2, 255]);
+            var before = File.ReadAllBytes(path);
+
+            Assert.Throws<IOException>(() =>
+                AtomicFileWrite.WriteAllTextCreateNew(path, "replacement content")
+            );
+
+            Assert.Equal(before, File.ReadAllBytes(path));
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
 }
 
 internal sealed class AtomicWriteFailureTestPath : IDisposable
