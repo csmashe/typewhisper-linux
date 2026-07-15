@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using Timer = System.Timers.Timer;
@@ -23,6 +24,9 @@ public partial class RecorderSectionViewModel : ObservableObject
     private readonly AudioRecordingService _audio;
     private readonly ModelManagerService _models;
     private readonly ISettingsService _settings;
+
+    // Command execution and continuations that access this flag run on the UI thread.
+    private bool _stopSaveInProgress;
 
     [ObservableProperty]
     private double _audioLevel;
@@ -63,17 +67,39 @@ public partial class RecorderSectionViewModel : ObservableObject
     public ObservableCollection<RecordingItem> Recordings { get; } = [];
     public bool HasRecordings => Recordings.Count > 0;
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanToggleRecording))]
     private void ToggleRecording()
     {
+        if (_stopSaveInProgress)
+        {
+            return;
+        }
+
         if (IsRecording)
         {
+            SetStopSaveInProgress(true);
             _ = StopRecordingAsync();
         }
         else
         {
             StartRecording();
         }
+    }
+
+    private bool CanToggleRecording()
+    {
+        return !_stopSaveInProgress;
+    }
+
+    private void SetStopSaveInProgress(bool value)
+    {
+        if (_stopSaveInProgress == value)
+        {
+            return;
+        }
+
+        _stopSaveInProgress = value;
+        ToggleRecordingCommand.NotifyCanExecuteChanged();
     }
 
     private void StartRecording()
@@ -107,27 +133,48 @@ public partial class RecorderSectionViewModel : ObservableObject
         _timer?.Dispose();
         _timer = null;
 
-        var wav = await _audio.StopRecordingAsync();
-        IsRecording = false;
-        OnPropertyChanged(nameof(RecordButtonText));
-        AudioLevel = 0;
         var duration = DateTime.UtcNow - _recordingStart;
+        byte[] wav;
+        string filePath;
 
-        if (wav.Length == 0)
+        try
         {
-            StatusText = Loc.Instance["Recorder.StatusNoAudio"];
+            wav = await _audio.StopRecordingAsync();
+            if (wav.Length == 0)
+            {
+                StatusText = Loc.Instance["Recorder.StatusNoAudio"];
+                DurationText = "0:00";
+                return;
+            }
+
+            // Off the dispatcher so a large WAV or slow disk doesn't freeze the UI;
+            // CommitRecording touches no UI state.
+            var recordingPath = TypeWhisperEnvironment.AudioPath;
+            var wavBytes = wav;
+            filePath = await Task.Run(
+                () => RecorderFileNamer.CommitRecording(recordingPath, DateTime.Now, wavBytes)
+            );
+        }
+        catch
+        {
+            StatusText = Loc.Instance["Recorder.StatusSaveFailed"];
             DurationText = "0:00";
             return;
         }
+        finally
+        {
+            IsRecording = false;
+            OnPropertyChanged(nameof(RecordButtonText));
+            AudioLevel = 0;
+            SetStopSaveInProgress(false);
+        }
 
-        var fileName = $"recording-{DateTime.Now:yyyy-MM-dd-HHmmss}.wav";
-        var filePath = Path.Join(TypeWhisperEnvironment.AudioPath, fileName);
-        await File.WriteAllBytesAsync(filePath, wav);
+        var fileName = Path.GetFileName(filePath);
 
         StatusText = Loc.Instance["Recorder.StatusSavedTranscribing"];
         IsTranscribing = true;
 
-        string? transcript = null;
+        string? transcript;
         try
         {
             var effectiveModelId = _settings.Current.SelectedModelId;
@@ -152,15 +199,26 @@ public partial class RecorderSectionViewModel : ObservableObject
                 // ReSharper disable once DisposeOnUsingVariable -- intentional early release of the model lock before the file I/O below.
                 await lease.DisposeAsync();
             }
-
-            if (!string.IsNullOrWhiteSpace(transcript))
-            {
-                await File.WriteAllTextAsync(Path.ChangeExtension(filePath, ".txt"), transcript);
-            }
         }
         catch
         {
             // Keep the recording even if transcription fails.
+            transcript = null;
+        }
+
+        var transcriptWriteFailed = false;
+        if (!string.IsNullOrWhiteSpace(transcript))
+        {
+            try
+            {
+                AtomicFileWrite.WriteAllText(Path.ChangeExtension(filePath, ".txt"), transcript);
+            }
+            catch
+            {
+                // Keep the recording; report the sidecar failure instead of
+                // misreporting "no model loaded".
+                transcriptWriteFailed = true;
+            }
         }
 
         IsTranscribing = false;
@@ -169,9 +227,11 @@ public partial class RecorderSectionViewModel : ObservableObject
             new RecordingItem(fileName, filePath, DateTime.Now, duration, transcript)
         );
         OnPropertyChanged(nameof(HasRecordings));
-        StatusText = transcript is not null
-            ? Loc.Instance["Recorder.StatusDone"]
-            : Loc.Instance["Recorder.StatusSavedNoModel"];
+        StatusText = transcriptWriteFailed
+            ? Loc.Instance["Recorder.StatusTranscriptSaveFailed"]
+            : transcript is not null
+                ? Loc.Instance["Recorder.StatusDone"]
+                : Loc.Instance["Recorder.StatusSavedNoModel"];
         DurationText = "0:00";
     }
 

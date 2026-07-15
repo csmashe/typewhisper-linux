@@ -1,14 +1,14 @@
 namespace TypeWhisper.Core.Services;
 
 /// <summary>
-///     Writes text so the destination ends up with either the complete old or complete new
+///     Writes content so the destination ends up with either the complete old or complete new
 ///     content, never a partial write. Failures throw.
 /// </summary>
 public static class AtomicFileWrite
 {
     public static void WriteAllText(string path, string contents)
     {
-        WriteAllTextCore(path, contents, replaceExisting: true);
+        WriteCore(path, replaceExisting: true, tempPath => File.WriteAllText(tempPath, contents));
     }
 
     /// <summary>
@@ -17,17 +17,35 @@ public static class AtomicFileWrite
     /// </summary>
     public static void WriteAllTextCreateNew(string path, string contents)
     {
-        WriteAllTextCore(path, contents, replaceExisting: false);
+        WriteCore(path, replaceExisting: false, tempPath => File.WriteAllText(tempPath, contents));
     }
 
-    private static void WriteAllTextCore(string path, string contents, bool replaceExisting)
+    public static void WriteAllBytes(string path, byte[] bytes)
+    {
+        WriteCore(path, replaceExisting: true, tempPath => File.WriteAllBytes(tempPath, bytes));
+    }
+
+    /// <summary>
+    ///     Atomically creates <paramref name="path" /> with complete byte content. Throws an
+    ///     <see cref="IOException" /> without changing the destination when it already exists.
+    /// </summary>
+    public static void WriteAllBytesCreateNew(string path, byte[] bytes)
+    {
+        WriteCore(path, replaceExisting: false, tempPath => File.WriteAllBytes(tempPath, bytes));
+    }
+
+    private static void WriteCore(
+        string path,
+        bool replaceExisting,
+        Action<string> writeTemporaryFile
+    )
     {
         var tempPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             if (OperatingSystem.IsWindows())
             {
-                File.WriteAllText(tempPath, contents);
+                writeTemporaryFile(tempPath);
             }
             else if (replaceExisting)
             {
@@ -47,13 +65,13 @@ public static class AtomicFileWrite
                     File.SetUnixFileMode(tempPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
                 }
 
-                File.WriteAllText(tempPath, contents);
+                writeTemporaryFile(tempPath);
             }
             else
             {
                 // New file: let the umask govern the mode so exports in shared output folders
                 // stay readable to their consumers.
-                File.WriteAllText(tempPath, contents);
+                writeTemporaryFile(tempPath);
             }
 
             if (replaceExisting && File.Exists(path))

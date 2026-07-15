@@ -93,6 +93,96 @@ public sealed class AtomicFileWriteTests
             Directory.Delete(directory, true);
         }
     }
+
+    [Fact]
+    public void WriteAllBytes_ReplacesDestinationCompletely()
+    {
+        var directory = Path.Join(
+            Path.GetTempPath(),
+            "tw-atomic-bytes-success-" + Guid.NewGuid().ToString("N")
+        );
+        Directory.CreateDirectory(directory);
+        var path = Path.Join(directory, "audio.wav");
+
+        try
+        {
+            File.WriteAllBytes(path, [9, 8, 7, 6]);
+
+            AtomicFileWrite.WriteAllBytes(path, [0, 1, 2, 255]);
+
+            Assert.Equal([0, 1, 2, 255], File.ReadAllBytes(path));
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public void WriteAllBytes_WhenTempWriteFails_LeavesDestinationUntouchedAndNoTempFile()
+    {
+        using var failurePath = new AtomicWriteFailureTestPath("complete old content");
+        var before = File.ReadAllBytes(failurePath.FilePath);
+
+        Assert.ThrowsAny<Exception>(() =>
+            AtomicFileWrite.WriteAllBytes(failurePath.FilePath, [0, 1, 2, 255])
+        );
+
+        Assert.Equal(before, File.ReadAllBytes(failurePath.FilePath));
+        Assert.Empty(failurePath.TemporaryFiles);
+    }
+
+    [Fact]
+    public void WriteAllBytesCreateNew_CreatesCompleteDestinationWithoutTempFile()
+    {
+        var directory = Path.Join(
+            Path.GetTempPath(),
+            "tw-atomic-bytes-create-new-" + Guid.NewGuid().ToString("N")
+        );
+        Directory.CreateDirectory(directory);
+        var path = Path.Join(directory, "audio.wav");
+
+        try
+        {
+            AtomicFileWrite.WriteAllBytesCreateNew(path, [0, 1, 2, 255]);
+
+            Assert.Equal([0, 1, 2, 255], File.ReadAllBytes(path));
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public void WriteAllBytesCreateNew_WhenDestinationExists_LeavesItUntouchedAndCleansTempFile()
+    {
+        var directory = Path.Join(
+            Path.GetTempPath(),
+            "tw-atomic-bytes-create-new-collision-" + Guid.NewGuid().ToString("N")
+        );
+        Directory.CreateDirectory(directory);
+        var path = Path.Join(directory, "audio.wav");
+
+        try
+        {
+            File.WriteAllBytes(path, [0, 1, 2, 255]);
+            var before = File.ReadAllBytes(path);
+
+            Assert.Throws<IOException>(() =>
+                AtomicFileWrite.WriteAllBytesCreateNew(path, [255, 2, 1, 0])
+            );
+
+            Assert.Equal(before, File.ReadAllBytes(path));
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
 }
 
 internal sealed class AtomicWriteFailureTestPath : IDisposable
