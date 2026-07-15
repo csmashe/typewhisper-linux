@@ -48,8 +48,9 @@ public sealed class PromptActionService : IPromptActionService
     public void AddAction(PromptAction action)
     {
         EnsureCacheLoaded();
-        _cache.Add(action);
-        SaveToDisk();
+        var next = new List<PromptAction>(_cache) { action };
+        SaveToDisk(next);
+        _cache = next;
         ActionsChanged?.Invoke();
     }
 
@@ -57,37 +58,43 @@ public sealed class PromptActionService : IPromptActionService
     {
         EnsureCacheLoaded();
         var updated = action with { UpdatedAt = DateTime.UtcNow };
-        var idx = _cache.FindIndex(a => a.Id == action.Id);
+        var next = new List<PromptAction>(_cache);
+        var idx = next.FindIndex(a => a.Id == action.Id);
         if (idx >= 0)
         {
-            _cache[idx] = updated;
+            next[idx] = updated;
         }
 
-        SaveToDisk();
+        SaveToDisk(next);
+        _cache = next;
         ActionsChanged?.Invoke();
     }
 
     public void DeleteAction(string id)
     {
         EnsureCacheLoaded();
-        _cache.RemoveAll(a => a.Id == id);
-        SaveToDisk();
+        var next = new List<PromptAction>(_cache);
+        next.RemoveAll(a => a.Id == id);
+        SaveToDisk(next);
+        _cache = next;
         ActionsChanged?.Invoke();
     }
 
     public void Reorder(IReadOnlyList<string> orderedIds)
     {
         EnsureCacheLoaded();
+        var next = new List<PromptAction>(_cache);
         for (var i = 0; i < orderedIds.Count; i++)
         {
-            var idx = _cache.FindIndex(a => a.Id == orderedIds[i]);
+            var idx = next.FindIndex(a => a.Id == orderedIds[i]);
             if (idx >= 0)
             {
-                _cache[idx] = _cache[idx] with { SortOrder = i };
+                next[idx] = next[idx] with { SortOrder = i };
             }
         }
 
-        SaveToDisk();
+        SaveToDisk(next);
+        _cache = next;
         ActionsChanged?.Invoke();
     }
 
@@ -107,8 +114,9 @@ public sealed class PromptActionService : IPromptActionService
             return;
         }
 
-        _cache.Add(FirstRunDefaults.CreateAutoCleanupAction());
-        SaveToDisk();
+        var next = new List<PromptAction>(_cache) { FirstRunDefaults.CreateAutoCleanupAction() };
+        SaveToDisk(next);
+        _cache = next;
         ActionsChanged?.Invoke();
     }
 
@@ -149,10 +157,11 @@ public sealed class PromptActionService : IPromptActionService
             )
         };
 
+        var next = new List<PromptAction>(_cache);
         for (var i = 0; i < presets.Length; i++)
         {
             var (name, icon, prompt) = presets[i];
-            _cache.Add(
+            next.Add(
                 new PromptAction
                 {
                     Id = Guid.NewGuid().ToString(),
@@ -165,7 +174,8 @@ public sealed class PromptActionService : IPromptActionService
             );
         }
 
-        SaveToDisk();
+        SaveToDisk(next);
+        _cache = next;
         ActionsChanged?.Invoke();
     }
 
@@ -207,19 +217,21 @@ public sealed class PromptActionService : IPromptActionService
         _cacheLoaded = true;
     }
 
-    private void SaveToDisk()
+    private void SaveToDisk(IReadOnlyList<PromptAction> actions)
     {
         if (_loadFailed)
         {
-            // We couldn't read the existing actions file, so the in-memory cache is incomplete.
-            // Persisting now would clobber the user's saved actions with a partial set, so refuse
-            // until the file loads cleanly again (e.g. after the user repairs it and relaunches).
+            // The cache is a partial set (the file didn't load), so refuse until it loads cleanly
+            // rather than clobber the user's saved actions.
+            const string reason =
+                "the existing file could not be loaded, so writing now would overwrite saved actions";
             _errorLog?.AddEntry(
-                $"Not saving prompt actions: the existing file at {_filePath} could not be loaded, "
-                + "so writing now would overwrite your saved actions.",
+                $"Not saving prompt actions at {_filePath}: {reason}.",
                 ErrorCategory.Prompt
             );
-            return;
+            throw new InvalidOperationException(
+                $"Cannot save prompt actions at '{_filePath}': {reason}."
+            );
         }
 
         try
@@ -230,17 +242,17 @@ public sealed class PromptActionService : IPromptActionService
                 Directory.CreateDirectory(dir);
             }
 
-            var json = JsonSerializer.Serialize(_cache, s_jsonOptions);
-            File.WriteAllText(_filePath, json);
+            var json = JsonSerializer.Serialize(actions, s_jsonOptions);
+            AtomicFileWrite.WriteAllText(_filePath, json);
         }
         catch (Exception ex)
         {
-            // Best-effort persistence: don't crash the caller, but log so a failing save is visible.
             Trace.WriteLine($"[PromptActionService] Failed to save prompt actions to {_filePath}: {ex}");
             _errorLog?.AddEntry(
                 $"Could not save prompt actions to {_filePath}: {ex.Message}",
                 ErrorCategory.Prompt
             );
+            throw;
         }
     }
 }

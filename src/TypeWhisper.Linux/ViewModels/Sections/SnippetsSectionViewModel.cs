@@ -2,6 +2,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Localization;
@@ -101,7 +102,16 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
 
     public int ImportFromJson(string json)
     {
-        return _snippets.ImportFromJson(json);
+        try
+        {
+            return _snippets.ImportFromJson(json);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[SnippetsSectionViewModel] Failed to import snippets: {ex}");
+            Refresh();
+            throw;
+        }
     }
 
     partial void OnSelectedTagFilterChanged(string value)
@@ -168,11 +178,17 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
 
         if (existing is null)
         {
-            _snippets.AddSnippet(snippet);
+            if (!TryMutate(() => _snippets.AddSnippet(snippet), "add a snippet"))
+            {
+                return;
+            }
         }
         else
         {
-            _snippets.UpdateSnippet(snippet);
+            if (!TryMutate(() => _snippets.UpdateSnippet(snippet), "update a snippet"))
+            {
+                return;
+            }
         }
 
         CancelEdit();
@@ -181,13 +197,16 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void Delete(Snippet snippet)
     {
-        _snippets.DeleteSnippet(snippet.Id);
+        TryMutate(() => _snippets.DeleteSnippet(snippet.Id), "delete a snippet");
     }
 
     [RelayCommand]
     private void ToggleEnabled(Snippet snippet)
     {
-        _snippets.UpdateSnippet(snippet with { IsEnabled = !snippet.IsEnabled });
+        TryMutate(
+            () => _snippets.UpdateSnippet(snippet with { IsEnabled = !snippet.IsEnabled }),
+            "toggle a snippet"
+        );
     }
 
     [RelayCommand]
@@ -264,6 +283,21 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(ShowEmptyState));
         OnPropertyChanged(nameof(ShowSnippetList));
         OnPropertyChanged(nameof(HasSelectedTagFilter));
+    }
+
+    private bool TryMutate(Action mutation, string operation)
+    {
+        try
+        {
+            mutation();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[SnippetsSectionViewModel] Failed to {operation}: {ex}");
+            Refresh();
+            return false;
+        }
     }
 
     private void NotifyConflictWarningChanged()

@@ -274,51 +274,13 @@ public sealed class ProfileService : IProfileService
 
     private void SaveToDisk(IReadOnlyList<Profile> profiles)
     {
-        // Atomic write-then-rename: a mid-write crash previously truncated _filePath,
-        // which EnsureCacheLoaded would silently discard, losing all saved profiles.
-        string? tempPath = null;
-        try
+        var dir = Path.GetDirectoryName(_filePath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {
-            var dir = Path.GetDirectoryName(_filePath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
-
-            var json = JsonSerializer.Serialize(profiles, s_jsonOptions);
-
-            tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            File.WriteAllText(tempPath, json);
-
-            if (File.Exists(_filePath))
-            {
-                File.Replace(tempPath, _filePath, null);
-            }
-            else
-            {
-                File.Move(tempPath, _filePath);
-            }
-
-            tempPath = null;
+            Directory.CreateDirectory(dir);
         }
-        finally
-        {
-            // Surface persistence failures: swallowing them left _cache mutated
-            // and ProfilesChanged firing as if to write had succeeded.
-            if (tempPath is not null)
-            {
-                try
-                {
-                    if (File.Exists(tempPath))
-                    {
-                        File.Delete(tempPath);
-                    }
-                }
-                catch
-                {
-                    // Best-effort temp-file cleanup.
-                }
-            }
-        }
+
+        var json = JsonSerializer.Serialize(profiles, s_jsonOptions);
+        AtomicFileWrite.WriteAllText(_filePath, json);
     }
 }

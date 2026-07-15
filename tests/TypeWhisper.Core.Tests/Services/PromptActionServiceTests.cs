@@ -307,4 +307,55 @@ public sealed class PromptActionServiceTests : IDisposable
         var action = Assert.Single(service.Actions);
         Assert.False(action.IsManualOnly);
     }
+
+    [Fact]
+    public void AddAction_WhenSaveFails_ThrowsWithoutChangingCacheFileOrEvent()
+    {
+        const string originalJson =
+            "[{\"Id\":\"old\",\"Name\":\"Old\",\"SystemPrompt\":\"Keep this\"}]";
+        using var failurePath = new AtomicWriteFailureTestPath(originalJson);
+        var sut = new PromptActionService(failurePath.FilePath);
+        var original = Assert.Single(sut.Actions);
+        var before = File.ReadAllBytes(failurePath.FilePath);
+        var eventFired = false;
+        sut.ActionsChanged += () => eventFired = true;
+
+        Assert.ThrowsAny<Exception>(() =>
+            sut.AddAction(
+                new PromptAction
+                {
+                    Id = "new",
+                    Name = "New",
+                    SystemPrompt = "Do not persist"
+                }
+            )
+        );
+
+        Assert.Same(original, Assert.Single(sut.Actions));
+        Assert.False(eventFired);
+        Assert.Equal(before, File.ReadAllBytes(failurePath.FilePath));
+        Assert.Empty(failurePath.TemporaryFiles);
+    }
+
+    [Fact]
+    public void UpdateAction_WhenSaveFails_ThrowsWithoutChangingCacheFileOrEvent()
+    {
+        const string originalJson =
+            "[{\"Id\":\"old\",\"Name\":\"Old\",\"SystemPrompt\":\"Keep this\"}]";
+        using var failurePath = new AtomicWriteFailureTestPath(originalJson);
+        var sut = new PromptActionService(failurePath.FilePath);
+        var original = Assert.Single(sut.Actions);
+        var before = File.ReadAllBytes(failurePath.FilePath);
+        var eventFired = false;
+        sut.ActionsChanged += () => eventFired = true;
+
+        Assert.ThrowsAny<Exception>(() =>
+            sut.UpdateAction(original with { Name = "Changed", SystemPrompt = "Changed" })
+        );
+
+        Assert.Same(original, Assert.Single(sut.Actions));
+        Assert.False(eventFired);
+        Assert.Equal(before, File.ReadAllBytes(failurePath.FilePath));
+        Assert.Empty(failurePath.TemporaryFiles);
+    }
 }

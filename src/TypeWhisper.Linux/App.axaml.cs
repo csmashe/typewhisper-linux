@@ -183,7 +183,19 @@ public class App : Application
             // Seed the disabled auto-cleanup prompt + profile on a first install,
             // before the hotkey snapshots below read them (both are disabled, so
             // their Ctrl+Alt+E binding stays inert until the user enables them).
-            promptActions.SeedFirstRunDefaultsIfMissing();
+            try
+            {
+                promptActions.SeedFirstRunDefaultsIfMissing();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[App] Failed to seed first-run prompt actions: {ex}");
+                services.GetRequiredService<IErrorLogService>().AddEntry(
+                    $"Could not seed first-run prompt actions: {ex.Message}",
+                    ErrorCategory.Prompt
+                );
+            }
+
             hotkey.SetPromptActionHotkeys(
                 HotkeyService.ParsePromptActionHotkeys(promptActions.Actions)
             );
