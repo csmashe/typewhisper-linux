@@ -39,14 +39,17 @@ internal sealed class EvdevDeviceReader : IEvdevDeviceReader
             return;
         }
 
-        // Close the kernel fd before awaiting cancellation callbacks. Revoked udev ACLs do not
-        // affect an already-open fd, so lock/session transitions depend on DisposeAsync closing
-        // the stream synchronously at entry rather than only suppressing later callbacks.
+        // Dispose synchronously as a best-effort close before awaiting cancellation. On Unix this
+        // stream has a blocking fd, and an in-flight read holds a SafeFileHandle reference, so the
+        // actual close is deferred until the next device event releases that reference. Lock and
+        // session safety instead comes from EvdevGlobalShortcutBackend.OnKeyEvent: its cached and
+        // live input checks, lifecycle generation, and reader-membership guard drop stale events.
+        // The generation check alone rejects the old reader after the device is reattached on unlock.
         var stream = Interlocked.Exchange(ref _stream, null);
         try
         {
             // ReSharper disable once MethodHasAsyncOverload -- synchronous Dispose is deliberate:
-            // it closes the kernel fd at entry (see comment above); DisposeAsync would defer it.
+            // it closes promptly when no read is in flight; DisposeAsync would defer even that.
             stream?.Dispose();
         }
         catch (Exception ex)
@@ -67,6 +70,9 @@ internal sealed class EvdevDeviceReader : IEvdevDeviceReader
         {
             try
             {
+                // A parked blocking read is expected to outlive this best-effort wait. Its next
+                // event is dropped by the backend; cancellation then exits the loop, releasing the
+                // final handle reference so the fd closes.
                 await _readLoop.WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
             }
             catch
