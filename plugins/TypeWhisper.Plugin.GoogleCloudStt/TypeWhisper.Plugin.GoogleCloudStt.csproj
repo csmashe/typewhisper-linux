@@ -10,6 +10,9 @@
         <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
     </ItemGroup>
     <ItemGroup>
+        <InternalsVisibleTo Include="TypeWhisper.PluginSystem.Tests" />
+    </ItemGroup>
+    <ItemGroup>
         <Content Include="manifest.json">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </Content>

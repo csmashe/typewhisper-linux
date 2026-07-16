@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -21,11 +22,19 @@ public sealed partial class GoogleCloudSttPlugin
         IPluginLocalizationAware
 {
     private const string ApiEndpoint = "https://speech.googleapis.com/v1/speech:recognize";
+    private const int MaxSyncSeconds = 60;
 
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(60) };
+    private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
     private string? _apiKey;
     private string? _selectedModelId;
+
+    public GoogleCloudSttPlugin()
+        : this(new HttpClientHandler()) { }
+
+    // Test seam: lets a stub handler answer requests without hitting the network.
+    internal GoogleCloudSttPlugin(HttpMessageHandler handler) =>
+        _httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(60) };
 
     public string PluginId => "com.typewhisper.google-cloud-stt";
     public string PluginName => "Google Cloud STT";
@@ -74,11 +83,23 @@ public sealed partial class GoogleCloudSttPlugin
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
-        // Google STT's LINEAR16 encoding wants raw PCM, not a WAV container —
-        // strip the standard 44-byte header. (TypeWhisper always emits the
-        // simple PCM-WAV layout, so the fixed offset is safe here.)
-        var pcmData = wavAudio.Length > 44 ? wavAudio[44..] : wavAudio;
-        var audioBase64 = Convert.ToBase64String(pcmData);
+        // Google's LINEAR16 encoding wants raw PCM, not a WAV container. ffmpeg's
+        // pipe output carries an extra LIST chunk (78-byte header, not 44), so
+        // locate the data chunk instead of stripping a fixed 44 bytes.
+        var (pcmOffset, pcmByteCount) = LocatePcmData(wavAudio);
+
+        // Google's sync API caps audio at 60s (long-running API is a follow-up).
+        // Ceiling the duration so a just-over-limit clip never displays as "60".
+        var durationSeconds = pcmByteCount / 32000.0;
+        if (durationSeconds > MaxSyncSeconds)
+        {
+            throw new NotSupportedException(
+                $"Google Cloud STT (synchronous API) supports at most {MaxSyncSeconds} seconds of audio; "
+                    + $"this recording is {Math.Ceiling(durationSeconds)} seconds. Use a different engine for long recordings."
+            );
+        }
+
+        var audioBase64 = Convert.ToBase64String(wavAudio, pcmOffset, pcmByteCount);
 
         var langCode = !string.IsNullOrEmpty(language) && language != "auto" ? language : "en-US";
         // Google requires BCP-47; the rest of the app uses ISO-639-1 ("en"),
@@ -107,6 +128,41 @@ public sealed partial class GoogleCloudSttPlugin
 
         var responseJson = await response.Content.ReadAsStringAsync(ct);
         return ParseResponse(responseJson, langCode);
+    }
+
+    // ffmpeg's piped WAV output writes 0xffffffff placeholder chunk sizes (it
+    // can't seek back on a pipe), so trust the declared size only when it fits
+    // in the buffer; otherwise use the bytes remaining.
+    private static (int Offset, int Length) LocatePcmData(byte[] wavAudio)
+    {
+        var data = wavAudio.AsSpan();
+        if (data.Length < 12 || !data[..4].SequenceEqual("RIFF"u8) || !data.Slice(8, 4).SequenceEqual("WAVE"u8))
+            return Fallback(wavAudio.Length);
+
+        var offset = 12;
+        while (offset + 8 <= data.Length)
+        {
+            var chunkId = data.Slice(offset, 4);
+            var chunkSize = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(offset + 4, 4));
+            var bodyOffset = offset + 8;
+            if (chunkId.SequenceEqual("data"u8))
+            {
+                var remaining = data.Length - bodyOffset;
+                var length = chunkSize <= (uint)remaining ? (int)chunkSize : remaining;
+                return (bodyOffset, length);
+            }
+
+            // Chunks are word-aligned: an odd body is followed by a pad byte.
+            var advance = (long)bodyOffset + chunkSize + (chunkSize & 1);
+            if (advance <= offset || advance > data.Length)
+                break;
+            offset = (int)advance;
+        }
+
+        return Fallback(wavAudio.Length);
+
+        static (int Offset, int Length) Fallback(int totalLength) =>
+            totalLength > 44 ? (44, totalLength - 44) : (0, totalLength);
     }
 
     private static PluginTranscriptionResult ParseResponse(string json, string requestedLanguage)
