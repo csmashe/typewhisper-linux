@@ -46,6 +46,7 @@
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Speechmatics\TypeWhisper.Plugin.Speechmatics.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.WhisperCpp\TypeWhisper.Plugin.WhisperCpp.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.SupertonicTts\TypeWhisper.Plugin.SupertonicTts.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Voxtral\TypeWhisper.Plugin.Voxtral.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Webhook\TypeWhisper.Plugin.Webhook.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Xai\TypeWhisper.Plugin.Xai.csproj"/>
         <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj"/>
