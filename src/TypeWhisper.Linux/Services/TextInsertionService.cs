@@ -291,15 +291,35 @@ public sealed class TextInsertionService
                     : InsertionResult.CopiedToClipboard;
             }
 
-            if (autoEnter && !await _platform.SendEnterAsync())
+            bool? deliveryConfirmed = null;
+            if (autoEnter)
             {
-                LogInsertionFallback($"Auto paste sent {pasteShortcut}, but Enter could not be sent.");
+                // GTK and Wayland targets read the clipboard asynchronously after Ctrl+V; Enter
+                // must not overtake that read and submit an empty or stale field. The gate result
+                // is passed to restore so it does not start a second full timeout.
+                var stopwatch = s_pasteDiagEnabled ? Stopwatch.StartNew() : null;
+                deliveryConfirmed = await AwaitPasteDeliveryAsync(pasteWatch);
+                PasteDiag(
+                    $"enter gate: {(deliveryConfirmed.Value ? "confirmed" : "floor")} after {stopwatch?.ElapsedMilliseconds ?? 0} ms"
+                );
+
+                if (!await _platform.SendEnterAsync())
+                {
+                    LogInsertionFallback(
+                        $"Auto paste sent {pasteShortcut}, but Enter could not be sent."
+                    );
+                }
             }
 
             // Awaited inline (not fire-and-forget) so rapid consecutive dictations stay
             // serialized: the next insertion's clipboard snapshot must not race this restore.
             watchHandedOff = true;
-            await RestorePreviousClipboardAsync(text, previousClipboard, pasteWatch);
+            await RestorePreviousClipboardAsync(
+                text,
+                previousClipboard,
+                pasteWatch,
+                deliveryConfirmed
+            );
             return InsertionResult.Pasted;
         }
         finally
@@ -518,7 +538,8 @@ public sealed class TextInsertionService
     private async Task RestorePreviousClipboardAsync(
         string pastedText,
         string? previousClipboard,
-        IPasteWatch? watch
+        IPasteWatch? watch,
+        bool? deliveryConfirmed
     )
     {
         if (previousClipboard is null)
@@ -532,29 +553,27 @@ public sealed class TextInsertionService
 
         using (watch)
         {
-            var stopwatch = s_pasteDiagEnabled ? Stopwatch.StartNew() : null;
-
             // Event-driven gate: a positive "text landed" signal means the target has read
             // the clipboard, so restoring now cannot cut off the transfer. The watch was
             // armed before the keystroke, so a text-changed that already fired is latched
             // and confirms instantly. Indeterminate (no watch — confirmer absent or AT-SPI
             // idle — or no event within the window) falls back to the fixed floor delay
-            // that previously bounded this race on its own.
-            var confirmed =
-                watch is not null
-                && await watch.WaitAsync(s_pasteConfirmTimeout, CancellationToken.None) == true;
-            if (!confirmed)
+            // that previously bounded this race on its own. Auto-enter has already paid this
+            // gate before sending Enter, so reuse its result instead of re-arming a fresh timeout.
+            if (deliveryConfirmed is null)
             {
-                await _platform.DelayAsync(
-                    _platform.IsKdePlasma
-                        ? s_clipboardRestoreDelayKde
-                        : s_clipboardRestoreDelayDefault
+                var stopwatch = s_pasteDiagEnabled ? Stopwatch.StartNew() : null;
+                deliveryConfirmed = await AwaitPasteDeliveryAsync(watch);
+                PasteDiag(
+                    $"restore gate: {(deliveryConfirmed.Value ? "confirmed" : "floor")} after {stopwatch?.ElapsedMilliseconds ?? 0} ms"
                 );
             }
-
-            PasteDiag(
-                $"restore gate: {(confirmed ? "confirmed" : "floor")} after {stopwatch?.ElapsedMilliseconds ?? 0} ms"
-            );
+            else
+            {
+                PasteDiag(
+                    $"restore gate: {(deliveryConfirmed.Value ? "confirmed" : "floor")} reused from enter gate"
+                );
+            }
 
             // Ownership check: only restore when the clipboard still holds OUR text —
             // content equality, not identity, since Wayland re-serves can differ by a
@@ -582,6 +601,23 @@ public sealed class TextInsertionService
                 /* best effort restore */
             }
         }
+    }
+
+    private async Task<bool> AwaitPasteDeliveryAsync(IPasteWatch? watch)
+    {
+        var confirmed =
+            watch is not null
+            && await watch.WaitAsync(s_pasteConfirmTimeout, CancellationToken.None) == true;
+        if (!confirmed)
+        {
+            await _platform.DelayAsync(
+                _platform.IsKdePlasma
+                    ? s_clipboardRestoreDelayKde
+                    : s_clipboardRestoreDelayDefault
+            );
+        }
+
+        return confirmed;
     }
 
     private async Task<bool> TrySendPasteAsync(bool useTerminalShortcut)

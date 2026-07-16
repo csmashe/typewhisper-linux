@@ -236,6 +236,112 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task InsertTextAsync_auto_enter_waits_for_confirmed_paste_without_floor_delay()
+    {
+        // A confirmed paste skips the floor delay, but Enter must still wait behind the gate.
+        // The OnWait probe pins the moment the gate is entered — Enter must be unsent there.
+        var order = new List<string>();
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            OnPasteSent = () => order.Add("paste"),
+            OnEnterSent = () => order.Add("enter")
+        };
+        var confirmation = new FakePasteConfirmationSource
+        {
+            Result = true,
+            OnWait = () =>
+            {
+                order.Add("gate");
+                Assert.False(platform.EnterSent);
+            }
+        };
+        var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
+
+        var result = await sut.InsertTextAsync("new text", autoEnter: true);
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.True(platform.EnterSent);
+        Assert.Equal(["paste", "gate", "enter"], order);
+        Assert.Equal(1, confirmation.LastWatch!.WaitCallCount);
+        Assert.DoesNotContain(TimeSpan.FromMilliseconds(500), platform.Delays);
+        Assert.DoesNotContain(TimeSpan.FromMilliseconds(600), platform.Delays);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_auto_enter_indeterminate_gate_delays_once_before_enter()
+    {
+        var order = new List<string>();
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            OnPasteSent = () => order.Add("paste"),
+            OnDelay = delay =>
+            {
+                if (delay == TimeSpan.FromMilliseconds(500))
+                {
+                    order.Add("floor");
+                }
+            },
+            OnEnterSent = () => order.Add("enter")
+        };
+        var confirmation = new FakePasteConfirmationSource { Result = null };
+        var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
+
+        var result = await sut.InsertTextAsync("new text", autoEnter: true);
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.True(platform.EnterSent);
+        Assert.Equal(["paste", "floor", "enter"], order);
+        Assert.Equal(
+            1,
+            platform.Delays.Count(delay => delay == TimeSpan.FromMilliseconds(500))
+        );
+        Assert.NotNull(confirmation.LastWatch);
+        Assert.Equal(1, confirmation.LastWatch.WaitCallCount);
+        Assert.Equal(TimeSpan.FromSeconds(2), confirmation.LastWatch.LastTimeout);
+        Assert.True(confirmation.LastWatch.Disposed);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_auto_enter_without_confirmer_delays_once_even_without_restore()
+    {
+        // Delivery ordering is independent of clipboard restoration. A null previous
+        // clipboard still needs the floor before Enter, even though restore returns early.
+        var order = new List<string>();
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = null,
+            PasteSucceeds = true,
+            OnPasteSent = () => order.Add("paste"),
+            OnDelay = delay =>
+            {
+                if (delay == TimeSpan.FromMilliseconds(500))
+                {
+                    order.Add("floor");
+                }
+            },
+            OnEnterSent = () => order.Add("enter")
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("new text", autoEnter: true);
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.True(platform.EnterSent);
+        Assert.Equal(["paste", "floor", "enter"], order);
+        Assert.Equal(
+            1,
+            platform.Delays.Count(delay => delay == TimeSpan.FromMilliseconds(500))
+        );
+        Assert.Equal("new text", platform.Clipboard);
+    }
+
+    [Fact]
     public async Task InsertTextAsync_paste_watch_acquires_and_releases_text_changed_lease()
     {
         // The paste watch holds a text-changed registration lease for the paste window (so a
@@ -1909,6 +2015,8 @@ public sealed class TextInsertionServiceTests
         // Every DelayAsync is recorded so tests can assert which waits ran
         // (e.g. the 500 ms restore floor must be skipped on a confirmed paste).
         public List<TimeSpan> Delays { get; } = [];
+        public Action<TimeSpan>? OnDelay { get; init; }
+        public Action? OnEnterSent { get; init; }
 
         public bool IsClipboardSetAvailable => ClipboardSetAvailable;
 
@@ -1937,6 +2045,7 @@ public sealed class TextInsertionServiceTests
         public Task DelayAsync(TimeSpan delay)
         {
             Delays.Add(delay);
+            OnDelay?.Invoke(delay);
             return Task.CompletedTask;
         }
 
@@ -1999,6 +2108,7 @@ public sealed class TextInsertionServiceTests
         public Task<bool> SendEnterAsync()
         {
             EnterSent = true;
+            OnEnterSent?.Invoke();
             return Task.FromResult(true);
         }
     }
@@ -2016,6 +2126,9 @@ public sealed class TextInsertionServiceTests
         // relative to the platform's paste call.
         public Action? OnBeginWatch { get; init; }
 
+        // Forwarded to the watch so ordering tests can observe entry into the delivery gate.
+        public Action? OnWait { get; init; }
+
         public bool BeginWatchCalled { get; private set; }
         public FakePasteWatch? LastWatch { get; private set; }
 
@@ -2032,7 +2145,7 @@ public sealed class TextInsertionServiceTests
                 return null;
             }
 
-            LastWatch = new FakePasteWatch { Result = Result };
+            LastWatch = new FakePasteWatch { Result = Result, OnWait = OnWait };
             return LastWatch;
         }
     }
@@ -2040,13 +2153,18 @@ public sealed class TextInsertionServiceTests
     private sealed class FakePasteWatch : IPasteWatch
     {
         public bool? Result { get; init; }
+        public Action? OnWait { get; init; }
+
         public bool WaitCalled { get; private set; }
+        public int WaitCallCount { get; private set; }
         public bool Disposed { get; private set; }
         public TimeSpan LastTimeout { get; private set; }
 
         public Task<bool?> WaitAsync(TimeSpan timeout, CancellationToken ct)
         {
+            OnWait?.Invoke();
             WaitCalled = true;
+            WaitCallCount++;
             LastTimeout = timeout;
             return Task.FromResult(Result);
         }
