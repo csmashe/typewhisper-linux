@@ -29,9 +29,16 @@ public class App : Application
 
     /// <summary>
     ///     Tray-menu Exit flips this; Close-button handler checks it to decide
-    ///     whether to actually quit or hide to the tray.
+    ///     whether to actually quit or hide to the tray. Access is UI-thread-only.
     /// </summary>
     private static bool ShuttingDown { get; set; }
+
+    /// <summary>
+    ///     While teardown runs, the Closing handler cancels closes (see the race
+    ///     note there); ShutdownAndExitAsync sets this just before its final
+    ///     desktop.Shutdown(). Access is UI-thread-only.
+    /// </summary>
+    private static bool ClosePermitted { get; set; }
 
     public override void Initialize()
     {
@@ -78,10 +85,19 @@ public class App : Application
 
             // Close-button: CloseToTray+tray-available → hide; otherwise quit.
             // Hiding with no tray (stock GNOME) would strand the user with no UI.
-            main.Closing += (_, e) =>
+            main.Closing += (sender, e) =>
             {
                 if (ShuttingDown)
                 {
+                    // Teardown underway: keep canceling closes until ShutdownAndExitAsync
+                    // sets ClosePermitted — on a tiling WM (overlay suppressed) this is the
+                    // last window, so an early close would trip OnLastWindowClose and
+                    // dispose DI while TearDownAsync is still running.
+                    if (!ClosePermitted)
+                    {
+                        e.Cancel = true;
+                    }
+
                     return;
                 }
 
@@ -92,11 +108,9 @@ public class App : Application
                 }
                 else
                 {
+                    e.Cancel = true;
                     ShuttingDown = true;
-                    TearDownAsync(services).GetAwaiter().GetResult();
-                    // Must call Shutdown explicitly: DictationOverlayWindow is always-shown
-                    // (backlog #16 Opacity workaround) so OnLastWindowClose never fires.
-                    desktop.Shutdown();
+                    _ = ShutdownAndExitAsync(services, desktop);
                 }
             };
 
@@ -109,9 +123,13 @@ public class App : Application
             };
             tray.ExitRequested += (_, _) =>
             {
+                if (ShuttingDown)
+                {
+                    return;
+                }
+
                 ShuttingDown = true;
-                TearDownAsync(services).GetAwaiter().GetResult();
-                desktop.Shutdown();
+                _ = ShutdownAndExitAsync(services, desktop);
             };
 
             var dictation = services.GetRequiredService<DictationOrchestrator>();
@@ -133,11 +151,10 @@ public class App : Application
             {
                 Console.Error.WriteLine("TypeWhisper is already running.");
                 ShuttingDown = true;
-                TearDownAsync(services).GetAwaiter().GetResult();
                 // Window never opens on this path, so notify startup complete to clear
                 // the GNOME launch cursor (main.Opened won't fire).
                 LinuxStartupNotification.NotifyComplete();
-                desktop.Shutdown();
+                _ = ShutdownAndExitAsync(services, desktop);
                 return;
             }
             catch (Exception ex)
@@ -434,6 +451,27 @@ public class App : Application
             static t => Debug.WriteLine($"[App] Background hotkey action failed: {t.Exception}"),
             TaskContinuationOptions.OnlyOnFaulted);
 
+    private static async Task ShutdownAndExitAsync(
+        IServiceProvider services,
+        IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        try
+        {
+            await TearDownAsync(services);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Teardown failed during shutdown: {ex.Message}");
+        }
+        finally
+        {
+            ClosePermitted = true;
+            // Must call Shutdown explicitly: DictationOverlayWindow is always-shown
+            // (backlog #16 Opacity workaround) so OnLastWindowClose never fires.
+            desktop.Shutdown();
+        }
+    }
+
     /// <summary>
     ///     Best-effort ordered shutdown of services that own native threads.
     ///     Runs before desktop.Shutdown() so the Host isn't left racing
@@ -495,7 +533,7 @@ public class App : Application
             var models = services.GetService<ModelManagerService>();
             if (models is not null)
             {
-                await models.UnloadModelAsync();
+                await models.UnloadModelAsync().ConfigureAwait(false);
             }
         }
         catch (Exception ex)
@@ -542,10 +580,6 @@ public class App : Application
         {
             Debug.WriteLine($"[App] Dictation session result store dispose failed: {ex.Message}");
         }
-
-        // Placeholder: keeps the method async for future awaitable teardown
-        // steps without forcing callers to change the signature.
-        await Task.CompletedTask;
     }
 
     private static async Task BootstrapAsync(IServiceProvider services)
