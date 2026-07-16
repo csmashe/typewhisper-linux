@@ -88,22 +88,16 @@ public sealed class ActiveWindowService : IActiveWindowService
     public string? GetBrowserUrl(bool allowInteractiveCapture = true)
     {
         var snapshot = GetActiveWindowSnapshotSync();
+        var nonInteractiveUrl = GetBrowserUrlForSnapshot(snapshot);
+        if (nonInteractiveUrl is not null)
+        {
+            return nonInteractiveUrl;
+        }
+
         var title = snapshot?.Title;
         var processName = snapshot?.ProcessName is { Length: > 0 } name
             ? name
             : TryInferBrowserProcessNameFromTitle(title);
-
-        var atSpiUrl = _atSpiUrlExtractor.TryGetBrowserUrl(processName, title);
-        if (atSpiUrl is not null)
-        {
-            return atSpiUrl;
-        }
-
-        var inferredUrl = TryInferBrowserUrlFromTitle(title);
-        if (inferredUrl is not null)
-        {
-            return inferredUrl;
-        }
 
         if (
             !allowInteractiveCapture
@@ -124,6 +118,20 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
 
         return string.IsNullOrWhiteSpace(windowId) ? null : TryCaptureBrowserUrl(windowId);
+    }
+
+    public string? GetBrowserUrlForSnapshot(
+        ActiveWindowSnapshot? snapshot,
+        bool honorMissBackoff = false
+    )
+    {
+        var title = snapshot?.Title;
+        var processName = snapshot?.ProcessName is { Length: > 0 } name
+            ? name
+            : TryInferBrowserProcessNameFromTitle(title);
+
+        var atSpiUrl = _atSpiUrlExtractor.TryGetBrowserUrl(processName, title, honorMissBackoff);
+        return atSpiUrl ?? TryInferBrowserUrlFromTitle(title);
     }
 
     public IReadOnlyList<string> GetRunningAppProcessNames()

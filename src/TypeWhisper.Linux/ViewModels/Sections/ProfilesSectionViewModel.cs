@@ -30,6 +30,10 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private readonly IProfileService _profiles;
     private readonly IPromptActionService _promptActions;
     private readonly DispatcherTimer _windowTimer;
+    private bool _isWindowUpdateInProgress;
+    private int _liveContextActivationCount;
+    private CancellationTokenSource? _liveContextCts;
+    private int _liveContextGeneration;
 
     [ObservableProperty]
     private string? _browserAccessibilityStatusMessage;
@@ -176,15 +180,16 @@ public partial class ProfilesSectionViewModel : ObservableObject
         RefreshProfiles();
 
         _windowTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _windowTimer.Tick += (_, _) => UpdateCurrentWindow();
-        UpdateCurrentWindow();
-        _windowTimer.Start();
+        _windowTimer.Tick += (_, _) => StartCurrentWindowUpdate();
     }
 
     public ObservableCollection<Profile> Profiles { get; } = [];
     public ObservableCollection<ProfileModelOption> ModelOptions { get; } = [];
     public ObservableCollection<PromptActionOption> PromptActionOptions { get; } = [];
     public ObservableCollection<TranslationTargetOption> TranslationTargetOptions { get; } = [];
+
+    internal Task CurrentWindowUpdateTask { get; private set; } = Task.CompletedTask;
+    internal bool IsLiveContextActive => _liveContextActivationCount > 0;
 
     public ObservableCollection<ProfileStylePresetOption> StylePresetOptions { get; } =
     [
@@ -238,6 +243,41 @@ public partial class ProfilesSectionViewModel : ObservableObject
         ["", "auto", "en", "de", "fr", "es", "pt", "ja", "zh", "ko", "it", "nl", "pl", "ru"];
 
     public IReadOnlyList<string> TaskChoices { get; } = ["", "transcribe", "translate"];
+
+    public void ActivateLiveContext()
+    {
+        _liveContextActivationCount++;
+        if (_liveContextActivationCount != 1)
+        {
+            return;
+        }
+
+        _liveContextGeneration++;
+        _liveContextCts = new CancellationTokenSource();
+        _windowTimer.Start();
+        StartCurrentWindowUpdate();
+    }
+
+    public void DeactivateLiveContext()
+    {
+        if (_liveContextActivationCount == 0)
+        {
+            return;
+        }
+
+        _liveContextActivationCount--;
+        if (_liveContextActivationCount != 0)
+        {
+            return;
+        }
+
+        _windowTimer.Stop();
+        _liveContextGeneration++;
+        var cts = _liveContextCts;
+        _liveContextCts = null;
+        cts?.Cancel();
+        cts?.Dispose();
+    }
 
     public bool HasSelectedProfile => SelectedProfile is not null;
     public int ProfileCount => Profiles.Count;
@@ -777,21 +817,45 @@ public partial class ProfilesSectionViewModel : ObservableObject
             return;
         }
 
-        _contextWindow = new ProfilesContextWindow(this);
+        var contextWindow = new ProfilesContextWindow(this);
+        _contextWindow = contextWindow;
+        var liveContextActivated = false;
+        contextWindow.Opened += (_, _) =>
+        {
+            if (liveContextActivated)
+            {
+                return;
+            }
+
+            liveContextActivated = true;
+            ActivateLiveContext();
+        };
+        contextWindow.Closed += (_, _) =>
+        {
+            if (liveContextActivated)
+            {
+                liveContextActivated = false;
+                DeactivateLiveContext();
+            }
+
+            if (ReferenceEquals(_contextWindow, contextWindow))
+            {
+                _contextWindow = null;
+            }
+        };
+
         if (
             Application.Current?.ApplicationLifetime
             is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
         {
-            _contextWindow.WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            _contextWindow.Show(owner);
+            contextWindow.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            contextWindow.Show(owner);
         }
         else
         {
-            _contextWindow.WindowStartupLocation = WindowStartupLocation.CenterScreen;
-            _contextWindow.Show();
+            contextWindow.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            contextWindow.Show();
         }
-
-        _contextWindow.Closed += (_, _) => _contextWindow = null;
     }
 
     private void RefreshProfiles()
@@ -876,11 +940,78 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
     }
 
-    private void UpdateCurrentWindow()
+    private void StartCurrentWindowUpdate()
     {
-        var processName = _activeWindow.GetActiveWindowProcessName();
-        var title = _activeWindow.GetActiveWindowTitle();
-        var url = _activeWindow.GetBrowserUrl(false);
+        if (_isWindowUpdateInProgress)
+        {
+            return;
+        }
+
+        CurrentWindowUpdateTask = UpdateCurrentWindowAsync();
+    }
+
+    internal async Task UpdateCurrentWindowAsync()
+    {
+        // Callers are UI-thread-only; the flag keeps timer ticks from stacking up
+        // behind a slow AT-SPI walk.
+        if (_isWindowUpdateInProgress || _liveContextCts is null)
+        {
+            return;
+        }
+
+        _isWindowUpdateInProgress = true;
+        var generation = _liveContextGeneration;
+        var token = _liveContextCts.Token;
+
+        try
+        {
+            var result = await Task.Run(
+                async () =>
+                {
+                    var snapshot = await _activeWindow
+                        .GetActiveWindowSnapshotAsync(token)
+                        .ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                    var url = _activeWindow.GetBrowserUrlForSnapshot(
+                        snapshot,
+                        honorMissBackoff: true
+                    );
+                    return (Snapshot: snapshot, Url: url);
+                },
+                token
+            );
+
+            if (token.IsCancellationRequested || generation != _liveContextGeneration)
+            {
+                return;
+            }
+
+            ApplyCurrentWindow(result.Snapshot, result.Url);
+        }
+        catch (OperationCanceledException)
+        {
+            // Deactivation invalidates the in-flight generation; no UI state is applied.
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Profiles] Active-window update failed: {ex.Message}");
+        }
+        finally
+        {
+            _isWindowUpdateInProgress = false;
+            if (IsLiveContextActive && generation != _liveContextGeneration)
+            {
+                StartCurrentWindowUpdate();
+            }
+        }
+    }
+
+    private void ApplyCurrentWindow(ActiveWindowSnapshot? snapshot, string? url)
+    {
+        var processName = snapshot?.ProcessName is { Length: > 0 } name
+            ? name
+            : ActiveWindowService.TryInferBrowserProcessNameFromTitle(snapshot?.Title);
+        var title = snapshot?.Title;
 
         if (
             string.IsNullOrWhiteSpace(processName)

@@ -10,6 +10,10 @@ public partial class ProfilesSection : UserControl
     public ProfilesSection()
     {
         InitializeComponent();
+        AttachedToVisualTree += (_, _) =>
+            (DataContext as ProfilesSectionViewModel)?.ActivateLiveContext();
+        DetachedFromVisualTree += (_, _) =>
+            (DataContext as ProfilesSectionViewModel)?.DeactivateLiveContext();
     }
 
     // Re-poll providers for current models whenever the per-profile model
