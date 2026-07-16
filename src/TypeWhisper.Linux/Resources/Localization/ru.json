@@ -366,6 +366,7 @@
   "FileTranscription.Transcript": "Транскрипт",
   "FileTranscription.UnsupportedFormat": "Неподдерживаемый формат",
   "FileTranscription.WatchFolder": "Наблюдать за папкой",
+  "FileTranscription.WatchFolderStartFailed": "Не удалось запустить наблюдение: {0}",
   "FileTranscription.WatchingForNewFiles": "Наблюдение за новыми файлами",
   "General.ApiExamples": "Примеры API",
   "General.Autostart": "Запускать автоматически при старте системы",

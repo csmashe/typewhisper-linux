@@ -366,6 +366,7 @@
   "FileTranscription.Transcript": "Transcript",
   "FileTranscription.UnsupportedFormat": "Unsupported format",
   "FileTranscription.WatchFolder": "Watch folder",
+  "FileTranscription.WatchFolderStartFailed": "Could not start watching: {0}",
   "FileTranscription.WatchingForNewFiles": "Watching for new files",
   "General.ApiExamples": "API examples",
   "General.Autostart": "Start automatically at system startup",

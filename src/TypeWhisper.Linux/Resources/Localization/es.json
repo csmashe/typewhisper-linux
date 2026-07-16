@@ -366,6 +366,7 @@
   "FileTranscription.Transcript": "Transcripción",
   "FileTranscription.UnsupportedFormat": "Formato no compatible",
   "FileTranscription.WatchFolder": "Carpeta vigilada",
+  "FileTranscription.WatchFolderStartFailed": "No se pudo iniciar la vigilancia: {0}",
   "FileTranscription.WatchingForNewFiles": "Esperando archivos nuevos",
   "General.ApiExamples": "Ejemplos de API",
   "General.Autostart": "Iniciar automáticamente al arrancar el sistema",
