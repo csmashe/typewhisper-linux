@@ -134,6 +134,24 @@ public class GladiaPluginTests
     }
 
     [Fact]
+    public void TranscribeAsync_ThrowsNotSupportedExceptionSynchronously()
+    {
+        using var sut = new GladiaPlugin();
+
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- void local binds Assert.Throws to the Action overload, asserting a synchronous throw (not a faulted Task).
+        void Act() =>
+            _ = sut.TranscribeAsync([], null, false, null, CancellationToken.None);
+
+        var exception = Assert.Throws<NotSupportedException>(Act);
+
+        Assert.Equal(
+            "Gladia batch transcription is not supported in this build; use live streaming. "
+                + "The batch API requires a multi-stage upload/poll protocol that is not yet implemented.",
+            exception.Message
+        );
+    }
+
+    [Fact]
     public void BuildInitRequest_UsesWavPcmAndEnablesPartials()
     {
         var json = GladiaSession.BuildInitRequest("de", 16000);
