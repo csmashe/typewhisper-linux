@@ -16,7 +16,7 @@ public sealed class LlmCleanupServiceTests
     {
         var sut = CreateService([]);
 
-        var result = await sut.CleanAsync("um hello", CleanupLevel.Light);
+        var result = await sut.CleanAsync("uh hello", CleanupLevel.Light);
 
         Assert.Equal("Hello", result);
     }
@@ -27,7 +27,7 @@ public sealed class LlmCleanupServiceTests
         var provider = new FakeLlmProviderPlugin("polished text");
         var sut = CreateService([provider]);
 
-        var result = await sut.CleanAsync("um hello", CleanupLevel.Medium);
+        var result = await sut.CleanAsync("uh hello", CleanupLevel.Medium);
 
         Assert.Equal("polished text", result);
         Assert.Equal(CleanupService.MediumSystemPrompt, provider.LastSystemPrompt);
@@ -54,7 +54,7 @@ public sealed class LlmCleanupServiceTests
         var sut = CreateService([]);
 
         var result = await sut.CleanAsync(
-            "um hello",
+            "uh hello",
             CleanupLevel.Medium,
             message =>
             {
@@ -75,7 +75,7 @@ public sealed class LlmCleanupServiceTests
         var sut = CreateService([provider]);
 
         var result = await sut.CleanAsync(
-            "um hello",
+            "uh hello",
             CleanupLevel.Medium,
             message =>
             {
@@ -94,7 +94,7 @@ public sealed class LlmCleanupServiceTests
         var sut = CreateService([]);
 
         var result = await sut.CleanAsync(
-            "um hello",
+            "uh hello",
             CleanupLevel.Medium,
             _ => throw new InvalidOperationException("Status failed.")
         );
@@ -109,7 +109,7 @@ public sealed class LlmCleanupServiceTests
         var sut = CreateService([provider]);
 
         var result = await sut.CleanAsync(
-            "um hello",
+            "uh hello",
             CleanupLevel.Medium,
             _ => throw new InvalidOperationException("Status failed.")
         );

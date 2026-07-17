@@ -315,7 +315,9 @@ public sealed partial class CleanupService
         return text;
     }
 
-    [GeneratedRegex(@"(?i)(^|[\s,.;:!?-])(?:um+|uh+|er+|ah+|you know)(?=$|[\s,.;:!?-])")]
+    // Doubled-letter minimums (umm/err, not um/er) — bare "er"/"um" are real words in
+    // German/Dutch/Swedish/Danish/Portuguese and must survive this language-agnostic pass.
+    [GeneratedRegex(@"(?i)(^|[\s,.;:!?-])(?:umm+|uh+|err+|erm+|ah+|you know)(?=$|[\s,.;:!?-])")]
     private static partial Regex StandaloneFillerRegex();
 
     [GeneratedRegex(@"[ \t]{2,}")]
