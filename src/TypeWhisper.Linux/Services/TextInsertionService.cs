@@ -57,6 +57,12 @@ public sealed record TextInsertionRequest(
 public sealed class TextInsertionService
 {
     private const int PasteAttemptCount = 3;
+    private const string ClipboardNonTextCouldNotRestoreMessage =
+        "Clipboard preservation skipped: the previous clipboard offered a non-text format (e.g. an image or file list) that cannot be captured as plain text, so it was replaced and could not be restored.";
+    private const string ClipboardRichRestoreSkippedMessage =
+        "Clipboard preservation skipped: the previous clipboard also offered a richer, non-text format (e.g. HTML) that would be lost if restored as plain text, so it was left as-is instead of a lossy restore.";
+    private const string ClipboardRichRestoreLossyMessage =
+        "Clipboard preservation was lossy: the previous clipboard also offered a richer, non-text format (e.g. HTML) that could not be restored; only its plain-text content was restored.";
     private static readonly TimeSpan s_focusDelay = TimeSpan.FromMilliseconds(100);
 
     // After the paste chord we hold our text on the clipboard this long before restoring the user's
@@ -240,6 +246,8 @@ public sealed class TextInsertionService
         }
 
         var previousClipboard = await _platform.TryGetClipboardTextAsync();
+        var previousClipboardHasNonTextFormats =
+            await _platform.ClipboardHasNonTextFormatsAsync();
         if (!await _platform.SetClipboardTextAsync(text))
         {
             return InsertionResult.Failed;
@@ -257,7 +265,11 @@ public sealed class TextInsertionService
                 "Auto paste fell back to clipboard: target window could not be focused."
             );
             return requiresSafeTerminalPaste
-                ? await FailTerminalMultilineAsync(text, previousClipboard)
+                ? await FailTerminalMultilineAsync(
+                    text,
+                    previousClipboard,
+                    previousClipboardHasNonTextFormats
+                )
                 : InsertionResult.CopiedToClipboard;
         }
 
@@ -268,7 +280,11 @@ public sealed class TextInsertionService
                 + $"so {pasteShortcut} was not sent (it would have pasted nothing or stale content)."
             );
             return requiresSafeTerminalPaste
-                ? await FailTerminalMultilineAsync(text, previousClipboard)
+                ? await FailTerminalMultilineAsync(
+                    text,
+                    previousClipboard,
+                    previousClipboardHasNonTextFormats
+                )
                 : InsertionResult.CopiedToClipboard;
         }
 
@@ -303,7 +319,11 @@ public sealed class TextInsertionService
                     $"Auto paste fell back to clipboard: {pasteShortcut} could not be sent after retries."
                 );
                 return requiresSafeTerminalPaste
-                    ? await FailTerminalMultilineAsync(text, previousClipboard)
+                    ? await FailTerminalMultilineAsync(
+                        text,
+                        previousClipboard,
+                        previousClipboardHasNonTextFormats
+                    )
                     : InsertionResult.CopiedToClipboard;
             }
 
@@ -333,6 +353,7 @@ public sealed class TextInsertionService
             await RestorePreviousClipboardAsync(
                 text,
                 previousClipboard,
+                previousClipboardHasNonTextFormats,
                 pasteWatch,
                 deliveryConfirmed
             );
@@ -404,6 +425,8 @@ public sealed class TextInsertionService
     private async Task<string> ProbeSelectionViaCopyAsync(bool targetIsTerminal)
     {
         var previousClipboard = await _platform.TryGetClipboardTextAsync();
+        var previousClipboardHasNonTextFormats =
+            await _platform.ClipboardHasNonTextFormatsAsync();
 
         // Only prime a sentinel when the clipboard already holds text we can detect against and
         // restore: a null read means it's empty or non-text (an image / file list) we must not
@@ -442,7 +465,17 @@ public sealed class TextInsertionService
 
         if (!useSentinel)
         {
+            if (previousClipboardHasNonTextFormats)
+            {
+                LogInsertionFallback(ClipboardNonTextCouldNotRestoreMessage);
+            }
+
             return afterCopy;
+        }
+
+        if (previousClipboardHasNonTextFormats)
+        {
+            LogInsertionFallback(ClipboardRichRestoreLossyMessage);
         }
 
         await _platform.SetClipboardTextAsync(previousClipboard!);
@@ -515,14 +548,15 @@ public sealed class TextInsertionService
     /// <summary>
     ///     Fail-closed exit for terminal multiline auto-paste. The clipboard already holds our
     ///     staged text but no keystroke was sent, so — unlike the paste path — there is no
-    ///     in-flight transfer to protect. Back the staged text out so the Failed result stays
-    ///     honest ("could not be copied or pasted"). Ownership-checked like the post-paste
-    ///     restore: if the user copied something newer while the insert was failing, leave
-    ///     their copy alone rather than clobbering it with the stale snapshot.
+    ///     in-flight transfer to protect. Restore a faithfully captured plain-text predecessor;
+    ///     otherwise retain the staged text as a manual-paste fallback. Ownership-checked like
+    ///     the post-paste restore: if the user copied something newer while the insert was
+    ///     failing, leave their copy alone rather than clobbering it with the stale snapshot.
     /// </summary>
     private async Task<InsertionResult> FailTerminalMultilineAsync(
         string stagedText,
-        string? previousClipboard
+        string? previousClipboard,
+        bool previousClipboardHasNonTextFormats
     )
     {
         var current = await _platform.TryGetClipboardTextAsync();
@@ -539,9 +573,23 @@ public sealed class TextInsertionService
             return InsertionResult.Failed;
         }
 
+        if (previousClipboard is null || previousClipboardHasNonTextFormats)
+        {
+            if (previousClipboardHasNonTextFormats)
+            {
+                LogInsertionFallback(
+                    previousClipboard is null
+                        ? ClipboardNonTextCouldNotRestoreMessage
+                        : ClipboardRichRestoreSkippedMessage
+                );
+            }
+
+            return InsertionResult.Failed;
+        }
+
         try
         {
-            await _platform.SetClipboardTextAsync(previousClipboard ?? string.Empty);
+            await _platform.SetClipboardTextAsync(previousClipboard);
         }
         catch
         {
@@ -554,12 +602,18 @@ public sealed class TextInsertionService
     private async Task RestorePreviousClipboardAsync(
         string pastedText,
         string? previousClipboard,
+        bool previousClipboardHasNonTextFormats,
         IPasteWatch? watch,
         bool? deliveryConfirmed
     )
     {
         if (previousClipboard is null)
         {
+            if (previousClipboardHasNonTextFormats)
+            {
+                LogInsertionFallback(ClipboardNonTextCouldNotRestoreMessage);
+            }
+
             // Nothing to restore — no restore write can cut off the in-flight paste,
             // so there is nothing to wait for either. Still drop the watch armed
             // before the paste chord: its event subscription must not outlive the insertion.
@@ -605,6 +659,12 @@ public sealed class TextInsertionService
                 )
             )
             {
+                return;
+            }
+
+            if (previousClipboardHasNonTextFormats)
+            {
+                LogInsertionFallback(ClipboardRichRestoreSkippedMessage);
                 return;
             }
 
@@ -887,6 +947,15 @@ internal interface ITextInsertionPlatform
 
     Task<string?> TryGetClipboardTextAsync();
     Task<bool> SetClipboardTextAsync(string text);
+
+    /// <summary>
+    ///     True when the clipboard currently offers a MIME type beyond ordinary plain text
+    ///     (an image, a file list, HTML, etc.) — queried before an insertion overwrites the
+    ///     clipboard, so a caller can tell whether the value it is about to destroy was
+    ///     something a plain-text round trip cannot faithfully preserve or restore.
+    /// </summary>
+    Task<bool> ClipboardHasNonTextFormatsAsync();
+
     Task DelayAsync(TimeSpan delay);
     string? GetActiveWindowId();
     Task<bool> ActivateWindowAsync(string windowId);
@@ -916,6 +985,25 @@ internal interface ITextInsertionPlatform
 /// </summary>
 internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 {
+    private static readonly HashSet<string> s_waylandTextSafeTargets =
+        new(StringComparer.OrdinalIgnoreCase) { "STRING", "UTF8_STRING", "TEXT" };
+
+    // X11 TARGETS listings always include protocol/negotiation targets that carry no
+    // content of their own alongside the plain-text encodings. None count as non-text content.
+    private static readonly HashSet<string> s_x11TextSafeTargets = new(
+        [
+            "TARGETS",
+            "MULTIPLE",
+            "SAVE_TARGETS",
+            "TIMESTAMP",
+            "STRING",
+            "UTF8_STRING",
+            "TEXT",
+            "COMPOUND_TEXT"
+        ],
+        StringComparer.OrdinalIgnoreCase
+    );
+
     // kept injected as a DI/test seam; not consumed in-tree
     // ReSharper disable once NotAccessedField.Local
     private readonly SystemCommandAvailabilityService? _commands;
@@ -1038,6 +1126,48 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             Trace.WriteLine($"[TextInsertionService] clipboard read failed: {ex.Message}");
             return null;
         }
+    }
+
+    public async Task<bool> ClipboardHasNonTextFormatsAsync()
+    {
+        var psi = _isWayland
+            ? new ProcessStartInfo("wl-paste", "--list-types")
+            : new ProcessStartInfo("xclip", "-selection clipboard -o -t TARGETS");
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        psi.UseShellExecute = false;
+
+        try
+        {
+            using var p = Process.Start(psi);
+            if (p is null)
+            {
+                return false;
+            }
+
+            var output = await p.StandardOutput.ReadToEndAsync();
+            await p.WaitForExitAsync();
+            return p.ExitCode == 0 && ListingHasNonTextFormats(output, _isWayland);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[TextInsertionService] clipboard format listing failed: {ex.Message}"
+            );
+            return false;
+        }
+    }
+
+    internal static bool ListingHasNonTextFormats(string listing, bool isWayland)
+    {
+        var textSafe = isWayland ? s_waylandTextSafeTargets : s_x11TextSafeTargets;
+        return listing.Split('\n').Any(rawLine =>
+        {
+            var target = rawLine.Trim();
+            return target.Length != 0
+                   && !textSafe.Contains(target)
+                   && !target.StartsWith("text/plain", StringComparison.OrdinalIgnoreCase);
+        });
     }
 
     public async Task<bool> SetClipboardTextAsync(string text)

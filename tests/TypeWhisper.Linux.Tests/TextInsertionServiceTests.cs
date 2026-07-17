@@ -1,3 +1,4 @@
+using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.ActiveWindow;
@@ -638,10 +639,12 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = null,
+            ClipboardHasNonTextFormats = false,
             PasteSucceeds = true
         };
         var confirmation = new FakePasteConfirmationSource { Result = true };
-        var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
+        var errorLog = new RecordingErrorLogService();
+        var sut = new TextInsertionService(platform, errorLog, confirmation);
 
         var result = await sut.InsertTextAsync("new text");
 
@@ -651,6 +654,51 @@ public sealed class TextInsertionServiceTests
         Assert.True(confirmation.LastWatch.Disposed);
         Assert.DoesNotContain(TimeSpan.FromMilliseconds(500), platform.Delays);
         Assert.Equal("new text", platform.Clipboard);
+        Assert.Empty(errorLog.AddedEntries);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_nontext_previous_clipboard_logs_unrestorable_disclosure()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = null,
+            ClipboardHasNonTextFormats = true,
+            PasteSucceeds = true
+        };
+        var errorLog = new RecordingErrorLogService();
+        var sut = new TextInsertionService(platform, errorLog);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal("new text", platform.Clipboard);
+        var entry = Assert.Single(errorLog.AddedEntries);
+        Assert.Equal(ErrorCategory.Insertion, entry.Category);
+        Assert.Contains("could not be restored", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_richer_previous_clipboard_skips_lossy_restore_and_logs()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ClipboardHasNonTextFormats = true,
+            PasteSucceeds = true
+        };
+        var confirmation = new FakePasteConfirmationSource { Result = true };
+        var errorLog = new RecordingErrorLogService();
+        var sut = new TextInsertionService(platform, errorLog, confirmation);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal("new text", platform.Clipboard);
+        Assert.Equal(1, platform.SetClipboardCount);
+        var entry = Assert.Single(errorLog.AddedEntries);
+        Assert.Equal(ErrorCategory.Insertion, entry.Category);
+        Assert.Contains("lossy restore", entry.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -821,10 +869,9 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
-    public async Task InsertTextAsync_terminal_multiline_fail_closed_clears_staged_text_when_no_prior_clipboard()
+    public async Task InsertTextAsync_terminal_multiline_fail_closed_keeps_staged_text_when_no_prior_clipboard()
     {
-        // With no prior clipboard to restore, a Failed result that left the staged
-        // dictated text on the clipboard would contradict "could not be copied": clear it.
+        // The staged dictated text stays on the clipboard as a manual-paste fallback.
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = null,
@@ -838,7 +885,35 @@ public sealed class TextInsertionServiceTests
         Assert.Equal(InsertionResult.Failed, result);
         Assert.False(platform.PasteSent);
         Assert.Null(platform.TypedText);
-        Assert.Equal(string.Empty, platform.Clipboard);
+        Assert.Equal("line1\nline2", platform.Clipboard);
+        Assert.Equal(1, platform.SetClipboardCount);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_nontext_clipboard_keeps_staged_text_and_logs()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = null,
+            ClipboardHasNonTextFormats = true,
+            ActiveWindowId = "other",
+            ActivateSucceeds = false
+        };
+        var errorLog = new RecordingErrorLogService();
+        var sut = new TextInsertionService(platform, errorLog);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("line1\nline2", platform.Clipboard);
+        Assert.Equal(1, platform.SetClipboardCount);
+        Assert.Contains(
+            errorLog.AddedEntries,
+            entry =>
+                entry.Category == ErrorCategory.Insertion
+                && entry.Message.Contains("could not be restored", StringComparison.Ordinal)
+        );
     }
 
     [Fact]
@@ -1469,14 +1544,72 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = null,
+            ClipboardHasNonTextFormats = true,
             SelectionText = null
         };
-        var sut = new TextInsertionService(platform);
+        var errorLog = new RecordingErrorLogService();
+        var sut = new TextInsertionService(platform, errorLog);
 
         var captured = await sut.CaptureSelectedTextAsync();
 
         Assert.Equal("", captured);
         Assert.Null(platform.Clipboard);
+        var entry = Assert.Single(errorLog.AddedEntries);
+        Assert.Equal(ErrorCategory.Insertion, entry.Category);
+        Assert.Contains("could not be restored", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedTextAsync_richer_clipboard_restores_plain_text_and_logs_loss()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ClipboardHasNonTextFormats = true,
+            SelectionText = "the selected text"
+        };
+        var errorLog = new RecordingErrorLogService();
+        var sut = new TextInsertionService(platform, errorLog);
+
+        var captured = await sut.CaptureSelectedTextAsync();
+
+        Assert.Equal("the selected text", captured);
+        Assert.Equal("previous", platform.Clipboard);
+        var entry = Assert.Single(errorLog.AddedEntries);
+        Assert.Equal(ErrorCategory.Insertion, entry.Category);
+        Assert.Contains(
+            "only its plain-text content was restored",
+            entry.Message,
+            StringComparison.Ordinal
+        );
+    }
+
+    [Theory]
+    [InlineData("", true, false)]
+    [InlineData("text/plain;charset=utf-8\n", true, false)]
+    [InlineData("text/plain;charset=utf-8\ntext/html\n", true, true)]
+    [InlineData("image/png\n", true, true)]
+    [InlineData("TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\n", false, false)]
+    [InlineData(
+        "TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\ntext/uri-list\n",
+        false,
+        true
+    )]
+    [InlineData(
+        "TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\nx-special/gnome-copied-files\n",
+        false,
+        true
+    )]
+    public void LinuxTextInsertionPlatform_ListingHasNonTextFormats_classifies_targets(
+        string listing,
+        bool isWayland,
+        bool expected
+    )
+    {
+        Assert.Equal(
+            expected,
+            LinuxTextInsertionPlatform.ListingHasNonTextFormats(listing, isWayland)
+        );
     }
 
     [Fact]
@@ -2362,9 +2495,36 @@ public sealed class TextInsertionServiceTests
         }
     }
 
+    private sealed class RecordingErrorLogService : IErrorLogService
+    {
+        public List<(string Message, string Category)> AddedEntries { get; } = [];
+
+        public IReadOnlyList<ErrorLogEntry> Entries => [];
+
+        public event Action? EntriesChanged;
+
+        public void AddEntry(string message, string category = ErrorCategory.General)
+        {
+            AddedEntries.Add((message, category));
+            EntriesChanged?.Invoke();
+        }
+
+        public void ClearAll()
+        {
+            AddedEntries.Clear();
+            EntriesChanged?.Invoke();
+        }
+
+        public string ExportDiagnostics()
+        {
+            return string.Empty;
+        }
+    }
+
     private sealed class FakeTextInsertionPlatform : ITextInsertionPlatform
     {
         public string? Clipboard { get; set; }
+        public bool ClipboardHasNonTextFormats { get; init; }
         public string? ActiveWindowId { get; set; }
         public bool ClipboardSetAvailable { get; init; } = true;
         public bool PasteAvailable { get; init; } = true;
@@ -2426,6 +2586,11 @@ public sealed class TextInsertionServiceTests
             SetClipboardCount++;
             Clipboard = text;
             return Task.FromResult(true);
+        }
+
+        public Task<bool> ClipboardHasNonTextFormatsAsync()
+        {
+            return Task.FromResult(ClipboardHasNonTextFormats);
         }
 
         public Task DelayAsync(TimeSpan delay)

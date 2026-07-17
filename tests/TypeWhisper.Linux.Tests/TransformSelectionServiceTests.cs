@@ -150,6 +150,11 @@ public sealed class TransformSelectionServiceTests
             return Task.FromResult(true);
         }
 
+        public Task<bool> ClipboardHasNonTextFormatsAsync()
+        {
+            return Task.FromResult(false);
+        }
+
         public Task DelayAsync(TimeSpan delay)
         {
             return Task.CompletedTask;
