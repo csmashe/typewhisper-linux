@@ -102,6 +102,44 @@ public sealed class TransformSelectionService
         );
     }
 
+    // Test seam: decides whether it's still safe to replace the captured selection. See audit §3 M6.
+    // Cannot detect caret/selection drift within the same window — that would need an
+    // AT-SPI selection-range or document-revision token.
+    internal static bool HasSelectionTargetChanged(
+        string? capturedWindowId,
+        string? capturedProcessName,
+        string? currentWindowId,
+        string? currentProcessName
+    )
+    {
+        // Window id is the strongest signal (X11 only) — if both sides have one, trust it
+        // even if process-name detection disagrees.
+        if (!string.IsNullOrEmpty(capturedWindowId) && !string.IsNullOrEmpty(currentWindowId))
+        {
+            return !string.Equals(capturedWindowId, currentWindowId, StringComparison.Ordinal);
+        }
+
+        // Wayland (and any X11 case missing an id on one side) falls back to process
+        // identity — the only cross-compositor signal ActiveWindowService exposes.
+        if (!string.IsNullOrEmpty(capturedProcessName) || !string.IsNullOrEmpty(currentProcessName))
+        {
+            return !string.Equals(
+                capturedProcessName,
+                currentProcessName,
+                StringComparison.OrdinalIgnoreCase
+            );
+        }
+
+        // No identity signal on either side — fail open rather than block a replacement we can't validate.
+        return false;
+    }
+
+    // Test seam: delivers an aborted transform clipboard-only so it can never paste into the now-focused window. See audit §3 M6.
+    internal static Task<InsertionResult> DeliverAbortedTransformAsync(
+        TextInsertionService textInsertion,
+        string transformed
+    ) => textInsertion.InsertTextAsync(transformed, autoPaste: false);
+
     public event EventHandler<DictationOverlayState>? OverlayStateChanged;
 
     private async Task StartAsync()
@@ -270,6 +308,21 @@ public sealed class TransformSelectionService
                 return;
             }
 
+            var currentWindowId = _activeWindow.GetActiveWindowId();
+            var currentProcessName = _activeWindow.GetActiveWindowProcessName();
+            if (
+                HasSelectionTargetChanged(
+                    session.WindowId,
+                    session.ProcessName,
+                    currentWindowId,
+                    currentProcessName
+                )
+            )
+            {
+                await AbortReplacementAsync(transformed);
+                return;
+            }
+
             PublishStatus("Replacing selected text...");
             var insertion = await _textInsertion.InsertTextAsync(
                 transformed,
@@ -309,6 +362,22 @@ public sealed class TransformSelectionService
             Trace.WriteLine($"[TransformSelection] Transform failed: {ex}");
             await ShowWarningAsync($"Transform selection failed: {ex.Message}");
         }
+    }
+
+    private async Task AbortReplacementAsync(string transformed)
+    {
+        var insertion = await DeliverAbortedTransformAsync(_textInsertion, transformed);
+        var message = insertion switch
+        {
+            InsertionResult.CopiedToClipboard =>
+                "Focus changed while transforming — the original selection was left alone. "
+                + "Transformed text copied; paste manually to replace it.",
+            InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
+            _ =>
+                "Focus changed while transforming, and the transformed text could not be copied. "
+                + "The original selection was left alone."
+        };
+        await ShowWarningAsync(message);
     }
 
     private async Task ShowWarningAsync(string message)

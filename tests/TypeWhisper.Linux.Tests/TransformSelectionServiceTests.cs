@@ -43,6 +43,31 @@ public sealed class TransformSelectionServiceTests
         Assert.False(platform.LastCopyUsedTerminalShortcut);
     }
 
+    [Theory]
+    [InlineData("123", "gnome-terminal", "123", "firefox", false)]
+    [InlineData("123", "code", "456", "code", true)]
+    [InlineData(null, "code", null, "code", false)]
+    [InlineData(null, "code", null, "firefox", true)]
+    [InlineData(null, null, null, null, false)]
+    [InlineData(null, "code", null, null, true)]
+    public void HasSelectionTargetChanged_ReturnsExpectedResult(
+        string? capturedWindowId,
+        string? capturedProcessName,
+        string? currentWindowId,
+        string? currentProcessName,
+        bool expected
+    )
+    {
+        var result = TransformSelectionService.HasSelectionTargetChanged(
+            capturedWindowId,
+            capturedProcessName,
+            currentWindowId,
+            currentProcessName
+        );
+
+        Assert.Equal(expected, result);
+    }
+
     [Fact]
     public void BuildTransformPrompt_IncludesSelectedTextAndSpokenCommand()
     {
@@ -81,11 +106,32 @@ public sealed class TransformSelectionServiceTests
         Assert.False(TransformSelectionService.IsCancelCommand(command));
     }
 
+    [Fact]
+    public async Task DeliverAbortedTransformAsync_CopiesToClipboardOnly_WithoutPasteActivateOrType()
+    {
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
+        var textInsertion = new TextInsertionService(platform);
+
+        var result = await TransformSelectionService.DeliverAbortedTransformAsync(
+            textInsertion,
+            "transformed text"
+        );
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal("transformed text", platform.Clipboard);
+        Assert.Equal(0, platform.PasteCalls);
+        Assert.Equal(0, platform.ActivateCalls);
+        Assert.Equal(0, platform.TypeCalls);
+    }
+
     private sealed class FakeTextInsertionPlatform : ITextInsertionPlatform
     {
         public string? Clipboard { get; set; }
         public string? SelectionText { get; init; }
         public bool LastCopyUsedTerminalShortcut { get; private set; }
+        public int PasteCalls { get; private set; }
+        public int ActivateCalls { get; private set; }
+        public int TypeCalls { get; private set; }
         public bool IsClipboardSetAvailable => true;
         public bool IsPasteAvailable => true;
         public bool IsKdePlasma => false;
@@ -116,16 +162,19 @@ public sealed class TransformSelectionServiceTests
 
         public Task<bool> ActivateWindowAsync(string windowId)
         {
+            ActivateCalls++;
             return Task.FromResult(false);
         }
 
         public Task<bool> SendPasteAsync(bool useTerminalShortcut = false)
         {
+            PasteCalls++;
             return Task.FromResult(false);
         }
 
         public Task<bool> TypeTextAsync(string text)
         {
+            TypeCalls++;
             return Task.FromResult(false);
         }
 
