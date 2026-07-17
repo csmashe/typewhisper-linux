@@ -657,6 +657,92 @@ public sealed class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
+    public void ImportFromCsv_UpdatesExistingCorrectionByOriginalIgnoringCase()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "existing-id",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "wispr",
+                Replacement = "Wispr",
+                Priority = 5,
+                Source = DictionaryEntrySource.Manual
+            }
+        );
+
+        var imported = _sut.ImportFromCsv(
+            """
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source
+            Correction,WISPR,Wispr Flow,true,true,true,9,Import
+            """
+        );
+
+        Assert.Equal(1, imported);
+        var correction = Assert.Single(
+            _sut.Entries,
+            entry => entry.EntryType == DictionaryEntryType.Correction
+        );
+        Assert.Equal("existing-id", correction.Id);
+        Assert.Equal("Wispr Flow", correction.Replacement);
+        Assert.Equal(9, correction.Priority);
+    }
+
+    [Fact]
+    public void ImportFromCsv_ExactDuplicateCorrectionIsNoOp()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "existing-id",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "wispr",
+                Replacement = "Wispr",
+                CaseSensitive = true,
+                IsEnabled = false,
+                IsStarred = true,
+                UsageCount = 12,
+                Priority = 5,
+                Source = DictionaryEntrySource.Manual
+            }
+        );
+
+        var imported = _sut.ImportFromCsv(
+            """
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source
+            Correction,WISPR,Wispr,true,false,true,5,Manual
+            """
+        );
+
+        Assert.Equal(0, imported);
+        var correction = Assert.Single(
+            _sut.Entries,
+            entry => entry.EntryType == DictionaryEntryType.Correction
+        );
+        Assert.Equal("existing-id", correction.Id);
+        Assert.Equal(12, correction.UsageCount);
+    }
+
+    [Fact]
+    public void ImportFromCsv_LastCorrectionRowWinsForDuplicateOriginals()
+    {
+        var imported = _sut.ImportFromCsv(
+            """
+            EntryType,Original,Replacement
+            Correction,wispr,First
+            Correction,WISPR,Second
+            """
+        );
+
+        Assert.Equal(2, imported);
+        var correction = Assert.Single(
+            _sut.Entries,
+            entry => entry.EntryType == DictionaryEntryType.Correction
+        );
+        Assert.Equal("Second", correction.Replacement);
+    }
+
+    [Fact]
     public void ImportFromCsv_SkipsDuplicatesAndInvalidCorrections()
     {
         _sut.AddEntry(
@@ -679,6 +765,11 @@ public sealed class DictionaryServiceTests : IDisposable
 
         Assert.Equal(1, imported);
         Assert.Equal(2, _sut.Entries.Count);
+        var term = Assert.Single(
+            _sut.Entries,
+            entry => entry.EntryType == DictionaryEntryType.Term
+        );
+        Assert.Equal("existing", term.Id);
         Assert.Contains(
             _sut.Entries,
             entry =>
