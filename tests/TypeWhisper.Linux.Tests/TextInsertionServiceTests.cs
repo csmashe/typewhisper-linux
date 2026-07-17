@@ -1317,7 +1317,7 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
-    public async Task LinuxTextInsertionPlatform_WaylandWithoutWtype_FallsBackToXdotool()
+    public async Task LinuxTextInsertionPlatform_WaylandWithOnlyXdotool_HasNoAvailablePasteBackend()
     {
         var runner = new RecordingProcessRunner();
         var platform = new LinuxTextInsertionPlatform(
@@ -1325,16 +1325,37 @@ public sealed class TextInsertionServiceTests
             runner.Run
         );
 
-        Assert.True(platform.IsPasteAvailable);
+        Assert.False(platform.IsPasteAvailable);
 
         var result = await platform.SendPasteAsync();
 
-        Assert.True(result);
-        Assert.All(runner.Calls, call => Assert.Equal("xdotool", call.FileName));
-        Assert.Contains(
-            runner.Calls,
-            call =>
-                call.Arguments.SequenceEqual(["keydown", "--clearmodifiers", "Control_L"])
+        Assert.False(result);
+        Assert.Empty(runner.Calls);
+        Assert.Equal(
+            InsertionFailureReason.NoWaylandTypingTool,
+            platform.LastFailureReason
+        );
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_WaylandWithOnlyXdotool_AllInputMethodsReturnFalse()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", true, false, "unknown", false, false),
+            runner.Run
+        );
+
+        Assert.False(platform.IsPasteAvailable);
+        Assert.False(await platform.SendPasteAsync());
+        Assert.False(await platform.SendCopyAsync(false));
+        Assert.False(await platform.SendCopyAsync(true));
+        Assert.False(await platform.SendEnterAsync());
+        Assert.False(await platform.TypeTextAsync("anything"));
+        Assert.Empty(runner.Calls);
+        Assert.Equal(
+            InsertionFailureReason.NoWaylandTypingTool,
+            platform.LastFailureReason
         );
     }
 
@@ -1593,15 +1614,14 @@ public sealed class TextInsertionServiceTests
         // ydotool-specific reason. A following wtype attempt with
         // compositor-rejection must NOT overwrite that reason —
         // otherwise the user sees "Set up ydotool" advice when ydotool
-        // is the actual broken thing. The chain falls through to
-        // xdotool (XWayland) as the final attempt; we use that to
-        // observe the full walk happened.
+        // is the actual broken thing. xdotool is deliberately never a
+        // Wayland candidate because its success cannot prove delivery
+        // to the native focused surface.
         var runner = new ScriptedProcessRunner();
         runner.Queue.Enqueue(("ydotool", 1, string.Empty));
         runner.Queue.Enqueue(
             ("wtype", 1, "Compositor does not support the virtual keyboard protocol")
         );
-        runner.Queue.Enqueue(("xdotool", 0, string.Empty));
 
         var platform = new LinuxTextInsertionPlatform(
             SnapshotFor(
@@ -1618,21 +1638,26 @@ public sealed class TextInsertionServiceTests
 
         var ok = await platform.TypeTextAsync("hi");
 
-        Assert.True(ok);
-        // ydotool was tried first, then wtype, then xdotool succeeded.
+        Assert.False(ok);
         Assert.Equal(
-            ["ydotool", "wtype", "xdotool"],
+            ["ydotool", "wtype"],
             runner.Calls.Select(c => c.FileName).ToArray()
         );
+        Assert.Equal(
+            InsertionFailureReason.YdotoolSocketUnreachable,
+            platform.LastFailureReason
+        );
 
-        // Second dictation: both ydotool and wtype should be skipped
-        // — only xdotool should be attempted.
+        // Second dictation: the failed ydotool and wtype are now disabled.
         runner.Calls.Clear();
-        runner.Queue.Enqueue(("xdotool", 0, string.Empty));
         var ok2 = await platform.TypeTextAsync("hello");
 
-        Assert.True(ok2);
-        Assert.Equal("xdotool", Assert.Single(runner.Calls).FileName);
+        Assert.False(ok2);
+        Assert.Empty(runner.Calls);
+        Assert.Equal(
+            InsertionFailureReason.NoWaylandTypingTool,
+            platform.LastFailureReason
+        );
     }
 
     [Fact]

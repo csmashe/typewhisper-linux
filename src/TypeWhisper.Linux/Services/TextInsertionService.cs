@@ -1294,10 +1294,10 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 }
             }
 
-            if (snapshot.HasXdotool)
-            {
-                chain.Add(InputBackend.Xdotool);
-            }
+            // xdotool is never added on Wayland: XTEST reaches only XWayland
+            // surfaces and can exit 0 even when the native-Wayland target received
+            // nothing — and nothing here can tell whether the focused surface
+            // is XWayland.
         }
         else if (snapshot.HasXdotool)
         {
