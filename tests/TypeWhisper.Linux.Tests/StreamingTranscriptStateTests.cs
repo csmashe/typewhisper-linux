@@ -82,6 +82,98 @@ public sealed class LinuxStreamingTranscriptStateTests
     }
 
     [Fact]
+    public async Task TryApplyPolling_ConcurrentOlderHypothesis_DoesNotClobberNewerCommittedText()
+    {
+        var sut = new StreamingTranscriptState();
+        var session = sut.StartSession();
+        sut.TryApplyPolling(session, "hello", text => text, out _);
+        var aEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var callA = Task.Run(() =>
+            sut.TryApplyPolling(
+                session,
+                "hello world",
+                text =>
+                {
+                    aEntered.SetResult();
+                    releaseA.Task.Wait();
+                    return text;
+                },
+                out _
+            )
+        );
+
+        await aEntered.Task;
+        var appliedB = sut.TryApplyPolling(
+            session,
+            "hello world how are you",
+            text => text,
+            out var displayB
+        );
+        releaseA.SetResult();
+        var appliedA = await callA;
+
+        Assert.True(appliedB);
+        Assert.Equal("hello world how are you", displayB);
+        Assert.False(appliedA);
+        Assert.Equal("hello world how are you", sut.StopSession());
+    }
+
+    [Fact]
+    public async Task TryApplyPolling_StaleSessionCallback_NeverWritesAfterStopStart_EvenWhenNewSessionTextIsStillEmpty()
+    {
+        var sut = new StreamingTranscriptState();
+        var firstSession = sut.StartSession();
+        var staleEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseStale = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        var staleDisplay = "";
+        var staleCall = Task.Run(() =>
+            sut.TryApplyPolling(
+                firstSession,
+                "stale text",
+                text =>
+                {
+                    staleEntered.SetResult();
+                    releaseStale.Task.Wait();
+                    return text;
+                },
+                out staleDisplay
+            )
+        );
+
+        // The stale corrector has snapshotted _confirmedText="" at the first session's version.
+        await staleEntered.Task;
+
+        // After Stop/Start the new confirmed buffer is also "", so only the version check can
+        // reject the stale write — release and await it before any session-2 commit.
+        sut.StopSession();
+        var secondSession = sut.StartSession();
+        releaseStale.SetResult();
+        var staleApplied = await staleCall;
+
+        Assert.False(staleApplied);
+        Assert.Equal("", staleDisplay);
+
+        // The new session still sees clean state and commits only its own text.
+        var freshApplied = sut.TryApplyPolling(
+            secondSession,
+            "fresh text",
+            text => text,
+            out var freshDisplay
+        );
+
+        Assert.True(freshApplied);
+        Assert.Equal("fresh text", freshDisplay);
+        Assert.Equal("fresh text", sut.StopSession());
+    }
+
+    [Fact]
     public void StopSession_PrefersDisplayedPreviewWhenItDivergesFromConfirmed()
     {
         // Public TryApplyPolling sets _confirmedText and _lastDisplayedText
