@@ -516,6 +516,80 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task InsertTextAsync_partial_typing_failure_does_not_retry_via_clipboard_paste()
+    {
+        // Regression: once direct typing has already delivered part of the text
+        // under a failed backend, falling through to the clipboard-paste path
+        // would paste the COMPLETE text again, duplicating the already-typed
+        // prefix. A partial-delivery failure must fail closed instead.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            TypeSucceeds = false,
+            TypeFailureReason = InsertionFailureReason.PartialTypingFailure,
+            LastTypingDeliveredPartialText = true
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("new text", targetProcessName: "codex");
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.Equal(0, platform.SetClipboardCount);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal(InsertionFailureReason.PartialTypingFailure, sut.LastFailureReason);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_partial_delivery_with_structural_reason_still_suppresses_clipboard_paste()
+    {
+        // Regression (audit §3 M2b): a mid-sequence typing failure can record a specific
+        // structural reason BEFORE FailPartway runs, so LastFailureReason is not
+        // PartialTypingFailure — yet a prefix already landed. The clipboard fallback must
+        // stay suppressed on the partial-delivery fact, not on the reason value, and the
+        // specific reason must still win (first-specific-wins).
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            TypeSucceeds = false,
+            TypeFailureReason = InsertionFailureReason.YdotoolSocketUnreachable,
+            LastTypingDeliveredPartialText = true
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("new text", targetProcessName: "codex");
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.Equal(0, platform.SetClipboardCount);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal(InsertionFailureReason.YdotoolSocketUnreachable, sut.LastFailureReason);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_direct_typing_failure_reason_survives_paste_fallback_overwrite()
+    {
+        // Regression: a specific direct-typing failure reason (e.g. ydotool socket
+        // unreachable) must not be downgraded to the generic "no typing tool"
+        // reason from the clipboard-paste fallback's own WalkChainAsync call —
+        // otherwise the user sees the generic hint instead of "check the ydotool
+        // daemon", even though ydotool is installed and the socket is the problem.
+        var platform = new FakeTextInsertionPlatform
+        {
+            TypeSucceeds = false,
+            TypeFailureReason = InsertionFailureReason.YdotoolSocketUnreachable,
+            PasteSucceeds = false,
+            PasteFailureReason = InsertionFailureReason.NoWaylandTypingTool
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("hello", targetProcessName: "codex");
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal(InsertionFailureReason.YdotoolSocketUnreachable, sut.LastFailureReason);
+    }
+
+    [Fact]
     public async Task InsertTextAsync_terminal_multiline_focus_failure_fails_closed_without_typing()
     {
         // Multiline text into a terminal must NOT fall back to direct typing
@@ -1803,6 +1877,110 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_MultilineTyping_PartialDeliveryStopsChainInsteadOfRetyping()
+    {
+        // Regression (audit §3 M2): wtype types "line one" successfully, then fails
+        // the Shift+Enter before "line two" can be sent. Retrying with the next
+        // backend (ydotool) would retype the whole text from the start, duplicating
+        // "line one" in the target app. The chain must stop here instead.
+        var runner = new ScriptedProcessRunner();
+        runner.Queue.Enqueue(("wtype", 0, string.Empty)); // "line one" succeeds
+        runner.Queue.Enqueue(("wtype", 1, string.Empty)); // Shift+Enter fails
+
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, args, _) => runner.Run(file, args),
+            runner.RunWithStderr
+        );
+
+        var result = await platform.TypeTextAsync("line one\nline two");
+
+        Assert.False(result);
+        Assert.Equal(2, runner.Calls.Count);
+        Assert.All(runner.Calls, call => Assert.Equal("wtype", call.FileName));
+        Assert.Equal(InsertionFailureReason.PartialTypingFailure, platform.LastFailureReason);
+        Assert.True(platform.LastTypingDeliveredPartialText);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_MultilineTyping_LeadingNewlineDeliveredBeforeFailureStopsChain()
+    {
+        // Regression (audit §3 M2, leading-blank-line variant): the first segment is
+        // empty (input begins with a newline), so the Shift+Enter — not a text segment —
+        // is the first thing to land in the target. When the following segment then fails,
+        // that already-delivered newline must count as partial delivery: the chain must
+        // stop rather than retype "\nline two" via the next backend and duplicate the
+        // newline.
+        var runner = new ScriptedProcessRunner();
+        runner.Queue.Enqueue(("wtype", 0, string.Empty)); // Shift+Enter lands the leading newline
+        runner.Queue.Enqueue(("wtype", 1, string.Empty)); // "line two" fails
+
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, args, _) => runner.Run(file, args),
+            runner.RunWithStderr
+        );
+
+        var result = await platform.TypeTextAsync("\nline two");
+
+        Assert.False(result);
+        Assert.Equal(2, runner.Calls.Count);
+        Assert.All(runner.Calls, call => Assert.Equal("wtype", call.FileName));
+        Assert.Equal(InsertionFailureReason.PartialTypingFailure, platform.LastFailureReason);
+        Assert.True(platform.LastTypingDeliveredPartialText);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_MultilineTyping_StructuralReasonBeforeAbort_KeepsReasonAndFlagsPartial()
+    {
+        // Regression (audit §3 M2b): ydotool types "line one", then Shift+Enter exits
+        // non-zero — RunYdotoolAsync records YdotoolSocketUnreachable BEFORE FailPartway
+        // fires, whose "== None" guard leaves that specific reason in place. A prefix
+        // already landed, so LastTypingDeliveredPartialText must still report it and the
+        // chain must abort rather than retype the whole text via wtype.
+        var runner = new ScriptedProcessRunner();
+        runner.Queue.Enqueue(("ydotool", 0, string.Empty)); // "line one" types
+        runner.Queue.Enqueue(("ydotool", 1, string.Empty)); // Shift+Enter fails non-zero
+
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "gnome", true, true),
+            (file, args, _) => runner.Run(file, args),
+            runner.RunWithStderr
+        );
+
+        var result = await platform.TypeTextAsync("line one\nline two");
+
+        Assert.False(result);
+        Assert.Equal(2, runner.Calls.Count);
+        Assert.All(runner.Calls, call => Assert.Equal("ydotool", call.FileName));
+        Assert.Equal(InsertionFailureReason.YdotoolSocketUnreachable, platform.LastFailureReason);
+        Assert.True(platform.LastTypingDeliveredPartialText);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_MultilineTyping_NoProgressYetStillFallsBackToNextBackend()
+    {
+        // A backend that fails before typing anything (dead binary, immediate
+        // rejection) is still safe to retry from scratch with the next backend —
+        // nothing has been delivered yet to duplicate.
+        var runner = new ScriptedProcessRunner();
+        runner.Queue.Enqueue(("wtype", 1, string.Empty)); // fails before typing "line one" at all
+
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, args, _) => runner.Run(file, args),
+            runner.RunWithStderr
+        );
+
+        var result = await platform.TypeTextAsync("line one\nline two");
+
+        Assert.True(result);
+        Assert.Equal("wtype", runner.Calls[0].FileName);
+        Assert.All(runner.Calls.Skip(1), call => Assert.Equal("ydotool", call.FileName));
+        Assert.Equal(InsertionFailureReason.None, platform.LastFailureReason);
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_Ydotool_TypesNewlineAsShiftEnter()
     {
         var runner = new RecordingProcessRunner();
@@ -2019,6 +2197,16 @@ public sealed class TextInsertionServiceTests
         public bool PasteAvailable { get; init; } = true;
         public bool ActivateSucceeds { get; init; } = true;
         public bool PasteSucceeds { get; init; } = true;
+        public bool TypeSucceeds { get; init; } = true;
+        public InsertionFailureReason TypeFailureReason { get; init; } =
+            InsertionFailureReason.None;
+
+        // Models a direct-typing attempt that aborted mid-sequence after already
+        // delivering part of the text (real flow: TypeWithNewlinesAsync.FailPartway).
+        public bool LastTypingDeliveredPartialText { get; init; }
+
+        public InsertionFailureReason PasteFailureReason { get; init; } =
+            InsertionFailureReason.None;
         public Queue<bool>? PasteResults { get; init; }
         public bool PasteSent { get; private set; }
         public int PasteAttemptCount { get; private set; }
@@ -2051,7 +2239,7 @@ public sealed class TextInsertionServiceTests
 
         public bool PrefersDirectTypingForUnknownTarget { get; init; }
 
-        public InsertionFailureReason LastFailureReason => InsertionFailureReason.None;
+        public InsertionFailureReason LastFailureReason { get; private set; }
 
         public Task<string?> TryGetClipboardTextAsync()
         {
@@ -2100,15 +2288,18 @@ public sealed class TextInsertionServiceTests
             PasteAttemptCount++;
             LastPasteUsedTerminalShortcut = useTerminalShortcut;
             OnPasteSent?.Invoke();
-            return Task.FromResult(
-                PasteResults?.Count > 0 ? PasteResults.Dequeue() : PasteSucceeds
-            );
+            var succeeded = PasteResults?.Count > 0 ? PasteResults.Dequeue() : PasteSucceeds;
+            LastFailureReason = succeeded ? InsertionFailureReason.None : PasteFailureReason;
+            return Task.FromResult(succeeded);
         }
 
         public Task<bool> TypeTextAsync(string text)
         {
             TypedText = text;
-            return Task.FromResult(true);
+            LastFailureReason = TypeSucceeds
+                ? InsertionFailureReason.None
+                : TypeFailureReason;
+            return Task.FromResult(TypeSucceeds);
         }
 
         // Models a compositor/app dropping the first N synthesized copies before one lands —

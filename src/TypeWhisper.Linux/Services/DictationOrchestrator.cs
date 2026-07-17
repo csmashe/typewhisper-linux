@@ -2138,6 +2138,9 @@ public sealed class DictationOrchestrator : IDisposable
                     InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
                     InsertionResult.MissingPasteTool =>
                         $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
+                    InsertionResult.Failed when _textInsertion.LastTypingDeliveredPartialText =>
+                        "Text insertion failed partway through typing. Some of the dictated text may "
+                        + "already be in the target app — check before dictating again.",
                     InsertionResult.Failed =>
                         "Text insertion failed. Dictated text could not be copied or pasted.",
                     InsertionResult.NoText when commandResult.CancelInsertion =>

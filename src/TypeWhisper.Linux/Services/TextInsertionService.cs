@@ -31,7 +31,8 @@ public enum InsertionFailureReason
     YdotoolSocketUnreachable,
     NoWaylandTypingTool,
     FocusFailed,
-    PasteRetriesExhausted
+    PasteRetriesExhausted,
+    PartialTypingFailure
 }
 
 public sealed record TextInsertionRequest(
@@ -127,6 +128,14 @@ public sealed class TextInsertionService
     public InsertionFailureReason LastFailureReason { get; private set; } =
         InsertionFailureReason.None;
 
+    // Whether the last direct-typing attempt aborted mid-sequence after already
+    // delivering part of the text. Both the clipboard-fallback suppression and the
+    // orchestrator's completion message key on this fact rather than on
+    // LastFailureReason: a structural reason (e.g. ydotool socket unreachable) can be
+    // recorded before the partial-delivery abort, so the reason value alone can't tell
+    // whether a prefix already landed. Reset per request.
+    public bool LastTypingDeliveredPartialText { get; private set; }
+
     public async Task<InsertionResult> InsertTextAsync(
         string text,
         bool autoPaste = true,
@@ -153,6 +162,7 @@ public sealed class TextInsertionService
     public async Task<InsertionResult> InsertTextAsync(TextInsertionRequest request)
     {
         LastFailureReason = InsertionFailureReason.None;
+        LastTypingDeliveredPartialText = false;
 
         var text = request.Text;
         var autoPaste = request.AutoPaste;
@@ -213,6 +223,11 @@ public sealed class TextInsertionService
             if (
                 strategy is TextInsertionStrategy.DirectTyping
                 || directResult is not InsertionResult.Failed
+                // Partial delivery already happened under the failed backend; falling
+                // through would clipboard-paste the complete text again and duplicate
+                // the prefix that's already in the target app. (Keyed on the delivery
+                // fact, not LastFailureReason — see the property comment.)
+                || LastTypingDeliveredPartialText
             )
             {
                 return directResult;
@@ -642,7 +657,15 @@ public sealed class TextInsertionService
                 or InsertionFailureReason.NoWaylandTypingTool
             )
             {
-                LastFailureReason = platformReason;
+                // First-failing structural reason within this request wins — a later,
+                // more generic reason from this fallback's own chain walk must not
+                // downgrade an earlier specific one (e.g. "ydotool socket unreachable"
+                // is a more useful hint than the generic "no typing tool").
+                if (LastFailureReason == InsertionFailureReason.None)
+                {
+                    LastFailureReason = platformReason;
+                }
+
                 return false;
             }
 
@@ -675,6 +698,7 @@ public sealed class TextInsertionService
                 LastFailureReason = _platform.LastFailureReason;
             }
 
+            LastTypingDeliveredPartialText = _platform.LastTypingDeliveredPartialText;
             LogInsertionFallback("Direct typing failed.");
             return InsertionResult.Failed;
         }
@@ -852,6 +876,15 @@ internal interface ITextInsertionPlatform
     bool PrefersDirectTypingForUnknownTarget { get; }
 
     InsertionFailureReason LastFailureReason { get; }
+
+    /// <summary>
+    ///     True when the most recent typing attempt aborted mid-sequence after at least
+    ///     one segment had already reached the target. The caller must then suppress the
+    ///     clipboard fallback — a full re-paste would duplicate the delivered prefix —
+    ///     regardless of which failure reason was recorded.
+    /// </summary>
+    bool LastTypingDeliveredPartialText { get; }
+
     Task<string?> TryGetClipboardTextAsync();
     Task<bool> SetClipboardTextAsync(string text);
     Task DelayAsync(TimeSpan delay);
@@ -897,6 +930,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     private List<InputBackend> _chain;
     private HashSet<InputBackend> _disabled = [];
+    private bool _abortChainAfterAttempt;
 
     private LinuxCapabilitySnapshot _snapshot;
 
@@ -975,6 +1009,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         );
 
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
+
+    public bool LastTypingDeliveredPartialText { get; private set; }
 
     public async Task<string?> TryGetClipboardTextAsync()
     {
@@ -1111,26 +1147,60 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             return await TypeSegmentAsync(backend, normalized);
         }
 
-        // A backend that fails mid-stream returns false and the chain retries
-        // the next backend from scratch — same all-or-nothing risk the single
-        // type() call already carried; partial duplication needs a rare
-        // mid-sequence failure (the first call fails fast on a dead backend).
         var segments = normalized.Split('\n');
+        var delivered = false;
         for (var i = 0; i < segments.Length; i++)
         {
-            if (i > 0 && !await SendShiftEnterAsync(backend))
+            if (i > 0)
             {
-                return false;
+                if (!await SendShiftEnterAsync(backend))
+                {
+                    return FailPartway(delivered);
+                }
+
+                // A landed Shift+Enter is itself delivery: it puts a newline in the
+                // target even when every segment so far was empty (leading/blank
+                // lines). Count it so a later failure fails closed instead of letting
+                // the chain retype from scratch and duplicate the newline.
+                delivered = true;
             }
 
             var segment = segments[i];
-            if (segment.Length > 0 && !await TypeSegmentAsync(backend, segment))
+            if (segment.Length == 0)
             {
-                return false;
+                continue;
             }
+
+            if (!await TypeSegmentAsync(backend, segment))
+            {
+                return FailPartway(delivered);
+            }
+
+            delivered = true;
         }
 
         return true;
+
+        // A failure after at least one segment already reached the target means
+        // retrying — with this backend or the next — would retype from the start
+        // and duplicate what's already there (or resubmit a partial shell command
+        // in a terminal). Stop the chain instead of risking a silent duplicate.
+        bool FailPartway(bool hasDelivered)
+        {
+            if (!hasDelivered)
+            {
+                return false;
+            }
+
+            _abortChainAfterAttempt = true;
+            LastTypingDeliveredPartialText = true;
+            if (LastFailureReason == InsertionFailureReason.None)
+            {
+                LastFailureReason = InsertionFailureReason.PartialTypingFailure;
+            }
+
+            return false;
+        }
     }
 
     private async Task<bool> TypeSegmentAsync(InputBackend backend, string segment)
@@ -1225,6 +1295,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         var chain = _chain;
         var disabled = _disabled;
         LastFailureReason = InsertionFailureReason.None;
+        _abortChainAfterAttempt = false;
+        LastTypingDeliveredPartialText = false;
         if (chain.Count == 0)
         {
             LastFailureReason = InsertionFailureReason.NoWaylandTypingTool;
@@ -1244,6 +1316,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             if (await attempt(backend))
             {
                 return true;
+            }
+
+            if (_abortChainAfterAttempt)
+            {
+                break;
             }
         }
 
