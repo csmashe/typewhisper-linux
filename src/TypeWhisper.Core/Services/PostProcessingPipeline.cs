@@ -53,7 +53,7 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
                     )
                 );
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
             }

@@ -460,6 +460,69 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
+    public async Task ProcessAsync_InternalCleanupCancellation_ContinuesAfterFailure()
+    {
+        using var privateCts = new CancellationTokenSource();
+        await privateCts.CancelAsync();
+
+        var options = new PipelineOptions
+        {
+            CleanupHandler = async (text, _) =>
+            {
+                // ReSharper disable once AccessToDisposedClosure -- runs synchronously while ProcessAsync is awaited, before the using disposes privateCts.
+                await Task.Delay(Timeout.Infinite, privateCts.Token);
+                return text;
+            },
+            SnippetExpander = text => text + "+SNIPPET"
+        };
+
+        var result = await _sut.ProcessAsync("hello", options, CancellationToken.None);
+
+        Assert.Equal("hello+SNIPPET", result.Text);
+        Assert.Contains(
+            result.Steps,
+            step => step is { Name: "Cleanup", Succeeded: false }
+        );
+    }
+
+    [Fact]
+    public async Task ProcessAsync_InternalPluginTaskCancellation_ContinuesAfterFailure()
+    {
+        using var unrelatedCts = new CancellationTokenSource();
+        await unrelatedCts.CancelAsync();
+
+        var options = new PipelineOptions
+        {
+            PluginPostProcessors =
+            [
+                new PluginPostProcessor(
+                    100,
+                    // ReSharper disable once AccessToDisposedClosure -- thrown synchronously while ProcessAsync is awaited, before the using disposes unrelatedCts.
+                    (_, _) => throw new TaskCanceledException(
+                        "Simulated internal HTTP timeout",
+                        null,
+                        unrelatedCts.Token
+                    )
+                )
+            ],
+            DictionaryCorrector = text => text + "+DICT"
+        };
+
+        var result = await _sut.ProcessAsync("hello", options, CancellationToken.None);
+
+        Assert.Equal("hello+DICT", result.Text);
+        Assert.Contains(
+            result.Steps,
+            step => step is
+            {
+                Name: "Plugin(100)",
+                Succeeded: false,
+                ErrorMessage: "Simulated internal HTTP timeout"
+            }
+        );
+    }
+
+    [Fact]
     public async Task ProcessAsync_Translation_UsesAutoWhenSourceUnknown()
     {
         string? sourceLanguage = null;
@@ -485,6 +548,33 @@ public class PostProcessingPipelineTests
         await cts.CancelAsync();
 
         var options = new PipelineOptions { DictionaryCorrector = text => text };
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            _sut.ProcessAsync("test", options, cts.Token)
+        );
+    }
+
+    [Fact]
+    public async Task ProcessAsync_StepCancelsCallerTokenThenThrows_Propagates()
+    {
+        using var cts = new CancellationTokenSource();
+
+        var options = new PipelineOptions
+        {
+            PluginPostProcessors =
+            [
+                new PluginPostProcessor(
+                    100,
+                    (_, _) =>
+                    {
+                        // ReSharper disable AccessToDisposedClosure -- runs synchronously while ProcessAsync is awaited, before the using disposes cts.
+                        cts.Cancel();
+                        throw new OperationCanceledException(cts.Token);
+                        // ReSharper restore AccessToDisposedClosure
+                    }
+                )
+            ]
+        };
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
             _sut.ProcessAsync("test", options, cts.Token)
