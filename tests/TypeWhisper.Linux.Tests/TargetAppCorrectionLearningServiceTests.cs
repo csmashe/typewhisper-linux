@@ -206,6 +206,42 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ReArm_WhenAtSpiBecomesUnavailable_DisarmsPreviousSession()
+    {
+        // A re-arm that fails because AT-SPI became unavailable must still disarm the
+        // previous session, or its lease and timer stay live.
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(client, enabled: true);
+
+        client.TextToReturn = "I deployed to kubernets today";
+        await service.ArmAsync("I deployed to kubernets today");
+        Assert.Equal(1, client.ActiveAcquisitions);
+
+        client.Available = false;
+        await service.ArmAsync("a fresh unrelated dictation");
+
+        Assert.Equal(0, client.ActiveAcquisitions);
+    }
+
+    [Fact]
+    public async Task ReArm_WhenFocusedElementBecomesInvalid_DisarmsPreviousSession()
+    {
+        // A re-arm that fails because no focused element can be found must still disarm the
+        // previous session, or its lease and timer stay live.
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(client, enabled: true);
+
+        client.TextToReturn = "I deployed to kubernets today";
+        await service.ArmAsync("I deployed to kubernets today");
+        Assert.Equal(1, client.ActiveAcquisitions);
+
+        client.CurrentFocusedElement = null; // BootstrapResult stays null: bootstrap finds nothing
+        await service.ArmAsync("a fresh unrelated dictation");
+
+        Assert.Equal(0, client.ActiveAcquisitions);
+    }
+
+    [Fact]
     public async Task Disable_MidWindow_ReleasesTextChangedLease()
     {
         // Disabling the feature disarms via the reconcile; the lease must be released so the
@@ -1393,7 +1429,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
     private sealed class FakeAtSpiEventClient : IAtSpiEventClient
     {
-        public bool Available { get; init; } = true;
+        public bool Available { get; set; } = true;
 
         // null models a role read that could not be determined (fail-closed path).
         public bool? PasswordResult { get; init; } = false;

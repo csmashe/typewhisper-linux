@@ -231,6 +231,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         if (!await _client.EnsureStartedAsync().ConfigureAwait(false))
         {
             LogSkipOnce("AT-SPI unavailable; target-app correction learning inactive.");
+            DisarmIfCurrent(armSequence);
             return;
         }
 
@@ -286,6 +287,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
             LogSkipOnce(
                 "No focused element found on the accessibility bus; correction learning skipped this dictation."
             );
+            DisarmIfCurrent(armSequence);
             return;
         }
 
