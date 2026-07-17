@@ -106,7 +106,6 @@ public sealed class BackendSelector
 
     private static bool IsWaylandSession()
     {
-        var session = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE");
-        return string.Equals(session, "wayland", StringComparison.OrdinalIgnoreCase);
+        return WaylandSessionDetector.IsWaylandSession();
     }
 }

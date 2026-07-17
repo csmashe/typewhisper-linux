@@ -482,7 +482,7 @@ public sealed partial class SystemCommandAvailabilityService
 
     private static LinuxCapabilitySnapshot BuildSnapshot()
     {
-        var isWayland = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
+        var isWayland = WaylandSessionDetector.IsWaylandSession();
         var isX11 = Environment.GetEnvironmentVariable("DISPLAY") is { Length: > 0 };
         var hasXclip = IsCommandAvailable("xclip");
         var hasWlClipboard = IsCommandAvailable("wl-copy") && IsCommandAvailable("wl-paste");

@@ -405,11 +405,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
     private static bool IsWaylandSession()
     {
-        return string.Equals(
-            Environment.GetEnvironmentVariable("XDG_SESSION_TYPE"),
-            "wayland",
-            StringComparison.OrdinalIgnoreCase
-        );
+        return WaylandSessionDetector.IsWaylandSession();
     }
 
     [RelayCommand]
