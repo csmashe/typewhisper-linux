@@ -66,6 +66,22 @@ public sealed class HistoryInsightsServiceTests
         Assert.Equal(1, result.TranslationAppliedCount);
     }
 
+    [Fact]
+    public void Build_IncludesActionOutcomesInSuccessMetrics()
+    {
+        var records = Enumerable.Range(0, 9)
+            .Select(_ => Record("done", "app", 1, TextInsertionStatus.ActionHandled))
+            .Append(Record("done", "app", 1, TextInsertionStatus.ActionFailed))
+            .ToArray();
+
+        var result = _sut.Build(records);
+
+        Assert.Equal(9, result.SuccessfulInsertionCount);
+        Assert.Equal(1, result.FailedInsertionCount);
+        Assert.Equal(10, result.InsertionAttemptCount);
+        Assert.Equal(90.0, result.InsertionSuccessRate);
+    }
+
     private static TranscriptionRecord Record(
         string finalText,
         string app,

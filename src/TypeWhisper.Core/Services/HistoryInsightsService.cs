@@ -38,6 +38,9 @@ public sealed class HistoryInsightsService : IHistoryInsightsService
         var typedCount = records.Count(record =>
             record.InsertionStatus is TextInsertionStatus.Typed
         );
+        var actionHandledCount = records.Count(record =>
+            record.InsertionStatus is TextInsertionStatus.ActionHandled
+        );
         var copiedToClipboardCount = records.Count(record =>
             record.InsertionStatus is TextInsertionStatus.CopiedToClipboard
         );
@@ -48,7 +51,7 @@ public sealed class HistoryInsightsService : IHistoryInsightsService
                 or TextInsertionStatus.MissingClipboardTool
                 or TextInsertionStatus.MissingPasteTool
         );
-        var successfulInsertionCount = pastedCount + typedCount;
+        var successfulInsertionCount = pastedCount + typedCount + actionHandledCount;
         var insertionAttemptCount =
             successfulInsertionCount + copiedToClipboardCount + failedInsertionCount;
 
