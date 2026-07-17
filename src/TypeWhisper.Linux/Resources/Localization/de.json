@@ -323,6 +323,7 @@
   "Dictionary.TypeTerm": "Begriff",
   "Dictionary.VocabularyBoostingHint": "Verbessert die Erkennung aktiver Begriffe aus Wörterbuch und Paketen bei lokalen Transkriptionen",
   "Feedback.CorrectionLearningUndone": "Korrekturlernen rückgängig gemacht.",
+  "Feedback.CorrectionUndoFailed": "Rückgängig fehlgeschlagen – bitte erneut versuchen.",
   "Feedback.LearnedCorrectionFormat": "„{0}“ → „{1}“ gelernt",
   "Feedback.LearnedCorrectionsFormat": "{0} Korrekturen gelernt",
   "Feedback.Undo": "Rückgängig",

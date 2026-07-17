@@ -9,14 +9,19 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class LearnedCorrectionsFeedbackPresenterTests
 {
     private static (LearnedCorrectionsFeedbackPresenter Presenter, Mock<IDictionaryService> Dictionary,
-        FakeScheduler Scheduler, List<LearnedCorrectionsFeedback> Emitted) CreateSut()
+        Mock<IErrorLogService> ErrorLog, FakeScheduler Scheduler,
+        List<LearnedCorrectionsFeedback> Emitted) CreateSut()
     {
         var dictionary = new Mock<IDictionaryService>();
+        var errorLog = new Mock<IErrorLogService>();
         var scheduler = new FakeScheduler();
-        var presenter = new LearnedCorrectionsFeedbackPresenter(dictionary.Object, scheduler.Schedule);
+        var presenter = new LearnedCorrectionsFeedbackPresenter(
+            dictionary.Object,
+            errorLog.Object,
+            scheduler.Schedule);
         var emitted = new List<LearnedCorrectionsFeedback>();
         presenter.FeedbackChanged += emitted.Add;
-        return (presenter, dictionary, scheduler, emitted);
+        return (presenter, dictionary, errorLog, scheduler, emitted);
     }
 
     private static LearnedDictionaryCorrection Correction(string id, string original, string replacement)
@@ -27,7 +32,7 @@ public sealed class LearnedCorrectionsFeedbackPresenterTests
     [Fact]
     public void ShowLearned_SingleCorrection_SetsPendingAndFormatsPair()
     {
-        var (presenter, _, scheduler, emitted) = CreateSut();
+        var (presenter, _, _, scheduler, emitted) = CreateSut();
 
         presenter.ShowLearned([Correction("1", "kubernetes", "Kubernetes")]);
 
@@ -42,7 +47,7 @@ public sealed class LearnedCorrectionsFeedbackPresenterTests
     [Fact]
     public void ShowLearned_MultipleCorrections_UsesCountFormat()
     {
-        var (presenter, _, _, emitted) = CreateSut();
+        var (presenter, _, _, _, emitted) = CreateSut();
 
         presenter.ShowLearned(
         [
@@ -58,7 +63,7 @@ public sealed class LearnedCorrectionsFeedbackPresenterTests
     [Fact]
     public void ShowLearned_EmptyBatch_IsIgnored()
     {
-        var (presenter, _, _, emitted) = CreateSut();
+        var (presenter, _, _, _, emitted) = CreateSut();
 
         presenter.ShowLearned([]);
 
@@ -69,7 +74,7 @@ public sealed class LearnedCorrectionsFeedbackPresenterTests
     [Fact]
     public void SecondShowLearned_ReplacesPendingBatch()
     {
-        var (presenter, dictionary, _, _) = CreateSut();
+        var (presenter, dictionary, _, _, _) = CreateSut();
         var first = new[] { Correction("1", "old", "Old") };
         var second = new[] { Correction("2", "new", "New") };
 
@@ -91,7 +96,7 @@ public sealed class LearnedCorrectionsFeedbackPresenterTests
     [Fact]
     public void Undo_RemovesExactBatchAndShowsConfirmation()
     {
-        var (presenter, dictionary, scheduler, emitted) = CreateSut();
+        var (presenter, dictionary, _, scheduler, emitted) = CreateSut();
         var batch = new[] { Correction("1", "teh", "the") };
         presenter.ShowLearned(batch);
         emitted.Clear();
@@ -110,9 +115,47 @@ public sealed class LearnedCorrectionsFeedbackPresenterTests
     }
 
     [Fact]
+    public void Undo_WhenDictionaryThrows_RetainsPendingBatchLogsAndShowsFailureFeedback()
+    {
+        var (presenter, dictionary, errorLog, scheduler, emitted) = CreateSut();
+        var batch = new[] { Correction("1", "teh", "the") };
+        presenter.ShowLearned(batch);
+        emitted.Clear();
+        dictionary
+            .Setup(d => d.UndoLearnedCorrections(
+                It.IsAny<IEnumerable<LearnedDictionaryCorrection>>()))
+            .Throws(new IOException("disk full"));
+
+        presenter.Undo();
+
+        Assert.True(presenter.HasPendingBatch);
+        var failure = Assert.Single(emitted);
+        Assert.True(failure.ShowUndo);
+        Assert.NotEqual(string.Empty, failure.Text);
+        Assert.Equal(TimeSpan.FromSeconds(8), scheduler.LastDelay);
+        errorLog.Verify(
+            e => e.AddEntry(It.IsAny<string>(), ErrorCategory.General),
+            Times.Once);
+
+        // A successful retry must act on the retained batch.
+        emitted.Clear();
+        dictionary.Setup(d => d.UndoLearnedCorrections(
+            It.IsAny<IEnumerable<LearnedDictionaryCorrection>>()));
+        presenter.Undo();
+
+        Assert.False(presenter.HasPendingBatch);
+        var confirmation = Assert.Single(emitted);
+        Assert.False(confirmation.ShowUndo);
+        dictionary.Verify(
+            d => d.UndoLearnedCorrections(
+                It.IsAny<IEnumerable<LearnedDictionaryCorrection>>()),
+            Times.Exactly(2));
+    }
+
+    [Fact]
     public void Undo_WithNothingPending_IsNoOp()
     {
-        var (presenter, dictionary, _, emitted) = CreateSut();
+        var (presenter, dictionary, _, _, emitted) = CreateSut();
 
         presenter.Undo();
 
@@ -125,7 +168,7 @@ public sealed class LearnedCorrectionsFeedbackPresenterTests
     [Fact]
     public void AutoHideExpiry_ClearsPendingAndHidesToast()
     {
-        var (presenter, dictionary, scheduler, emitted) = CreateSut();
+        var (presenter, dictionary, _, scheduler, emitted) = CreateSut();
         presenter.ShowLearned([Correction("1", "teh", "the")]);
         emitted.Clear();
 
@@ -144,7 +187,7 @@ public sealed class LearnedCorrectionsFeedbackPresenterTests
     [Fact]
     public void ReArm_CancelsPreviousAutoHide()
     {
-        var (presenter, _, scheduler, emitted) = CreateSut();
+        var (presenter, _, _, scheduler, emitted) = CreateSut();
         presenter.ShowLearned([Correction("1", "a", "A")]);
 
         // Second show re-arms; the first timer's handle was disposed, so firing "pending"
@@ -161,7 +204,7 @@ public sealed class LearnedCorrectionsFeedbackPresenterTests
     [Fact]
     public void Reset_ClearsPendingSilentlyWithoutEmitting()
     {
-        var (presenter, dictionary, scheduler, emitted) = CreateSut();
+        var (presenter, dictionary, _, scheduler, emitted) = CreateSut();
         presenter.ShowLearned([Correction("1", "a", "A")]);
         emitted.Clear();
 
