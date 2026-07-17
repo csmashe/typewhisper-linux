@@ -283,7 +283,7 @@ public sealed class TextInsertionService
         // Arm the confirmation watch BEFORE the keystroke: the target's text-changed
         // fires while the paste chord is being processed, so a subscription made in the restore
         // step (after the paste) misses it every time and waits out the full timeout.
-        var pasteWatch = _pasteConfirmation?.BeginWatch();
+        var pasteWatch = _pasteConfirmation?.BeginWatch(text);
 
         // Until the watch is handed to RestorePreviousClipboardAsync (which owns its disposal),
         // any throw from the paste/enter path must still release the AT-SPI subscription.

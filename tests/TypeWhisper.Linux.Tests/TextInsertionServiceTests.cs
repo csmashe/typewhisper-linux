@@ -200,6 +200,7 @@ public sealed class TextInsertionServiceTests
 
         Assert.Equal(InsertionResult.Pasted, result);
         Assert.Equal(["begin-watch", "ctrl-v"], order);
+        Assert.Equal("new text", confirmation.LastExpectedText);
     }
 
     [Fact]
@@ -209,13 +210,17 @@ public sealed class TextInsertionServiceTests
         // arrives while Ctrl+V is being processed — before the restore step ever awaits
         // the watch. The pre-armed watch must have latched it, so the restore confirms
         // instantly instead of waiting out the timeout and then floor-delaying anyway.
-        var client = new FakeAtSpiEventClient();
+        var targetElement = new AtSpiElementRef(":1.7", "/org/a11y/atspi/accessible/42");
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = targetElement,
+            TextByElement = { [targetElement] = "Prefix new text suffix" }
+        };
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
             PasteSucceeds = true,
-            OnPasteSent = () =>
-                client.RaiseTextChanged(new AtSpiElementRef(":1.7", "/org/a11y/atspi/accessible/42"))
+            OnPasteSent = () => client.RaiseTextChanged(targetElement)
         };
         var sut = new TextInsertionService(
             platform,
@@ -233,6 +238,174 @@ public sealed class TextInsertionServiceTests
         // ...and released the text-changed registration lease it held for the paste window.
         Assert.Equal(1, client.AcquireCount);
         Assert.Equal(0, client.ActiveAcquisitions);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_unrelated_same_bus_text_change_does_not_confirm_paste()
+    {
+        var focusedElement = new AtSpiElementRef(
+            ":1.7",
+            "/org/a11y/atspi/accessible/42"
+        );
+        var unrelatedElement = new AtSpiElementRef(
+            ":1.7",
+            "/org/a11y/atspi/accessible/99"
+        );
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = focusedElement,
+            TextByElement = { [unrelatedElement] = "Background log count: 17" }
+        };
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            OnPasteSent = () => client.RaiseTextChanged(unrelatedElement)
+        };
+        var sut = new TextInsertionService(
+            platform,
+            pasteConfirmation: new AtSpiPasteConfirmation(client)
+        );
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Contains(TimeSpan.FromMilliseconds(500), platform.Delays);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal(unrelatedElement, Assert.Single(client.TextReadRequests).Element);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_unknown_bus_unverified_text_change_does_not_confirm_paste()
+    {
+        // Focus was unknown when the watch armed (_targetBusName null), so the bus filter is
+        // skipped and every text-changed proceeds to the content read. An event whose text does
+        // NOT contain the pasted string must still stay unconfirmed — the floor delay applies.
+        var changedElement = new AtSpiElementRef(
+            ":1.7",
+            "/org/a11y/atspi/accessible/99"
+        );
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = null,
+            TextByElement = { [changedElement] = "Background log count: 17" }
+        };
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            OnPasteSent = () => client.RaiseTextChanged(changedElement)
+        };
+        var sut = new TextInsertionService(
+            platform,
+            pasteConfirmation: new AtSpiPasteConfirmation(client)
+        );
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Contains(TimeSpan.FromMilliseconds(500), platform.Delays);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal(changedElement, Assert.Single(client.TextReadRequests).Element);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_unreadable_same_bus_text_change_remains_indeterminate()
+    {
+        var targetElement = new AtSpiElementRef(":1.7", "/org/a11y/atspi/accessible/42");
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = targetElement };
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            OnPasteSent = () => client.RaiseTextChanged(targetElement)
+        };
+        var sut = new TextInsertionService(
+            platform,
+            pasteConfirmation: new AtSpiPasteConfirmation(client)
+        );
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Contains(TimeSpan.FromMilliseconds(500), platform.Delays);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal(targetElement, Assert.Single(client.TextReadRequests).Element);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_password_element_text_change_is_never_read()
+    {
+        // Privacy boundary: even when the paste target's text-changed fires, a password (or
+        // role-unreadable) element must never be read to verify delivery. The watch stays
+        // indeterminate and the floor delay applies — no TryReadTextAsync ever runs.
+        var targetElement = new AtSpiElementRef(":1.7", "/org/a11y/atspi/accessible/42");
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = targetElement,
+            TextByElement = { [targetElement] = "Prefix new text suffix" },
+            PasswordRoleByElement = { [targetElement] = true }
+        };
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            OnPasteSent = () => client.RaiseTextChanged(targetElement)
+        };
+        var sut = new TextInsertionService(
+            platform,
+            pasteConfirmation: new AtSpiPasteConfirmation(client)
+        );
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Contains(TimeSpan.FromMilliseconds(500), platform.Delays);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Empty(client.TextReadRequests);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_watch_keeps_listening_after_unverified_text_change()
+    {
+        var targetElement = new AtSpiElementRef(":1.7", "/org/a11y/atspi/accessible/42");
+        var unrelatedElement = new AtSpiElementRef(
+            ":1.7",
+            "/org/a11y/atspi/accessible/99"
+        );
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = targetElement,
+            TextByElement =
+            {
+                [unrelatedElement] = "Background log count: 17",
+                [targetElement] = "Prefix new text suffix"
+            }
+        };
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            OnPasteSent = () =>
+            {
+                client.RaiseTextChanged(unrelatedElement);
+                client.RaiseTextChanged(targetElement);
+            }
+        };
+        var sut = new TextInsertionService(
+            platform,
+            pasteConfirmation: new AtSpiPasteConfirmation(client)
+        );
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.DoesNotContain(TimeSpan.FromMilliseconds(500), platform.Delays);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal(
+            [unrelatedElement, targetElement],
+            client.TextReadRequests.Select(request => request.Element)
+        );
     }
 
     [Fact]
@@ -2346,15 +2519,17 @@ public sealed class TextInsertionServiceTests
         public Action? OnWait { get; init; }
 
         public bool BeginWatchCalled { get; private set; }
+        public string? LastExpectedText { get; private set; }
         public FakePasteWatch? LastWatch { get; private set; }
 
         // ReSharper disable once UnusedAutoPropertyAccessor.Local — configurable surface mirroring
         // the fake's other init properties and IPasteConfirmationSource; no test sets it yet.
         public bool? HasFocusedElement { get; init; }
 
-        public IPasteWatch? BeginWatch()
+        public IPasteWatch? BeginWatch(string expectedText)
         {
             BeginWatchCalled = true;
+            LastExpectedText = expectedText;
             OnBeginWatch?.Invoke();
             if (SourceNotRunning)
             {
@@ -2407,9 +2582,16 @@ public sealed class TextInsertionServiceTests
 
         public event Action<AtSpiElementRef>? TextChanged;
 
-        public AtSpiElementRef? CurrentFocusedElement => null;
+        public AtSpiElementRef? CurrentFocusedElement { get; init; }
 
         public bool IsRunning => true;
+
+        public Dictionary<AtSpiElementRef, string?> TextByElement { get; } = [];
+        public List<(AtSpiElementRef Element, int MaxLength)> TextReadRequests { get; } = [];
+
+        // Password-role verdicts per element. Absent entries default to false (positively
+        // non-password); set true (or null for unreadable) to exercise the privacy gate.
+        public Dictionary<AtSpiElementRef, bool?> PasswordRoleByElement { get; } = [];
 
         public IReadOnlyList<AtSpiElementRef> GetRecentFocusedElements()
         {
@@ -2453,12 +2635,13 @@ public sealed class TextInsertionServiceTests
 
         public Task<string?> TryReadTextAsync(AtSpiElementRef element, int maxLength)
         {
-            return Task.FromResult<string?>(null);
+            TextReadRequests.Add((element, maxLength));
+            return Task.FromResult(TextByElement.GetValueOrDefault(element));
         }
 
         public Task<bool?> IsPasswordFieldAsync(AtSpiElementRef element)
         {
-            return Task.FromResult<bool?>(null);
+            return Task.FromResult(PasswordRoleByElement.GetValueOrDefault(element, false));
         }
 
         public Task<AtSpiScreenRect?> TryGetScreenExtentsAsync(AtSpiElementRef element)
