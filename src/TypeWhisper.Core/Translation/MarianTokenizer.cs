@@ -91,7 +91,7 @@ public sealed class MarianTokenizer
 
         var tokens = new List<int>();
 
-        var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         foreach (var t in words)
         {
             var word = MetaspacePrefix + t;
