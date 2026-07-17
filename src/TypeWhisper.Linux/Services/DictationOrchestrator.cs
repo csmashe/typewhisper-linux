@@ -1540,6 +1540,16 @@ public sealed class DictationOrchestrator : IDisposable
         return !string.IsNullOrWhiteSpace(targetActionPluginId) && !actionPluginResolved;
     }
 
+    /// <summary>
+    ///     Classifies a thrown insertion/action exception into the InsertionResult that
+    ///     should be recorded in Recents/History instead of silently dropping the
+    ///     transcription (audit §2 M6). Exposed internally for unit testing.
+    /// </summary>
+    internal static InsertionResult ClassifyThrownInsertionFailure(bool viaActionPlugin)
+    {
+        return viaActionPlugin ? InsertionResult.ActionFailed : InsertionResult.Failed;
+    }
+
     public event EventHandler<string>? RecordingCaptured; // arg = WAV file path
     public event EventHandler<bool>? RecordingStateChanged;
     public event EventHandler<string>? TranscriptionCompleted;
@@ -2034,6 +2044,7 @@ public sealed class DictationOrchestrator : IDisposable
             var insertionText = DictationInsertionTextFormatter.TextForInsertion(finalText);
 
             InsertionResult insertion;
+            var insertionThrew = false;
             try
             {
                 // Wait for every earlier-started session to finish inserting first
@@ -2104,65 +2115,70 @@ public sealed class DictationOrchestrator : IDisposable
                 );
                 ReportStatus(context, $"Insertion failed: {ex.Message}");
                 ShowFeedback(context, "Insertion failed.", true);
-                return;
+                insertion = ClassifyThrownInsertionFailure(actionPlugin is not null);
+                insertionThrew = true;
             }
             finally
             {
                 _insertionOrder.Release(context.SessionId);
             }
 
-            var completionMessage = insertion switch
+            if (!insertionThrew)
             {
-                InsertionResult.Pasted when commandResult.AutoEnter && finalText.Length == 0 =>
-                    "Pressed Enter.",
-                InsertionResult.Pasted or InsertionResult.Typed =>
-                    $"Typed {finalText.Length} char(s).",
-                InsertionResult.CopiedToClipboard => ClipboardFallbackMessage(),
-                InsertionResult.ActionHandled => "Action completed.",
-                InsertionResult.ActionFailed => "Action failed.",
-                InsertionResult.ActionUnavailable => "Action destination unavailable.",
-                InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
-                InsertionResult.MissingPasteTool =>
-                    $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
-                InsertionResult.Failed =>
-                    "Text insertion failed. Dictated text could not be copied or pasted.",
-                InsertionResult.NoText when commandResult.CancelInsertion => "Dictation canceled.",
-                _ => "Done."
-            };
-            var isError =
-                insertion
-                    is InsertionResult.Failed
-                    or InsertionResult.ActionFailed
-                    or InsertionResult.ActionUnavailable
-                    or InsertionResult.MissingClipboardTool
-                    or InsertionResult.MissingPasteTool;
-            var isCanceled =
-                insertion is InsertionResult.NoText && commandResult.CancelInsertion;
-            ReportStatus(context, completionMessage);
-            ShowFeedback(context, completionMessage, isError, isCanceled);
+                var completionMessage = insertion switch
+                {
+                    InsertionResult.Pasted when commandResult.AutoEnter && finalText.Length == 0 =>
+                        "Pressed Enter.",
+                    InsertionResult.Pasted or InsertionResult.Typed =>
+                        $"Typed {finalText.Length} char(s).",
+                    InsertionResult.CopiedToClipboard => ClipboardFallbackMessage(),
+                    InsertionResult.ActionHandled => "Action completed.",
+                    InsertionResult.ActionFailed => "Action failed.",
+                    InsertionResult.ActionUnavailable => "Action destination unavailable.",
+                    InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
+                    InsertionResult.MissingPasteTool =>
+                        $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
+                    InsertionResult.Failed =>
+                        "Text insertion failed. Dictated text could not be copied or pasted.",
+                    InsertionResult.NoText when commandResult.CancelInsertion =>
+                        "Dictation canceled.",
+                    _ => "Done."
+                };
+                var isError =
+                    insertion
+                        is InsertionResult.Failed
+                        or InsertionResult.ActionFailed
+                        or InsertionResult.ActionUnavailable
+                        or InsertionResult.MissingClipboardTool
+                        or InsertionResult.MissingPasteTool;
+                var isCanceled =
+                    insertion is InsertionResult.NoText && commandResult.CancelInsertion;
+                ReportStatus(context, completionMessage);
+                ShowFeedback(context, completionMessage, isError, isCanceled);
 
-            if (
-                insertion
-                is InsertionResult.Pasted
-                or InsertionResult.Typed
-                or InsertionResult.CopiedToClipboard
-            )
-            {
-                _models.PluginManager.EventBus.Publish(
-                    new TextInsertedEvent { Text = insertionText, AppName = context.AppTitle }
-                );
-            }
+                if (
+                    insertion
+                    is InsertionResult.Pasted
+                    or InsertionResult.Typed
+                    or InsertionResult.CopiedToClipboard
+                )
+                {
+                    _models.PluginManager.EventBus.Publish(
+                        new TextInsertedEvent { Text = insertionText, AppName = context.AppTitle }
+                    );
+                }
 
-            if (ShouldArmTargetAppLearning(insertion, actionPlugin, insertionText))
-            {
-                // Fire-and-forget: arm a bounded tracking window on the field that just
-                // received the text, so a follow-up type-over is learned silently. Mirrors
-                // the memory-extraction hook below — never blocks the dictation path.
-                // ReSharper disable once MethodSupportsCancellation -- background arm; not tied to the dictation token.
-                FireAndLog(
-                    () => _targetAppLearning.ArmAsync(insertionText),
-                    "target-app correction learning"
-                );
+                if (ShouldArmTargetAppLearning(insertion, actionPlugin, insertionText))
+                {
+                    // Fire-and-forget: arm a bounded tracking window on the field that just
+                    // received the text, so a follow-up type-over is learned silently. Mirrors
+                    // the memory-extraction hook below — never blocks the dictation path.
+                    // ReSharper disable once MethodSupportsCancellation -- background arm; not tied to the dictation token.
+                    FireAndLog(
+                        () => _targetAppLearning.ArmAsync(insertionText),
+                        "target-app correction learning"
+                    );
+                }
             }
 
             var transcriptionId = Guid.NewGuid().ToString();
@@ -2180,7 +2196,7 @@ public sealed class DictationOrchestrator : IDisposable
             // active, run it (awaited) before writing history so its request is
             // recorded on the entry; otherwise keep it fire-and-forget so the
             // common path isn't delayed by the extraction round-trip.
-            if (_settings.Current.MemoryEnabled)
+            if (_settings.Current.MemoryEnabled && !insertionThrew)
             {
                 if (context.Capture is not null)
                 {
