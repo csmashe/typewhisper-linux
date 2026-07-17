@@ -33,6 +33,7 @@ public sealed class LearnedCorrectionsFeedbackPresenter
     private static readonly TimeSpan s_confirmationAutoHide = TimeSpan.FromSeconds(2);
 
     private readonly IDictionaryService _dictionary;
+    private readonly IErrorLogService _errorLog;
 
     // Schedules a one-shot delay and returns a handle whose disposal cancels the pending
     // callback. Re-arming disposes the previous handle so only the latest timer can fire.
@@ -49,10 +50,12 @@ public sealed class LearnedCorrectionsFeedbackPresenter
 
     public LearnedCorrectionsFeedbackPresenter(
         IDictionaryService dictionary,
+        IErrorLogService errorLog,
         Func<TimeSpan, Action, IDisposable> scheduleDelay
     )
     {
         _dictionary = dictionary;
+        _errorLog = errorLog;
         _scheduleDelay = scheduleDelay;
     }
 
@@ -99,7 +102,22 @@ public sealed class LearnedCorrectionsFeedbackPresenter
             return;
         }
 
-        _dictionary.UndoLearnedCorrections(_pending);
+        try
+        {
+            _dictionary.UndoLearnedCorrections(_pending);
+        }
+        catch (Exception ex)
+        {
+            _errorLog.AddEntry(
+                $"Failed to undo learned correction: {ex.Message}");
+            Emit(
+                new LearnedCorrectionsFeedback(
+                    Loc.Instance["Feedback.CorrectionUndoFailed"],
+                    ShowUndo: true),
+                s_learnedAutoHide);
+            return;
+        }
+
         _pending = [];
 
         Emit(

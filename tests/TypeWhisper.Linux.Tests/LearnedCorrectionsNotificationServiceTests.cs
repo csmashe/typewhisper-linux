@@ -111,6 +111,44 @@ public sealed class LearnedCorrectionsNotificationServiceTests : IDisposable
     }
 
     [Fact]
+    public void ActionInvoked_Undo_WhenDictionaryThrows_DoesNotEscapeCallbackAndLogsFailure()
+    {
+        var dictionary = new Mock<IDictionaryService>();
+        dictionary
+            .Setup(d => d.UndoLearnedCorrections(
+                It.IsAny<IEnumerable<LearnedDictionaryCorrection>>()))
+            .Throws(new IOException("disk full"));
+        var learning = new TargetAppCorrectionLearningService(
+            Mock.Of<IAtSpiEventClient>(),
+            dictionary.Object,
+            Mock.Of<ISettingsService>(),
+            Mock.Of<IErrorLogService>());
+        var channel = new FakeChannel();
+        var scheduler = new FakeScheduler();
+        var errorLog = new Mock<IErrorLogService>();
+        var service = new LearnedCorrectionsNotificationService(
+            learning,
+            dictionary.Object,
+            errorLog.Object,
+            channel,
+            post: action => action(),
+            scheduleDelay: scheduler.Schedule);
+        service.Initialize();
+
+        RaiseLearned(learning, [Correction("teh", "the")]);
+        var shownId = channel.ShowCalls[0].ResultId;
+
+        var thrown = Record.Exception(() => channel.RaiseActionInvoked(shownId, "undo"));
+
+        Assert.Null(thrown);
+        errorLog.Verify(
+            e => e.AddEntry(It.IsAny<string>(), ErrorCategory.General),
+            Times.Once);
+        Assert.Equal(2, channel.ShowCalls.Count);
+        Assert.True(channel.ShowCalls[1].WithUndoAction);
+    }
+
+    [Fact]
     public void HiddenFeedback_ClosesTheNotification()
     {
         var (learning, _, channel, scheduler, service) = CreateSut();

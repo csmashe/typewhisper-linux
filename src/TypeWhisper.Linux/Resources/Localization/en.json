@@ -323,6 +323,7 @@
   "Dictionary.TypeTerm": "Term",
   "Dictionary.VocabularyBoostingHint": "Improves recognition of active dictionary terms and packs for local transcriptions",
   "Feedback.CorrectionLearningUndone": "Correction learning undone.",
+  "Feedback.CorrectionUndoFailed": "Couldn't undo — try again.",
   "Feedback.LearnedCorrectionFormat": "Learned \"{0}\" → \"{1}\"",
   "Feedback.LearnedCorrectionsFormat": "Learned {0} corrections",
   "Feedback.Undo": "Undo",
