@@ -7,6 +7,7 @@ namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 ///     Writes a <c>.desktop</c> entry into <c>~/.local/share/kglobalaccel/</c>.
 ///     KGlobalAccel scans that directory on session start; the user can override the
 ///     trigger from System Settings → Shortcuts.
+///     Existing targets are changed only when the ownership marker and shortcut ID match.
 ///     The live D-Bus path (<c>org.kde.kglobalaccel.registerShortcut</c>) is avoided
 ///     because it's fragile across Plasma versions and a static toggle doesn't need
 ///     the immediate-effect property. Cost: user must log out once to activate.
@@ -54,6 +55,15 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
     public async Task<DeShortcutWriteResult> WriteAsync(DeShortcutSpec spec, CancellationToken ct)
     {
         var (dir, target) = ResolveTargetPath(spec.ShortcutId);
+        if (File.Exists(target) && !IsOwnedByTypeWhisper(target, spec.ShortcutId))
+        {
+            return new DeShortcutWriteResult(
+                false,
+                $"Left {target} untouched — it doesn't carry TypeWhisper's ownership markers, so we won't overwrite it. Remove or rename it manually, then try again.",
+                []
+            );
+        }
+
         try
         {
             Directory.CreateDirectory(dir);
@@ -98,6 +108,18 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
                     true,
                     "No KDE integration to remove.",
                     []
+                )
+            );
+        }
+
+        if (!IsOwnedByTypeWhisper(target, shortcutId))
+        {
+            return Task.FromResult(
+                new DeShortcutWriteResult(
+                    true,
+                    "KDE shortcut file left in place.",
+                    [],
+                    $"Left {target} untouched — it doesn't carry TypeWhisper's ownership markers, so we won't delete it. Remove it manually if you want to."
                 )
             );
         }
@@ -172,6 +194,28 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
             EscapeDesktopValue(spec.Trigger),
             EscapeDesktopValue(spec.ShortcutId)
         );
+    }
+
+    // Require both exact lines: a marker alone could belong to a different shortcut,
+    // while full-file equality would reject legitimate trigger updates.
+    private static bool IsOwnedByTypeWhisper(string target, string shortcutId)
+    {
+        string contents;
+        try
+        {
+            contents = File.ReadAllText(target);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Refuse destructive changes when ownership cannot be proven.
+            return false;
+        }
+
+        var lines = contents.Split('\n').Select(line => line.TrimEnd('\r'));
+        var lineSet = lines.ToHashSet(StringComparer.Ordinal);
+        const string managedLine = "X-TypeWhisper-Managed=true";
+        var idLine = $"X-TypeWhisper-ShortcutId={EscapeDesktopValue(shortcutId)}";
+        return lineSet.Contains(managedLine) && lineSet.Contains(idLine);
     }
 
     private static string EscapeDesktopValue(string value)
