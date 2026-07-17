@@ -111,7 +111,107 @@ public sealed class GlobalHotkeySetupTaskTests
         Assert.Equal(Loc.Instance["Setup.GlobalHotkeyAddMeButton"], state.ActionLabel);
     }
 
+    [Fact]
+    public async Task EvaluateAsync_when_opted_out_and_no_rule_installed_is_satisfied_with_no_action()
+    {
+        var task = Build(
+            isWayland: true,
+            hasAccess: () => false,
+            ruleInstalled: () => false,
+            evdevOptedIn: () => false
+        );
+
+        var state = await task.EvaluateAsync(CancellationToken.None);
+
+        Assert.Equal(SetupTaskStatusKind.Satisfied, state.Kind);
+        Assert.Equal(Loc.Instance["Setup.GlobalHotkeyOptedOut"], state.Summary);
+        Assert.Null(state.ActionLabel);
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_when_opted_out_and_rule_still_installed_offers_a_revoke_action_without_blocking_finish()
+    {
+        var task = Build(
+            isWayland: true,
+            hasAccess: () => false,
+            ruleInstalled: () => true,
+            evdevOptedIn: () => false
+        );
+
+        var state = await task.EvaluateAsync(CancellationToken.None);
+
+        Assert.Equal(SetupTaskStatusKind.Satisfied, state.Kind);
+        Assert.Equal(Loc.Instance["Setup.GlobalHotkeyOptedOutRuleInstalled"], state.Summary);
+        Assert.Equal(
+            Loc.Instance["Setup.GlobalHotkeyOptedOutRuleInstalledDetail"],
+            state.Detail
+        );
+        Assert.Equal(Loc.Instance["Setup.GlobalHotkeyRevokeButton"], state.ActionLabel);
+    }
+
     // --- RunActionAsync ---------------------------------------------------
+
+    [Fact]
+    public async Task RunAction_when_opted_out_and_no_rule_installed_is_a_noop()
+    {
+        var runner = new FakeProcessRunner();
+        var task = Build(
+            isWayland: true,
+            hasAccess: () => false,
+            ruleInstalled: () => false,
+            runner: runner,
+            evdevOptedIn: () => false
+        );
+
+        var outcome = await task.RunActionAsync(CancellationToken.None);
+
+        Assert.True(outcome.Success);
+        Assert.Equal(Loc.Instance["Setup.GlobalHotkeyOptedOut"], outcome.Message);
+        Assert.Empty(runner.Invocations);
+    }
+
+    [Fact]
+    public async Task RunAction_when_opted_out_but_rule_still_installed_revokes_it_via_the_helper()
+    {
+        using var env = new PkexecOnPath();
+        PkexecOnPath.WriteOwnedRule();
+        var runner = new FakeProcessRunner();
+        var task = Build(
+            isWayland: true,
+            hasAccess: () => false,
+            ruleInstalled: () => true,
+            runner: runner,
+            evdevOptedIn: () => false
+        );
+
+        var outcome = await task.RunActionAsync(CancellationToken.None);
+
+        Assert.True(outcome.Success);
+        Assert.Contains(
+            runner.Invocations,
+            i => i.FileName == "pkexec" && i.Args.Contains("/bin/sh")
+        );
+        Assert.Contains(runner.Invocations, i => i.StandardInput?.Contains("rm -f") == true);
+    }
+
+    [Fact]
+    public async Task RunAction_never_falls_through_to_install_when_opted_out_even_if_access_is_missing()
+    {
+        var runner = new FakeProcessRunner();
+        var task = Build(
+            isWayland: true,
+            hasAccess: () => false,
+            seatManagerPresent: () => false,
+            ruleInstalled: () => false,
+            runner: runner,
+            evdevOptedIn: () => false
+        );
+
+        var outcome = await task.RunActionAsync(CancellationToken.None);
+
+        Assert.True(outcome.Success);
+        Assert.Empty(runner.Invocations);
+    }
 
     [Fact]
     public async Task RunAction_when_already_accessible_reports_already_active()
@@ -241,7 +341,8 @@ public sealed class GlobalHotkeySetupTaskTests
         Func<bool>? listedInGroup = null,
         Func<bool>? ruleInstalled = null,
         IProcessRunner? runner = null,
-        Func<CancellationToken, Task>? onGranted = null
+        Func<CancellationToken, Task>? onGranted = null,
+        Func<bool>? evdevOptedIn = null
     )
     {
         runner ??= new FakeProcessRunner();
@@ -254,7 +355,8 @@ public sealed class GlobalHotkeySetupTaskTests
             seatManagerPresent ?? (() => true),
             listedInGroup ?? (() => false),
             ruleInstalled ?? (() => false),
-            onGranted ?? (_ => Task.CompletedTask)
+            onGranted ?? (_ => Task.CompletedTask),
+            evdevOptedIn ?? (() => true)
         );
     }
 
@@ -287,6 +389,15 @@ public sealed class GlobalHotkeySetupTaskTests
             {
                 File.WriteAllText(Path.Join(_pathDir, "pkexec"), "#!/bin/sh\n");
             }
+        }
+
+        public static void WriteOwnedRule()
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(InputAccessSetupHelper.UdevRulePath)!);
+            File.WriteAllText(
+                InputAccessSetupHelper.UdevRulePath,
+                InputAccessSetupHelper.UdevRuleContent
+            );
         }
 
         public void Dispose()

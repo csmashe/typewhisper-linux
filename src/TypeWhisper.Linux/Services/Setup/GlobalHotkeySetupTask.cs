@@ -1,3 +1,4 @@
+using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
 using TypeWhisper.Linux.Services.Localization;
@@ -35,12 +36,15 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
     private readonly Func<bool> _userListedInInputGroupFile;
     private readonly Func<bool> _ruleInstalled;
     private readonly Func<CancellationToken, Task> _onAccessGranted;
+    private readonly Func<bool> _evdevOptedIn;
 
+    // ReSharper disable once UnusedMember.Global -- resolved by the DI container (AddSingleton<ISetupTask, GlobalHotkeySetupTask>), which SWEA cannot see.
     public GlobalHotkeySetupTask(
         SystemCommandAvailabilityService commands,
         IProcessRunner runner,
         InputAccessSetupHelper accessHelper,
-        HotkeyService hotkey
+        HotkeyService hotkey,
+        ISettingsService settings
     )
         : this(
             () => commands.GetSnapshot().SessionType == "Wayland",
@@ -50,7 +54,8 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
             InputAccessSetupHelper.IsSeatManagerPresent,
             UserListedInInputGroupFile,
             InputAccessSetupHelper.IsRuleInstalled,
-            hotkey.SwitchBackendAsync
+            hotkey.SwitchBackendAsync,
+            () => settings.Current.WaylandEvdevHotkeysEnabled
         )
     {
     }
@@ -63,7 +68,8 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         Func<bool> isSeatManagerPresent,
         Func<bool> userListedInInputGroupFile,
         Func<bool> ruleInstalled,
-        Func<CancellationToken, Task> onAccessGranted
+        Func<CancellationToken, Task> onAccessGranted,
+        Func<bool> evdevOptedIn
     )
     {
         _isWayland = isWayland;
@@ -74,6 +80,7 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         _userListedInInputGroupFile = userListedInInputGroupFile;
         _ruleInstalled = ruleInstalled;
         _onAccessGranted = onAccessGranted;
+        _evdevOptedIn = evdevOptedIn;
     }
 
     private bool IsWayland => _isWayland();
@@ -95,6 +102,26 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         if (!IsWayland)
         {
             return Satisfied(Loc.Instance["Setup.GlobalHotkeyActiveX11"]);
+        }
+
+        // Opting out is a valid focused-only choice and must never block setup or
+        // prompt for privileged keyboard access. If a rule remains from an earlier
+        // opt-in, keep the task satisfied while offering an explicit revoke action.
+        if (!_evdevOptedIn())
+        {
+            if (_ruleInstalled())
+            {
+                return Task.FromResult(
+                    new SetupTaskState(
+                        SetupTaskStatusKind.Satisfied,
+                        Loc.Instance["Setup.GlobalHotkeyOptedOutRuleInstalled"],
+                        Loc.Instance["Setup.GlobalHotkeyOptedOutRuleInstalledDetail"],
+                        Loc.Instance["Setup.GlobalHotkeyRevokeButton"]
+                    )
+                );
+            }
+
+            return Satisfied(Loc.Instance["Setup.GlobalHotkeyOptedOut"]);
         }
 
         // Wayland: gate on actual openability of a keyboard node, NOT input-group
@@ -135,6 +162,19 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
 
     public async Task<SetupActionOutcome> RunActionAsync(CancellationToken ct)
     {
+        // Re-check the setting here so direct callers cannot bypass the opt-out
+        // and fall through into either privileged installation path.
+        if (IsWayland && !_evdevOptedIn())
+        {
+            if (!_ruleInstalled())
+            {
+                return new SetupActionOutcome(true, Loc.Instance["Setup.GlobalHotkeyOptedOut"]);
+            }
+
+            var removal = await _accessHelper.RemoveAsync(ct).ConfigureAwait(false);
+            return new SetupActionOutcome(removal.Success, removal.Message, removal.Detail);
+        }
+
         if (!IsWayland || _hasKeyboardAccess())
         {
             return new SetupActionOutcome(true, Loc.Instance["Setup.GlobalHotkeyAlreadyActive"]);
