@@ -112,11 +112,21 @@ public sealed class LocalModelStorageService
                 await Task.Run(() =>
                 {
                     ct.ThrowIfCancellationRequested();
-                    MigratePluginAssets(pluginAssetSourceRoot, targetRoot, ct);
+                    CopyPluginAssets(pluginAssetSourceRoot, targetRoot, ct);
                 }, ct);
             }
 
             _settings.Save(_settings.Current with { LocalModelStoragePath = targetRoot });
+
+            if (currentIsDefault)
+            {
+                // Settings already point at targetRoot, so this cleanup is best-effort: a failure or
+                // interruption wastes disk space, never data — hence CancellationToken.None after the commit.
+                await Task.Run(
+                    () => DeletePluginAssetSourceContents(pluginAssetSourceRoot, targetRoot),
+                    CancellationToken.None);
+            }
+
             return;
         }
 
@@ -157,11 +167,18 @@ public sealed class LocalModelStorageService
         await Task.Run(() =>
         {
             ct.ThrowIfCancellationRequested();
-            MigrateModelRootContents(sourceRoot, targetRoot, ct);
-            MigratePluginAssets(pluginAssetSourceRoot, targetRoot, ct);
+            CopyModelRootContents(sourceRoot, targetRoot, ct);
+            CopyPluginAssets(pluginAssetSourceRoot, targetRoot, ct);
         }, ct);
 
         _settings.Save(_settings.Current with { LocalModelStoragePath = targetRoot });
+
+        // Best-effort cleanup after the commit above — see comment in the currentIsDefault branch.
+        await Task.Run(() =>
+        {
+            DeleteModelRootSourceContents(sourceRoot, targetRoot);
+            DeletePluginAssetSourceContents(pluginAssetSourceRoot, targetRoot);
+        }, CancellationToken.None);
     }
 
     /// <summary>
@@ -220,7 +237,7 @@ public sealed class LocalModelStorageService
         }
     }
 
-    private static void MigrateModelRootContents(string sourceRoot, string targetRoot, CancellationToken ct)
+    private static void CopyModelRootContents(string sourceRoot, string targetRoot, CancellationToken ct)
     {
         if (!Directory.Exists(sourceRoot))
             return;
@@ -234,11 +251,26 @@ public sealed class LocalModelStorageService
             if (string.Equals(name, LocalModelStoragePaths.PluginDataFolderName, StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            MoveEntry(entry, Path.Join(targetRoot, SafeLeafName(name, nameof(entry))));
+            CopyEntry(entry, Path.Join(targetRoot, SafeLeafName(name, nameof(entry))), ct);
         }
     }
 
-    private static void MigratePluginAssets(string assetSourceRoot, string targetRoot, CancellationToken ct)
+    private static void DeleteModelRootSourceContents(string sourceRoot, string targetRoot)
+    {
+        if (!Directory.Exists(sourceRoot))
+            return;
+
+        foreach (var entry in Directory.EnumerateFileSystemEntries(sourceRoot))
+        {
+            var name = Path.GetFileName(entry);
+            if (string.Equals(name, LocalModelStoragePaths.PluginDataFolderName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            DeleteMigratedEntry(entry, Path.Join(targetRoot, SafeLeafName(name, nameof(entry))));
+        }
+    }
+
+    private static void CopyPluginAssets(string assetSourceRoot, string targetRoot, CancellationToken ct)
     {
         var pluginDataFolderName = SafeRelativeName(LocalModelStoragePaths.PluginDataFolderName, nameof(LocalModelStoragePaths.PluginDataFolderName));
 
@@ -255,31 +287,128 @@ public sealed class LocalModelStorageService
             {
                 ct.ThrowIfCancellationRequested();
                 var safeEntryName = SafeRelativeName(entryName, nameof(entryName));
-                var sourceEntry = Path.Join(sourcePluginDir, safeEntryName);
-                var targetEntry = Path.Join(targetPluginDir, safeEntryName);
-                MoveEntry(sourceEntry, targetEntry);
+                CopyEntry(
+                    Path.Join(sourcePluginDir, safeEntryName),
+                    Path.Join(targetPluginDir, safeEntryName),
+                    ct);
             }
         }
     }
 
-    private static void MoveEntry(string source, string target)
+    private static void DeletePluginAssetSourceContents(string assetSourceRoot, string targetRoot)
     {
+        var pluginDataFolderName = SafeRelativeName(LocalModelStoragePaths.PluginDataFolderName, nameof(LocalModelStoragePaths.PluginDataFolderName));
+
+        foreach (var (pluginId, entries) in s_pluginAssetEntries)
+        {
+            var pluginFolderName = SafeLeafName(pluginId, nameof(pluginId));
+            var sourcePluginDir = Path.Join(assetSourceRoot, pluginFolderName);
+            if (!Directory.Exists(sourcePluginDir))
+                continue;
+
+            var targetPluginDir = Path.Join(targetRoot, pluginDataFolderName, pluginFolderName);
+            foreach (var entryName in entries)
+            {
+                var safeEntryName = SafeRelativeName(entryName, nameof(entryName));
+                DeleteMigratedEntry(
+                    Path.Join(sourcePluginDir, safeEntryName),
+                    Path.Join(targetPluginDir, safeEntryName));
+            }
+        }
+    }
+
+    // Files land at target only via an atomic same-directory rename, so a crash or I/O error
+    // mid-copy never leaves a partial file visible there — a later resume can trust
+    // File.Exists(target) to mean fully copied.
+    private static void CopyEntry(string source, string target, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
         if (Directory.Exists(source))
         {
             Directory.CreateDirectory(target);
             foreach (var child in Directory.EnumerateFileSystemEntries(source))
-                MoveEntry(child, Path.Join(target, SafeLeafName(Path.GetFileName(child), nameof(child))));
+            {
+                CopyEntry(
+                    child,
+                    Path.Join(target, SafeLeafName(Path.GetFileName(child), nameof(child))),
+                    ct);
+            }
 
-            TryDeleteDirectoryIfEmpty(source);
             return;
         }
 
         if (!File.Exists(source) || File.Exists(target))
             return;
 
-        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        File.Copy(source, target);
-        File.Delete(source);
+        var targetDir = Path.GetDirectoryName(target)!;
+        Directory.CreateDirectory(targetDir);
+        var stagingTarget = Path.Join(
+            targetDir,
+            $".{Path.GetFileName(target)}.tw-migrate-{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.Copy(source, stagingTarget);
+            File.Move(stagingTarget, target);
+        }
+        catch
+        {
+            try
+            {
+                File.Delete(stagingTarget);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // best-effort staging cleanup
+            }
+
+            throw;
+        }
+    }
+
+    // Deletes source only once its copy is confirmed at target. Runs only after the settings
+    // commit, so a failure wastes disk space but cannot make the active model root incomplete.
+    private static void DeleteMigratedEntry(string source, string target)
+    {
+        if (Directory.Exists(source))
+        {
+            foreach (var child in Directory.EnumerateFileSystemEntries(source))
+            {
+                DeleteMigratedEntry(
+                    child,
+                    Path.Join(target, SafeLeafName(Path.GetFileName(child), nameof(child))));
+            }
+
+            TryDeleteDirectoryIfEmpty(source);
+            return;
+        }
+
+        if (!File.Exists(source) || !File.Exists(target))
+            return;
+
+        TryDeleteFile(source);
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException ex)
+        {
+            System.Diagnostics.Trace.TraceWarning(
+                "Could not delete migrated source file '{0}': {1}",
+                path,
+                ex.Message);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            System.Diagnostics.Trace.TraceWarning(
+                "Could not delete migrated source file '{0}': {1}",
+                path,
+                ex.Message);
+        }
     }
 
     private static string SafeLeafName(string value, string parameterName)
