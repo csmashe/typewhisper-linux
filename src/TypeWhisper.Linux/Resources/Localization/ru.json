@@ -451,6 +451,7 @@
   "Notify.BodyPushToTalk": "Говорите — отпустите, чтобы вставить",
   "Notify.BodyToggle": "Говорите — нажмите сочетание ещё раз, чтобы остановить",
   "Overlay.Canceled": "Отменено",
+  "Overlay.CaptureSaveFailed": "Не удалось сохранить запись.",
   "Overlay.NoRecentTranscriptions": "Нет недавних транскрипций.",
   "Overlay.NoSpeech": "Речь не обнаружена",
   "Overlay.Processing": "Обработка…",

@@ -37,4 +37,14 @@ public sealed class SessionAudioFileServiceTests : IDisposable
         Assert.False(File.Exists(dictationFile));
         Assert.True(File.Exists(otherFile));
     }
+
+    [Fact]
+    public void SaveDictationCapture_Throws_WhenAudioDirectoryPathIsBlockedByAFile()
+    {
+        var blockingFile = Path.Join(_audioDirectory, "not-a-directory");
+        File.WriteAllText(blockingFile, "blocked");
+        var service = new SessionAudioFileService(Path.Join(blockingFile, "captures"));
+
+        Assert.ThrowsAny<IOException>(() => service.SaveDictationCapture([1, 2, 3]));
+    }
 }

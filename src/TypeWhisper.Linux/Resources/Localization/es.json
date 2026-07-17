@@ -451,6 +451,7 @@
   "Notify.BodyPushToTalk": "Habla ahora — suelta para insertar",
   "Notify.BodyToggle": "Habla ahora — pulsa el atajo de nuevo para detener",
   "Overlay.Canceled": "Cancelado",
+  "Overlay.CaptureSaveFailed": "No se pudo guardar la grabación.",
   "Overlay.NoRecentTranscriptions": "No hay transcripciones recientes.",
   "Overlay.NoSpeech": "No se detectó voz",
   "Overlay.Processing": "Procesando…",

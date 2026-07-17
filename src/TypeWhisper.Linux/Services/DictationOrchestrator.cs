@@ -65,7 +65,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IHistoryService _history;
     private readonly HotkeyService _hotkey;
     private readonly IdeFileReferenceService _ideFileReferences;
-    private readonly HashSet<int> _inFlightSessions = [];
+    private readonly DictationInFlightSessionTracker _inFlightTracker = new();
     private readonly IMediaPauseService _mediaPause;
     private readonly MemoryService _memory;
     private readonly ModelManagerService _models;
@@ -670,7 +670,7 @@ public sealed class DictationOrchestrator : IDisposable
             lock (_recordingSessionLock)
             {
                 sessionId = ++_recordingSession;
-                _inFlightSessions.Add(sessionId);
+                _inFlightTracker.Begin(sessionId);
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
                 _recordingAppUrl = null;
@@ -1142,155 +1142,209 @@ public sealed class DictationOrchestrator : IDisposable
             _toggleGate.Release();
             gateReleased = true;
 
-            if (canceledThisStop)
-            {
-                // User hit Escape while still recording: clean up audio/media
-                // (already done above) and surface "Canceled" without saving
-                // the WAV or running transcription.
-                SetOverlayState(state =>
-                    state with
-                    {
-                        IsOverlayVisible = true,
-                        ShowFeedback = true,
-                        FeedbackText = Localization.Loc.Instance["Overlay.Canceled"],
-                        FeedbackIsError = false,
-                        IsRecording = false,
-                        StatusText = Localization.Loc.Instance["Overlay.Canceled"],
-                        PartialText = null,
-                        SessionStartedAtUtc = null
-                    }
-                );
-                StatusMessage?.Invoke(this, "Canceled");
-                _models.PluginManager.EventBus.Publish(
-                    new RecordingStoppedEvent
-                    {
-                        DurationSeconds = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(
-                            wav
-                        )
-                    }
-                );
-                _ = await TeardownStreamingSessionAsync(
-                    stoppedStreamingCoordinator,
-                    stoppedStreamingStartupCts,
-                    false,
-                    CancellationToken.None
-                );
-                FinalizeSession(recordingContext.SessionId, "canceled", "Canceled");
-                return;
-            }
-
-            SetOverlayState(state =>
-                state with
-                {
-                    IsOverlayVisible = true,
-                    ShowFeedback = false,
-                    FeedbackText = null,
-                    FeedbackIsError = false,
-                    IsRecording = false,
-                    StatusText = Localization.Loc.Instance["Overlay.Processing"],
-                    SessionStartedAtUtc = null
-                }
-            );
-            var duration = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav);
-            _models.PluginManager.EventBus.Publish(
-                new RecordingStoppedEvent { DurationSeconds = duration }
-            );
-
-            var shortSpeechDecision = LinuxDictationShortSpeechPolicy.Classify(
-                duration,
-                LinuxDictationShortSpeechPolicy.ComputePeakLevel(wav),
-                _settings.Current.TranscribeShortQuietClipsAggressively
-            );
-
-            // Transcribe intentionally falls through to the normal transcription path below.
-            // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault
-            switch (shortSpeechDecision)
-            {
-                case LinuxShortSpeechDecision.DiscardTooShort:
-                    SetOverlayState(state =>
-                        state with
-                        {
-                            IsOverlayVisible = true,
-                            ShowFeedback = true,
-                            FeedbackText = Localization.Loc.Instance["Overlay.TooShort"],
-                            FeedbackIsError = true,
-                            IsRecording = false,
-                            StatusText = Localization.Loc.Instance["Overlay.TooShort"],
-                            PartialText = null
-                        }
-                    );
-                    StatusMessage?.Invoke(this, "Too short");
-                    _ = await TeardownStreamingSessionAsync(
-                        stoppedStreamingCoordinator,
-                        stoppedStreamingStartupCts,
-                        false,
-                        CancellationToken.None
-                    );
-                    FinalizeSession(recordingContext.SessionId, "discarded", "Too short");
-                    return;
-                case LinuxShortSpeechDecision.DiscardNoSpeech:
-                    SetOverlayState(state =>
-                        state with
-                        {
-                            IsOverlayVisible = true,
-                            ShowFeedback = true,
-                            FeedbackText = Localization.Loc.Instance["Overlay.NoSpeech"],
-                            FeedbackIsError = true,
-                            IsRecording = false,
-                            StatusText = Localization.Loc.Instance["Overlay.NoSpeech"],
-                            PartialText = null
-                        }
-                    );
-                    StatusMessage?.Invoke(this, "No speech detected");
-                    _ = await TeardownStreamingSessionAsync(
-                        stoppedStreamingCoordinator,
-                        stoppedStreamingStartupCts,
-                        false,
-                        CancellationToken.None
-                    );
-                    FinalizeSession(recordingContext.SessionId, "discarded", "No speech detected");
-                    return;
-            }
-
-            // Streaming finalize must run BEFORE pad/save so the EOF grace-window
-            // flush captures any trailing partials. Read fault state from the
-            // just-torn-down coordinator, never from a shared field a racing
-            // StartAsync could have reset.
-            if (stoppedStreamingCoordinator is not null)
-            {
-                var streamingCancelToken = snapshotCts?.Token ?? CancellationToken.None;
-                var (streamingFinalText, streamingFaulted) = await TeardownStreamingSessionAsync(
-                    stoppedStreamingCoordinator,
-                    stoppedStreamingStartupCts,
-                    true,
-                    streamingCancelToken
-                );
-                recordingContext = recordingContext with
-                {
-                    StreamingFinalText = streamingFinalText, StreamingFaulted = streamingFaulted
-                };
-            }
-
-            // Keep the recorded (pre-padding) length: PadWavForFinalTranscription adds ~0.3s of
-            // silence, which would push a borderline-short silent clip past the hallucination filter's
-            // duration cutoff and let a stock "Thank you." artifact through.
-            var recordedDuration = duration;
-            wav = LinuxDictationShortSpeechPolicy.PadWavForFinalTranscription(wav, duration);
-            duration = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav);
-
-            var path = _sessionAudioFiles.SaveDictationCapture(wav);
-            RecordingCaptured?.Invoke(this, path);
-            Trace.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
-
+            // Single terminal guard (audit §2 H1): every post-stop step below
+            // can throw, and the session id must leave `_inFlightTracker` no
+            // matter which step fails — `RunAsync`'s finally is the chokepoint
+            // that guarantees that. The catch below additionally turns an
+            // otherwise-silent failure (e.g. disk-full saving the WAV, a
+            // throwing RecordingCaptured subscriber) into a published "failed"
+            // terminal and visible overlay feedback instead of leaving
+            // IsSessionInFlight stuck true and the overlay on "Processing…"
+            // forever.
             try
             {
-                await TranscribeAndInsertAsync(wav, path, duration, recordedDuration, recordingContext);
+                await _inFlightTracker.RunAsync(recordingContext.SessionId, async () =>
+                {
+                    if (canceledThisStop)
+                    {
+                        // User hit Escape while still recording: clean up audio/media
+                        // (already done above) and surface "Canceled" without saving
+                        // the WAV or running transcription.
+                        SetOverlayState(state =>
+                            state with
+                            {
+                                IsOverlayVisible = true,
+                                ShowFeedback = true,
+                                FeedbackText = Localization.Loc.Instance["Overlay.Canceled"],
+                                FeedbackIsError = false,
+                                IsRecording = false,
+                                StatusText = Localization.Loc.Instance["Overlay.Canceled"],
+                                PartialText = null,
+                                SessionStartedAtUtc = null
+                            }
+                        );
+                        StatusMessage?.Invoke(this, "Canceled");
+                        _models.PluginManager.EventBus.Publish(
+                            new RecordingStoppedEvent
+                            {
+                                DurationSeconds = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(
+                                    wav
+                                )
+                            }
+                        );
+                        _ = await TeardownStreamingSessionAsync(
+                            stoppedStreamingCoordinator,
+                            stoppedStreamingStartupCts,
+                            false,
+                            CancellationToken.None
+                        );
+                        FinalizeSession(recordingContext.SessionId, "canceled", "Canceled");
+                        return;
+                    }
+
+                    SetOverlayState(state =>
+                        state with
+                        {
+                            IsOverlayVisible = true,
+                            ShowFeedback = false,
+                            FeedbackText = null,
+                            FeedbackIsError = false,
+                            IsRecording = false,
+                            StatusText = Localization.Loc.Instance["Overlay.Processing"],
+                            SessionStartedAtUtc = null
+                        }
+                    );
+                    var duration = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav);
+                    _models.PluginManager.EventBus.Publish(
+                        new RecordingStoppedEvent { DurationSeconds = duration }
+                    );
+
+                    var shortSpeechDecision = LinuxDictationShortSpeechPolicy.Classify(
+                        duration,
+                        LinuxDictationShortSpeechPolicy.ComputePeakLevel(wav),
+                        _settings.Current.TranscribeShortQuietClipsAggressively
+                    );
+
+                    // Transcribe intentionally falls through to the normal transcription path below.
+                    // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault
+                    switch (shortSpeechDecision)
+                    {
+                        case LinuxShortSpeechDecision.DiscardTooShort:
+                            SetOverlayState(state =>
+                                state with
+                                {
+                                    IsOverlayVisible = true,
+                                    ShowFeedback = true,
+                                    FeedbackText = Localization.Loc.Instance["Overlay.TooShort"],
+                                    FeedbackIsError = true,
+                                    IsRecording = false,
+                                    StatusText = Localization.Loc.Instance["Overlay.TooShort"],
+                                    PartialText = null
+                                }
+                            );
+                            StatusMessage?.Invoke(this, "Too short");
+                            _ = await TeardownStreamingSessionAsync(
+                                stoppedStreamingCoordinator,
+                                stoppedStreamingStartupCts,
+                                false,
+                                CancellationToken.None
+                            );
+                            FinalizeSession(recordingContext.SessionId, "discarded", "Too short");
+                            return;
+                        case LinuxShortSpeechDecision.DiscardNoSpeech:
+                            SetOverlayState(state =>
+                                state with
+                                {
+                                    IsOverlayVisible = true,
+                                    ShowFeedback = true,
+                                    FeedbackText = Localization.Loc.Instance["Overlay.NoSpeech"],
+                                    FeedbackIsError = true,
+                                    IsRecording = false,
+                                    StatusText = Localization.Loc.Instance["Overlay.NoSpeech"],
+                                    PartialText = null
+                                }
+                            );
+                            StatusMessage?.Invoke(this, "No speech detected");
+                            _ = await TeardownStreamingSessionAsync(
+                                stoppedStreamingCoordinator,
+                                stoppedStreamingStartupCts,
+                                false,
+                                CancellationToken.None
+                            );
+                            FinalizeSession(
+                                recordingContext.SessionId,
+                                "discarded",
+                                "No speech detected"
+                            );
+                            return;
+                    }
+
+                    // Streaming finalize must run BEFORE pad/save so the EOF grace-window
+                    // flush captures any trailing partials. Read fault state from the
+                    // just-torn-down coordinator, never from a shared field a racing
+                    // StartAsync could have reset.
+                    if (stoppedStreamingCoordinator is not null)
+                    {
+                        var streamingCancelToken = snapshotCts?.Token ?? CancellationToken.None;
+                        var (streamingFinalText, streamingFaulted) =
+                            await TeardownStreamingSessionAsync(
+                                stoppedStreamingCoordinator,
+                                stoppedStreamingStartupCts,
+                                true,
+                                streamingCancelToken
+                            );
+                        recordingContext = recordingContext with
+                        {
+                            StreamingFinalText = streamingFinalText,
+                            StreamingFaulted = streamingFaulted
+                        };
+                    }
+
+                    // Keep the recorded (pre-padding) length: PadWavForFinalTranscription adds ~0.3s of
+                    // silence, which would push a borderline-short silent clip past the hallucination filter's
+                    // duration cutoff and let a stock "Thank you." artifact through.
+                    var recordedDuration = duration;
+                    wav = LinuxDictationShortSpeechPolicy.PadWavForFinalTranscription(
+                        wav,
+                        duration
+                    );
+                    duration = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav);
+
+                    var path = _sessionAudioFiles.SaveDictationCapture(wav);
+                    RecordingCaptured?.Invoke(this, path);
+                    Trace.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
+
+                    await TranscribeAndInsertAsync(
+                        wav,
+                        path,
+                        duration,
+                        recordedDuration,
+                        recordingContext
+                    );
+                });
             }
-            finally
+            catch (OperationCanceledException)
             {
-                // Guarantee the session leaves the in-flight set even on early
-                // exception or cancel before a terminal status is published.
-                ClearSessionInFlight(recordingContext.SessionId);
+                Trace.WriteLine("[Dictation] Post-stop pipeline canceled before completion.");
+                PublishSessionTerminal(recordingContext.SessionId, "canceled", "Canceled");
+            }
+            catch (Exception ex)
+            {
+                // Reached only for a step BEFORE TranscribeAndInsertAsync's own
+                // try/catch chain (streaming teardown, WAV padding, capture
+                // persistence, the RecordingCaptured event), or a rethrow from
+                // its `await using` lease disposal. Either way the session must
+                // not stay "in_progress" forever (audit §2 H1).
+                Trace.WriteLine($"[Dictation] Post-stop pipeline failed before completion: {ex}");
+                // Publish the terminal result FIRST: RunAsync's finally has
+                // already dropped the id from the in-flight set, so a throw from
+                // any log/UI callback below must not stop the "failed" result
+                // from being recorded — otherwise the session would poll as
+                // not_found forever, defeating audit §2 H1.
+                PublishSessionTerminal(recordingContext.SessionId, "failed", ex.Message);
+                _errorLog.AddEntry(
+                    $"Dictation capture could not be saved or transcribed ({ex.Message}).",
+                    ErrorCategory.Recording
+                );
+                ReportStatus(
+                    recordingContext,
+                    Localization.Loc.Instance["Overlay.CaptureSaveFailed"]
+                );
+                ShowFeedback(
+                    recordingContext,
+                    Localization.Loc.Instance["Overlay.CaptureSaveFailed"],
+                    true
+                );
             }
         }
         finally
@@ -1336,10 +1390,7 @@ public sealed class DictationOrchestrator : IDisposable
     /// </summary>
     public bool IsSessionInFlight(int sessionId)
     {
-        lock (_recordingSessionLock)
-        {
-            return _inFlightSessions.Contains(sessionId);
-        }
+        return _inFlightTracker.Contains(sessionId);
     }
 
     /// <summary>
@@ -3797,10 +3848,7 @@ public sealed class DictationOrchestrator : IDisposable
 
     private void ClearSessionInFlight(int sessionId)
     {
-        lock (_recordingSessionLock)
-        {
-            _inFlightSessions.Remove(sessionId);
-        }
+        _inFlightTracker.End(sessionId);
     }
 
     private void PublishSessionResult(DictationSessionResult result)

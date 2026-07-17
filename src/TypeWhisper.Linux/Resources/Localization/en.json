@@ -451,6 +451,7 @@
   "Notify.BodyPushToTalk": "Speak now — release to insert",
   "Notify.BodyToggle": "Speak now — press the shortcut again to stop",
   "Overlay.Canceled": "Canceled",
+  "Overlay.CaptureSaveFailed": "Failed to save the recording.",
   "Overlay.NoRecentTranscriptions": "No recent transcriptions.",
   "Overlay.NoSpeech": "No speech detected",
   "Overlay.Processing": "Processing…",
