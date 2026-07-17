@@ -67,6 +67,8 @@ public interface IProcessRunner
 /// </summary>
 public sealed class ProcessRunner : IProcessRunner
 {
+    private static readonly TimeSpan s_minimumDrainGrace = TimeSpan.FromMilliseconds(250);
+
     public async Task<ProcessRunResult> RunAsync(
         string fileName,
         IReadOnlyList<string> args,
@@ -105,63 +107,161 @@ public sealed class ProcessRunner : IProcessRunner
                 return ProcessRunResult.NotStarted($"Could not start {fileName}");
             }
 
-            if (standardInput is not null)
-            {
-                await process
-                    .StandardInput.WriteAsync(standardInput.AsMemory(), ct)
-                    .ConfigureAwait(false);
-                process.StandardInput.Close();
-            }
-
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-            var stderrTask = process.StandardError.ReadToEndAsync(ct);
-
+            using var timeoutCts = timeout is not null
+                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                : null;
+            var timeoutStopwatch = timeout is not null ? Stopwatch.StartNew() : null;
             if (timeout is { } limit)
             {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeoutCts.CancelAfter(limit);
+                timeoutCts!.CancelAfter(limit);
+            }
+
+            var lifecycleToken = timeoutCts?.Token ?? ct;
+            await using var standardInputWriter = standardInput is not null
+                ? process.StandardInput
+                : null;
+            if (standardInput is not null)
+            {
                 try
                 {
-                    await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+                    await standardInputWriter!
+                        .WriteAsync(standardInput.AsMemory(), lifecycleToken)
+                        .ConfigureAwait(false);
+                    standardInputWriter.Close();
                 }
-                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                catch (OperationCanceledException) when (
+                    timeoutCts?.IsCancellationRequested == true && !ct.IsCancellationRequested
+                )
                 {
-                    // Inner timeout fired (not the caller's ct) — kill and return TimedOut
-                    // so the caller can distinguish a timeout from a hard cancellation.
-                    try
-                    {
-                        process.Kill(true);
-                    }
-                    catch
-                    {
-                        /* best effort */
-                    }
-
-                    return new ProcessRunResult(
-                        true,
-                        true,
-                        -1,
-                        string.Empty,
-                        string.Empty
-                    );
+                    KillProcessTree(process);
+                    return TimedOutResult();
                 }
             }
-            else
+
+            using var standardOutputReader = process.StandardOutput;
+            using var standardErrorReader = process.StandardError;
+            var stdoutTask = standardOutputReader.ReadToEndAsync(ct);
+            var stderrTask = standardErrorReader.ReadToEndAsync(ct);
+
+            try
             {
-                await process.WaitForExitAsync(ct).ConfigureAwait(false);
+                await process.WaitForExitAsync(lifecycleToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (
+                timeoutCts?.IsCancellationRequested == true && !ct.IsCancellationRequested
+            )
+            {
+                // Inner timeout fired (not the caller's ct) — kill and return TimedOut
+                // so the caller can distinguish a timeout from a hard cancellation.
+                KillProcessTree(process);
+                AbandonRead(standardOutputReader, stdoutTask);
+                AbandonRead(standardErrorReader, stderrTask);
+                return TimedOutResult();
+            }
+
+            var exitCode = process.ExitCode;
+            if (timeout is not { } timeoutLimit)
+            {
+                return new ProcessRunResult(
+                    true,
+                    false,
+                    exitCode,
+                    await stdoutTask.ConfigureAwait(false),
+                    await stderrTask.ConfigureAwait(false)
+                );
+            }
+
+            var remaining = timeoutLimit - timeoutStopwatch!.Elapsed;
+            // Preserve the lifecycle deadline when time remains, but allow a small
+            // post-exit grace so a process exiting at the deadline can flush normal
+            // redirected output. The total run may therefore exceed the limit by at
+            // most 250 ms when the process exits at deadline-minus-epsilon.
+            var drainLimit = remaining > s_minimumDrainGrace ? remaining : s_minimumDrainGrace;
+            using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            drainCts.CancelAfter(drainLimit);
+            try
+            {
+                await Task.WhenAll(stdoutTask, stderrTask)
+                    .WaitAsync(drainCts.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // The process itself exited, so its exit code is authoritative. A
+                // descendant may still hold the pipe writers (wl-copy/xclip do this).
+                // Close our redirected stream handles and observe any resulting
+                // background read faults rather than surfacing a false process timeout
+                // or waiting for the descendant.
+                AbandonRead(standardOutputReader, stdoutTask);
+                AbandonRead(standardErrorReader, stderrTask);
             }
 
             return new ProcessRunResult(
                 true,
                 false,
-                process.ExitCode,
-                await stdoutTask.ConfigureAwait(false),
-                await stderrTask.ConfigureAwait(false)
+                exitCode,
+                CompletedOutput(stdoutTask),
+                CompletedOutput(stderrTask)
             );
         }
         catch (Exception ex)
         {
             return ProcessRunResult.NotStarted(ex.Message);
         }
+    }
+
+    private static string CompletedOutput(Task<string> readTask)
+    {
+        return readTask.Status == TaskStatus.RanToCompletion
+            ? readTask.Result
+            : string.Empty;
+    }
+
+    private static void KillProcessTree(Process process)
+    {
+        try
+        {
+            process.Kill(true);
+        }
+        catch
+        {
+            /* best effort */
+        }
+    }
+
+    private static void AbandonRead(StreamReader reader, Task readTask)
+    {
+        ObserveFault(readTask);
+        try
+        {
+            // Process.Dispose does not close a redirected stream once its reader
+            // has been accessed; close the caller-owned pipe handle explicitly.
+            reader.BaseStream.Close();
+        }
+        catch
+        {
+            /* best effort */
+        }
+    }
+
+    private static void ObserveFault(Task task)
+    {
+        _ = task.ContinueWith(
+            static completedTask => _ = completedTask.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
+    }
+
+    private static ProcessRunResult TimedOutResult()
+    {
+        return new ProcessRunResult(
+            true,
+            true,
+            -1,
+            string.Empty,
+            string.Empty
+        );
     }
 }

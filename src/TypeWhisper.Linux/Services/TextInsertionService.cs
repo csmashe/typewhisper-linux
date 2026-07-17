@@ -985,6 +985,9 @@ internal interface ITextInsertionPlatform
 /// </summary>
 internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 {
+    private static readonly TimeSpan s_clipboardOperationTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan s_injectorProcessTimeout = TimeSpan.FromSeconds(60);
+
     private static readonly HashSet<string> s_waylandTextSafeTargets =
         new(StringComparer.OrdinalIgnoreCase) { "STRING", "UTF8_STRING", "TEXT" };
 
@@ -1007,6 +1010,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     // kept injected as a DI/test seam; not consumed in-tree
     // ReSharper disable once NotAccessedField.Local
     private readonly SystemCommandAvailabilityService? _commands;
+    private readonly IProcessRunner _ioRunner;
     private readonly bool _isWayland;
     private readonly ProcessRunnerWithEnv _processRunner;
 
@@ -1022,9 +1026,15 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     private LinuxCapabilitySnapshot _snapshot;
 
-    public LinuxTextInsertionPlatform(SystemCommandAvailabilityService commands)
-        : this(commands, DefaultProcessRunnerWithEnv, DefaultProcessRunnerWithStderr)
+    public LinuxTextInsertionPlatform(
+        SystemCommandAvailabilityService commands,
+        IProcessRunner? processRunner = null
+    )
+        : this(commands.GetSnapshot(), processRunner ?? new ProcessRunner())
     {
+        _commands = commands;
+        // Rebuild chain in place whenever the snapshot refreshes (e.g. after ydotool setup).
+        commands.SnapshotChanged += OnSnapshotChanged;
     }
 
     internal LinuxTextInsertionPlatform(
@@ -1071,9 +1081,23 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         >? processRunnerWithStderr = null
     )
     {
+        _ioRunner = new ProcessRunner();
         _snapshot = snapshot;
         _processRunner = processRunner;
         _processRunnerWithStderr = processRunnerWithStderr;
+        _isWayland = snapshot.SessionType == "Wayland";
+        _chain = BuildChain(snapshot);
+    }
+
+    internal LinuxTextInsertionPlatform(
+        LinuxCapabilitySnapshot snapshot,
+        IProcessRunner processRunner
+    )
+    {
+        _ioRunner = processRunner;
+        _snapshot = snapshot;
+        _processRunner = DefaultProcessRunnerWithEnv;
+        _processRunnerWithStderr = DefaultProcessRunnerWithStderr;
         _isWayland = snapshot.SessionType == "Wayland";
         _chain = BuildChain(snapshot);
     }
@@ -1102,24 +1126,28 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public async Task<string?> TryGetClipboardTextAsync()
     {
-        var psi = _isWayland
-            ? new ProcessStartInfo("wl-paste", "--no-newline")
-            : new ProcessStartInfo("xclip", "-selection clipboard -o");
-        psi.RedirectStandardOutput = true;
-        psi.RedirectStandardError = true;
-        psi.UseShellExecute = false;
+        var fileName = _isWayland ? "wl-paste" : "xclip";
+        IReadOnlyList<string> args = _isWayland
+            ? ["--no-newline"]
+            : ["-selection", "clipboard", "-o"];
 
         try
         {
-            using var p = Process.Start(psi);
-            if (p is null)
+            var result = await _ioRunner.RunAsync(
+                fileName,
+                args,
+                timeout: s_clipboardOperationTimeout
+            ).ConfigureAwait(false);
+            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
+            if (result.TimedOut)
             {
+                Trace.WriteLine(
+                    $"[TextInsertionService] clipboard read timed out after {s_clipboardOperationTimeout.TotalSeconds:0} seconds and was killed."
+                );
                 return null;
             }
 
-            var output = await p.StandardOutput.ReadToEndAsync();
-            await p.WaitForExitAsync();
-            return p.ExitCode == 0 ? output : null;
+            return result.Succeeded ? result.StandardOutput : null;
         }
         catch (Exception ex)
         {
@@ -1130,24 +1158,29 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public async Task<bool> ClipboardHasNonTextFormatsAsync()
     {
-        var psi = _isWayland
-            ? new ProcessStartInfo("wl-paste", "--list-types")
-            : new ProcessStartInfo("xclip", "-selection clipboard -o -t TARGETS");
-        psi.RedirectStandardOutput = true;
-        psi.RedirectStandardError = true;
-        psi.UseShellExecute = false;
+        var fileName = _isWayland ? "wl-paste" : "xclip";
+        IReadOnlyList<string> args = _isWayland
+            ? ["--list-types"]
+            : ["-selection", "clipboard", "-o", "-t", "TARGETS"];
 
         try
         {
-            using var p = Process.Start(psi);
-            if (p is null)
+            var result = await _ioRunner.RunAsync(
+                fileName,
+                args,
+                timeout: s_clipboardOperationTimeout
+            ).ConfigureAwait(false);
+            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
+            if (result.TimedOut)
             {
+                Trace.WriteLine(
+                    $"[TextInsertionService] clipboard format listing timed out after {s_clipboardOperationTimeout.TotalSeconds:0} seconds and was killed."
+                );
                 return false;
             }
 
-            var output = await p.StandardOutput.ReadToEndAsync();
-            await p.WaitForExitAsync();
-            return p.ExitCode == 0 && ListingHasNonTextFormats(output, _isWayland);
+            return result.Succeeded
+                   && ListingHasNonTextFormats(result.StandardOutput, _isWayland);
         }
         catch (Exception ex)
         {
@@ -1172,25 +1205,27 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public async Task<bool> SetClipboardTextAsync(string text)
     {
-        var psi = _isWayland
-            ? new ProcessStartInfo("wl-copy")
-            : new ProcessStartInfo("xclip", "-selection clipboard");
-        psi.RedirectStandardInput = true;
-        psi.RedirectStandardError = true;
-        psi.UseShellExecute = false;
+        var fileName = _isWayland ? "wl-copy" : "xclip";
+        IReadOnlyList<string> args = _isWayland ? [] : ["-selection", "clipboard"];
 
         try
         {
-            using var p = Process.Start(psi);
-            if (p is null)
+            var result = await _ioRunner.RunAsync(
+                fileName,
+                args,
+                standardInput: text,
+                timeout: s_clipboardOperationTimeout
+            ).ConfigureAwait(false);
+            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
+            if (result.TimedOut)
             {
+                Trace.WriteLine(
+                    $"[TextInsertionService] clipboard write timed out after {s_clipboardOperationTimeout.TotalSeconds:0} seconds and was killed."
+                );
                 return false;
             }
 
-            await p.StandardInput.WriteAsync(text);
-            p.StandardInput.Close();
-            await p.WaitForExitAsync();
-            return p.ExitCode == 0;
+            return result.Succeeded;
         }
         catch (Exception ex)
         {
@@ -1682,7 +1717,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         return _processRunner(fileName, args, env);
     }
 
-    private static async Task<int> DefaultProcessRunnerWithEnv(
+    private async Task<int> DefaultProcessRunnerWithEnv(
         string fileName,
         IReadOnlyList<string> args,
         IReadOnlyDictionary<string, string>? env
@@ -1690,28 +1725,30 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     {
         try
         {
-            var psi = new ProcessStartInfo(fileName) { RedirectStandardError = true, UseShellExecute = false };
-            foreach (var arg in args)
+            var result = await _ioRunner.RunAsync(
+                fileName,
+                args,
+                environment: env,
+                timeout: s_injectorProcessTimeout
+            ).ConfigureAwait(false);
+            if (result.TimedOut)
             {
-                psi.ArgumentList.Add(arg);
-            }
-
-            if (env is not null)
-            {
-                foreach (var (key, value) in env)
-                {
-                    psi.Environment[key] = value;
-                }
-            }
-
-            using var p = Process.Start(psi);
-            if (p is null)
-            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] {fileName} timed out after {s_injectorProcessTimeout.TotalSeconds:0} seconds and was killed."
+                );
                 return -1;
             }
 
-            await p.WaitForExitAsync();
-            return p.ExitCode;
+            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
+            if (!result.Started)
+            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] {fileName} failed: {result.StandardError}"
+                );
+                return -1;
+            }
+
+            return result.ExitCode;
         }
         catch (Exception ex)
         {
@@ -1720,34 +1757,36 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
     }
 
-    private static async Task<(int exitCode, string stderr)> DefaultProcessRunnerWithStderr(
+    private async Task<(int exitCode, string stderr)> DefaultProcessRunnerWithStderr(
         string fileName,
         IReadOnlyList<string> args
     )
     {
         try
         {
-            var psi = new ProcessStartInfo(fileName)
+            var result = await _ioRunner.RunAsync(
+                fileName,
+                args,
+                timeout: s_injectorProcessTimeout
+            ).ConfigureAwait(false);
+            if (result.TimedOut)
             {
-                RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false
-            };
-            foreach (var arg in args)
-            {
-                psi.ArgumentList.Add(arg);
-            }
-
-            using var p = Process.Start(psi);
-            if (p is null)
-            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] {fileName} timed out after {s_injectorProcessTimeout.TotalSeconds:0} seconds and was killed."
+                );
                 return (-1, string.Empty);
             }
 
-            var stderrTask = p.StandardError.ReadToEndAsync();
-            var stdoutTask = p.StandardOutput.ReadToEndAsync();
-            await p.WaitForExitAsync();
-            var stderr = await stderrTask.ConfigureAwait(false);
-            await stdoutTask.ConfigureAwait(false);
-            return (p.ExitCode, stderr);
+            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
+            if (!result.Started)
+            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] {fileName} failed: {result.StandardError}"
+                );
+                return (-1, string.Empty);
+            }
+
+            return (result.ExitCode, result.StandardError);
         }
         catch (Exception ex)
         {

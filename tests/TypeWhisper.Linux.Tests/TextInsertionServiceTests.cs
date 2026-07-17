@@ -1613,6 +1613,164 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardRead_UsesFiveSecondTimeout()
+    {
+        var runner = new FakeProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+
+        await platform.TryGetClipboardTextAsync();
+
+        var call = Assert.Single(runner.Invocations);
+        Assert.Equal("wl-paste", call.FileName);
+        Assert.Equal(TimeSpan.FromSeconds(5), call.Timeout);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardRead_TimeoutReturnsNull()
+    {
+        var runner = CreateTimedOutProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+
+        var result = await platform.TryGetClipboardTextAsync();
+
+        Assert.Null(result);
+        Assert.Single(runner.Invocations);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardWrite_UsesFiveSecondTimeout()
+    {
+        var runner = new FakeProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+
+        var result = await platform.SetClipboardTextAsync("hello");
+
+        Assert.True(result);
+        var call = Assert.Single(runner.Invocations);
+        Assert.Equal("wl-copy", call.FileName);
+        Assert.Equal("hello", call.StandardInput);
+        Assert.Equal(TimeSpan.FromSeconds(5), call.Timeout);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardWrite_TimeoutReturnsFalse()
+    {
+        var runner = CreateTimedOutProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+
+        var result = await platform.SetClipboardTextAsync("hello");
+
+        Assert.False(result);
+        Assert.Single(runner.Invocations);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardFormatListing_UsesFiveSecondTimeout()
+    {
+        var runner = new FakeProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+
+        await platform.ClipboardHasNonTextFormatsAsync();
+
+        var call = Assert.Single(runner.Invocations);
+        Assert.Equal("wl-paste", call.FileName);
+        Assert.Equal(["--list-types"], call.Args);
+        Assert.Equal(TimeSpan.FromSeconds(5), call.Timeout);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardFormatListing_TimeoutReturnsFalse()
+    {
+        var runner = CreateTimedOutProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+
+        var result = await platform.ClipboardHasNonTextFormatsAsync();
+
+        Assert.False(result);
+        Assert.Single(runner.Invocations);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_InjectorCalls_UseSixtySecondTimeout()
+    {
+        var runner = new FakeProcessRunner();
+        var wtypePlatform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", false, false),
+            runner
+        );
+        var ydotoolPlatform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, false, "gnome", true, true),
+            runner
+        );
+        var xdotoolPlatform = new LinuxTextInsertionPlatform(
+            SnapshotFor("X11", true, false),
+            runner
+        );
+
+        Assert.True(await wtypePlatform.TypeTextAsync("hello"));
+        Assert.True(await ydotoolPlatform.TypeTextAsync("hello"));
+        Assert.True(await xdotoolPlatform.TypeTextAsync("hello"));
+
+        Assert.Equal(["wtype", "ydotool", "xdotool"], runner.Invocations.Select(i => i.FileName));
+        Assert.All(
+            runner.Invocations,
+            invocation => Assert.Equal(TimeSpan.FromSeconds(60), invocation.Timeout)
+        );
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_WtypeTimeout_FailsCleanly()
+    {
+        var runner = CreateTimedOutProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", false, false),
+            runner
+        );
+
+        var result = await platform.TypeTextAsync("hello");
+
+        Assert.False(result);
+        var call = Assert.Single(runner.Invocations);
+        Assert.Equal("wtype", call.FileName);
+        Assert.Equal(TimeSpan.FromSeconds(60), call.Timeout);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_XdotoolTimeout_FailsCleanly()
+    {
+        var runner = CreateTimedOutProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("X11", true, false),
+            runner
+        );
+
+        var result = await platform.TypeTextAsync("hello");
+
+        Assert.False(result);
+        var call = Assert.Single(runner.Invocations);
+        Assert.Equal("xdotool", call.FileName);
+        Assert.Equal(TimeSpan.FromSeconds(60), call.Timeout);
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_WaylandWithWtype_PasteCallsWtype()
     {
         var runner = new RecordingProcessRunner();
@@ -2448,6 +2606,20 @@ public sealed class TextInsertionServiceTests
             hasYdotoolSocket,
             hasYdotoolSocket ? "/run/user/1000/.ydotool_socket" : null
         );
+    }
+
+    private static FakeProcessRunner CreateTimedOutProcessRunner()
+    {
+        return new FakeProcessRunner
+        {
+            Default = new ProcessRunResult(
+                true,
+                true,
+                -1,
+                string.Empty,
+                string.Empty
+            )
+        };
     }
 
     private sealed class RecordingProcessRunner
