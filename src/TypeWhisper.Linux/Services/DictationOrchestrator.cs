@@ -1489,6 +1489,25 @@ public sealed class DictationOrchestrator : IDisposable
         return "";
     }
 
+    /// <summary>
+    ///     Resolves the language post-processing should treat the transcript as.
+    ///     "en" only when a translate task was requested AND the engine supports
+    ///     translation — engines with <c>SupportsTranslation=false</c> ignore the
+    ///     translate task and return source-language text; otherwise the detected
+    ///     (else configured) source language (audit §2 M1).
+    ///     Exposed internally for unit testing.
+    /// </summary>
+    internal static string? ResolvePostProcessingSourceLanguage(
+        string? detectedLanguage,
+        string? configuredLanguage,
+        bool translateRequested,
+        bool engineSupportsTranslation
+    )
+    {
+        var engineTranslatedToEnglish = translateRequested && engineSupportsTranslation;
+        return engineTranslatedToEnglish ? "en" : detectedLanguage ?? configuredLanguage;
+    }
+
     public event EventHandler<string>? RecordingCaptured; // arg = WAV file path
     public event EventHandler<bool>? RecordingStateChanged;
     public event EventHandler<string>? TranscriptionCompleted;
@@ -1566,6 +1585,7 @@ public sealed class DictationOrchestrator : IDisposable
         // race a concurrent dictation's model swap.
         var engineProviderId = plugin.ProviderId;
         var engineModelId = plugin.SelectedModelId;
+        var engineSupportsTranslation = plugin.SupportsTranslation;
 
         ReportStatus(context, $"Transcribing via {plugin.ProviderDisplayName}…");
 
@@ -1782,9 +1802,16 @@ public sealed class DictationOrchestrator : IDisposable
                 return;
             }
 
+            var postProcessingLanguage = ResolvePostProcessingSourceLanguage(
+                result?.DetectedLanguage,
+                languageHint,
+                translate,
+                engineSupportsTranslation
+            );
+
             var pipelineContext = new PostProcessingContext
             {
-                SourceLanguage = result?.DetectedLanguage ?? languageHint,
+                SourceLanguage = postProcessingLanguage,
                 ActiveAppName = context.AppTitle,
                 ActiveAppProcessName = context.AppProcess,
                 ProfileName = context.Profile?.Name,
@@ -1869,8 +1896,8 @@ public sealed class DictationOrchestrator : IDisposable
                     TranslationTarget = string.IsNullOrWhiteSpace(translationTarget)
                         ? null
                         : translationTarget,
-                    EffectiveSourceLanguage = languageHint,
-                    DetectedLanguage = result?.DetectedLanguage,
+                    EffectiveSourceLanguage = postProcessingLanguage,
+                    DetectedLanguage = postProcessingLanguage,
                     PluginPostProcessors = pluginProcessors,
                     StatusCallback = status =>
                     {
