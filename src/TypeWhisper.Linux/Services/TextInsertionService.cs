@@ -15,7 +15,8 @@ public enum InsertionResult
     ActionFailed,
     MissingClipboardTool,
     MissingPasteTool,
-    Failed
+    Failed,
+    ActionUnavailable
 }
 
 /// <summary>

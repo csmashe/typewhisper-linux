@@ -1508,6 +1508,22 @@ public sealed class DictationOrchestrator : IDisposable
         return engineTranslatedToEnglish ? "en" : detectedLanguage ?? configuredLanguage;
     }
 
+    /// <summary>
+    ///     True when a prompt action explicitly names a target action plugin but
+    ///     no loaded plugin matches (disabled, removed, or renamed) — unlike "no
+    ///     action plugin configured", which still falls through to plain text
+    ///     insertion. An explicit-but-missing destination must fail with a routing
+    ///     error, not silently substitute another destination (audit §2 M2).
+    ///     Exposed internally for unit testing.
+    /// </summary>
+    internal static bool IsActionPluginTargetUnavailable(
+        string? targetActionPluginId,
+        bool actionPluginResolved
+    )
+    {
+        return !string.IsNullOrWhiteSpace(targetActionPluginId) && !actionPluginResolved;
+    }
+
     public event EventHandler<string>? RecordingCaptured; // arg = WAV file path
     public event EventHandler<bool>? RecordingStateChanged;
     public event EventHandler<string>? TranscriptionCompleted;
@@ -1961,13 +1977,30 @@ public sealed class DictationOrchestrator : IDisposable
             transcriptionCompletedPublished = true;
 
             var actionPlugin = ResolveActionPlugin(promptAction);
+            var actionPluginUnavailable = IsActionPluginTargetUnavailable(
+                promptAction?.TargetActionPluginId,
+                actionPlugin is not null
+            );
+            if (actionPluginUnavailable)
+            {
+                Trace.WriteLine(
+                    $"[Dictation] Configured action plugin target "
+                    + $"'{promptAction?.TargetActionPluginId}' is unavailable (disabled, removed, "
+                    + "or renamed) — routing as a failure instead of falling back to ordinary text "
+                    + "insertion (audit §2 M2)."
+                );
+            }
 
             // Yield focus before any synthesized keystroke: on Wayland a
             // visible overlay can still hold keyboard focus, and ydotool's
             // virtual keyboard fires Ctrl+V to whatever has focus. wtype on
             // GNOME/KDE was always compositor-rejected, so this was latent
             // until the ydotool backend was added.
-            if (actionPlugin is null && !commandResult.CancelInsertion)
+            if (
+                actionPlugin is null
+                && !actionPluginUnavailable
+                && !commandResult.CancelInsertion
+            )
             {
                 // Surface the inject phase so `typewhisper status` reports
                 // `injecting` while a long transcript is still being typed.
@@ -2008,26 +2041,28 @@ public sealed class DictationOrchestrator : IDisposable
                 insertion =
                     commandResult.CancelInsertion
                         ? InsertionResult.NoText
-                        : actionPlugin is null
-                            ? await _textInsertion.InsertTextAsync(
-                                new TextInsertionRequest(
-                                    insertionText,
-                                    _settings.Current.AutoPaste,
-                                    context.WindowId,
-                                    context.AppProcess,
-                                    context.AppTitle,
-                                    commandResult.AutoEnter,
-                                    ResolveInsertionStrategy(context.AppProcess)
+                        : actionPluginUnavailable
+                            ? InsertionResult.ActionUnavailable
+                            : actionPlugin is null
+                                ? await _textInsertion.InsertTextAsync(
+                                    new TextInsertionRequest(
+                                        insertionText,
+                                        _settings.Current.AutoPaste,
+                                        context.WindowId,
+                                        context.AppProcess,
+                                        context.AppTitle,
+                                        commandResult.AutoEnter,
+                                        ResolveInsertionStrategy(context.AppProcess)
+                                    )
                                 )
-                            )
-                            : await ExecuteActionPluginAsync(
-                                actionPlugin,
-                                context,
-                                finalText,
-                                rawText,
-                                result?.DetectedLanguage,
-                                cancelToken
-                            );
+                                : await ExecuteActionPluginAsync(
+                                    actionPlugin,
+                                    context,
+                                    finalText,
+                                    rawText,
+                                    result?.DetectedLanguage,
+                                    cancelToken
+                                );
             }
             catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
             {
@@ -2066,6 +2101,7 @@ public sealed class DictationOrchestrator : IDisposable
                 InsertionResult.CopiedToClipboard => ClipboardFallbackMessage(),
                 InsertionResult.ActionHandled => "Action completed.",
                 InsertionResult.ActionFailed => "Action failed.",
+                InsertionResult.ActionUnavailable => "Action destination unavailable.",
                 InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
                 InsertionResult.MissingPasteTool =>
                     $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
@@ -2078,6 +2114,7 @@ public sealed class DictationOrchestrator : IDisposable
                 insertion
                     is InsertionResult.Failed
                     or InsertionResult.ActionFailed
+                    or InsertionResult.ActionUnavailable
                     or InsertionResult.MissingClipboardTool
                     or InsertionResult.MissingPasteTool;
             var isCanceled =
@@ -3296,6 +3333,7 @@ public sealed class DictationOrchestrator : IDisposable
             InsertionResult.NoText => TextInsertionStatus.NoText,
             InsertionResult.ActionHandled => TextInsertionStatus.ActionHandled,
             InsertionResult.ActionFailed => TextInsertionStatus.ActionFailed,
+            InsertionResult.ActionUnavailable => TextInsertionStatus.ActionUnavailable,
             InsertionResult.MissingClipboardTool => TextInsertionStatus.MissingClipboardTool,
             InsertionResult.MissingPasteTool => TextInsertionStatus.MissingPasteTool,
             InsertionResult.Failed => TextInsertionStatus.Failed,
@@ -3322,6 +3360,8 @@ public sealed class DictationOrchestrator : IDisposable
         return insertion switch
         {
             InsertionResult.ActionFailed => "Action plugin failed.",
+            InsertionResult.ActionUnavailable =>
+                "Configured action plugin destination is unavailable.",
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             InsertionResult.MissingPasteTool => "Automatic paste tool is unavailable.",
             InsertionResult.Failed => "Text insertion failed.",

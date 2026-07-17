@@ -72,14 +72,15 @@ public sealed class HistoryInsightsServiceTests
         var records = Enumerable.Range(0, 9)
             .Select(_ => Record("done", "app", 1, TextInsertionStatus.ActionHandled))
             .Append(Record("done", "app", 1, TextInsertionStatus.ActionFailed))
+            .Append(Record("done", "app", 1, TextInsertionStatus.ActionUnavailable))
             .ToArray();
 
         var result = _sut.Build(records);
 
         Assert.Equal(9, result.SuccessfulInsertionCount);
-        Assert.Equal(1, result.FailedInsertionCount);
-        Assert.Equal(10, result.InsertionAttemptCount);
-        Assert.Equal(90.0, result.InsertionSuccessRate);
+        Assert.Equal(2, result.FailedInsertionCount);
+        Assert.Equal(11, result.InsertionAttemptCount);
+        Assert.Equal(81.8, result.InsertionSuccessRate);
     }
 
     private static TranscriptionRecord Record(

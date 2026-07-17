@@ -48,6 +48,7 @@ public sealed class HistoryInsightsService : IHistoryInsightsService
             record.InsertionStatus
                 is TextInsertionStatus.Failed
                 or TextInsertionStatus.ActionFailed
+                or TextInsertionStatus.ActionUnavailable
                 or TextInsertionStatus.MissingClipboardTool
                 or TextInsertionStatus.MissingPasteTool
         );
