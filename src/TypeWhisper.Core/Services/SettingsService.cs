@@ -17,6 +17,7 @@ public sealed class SettingsService : ISettingsService
         WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
+    private readonly Lock _gate = new();
     private readonly string _filePath;
 
     public SettingsService(string filePath)
@@ -61,6 +62,25 @@ public sealed class SettingsService : ISettingsService
 
     public void Save(AppSettings settings)
     {
+        lock (_gate)
+        {
+            SaveLocked(settings);
+        }
+    }
+
+    public AppSettings Update(Func<AppSettings, AppSettings> mutate)
+    {
+        ArgumentNullException.ThrowIfNull(mutate);
+        lock (_gate)
+        {
+            var updated = mutate(Current);
+            SaveLocked(updated);
+            return updated;
+        }
+    }
+
+    private void SaveLocked(AppSettings settings)
+    {
         var directory = Path.GetDirectoryName(_filePath);
         if (!string.IsNullOrEmpty(directory))
         {
@@ -92,6 +112,7 @@ public sealed class SettingsService : ISettingsService
             }
 
             var json = File.ReadAllText(path);
+            // ReSharper disable once InconsistentlySynchronizedField -- s_jsonOptions is static readonly (immutable reference); _gate guards file I/O and Current, not this field.
             var settings = JsonSerializer.Deserialize<AppSettings>(json, s_jsonOptions);
             if (settings is null)
             {

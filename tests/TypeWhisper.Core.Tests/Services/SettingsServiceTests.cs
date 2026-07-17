@@ -176,6 +176,75 @@ public sealed class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Save_ConcurrentCalls_DoNotThrow()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default); // ensure the primary file exists before racing
+
+        const int taskCount = 24;
+        using var barrier = new Barrier(taskCount);
+        var tasks = new Task[taskCount];
+        for (var i = 0; i < taskCount; i++)
+        {
+            var idx = i;
+            tasks[i] = Task.Run(() =>
+            {
+                // ReSharper disable once AccessToDisposedClosure -- barrier is disposed only after await Task.WhenAll below, by which point every task has finished using it.
+                barrier.SignalAndWait();
+                sut.Save(AppSettings.Default with { CommandKeyphrase = $"phrase-{idx}" });
+            });
+        }
+
+        var exception = await Record.ExceptionAsync(() => Task.WhenAll(tasks));
+
+        Assert.Null(exception);
+
+        // Reload must see a fully-formed, non-torn snapshot (a corrupted temp/primary file would
+        // silently fall back to AppSettings.Default inside SettingsService.Load()).
+        var reloaded = new SettingsService(_filePath);
+        Assert.StartsWith("phrase-", reloaded.Current.CommandKeyphrase);
+    }
+
+    [Fact]
+    public async Task Update_ConcurrentDisjointMutations_AllSurvive()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default);
+
+        const int taskCount = 20;
+        using var barrier = new Barrier(taskCount);
+        var tasks = new Task[taskCount];
+        for (var i = 0; i < taskCount; i++)
+        {
+            var idx = i;
+            tasks[i] = Task.Run(() =>
+            {
+                // ReSharper disable once AccessToDisposedClosure -- barrier is disposed only after await Task.WhenAll below, by which point every task has finished using it.
+                barrier.SignalAndWait();
+                sut.Update(current => current with
+                {
+                    AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>(
+                        current.AppInsertionStrategies,
+                        StringComparer.OrdinalIgnoreCase)
+                    {
+                        [$"app{idx}"] = TextInsertionStrategy.DirectTyping
+                    }
+                });
+            });
+        }
+
+        await Task.WhenAll(tasks);
+
+        var reloaded = new SettingsService(_filePath);
+        for (var i = 0; i < taskCount; i++)
+        {
+            Assert.True(
+                reloaded.Current.AppInsertionStrategies.ContainsKey($"app{i}"),
+                $"app{i} was lost — Update did not read the latest Current under the write lock.");
+        }
+    }
+
+    [Fact]
     public void Load_LegacyHistoryRetentionDays_MigratesToMinutes()
     {
         File.WriteAllText(
