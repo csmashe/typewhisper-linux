@@ -106,4 +106,28 @@ public sealed class DictationOrchestratorPreviewFallbackTests
         Assert.True(usedFallback);
         Assert.Equal("and set the timer for noon", result);
     }
+
+    [Fact]
+    public void SelectFinalDictionaryCorrector_ReturnsNull_WhenUsedPreviewFallback()
+    {
+        var result = DictationOrchestrator.SelectFinalDictionaryCorrector(
+            usedPreviewFallback: true,
+            text => text
+        );
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void SelectFinalDictionaryCorrector_ReturnsCorrector_WhenNotUsedPreviewFallback()
+    {
+        Func<string, string> applyCorrections = text => text + "!";
+
+        var result = DictationOrchestrator.SelectFinalDictionaryCorrector(
+            usedPreviewFallback: false,
+            applyCorrections
+        );
+
+        Assert.Same(applyCorrections, result);
+    }
 }

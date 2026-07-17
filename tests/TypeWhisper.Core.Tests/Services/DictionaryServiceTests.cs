@@ -203,6 +203,65 @@ public sealed class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
+    public void PreviewCorrections_ReplacesText()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "kubernets",
+                Replacement = "Kubernetes"
+            }
+        );
+
+        var result = _sut.PreviewCorrections("I deployed to kubernets");
+        Assert.Equal("I deployed to Kubernetes", result);
+    }
+
+    [Fact]
+    public void PreviewCorrections_DoesNotUpdateUsageMetadata()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "kubernets",
+                Replacement = "Kubernetes"
+            }
+        );
+
+        _sut.PreviewCorrections("kubernets");
+        _sut.PreviewCorrections("kubernets");
+        _sut.PreviewCorrections("kubernets");
+
+        var entry = _sut.Entries[0];
+        Assert.Equal(0, entry.UsageCount);
+        Assert.Equal(0, entry.TimesApplied);
+        Assert.Null(entry.LastUsedAt);
+    }
+
+    [Fact]
+    public void PreviewCorrections_DoesNotPersistAcrossInstances()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "kubernets",
+                Replacement = "Kubernetes"
+            }
+        );
+
+        _sut.PreviewCorrections("kubernets");
+
+        var reloadedService = new DictionaryService(_filePath);
+        Assert.Equal(0, reloadedService.Entries[0].UsageCount);
+    }
+
+    [Fact]
     public void ApplyCorrections_UpdatesUsageMetadata()
     {
         _sut.AddEntry(

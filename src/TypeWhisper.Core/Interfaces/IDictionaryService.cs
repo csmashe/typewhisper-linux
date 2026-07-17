@@ -23,6 +23,13 @@ public interface IDictionaryService
     /// <summary>Applies the enabled corrections to <paramref name="text" /> and returns the rewritten text.</summary>
     string ApplyCorrections(string text);
 
+    /// <summary>
+    ///     Like <see cref="ApplyCorrections" /> but never records usage counts or persists
+    ///     to disk. For the live dictation preview, which can run many times per second on
+    ///     text that may still change or never be inserted (audit §2 M3).
+    /// </summary>
+    string PreviewCorrections(string text);
+
     /// <summary>Comma-separated enabled terms for seeding an STT/LLM prompt, or <c>null</c> when there are none.</summary>
     string? GetTermsForPrompt();
 

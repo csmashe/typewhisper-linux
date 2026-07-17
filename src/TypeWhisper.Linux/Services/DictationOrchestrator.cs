@@ -1490,6 +1490,22 @@ public sealed class DictationOrchestrator : IDisposable
     }
 
     /// <summary>
+    ///     Null when <paramref name="usedPreviewFallback" /> is true: that text came from
+    ///     the live preview, which already ran the side-effect-free PreviewCorrections on
+    ///     every tick — re-running ApplyCorrections here would re-persist usage stats and,
+    ///     since corrections aren't guaranteed idempotent, transform the text a second
+    ///     time (audit §2 M3).
+    ///     Exposed internally for unit testing.
+    /// </summary>
+    internal static Func<string, string>? SelectFinalDictionaryCorrector(
+        bool usedPreviewFallback,
+        Func<string, string> applyCorrections
+    )
+    {
+        return usedPreviewFallback ? null : applyCorrections;
+    }
+
+    /// <summary>
     ///     Resolves the language post-processing should treat the transcript as.
     ///     "en" only when a translate task was requested AND the engine supports
     ///     translation — engines with <c>SupportsTranslation=false</c> ignore the
@@ -1880,7 +1896,10 @@ public sealed class DictationOrchestrator : IDisposable
                     NormalizeSpokenPunctuation = true,
                     AppFormatter = AppFormatterService.Format,
                     TargetProcessName = context.AppProcess,
-                    DictionaryCorrector = _dictionary.ApplyCorrections,
+                    DictionaryCorrector = SelectFinalDictionaryCorrector(
+                        usedPreviewFallback,
+                        _dictionary.ApplyCorrections
+                    ),
                     VocabularyBooster = _settings.Current.VocabularyBoostingEnabled
                         ? _vocabularyBoosting.Apply
                         : null,
@@ -4013,7 +4032,7 @@ public sealed class DictationOrchestrator : IDisposable
             !_partialTranscriptState.TryApplyPolling(
                 sessionVersion,
                 text ?? "",
-                _dictionary.ApplyCorrections,
+                _dictionary.PreviewCorrections,
                 out var partialText
             )
         )

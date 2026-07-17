@@ -122,6 +122,20 @@ public sealed partial class DictionaryService : IDictionaryService
 
     public string ApplyCorrections(string text)
     {
+        return ApplyCorrectionsCore(text, recordUsage: true);
+    }
+
+    /// <summary>
+    ///     Side-effect-free variant of <see cref="ApplyCorrections" />: never records usage
+    ///     counts or writes the dictionary file (audit §2 M3).
+    /// </summary>
+    public string PreviewCorrections(string text)
+    {
+        return ApplyCorrectionsCore(text, recordUsage: false);
+    }
+
+    private string ApplyCorrectionsCore(string text, bool recordUsage)
+    {
         EnsureCacheLoaded();
         List<DictionaryEntry> corrections;
         lock (_gate)
@@ -189,7 +203,7 @@ public sealed partial class DictionaryService : IDictionaryService
                 : matchCount;
         }
 
-        if (usedCounts.Count > 0)
+        if (recordUsage && usedCounts.Count > 0)
         {
             IncrementUsageCounts(usedCounts);
         }

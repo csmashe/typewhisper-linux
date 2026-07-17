@@ -263,6 +263,11 @@ public class VocabularyBoostingServiceTests
             return text;
         }
 
+        public string PreviewCorrections(string text)
+        {
+            return text;
+        }
+
         public string? GetTermsForPrompt()
         {
             return null;
