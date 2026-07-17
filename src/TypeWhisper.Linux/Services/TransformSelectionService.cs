@@ -91,6 +91,17 @@ public sealed class TransformSelectionService
                || normalized.Equals("stop", StringComparison.OrdinalIgnoreCase);
     }
 
+    // Test seam: lets the terminal-aware copy-shortcut decision be tested without constructing the full service. See audit §3 M5.
+    internal static Task<string> CaptureSelectionForTransformAsync(
+        TextInsertionService textInsertion,
+        string? processName
+    )
+    {
+        return textInsertion.CaptureSelectedTextAsync(
+            TextInsertionService.IsTerminalApp(processName)
+        );
+    }
+
     public event EventHandler<DictationOverlayState>? OverlayStateChanged;
 
     private async Task StartAsync()
@@ -106,7 +117,7 @@ public sealed class TransformSelectionService
         var windowId = _activeWindow.GetActiveWindowId();
         var processName = _activeWindow.GetActiveWindowProcessName();
         var windowTitle = _activeWindow.GetActiveWindowTitle();
-        var selectedText = await _textInsertion.CaptureSelectedTextAsync();
+        var selectedText = await CaptureSelectionForTransformAsync(_textInsertion, processName);
         if (string.IsNullOrWhiteSpace(selectedText))
         {
             await ShowWarningAsync("Select text before using Transform Selection.");
