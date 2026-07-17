@@ -26,6 +26,14 @@ public sealed class DesktopWriterFormattingTests
     }
 
     [Fact]
+    public void Hyprland_MapsMetaToSuper()
+    {
+        var (mods, key) = HyprlandShortcutWriter.ToHyprlandBind("Meta+K");
+        Assert.Equal("SUPER", mods);
+        Assert.Equal("K", key);
+    }
+
+    [Fact]
     public void Sway_ConvertsCtrlShiftSpace_ToCanonicalForm()
     {
         Assert.Equal("Ctrl+Shift+space", SwayShortcutWriter.ToSwayBind("Ctrl+Shift+Space"));
@@ -42,5 +50,11 @@ public sealed class DesktopWriterFormattingTests
     public void Sway_MapsSuperToMod4()
     {
         Assert.Equal("Mod4+k", SwayShortcutWriter.ToSwayBind("Super+k"));
+    }
+
+    [Fact]
+    public void Sway_MapsMetaToMod4()
+    {
+        Assert.Equal("Mod4+k", SwayShortcutWriter.ToSwayBind("Meta+k"));
     }
 }

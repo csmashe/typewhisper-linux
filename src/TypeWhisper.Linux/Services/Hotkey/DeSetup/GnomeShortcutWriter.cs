@@ -461,8 +461,8 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             {
                 "ctrl" or "control" => "Control",
                 "shift" => "Shift",
-                "alt" or "meta" => "Alt",
-                "super" or "win" or "windows" or "cmd" => "Super",
+                "alt" => "Alt",
+                "super" or "win" or "windows" or "cmd" or "meta" => "Super",
                 _ => null
             };
             if (modifier is null)

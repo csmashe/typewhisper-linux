@@ -158,6 +158,12 @@ public sealed class GnomeShortcutWriterTests
     }
 
     [Fact]
+    public void FormatGnomeAccel_MapsMetaToSuper()
+    {
+        Assert.Equal("<Super>k", GnomeShortcutWriter.FormatGnomeAccel("Meta+K"));
+    }
+
+    [Fact]
     public void FormatGnomeAccel_EmptyInput_ReturnsEmpty()
     {
         Assert.Equal(string.Empty, GnomeShortcutWriter.FormatGnomeAccel(""));

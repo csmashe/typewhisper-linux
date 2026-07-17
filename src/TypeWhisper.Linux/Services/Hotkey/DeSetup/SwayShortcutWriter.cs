@@ -200,8 +200,8 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             {
                 "ctrl" or "control" => "Ctrl",
                 "shift" => "Shift",
-                "alt" or "meta" => "Alt",
-                "super" or "win" or "windows" or "cmd" => "Mod4",
+                "alt" => "Alt",
+                "super" or "win" or "windows" or "cmd" or "meta" => "Mod4",
                 _ => parts[i]
             };
             if (sb.Length > 0)

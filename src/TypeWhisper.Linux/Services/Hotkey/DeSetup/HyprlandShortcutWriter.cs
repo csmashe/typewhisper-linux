@@ -206,8 +206,8 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
                 {
                     "ctrl" or "control" => "CTRL",
                     "shift" => "SHIFT",
-                    "alt" or "meta" => "ALT",
-                    "super" or "win" or "windows" or "cmd" => "SUPER",
+                    "alt" => "ALT",
+                    "super" or "win" or "windows" or "cmd" or "meta" => "SUPER",
                     _ => parts[i].ToUpperInvariant()
                 }
             );
