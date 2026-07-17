@@ -1342,7 +1342,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
     }
 
-    private void HandleStateChanged(Exception? exception, AtSpiSignal signal, object? readerState, object? handlerState)
+    internal void HandleStateChanged(Exception? exception, AtSpiSignal signal, object? readerState, object? handlerState)
     {
         // Only successful reads carry a signal. On error/disconnect the observer is invoked
         // with a non-null exception and a default value; schedule a reconnect rather than
@@ -1353,10 +1353,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             return;
         }
 
-        if (
-            !string.Equals(signal.Detail, FocusedStateName, StringComparison.Ordinal)
-            || signal.Detail1 != StateGained
-        )
+        if (!string.Equals(signal.Detail, FocusedStateName, StringComparison.Ordinal))
         {
             return;
         }
@@ -1364,6 +1361,21 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         var element = new AtSpiElementRef(signal.Sender, signal.Path);
         if (!element.IsValid)
         {
+            return;
+        }
+
+        if (signal.Detail1 != StateGained)
+        {
+            // Focus loss can arrive after a newer gain, so only clear the element that actually
+            // lost focus; a stale loss must not clobber the newer focus anchor.
+            lock (_focusLock)
+            {
+                if (_currentFocused == element)
+                {
+                    _currentFocused = null;
+                }
+            }
+
             return;
         }
 
@@ -1733,7 +1745,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         _errorLog.AddEntry(message, ErrorCategory.Detection);
     }
 
-    private readonly record struct AtSpiSignal(string Sender, string Path, string Detail, int Detail1);
+    internal readonly record struct AtSpiSignal(string Sender, string Path, string Detail, int Detail1);
 
     // Handle returned by AcquireTextChangedEvents. Idempotent: only the first Dispose releases the
     // underlying lease, so a caller (or a double-dispose from finalization patterns) can't drive
