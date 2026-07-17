@@ -66,6 +66,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly HotkeyService _hotkey;
     private readonly IdeFileReferenceService _ideFileReferences;
     private readonly DictationInFlightSessionTracker _inFlightTracker = new();
+    private readonly DictationInsertionOrderGate _insertionOrder = new();
     private readonly IMediaPauseService _mediaPause;
     private readonly MemoryService _memory;
     private readonly ModelManagerService _models;
@@ -1048,6 +1049,7 @@ public sealed class DictationOrchestrator : IDisposable
         var wasRecording = false;
         var gateReleased = false;
         CancellationTokenSource? snapshotCts = null;
+        int? insertionOrderSessionId = null;
         try
         {
             if (!_audio.IsRecording)
@@ -1139,6 +1141,13 @@ public sealed class DictationOrchestrator : IDisposable
 
             // Release the gate now that capture is torn down and context is
             // snapshotted. A new StartAsync can record while transcription runs.
+            // Reserve this session's insertion-order slot before releasing the
+            // gate so reservations happen in strict session-start order — a new
+            // StartAsync's own future stop cannot reach this point until this one
+            // has passed it (audit §2 H3).
+            _insertionOrder.Reserve(recordingContext.SessionId);
+            insertionOrderSessionId = recordingContext.SessionId;
+
             _toggleGate.Release();
             gateReleased = true;
 
@@ -1349,6 +1358,17 @@ public sealed class DictationOrchestrator : IDisposable
         }
         finally
         {
+            // Safety net: every early-discard branch above and every early return
+            // in TranscribeAndInsertAsync that never reaches the insertion call
+            // must still release this session's insertion-order slot, or a
+            // successor blocked in WaitForTurnAsync would wait forever. Release is
+            // idempotent, so this is a no-op on the common path, which already
+            // released around the insertion call.
+            if (insertionOrderSessionId is { } reservedSessionId)
+            {
+                _insertionOrder.Release(reservedSessionId);
+            }
+
             // Restore ducking/media only when there was an active recording and
             // the normal cleanup path didn't already run (earlyCleanupDone).
             if (wasRecording && !earlyCleanupDone)
@@ -1730,6 +1750,13 @@ public sealed class DictationOrchestrator : IDisposable
                 )
             )
             {
+                // Spoken commands insert through their own path (one-shot or
+                // streamed-while-typing), not the InsertTextAsync/
+                // ExecuteActionPluginAsync boundary this gate orders — their
+                // delivery is out of scope for audit §2 H3. Release now rather
+                // than hold a waiting successor for the whole LLM+typing round
+                // trip.
+                _insertionOrder.Release(context.SessionId);
                 var outcome = await RunSpokenCommandAsync(spokenCommand, context, cancelToken);
                 // A spoken command is still a dictation the user issued: record it in
                 // history (with the LLM request/response captured on context.Capture)
@@ -1921,18 +1948,6 @@ public sealed class DictationOrchestrator : IDisposable
                 await YieldFocusForInsertionAsync().ConfigureAwait(false);
             }
 
-            // Final lock check before synthesizing any keystroke. A session-loss discard cancels
-            // recording, but a normal stop nulls _activeDictationCts and releases the gate before
-            // transcription finishes, so a lock landing during transcription cannot reach that
-            // token — this authoritative check keeps synthesized paste/type off the lock screen.
-            if (!_sessionActivityMonitor.IsInputAllowed)
-            {
-                Trace.WriteLine("[Dictation] Insertion suppressed: session locked or inactive.");
-                ReportStatus(context, "Canceled");
-                ShowFeedback(context, "Canceled", false, true);
-                return;
-            }
-
             // Pad with a trailing space so back-to-back dictations don't run
             // together. Only the insertion and TextInsertedEvent use this;
             // history, recent transcriptions, and completion events keep the
@@ -1942,6 +1957,27 @@ public sealed class DictationOrchestrator : IDisposable
             InsertionResult insertion;
             try
             {
+                // Wait for every earlier-started session to finish inserting first
+                // (audit §2 H3) — but only around the delivery call itself, not the
+                // transcription/post-processing above, which stays concurrent.
+                await _insertionOrder.WaitForTurnAsync(context.SessionId, cancelToken)
+                    .ConfigureAwait(false);
+
+                // Final lock check before synthesizing any keystroke, re-evaluated
+                // AFTER the insertion-order wait above. A normal stop nulls
+                // _activeDictationCts and releases the gate before transcription
+                // finishes, and the wait can span an arbitrary predecessor (up to
+                // the fail-open backstop), so a lock landing during transcription
+                // OR while queued cannot reach that token — this authoritative
+                // check keeps synthesized paste/type off the lock screen.
+                if (!_sessionActivityMonitor.IsInputAllowed)
+                {
+                    Trace.WriteLine("[Dictation] Insertion suppressed: session locked or inactive.");
+                    ReportStatus(context, "Canceled");
+                    ShowFeedback(context, "Canceled", false, true);
+                    return;
+                }
+
                 insertion =
                     commandResult.CancelInsertion
                         ? InsertionResult.NoText
@@ -1988,6 +2024,10 @@ public sealed class DictationOrchestrator : IDisposable
                 ReportStatus(context, $"Insertion failed: {ex.Message}");
                 ShowFeedback(context, "Insertion failed.", true);
                 return;
+            }
+            finally
+            {
+                _insertionOrder.Release(context.SessionId);
             }
 
             var completionMessage = insertion switch
@@ -2160,7 +2200,16 @@ public sealed class DictationOrchestrator : IDisposable
 
             var pump = new LlmStreamPump(accumulated =>
             {
-                SetOverlayState(state => state with { LlmResponseText = accumulated });
+                // Match ReportStatus(context,...)/ShowFeedback(context,...): a
+                // newer session that has taken over the overlay must not have its
+                // LlmResponseText clobbered by an older session's still-running
+                // prompt action (audit §2 H3). The event still publishes
+                // unconditionally for non-overlay observers.
+                if (IsContextStillOwningOverlay(context))
+                {
+                    SetOverlayState(state => state with { LlmResponseText = accumulated });
+                }
+
                 _models.PluginManager.EventBus.Publish(
                     new LlmResponseTokenEvent
                     {
