@@ -1,3 +1,4 @@
+using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Tests;
@@ -146,5 +147,49 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         // backend yet → status panel shows the placeholder.
         Assert.Equal("(not initialized)", sut.ActiveBackendId);
         Assert.Equal("(not initialized)", sut.ActiveBackendDisplayName);
+    }
+
+    [Fact]
+    public async Task SetupAutomatically_PushToTalkWithPressOnlyWriter_ShowsUnsupportedAndDoesNotWrite()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Load();
+        settings.Save(settings.Current with { Mode = RecordingMode.PushToTalk });
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter { SupportsPushToTalk = false };
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
+
+        Assert.Contains(
+            "Fake Desktop can't install a native shortcut for Push to talk mode",
+            sut.IntegrationPreview
+        );
+        Assert.DoesNotContain("preview:", sut.IntegrationPreview);
+
+        await sut.SetupAutomaticallyCommand.ExecuteAsync(null);
+
+        Assert.Equal(0, writer.WriteCallCount);
+        Assert.Contains(
+            "Fake Desktop can't install a native shortcut for Push to talk mode",
+            sut.IntegrationStatusMessage
+        );
+    }
+
+    [Fact]
+    public async Task SetupAutomatically_ToggleWithPressOnlyWriter_PreviewsAndWrites()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Load();
+        settings.Save(settings.Current with { Mode = RecordingMode.Toggle });
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter { SupportsPushToTalk = false };
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
+
+        Assert.StartsWith("preview:", sut.IntegrationPreview);
+        Assert.DoesNotContain("can't install a native shortcut", sut.IntegrationPreview);
+
+        await sut.SetupAutomaticallyCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, writer.WriteCallCount);
+        Assert.NotNull(writer.LastWrittenSpec);
     }
 }

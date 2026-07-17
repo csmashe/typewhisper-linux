@@ -686,6 +686,7 @@
   "Shortcuts.ActivationModeHint": "Toggle starts and stops on repeated presses. Push to talk records while held. Hybrid starts immediately, keeps recording after a short press, and stops on release after a long hold.",
   "Shortcuts.AlreadyRunningHint": "When TypeWhisper is already running, invoking this command toggles dictation in the existing instance — your shortcut won't launch a second copy.",
   "Shortcuts.AutoSetupHint": "Write the dictation shortcut directly to your desktop's settings. The lines below show exactly what will be added — your existing shortcuts are preserved.",
+  "Shortcuts.AutoSetupModeUnsupported": "{0} can't install a native shortcut for {1} mode. Switch to Toggle mode, or use TypeWhisper's built-in hotkey (Settings → Shortcuts) instead.",
   "Shortcuts.Backend": "Backend",
   "Shortcuts.BackendSwitchFailed": "Backend switch failed: {0}",
   "Shortcuts.BindCustom": "Bind a custom shortcut",

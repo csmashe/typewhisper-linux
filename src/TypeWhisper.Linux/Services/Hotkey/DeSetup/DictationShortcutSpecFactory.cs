@@ -1,9 +1,10 @@
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 /// <summary>
-///     Builds the <see cref="DeShortcutSpec" /> for TypeWhisper's dictation toggle. Shared by the
+///     Builds the <see cref="DeShortcutSpec" /> for TypeWhisper's selected recording mode. Shared by the
 ///     Shortcuts panel and onboarding checklist so both register the same id/trigger/command —
 ///     a divergence would let one surface install a shortcut the other can't detect.
 /// </summary>
@@ -14,19 +15,29 @@ public static class DictationShortcutSpecFactory
     private const string DefaultTrigger = "Ctrl+Shift+Space";
 
     /// <summary>
-    ///     Builds the spec for <paramref name="writer" />. PTT desktops (Hyprland/Sway) get
-    ///     press/release/cancel triplet; toggle-only desktops (GNOME/KDE) get a single command.
+    ///     Builds the spec for the selected recording mode and <paramref name="writer" />. Toggle uses
+    ///     a press-only command on every desktop, PushToTalk requires press/release support, and Hybrid
+    ///     is unsupported because native desktop bindings cannot reproduce its tap/hold threshold.
     /// </summary>
-    public static DeShortcutSpec Build(ISettingsService settings, IDeShortcutWriter writer)
+    public static DeShortcutSpec? Build(ISettingsService settings, IDeShortcutWriter writer)
     {
         var trigger = string.IsNullOrWhiteSpace(settings.Current.ToggleHotkey)
             ? DefaultTrigger
             : settings.Current.ToggleHotkey;
         var gui = ResolveGuiCommand();
 
-        if (writer.SupportsPushToTalk)
+        return settings.Current.Mode switch
         {
-            return new DeShortcutSpec(
+            RecordingMode.Toggle => new DeShortcutSpec(
+                DictationShortcutId,
+                DictationDisplayName,
+                trigger,
+                gui,
+                null,
+                null,
+                null
+            ),
+            RecordingMode.PushToTalk when writer.SupportsPushToTalk => new DeShortcutSpec(
                 DictationShortcutId,
                 DictationDisplayName,
                 trigger,
@@ -34,18 +45,9 @@ public static class DictationShortcutSpecFactory
                 $"{gui} record stop",
                 SwapKeyForCancel(trigger),
                 $"{gui} record cancel"
-            );
-        }
-
-        return new DeShortcutSpec(
-            DictationShortcutId,
-            DictationDisplayName,
-            trigger,
-            gui,
-            null,
-            null,
-            null
-        );
+            ),
+            _ => null
+        };
     }
 
     /// <summary>

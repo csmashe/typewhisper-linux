@@ -366,15 +366,37 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         get
         {
             var w = ActiveWriter;
-            return w is null ? string.Empty : w.PreviewLines(BuildSpec(w));
+            if (w is null)
+            {
+                return string.Empty;
+            }
+
+            var spec = BuildSpec(w);
+            return spec is null ? GetUnsupportedModeMessage(w) : w.PreviewLines(spec);
         }
     }
 
     // Uses the shared factory so this panel and the onboarding checklist register
     // identical shortcuts — otherwise one could install a bind the other wouldn't recognize.
-    private DeShortcutSpec BuildSpec(IDeShortcutWriter writer)
+    private DeShortcutSpec? BuildSpec(IDeShortcutWriter writer)
     {
         return DictationShortcutSpecFactory.Build(_settings, writer);
+    }
+
+    private string GetUnsupportedModeMessage(IDeShortcutWriter writer)
+    {
+        var modeDisplayName = _settings.Current.Mode switch
+        {
+            RecordingMode.Toggle => Loc.Instance["Common.ModeToggle"],
+            RecordingMode.PushToTalk => Loc.Instance["Common.ModePushToTalk"],
+            RecordingMode.Hybrid => Loc.Instance["Common.ModeHybrid"],
+            _ => ""
+        };
+        return Loc.Instance.GetString(
+            "Shortcuts.AutoSetupModeUnsupported",
+            writer.DisplayName,
+            modeDisplayName
+        );
     }
 
     // VMs don't have direct clipboard access in Avalonia — the view
@@ -476,12 +498,19 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             return;
         }
 
+        var spec = BuildSpec(writer);
+        if (spec is null)
+        {
+            IntegrationStatusMessage = GetUnsupportedModeMessage(writer);
+            return;
+        }
+
         IntegrationStatusMessage =
             Loc.Instance.GetString("Shortcuts.InstallingShortcut", writer.DisplayName);
         try
         {
             var result = await writer
-                .WriteAsync(BuildSpec(writer), CancellationToken.None)
+                .WriteAsync(spec, CancellationToken.None)
                 .ConfigureAwait(true);
             IntegrationStatusMessage = FormatResultMessage(result);
         }
@@ -640,6 +669,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             _ => ""
         };
         OnPropertyChanged(nameof(ShowCapabilityMismatch));
+        OnPropertyChanged(nameof(IntegrationPreview));
     }
 
     partial void OnWaylandEvdevHotkeysEnabledChanged(bool value)
