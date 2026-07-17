@@ -41,6 +41,9 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     /// </summary>
     internal Func<(bool Success, string Message)> CudaRuntimePreflight { get; set; }
 
+    /// <summary>Test seam: true while the idle auto-unload timer is armed and pending.</summary>
+    internal bool IsAutoUnloadArmed => _autoUnloadTimer is { Enabled: true };
+
     public string? ActiveModelId
     {
         get => _activeModelId;
@@ -205,7 +208,14 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
         finally
         {
-            _modelLock.Release();
+            try
+            {
+                ScheduleAutoUnload();
+            }
+            finally
+            {
+                _modelLock.Release();
+            }
         }
     }
 
@@ -218,7 +228,14 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
         finally
         {
-            _modelLock.Release();
+            try
+            {
+                ScheduleAutoUnload();
+            }
+            finally
+            {
+                _modelLock.Release();
+            }
         }
     }
 
@@ -245,17 +262,24 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public void ScheduleAutoUnload()
+    private void ScheduleAutoUnload()
     {
         CancelAutoUnload();
 
         var seconds = _settings.Current.ModelAutoUnloadSeconds;
-        if (seconds <= 0 || ActiveModelId is null)
+        // Never arm after disposal: a lease outstanding when Dispose() runs re-arms here on
+        // its DisposeAsync, which would otherwise leave a zombie timer that fires plugin
+        // unloading during or after app teardown.
+        if (_disposed || seconds <= 0 || ActiveModelId is null)
         {
             return;
         }
 
-        _autoUnloadTimer = new Timer(seconds * 1000.0) { AutoReset = false };
+        // System.Timers.Timer throws for intervals above int.MaxValue ms, and
+        // ModelAutoUnloadSeconds is a raw setting a corrupt or hand-edited config could push
+        // past that. Every load/lease path runs through here, so a throw must never be possible.
+        var intervalMs = Math.Min(seconds * 1000.0, int.MaxValue);
+        _autoUnloadTimer = new Timer(intervalMs) { AutoReset = false };
         _autoUnloadTimer.Elapsed += (_, _) =>
         {
             Debug.WriteLine($"Auto-unloading model after {seconds}s idle");
@@ -374,7 +398,14 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
         finally
         {
-            _modelLock.Release();
+            try
+            {
+                ScheduleAutoUnload();
+            }
+            finally
+            {
+                _modelLock.Release();
+            }
         }
     }
 
@@ -385,6 +416,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     /// </summary>
     public async Task<TranscriptionLease> AcquireTranscriptionAsync(
         string? modelId = null,
+        bool keepModelWarm = false,
         CancellationToken cancellationToken = default
     )
     {
@@ -400,11 +432,19 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 ActiveTranscriptionPlugin
                 ?? throw new InvalidOperationException("No transcription engine loaded.");
 
-            return new TranscriptionLease(_modelLock, plugin);
+            return new TranscriptionLease(_modelLock, plugin, this, keepModelWarm);
         }
         catch
         {
-            _modelLock.Release();
+            try
+            {
+                ScheduleAutoUnload();
+            }
+            finally
+            {
+                _modelLock.Release();
+            }
+
             throw;
         }
     }
@@ -417,6 +457,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     /// </summary>
     public async Task<TranscriptionLease?> TryAcquireTranscriptionAsync(
         string? modelId = null,
+        bool keepModelWarm = false,
         CancellationToken cancellationToken = default
     )
     {
@@ -429,23 +470,39 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         {
             var targetModelId = modelId ?? _settings.Current.SelectedModelId;
             if (
-                string.IsNullOrWhiteSpace(targetModelId)
-                || ActiveModelId != targetModelId
-                || ActiveTranscriptionPlugin is not { } plugin
+                !string.IsNullOrWhiteSpace(targetModelId)
+                && ActiveModelId == targetModelId
+                && ActiveTranscriptionPlugin is { } plugin
             )
             {
-                _modelLock.Release();
-                return null;
+                CancelAutoUnload();
+                return new TranscriptionLease(_modelLock, plugin, this, keepModelWarm);
             }
-
-            CancelAutoUnload();
-            return new TranscriptionLease(_modelLock, plugin);
         }
         catch
         {
-            _modelLock.Release();
+            try
+            {
+                ScheduleAutoUnload();
+            }
+            finally
+            {
+                _modelLock.Release();
+            }
+
             throw;
         }
+
+        try
+        {
+            ScheduleAutoUnload();
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -876,12 +933,21 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     public sealed class TranscriptionLease : IAsyncDisposable
     {
         private readonly SemaphoreSlim _modelLock;
+        private readonly ModelManagerService _owner;
+        private readonly bool _keepModelWarm;
         private int _released;
 
-        internal TranscriptionLease(SemaphoreSlim modelLock, ITranscriptionEnginePlugin plugin)
+        internal TranscriptionLease(
+            SemaphoreSlim modelLock,
+            ITranscriptionEnginePlugin plugin,
+            ModelManagerService owner,
+            bool keepModelWarm
+        )
         {
             _modelLock = modelLock;
             Plugin = plugin;
+            _owner = owner;
+            _keepModelWarm = keepModelWarm;
         }
 
         /// <summary>The plugin pinned for the lifetime of this lease.</summary>
@@ -889,7 +955,25 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
         public ValueTask DisposeAsync()
         {
-            if (Interlocked.Exchange(ref _released, 1) == 0)
+            if (Interlocked.Exchange(ref _released, 1) != 0)
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            // Re-arm (unless the caller asked to keep the model warm) BEFORE releasing
+            // _modelLock: the lock is still held here, so this is the last point at which
+            // touching _autoUnloadTimer is guaranteed serialized against every other
+            // load/unload/acquire path. Never let a caller thread touch the timer after
+            // the lock is released. Release in finally so a scheduling failure can never
+            // strand the lock and deadlock every subsequent load/unload/acquire.
+            try
+            {
+                if (!_keepModelWarm)
+                {
+                    _owner.ScheduleAutoUnload();
+                }
+            }
+            finally
             {
                 _modelLock.Release();
             }

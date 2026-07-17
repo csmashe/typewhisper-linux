@@ -577,7 +577,7 @@ public sealed class HttpApiService : IDisposable
         ModelManagerService.TranscriptionLease lease;
         try
         {
-            lease = await _models.AcquireTranscriptionAsync(modelId, ct);
+            lease = await _models.AcquireTranscriptionAsync(modelId, cancellationToken: ct);
         }
         catch (InvalidOperationException)
         {

@@ -91,7 +91,10 @@ public sealed class FileTranscriptionProcessor(
         // watch-folder transcription from loading a different model.
         PluginTranscriptionResult pluginResult;
         await using (
-            var lease = await modelManager.AcquireTranscriptionAsync(modelId, cancellationToken)
+            var lease = await modelManager.AcquireTranscriptionAsync(
+                modelId,
+                cancellationToken: cancellationToken
+            )
         )
         {
             pluginResult = await lease.Plugin.TranscribeAsync(
@@ -130,8 +133,6 @@ public sealed class FileTranscriptionProcessor(
             },
             cancellationToken
         );
-
-        modelManager.ScheduleAutoUnload();
 
         return new FileTranscriptionProcessResult(result, pipelineResult.Text);
     }

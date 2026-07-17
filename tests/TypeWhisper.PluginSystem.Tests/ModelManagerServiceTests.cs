@@ -99,6 +99,92 @@ public class ModelManagerServiceTests
     }
 
     [Fact]
+    public async Task AcquireTranscriptionAsync_WhileLeaseHeld_DoesNotArmAutoUnload()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out _,
+            modelAutoUnloadSeconds: 60
+        );
+
+        await using var lease = await sut.AcquireTranscriptionAsync(fullModelId);
+
+        Assert.False(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task AcquireTranscriptionAsync_LeaseDisposed_ArmsAutoUnload()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out _,
+            modelAutoUnloadSeconds: 60
+        );
+
+        var lease = await sut.AcquireTranscriptionAsync(fullModelId);
+        await lease.DisposeAsync();
+
+        Assert.True(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task AcquireTranscriptionAsync_CallerThrows_PropagatesAndArmsAutoUnload()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out _,
+            modelAutoUnloadSeconds: 60
+        );
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await using var lease = await sut.AcquireTranscriptionAsync(fullModelId);
+            throw new InvalidOperationException("caller failed");
+        });
+
+        Assert.Equal("caller failed", exception.Message);
+        Assert.True(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task AcquireTranscriptionAsync_CallerCanceled_PropagatesAndArmsAutoUnload()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out _,
+            modelAutoUnloadSeconds: 60
+        );
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            // ReSharper disable once MethodSupportsCancellation -- passing the already-canceled
+            // token here would make the acquire throw before arming auto-unload, defeating the
+            // point of this test: the cancellation must come from the caller's own work below.
+            await using var lease = await sut.AcquireTranscriptionAsync(fullModelId);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellation.Token);
+        });
+
+        Assert.True(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task AcquireTranscriptionAsync_KeepModelWarm_DoesNotArmAutoUnloadAfterDisposal()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out _,
+            modelAutoUnloadSeconds: 60
+        );
+
+        var lease = await sut.AcquireTranscriptionAsync(fullModelId, keepModelWarm: true);
+        await lease.DisposeAsync();
+
+        Assert.False(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
     public async Task AcquireTranscriptionAsync_BlocksSecondAcquire_UntilLeaseDisposed()
     {
         var sut = CreateServiceWithLoadableModel(out var fullModelId, out _);
@@ -252,6 +338,258 @@ public class ModelManagerServiceTests
 
         Assert.NotNull(attempt);
         Assert.Same(plugin, attempt.Plugin);
+    }
+
+    [Fact]
+    public async Task TryAcquireTranscriptionAsync_LeaseDisposed_ArmsAutoUnload()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out _,
+            modelAutoUnloadSeconds: 60
+        );
+        await sut.LoadModelAsync(fullModelId);
+
+        var lease = await sut.TryAcquireTranscriptionAsync(fullModelId);
+        Assert.NotNull(lease);
+        Assert.False(sut.IsAutoUnloadArmed);
+
+        await lease.DisposeAsync();
+
+        Assert.True(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_LoadSucceeds_ArmsAutoUnload()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out _,
+            modelAutoUnloadSeconds: 60
+        );
+
+        await sut.LoadModelAsync(fullModelId);
+
+        Assert.True(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task DownloadAndLoadModelAsync_LoadSucceeds_ArmsAutoUnload()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out _,
+            modelAutoUnloadSeconds: 60
+        );
+
+        await sut.DownloadAndLoadModelAsync(fullModelId);
+
+        Assert.True(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task EnsureModelLoadedAsync_ColdLoadAndActiveFastPath_ArmAutoUnload()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out _,
+            modelAutoUnloadSeconds: 60
+        );
+
+        Assert.True(await sut.EnsureModelLoadedAsync(fullModelId));
+        Assert.True(sut.IsAutoUnloadArmed);
+
+        Assert.True(await sut.EnsureModelLoadedAsync(fullModelId));
+        Assert.True(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_FailedModelSwitch_RearmsAutoUnloadForSurvivingModel()
+    {
+        using var sut = CreateServiceForModelSwitch(
+            out var oldModelId,
+            out var newModelId,
+            out var newPlugin
+        );
+        await sut.LoadModelAsync(oldModelId);
+        newPlugin.LoadGate = new TaskCompletionSource();
+
+        var switchModel = sut.LoadModelAsync(newModelId);
+        await newPlugin.LoadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        newPlugin.LoadGate.SetException(new InvalidOperationException("switch failed"));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => switchModel);
+
+        Assert.Equal("switch failed", exception.Message);
+        Assert.Equal(oldModelId, sut.ActiveModelId);
+        Assert.True(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task AcquireTranscriptionAsync_FailedModelSwitch_RearmsAutoUnloadAndPropagates()
+    {
+        using var sut = CreateServiceForModelSwitch(
+            out var oldModelId,
+            out var newModelId,
+            out var newPlugin
+        );
+        await sut.LoadModelAsync(oldModelId);
+        newPlugin.LoadGate = new TaskCompletionSource();
+
+        var acquire = sut.AcquireTranscriptionAsync(newModelId);
+        await newPlugin.LoadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        newPlugin.LoadGate.SetException(new InvalidOperationException("switch failed"));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => acquire);
+
+        Assert.Equal("switch failed", exception.Message);
+        Assert.Equal(oldModelId, sut.ActiveModelId);
+        Assert.True(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task EnsureModelLoadedAsync_CancelledModelSwitch_RearmsAutoUnloadForSurvivingModel()
+    {
+        using var sut = CreateServiceForModelSwitch(
+            out var oldModelId,
+            out var newModelId,
+            out var newPlugin
+        );
+        using var cancellation = new CancellationTokenSource();
+        // ReSharper disable once MethodSupportsCancellation -- setup load must complete; the
+        // token is reserved for canceling the model switch below, not this precondition.
+        await sut.LoadModelAsync(oldModelId);
+        newPlugin.LoadGate = new TaskCompletionSource();
+
+        var switchModel = sut.EnsureModelLoadedAsync(newModelId, cancellation.Token);
+        // ReSharper disable once MethodSupportsCancellation -- deliberately a time-bounded wait
+        // for load-start; coupling it to the switch's token would mask the cancellation we test.
+        await newPlugin.LoadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => switchModel);
+        Assert.Equal(oldModelId, sut.ActiveModelId);
+        Assert.True(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task DownloadAndLoadModelAsync_ColdLoadFails_DoesNotArmAutoUnload()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out var plugin,
+            modelAutoUnloadSeconds: 60
+        );
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.LoadGate = new TaskCompletionSource();
+
+        var load = sut.DownloadAndLoadModelAsync(fullModelId);
+        await fake.LoadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        fake.LoadGate.SetException(new InvalidOperationException("cold load failed"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => load);
+        Assert.Null(sut.ActiveModelId);
+        Assert.False(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task TryAcquireTranscriptionAsync_NoLeaseExit_RearmsAutoUnloadForActiveModel()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out _,
+            modelAutoUnloadSeconds: 60
+        );
+        await sut.LoadModelAsync(fullModelId);
+        var lease = await sut.AcquireTranscriptionAsync(fullModelId, keepModelWarm: true);
+        await lease.DisposeAsync();
+        Assert.False(sut.IsAutoUnloadArmed);
+
+        var otherModelId = ModelManagerService.GetPluginModelId(
+            "com.typewhisper.sherpa-onnx",
+            "whisper"
+        );
+        var attempt = await sut.TryAcquireTranscriptionAsync(otherModelId);
+
+        Assert.Null(attempt);
+        Assert.Equal(fullModelId, sut.ActiveModelId);
+        Assert.True(sut.IsAutoUnloadArmed);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task AutoUnloadDisabled_AllLoadAndLeasePaths_LeaveTimerDisarmed(
+        int modelAutoUnloadSeconds
+    )
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out _,
+            modelAutoUnloadSeconds
+        );
+
+        var lease = await sut.AcquireTranscriptionAsync(fullModelId);
+        Assert.False(sut.IsAutoUnloadArmed);
+        await lease.DisposeAsync();
+        Assert.False(sut.IsAutoUnloadArmed);
+
+        var tryLease = await sut.TryAcquireTranscriptionAsync(fullModelId);
+        Assert.NotNull(tryLease);
+        Assert.False(sut.IsAutoUnloadArmed);
+        await tryLease.DisposeAsync();
+        Assert.False(sut.IsAutoUnloadArmed);
+
+        await sut.LoadModelAsync(fullModelId);
+        Assert.False(sut.IsAutoUnloadArmed);
+
+        await sut.DownloadAndLoadModelAsync(fullModelId);
+        Assert.False(sut.IsAutoUnloadArmed);
+
+        Assert.True(await sut.EnsureModelLoadedAsync(fullModelId));
+        Assert.False(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task AcquireTranscriptionAsync_LeaseDisposed_AutoUnloadTimerFires()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out var plugin,
+            modelAutoUnloadSeconds: 1
+        );
+        var fake = (FakeTranscriptionPlugin)plugin;
+
+        var lease = await sut.AcquireTranscriptionAsync(fullModelId);
+        await lease.DisposeAsync();
+
+        Assert.True(sut.IsAutoUnloadArmed);
+        await fake.UnloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task AcquireTranscriptionAsync_WhileIdleAutoUnloadInFlight_WaitsAndReloadsModel()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out var plugin,
+            modelAutoUnloadSeconds: 1
+        );
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.UnloadGate = new TaskCompletionSource();
+
+        var initialLease = await sut.AcquireTranscriptionAsync(fullModelId);
+        await initialLease.DisposeAsync();
+        await fake.UnloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var acquire = sut.AcquireTranscriptionAsync(fullModelId);
+        Assert.False(acquire.IsCompleted);
+
+        fake.UnloadGate.SetResult();
+
+        await using var lease = await acquire.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Same(plugin, lease.Plugin);
+        Assert.Equal(fullModelId, sut.ActiveModelId);
     }
 
     [Fact]
@@ -731,12 +1069,19 @@ public class ModelManagerServiceTests
 
     private ModelManagerService CreateServiceWithLoadableModel(
         out string fullModelId,
-        out ITranscriptionEnginePlugin plugin
+        out ITranscriptionEnginePlugin plugin,
+        int modelAutoUnloadSeconds = 0
     )
     {
         const string pluginId = "com.typewhisper.sherpa-onnx";
         fullModelId = ModelManagerService.GetPluginModelId(pluginId, "parakeet");
-        _settings.Setup(s => s.Current).Returns(new AppSettings { SelectedModelId = fullModelId });
+        _settings
+            .Setup(s => s.Current)
+            .Returns(new AppSettings
+            {
+                SelectedModelId = fullModelId,
+                ModelAutoUnloadSeconds = modelAutoUnloadSeconds
+            });
 
         var fake = new FakeTranscriptionPlugin(
             pluginId,
@@ -748,6 +1093,36 @@ public class ModelManagerServiceTests
         var service = new ModelManagerService(CreatePluginManager(fake), _settings.Object);
         // Default to no CUDA so tests don't depend on the host having CUDA installed.
         service.CudaRuntimePreflight = () => (false, "CUDA not available in test");
+        return service;
+    }
+
+    private ModelManagerService CreateServiceForModelSwitch(
+        out string oldModelId,
+        out string newModelId,
+        out FakeTranscriptionPlugin newPlugin
+    )
+    {
+        const string oldPluginId = "com.typewhisper.old";
+        const string newPluginId = "com.typewhisper.new";
+        oldModelId = ModelManagerService.GetPluginModelId(oldPluginId, "parakeet");
+        newModelId = ModelManagerService.GetPluginModelId(newPluginId, "whisper");
+        _settings
+            .Setup(s => s.Current)
+            .Returns(new AppSettings
+            {
+                SelectedModelId = oldModelId,
+                ModelAutoUnloadSeconds = 60
+            });
+
+        var oldPlugin = new FakeTranscriptionPlugin(oldPluginId, true, null, true);
+        newPlugin = new FakeTranscriptionPlugin(newPluginId, true, null, true);
+        var service = new ModelManagerService(
+            CreatePluginManager(oldPlugin, newPlugin),
+            _settings.Object
+        )
+        {
+            CudaRuntimePreflight = () => (false, "CUDA not available in test")
+        };
         return service;
     }
 

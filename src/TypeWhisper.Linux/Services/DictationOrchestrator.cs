@@ -1459,7 +1459,10 @@ public sealed class DictationOrchestrator : IDisposable
         ModelManagerService.TranscriptionLease lease;
         try
         {
-            lease = await _models.AcquireTranscriptionAsync(effectiveModelId, cancelToken);
+            lease = await _models.AcquireTranscriptionAsync(
+                effectiveModelId,
+                cancellationToken: cancelToken
+            );
         }
         catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
         {
@@ -2083,10 +2086,6 @@ public sealed class DictationOrchestrator : IDisposable
             // persistence). Don't republish a Failed event for an already-announced
             // dictation.
             Trace.WriteLine($"[Dictation] Post-completion bookkeeping failed: {ex}");
-        }
-        finally
-        {
-            _models.ScheduleAutoUnload();
         }
     }
 
@@ -3702,7 +3701,7 @@ public sealed class DictationOrchestrator : IDisposable
                             ?? _settings.Current.SelectedModelId;
                         await using var lease = await _models.TryAcquireTranscriptionAsync(
                             partialModelId,
-                            ct
+                            cancellationToken: ct
                         );
                         // Local engines poll cheaply; online batch providers
                         // re-upload the whole growing buffer each poll, so they
