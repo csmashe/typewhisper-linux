@@ -280,6 +280,12 @@
                                    Margin="0,0,0,6" />
                         <TextBox Text="{Binding EditHotkeyKey}"
                                  PlaceholderText="{loc:Str Prompts.HotkeyPlaceholder}" />
+                        <TextBlock Text="{Binding HotkeyValidationMessage}"
+                                   IsVisible="{Binding HotkeyValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                   Foreground="#F3E1AF"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Margin="0,6,0,0" />
                     </StackPanel>
 
                     <StackPanel Grid.Row="4"

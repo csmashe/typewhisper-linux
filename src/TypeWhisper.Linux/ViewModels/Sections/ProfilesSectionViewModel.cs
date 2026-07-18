@@ -29,6 +29,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private readonly PluginManager _pluginManager;
     private readonly IProfileService _profiles;
     private readonly IPromptActionService _promptActions;
+    private readonly HotkeyService _hotkeys;
     private readonly DispatcherTimer _windowTimer;
     private bool _isWindowUpdateInProgress;
     private int _liveContextActivationCount;
@@ -69,6 +70,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private string? _editHotkeyData;
+
+    [ObservableProperty]
+    private string? _hotkeyValidationMessage;
 
     [ObservableProperty]
     private bool _editIsEnabled = true;
@@ -130,6 +134,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         IActiveWindowService activeWindow,
         PluginManager pluginManager,
         IPromptActionService promptActions,
+        HotkeyService hotkeys,
         IDetectionFailureTracker failureTracker,
         GnomeWindowCallsSetupHelper gnomeSetup,
         BrowserAccessibilitySetupHelper browserSetup
@@ -139,6 +144,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         _activeWindow = activeWindow;
         _pluginManager = pluginManager;
         _promptActions = promptActions;
+        _hotkeys = hotkeys;
         _failureTracker = failureTracker;
         _gnomeSetup = gnomeSetup;
         _browserSetup = browserSetup;
@@ -474,6 +480,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     partial void OnSelectedProfileChanged(Profile? value)
     {
+        HotkeyValidationMessage = null;
         ProcessNameChips.Clear();
         UrlPatternChips.Clear();
         ProcessNameInput = "";
@@ -540,6 +547,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     partial void OnEditPromptActionIdChanged(string? value)
     {
+        HotkeyValidationMessage = null;
         OnPropertyChanged(nameof(SelectedPromptActionOption));
     }
 
@@ -550,11 +558,13 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     partial void OnEditHotkeyBehaviorChanged(ProfileHotkeyBehavior value)
     {
+        HotkeyValidationMessage = null;
         OnPropertyChanged(nameof(SelectedHotkeyBehaviorOption));
     }
 
     partial void OnEditHotkeyDataChanged(string? value)
     {
+        HotkeyValidationMessage = null;
         // A hotkey turns an empty-matcher profile into a hotkey-only profile,
         // which is no longer the global fallback — refresh the editor hint.
         OnPropertyChanged(nameof(IsGlobalFallbackProfile));
@@ -606,6 +616,33 @@ public partial class ProfilesSectionViewModel : ObservableObject
             return;
         }
 
+        var promptActionId = string.IsNullOrWhiteSpace(EditPromptActionId)
+            ? null
+            : EditPromptActionId.Trim();
+        var hotkeyValidation = _hotkeys.ValidateProfileHotkeyCandidate(
+            EditHotkeyData,
+            EditHotkeyBehavior,
+            promptActionId,
+            SelectedProfile.Id,
+            _promptActions.Actions,
+            _profiles.Profiles
+        );
+        if (!hotkeyValidation.IsValid)
+        {
+            HotkeyValidationMessage = hotkeyValidation.Status switch
+            {
+                HotkeyCandidateValidationStatus.Malformed =>
+                    Loc.Instance["Profiles.HotkeyMalformed"],
+                HotkeyCandidateValidationStatus.MissingEnabledPromptAction =>
+                    Loc.Instance["Profiles.HotkeyPromptActionRequired"],
+                _ => Loc.Instance["Profiles.HotkeyCollision"]
+            };
+            return;
+        }
+
+        EditHotkeyData = hotkeyValidation.NormalizedHotkey;
+        HotkeyValidationMessage = null;
+
         var updated = SelectedProfile with
         {
             Name = EditName.Trim(),
@@ -618,10 +655,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
             TranscriptionModelOverride = string.IsNullOrWhiteSpace(EditModelId)
                 ? null
                 : EditModelId,
-            PromptActionId = string.IsNullOrWhiteSpace(EditPromptActionId)
-                ? null
-                : EditPromptActionId,
-            HotkeyData = string.IsNullOrWhiteSpace(EditHotkeyData) ? null : EditHotkeyData.Trim(),
+            PromptActionId = promptActionId,
+            HotkeyData = hotkeyValidation.NormalizedHotkey,
             HotkeyBehavior = EditHotkeyBehavior,
             StylePreset = EditStylePreset,
             CleanupLevelOverride = EditCleanupLevelOverride,

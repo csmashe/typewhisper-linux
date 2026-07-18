@@ -1,7 +1,9 @@
 using System.Reflection;
 using Moq;
+using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -11,6 +13,8 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class PromptsSectionViewModelTests : IDisposable
 {
+    private readonly HotkeyService _hotkeys;
+    private readonly ProfileService _profiles;
     private readonly string _tempDir;
 
     public PromptsSectionViewModelTests()
@@ -20,10 +24,13 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             "TypeWhisper.Linux.PromptVmTests_" + Guid.NewGuid().ToString("N")
         );
         Directory.CreateDirectory(_tempDir);
+        _profiles = new ProfileService(Path.Join(_tempDir, "profiles.json"));
+        _hotkeys = TestShortcutBackend.CreateHotkeyService();
     }
 
     public void Dispose()
     {
+        _hotkeys.Dispose();
         try
         {
             if (Directory.Exists(_tempDir))
@@ -44,7 +51,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.StartCreateCommand.Execute(null);
         sut.EditName = "Rewrite";
         sut.EditSystemPrompt = "Rewrite this";
@@ -64,11 +71,11 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.StartCreateCommand.Execute(null);
         sut.EditName = "Manual rewrite";
         sut.EditSystemPrompt = "Do it";
-        sut.EditHotkeyKey = " Ctrl+Alt+R ";
+        sut.EditHotkeyKey = " control + ALT + r ";
         sut.EditIsManualOnly = true;
         sut.SaveActionCommand.Execute(null);
 
@@ -92,7 +99,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.SelectedAction = sut.Actions.Single(a => a.Id == "existing");
         sut.EditHotkeyKey = "Ctrl+Alt+T";
         sut.EditIsManualOnly = true;
@@ -120,7 +127,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.SelectedAction = sut.Actions.Single(a => a.Id == "existing");
 
         Assert.Equal("Ctrl+Alt+R", sut.EditHotkeyKey);
@@ -134,7 +141,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.StartCreateCommand.Execute(null);
         sut.EditName = "Blank";
         sut.EditSystemPrompt = "x";
@@ -143,6 +150,99 @@ public sealed class PromptsSectionViewModelTests : IDisposable
 
         var action = Assert.Single(prompts.Actions);
         Assert.Null(action.HotkeyKey);
+    }
+
+    [Fact]
+    public void SaveAction_MalformedNewDraftDoesNotPersistAndShowsFeedback()
+    {
+        var prompts = new Mock<IPromptActionService>();
+        prompts.SetupGet(service => service.Actions).Returns([]);
+        prompts.SetupGet(service => service.EnabledActions).Returns([]);
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts.Object,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+        sut.StartCreateCommand.Execute(null);
+        sut.EditName = "Invalid";
+        sut.EditSystemPrompt = "x";
+        sut.EditHotkeyKey = "Ctrl+DefinitelyNotAKey";
+
+        sut.SaveActionCommand.Execute(null);
+
+        prompts.Verify(service => service.AddAction(It.IsAny<PromptAction>()), Times.Never);
+        Assert.True(sut.ShowEditor);
+        Assert.True(sut.IsCreatingNew);
+        Assert.Equal("Ctrl+DefinitelyNotAKey", sut.EditHotkeyKey);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
+    }
+
+    [Fact]
+    public void SaveAction_MalformedExistingDraftDoesNotUpdate()
+    {
+        var existing = new PromptAction
+        {
+            Id = "existing",
+            Name = "Existing",
+            SystemPrompt = "x",
+            HotkeyKey = "Alt+F8"
+        };
+        var prompts = new Mock<IPromptActionService>();
+        prompts.SetupGet(service => service.Actions).Returns([existing]);
+        prompts.SetupGet(service => service.EnabledActions).Returns([existing]);
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts.Object,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+        sut.SelectedAction = Assert.Single(sut.Actions);
+        sut.EditHotkeyKey = "Ctrl+NoSuchKey";
+
+        sut.SaveActionCommand.Execute(null);
+
+        prompts.Verify(service => service.UpdateAction(It.IsAny<PromptAction>()), Times.Never);
+        Assert.Equal("Ctrl+NoSuchKey", sut.EditHotkeyKey);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
+    }
+
+    [Fact]
+    public void SaveAction_CrossDynamicPrefixCollisionDoesNotPersist()
+    {
+        _profiles.AddProfile(
+            new Profile
+            {
+                Id = "profile",
+                Name = "Profile",
+                HotkeyData = "Right Ctrl"
+            }
+        );
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+        sut.StartCreateCommand.Execute(null);
+        sut.EditName = "Collision";
+        sut.EditSystemPrompt = "x";
+        sut.EditHotkeyKey = "Ctrl+Alt+R";
+
+        sut.SaveActionCommand.Execute(null);
+
+        Assert.Empty(prompts.Actions);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
     }
 
     [Fact]
@@ -163,7 +263,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         );
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         var option = Assert.Single(
             sut.AvailableProviders,
             candidate => candidate.Value == "plugin:com.typewhisper.openai:gpt-4.1-mini"
@@ -193,7 +293,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         );
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         var option = Assert.Single(
             sut.AvailableProviders,
             candidate => candidate.Value == "plugin:com.typewhisper.openai:gpt-4.1-mini"
@@ -231,7 +331,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             ]
         );
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
             EditProviderOverride = "plugin:com.typewhisper.openai:gpt-4.1-mini"
         };
@@ -254,7 +354,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             new AppSettings { CommandModeEnabled = true, CommandKeyphrase = "Jarvis" }
         );
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
 
         Assert.True(sut.CommandModeEnabled);
         Assert.Equal("Jarvis", sut.CommandKeyphrase);
@@ -271,7 +371,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             new AppSettings { CommandKeyphrase = "   " }
         );
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
 
         Assert.Equal(AppSettings.DefaultCommandKeyphrase, sut.CommandKeyphrase);
     }
@@ -283,7 +383,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
             CommandModeEnabled = true
         };
@@ -303,7 +403,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
             CommandKeyphrase = "  Jarvis  "
         };
@@ -326,7 +426,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             new AppSettings { CommandKeyphrase = "Jarvis" }
         );
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
             CommandKeyphrase = "   "
         };
@@ -344,7 +444,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             new AppSettings { CommandKeyphrase = "Jarvis" }
         );
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
             // Whitespace that normalizes back to the already-saved value: no persist.
             CommandKeyphrase = "  Jarvis  "
