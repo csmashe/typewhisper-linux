@@ -60,7 +60,7 @@ public sealed class AudioRecordingServiceTests
     [Fact]
     public void LiveFrameSink_InvokedFromCallback_WithProcessedSamples()
     {
-        using var service = new AudioRecordingService(() => true, () => { });
+        using var service = new AudioRecordingService(_ => { }, () => 0, () => { });
         var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
             service.TryStartRecording(whisperModeEnabled: true)
         );
@@ -84,7 +84,7 @@ public sealed class AudioRecordingServiceTests
     [Fact]
     public void LiveFrameSink_ThrowingSubscriber_DoesNotKillCapture()
     {
-        using var service = new AudioRecordingService(() => true, () => { });
+        using var service = new AudioRecordingService(_ => { }, () => 0, () => { });
         var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
             service.TryStartRecording(whisperModeEnabled: false)
         );
@@ -124,7 +124,7 @@ public sealed class AudioRecordingServiceTests
     [Fact]
     public void LiveFrameSink_OnlyFiresWhenIsRecording()
     {
-        using var service = new AudioRecordingService(() => true, () => { });
+        using var service = new AudioRecordingService(_ => { }, () => 0, () => { });
         var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
             service.TryStartRecording(whisperModeEnabled: false)
         );
@@ -140,16 +140,111 @@ public sealed class AudioRecordingServiceTests
     }
 
     [Fact]
+    public void TryStartRecording_WhenPreviewDeviceChanged_RebuildsBeforeCreatingOwner()
+    {
+        const int deviceA = 4;
+        const int deviceB = 9;
+        int? openDevice = null;
+        var operations = new List<string>();
+        // holder lets the delegates read `service`, which isn't assigned until
+        // construction returns. The IsRecording checks confirm capture ownership
+        // is granted only after the device rebuild's stop/open pair completes.
+        var holder = new AudioRecordingService[1];
+        using var service = new AudioRecordingService(
+            deviceIndex =>
+            {
+                if (holder[0] is { } recorderAtOpen)
+                {
+                    Assert.False(recorderAtOpen.IsRecording);
+                }
+
+                Assert.Null(openDevice);
+                openDevice = deviceIndex;
+                operations.Add($"open:{deviceIndex}");
+            },
+            () => 1,
+            () =>
+            {
+                if (holder[0] is { } recorderAtStop && operations.Count < 3)
+                {
+                    Assert.False(recorderAtStop.IsRecording);
+                }
+
+                Assert.NotNull(openDevice);
+                operations.Add($"stop:{openDevice}");
+                openDevice = null;
+            }
+        );
+        holder[0] = service;
+
+        service.SelectedDeviceIndex = deviceA;
+        Assert.True(service.StartPreview());
+
+        service.SelectedDeviceIndex = deviceB;
+        var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+
+        Assert.Equal(["open:4", "stop:4", "open:9"], operations);
+        Assert.Equal(deviceB, openDevice);
+
+        service.StopPreview();
+        Assert.Equal(["open:4", "stop:4", "open:9"], operations);
+
+        // ReSharper disable once MethodHasAsyncOverload -- synchronous stop verifies the owning capture performs final stream teardown.
+        service.StopRecording(session);
+        Assert.Equal(["open:4", "stop:4", "open:9", "stop:9"], operations);
+        Assert.Null(openDevice);
+    }
+
+    [Fact]
+    public void TryStartRecording_WhenPreviewDeviceUnchanged_ReusesOpenStream()
+    {
+        const int deviceA = 4;
+        int? openDevice = null;
+        var operations = new List<string>();
+        using var service = new AudioRecordingService(
+            deviceIndex =>
+            {
+                Assert.Null(openDevice);
+                openDevice = deviceIndex;
+                operations.Add($"open:{deviceIndex}");
+            },
+            () => 1,
+            () =>
+            {
+                Assert.NotNull(openDevice);
+                operations.Add($"stop:{openDevice}");
+                openDevice = null;
+            }
+        );
+
+        service.SelectedDeviceIndex = deviceA;
+        Assert.True(service.StartPreview());
+        var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+
+        Assert.Equal(["open:4"], operations);
+        Assert.Equal(deviceA, openDevice);
+
+        service.StopPreview();
+        // ReSharper disable once MethodHasAsyncOverload -- synchronous stop completes cleanup after asserting preview reuse.
+        service.StopRecording(session);
+        Assert.Equal(["open:4", "stop:4"], operations);
+    }
+
+    [Fact]
     public void TryStartRecording_WhenBusy_ReturnsNullWithoutAdoptingOrReconfiguringOwner()
     {
         var streamStartCount = 0;
         var streamStopCount = 0;
         using var service = new AudioRecordingService(
-            () =>
+            _ =>
             {
                 streamStartCount++;
-                return true;
             },
+            () => 0,
             () => streamStopCount++
         );
 
@@ -176,11 +271,11 @@ public sealed class AudioRecordingServiceTests
         var streamStartCount = 0;
         var streamStopCount = 0;
         using var service = new AudioRecordingService(
-            () =>
+            _ =>
             {
                 streamStartCount++;
-                return true;
             },
+            () => 0,
             () => streamStopCount++
         );
 
@@ -222,11 +317,11 @@ public sealed class AudioRecordingServiceTests
         var streamStartCount = 0;
         var streamStopCount = 0;
         using var service = new AudioRecordingService(
-            () =>
+            _ =>
             {
                 Interlocked.Increment(ref streamStartCount);
-                return true;
             },
+            () => 0,
             () => Interlocked.Increment(ref streamStopCount)
         );
         using var barrier = new Barrier(3);
@@ -257,7 +352,8 @@ public sealed class AudioRecordingServiceTests
     {
         var streamStopCount = 0;
         using var service = new AudioRecordingService(
-            () => true,
+            _ => { },
+            () => 0,
             () => streamStopCount++
         );
 
