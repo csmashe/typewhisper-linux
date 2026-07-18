@@ -46,6 +46,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private readonly IReadOnlyList<ISetupTask> _setupTasks;
     private readonly TextInsertionService _textInsertion;
     private bool _cleanedUp;
+    private AudioRecordingService.AudioCaptureSession? _firstDictationCaptureSession;
 
     [ObservableProperty]
     private string _cudaBenchmarkStatus = Loc.Instance["Wizard.CudaBenchmarkIdle"];
@@ -265,9 +266,14 @@ public partial class WelcomeWizardViewModel : ObservableObject
             _audio.StopPreview();
         }
 
-        if (IsFirstDictationRecording)
+        var firstDictationCaptureSession = _firstDictationCaptureSession;
+        _firstDictationCaptureSession = null;
+        if (firstDictationCaptureSession is not null)
         {
-            FireAndLog(() => _audio.StopRecordingAsync(), "welcome wizard stop recording");
+            FireAndLog(
+                () => _audio.StopRecordingAsync(firstDictationCaptureSession),
+                "welcome wizard stop recording"
+            );
         }
 
         IsMicTestRunning = false;
@@ -761,9 +767,12 @@ public partial class WelcomeWizardViewModel : ObservableObject
                 _audio.SelectedDeviceIndex = SelectedMic.Index;
             }
 
+            _firstDictationCaptureSession = null;
             try
             {
-                _audio.StartRecording();
+                _firstDictationCaptureSession = _audio.TryStartRecording(
+                    _settings.Current.WhisperModeEnabled
+                );
             }
             catch (Exception ex)
             {
@@ -775,7 +784,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
                 return;
             }
 
-            if (!_audio.IsRecording)
+            if (_firstDictationCaptureSession is null)
             {
                 FirstDictationStatus = Loc.Instance["Wizard.FirstDictationStartFailedGeneric"];
                 IsFirstDictationRecording = false;
@@ -788,10 +797,14 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
         IsFirstDictationRecording = false;
         FirstDictationStatus = Loc.Instance["Wizard.FirstDictationStopping"];
+        var captureSession = _firstDictationCaptureSession;
+        _firstDictationCaptureSession = null;
         byte[] wav;
         try
         {
-            wav = await _audio.StopRecordingAsync();
+            wav = captureSession is null
+                ? []
+                : await _audio.StopRecordingAsync(captureSession);
         }
         catch (Exception ex)
         {

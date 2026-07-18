@@ -94,6 +94,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly DictationToggleGate _toggleGate = new();
     private readonly ITranslationService _translation;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
+    private AudioRecordingService.AudioCaptureSession? _audioCaptureSession;
     private CancellationTokenSource? _activeDictationCts;
 
     // Cancels an in-flight spoken command (its LLM stream + typing). Distinct from
@@ -207,7 +208,7 @@ public sealed class DictationOrchestrator : IDisposable
         _sessionActivityMonitor = sessionActivityMonitor;
     }
 
-    public bool IsRecording => _audio.IsRecording;
+    public bool IsRecording => _audio.IsRecordingOwnedBy(_audioCaptureSession);
 
     /// <summary>
     ///     Current pipeline phase for <c>typewhisper status</c>. The audio
@@ -218,7 +219,7 @@ public sealed class DictationOrchestrator : IDisposable
     {
         get
         {
-            if (_audio.IsRecording)
+            if (IsRecording)
             {
                 return "recording";
             }
@@ -279,11 +280,12 @@ public sealed class DictationOrchestrator : IDisposable
 
         // Stop any active recording and undo ducking/media-pause before teardown
         // so the user isn't left with a muted system after exit.
-        if (_audio.IsRecording)
+        var captureSession = _audioCaptureSession;
+        if (_audio.IsRecordingOwnedBy(captureSession))
         {
             try
             {
-                _audio.StopRecording();
+                _audio.StopRecording(captureSession!);
             }
             catch (Exception ex)
             {
@@ -309,6 +311,8 @@ public sealed class DictationOrchestrator : IDisposable
             }
         }
 
+        Interlocked.CompareExchange(ref _audioCaptureSession, null, captureSession);
+
         ShutdownPartialTranscriptionSession();
 
         // Null the audio tap and snapshot the coordinator before awaiting close
@@ -320,11 +324,6 @@ public sealed class DictationOrchestrator : IDisposable
         _streamingProviderId = null;
         _streamingModelId = null;
         _streamingLanguageHint = null;
-        if (disposingCoordinator is not null)
-        {
-            _audio.LiveFrameSink = null;
-        }
-
         var streamingTeardown = TeardownStreamingSessionAsync(
             disposingCoordinator,
             disposingStartupCts,
@@ -452,7 +451,7 @@ public sealed class DictationOrchestrator : IDisposable
             _lastToggleUtc = now;
         }
 
-        if (_audio.IsRecording)
+        if (IsRecording)
         {
             await StopAsync();
         }
@@ -480,7 +479,7 @@ public sealed class DictationOrchestrator : IDisposable
         // cancel intent explicitly so a racing StartAsync that clears the shared
         // _cancelRequested flag between here and the gate probe can't downgrade
         // this discard to a normal save.
-        if (_audio.IsRecording)
+        if (IsRecording)
         {
             _cancelRequested = true;
             await StopAsync(cancelRequested: true);
@@ -498,7 +497,7 @@ public sealed class DictationOrchestrator : IDisposable
         DictationDeferredStop pendingStop;
         try
         {
-            if (_audio.IsRecording)
+            if (IsRecording)
             {
                 goto StartupComplete;
             }
@@ -514,15 +513,16 @@ public sealed class DictationOrchestrator : IDisposable
                 goto StartupComplete;
             }
 
-            _audio.WhisperModeEnabled = _settings.Current.WhisperModeEnabled;
-
             // Start capturing immediately — user may already be speaking (especially PTT).
             _recordingStart = DateTime.UtcNow;
             _lastSpeechDetectedAtUtc = _recordingStart;
             _silenceStopRequested = false;
+            AudioRecordingService.AudioCaptureSession? captureSession;
             try
             {
-                _audio.StartRecording();
+                captureSession = _audio.TryStartRecording(
+                    _settings.Current.WhisperModeEnabled
+                );
             }
             catch (Exception ex)
             {
@@ -533,13 +533,15 @@ public sealed class DictationOrchestrator : IDisposable
                 goto StartupComplete;
             }
 
-            if (!_audio.IsRecording)
+            if (captureSession is null)
             {
                 var message = BuildRecordingStartFailureMessage(null);
                 ReportStatus(message);
                 ShowFeedback(message, true);
                 goto StartupComplete;
             }
+
+            _audioCaptureSession = captureSession;
 
             // Set overlay to "Recording…" after the stream is confirmed open but
             // before slow startup work (playerctl, sound). On Wayland the earlier
@@ -627,18 +629,22 @@ public sealed class DictationOrchestrator : IDisposable
                 )
                 {
                     StartStreamingTranscriptionSession(
-                        startupPlugin, startupLanguageHint, sessionVersion);
+                        startupPlugin,
+                        startupLanguageHint,
+                        sessionVersion,
+                        captureSession
+                    );
                 }
 
                 // Always start the partial loop — it drives silence-auto-stop.
                 // When streaming is active, the in-loop policy short-circuits
                 // PollPartialTranscriptOnceAsync so polling stays a no-op.
-                StartPartialTranscriptionSession(sessionVersion);
+                StartPartialTranscriptionSession(sessionVersion, captureSession);
             }
             catch (Exception ex)
             {
                 Trace.WriteLine($"[Dictation] Post-start setup failed: {ex}");
-                RollBackStartedRecording();
+                RollBackStartedRecording(captureSession);
                 _ = await StopPartialTranscriptionSessionAsync();
                 var faultedCoordinator = _streamingCoordinator;
                 var faultedStartupCts = _streamingStartupCts;
@@ -647,7 +653,6 @@ public sealed class DictationOrchestrator : IDisposable
                 _streamingProviderId = null;
                 _streamingModelId = null;
                 _streamingLanguageHint = null;
-                _audio.LiveFrameSink = null;
                 _ = await TeardownStreamingSessionAsync(
                     faultedCoordinator,
                     faultedStartupCts,
@@ -754,8 +759,11 @@ public sealed class DictationOrchestrator : IDisposable
                     return;
                 }
 
-                _audio.WhisperModeEnabled =
-                    matchedProfile?.WhisperModeOverride ?? _settings.Current.WhisperModeEnabled;
+                _audio.TrySetWhisperMode(
+                    captureSession,
+                    matchedProfile?.WhisperModeOverride
+                    ?? _settings.Current.WhisperModeEnabled
+                );
                 SetOverlayState(state =>
                     state with { ActiveProfileName = matchedProfile?.Name, ActiveAppName = appTitle }
                 );
@@ -850,9 +858,11 @@ public sealed class DictationOrchestrator : IDisposable
                                         state with { ActiveProfileName = rematch.Profile.Name }
                                     );
 
-                                    _audio.WhisperModeEnabled =
+                                    _audio.TrySetWhisperMode(
+                                        captureSession,
                                         rematch.Profile.WhisperModeOverride
-                                        ?? _settings.Current.WhisperModeEnabled;
+                                        ?? _settings.Current.WhisperModeEnabled
+                                    );
                                 }
                             }
                         }
@@ -874,7 +884,7 @@ public sealed class DictationOrchestrator : IDisposable
             if (!_sessionActivityMonitor.IsInputAllowed)
             {
                 Trace.WriteLine("[Dictation] Session locked during start; rolling back recording.");
-                RollBackStartedRecording();
+                RollBackStartedRecording(captureSession);
                 _ = await StopPartialTranscriptionSessionAsync();
 
                 StreamingTranscriptionCoordinator? rolledBackCoordinator;
@@ -893,7 +903,6 @@ public sealed class DictationOrchestrator : IDisposable
                     _streamingLanguageHint = null;
                 }
 
-                _audio.LiveFrameSink = null;
                 _ = await TeardownStreamingSessionAsync(
                     rolledBackCoordinator,
                     rolledBackStartupCts,
@@ -1052,7 +1061,8 @@ public sealed class DictationOrchestrator : IDisposable
         int? insertionOrderSessionId = null;
         try
         {
-            if (!_audio.IsRecording)
+            var captureSession = _audioCaptureSession;
+            if (!_audio.IsRecordingOwnedBy(captureSession))
             {
                 return;
             }
@@ -1063,8 +1073,16 @@ public sealed class DictationOrchestrator : IDisposable
             var canceledThisStop = _cancelRequested;
             _cancelRequested = false;
 
-            // ReSharper disable once MethodSupportsCancellation -- stop path must run teardown to completion; recording stop is intentionally non-cancellable.
-            var wav = await _audio.StopRecordingAsync();
+            byte[] wav;
+            try
+            {
+                // ReSharper disable once MethodSupportsCancellation -- stop path must run teardown to completion; recording stop is intentionally non-cancellable.
+                wav = await _audio.StopRecordingAsync(captureSession!);
+            }
+            finally
+            {
+                Interlocked.CompareExchange(ref _audioCaptureSession, null, captureSession);
+            }
             var recoveredPartialPreview = await StopPartialTranscriptionSessionAsync();
             await AwaitRecordingSnapshotAsync();
             _audioDucking.RestoreAudio();
@@ -1132,11 +1150,6 @@ public sealed class DictationOrchestrator : IDisposable
                 _recordingWindowId = null;
                 _recordingProfile = null;
                 _recordingStart = default;
-            }
-
-            if (stoppedStreamingCoordinator is not null)
-            {
-                _audio.LiveFrameSink = null;
             }
 
             // Release the gate now that capture is torn down and context is
@@ -2656,7 +2669,7 @@ public sealed class DictationOrchestrator : IDisposable
 
             // Don't disarm Escape if a new recording — or a newer overlapping spoken command (its
             // CTS is still set above) — has taken over the shortcut meanwhile.
-            if (_activeCommandCts is null && _activeDictationCts is null && !_audio.IsRecording)
+            if (_activeCommandCts is null && _activeDictationCts is null && !IsRecording)
             {
                 _hotkey.IsCancelShortcutEnabled = false;
             }
@@ -3540,13 +3553,13 @@ public sealed class DictationOrchestrator : IDisposable
         return current <= context.SessionId + 1;
     }
 
-    private void RollBackStartedRecording()
+    private void RollBackStartedRecording(AudioRecordingService.AudioCaptureSession captureSession)
     {
         try
         {
-            if (_audio.IsRecording)
+            if (_audio.IsRecordingOwnedBy(captureSession))
             {
-                _audio.StopRecording();
+                _audio.StopRecording(captureSession);
             }
         }
         catch (Exception ex)
@@ -3554,6 +3567,10 @@ public sealed class DictationOrchestrator : IDisposable
             Trace.WriteLine(
                 $"[Dictation] Failed to stop recording during start rollback: {ex.Message}"
             );
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref _audioCaptureSession, null, captureSession);
         }
 
         try
@@ -3612,7 +3629,10 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    private void StartPartialTranscriptionSession(int sessionVersion)
+    private void StartPartialTranscriptionSession(
+        int sessionVersion,
+        AudioRecordingService.AudioCaptureSession captureSession
+    )
     {
         _partialTranscriptionCts?.Cancel();
         _partialTranscriptionCts?.Dispose();
@@ -3622,21 +3642,22 @@ public sealed class DictationOrchestrator : IDisposable
         _partialTranscriptionCts = cts;
         // ReSharper disable once MethodSupportsCancellation -- the loop receives cts.Token directly; a Task.Run token would be redundant.
         _partialTranscriptionTask = Task.Run(() =>
-            RunPartialTranscriptionLoopAsync(sessionVersion, cts.Token)
+            RunPartialTranscriptionLoopAsync(sessionVersion, captureSession, cts.Token)
         );
     }
 
     private void StartStreamingTranscriptionSession(
         ITranscriptionEnginePlugin plugin,
         string? language,
-        int sessionVersion
+        int sessionVersion,
+        AudioRecordingService.AudioCaptureSession captureSession
     )
     {
         var coordinator = new StreamingTranscriptionCoordinator(
             plugin,
             language,
             sessionVersion,
-            TryPublishPartialTranscript,
+            (version, text) => TryPublishPartialTranscript(version, captureSession, text),
             ex =>
             {
                 // Coordinator already sets its own Faulted flag — just log.
@@ -3651,10 +3672,17 @@ public sealed class DictationOrchestrator : IDisposable
 
         // Wire the audio tap BEFORE StartAsync resolves so frames captured
         // during the connect handshake queue in the coordinator's pending
-        // buffer (1 MB cap, drop-oldest). Detached in
-        // TeardownStreamingSessionAsync.
-        _audio.LiveFrameSink = samples =>
-            coordinator.AcceptAudioFrame(samples, _audio.CaptureSampleRate);
+        // buffer (1 MB cap, drop-oldest). The audio service detaches it at the
+        // token-protected stop boundary.
+        if (
+            !_audio.TrySetLiveFrameSink(
+                captureSession,
+                samples => coordinator.AcceptAudioFrame(samples, _audio.CaptureSampleRate)
+            )
+        )
+        {
+            throw new InvalidOperationException("Audio capture ended before streaming setup.");
+        }
 
         // Owns cancellation of the queued connect handshake. The coordinator
         // creates its own internal _cts inside StartAsync, but if teardown
@@ -3864,7 +3892,11 @@ public sealed class DictationOrchestrator : IDisposable
         _partialTranscriptState.StopSession();
     }
 
-    private async Task RunPartialTranscriptionLoopAsync(int sessionVersion, CancellationToken ct)
+    private async Task RunPartialTranscriptionLoopAsync(
+        int sessionVersion,
+        AudioRecordingService.AudioCaptureSession captureSession,
+        CancellationToken ct
+    )
     {
         var partialPollInterval = TimeSpan.FromSeconds(3);
         var loopDelay = TimeSpan.FromMilliseconds(250);
@@ -3872,7 +3904,10 @@ public sealed class DictationOrchestrator : IDisposable
 
         try
         {
-            while (!ct.IsCancellationRequested && _audio.IsRecording)
+            while (
+                !ct.IsCancellationRequested
+                && _audio.IsRecordingOwnedBy(captureSession)
+            )
             {
                 if (_audio.HasSpeechEnergy)
                 {
@@ -3889,7 +3924,7 @@ public sealed class DictationOrchestrator : IDisposable
 
                 if (DateTime.UtcNow >= nextPartialPollAtUtc)
                 {
-                    var wav = _audio.GetCurrentBuffer();
+                    var wav = _audio.GetCurrentBuffer(captureSession);
                     // Partials are best-effort/cosmetic. Only poll when a model is
                     // already loaded (never *initiate* a load for a partial), and
                     // use TryAcquire so a partial silently skips when a final
@@ -3925,6 +3960,7 @@ public sealed class DictationOrchestrator : IDisposable
                                 lease.Plugin,
                                 wav,
                                 sessionVersion,
+                                captureSession,
                                 ct
                             );
                         }
@@ -3963,6 +3999,7 @@ public sealed class DictationOrchestrator : IDisposable
         ITranscriptionEnginePlugin plugin,
         byte[] wav,
         int sessionVersion,
+        AudioRecordingService.AudioCaptureSession captureSession,
         CancellationToken ct
     )
     {
@@ -3985,13 +4022,14 @@ public sealed class DictationOrchestrator : IDisposable
                 null,
                 partial =>
                 {
-                    TryPublishPartialTranscript(sessionVersion, partial);
-                    return !ct.IsCancellationRequested && _audio.IsRecording;
+                    TryPublishPartialTranscript(sessionVersion, captureSession, partial);
+                    return !ct.IsCancellationRequested
+                           && _audio.IsRecordingOwnedBy(captureSession);
                 },
                 ct
             );
 
-            TryPublishPartialTranscript(sessionVersion, result.Text);
+            TryPublishPartialTranscript(sessionVersion, captureSession, result.Text);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -4045,7 +4083,11 @@ public sealed class DictationOrchestrator : IDisposable
         PublishSessionTerminal(sessionId, status, message);
     }
 
-    private void TryPublishPartialTranscript(int sessionVersion, string? text)
+    private void TryPublishPartialTranscript(
+        int sessionVersion,
+        AudioRecordingService.AudioCaptureSession captureSession,
+        string? text
+    )
     {
         if (
             !_partialTranscriptState.TryApplyPolling(
@@ -4069,7 +4111,7 @@ public sealed class DictationOrchestrator : IDisposable
             new PartialTranscriptionUpdateEvent
             {
                 PartialText = partialText,
-                IsRecording = _audio.IsRecording,
+                IsRecording = _audio.IsRecordingOwnedBy(captureSession),
                 ElapsedSeconds =
                     _recordingStart == default
                         ? 0
