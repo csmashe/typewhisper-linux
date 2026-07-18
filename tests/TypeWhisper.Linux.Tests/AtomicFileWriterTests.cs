@@ -1,4 +1,5 @@
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Tests;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
@@ -27,7 +28,7 @@ public sealed class AtomicFileWriterTests
         }
         finally
         {
-            Directory.Delete(dir, true);
+            TestPaths.DeleteDirectory(dir);
         }
     }
 
@@ -46,7 +47,86 @@ public sealed class AtomicFileWriterTests
         }
         finally
         {
-            Directory.Delete(dir, true);
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public async Task WriteIfUnchangedAsync_RegularFile_ReplacesMatchingSnapshot()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Join(dir, "hyprland.conf");
+            await File.WriteAllTextAsync(path, "old");
+            var snapshot = await AtomicFileWriter.CaptureAsync(path, CancellationToken.None);
+
+            var committed = await AtomicFileWriter.WriteIfUnchangedAsync(
+                snapshot,
+                "new",
+                CancellationToken.None
+            );
+
+            Assert.True(committed);
+            Assert.Equal("new", await File.ReadAllTextAsync(path));
+            Assert.Empty(Directory.EnumerateFiles(dir, "*.tmp"));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public async Task WriteIfUnchangedAsync_EditAfterCapture_ReportsConflictAndPreservesEdit()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Join(dir, "hyprland.conf");
+            await File.WriteAllTextAsync(path, "old");
+            var snapshot = await AtomicFileWriter.CaptureAsync(path, CancellationToken.None);
+            await File.WriteAllTextAsync(path, "user edit");
+
+            var committed = await AtomicFileWriter.WriteIfUnchangedAsync(
+                snapshot,
+                "typewhisper edit",
+                CancellationToken.None
+            );
+
+            Assert.False(committed);
+            Assert.Equal("user edit", await File.ReadAllTextAsync(path));
+            Assert.Empty(Directory.EnumerateFiles(dir, "*.tmp"));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public async Task WriteIfUnchangedAsync_FileCreatedAfterMissingCapture_ReportsConflict()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Join(dir, "hyprland.conf");
+            var snapshot = await AtomicFileWriter.CaptureAsync(path, CancellationToken.None);
+            await File.WriteAllTextAsync(path, "user-created config");
+
+            var committed = await AtomicFileWriter.WriteIfUnchangedAsync(
+                snapshot,
+                "typewhisper config",
+                CancellationToken.None
+            );
+
+            Assert.False(committed);
+            Assert.Equal("user-created config", await File.ReadAllTextAsync(path));
+            Assert.Empty(Directory.EnumerateFiles(dir, "*.tmp"));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
         }
     }
 
@@ -71,7 +151,101 @@ public sealed class AtomicFileWriterTests
         }
         finally
         {
-            Directory.Delete(dir, true);
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public async Task WriteIfUnchangedAsync_SymlinkTarget_PreservesLinkAndUpdatesFinalFile()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var real = Path.Join(dir, "real-hyprland.conf");
+            await File.WriteAllTextAsync(real, "old");
+            var link = Path.Join(dir, "hyprland.conf");
+            File.CreateSymbolicLink(link, real);
+            var snapshot = await AtomicFileWriter.CaptureAsync(link, CancellationToken.None);
+
+            var committed = await AtomicFileWriter.WriteIfUnchangedAsync(
+                snapshot,
+                "new",
+                CancellationToken.None
+            );
+
+            Assert.True(committed);
+            Assert.NotNull(new FileInfo(link).LinkTarget);
+            Assert.Equal(real, File.ResolveLinkTarget(link, true)!.FullName);
+            Assert.Equal("new", await File.ReadAllTextAsync(real));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public async Task WriteIfUnchangedAsync_FinalTargetEdited_ReportsConflictAndPreservesSymlink()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var real = Path.Join(dir, "real-hyprland.conf");
+            await File.WriteAllTextAsync(real, "old");
+            var link = Path.Join(dir, "hyprland.conf");
+            File.CreateSymbolicLink(link, real);
+            var snapshot = await AtomicFileWriter.CaptureAsync(link, CancellationToken.None);
+            await File.WriteAllTextAsync(real, "user edit in final target");
+
+            var committed = await AtomicFileWriter.WriteIfUnchangedAsync(
+                snapshot,
+                "typewhisper edit",
+                CancellationToken.None
+            );
+
+            Assert.False(committed);
+            Assert.NotNull(new FileInfo(link).LinkTarget);
+            Assert.Equal(real, File.ResolveLinkTarget(link, true)!.FullName);
+            Assert.Equal("user edit in final target", await File.ReadAllTextAsync(real));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public async Task WriteIfUnchangedAsync_SymlinkRetargeted_ReportsConflictAndPreservesBothFiles()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var original = Path.Join(dir, "original.conf");
+            var retargeted = Path.Join(dir, "retargeted.conf");
+            await File.WriteAllTextAsync(original, "original user content");
+            await File.WriteAllTextAsync(retargeted, "retargeted user content");
+            var link = Path.Join(dir, "hyprland.conf");
+            File.CreateSymbolicLink(link, original);
+            var snapshot = await AtomicFileWriter.CaptureAsync(link, CancellationToken.None);
+            File.Delete(link);
+            File.CreateSymbolicLink(link, retargeted);
+
+            var committed = await AtomicFileWriter.WriteIfUnchangedAsync(
+                snapshot,
+                "typewhisper edit",
+                CancellationToken.None
+            );
+
+            Assert.False(committed);
+            Assert.Equal(retargeted, File.ResolveLinkTarget(link, true)!.FullName);
+            Assert.Equal("original user content", await File.ReadAllTextAsync(original));
+            Assert.Equal("retargeted user content", await File.ReadAllTextAsync(retargeted));
+            Assert.Equal("retargeted user content", await File.ReadAllTextAsync(link));
+            Assert.Empty(Directory.EnumerateFiles(dir, "*.tmp"));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
         }
     }
 
@@ -95,7 +269,7 @@ public sealed class AtomicFileWriterTests
         }
         finally
         {
-            Directory.Delete(dir, true);
+            TestPaths.DeleteDirectory(dir);
         }
     }
 
@@ -120,7 +294,7 @@ public sealed class AtomicFileWriterTests
         }
         finally
         {
-            Directory.Delete(dir, true);
+            TestPaths.DeleteDirectory(dir);
         }
     }
 
@@ -142,7 +316,7 @@ public sealed class AtomicFileWriterTests
         }
         finally
         {
-            Directory.Delete(dir, true);
+            TestPaths.DeleteDirectory(dir);
         }
     }
 
@@ -163,17 +337,12 @@ public sealed class AtomicFileWriterTests
         }
         finally
         {
-            Directory.Delete(dir, true);
+            TestPaths.DeleteDirectory(dir);
         }
     }
 
     private static string CreateTempDir()
     {
-        var dir = Path.Join(
-            Path.GetTempPath(),
-            "tw-atomic-symlink-" + Guid.NewGuid().ToString("N")
-        );
-        Directory.CreateDirectory(dir);
-        return dir;
+        return TestPaths.CreateTempDirectory("tw-atomic-symlink");
     }
 }

@@ -12,8 +12,27 @@ namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 /// </summary>
 public sealed class HyprlandShortcutWriter : IDeShortcutWriter
 {
+    private const int MaxWriteAttempts = 3;
     private const string RemovalRequiresReloadWarning =
         "Hyprland may still have the live binding. Run `hyprctl reload` (or restart Hyprland) to remove it.";
+
+    private readonly Func<
+        AtomicFileSnapshot,
+        string,
+        CancellationToken,
+        Task<bool>
+    > _conditionalWriteAsync;
+
+    public HyprlandShortcutWriter()
+        : this(AtomicFileWriter.WriteIfUnchangedAsync) { }
+
+    internal HyprlandShortcutWriter(
+        Func<AtomicFileSnapshot, string, CancellationToken, Task<bool>> conditionalWriteAsync
+    )
+    {
+        _conditionalWriteAsync = conditionalWriteAsync
+                                 ?? throw new ArgumentNullException(nameof(conditionalWriteAsync));
+    }
 
     public string DesktopId => "hyprland";
     public string DisplayName => "Hyprland";
@@ -86,30 +105,53 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             );
         }
 
-        var existing = File.Exists(path)
-            ? await File.ReadAllTextAsync(path, ct).ConfigureAwait(false)
-            : string.Empty;
-        var scan = SentinelBlock.Scan(existing);
-        if (scan.Mismatched)
+        var managed = BuildManagedLines(spec).ToList();
+        var committed = false;
+        for (var attempt = 0; attempt < MaxWriteAttempts; attempt++)
         {
-            return new DeShortcutWriteResult(
-                false,
-                $"Your hyprland.conf has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually (remove the stray sentinel lines) and try again.",
-                []
-            );
+            try
+            {
+                var snapshot = await AtomicFileWriter.CaptureAsync(path, ct)
+                    .ConfigureAwait(false);
+                var scan = SentinelBlock.Scan(snapshot.Contents);
+                if (scan.Mismatched)
+                {
+                    return new DeShortcutWriteResult(
+                        false,
+                        $"Your hyprland.conf has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually (remove the stray sentinel lines) and try again.",
+                        []
+                    );
+                }
+
+                var updated = SentinelBlock.ReplaceOrAppend(snapshot.Contents, managed);
+                // ReSharper disable once InvertIf -- the conditional-write commit/break is the deliberate success path of the capture-and-retry loop; leave it as-is rather than inverting into a continue.
+                if (
+                    await _conditionalWriteAsync(snapshot, updated, ct).ConfigureAwait(false)
+                )
+                {
+                    committed = true;
+                    break;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return new DeShortcutWriteResult(
+                    false,
+                    $"Could not write {path}: {ex.Message}",
+                    []
+                );
+            }
         }
 
-        var managed = BuildManagedLines(spec).ToList();
-        var updated = SentinelBlock.ReplaceOrAppend(existing, managed);
-        try
-        {
-            await AtomicFileWriter.WriteAsync(path, updated, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
+        if (!committed)
         {
             return new DeShortcutWriteResult(
                 false,
-                $"Could not write {path}: {ex.Message}",
+                "hyprland.conf kept changing while TypeWhisper was updating it. Please retry.",
                 []
             );
         }
@@ -128,58 +170,77 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
     public async Task<DeShortcutWriteResult> RemoveAsync(string shortcutId, CancellationToken ct)
     {
         var path = ResolveConfigPath();
-        if (!File.Exists(path))
+        for (var attempt = 0; attempt < MaxWriteAttempts; attempt++)
         {
-            return new DeShortcutWriteResult(
-                true,
-                "No hyprland.conf to update.",
-                [],
-                RemovalRequiresReloadWarning
-            );
+            try
+            {
+                var snapshot = await AtomicFileWriter.CaptureAsync(path, ct)
+                    .ConfigureAwait(false);
+                if (!snapshot.Existed)
+                {
+                    return new DeShortcutWriteResult(
+                        true,
+                        "No hyprland.conf to update.",
+                        [],
+                        RemovalRequiresReloadWarning
+                    );
+                }
+
+                var scan = SentinelBlock.Scan(snapshot.Contents);
+                if (scan.Mismatched)
+                {
+                    return new DeShortcutWriteResult(
+                        false,
+                        $"Your hyprland.conf has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually and try again.",
+                        []
+                    );
+                }
+
+                if (scan.OpenLine is null)
+                {
+                    return new DeShortcutWriteResult(
+                        true,
+                        "No Hyprland integration to remove.",
+                        [],
+                        RemovalRequiresReloadWarning
+                    );
+                }
+
+                var updated = SentinelBlock.Remove(snapshot.Contents);
+                if (
+                    !await _conditionalWriteAsync(snapshot, updated, ct).ConfigureAwait(false)
+                )
+                {
+                    continue;
+                }
+
+                // Hyprland's unbind syntax varies across versions; asking the user
+                // to reload is more robust than attempting a live removal.
+                return new DeShortcutWriteResult(
+                    true,
+                    "Hyprland managed block removed.",
+                    [path],
+                    RemovalRequiresReloadWarning
+                );
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return new DeShortcutWriteResult(
+                    false,
+                    $"Could not write {path}: {ex.Message}",
+                    []
+                );
+            }
         }
 
-        var existing = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
-        var scan = SentinelBlock.Scan(existing);
-        if (scan.Mismatched)
-        {
-            return new DeShortcutWriteResult(
-                false,
-                $"Your hyprland.conf has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually and try again.",
-                []
-            );
-        }
-
-        if (scan.OpenLine is null)
-        {
-            return new DeShortcutWriteResult(
-                true,
-                "No Hyprland integration to remove.",
-                [],
-                RemovalRequiresReloadWarning
-            );
-        }
-
-        var updated = SentinelBlock.Remove(existing);
-        try
-        {
-            await AtomicFileWriter.WriteAsync(path, updated, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            return new DeShortcutWriteResult(
-                false,
-                $"Could not write {path}: {ex.Message}",
-                []
-            );
-        }
-
-        // Hyprland's unbind syntax varies across versions; asking the user
-        // to reload is more robust than attempting a live removal.
         return new DeShortcutWriteResult(
-            true,
-            "Hyprland managed block removed.",
-            [path],
-            RemovalRequiresReloadWarning
+            false,
+            "hyprland.conf kept changing while TypeWhisper was removing its managed block. Please retry.",
+            []
         );
     }
 

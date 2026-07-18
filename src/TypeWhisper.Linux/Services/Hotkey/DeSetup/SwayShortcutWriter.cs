@@ -10,6 +10,26 @@ namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 /// </summary>
 public sealed class SwayShortcutWriter : IDeShortcutWriter
 {
+    private const int MaxWriteAttempts = 3;
+
+    private readonly Func<
+        AtomicFileSnapshot,
+        string,
+        CancellationToken,
+        Task<bool>
+    > _conditionalWriteAsync;
+
+    public SwayShortcutWriter()
+        : this(AtomicFileWriter.WriteIfUnchangedAsync) { }
+
+    internal SwayShortcutWriter(
+        Func<AtomicFileSnapshot, string, CancellationToken, Task<bool>> conditionalWriteAsync
+    )
+    {
+        _conditionalWriteAsync = conditionalWriteAsync
+                                 ?? throw new ArgumentNullException(nameof(conditionalWriteAsync));
+    }
+
     public string DesktopId => "sway";
     public string DisplayName => "Sway";
     public bool SupportsPushToTalk => true;
@@ -78,30 +98,53 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             );
         }
 
-        var existing = File.Exists(path)
-            ? await File.ReadAllTextAsync(path, ct).ConfigureAwait(false)
-            : string.Empty;
-        var scan = SentinelBlock.Scan(existing);
-        if (scan.Mismatched)
+        var managed = BuildManagedLines(spec).ToList();
+        var committed = false;
+        for (var attempt = 0; attempt < MaxWriteAttempts; attempt++)
         {
-            return new DeShortcutWriteResult(
-                false,
-                $"Your sway config has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually and try again.",
-                []
-            );
+            try
+            {
+                var snapshot = await AtomicFileWriter.CaptureAsync(path, ct)
+                    .ConfigureAwait(false);
+                var scan = SentinelBlock.Scan(snapshot.Contents);
+                if (scan.Mismatched)
+                {
+                    return new DeShortcutWriteResult(
+                        false,
+                        $"Your sway config has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually and try again.",
+                        []
+                    );
+                }
+
+                var updated = SentinelBlock.ReplaceOrAppend(snapshot.Contents, managed);
+                // ReSharper disable once InvertIf -- the conditional-write commit/break is the deliberate success path of the capture-and-retry loop; leave it as-is rather than inverting into a continue.
+                if (
+                    await _conditionalWriteAsync(snapshot, updated, ct).ConfigureAwait(false)
+                )
+                {
+                    committed = true;
+                    break;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return new DeShortcutWriteResult(
+                    false,
+                    $"Could not write {path}: {ex.Message}",
+                    []
+                );
+            }
         }
 
-        var managed = BuildManagedLines(spec).ToList();
-        var updated = SentinelBlock.ReplaceOrAppend(existing, managed);
-        try
-        {
-            await AtomicFileWriter.WriteAsync(path, updated, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
+        if (!committed)
         {
             return new DeShortcutWriteResult(
                 false,
-                $"Could not write {path}: {ex.Message}",
+                "Sway config kept changing while TypeWhisper was updating it. Please retry.",
                 []
             );
         }
@@ -117,58 +160,77 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
     public async Task<DeShortcutWriteResult> RemoveAsync(string shortcutId, CancellationToken ct)
     {
         var path = ResolveConfigPath();
-        if (!File.Exists(path))
+        for (var attempt = 0; attempt < MaxWriteAttempts; attempt++)
         {
-            return new DeShortcutWriteResult(
-                true,
-                "No sway config to update.",
-                []
-            );
+            try
+            {
+                var snapshot = await AtomicFileWriter.CaptureAsync(path, ct)
+                    .ConfigureAwait(false);
+                if (!snapshot.Existed)
+                {
+                    return new DeShortcutWriteResult(
+                        true,
+                        "No sway config to update.",
+                        []
+                    );
+                }
+
+                var scan = SentinelBlock.Scan(snapshot.Contents);
+                if (scan.Mismatched)
+                {
+                    return new DeShortcutWriteResult(
+                        false,
+                        $"Your sway config has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually and try again.",
+                        []
+                    );
+                }
+
+                if (scan.OpenLine is null)
+                {
+                    return new DeShortcutWriteResult(
+                        true,
+                        "No Sway integration to remove.",
+                        []
+                    );
+                }
+
+                var updated = SentinelBlock.Remove(snapshot.Contents);
+                if (
+                    !await _conditionalWriteAsync(snapshot, updated, ct).ConfigureAwait(false)
+                )
+                {
+                    continue;
+                }
+
+                var reloaded = await ReloadAsync(ct).ConfigureAwait(false);
+                var warning = reloaded
+                    ? null
+                    : "Block removed, but `swaymsg reload` failed. Reload Sway manually to drop the live bindings.";
+                return new DeShortcutWriteResult(
+                    true,
+                    "Sway managed block removed.",
+                    [path],
+                    warning
+                );
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return new DeShortcutWriteResult(
+                    false,
+                    $"Could not write {path}: {ex.Message}",
+                    []
+                );
+            }
         }
 
-        var existing = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
-        var scan = SentinelBlock.Scan(existing);
-        if (scan.Mismatched)
-        {
-            return new DeShortcutWriteResult(
-                false,
-                $"Your sway config has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually and try again.",
-                []
-            );
-        }
-
-        if (scan.OpenLine is null)
-        {
-            return new DeShortcutWriteResult(
-                true,
-                "No Sway integration to remove.",
-                []
-            );
-        }
-
-        var updated = SentinelBlock.Remove(existing);
-        try
-        {
-            await AtomicFileWriter.WriteAsync(path, updated, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            return new DeShortcutWriteResult(
-                false,
-                $"Could not write {path}: {ex.Message}",
-                []
-            );
-        }
-
-        var reloaded = await ReloadAsync(ct).ConfigureAwait(false);
-        var warning = reloaded
-            ? null
-            : "Block removed, but `swaymsg reload` failed. Reload Sway manually to drop the live bindings.";
         return new DeShortcutWriteResult(
-            true,
-            "Sway managed block removed.",
-            [path],
-            warning
+            false,
+            "Sway config kept changing while TypeWhisper was removing its managed block. Please retry.",
+            []
         );
     }
 

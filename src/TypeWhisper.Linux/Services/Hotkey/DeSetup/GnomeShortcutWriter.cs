@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using TypeWhisper.Core;
@@ -17,12 +16,29 @@ namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 /// </summary>
 public sealed class GnomeShortcutWriter : IDeShortcutWriter
 {
+    private const int MaxListMutationAttempts = 3;
     private const string MediaKeysSchema = "org.gnome.settings-daemon.plugins.media-keys";
 
     private const string CustomKeybindingSchema =
         "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding";
 
     private const string ListKey = "custom-keybindings";
+
+    private readonly string _backupDirectory;
+    private readonly IProcessRunner _processRunner;
+
+    public GnomeShortcutWriter()
+        : this(new ProcessRunner()) { }
+
+    private GnomeShortcutWriter(IProcessRunner processRunner)
+        : this(processRunner, Path.Join(TypeWhisperEnvironment.BasePath, "backups")) { }
+
+    internal GnomeShortcutWriter(IProcessRunner processRunner, string backupDirectory)
+    {
+        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
+        ArgumentException.ThrowIfNullOrWhiteSpace(backupDirectory);
+        _backupDirectory = backupDirectory;
+    }
 
     public string DesktopId => "gnome";
     public string DisplayName => "GNOME";
@@ -89,79 +105,24 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
     public async Task<DeShortcutWriteResult> WriteAsync(DeShortcutSpec spec, CancellationToken ct)
     {
         var path = BuildCustomPath(spec.ShortcutId);
-
-        // 1. Snapshot before touching anything — refuse if backup fails.
-        var (listOk, listOut, listErr) = await RunAsync(
-                "gsettings",
-                ["get", MediaKeysSchema, ListKey],
-                ct
-            )
-            .ConfigureAwait(false);
-        if (!listOk)
+        var mutation = await MutateListAsync(path, add: true, ct).ConfigureAwait(false);
+        if (mutation.Failure is not null)
         {
-            return new DeShortcutWriteResult(
-                false,
-                $"Could not read GNOME shortcut list: {listErr.Trim()}",
-                []
-            );
+            return mutation.Failure;
         }
 
-        var backupPath = await SnapshotListAsync(listOut, ct).ConfigureAwait(false);
-        if (backupPath is null)
+        var changed = new List<string>();
+        if (mutation.BackupPath is not null)
         {
-            return new DeShortcutWriteResult(
-                false,
-                "Could not write GNOME backup file. Refusing to modify shortcuts.",
-                []
-            );
+            changed.Add(mutation.BackupPath);
         }
 
-        List<string> list;
-        try
+        if (mutation.Changed)
         {
-            list = ParseGSettingsList(listOut);
-        }
-        catch (FormatException ex)
-        {
-            // The backup is already on disk — surface its path so the
-            // user knows where to look if they need to recover.
-            return new DeShortcutWriteResult(
-                false,
-                $"Could not parse GNOME shortcut list ({ex.Message}). Refusing to modify shortcuts; backup at {backupPath}.",
-                [backupPath]
-            );
-        }
-
-        var added = false;
-        if (!list.Contains(path))
-        {
-            list.Add(path);
-            added = true;
-        }
-
-        // 2. Write merged list only when a path was actually added (repeat invocations are no-ops).
-        var changed = new List<string> { backupPath };
-        if (added)
-        {
-            var (ok, _, err) = await RunAsync(
-                    "gsettings",
-                    ["set", MediaKeysSchema, ListKey, FormatGSettingsList(list)],
-                    ct
-                )
-                .ConfigureAwait(false);
-            if (!ok)
-            {
-                return new DeShortcutWriteResult(
-                    false,
-                    $"Could not update GNOME shortcut list: {err.Trim()}",
-                    [backupPath]
-                );
-            }
-
             changed.Add($"{MediaKeysSchema}.{ListKey}");
         }
 
-        // 3. Set name/command/binding via "schema:path" form (gsettings treats the path as dconf prefix).
+        // Set name/command/binding only after the complete-list add is stable.
         var schemaWithPath = $"{CustomKeybindingSchema}:{path}";
         foreach (
             var (key, value) in new[]
@@ -191,7 +152,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
 
         return new DeShortcutWriteResult(
             true,
-            added
+            mutation.Changed
                 ? "GNOME shortcut installed. It will appear under Settings → Keyboard → Custom Shortcuts."
                 : "GNOME shortcut updated.",
             changed
@@ -201,36 +162,13 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
     public async Task<DeShortcutWriteResult> RemoveAsync(string shortcutId, CancellationToken ct)
     {
         var path = BuildCustomPath(shortcutId);
-        var (listOk, listOut, listErr) = await RunAsync(
-                "gsettings",
-                ["get", MediaKeysSchema, ListKey],
-                ct
-            )
-            .ConfigureAwait(false);
-        if (!listOk)
+        var mutation = await MutateListAsync(path, add: false, ct).ConfigureAwait(false);
+        if (mutation.Failure is not null)
         {
-            return new DeShortcutWriteResult(
-                false,
-                $"Could not read GNOME shortcut list: {listErr.Trim()}",
-                []
-            );
+            return mutation.Failure;
         }
 
-        List<string> list;
-        try
-        {
-            list = ParseGSettingsList(listOut);
-        }
-        catch (FormatException ex)
-        {
-            return new DeShortcutWriteResult(
-                false,
-                $"Could not parse GNOME shortcut list ({ex.Message}). Refusing to modify shortcuts.",
-                []
-            );
-        }
-
-        if (!list.Contains(path))
+        if (!mutation.Changed)
         {
             return new DeShortcutWriteResult(
                 true,
@@ -239,34 +177,8 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             );
         }
 
-        var backupPath = await SnapshotListAsync(listOut, ct).ConfigureAwait(false);
-        if (backupPath is null)
-        {
-            return new DeShortcutWriteResult(
-                false,
-                "Could not write GNOME backup file. Refusing to modify shortcuts.",
-                []
-            );
-        }
-
-        list.Remove(path);
-        var (setOk, _, setErr) = await RunAsync(
-                "gsettings",
-                ["set", MediaKeysSchema, ListKey, FormatGSettingsList(list)],
-                ct
-            )
-            .ConfigureAwait(false);
-        if (!setOk)
-        {
-            return new DeShortcutWriteResult(
-                false,
-                $"Could not update GNOME shortcut list: {setErr.Trim()}",
-                [backupPath]
-            );
-        }
-
         // gsettings has no "reset path" verb; reset individual keys so dconf-editor
-        // stops showing stale values. Reset failures are non-fatal (entry no longer listed).
+        // stops showing stale values. This only runs after the list removal is stable.
         var schemaWithPath = $"{CustomKeybindingSchema}:{path}";
         foreach (var key in new[] { "name", "command", "binding" })
         {
@@ -279,7 +191,122 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         return new DeShortcutWriteResult(
             true,
             "GNOME shortcut removed.",
-            [backupPath, $"{MediaKeysSchema}.{ListKey}"]
+            [mutation.BackupPath!, $"{MediaKeysSchema}.{ListKey}"]
+        );
+    }
+
+    private async Task<ListMutationOutcome> MutateListAsync(
+        string path,
+        bool add,
+        CancellationToken ct
+    )
+    {
+        string? candidateRaw = null;
+        for (var attempt = 0; attempt < MaxListMutationAttempts; attempt++)
+        {
+            if (candidateRaw is null)
+            {
+                var read = await ReadListAsync(ct).ConfigureAwait(false);
+                if (!read.Ok)
+                {
+                    return ListMutationOutcome.Fail(
+                        $"Could not read GNOME shortcut list: {read.Error.Trim()}"
+                    );
+                }
+
+                candidateRaw = read.Raw;
+            }
+
+            List<string> list;
+            try
+            {
+                list = ParseGSettingsList(candidateRaw);
+            }
+            catch (FormatException ex)
+            {
+                if (!add)
+                {
+                    return ListMutationOutcome.Fail(
+                        $"Could not parse GNOME shortcut list ({ex.Message}). Refusing to modify shortcuts."
+                    );
+                }
+
+                // Back up the malformed value on add so the user has it while repairing.
+                var malformedBackup = await SnapshotListAsync(candidateRaw, ct)
+                    .ConfigureAwait(false);
+                if (malformedBackup is null)
+                {
+                    return ListMutationOutcome.Fail(
+                        "Could not write GNOME backup file. Refusing to modify shortcuts."
+                    );
+                }
+
+                return ListMutationOutcome.Fail(
+                    $"Could not parse GNOME shortcut list ({ex.Message}). Refusing to modify shortcuts; backup at {malformedBackup}.",
+                    [malformedBackup]
+                );
+            }
+
+            var containsPath = list.Contains(path);
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- the add/contains no-op guard reads clearer as a single boolean condition than a two-tuple switch.
+            if ((add && containsPath) || (!add && !containsPath))
+            {
+                return ListMutationOutcome.NoChange();
+            }
+
+            if (add)
+            {
+                list.Add(path);
+            }
+            else
+            {
+                list.Remove(path);
+            }
+
+            // Compare the exact raw value immediately before replacing the complete list.
+            var confirmation = await ReadListAsync(ct).ConfigureAwait(false);
+            if (!confirmation.Ok)
+            {
+                return ListMutationOutcome.Fail(
+                    $"Could not read GNOME shortcut list: {confirmation.Error.Trim()}"
+                );
+            }
+
+            if (
+                !string.Equals(candidateRaw, confirmation.Raw, StringComparison.Ordinal)
+            )
+            {
+                candidateRaw = confirmation.Raw;
+                continue;
+            }
+
+            var backupPath = await SnapshotListAsync(candidateRaw, ct).ConfigureAwait(false);
+            if (backupPath is null)
+            {
+                return ListMutationOutcome.Fail(
+                    "Could not write GNOME backup file. Refusing to modify shortcuts."
+                );
+            }
+
+            var (setOk, _, setErr) = await RunAsync(
+                    "gsettings",
+                    ["set", MediaKeysSchema, ListKey, FormatGSettingsList(list)],
+                    ct
+                )
+                .ConfigureAwait(false);
+            if (!setOk)
+            {
+                return ListMutationOutcome.Fail(
+                    $"Could not update GNOME shortcut list: {setErr.Trim()}",
+                    [backupPath]
+                );
+            }
+
+            return ListMutationOutcome.ChangedList(backupPath);
+        }
+
+        return ListMutationOutcome.Fail(
+            "GNOME shortcut list kept changing while TypeWhisper was updating it. Please retry."
         );
     }
 
@@ -492,7 +519,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
     ///     single quotes gsettings prints (unescaping <c>\'</c> and <c>\\</c>).
     ///     Returns null when the key can't be read.
     /// </summary>
-    private static async Task<string?> GetStringValueAsync(
+    private async Task<string?> GetStringValueAsync(
         string schemaWithPath,
         string key,
         CancellationToken ct
@@ -557,14 +584,29 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         return true;
     }
 
-    private static async Task<string?> SnapshotListAsync(string currentValue, CancellationToken ct)
+    private async Task<(bool Ok, string Raw, string Error)> ReadListAsync(
+        CancellationToken ct
+    )
+    {
+        var (ok, raw, error) = await RunAsync(
+                "gsettings",
+                ["get", MediaKeysSchema, ListKey],
+                ct
+            )
+            .ConfigureAwait(false);
+        return (ok, raw, error);
+    }
+
+    private async Task<string?> SnapshotListAsync(string currentValue, CancellationToken ct)
     {
         try
         {
-            var dir = Path.Join(TypeWhisperEnvironment.BasePath, "backups");
-            Directory.CreateDirectory(dir);
-            var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
-            var file = Path.Join(dir, $"gnome-keybindings-{stamp}.txt");
+            Directory.CreateDirectory(_backupDirectory);
+            var stamp = DateTime.UtcNow.ToString(
+                "yyyyMMdd-HHmmss-fffffff",
+                CultureInfo.InvariantCulture
+            );
+            var file = Path.Join(_backupDirectory, $"gnome-keybindings-{stamp}.txt");
             var contents =
                 $"# GNOME custom-keybindings list snapshot taken {DateTime.UtcNow:O}\n"
                 + $"# Restore with:\n"
@@ -573,53 +615,55 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             await File.WriteAllTextAsync(file, contents, ct).ConfigureAwait(false);
             return file;
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch
         {
             return null;
         }
     }
 
-    private static async Task<(bool ok, string stdout, string stderr)> RunAsync(
+    private async Task<(bool ok, string stdout, string stderr)> RunAsync(
         string fileName,
         IReadOnlyList<string> args,
         CancellationToken ct
     )
     {
-        var psi = new ProcessStartInfo
+        var result = await _processRunner.RunAsync(fileName, args, ct: ct)
+            .ConfigureAwait(false);
+        // Some runners report cancellation as a result rather than throwing; enforce it either way.
+        ct.ThrowIfCancellationRequested();
+        return (result.Succeeded, result.StandardOutput, result.StandardError);
+    }
+
+    private sealed record ListMutationOutcome(
+        bool Changed,
+        string? BackupPath,
+        DeShortcutWriteResult? Failure
+    )
+    {
+        public static ListMutationOutcome ChangedList(string backupPath)
         {
-            FileName = fileName,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        foreach (var a in args)
-        {
-            psi.ArgumentList.Add(a);
+            return new ListMutationOutcome(true, backupPath, null);
         }
 
-        try
+        public static ListMutationOutcome NoChange()
         {
-            using var proc = Process.Start(psi);
-            if (proc is null)
-            {
-                return (false, string.Empty, $"Could not start {fileName}");
-            }
+            return new ListMutationOutcome(false, null, null);
+        }
 
-            var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
-            var stderrTask = proc.StandardError.ReadToEndAsync(ct);
-            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
-            var stdout = await stdoutTask.ConfigureAwait(false);
-            var stderr = await stderrTask.ConfigureAwait(false);
-            return (proc.ExitCode == 0, stdout, stderr);
-        }
-        catch (OperationCanceledException)
+        public static ListMutationOutcome Fail(
+            string message,
+            IReadOnlyList<string>? filesChanged = null
+        )
         {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return (false, string.Empty, ex.Message);
+            return new ListMutationOutcome(
+                false,
+                null,
+                new DeShortcutWriteResult(false, message, filesChanged ?? [])
+            );
         }
     }
 }
