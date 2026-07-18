@@ -65,31 +65,8 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
 
     public async Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct)
     {
-        if (!DesktopDetector.BinaryExists("gsettings"))
-        {
-            return false;
-        }
-
         var path = BuildCustomPath(spec.ShortcutId);
-        var (ok, listOut, _) = await RunAsync(
-                "gsettings",
-                ["get", MediaKeysSchema, ListKey],
-                ct
-            )
-            .ConfigureAwait(false);
-        if (!ok)
-        {
-            return false;
-        }
-
-        try
-        {
-            if (!ParseGSettingsList(listOut).Contains(path))
-            {
-                return false;
-            }
-        }
-        catch (FormatException)
+        if (!await IsManagedPathListedAsync(path, ct).ConfigureAwait(false))
         {
             return false;
         }
@@ -100,6 +77,11 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         var command = await GetStringValueAsync(schemaWithPath, "command", ct).ConfigureAwait(false);
         var binding = await GetStringValueAsync(schemaWithPath, "binding", ct).ConfigureAwait(false);
         return command == spec.OnPressCommand && binding == FormatGnomeAccel(spec.Trigger);
+    }
+
+    public Task<bool> IsManagedShortcutPresentAsync(string shortcutId, CancellationToken ct)
+    {
+        return IsManagedPathListedAsync(BuildCustomPath(shortcutId), ct);
     }
 
     public async Task<DeShortcutWriteResult> WriteAsync(DeShortcutSpec spec, CancellationToken ct)
@@ -595,6 +577,34 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             )
             .ConfigureAwait(false);
         return (ok, raw, error);
+    }
+
+    private async Task<bool> IsManagedPathListedAsync(string path, CancellationToken ct)
+    {
+        if (!DesktopDetector.BinaryExists("gsettings"))
+        {
+            return false;
+        }
+
+        var (ok, listOut, _) = await RunAsync(
+                "gsettings",
+                ["get", MediaKeysSchema, ListKey],
+                ct
+            )
+            .ConfigureAwait(false);
+        if (!ok)
+        {
+            return false;
+        }
+
+        try
+        {
+            return ParseGSettingsList(listOut).Contains(path);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
     }
 
     private async Task<string?> SnapshotListAsync(string currentValue, CancellationToken ct)

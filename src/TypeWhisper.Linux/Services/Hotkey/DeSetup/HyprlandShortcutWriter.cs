@@ -6,9 +6,9 @@ namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 /// <summary>
 ///     Hyprland shortcut writer. On Write, a managed sentinel block with the
 ///     <c>bind</c>/<c>bindr</c>/cancel lines is upserted into
-///     <c>~/.config/hypr/hyprland.conf</c>, then each line is applied live via
-///     <c>hyprctl keyword</c>. If hyprctl fails the config write still succeeds
-///     — a warning is surfaced instead of an error.
+///     <c>~/.config/hypr/hyprland.conf</c>, then the compositor is reloaded so
+///     replaced or removed binds are dropped as well. If <c>hyprctl reload</c> fails,
+///     the config write still succeeds and a warning is surfaced instead of an error.
 /// </summary>
 public sealed class HyprlandShortcutWriter : IDeShortcutWriter
 {
@@ -38,13 +38,13 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
     public string DisplayName => "Hyprland";
     public bool SupportsPushToTalk => true;
 
-    // hyprctl applies the bind live (a warning is surfaced if it couldn't).
+    // hyprctl reload applies the committed config live (a warning is surfaced if it couldn't).
     public bool RequiresSessionRestartToApply => false;
 
     public bool IsCurrentDesktop()
     {
         // HYPRLAND_INSTANCE_SIGNATURE is only set inside a live session;
-        // hyprctl must also be present for the runtime-bind step.
+        // hyprctl must also be present for the live reload step.
         return DesktopDetector.DetectId() == "hyprland" && DesktopDetector.BinaryExists("hyprctl");
     }
 
@@ -62,30 +62,19 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
 
     public async Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct)
     {
-        var path = ResolveConfigPath();
-        if (!File.Exists(path))
-        {
-            return false;
-        }
+        var inner = await ReadManagedBlockLinesAsync(ct).ConfigureAwait(false);
+        // Stale or manually edited blocks read as not-installed so the
+        // checklist re-registers them.
+        var expected = BuildManagedLines(spec).Select(l => l.TrimEnd()).ToList();
+        return inner is not null && inner.SequenceEqual(expected);
+    }
 
-        try
-        {
-            var existing = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
-            var inner = SentinelBlock.ExtractBlockLines(existing);
-            if (inner is null)
-            {
-                return false;
-            }
-
-            // Stale or manually edited blocks read as not-installed so the
-            // checklist re-registers them.
-            var expected = BuildManagedLines(spec).Select(l => l.TrimEnd()).ToList();
-            return inner.SequenceEqual(expected);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            return false;
-        }
+    public async Task<bool> IsManagedShortcutPresentAsync(
+        string shortcutId,
+        CancellationToken ct
+    )
+    {
+        return await ReadManagedBlockLinesAsync(ct).ConfigureAwait(false) is not null;
     }
 
     public async Task<DeShortcutWriteResult> WriteAsync(DeShortcutSpec spec, CancellationToken ct)
@@ -156,14 +145,14 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             );
         }
 
-        // Apply live via hyprctl one line at a time to isolate failures.
-        // Non-fatal — the persistent config is already written.
-        var liveOk = await ApplyLiveAsync(spec, ct).ConfigureAwait(false);
+        // A full reload is required to drop any old trigger/release/cancel binds that
+        // were replaced in the persistent block. Non-fatal: the config is committed.
+        var liveOk = await ReloadAsync(ct).ConfigureAwait(false);
 
         const string message = "Hyprland shortcut installed in ~/.config/hypr/hyprland.conf";
         var warning = liveOk
             ? null
-            : "Config written, but `hyprctl` could not apply the bind live. Run `hyprctl reload` (or restart Hyprland) to pick it up.";
+            : "Config written, but `hyprctl reload` failed. Reload or restart Hyprland to pick up the binding.";
         return new DeShortcutWriteResult(true, message, [path], warning);
     }
 
@@ -214,13 +203,15 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
                     continue;
                 }
 
-                // Hyprland's unbind syntax varies across versions; asking the user
-                // to reload is more robust than attempting a live removal.
+                var reloaded = await ReloadAsync(ct).ConfigureAwait(false);
+                var warning = reloaded
+                    ? null
+                    : RemovalRequiresReloadWarning;
                 return new DeShortcutWriteResult(
                     true,
                     "Hyprland managed block removed.",
                     [path],
-                    RemovalRequiresReloadWarning
+                    warning
                 );
             }
             catch (OperationCanceledException)
@@ -305,35 +296,42 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
         yield return $"bind  = {cmods}, {ckey}, exec, {spec.OnCancelCommand}";
     }
 
-    private static async Task<bool> ApplyLiveAsync(DeShortcutSpec spec, CancellationToken ct)
+    private static async Task<IReadOnlyList<string>?> ReadManagedBlockLinesAsync(
+        CancellationToken ct
+    )
+    {
+        var path = ResolveConfigPath();
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            var existing = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
+            var scan = SentinelBlock.Scan(existing);
+            if (scan.Mismatched || scan.OpenLine is null)
+            {
+                return null;
+            }
+
+            return SentinelBlock.ExtractBlockLines(existing);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    private static async Task<bool> ReloadAsync(CancellationToken ct)
     {
         if (!DesktopDetector.BinaryExists("hyprctl"))
         {
             return false;
         }
 
-        var anyFailed = false;
-        foreach (var line in BuildManagedLines(spec))
-        {
-            // hyprctl keyword wants keyword and value as separate args.
-            var trimmed = line.TrimStart();
-            var eq = trimmed.IndexOf('=');
-            if (eq < 0)
-            {
-                continue;
-            }
-
-            var keyword = trimmed[..eq].Trim();
-            var value = trimmed[(eq + 1)..].Trim();
-            var (ok, _, _) = await RunAsync("hyprctl", ["keyword", keyword, value], ct)
-                .ConfigureAwait(false);
-            if (!ok)
-            {
-                anyFailed = true;
-            }
-        }
-
-        return !anyFailed;
+        var (ok, _, _) = await RunAsync("hyprctl", ["reload"], ct).ConfigureAwait(false);
+        return ok;
     }
 
     private static string ResolveConfigPath()

@@ -52,6 +52,15 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
         }
     }
 
+    public Task<bool> IsManagedShortcutPresentAsync(string shortcutId, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var (_, target) = ResolveTargetPath(shortcutId);
+        return Task.FromResult(
+            File.Exists(target) && IsOwnedByTypeWhisper(target, shortcutId)
+        );
+    }
+
     public async Task<DeShortcutWriteResult> WriteAsync(DeShortcutSpec spec, CancellationToken ct)
     {
         var (dir, target) = ResolveTargetPath(spec.ShortcutId);

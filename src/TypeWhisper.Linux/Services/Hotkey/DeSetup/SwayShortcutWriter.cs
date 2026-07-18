@@ -56,29 +56,18 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
 
     public async Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct)
     {
-        var path = ResolveConfigPath();
-        if (!File.Exists(path))
-        {
-            return false;
-        }
+        var inner = await ReadManagedBlockLinesAsync(ct).ConfigureAwait(false);
+        // Must match exactly — a stale trigger or manual edit reads as not-installed.
+        var expected = BuildManagedLines(spec).Select(l => l.TrimEnd()).ToList();
+        return inner is not null && inner.SequenceEqual(expected);
+    }
 
-        try
-        {
-            var existing = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
-            var inner = SentinelBlock.ExtractBlockLines(existing);
-            if (inner is null)
-            {
-                return false;
-            }
-
-            // Must match exactly — a stale trigger or manual edit reads as not-installed.
-            var expected = BuildManagedLines(spec).Select(l => l.TrimEnd()).ToList();
-            return inner.SequenceEqual(expected);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            return false;
-        }
+    public async Task<bool> IsManagedShortcutPresentAsync(
+        string shortcutId,
+        CancellationToken ct
+    )
+    {
+        return await ReadManagedBlockLinesAsync(ct).ConfigureAwait(false) is not null;
     }
 
     public async Task<DeShortcutWriteResult> WriteAsync(DeShortcutSpec spec, CancellationToken ct)
@@ -336,6 +325,33 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
         }
 
         return true;
+    }
+
+    private static async Task<IReadOnlyList<string>?> ReadManagedBlockLinesAsync(
+        CancellationToken ct
+    )
+    {
+        var path = ResolveConfigPath();
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            var existing = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
+            var scan = SentinelBlock.Scan(existing);
+            if (scan.Mismatched || scan.OpenLine is null)
+            {
+                return null;
+            }
+
+            return SentinelBlock.ExtractBlockLines(existing);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
     }
 
     private static string ResolveConfigPath()
