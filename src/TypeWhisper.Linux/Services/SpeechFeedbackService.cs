@@ -27,12 +27,18 @@ public sealed class SpeechFeedbackService : IDisposable
 
     private CancellationTokenSource? _speakCts;
 
+    // ReSharper disable once UnusedMember.Global -- resolved by DI (AddSingleton<SpeechFeedbackService>); the analyzer cannot see the reflection-driven construction.
     public SpeechFeedbackService(
         ISettingsService settings,
         PluginManager pluginManager,
-        SystemCommandAvailabilityService commands
+        SystemCommandAvailabilityService commands,
+        IProcessRunner processRunner
     )
-        : this(settings, pluginManager, new LinuxSystemTtsProvider(settings, commands))
+        : this(
+            settings,
+            pluginManager,
+            new LinuxSystemTtsProvider(settings, commands, processRunner)
+        )
     {
     }
 

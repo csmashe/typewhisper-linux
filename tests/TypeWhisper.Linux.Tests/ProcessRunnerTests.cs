@@ -124,6 +124,74 @@ public sealed class ProcessRunnerTests
         }
     }
 
+    [Fact]
+    public async Task RunAsync_kills_and_rethrows_on_caller_cancellation()
+    {
+        var pidFile = Path.Join(
+            Path.GetTempPath(),
+            $"typewhisper-process-runner-cancellation-{Guid.NewGuid():N}.pid"
+        );
+        using var cts = new CancellationTokenSource();
+        int? processId = null;
+        try
+        {
+            var runTask = new ProcessRunner().RunAsync(
+                "/bin/bash",
+                ["-c", "printf '%s' \"$$\" > \"$1\"; sleep 30", "process-runner-test", pidFile],
+                timeout: TimeSpan.FromSeconds(30),
+                ct: cts.Token
+            );
+            processId = await WaitForProcessIdAsync(pidFile);
+
+            // ReSharper disable once MethodHasAsyncOverload -- the test deliberately triggers synchronous CTS cancellation to exercise ProcessRunner's cancel-and-kill path.
+            cts.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                // ReSharper disable once MethodSupportsCancellation -- WaitAsync uses only the test-guard timeout; there is no ambient cancellation token to pass here.
+                async () => await runTask.WaitAsync(s_testGuard)
+            );
+            await AssertProcessDisappearsAsync(processId.Value);
+        }
+        finally
+        {
+            // ReSharper disable once MethodHasAsyncOverload -- synchronous cancellation is the intended cleanup here; no async continuation to await in the finally guard.
+            cts.Cancel();
+            if (processId is { } leakedProcessId)
+            {
+                TryKillProcess(leakedProcessId);
+            }
+
+            File.Delete(pidFile);
+        }
+    }
+
+    private static async Task<int> WaitForProcessIdAsync(string pidFile)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < s_testGuard)
+        {
+            try
+            {
+                if (File.Exists(pidFile))
+                {
+                    var contents = await File.ReadAllTextAsync(pidFile);
+                    if (int.TryParse(contents, out var processId))
+                    {
+                        return processId;
+                    }
+                }
+            }
+            catch (IOException)
+            {
+                // The child may still be publishing the file; retry briefly.
+            }
+
+            await Task.Delay(20);
+        }
+
+        throw new Xunit.Sdk.XunitException("Fake child did not publish its PID in time.");
+    }
+
     // Kill(true) sends SIGKILL but returns before the kernel reaps the process, so
     // /proc/{pid} can linger momentarily; poll briefly instead of asserting instantly.
     private static async Task AssertProcessDisappearsAsync(int processId)
@@ -136,6 +204,19 @@ public sealed class ProcessRunnerTests
                 $"Process {processId} still present in /proc {stopwatch.Elapsed} after kill."
             );
             await Task.Delay(20);
+        }
+    }
+
+    private static void TryKillProcess(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            process.Kill(true);
+        }
+        catch
+        {
+            // The expected path already reaped the fake child.
         }
     }
 }
