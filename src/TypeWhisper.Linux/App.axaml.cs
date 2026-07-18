@@ -717,7 +717,7 @@ public class App : Application
         }
     }
 
-    private static void ApplyConfiguredMicrophone(
+    internal static void ApplyConfiguredMicrophone(
         AudioRecordingService audio,
         ISettingsService settings
     )
@@ -734,6 +734,7 @@ public class App : Application
             var resolved = audio.ResolveConfiguredDevice(configuredIndex, configuredId);
             if (resolved is null)
             {
+                audio.SelectedDeviceIndex = null;
                 return;
             }
 

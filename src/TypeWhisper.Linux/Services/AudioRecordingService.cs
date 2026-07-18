@@ -48,6 +48,7 @@ public sealed class AudioRecordingService : IDisposable
     private readonly Func<int> _defaultInputDeviceIndexProvider;
     private readonly Action _ensurePortAudioInitialized;
     private readonly IErrorLogService? _errorLog;
+    private readonly Func<IReadOnlyList<AudioInputDevice>> _inputDeviceListProvider;
     private readonly Action<int> _openInputStream;
     private readonly List<float[]> _sampleChunks = [];
     private readonly Lock _sampleLock = new();
@@ -83,6 +84,7 @@ public sealed class AudioRecordingService : IDisposable
         _errorLog = errorLog;
         _defaultInputDeviceIndexProvider = static () => PortAudio.DefaultInputDevice;
         _ensurePortAudioInitialized = EnsurePortAudioInitialized;
+        _inputDeviceListProvider = GetInputDevices;
         _openInputStream = OpenInputStream;
         _stopAndDisposeInputStreamCore = StopAndDisposeInputStreamCore;
         _terminatePortAudioOnDispose = true;
@@ -96,10 +98,30 @@ public sealed class AudioRecordingService : IDisposable
         Action stopAndDisposeInputStream,
         IErrorLogService? errorLog = null
     )
+        : this(
+            static () => [],
+            openInputStream,
+            defaultInputDeviceIndexProvider,
+            stopAndDisposeInputStream,
+            errorLog
+        )
+    {
+    }
+
+    // Test seam for configured-device resolution. The provider supplies descriptors only;
+    // matching and fallback decisions remain in ResolveConfiguredDevice.
+    internal AudioRecordingService(
+        Func<IReadOnlyList<AudioInputDevice>> inputDeviceListProvider,
+        Action<int> openInputStream,
+        Func<int> defaultInputDeviceIndexProvider,
+        Action stopAndDisposeInputStream,
+        IErrorLogService? errorLog = null
+    )
     {
         _errorLog = errorLog;
         _defaultInputDeviceIndexProvider = defaultInputDeviceIndexProvider;
         _ensurePortAudioInitialized = static () => { };
+        _inputDeviceListProvider = inputDeviceListProvider;
         _openInputStream = openInputStream;
         _stopAndDisposeInputStreamCore = stopAndDisposeInputStream;
         _terminatePortAudioOnDispose = false;
@@ -406,31 +428,22 @@ public sealed class AudioRecordingService : IDisposable
         UpdateLevel(0f);
     }
 
-    // kept instance: invoked on the injected _audio service by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
-    // ReSharper disable once MemberCanBeMadeStatic.Global
     public AudioInputDevice? ResolveConfiguredDevice(int? preferredIndex, string? preferredDeviceId)
     {
-        var devices = GetInputDevices();
+        var devices = _inputDeviceListProvider();
 
         if (!string.IsNullOrWhiteSpace(preferredDeviceId))
         {
-            var byId = devices.FirstOrDefault(d => d.PersistentId == preferredDeviceId);
-            if (byId is not null)
-            {
-                return byId;
-            }
+            var matches = devices
+                .Where(d => string.Equals(d.PersistentId, preferredDeviceId, StringComparison.Ordinal))
+                .Take(2)
+                .ToArray();
+            return matches.Length == 1 ? matches[0] : null;
         }
 
-        // ReSharper disable once InvertIf — fall-through tail is a coalesce/ternary expression
-        // that inverting this block would duplicate.
         if (preferredIndex.HasValue)
         {
-            var byIndex = devices.FirstOrDefault(d => d.Index == preferredIndex.Value);
-            if (byIndex is not null)
-            {
-                return byIndex;
-            }
+            return null;
         }
 
         return devices.FirstOrDefault(d => d.IsDefault) ?? (devices.Count > 0 ? devices[0] : null);
