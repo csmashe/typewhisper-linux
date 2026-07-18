@@ -15,6 +15,54 @@ public sealed record TtsVoiceOption(string Id, string DisplayName, string? Local
 public sealed class SpeechFeedbackService : IDisposable
 {
     public const string DefaultVoiceOptionId = "__typewhisper_default_voice__";
+    internal static readonly TimeSpan s_recordingAnnouncementTimeout = TimeSpan.FromSeconds(2);
+    internal static readonly TimeSpan s_stopPlaybackTimeout = TimeSpan.FromMilliseconds(500);
+
+    private sealed class PlaybackRequest(long version)
+    {
+        private int _completed;
+
+        public CancellationTokenSource Cancellation { get; } = new();
+        public TaskCompletionSource Completion { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        public ITtsPlaybackSession? Session;
+        public long Version { get; } = version;
+
+        public void CancelAndStop()
+        {
+            try
+            {
+                Cancellation.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Completion won the race and already released the source.
+            }
+
+            try
+            {
+                Volatile.Read(ref Session)?.Stop();
+            }
+            catch
+            {
+                // Best-effort stop of the speech session.
+            }
+        }
+
+        public void Complete()
+        {
+            if (Interlocked.Exchange(ref _completed, 1) != 0)
+            {
+                return;
+            }
+
+            Completion.TrySetResult();
+            Cancellation.Dispose();
+        }
+    }
+
+    private readonly Func<TimeSpan, Task> _delay;
     private readonly Lock _lock = new();
     private readonly PluginManager _pluginManager;
 
@@ -22,10 +70,9 @@ public sealed class SpeechFeedbackService : IDisposable
     private readonly ITtsProviderPlugin _systemProvider;
     private bool _disposed;
     private bool _isPlaybackPending;
+    private PlaybackRequest? _playbackRequest;
     private ITtsPlaybackSession? _playbackSession;
     private long _playbackVersion;
-
-    private CancellationTokenSource? _speakCts;
 
     // ReSharper disable once UnusedMember.Global -- resolved by DI (AddSingleton<SpeechFeedbackService>); the analyzer cannot see the reflection-driven construction.
     public SpeechFeedbackService(
@@ -45,12 +92,14 @@ public sealed class SpeechFeedbackService : IDisposable
     internal SpeechFeedbackService(
         ISettingsService settings,
         PluginManager pluginManager,
-        ITtsProviderPlugin systemProvider
+        ITtsProviderPlugin systemProvider,
+        Func<TimeSpan, Task>? delay = null
     )
     {
         _settings = settings;
         _pluginManager = pluginManager;
         _systemProvider = systemProvider;
+        _delay = delay ?? Task.Delay;
         _pluginManager.PluginStateChanged += OnPluginStateChanged;
     }
 
@@ -174,6 +223,64 @@ public sealed class SpeechFeedbackService : IDisposable
         Speak(Loc.Instance["Speech.Recording"]);
     }
 
+    internal async Task StopCurrentPlaybackBeforeCaptureAsync()
+    {
+        var request = StopPlayback();
+        if (request is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = await WaitForCompletionAsync(request, s_stopPlaybackTimeout)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"SpeechFeedback stop wait error: {ex.Message}");
+        }
+    }
+
+    internal async Task AnnounceRecordingStartedAsync(bool spokenFeedbackEnabled)
+    {
+        if (!spokenFeedbackEnabled)
+        {
+            return;
+        }
+
+        var request = StartPlayback(
+            new TtsSpeakRequest(Loc.Instance["Speech.Recording"]),
+            requireEnabled: false
+        );
+        if (request is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (
+                await WaitForCompletionAsync(request, s_recordingAnnouncementTimeout)
+                    .ConfigureAwait(false)
+            )
+            {
+                return;
+            }
+
+            request.CancelAndStop();
+            _ = await WaitForCompletionAsync(request, s_stopPlaybackTimeout)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Spoken feedback is optional; a failed timeout wait or provider
+            // completion must not leave the request's session unstopped.
+            request.CancelAndStop();
+            Debug.WriteLine($"SpeechFeedback recording announcement error: {ex.Message}");
+        }
+    }
+
     public void AnnounceTranscriptionComplete(
         string text,
         string? language = null,
@@ -190,39 +297,7 @@ public sealed class SpeechFeedbackService : IDisposable
 
     private void Stop()
     {
-        CancellationTokenSource? cts;
-        ITtsPlaybackSession? session;
-
-        lock (_lock)
-        {
-            cts = _speakCts;
-            session = _playbackSession;
-            _speakCts = null;
-            _playbackSession = null;
-            _isPlaybackPending = false;
-        }
-
-        try
-        {
-            cts?.Cancel();
-        }
-        catch
-        {
-            // Best-effort cancellation; the source is disposed in the finally below.
-        }
-        finally
-        {
-            cts?.Dispose();
-        }
-
-        try
-        {
-            session?.Stop();
-        }
-        catch
-        {
-            // Best-effort stop of the speech session.
-        }
+        _ = StopPlayback();
     }
 
     public event EventHandler? ProvidersChanged;
@@ -233,14 +308,23 @@ public sealed class SpeechFeedbackService : IDisposable
         bool useConfiguredLanguageFallback = true
     )
     {
+        _ = StartPlayback(request, requireEnabled, useConfiguredLanguageFallback);
+    }
+
+    private PlaybackRequest? StartPlayback(
+        TtsSpeakRequest request,
+        bool requireEnabled,
+        bool useConfiguredLanguageFallback = true
+    )
+    {
         if (_disposed || string.IsNullOrWhiteSpace(request.Text))
         {
-            return;
+            return null;
         }
 
         if (requireEnabled && !_settings.Current.SpokenFeedbackEnabled)
         {
-            return;
+            return null;
         }
 
         // Callers that have already resolved the readback language (e.g. the
@@ -253,16 +337,17 @@ public sealed class SpeechFeedbackService : IDisposable
 
         Stop();
 
-        var cts = new CancellationTokenSource();
         var version = Interlocked.Increment(ref _playbackVersion);
+        var playbackRequest = new PlaybackRequest(version);
 
         lock (_lock)
         {
-            _speakCts = cts;
+            _playbackRequest = playbackRequest;
             _isPlaybackPending = true;
         }
 
-        _ = SpeakAsync(request, cts, version);
+        _ = SpeakAsync(request, playbackRequest);
+        return playbackRequest;
     }
 
     // When a transcription / manual-readback request carries no language, fall
@@ -297,21 +382,17 @@ public sealed class SpeechFeedbackService : IDisposable
 
     private async Task SpeakAsync(
         TtsSpeakRequest request,
-        CancellationTokenSource cts,
-        long version
+        PlaybackRequest playbackRequest
     )
     {
         ITtsPlaybackSession? session;
         try
         {
             var provider = ResolveSpeakProvider();
-            session = await provider.SpeakAsync(request, cts.Token).ConfigureAwait(false);
-
-            if (cts.IsCancellationRequested)
-            {
-                session.Stop();
-                return;
-            }
+            session = await provider
+                .SpeakAsync(request, playbackRequest.Cancellation.Token)
+                .ConfigureAwait(false);
+            Volatile.Write(ref playbackRequest.Session, session);
 
             // Check that no newer Speak / Stop call has superseded us while
             // SpeakAsync was awaited. If the version has advanced, discard
@@ -319,7 +400,11 @@ public sealed class SpeechFeedbackService : IDisposable
             var accepted = false;
             lock (_lock)
             {
-                if (_speakCts == cts && version == Volatile.Read(ref _playbackVersion))
+                if (
+                    ReferenceEquals(_playbackRequest, playbackRequest)
+                    && playbackRequest.Version == Volatile.Read(ref _playbackVersion)
+                    && !playbackRequest.Cancellation.IsCancellationRequested
+                )
                 {
                     _playbackSession = session;
                     _isPlaybackPending = false;
@@ -327,83 +412,111 @@ public sealed class SpeechFeedbackService : IDisposable
                 }
             }
 
-            if (!accepted)
-            {
-                session.Stop();
-                return;
-            }
-
             EventHandler? completedHandler = null;
             completedHandler = (_, _) =>
             {
                 session.Completed -= completedHandler;
-                OnPlaybackCompleted(session, cts, version);
+                OnPlaybackCompleted(session, playbackRequest);
             };
             session.Completed += completedHandler;
 
+            if (!accepted)
+            {
+                playbackRequest.CancelAndStop();
+            }
+
             if (!session.IsActive)
             {
-                OnPlaybackCompleted(session, cts, version);
+                session.Completed -= completedHandler;
+                OnPlaybackCompleted(session, playbackRequest);
             }
         }
         catch (OperationCanceledException)
         {
-            ClearPending(cts, version);
+            ClearPending(playbackRequest);
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"SpeechFeedback error: {ex.Message}");
-            ClearPending(cts, version);
+            ClearPending(playbackRequest);
         }
     }
 
     private void OnPlaybackCompleted(
         ITtsPlaybackSession session,
-        CancellationTokenSource cts,
-        long version
+        PlaybackRequest playbackRequest
     )
     {
-        var disposeCts = false;
         lock (_lock)
         {
             if (
-                ReferenceEquals(_playbackSession, session)
-                && version == Volatile.Read(ref _playbackVersion)
+                ReferenceEquals(_playbackRequest, playbackRequest)
+                && ReferenceEquals(_playbackSession, session)
+                && playbackRequest.Version == Volatile.Read(ref _playbackVersion)
             )
             {
                 _playbackSession = null;
                 _isPlaybackPending = false;
-                if (_speakCts == cts)
-                {
-                    _speakCts = null;
-                    disposeCts = true;
-                }
+                _playbackRequest = null;
             }
         }
 
-        if (disposeCts)
-        {
-            cts.Dispose();
-        }
+        playbackRequest.Complete();
     }
 
-    private void ClearPending(CancellationTokenSource cts, long version)
+    private void ClearPending(PlaybackRequest playbackRequest)
     {
-        var disposeCts = false;
         lock (_lock)
         {
-            if (_speakCts == cts && version == Volatile.Read(ref _playbackVersion))
+            if (
+                ReferenceEquals(_playbackRequest, playbackRequest)
+                && playbackRequest.Version == Volatile.Read(ref _playbackVersion)
+            )
             {
-                _speakCts = null;
+                _playbackRequest = null;
                 _isPlaybackPending = false;
-                disposeCts = true;
             }
         }
 
-        if (disposeCts)
+        playbackRequest.Complete();
+    }
+
+    private PlaybackRequest? StopPlayback()
+    {
+        PlaybackRequest? playbackRequest;
+        lock (_lock)
         {
-            cts.Dispose();
+            playbackRequest = _playbackRequest;
+            _playbackRequest = null;
+            _playbackSession = null;
+            _isPlaybackPending = false;
         }
+
+        playbackRequest?.CancelAndStop();
+        return playbackRequest;
+    }
+
+    private async Task<bool> WaitForCompletionAsync(
+        PlaybackRequest playbackRequest,
+        TimeSpan timeout
+    )
+    {
+        var completion = playbackRequest.Completion.Task;
+        if (completion.IsCompleted)
+        {
+            await completion.ConfigureAwait(false);
+            return true;
+        }
+
+        var timeoutTask = _delay(timeout);
+        if (await Task.WhenAny(completion, timeoutTask).ConfigureAwait(false) == completion)
+        {
+            await completion.ConfigureAwait(false);
+            return true;
+        }
+
+        await timeoutTask.ConfigureAwait(false);
+        return false;
     }
 
     private IReadOnlyList<ITtsProviderPlugin> AllProviders()

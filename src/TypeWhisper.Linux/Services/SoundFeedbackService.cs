@@ -7,56 +7,68 @@ namespace TypeWhisper.Linux.Services;
 ///     <c>pw-play</c>, <c>paplay</c>, or <c>aplay</c>. Shells out instead of
 ///     using libcanberra so cues play regardless of the desktop sound theme and
 ///     GNOME's "System Sounds" toggle (libcanberra respected that toggle).
-///     Fire-and-forget; silently no-ops when no player or file is available.
 /// </summary>
 public sealed class SoundFeedbackService
 {
+    internal static readonly TimeSpan s_startCueTimeout = TimeSpan.FromSeconds(2);
+
     private static readonly string s_soundsDir =
         Path.Join(AppContext.BaseDirectory, "Resources", "Sounds");
 
-    // First available player on PATH: pw-play (PipeWire), paplay (PulseAudio), aplay (ALSA).
-    private static readonly string? s_player = ResolvePlayer();
+    private readonly string? _player;
+    private readonly IProcessRunner _processRunner;
+    private readonly string _soundsDir;
 
-    // kept instance: injected as a DI/test seam by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
-    // ReSharper disable once MemberCanBeMadeStatic.Global
-    public void PlayRecordingStarted()
+    // ReSharper disable once UnusedMember.Global -- resolved by DI (AddSingleton<SoundFeedbackService>).
+    public SoundFeedbackService(IProcessRunner processRunner)
+        : this(processRunner, ResolvePlayer(), s_soundsDir)
     {
-        Play("start.wav");
     }
 
-    // kept instance: injected as a DI/test seam by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
-    // ReSharper disable once MemberCanBeMadeStatic.Global
+    internal SoundFeedbackService(
+        IProcessRunner processRunner,
+        string? player,
+        string soundsDir
+    )
+    {
+        _processRunner = processRunner;
+        _player = player;
+        _soundsDir = soundsDir;
+    }
+
+    /// <summary>
+    ///     Plays the startup cue to completion before capture opens. The process
+    ///     runner kills and reaps a player that exceeds the finite cue budget.
+    ///     Missing players/files and playback failures remain optional no-ops.
+    /// </summary>
+    internal Task PlayRecordingStartedAsync(CancellationToken ct = default)
+    {
+        return PlayAsync("start.wav", s_startCueTimeout, ct);
+    }
+
     public void PlayRecordingStopped()
     {
-        Play("stop.wav");
+        Observe(PlayAsync("stop.wav", s_startCueTimeout));
     }
 
-    // kept instance: injected as a DI/test seam by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
-    // ReSharper disable once MemberCanBeMadeStatic.Global
     public void PlaySuccess()
     {
-        Play("success.wav");
+        Observe(PlayAsync("success.wav", s_startCueTimeout));
     }
 
-    // kept instance: injected as a DI/test seam by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
-    // ReSharper disable once MemberCanBeMadeStatic.Global
     public void PlayError()
     {
-        Play("error.wav");
+        Observe(PlayAsync("error.wav", s_startCueTimeout));
     }
 
-    private static void Play(string fileName)
+    private async Task PlayAsync(string fileName, TimeSpan timeout, CancellationToken ct = default)
     {
-        if (s_player is null)
+        if (_player is null)
         {
             return;
         }
 
-        var path = Path.Join(s_soundsDir, fileName);
+        var path = Path.Join(_soundsDir, fileName);
         if (!File.Exists(path))
         {
             return;
@@ -64,48 +76,31 @@ public sealed class SoundFeedbackService
 
         try
         {
-            var startInfo = new ProcessStartInfo(s_player)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            startInfo.ArgumentList.Add(path);
-
-            var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return;
-            }
-
-            _ = Task.Run(() =>
-            {
-                try
-                {
-                    // Cues are short (≤0.4s); 2s is ample headroom.
-                    process.WaitForExit(2000);
-                }
-                catch
-                {
-                    // Best-effort only.
-                }
-                finally
-                {
-                    process.Dispose();
-                }
-            });
+            _ = await _processRunner
+                .RunAsync(_player, [path], timeout: timeout, ct: ct)
+                .ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
-            // Optional platform feedback only.
+            // Optional platform feedback only. IProcessRunner has already killed
+            // and reaped the process tree before cancellation is surfaced.
+            Trace.WriteLine($"[SoundFeedback] {fileName} playback failed: {ex.Message}");
         }
+    }
+
+    private static void Observe(Task task)
+    {
+        _ = task.ContinueWith(
+            completed => Trace.WriteLine($"[SoundFeedback] Playback task failed: {completed.Exception}"),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
     }
 
     private static string? ResolvePlayer()
     {
-        // Same candidate order as SystemCommandAvailabilityService.HasAudioPlayer
-        // so s_player is non-null exactly when HasAudioPlayer is true.
+        // Same candidate order as SystemCommandAvailabilityService.HasAudioPlayer.
         return Array.Find(
             ["pw-play", "paplay", "aplay"],
             SystemCommandAvailabilityService.IsCommandAvailable
