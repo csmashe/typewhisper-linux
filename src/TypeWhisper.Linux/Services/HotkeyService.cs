@@ -39,6 +39,7 @@ public sealed class HotkeyService : IDisposable
     private KeyCode _key = KeyCode.VcSpace;
     private RecordingMode _mode = RecordingMode.Toggle;
     private ModifierMask _modifiers = ModifierMask.LeftCtrl | ModifierMask.LeftShift;
+    private volatile bool _nativeDictationBindingActive;
     private EventHandler<string>? _onBackendFailed;
     private EventHandler? _onCancelRequested;
     private EventHandler? _onCopyLastTranscriptionRequested;
@@ -95,6 +96,12 @@ public sealed class HotkeyService : IDisposable
     ///     but downstream UI may surface a hint that only Toggle is effective.
     /// </summary>
     public bool BackendRequiresToggleMode => _backendRequiresToggleMode;
+
+    /// <summary>
+    ///     True when the current native desktop dictation binding has been verified or applied
+    ///     live, so the app-owned fixed dictation route is omitted from backend snapshots.
+    /// </summary>
+    public bool NativeDictationBindingActive => _nativeDictationBindingActive;
 
     /// <summary>
     ///     Stable identifier of the currently active backend (e.g.
@@ -169,6 +176,17 @@ public sealed class HotkeyService : IDisposable
         _transformSelectionKey is null
             ? ""
             : FormatHotkey(_transformSelectionKey.Value, _transformSelectionModifiers);
+
+    public void SetNativeDictationBindingActive(bool active)
+    {
+        if (_nativeDictationBindingActive == active)
+        {
+            return;
+        }
+
+        _nativeDictationBindingActive = active;
+        PushShortcutsIfRunning();
+    }
 
     public void Dispose()
     {
@@ -849,9 +867,11 @@ public sealed class HotkeyService : IDisposable
 
     private GlobalShortcutSet BuildShortcutSet()
     {
+        var nativeDictationBindingActive = _nativeDictationBindingActive;
+        var suppressCancel = nativeDictationBindingActive && _mode == RecordingMode.PushToTalk;
         return new GlobalShortcutSet(
-            _key,
-            _modifiers,
+            nativeDictationBindingActive ? KeyCode.VcUndefined : _key,
+            nativeDictationBindingActive ? ModifierMask.None : _modifiers,
             _promptPaletteKey,
             _promptPaletteModifiers,
             _recentTranscriptionsKey,
@@ -860,10 +880,11 @@ public sealed class HotkeyService : IDisposable
             _copyLastTranscriptionModifiers,
             _transformSelectionKey,
             _transformSelectionModifiers,
-            CancelKey,
-            CancelModifiers,
+            suppressCancel ? KeyCode.VcUndefined : CancelKey,
+            suppressCancel ? ModifierMask.None : CancelModifiers,
             _mode,
-            _cancelShortcutEnabled,
+            // ReSharper disable once SimplifyConditionalTernaryExpression -- kept parallel with the suppressCancel ? x : y projection lines above for readability.
+            suppressCancel ? false : _cancelShortcutEnabled,
             _promptActionHotkeys,
             _profileHotkeys
         );

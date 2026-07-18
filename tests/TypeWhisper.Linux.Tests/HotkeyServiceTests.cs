@@ -1073,4 +1073,199 @@ public sealed class HotkeyServiceTests
         Assert.Equal("keeper", kept.ActionId);
     }
 
+    [Fact]
+    public async Task NativeDictationActive_SuppressesOnlyDictationAndPreservesEveryOtherRoute()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        Assert.True(hotkey.TrySetHotkeyFromString("Ctrl+Shift+F9"));
+        Assert.True(hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Alt+P"));
+        Assert.True(hotkey.TrySetRecentTranscriptionsHotkeyFromString("Ctrl+Alt+R"));
+        Assert.True(hotkey.TrySetCopyLastTranscriptionHotkeyFromString("Ctrl+Alt+C"));
+        Assert.True(hotkey.TrySetTransformSelectionHotkeyFromString("Ctrl+Alt+T"));
+        hotkey.SetDynamicHotkeys(
+            [new PromptActionHotkey("action", KeyCode.VcF10, ModifierMask.LeftMeta)],
+            [
+                new ProfileHotkey(
+                    "profile",
+                    KeyCode.VcF11,
+                    ModifierMask.LeftMeta,
+                    ProfileHotkeyBehavior.StartDictation
+                )
+            ]
+        );
+        hotkey.IsCancelShortcutEnabled = true;
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+        var configured = backend.LastSet;
+        Assert.NotNull(configured);
+
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+
+        var suppressed = backend.LastSet;
+        var registerCount = backend.RegisterCount;
+        Assert.NotNull(suppressed);
+        Assert.True(hotkey.NativeDictationBindingActive);
+        Assert.Equal(KeyCode.VcUndefined, suppressed.DictationKey);
+        Assert.Equal(ModifierMask.None, suppressed.DictationModifiers);
+        Assert.Equal(configured.PromptPaletteKey, suppressed.PromptPaletteKey);
+        Assert.Equal(configured.PromptPaletteModifiers, suppressed.PromptPaletteModifiers);
+        Assert.Equal(configured.RecentTranscriptionsKey, suppressed.RecentTranscriptionsKey);
+        Assert.Equal(
+            configured.RecentTranscriptionsModifiers,
+            suppressed.RecentTranscriptionsModifiers
+        );
+        Assert.Equal(
+            configured.CopyLastTranscriptionKey,
+            suppressed.CopyLastTranscriptionKey
+        );
+        Assert.Equal(
+            configured.CopyLastTranscriptionModifiers,
+            suppressed.CopyLastTranscriptionModifiers
+        );
+        Assert.Equal(configured.TransformSelectionKey, suppressed.TransformSelectionKey);
+        Assert.Equal(
+            configured.TransformSelectionModifiers,
+            suppressed.TransformSelectionModifiers
+        );
+        Assert.Equal(configured.CancelKey, suppressed.CancelKey);
+        Assert.Equal(configured.CancelModifiers, suppressed.CancelModifiers);
+        Assert.Equal(configured.Mode, suppressed.Mode);
+        Assert.Equal(configured.IsCancelEnabled, suppressed.IsCancelEnabled);
+        Assert.Equal(configured.PromptActionHotkeys.ToArray(), suppressed.PromptActionHotkeys);
+        Assert.Equal(configured.ProfileHotkeys.ToArray(), suppressed.ProfileHotkeys);
+        Assert.Equal("Ctrl+Shift+F9", hotkey.CurrentHotkeyString);
+
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+        Assert.Equal(registerCount, backend.RegisterCount);
+    }
+
+    [Theory]
+    [InlineData(RecordingMode.PushToTalk, KeyCode.VcUndefined, false)]
+    [InlineData(RecordingMode.Toggle, KeyCode.VcEscape, true)]
+    public async Task NativeDictationActive_ProjectsCancelOnlyForPushToTalk(
+        RecordingMode mode,
+        KeyCode expectedCancelKey,
+        bool expectedCancelEnabled
+    )
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Mode = mode;
+        hotkey.IsCancelShortcutEnabled = true;
+        hotkey.Initialize();
+
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(expectedCancelKey, snapshot.CancelKey);
+        Assert.Equal(ModifierMask.None, snapshot.CancelModifiers);
+        Assert.Equal(expectedCancelEnabled, snapshot.IsCancelEnabled);
+        Assert.True(hotkey.IsCancelShortcutEnabled);
+    }
+
+    [Fact]
+    public async Task NativeDictationInactive_RestoresConfiguredDictationAndCancelWithoutChangingOthers()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Mode = RecordingMode.PushToTalk;
+        hotkey.IsCancelShortcutEnabled = true;
+        Assert.True(hotkey.TrySetHotkeyFromString("Alt+F8"));
+        Assert.True(hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+P"));
+        Assert.True(hotkey.TrySetRecentTranscriptionsHotkeyFromString("Ctrl+R"));
+        Assert.True(hotkey.TrySetCopyLastTranscriptionHotkeyFromString("Ctrl+C"));
+        Assert.True(hotkey.TrySetTransformSelectionHotkeyFromString("Ctrl+T"));
+        hotkey.SetDynamicHotkeys(
+            [new PromptActionHotkey("action", KeyCode.VcF10, ModifierMask.LeftMeta)],
+            [
+                new ProfileHotkey(
+                    "profile",
+                    KeyCode.VcF11,
+                    ModifierMask.LeftMeta,
+                    ProfileHotkeyBehavior.StartDictation
+                )
+            ]
+        );
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+        var configured = backend.LastSet;
+        Assert.NotNull(configured);
+
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+        Assert.Equal(KeyCode.VcUndefined, backend.LastSet?.DictationKey);
+        Assert.Equal(KeyCode.VcUndefined, backend.LastSet?.CancelKey);
+
+        hotkey.SetNativeDictationBindingActive(false);
+        await backend.WaitUntilSettledAsync();
+
+        var restored = backend.LastSet;
+        Assert.NotNull(restored);
+        Assert.False(hotkey.NativeDictationBindingActive);
+        Assert.Equal(KeyCode.VcF8, restored.DictationKey);
+        Assert.Equal(ModifierMask.LeftAlt, restored.DictationModifiers);
+        Assert.Equal(KeyCode.VcEscape, restored.CancelKey);
+        Assert.Equal(ModifierMask.None, restored.CancelModifiers);
+        Assert.True(restored.IsCancelEnabled);
+        Assert.Equal(configured.PromptPaletteKey, restored.PromptPaletteKey);
+        Assert.Equal(configured.PromptPaletteModifiers, restored.PromptPaletteModifiers);
+        Assert.Equal(configured.RecentTranscriptionsKey, restored.RecentTranscriptionsKey);
+        Assert.Equal(
+            configured.RecentTranscriptionsModifiers,
+            restored.RecentTranscriptionsModifiers
+        );
+        Assert.Equal(
+            configured.CopyLastTranscriptionKey,
+            restored.CopyLastTranscriptionKey
+        );
+        Assert.Equal(
+            configured.CopyLastTranscriptionModifiers,
+            restored.CopyLastTranscriptionModifiers
+        );
+        Assert.Equal(configured.TransformSelectionKey, restored.TransformSelectionKey);
+        Assert.Equal(
+            configured.TransformSelectionModifiers,
+            restored.TransformSelectionModifiers
+        );
+        Assert.Equal(configured.PromptActionHotkeys.ToArray(), restored.PromptActionHotkeys);
+        Assert.Equal(configured.ProfileHotkeys.ToArray(), restored.ProfileHotkeys);
+    }
+
+    [Fact]
+    public async Task NativeDictationActiveBeforeInitialize_SuppressesFirstSnapshot()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+
+        hotkey.SetNativeDictationBindingActive(true);
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+
+        Assert.Equal(1, backend.RegisterCount);
+        Assert.Equal(KeyCode.VcUndefined, backend.LastSet?.DictationKey);
+        Assert.Equal(ModifierMask.None, backend.LastSet?.DictationModifiers);
+    }
+
+    [Fact]
+    public async Task NativeDictationActive_CollisionChecksStillReserveConfiguredChord()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+
+        var accepted = hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Shift+Space");
+
+        Assert.False(accepted);
+        Assert.Equal("Ctrl+Shift+Space", hotkey.CurrentHotkeyString);
+        Assert.Equal("", hotkey.CurrentPromptPaletteHotkeyString);
+        Assert.Equal(KeyCode.VcUndefined, backend.LastSet?.DictationKey);
+    }
+
 }

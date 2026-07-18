@@ -383,6 +383,35 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         return DictationShortcutSpecFactory.Build(_settings, writer);
     }
 
+    internal async Task RefreshNativeDictationBindingStateAsync(CancellationToken ct)
+    {
+        try
+        {
+            var writer = ActiveWriter;
+            var spec = writer is null ? null : BuildSpec(writer);
+            if (writer is null || spec is null)
+            {
+                _hotkey.SetNativeDictationBindingActive(false);
+                return;
+            }
+
+            var isInstalled = await writer.IsInstalledAsync(spec, ct).ConfigureAwait(false);
+            _hotkey.SetNativeDictationBindingActive(isInstalled);
+        }
+        catch (OperationCanceledException)
+        {
+            _hotkey.SetNativeDictationBindingActive(false);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.WriteLine(
+                $"[Shortcuts] Native dictation binding probe failed: {ex.Message}"
+            );
+            _hotkey.SetNativeDictationBindingActive(false);
+        }
+    }
+
     private string GetUnsupportedModeMessage(IDeShortcutWriter writer)
     {
         var modeDisplayName = _settings.Current.Mode switch
@@ -509,6 +538,25 @@ public partial class ShortcutsSectionViewModel : ObservableObject
                 .WriteAsync(spec, CancellationToken.None)
                 .ConfigureAwait(true);
             IntegrationStatusMessage = FormatResultMessage(result);
+
+            if (result.Success)
+            {
+                var appliesImmediately =
+                    !writer.RequiresSessionRestartToApply && result.Warning is null;
+                if (appliesImmediately)
+                {
+                    _hotkey.SetNativeDictationBindingActive(true);
+                    IntegrationStatusMessage =
+                        $"{IntegrationStatusMessage} "
+                        + Loc.Instance["Shortcuts.NativeDictationOwnershipActive"];
+                }
+                else
+                {
+                    IntegrationStatusMessage =
+                        $"{IntegrationStatusMessage} "
+                        + Loc.Instance["Shortcuts.NativeDictationInstallDeferred"];
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -534,6 +582,25 @@ public partial class ShortcutsSectionViewModel : ObservableObject
                 .RemoveAsync(DictationShortcutId, CancellationToken.None)
                 .ConfigureAwait(true);
             IntegrationStatusMessage = FormatResultMessage(result);
+
+            if (result.Success)
+            {
+                var appliesImmediately =
+                    !writer.RequiresSessionRestartToApply && result.Warning is null;
+                if (appliesImmediately)
+                {
+                    _hotkey.SetNativeDictationBindingActive(false);
+                    IntegrationStatusMessage =
+                        $"{IntegrationStatusMessage} "
+                        + Loc.Instance["Shortcuts.NativeDictationRemovalActive"];
+                }
+                else
+                {
+                    IntegrationStatusMessage =
+                        $"{IntegrationStatusMessage} "
+                        + Loc.Instance["Shortcuts.NativeDictationRemovalDeferred"];
+                }
+            }
         }
         catch (Exception ex)
         {
