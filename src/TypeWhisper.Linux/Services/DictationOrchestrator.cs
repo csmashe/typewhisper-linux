@@ -1107,6 +1107,29 @@ public sealed class DictationOrchestrator : IDisposable
         return StopAsync(cancelRequested: false);
     }
 
+    internal static void ReportShortSpeechDiscardOutcome(
+        LinuxShortSpeechDecision discardReason,
+        RecordingContext recordingContext,
+        Action<RecordingContext, string> reportStatus,
+        Action<RecordingContext, string, bool, bool> showFeedback
+    )
+    {
+        var messageKey = discardReason switch
+        {
+            LinuxShortSpeechDecision.DiscardTooShort => "Overlay.TooShort",
+            LinuxShortSpeechDecision.DiscardNoSpeech => "Overlay.NoSpeech",
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(discardReason),
+                discardReason,
+                "Only discard outcomes can be reported."
+            )
+        };
+        var message = Localization.Loc.Instance[messageKey];
+
+        reportStatus(recordingContext, message);
+        showFeedback(recordingContext, message, true, false);
+    }
+
     private async Task StopAsync(bool cancelRequested)
     {
         // Fold both intent sources into the gate so a stop deferred behind an in-progress startup
@@ -1317,19 +1340,12 @@ public sealed class DictationOrchestrator : IDisposable
                     switch (shortSpeechDecision)
                     {
                         case LinuxShortSpeechDecision.DiscardTooShort:
-                            SetOverlayState(state =>
-                                state with
-                                {
-                                    IsOverlayVisible = true,
-                                    ShowFeedback = true,
-                                    FeedbackText = Localization.Loc.Instance["Overlay.TooShort"],
-                                    FeedbackIsError = true,
-                                    IsRecording = false,
-                                    StatusText = Localization.Loc.Instance["Overlay.TooShort"],
-                                    PartialText = null
-                                }
+                            ReportShortSpeechDiscardOutcome(
+                                LinuxShortSpeechDecision.DiscardTooShort,
+                                recordingContext,
+                                ReportStatus,
+                                ShowFeedback
                             );
-                            StatusMessage?.Invoke(this, "Too short");
                             _ = await TeardownStreamingSessionAsync(
                                 stoppedStreamingCoordinator,
                                 stoppedStreamingStartupCts,
@@ -1339,19 +1355,12 @@ public sealed class DictationOrchestrator : IDisposable
                             FinalizeSession(recordingContext.SessionId, "discarded", "Too short");
                             return;
                         case LinuxShortSpeechDecision.DiscardNoSpeech:
-                            SetOverlayState(state =>
-                                state with
-                                {
-                                    IsOverlayVisible = true,
-                                    ShowFeedback = true,
-                                    FeedbackText = Localization.Loc.Instance["Overlay.NoSpeech"],
-                                    FeedbackIsError = true,
-                                    IsRecording = false,
-                                    StatusText = Localization.Loc.Instance["Overlay.NoSpeech"],
-                                    PartialText = null
-                                }
+                            ReportShortSpeechDiscardOutcome(
+                                LinuxShortSpeechDecision.DiscardNoSpeech,
+                                recordingContext,
+                                ReportStatus,
+                                ShowFeedback
                             );
-                            StatusMessage?.Invoke(this, "No speech detected");
                             _ = await TeardownStreamingSessionAsync(
                                 stoppedStreamingCoordinator,
                                 stoppedStreamingStartupCts,
