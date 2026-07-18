@@ -82,6 +82,11 @@ public static class Program
                 if (!string.IsNullOrEmpty(probeError))
                 {
                     Trace.WriteLine($"[Program] Control socket probe: {probeError}");
+                    Console.Error.WriteLine(
+                        "TypeWhisper could not verify that no other instance is running. Startup was canceled."
+                    );
+                    LinuxStartupNotification.NotifyComplete();
+                    return 1;
                 }
 
                 BootTrace.Stage("ControlSocketClient.TrySendToggle (no live peer)");
@@ -92,6 +97,14 @@ public static class Program
                 LinuxStartupNotification.NotifyComplete(); // clear launcher's busy cursor
                 return 0;
             }
+            else if (File.Exists(socketPath))
+            {
+                Console.Error.WriteLine(
+                    "TypeWhisper could not verify that no other instance is running. Startup was canceled."
+                );
+                LinuxStartupNotification.NotifyComplete();
+                return 1;
+            }
             else
             {
                 BootTrace.Stage("ControlSocketClient.IsLivePeer (none)");
@@ -101,6 +114,62 @@ public static class Program
         {
             Trace.WriteLine($"[Program] Control socket probe failed: {ex.Message}");
             BootTrace.Stage($"control socket probe threw: {ex.GetType().Name}");
+            Console.Error.WriteLine(
+                "TypeWhisper could not verify that no other instance is running. Startup was canceled."
+            );
+            LinuxStartupNotification.NotifyComplete();
+            return 1;
+        }
+
+        var restoreResult = SettingsBackupService.ApplyPendingRestoreAtStartup(
+            TypeWhisperEnvironment.BasePath
+        );
+        switch (restoreResult.Status)
+        {
+            case StartupRestoreStatus.None:
+                break;
+
+            case StartupRestoreStatus.Applied:
+                Trace.WriteLine("[Program] Applied the staged settings restore.");
+                BootTrace.Stage("staged settings restore applied");
+                break;
+
+            case StartupRestoreStatus.PriorGenerationRestored:
+                Console.Error.WriteLine(
+                    "The staged settings restore could not be applied. The prior settings generation was restored."
+                );
+                if (restoreResult.Error is not null)
+                {
+                    Trace.WriteLine(
+                        $"[Program] Settings restore rolled back: {restoreResult.Error}"
+                    );
+                }
+
+                BootTrace.Stage("staged settings restore rolled back");
+                break;
+
+            case StartupRestoreStatus.LockUnavailable:
+                Console.Error.WriteLine(
+                    "Another TypeWhisper startup is applying a staged settings restore. Startup was canceled."
+                );
+                Trace.WriteLine($"[Program] Restore lock unavailable: {restoreResult.Error}");
+                LinuxStartupNotification.NotifyComplete();
+                return 1;
+
+            case StartupRestoreStatus.UnresolvedFailure:
+                Console.Error.WriteLine(
+                    "TypeWhisper could not safely recover the staged settings restore. Startup was canceled."
+                );
+                Trace.WriteLine($"[Program] Settings restore recovery failed: {restoreResult.Error}");
+                LinuxStartupNotification.NotifyComplete();
+                return 1;
+
+            default:
+                Console.Error.WriteLine(
+                    "TypeWhisper encountered an unknown staged restore state. Startup was canceled."
+                );
+                LinuxStartupNotification.NotifyComplete();
+                return 1;
         }
 
         Services = BuildServices();

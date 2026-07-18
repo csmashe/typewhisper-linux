@@ -6,6 +6,7 @@
   "About.BackupInvalid": "This file is not a valid TypeWhisper settings backup.",
   "About.BackupInvalidManifest": "The TypeWhisper backup manifest is invalid or unreadable. Restore was canceled.",
   "About.BackupRestored": "Backup restored from {0} file(s). Some restored settings may require an app restart.",
+  "About.BackupStaged": "Backup validated and staged from {0} file(s). Quit and reopen TypeWhisper to apply it.",
   "About.BackupStatusDefault": "Back up settings, profiles, snippets, and plugin data.",
   "About.BackupUnsafePath": "This backup contains an unsafe path and may have been tampered with: {0}",
   "About.BackupUnsupportedPath": "This backup contains an unsupported path and may have been tampered with: {0}",
