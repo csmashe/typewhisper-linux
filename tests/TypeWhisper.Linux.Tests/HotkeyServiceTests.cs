@@ -40,6 +40,253 @@ public sealed class HotkeyServiceTests
     }
 
     [Fact]
+    public void ValidatePromptActionHotkeyCandidate_ReportsMalformedNonblankChord()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+
+        var result = hotkey.ValidatePromptActionHotkeyCandidate(
+            "Ctrl+DefinitelyNotAKey",
+            null,
+            [],
+            []
+        );
+
+        Assert.Equal(HotkeyCandidateValidationStatus.Malformed, result.Status);
+        Assert.False(result.IsValid);
+        Assert.Null(result.NormalizedHotkey);
+    }
+
+    [Fact]
+    public void ValidatePromptActionHotkeyCandidate_RejectsFixedShortcutCollision()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+
+        var result = hotkey.ValidatePromptActionHotkeyCandidate(
+            "Control+Shift+Space",
+            null,
+            [],
+            []
+        );
+
+        Assert.Equal(
+            HotkeyCandidateValidationStatus.CollidesWithFixedBinding,
+            result.Status
+        );
+    }
+
+    [Fact]
+    public void ValidatePromptActionHotkeyCandidate_RejectsEnabledPromptActionCollision()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var actions = new[]
+        {
+            new PromptAction
+            {
+                Id = "other",
+                Name = "Other",
+                SystemPrompt = "x",
+                HotkeyKey = "Alt+F8"
+            }
+        };
+
+        var result = hotkey.ValidatePromptActionHotkeyCandidate(
+            " alt + f8 ",
+            "edited",
+            actions,
+            []
+        );
+
+        Assert.Equal(
+            HotkeyCandidateValidationStatus.CollidesWithPromptAction,
+            result.Status
+        );
+    }
+
+    [Fact]
+    public void ValidatePromptActionHotkeyCandidate_UsesCrossSideModifierPrefixForProfiles()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var profiles = new[]
+        {
+            new Profile
+            {
+                Id = "other",
+                Name = "Other",
+                HotkeyData = "Right Ctrl"
+            }
+        };
+
+        var result = hotkey.ValidatePromptActionHotkeyCandidate(
+            "Ctrl+Alt+R",
+            "edited",
+            [],
+            profiles
+        );
+
+        Assert.Equal(
+            HotkeyCandidateValidationStatus.CollidesWithProfile,
+            result.Status
+        );
+    }
+
+    [Fact]
+    public void ValidateCandidates_AllowOwnUnchangedBindingAndIgnoreDisabledOthers()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var actions = new[]
+        {
+            new PromptAction
+            {
+                Id = "edited-action",
+                Name = "Edited",
+                SystemPrompt = "x",
+                HotkeyKey = "alt+f8"
+            },
+            new PromptAction
+            {
+                Id = "disabled-action",
+                Name = "Disabled",
+                SystemPrompt = "x",
+                HotkeyKey = "Alt+F8",
+                IsEnabled = false
+            }
+        };
+        var profiles = new[]
+        {
+            new Profile
+            {
+                Id = "edited-profile",
+                Name = "Edited",
+                HotkeyData = "Meta+F9"
+            },
+            new Profile
+            {
+                Id = "disabled-profile",
+                Name = "Disabled",
+                HotkeyData = "Meta+F9",
+                IsEnabled = false
+            }
+        };
+
+        var actionResult = hotkey.ValidatePromptActionHotkeyCandidate(
+            " ALT + f8 ",
+            "edited-action",
+            actions,
+            []
+        );
+        var profileResult = hotkey.ValidateProfileHotkeyCandidate(
+            " super + f9 ",
+            ProfileHotkeyBehavior.StartDictation,
+            null,
+            "edited-profile",
+            [],
+            profiles
+        );
+
+        Assert.True(actionResult.IsValid);
+        Assert.Equal("Alt+F8", actionResult.NormalizedHotkey);
+        Assert.True(profileResult.IsValid);
+        Assert.Equal("Meta+F9", profileResult.NormalizedHotkey);
+    }
+
+    [Fact]
+    public async Task ValidatePromptActionHotkeyCandidate_DoesNotRegisterOrMutateBindings()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+        var registerCount = backend.RegisterCount;
+        var originalHotkey = hotkey.CurrentHotkeyString;
+
+        var result = hotkey.ValidatePromptActionHotkeyCandidate(
+            "Alt+F8",
+            null,
+            [],
+            []
+        );
+        await backend.WaitUntilSettledAsync();
+
+        Assert.True(result.IsValid);
+        Assert.Equal(registerCount, backend.RegisterCount);
+        Assert.Equal(originalHotkey, hotkey.CurrentHotkeyString);
+        Assert.Empty(backend.LastSet?.PromptActionHotkeys ?? []);
+        Assert.Empty(backend.LastSet?.ProfileHotkeys ?? []);
+    }
+
+    [Fact]
+    public void ValidateProfileHotkeyCandidate_RequiresUsableSelectedTextDestination()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var disabled = new PromptAction
+        {
+            Id = "disabled",
+            Name = "Disabled",
+            SystemPrompt = "x",
+            IsEnabled = false
+        };
+        var enabled = disabled with { Id = "enabled", Name = "Enabled", IsEnabled = true };
+
+        var nullResult = hotkey.ValidateProfileHotkeyCandidate(
+            "Meta+F9",
+            ProfileHotkeyBehavior.ProcessSelectedText,
+            null,
+            "profile",
+            [disabled, enabled],
+            []
+        );
+        var missingResult = hotkey.ValidateProfileHotkeyCandidate(
+            "Meta+F9",
+            ProfileHotkeyBehavior.ProcessSelectedText,
+            "missing",
+            "profile",
+            [disabled, enabled],
+            []
+        );
+        var disabledResult = hotkey.ValidateProfileHotkeyCandidate(
+            "Meta+F9",
+            ProfileHotkeyBehavior.ProcessSelectedText,
+            "disabled",
+            "profile",
+            [disabled, enabled],
+            []
+        );
+        var enabledResult = hotkey.ValidateProfileHotkeyCandidate(
+            " super + f9 ",
+            ProfileHotkeyBehavior.ProcessSelectedText,
+            "enabled",
+            "profile",
+            [disabled, enabled],
+            []
+        );
+        var blankResult = hotkey.ValidateProfileHotkeyCandidate(
+            "   ",
+            ProfileHotkeyBehavior.ProcessSelectedText,
+            null,
+            "profile",
+            [],
+            []
+        );
+
+        Assert.Equal(
+            HotkeyCandidateValidationStatus.MissingEnabledPromptAction,
+            nullResult.Status
+        );
+        Assert.Equal(
+            HotkeyCandidateValidationStatus.MissingEnabledPromptAction,
+            missingResult.Status
+        );
+        Assert.Equal(
+            HotkeyCandidateValidationStatus.MissingEnabledPromptAction,
+            disabledResult.Status
+        );
+        Assert.True(enabledResult.IsValid);
+        Assert.Equal("Meta+F9", enabledResult.NormalizedHotkey);
+        Assert.True(blankResult.IsValid);
+        Assert.Null(blankResult.NormalizedHotkey);
+    }
+
+    [Fact]
     public async Task Initialize_RecordsRequiresToggleModeFromBackend()
     {
         var backend = new TestShortcutBackend

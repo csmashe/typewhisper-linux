@@ -5,6 +5,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
@@ -17,8 +18,10 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class PromptsSectionViewModel : ObservableObject
 {
     private readonly PluginManager _pluginManager;
+    private readonly IProfileService _profiles;
     private readonly IPromptActionService _prompts;
     private readonly ISettingsService _settings;
+    private readonly HotkeyService _hotkeys;
 
     // Set while hydrating the spoken-command properties from saved settings so the
     // generated On<Property>Changed hooks don't persist the value straight back.
@@ -32,6 +35,9 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private string? _editHotkeyKey;
+
+    [ObservableProperty]
+    private string? _hotkeyValidationMessage;
 
     [ObservableProperty]
     private string _editIcon = "\u2728";
@@ -69,11 +75,15 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     public PromptsSectionViewModel(
         IPromptActionService prompts,
+        IProfileService profiles,
+        HotkeyService hotkeys,
         PluginManager pluginManager,
         ISettingsService settings
     )
     {
         _prompts = prompts;
+        _profiles = profiles;
+        _hotkeys = hotkeys;
         _pluginManager = pluginManager;
         _settings = settings;
 
@@ -249,6 +259,7 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     partial void OnSelectedActionChanged(PromptAction? value)
     {
+        HotkeyValidationMessage = null;
         if (value is null)
         {
             if (!IsCreatingNew)
@@ -273,9 +284,15 @@ public partial class PromptsSectionViewModel : ObservableObject
         NotifyStateChanged();
     }
 
+    partial void OnEditHotkeyKeyChanged(string? value)
+    {
+        HotkeyValidationMessage = null;
+    }
+
     [RelayCommand]
     private void StartCreate()
     {
+        HotkeyValidationMessage = null;
         IsCreatingNew = true;
         ShowEditor = true;
         SelectedAction = null;
@@ -298,6 +315,26 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
+        var hotkeyValidation = _hotkeys.ValidatePromptActionHotkeyCandidate(
+            EditHotkeyKey,
+            _editingActionId,
+            _prompts.Actions,
+            _profiles.Profiles
+        );
+        if (!hotkeyValidation.IsValid)
+        {
+            HotkeyValidationMessage = hotkeyValidation.Status switch
+            {
+                HotkeyCandidateValidationStatus.Malformed =>
+                    Loc.Instance["Prompts.HotkeyMalformed"],
+                _ => Loc.Instance["Prompts.HotkeyCollision"]
+            };
+            return;
+        }
+
+        EditHotkeyKey = hotkeyValidation.NormalizedHotkey;
+        HotkeyValidationMessage = null;
+
         if (IsCreatingNew)
         {
             var action = new PromptAction
@@ -308,7 +345,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                 Icon = EditIcon,
                 ProviderOverride = EditProviderOverride,
                 TargetActionPluginId = EditTargetActionPluginId,
-                HotkeyKey = NormalizeOptionalString(EditHotkeyKey),
+                HotkeyKey = hotkeyValidation.NormalizedHotkey,
                 IsManualOnly = EditIsManualOnly,
                 IsEnabled = true,
                 SortOrder = _prompts.Actions.Count
@@ -346,7 +383,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                             Icon = EditIcon,
                             ProviderOverride = EditProviderOverride,
                             TargetActionPluginId = EditTargetActionPluginId,
-                            HotkeyKey = NormalizeOptionalString(EditHotkeyKey),
+                            HotkeyKey = hotkeyValidation.NormalizedHotkey,
                             IsManualOnly = EditIsManualOnly
                         }
                     ),
@@ -635,6 +672,7 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     private void ClearEditor()
     {
+        HotkeyValidationMessage = null;
         _editingActionId = null;
         EditName = "";
         EditSystemPrompt = "";
@@ -643,11 +681,6 @@ public partial class PromptsSectionViewModel : ObservableObject
         EditTargetActionPluginId = null;
         EditHotkeyKey = null;
         EditIsManualOnly = false;
-    }
-
-    private static string? NormalizeOptionalString(string? value)
-    {
-        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     private void NotifyStateChanged()

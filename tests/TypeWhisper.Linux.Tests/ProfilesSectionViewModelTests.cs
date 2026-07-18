@@ -12,12 +12,14 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class ProfilesSectionViewModelTests : IDisposable
 {
+    private readonly HotkeyService _hotkeys = TestShortcutBackend.CreateHotkeyService();
     private readonly string _tempDir = TestPaths.CreateTempDirectory(
         "TypeWhisper.ProfilesSectionViewModelTests"
     );
 
     public void Dispose()
     {
+        _hotkeys.Dispose();
         try
         {
             TestPaths.DeleteDirectory(_tempDir);
@@ -41,6 +43,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             activeWindow.Object,
             pluginManager,
             promptActions,
+            _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
             new BrowserAccessibilitySetupHelper()
@@ -64,6 +67,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             activeWindow.Object,
             pluginManager,
             promptActions,
+            _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
             new BrowserAccessibilitySetupHelper()
@@ -85,6 +89,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             activeWindow.Object,
             pluginManager,
             promptActions,
+            _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
             new BrowserAccessibilitySetupHelper()
@@ -128,6 +133,208 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void SaveProfile_MalformedBindingDoesNotUpdateAndShowsFeedback()
+    {
+        var existing = CreateEditableProfile(hotkeyData: "Alt+F8");
+        var profiles = CreateProfileServiceMock(existing);
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var sut = new ProfilesSectionViewModel(
+            profiles.Object,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper()
+        )
+        {
+            EditHotkeyData = "Ctrl+NoSuchKey"
+        };
+
+        sut.SaveProfileCommand.Execute(null);
+
+        profiles.Verify(service => service.UpdateProfile(It.IsAny<Profile>()), Times.Never);
+        Assert.Equal("Alt+F8", Assert.Single(profiles.Object.Profiles).HotkeyData);
+        Assert.Equal("Ctrl+NoSuchKey", sut.EditHotkeyData);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
+    }
+
+    [Fact]
+    public void SaveProfile_CrossDynamicPrefixCollisionDoesNotUpdate()
+    {
+        var existing = CreateEditableProfile();
+        var profiles = CreateProfileServiceMock(existing);
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        promptActions.AddAction(
+            new PromptAction
+            {
+                Id = "action",
+                Name = "Action",
+                SystemPrompt = "x",
+                HotkeyKey = "Right Ctrl"
+            }
+        );
+        var sut = new ProfilesSectionViewModel(
+            profiles.Object,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper()
+        )
+        {
+            EditHotkeyData = "Ctrl+Alt+E"
+        };
+
+        sut.SaveProfileCommand.Execute(null);
+
+        profiles.Verify(service => service.UpdateProfile(It.IsAny<Profile>()), Times.Never);
+        Assert.Null(existing.HotkeyData);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
+    }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("missing", false)]
+    [InlineData("disabled", true)]
+    public void SaveProfile_SelectedTextBindingRequiresEnabledPromptAction(
+        string? promptActionId,
+        bool addDisabledAction
+    )
+    {
+        var existing = CreateEditableProfile();
+        var profiles = CreateProfileServiceMock(existing);
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        if (addDisabledAction)
+        {
+            promptActions.AddAction(
+                new PromptAction
+                {
+                    Id = "disabled",
+                    Name = "Disabled",
+                    SystemPrompt = "x",
+                    IsEnabled = false
+                }
+            );
+        }
+
+        var sut = new ProfilesSectionViewModel(
+            profiles.Object,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper()
+        )
+        {
+            EditHotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
+            EditPromptActionId = promptActionId,
+            EditHotkeyData = "Meta+F9"
+        };
+
+        sut.SaveProfileCommand.Execute(null);
+
+        profiles.Verify(service => service.UpdateProfile(It.IsAny<Profile>()), Times.Never);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
+    }
+
+    [Fact]
+    public void SaveProfile_SelectedTextBindingWithEnabledActionPersistsCanonicalChord()
+    {
+        var existing = CreateEditableProfile();
+        var profiles = CreateProfileServiceMock(existing);
+        Profile? persisted = null;
+        profiles
+            .Setup(service => service.UpdateProfile(It.IsAny<Profile>()))
+            .Callback<Profile>(profile => persisted = profile);
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        promptActions.AddAction(
+            new PromptAction
+            {
+                Id = "enabled",
+                Name = "Enabled",
+                SystemPrompt = "x"
+            }
+        );
+        var sut = new ProfilesSectionViewModel(
+            profiles.Object,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper()
+        )
+        {
+            EditHotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
+            EditPromptActionId = "enabled",
+            EditHotkeyData = " super + f9 "
+        };
+
+        sut.SaveProfileCommand.Execute(null);
+
+        profiles.Verify(service => service.UpdateProfile(It.IsAny<Profile>()), Times.Once);
+        Assert.NotNull(persisted);
+        Assert.Equal("Meta+F9", persisted.HotkeyData);
+        Assert.Equal("enabled", persisted.PromptActionId);
+        Assert.Null(sut.HotkeyValidationMessage);
+    }
+
+    [Theory]
+    [InlineData(" alt + f8 ", "Alt+F8")]
+    [InlineData("   ", null)]
+    public void SaveProfile_StartDictationAcceptsValidOrBlankBinding(
+        string draft,
+        string? expected
+    )
+    {
+        var existing = CreateEditableProfile(hotkeyData: "Ctrl+Alt+E");
+        var profiles = CreateProfileServiceMock(existing);
+        Profile? persisted = null;
+        profiles
+            .Setup(service => service.UpdateProfile(It.IsAny<Profile>()))
+            .Callback<Profile>(profile => persisted = profile);
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var sut = new ProfilesSectionViewModel(
+            profiles.Object,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper()
+        )
+        {
+            EditHotkeyBehavior = ProfileHotkeyBehavior.StartDictation,
+            EditHotkeyData = draft
+        };
+
+        sut.SaveProfileCommand.Execute(null);
+
+        profiles.Verify(service => service.UpdateProfile(It.IsAny<Profile>()), Times.Once);
+        Assert.NotNull(persisted);
+        Assert.Equal(expected, persisted.HotkeyData);
+        Assert.Null(sut.HotkeyValidationMessage);
+    }
+
+    [Fact]
     public async Task ActivateLiveContext_AppliesOneSnapshotAndTracksMatchedProfile()
     {
         var service = CreateProfileService();
@@ -159,6 +366,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             activeWindow.Object,
             pluginManager,
             promptActions,
+            _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
             new BrowserAccessibilitySetupHelper()
@@ -214,6 +422,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             activeWindow.Object,
             pluginManager,
             promptActions,
+            _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
             new BrowserAccessibilitySetupHelper()
@@ -264,6 +473,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             activeWindow.Object,
             pluginManager,
             promptActions,
+            _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
             new BrowserAccessibilitySetupHelper()
@@ -306,6 +516,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             activeWindow.Object,
             pluginManager,
             promptActions,
+            _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
             new BrowserAccessibilitySetupHelper()
@@ -353,6 +564,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             activeWindow.Object,
             pluginManager,
             promptActions,
+            _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
             new BrowserAccessibilitySetupHelper()
@@ -380,6 +592,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             activeWindow.Object,
             pluginManager,
             promptActions,
+            _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
             new BrowserAccessibilitySetupHelper()
@@ -405,6 +618,23 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     private ProfileService CreateProfileService()
     {
         return new ProfileService(Path.Join(_tempDir, "profiles.json"));
+    }
+
+    private static Profile CreateEditableProfile(string? hotkeyData = null)
+    {
+        return new Profile
+        {
+            Id = "profile",
+            Name = "Profile",
+            HotkeyData = hotkeyData
+        };
+    }
+
+    private static Mock<IProfileService> CreateProfileServiceMock(Profile profile)
+    {
+        var profiles = new Mock<IProfileService>();
+        profiles.SetupGet(service => service.Profiles).Returns([profile]);
+        return profiles;
     }
 
     private static Mock<IActiveWindowService> CreateActiveWindowService()

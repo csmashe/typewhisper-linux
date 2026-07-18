@@ -538,6 +538,11 @@
                                                     </DataTemplate>
                                                 </ComboBox.ItemTemplate>
                                             </ComboBox>
+                                            <TextBlock Text="{Binding HotkeyValidationMessage}"
+                                                       IsVisible="{Binding HotkeyValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                       Foreground="#F3E1AF"
+                                                       FontSize="12"
+                                                       TextWrapping="Wrap" />
                                         </StackPanel>
                                     </Grid>
                                 </Border>

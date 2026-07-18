@@ -5,6 +5,24 @@ using TypeWhisper.Linux.Services.Hotkey;
 
 namespace TypeWhisper.Linux.Services;
 
+public enum HotkeyCandidateValidationStatus
+{
+    Valid,
+    Malformed,
+    CollidesWithFixedBinding,
+    CollidesWithPromptAction,
+    CollidesWithProfile,
+    MissingEnabledPromptAction
+}
+
+public sealed record HotkeyCandidateValidationResult(
+    HotkeyCandidateValidationStatus Status,
+    string? NormalizedHotkey
+)
+{
+    public bool IsValid => Status == HotkeyCandidateValidationStatus.Valid;
+}
+
 /// <summary>
 ///     Coordinator for global hotkeys. Owns the configured-binding state (the
 ///     eight shortcuts plus mode), parses user-supplied hotkey strings, and
@@ -503,6 +521,159 @@ public sealed class HotkeyService : IDisposable
     }
 
     /// <summary>
+    ///     Validates a proposed prompt-action chord against the same parser, formatter, fixed
+    ///     bindings, and collision matcher used by dynamic reconciliation. The canonical source
+    ///     collections are inspected directly so bindings rejected by the current reconciliation
+    ///     remain visible. No coordinator or backend state is changed.
+    /// </summary>
+    public HotkeyCandidateValidationResult ValidatePromptActionHotkeyCandidate(
+        string? hotkey,
+        string? editedActionId,
+        IEnumerable<PromptAction> promptActions,
+        IEnumerable<Profile> profiles
+    )
+    {
+        ArgumentNullException.ThrowIfNull(promptActions);
+        ArgumentNullException.ThrowIfNull(profiles);
+
+        var parsed = ParseCandidate(hotkey);
+        if (
+            !parsed.IsValid
+            || parsed.NormalizedHotkey is null
+            || !TryParseHotkey(parsed.NormalizedHotkey, out var key, out var modifiers)
+            || key is null
+        )
+        {
+            return parsed;
+        }
+
+        if (HotkeyMatchesAny(key.Value, modifiers, GetFixedHotkeys()))
+        {
+            return parsed with
+            {
+                Status = HotkeyCandidateValidationStatus.CollidesWithFixedBinding,
+                NormalizedHotkey = null
+            };
+        }
+
+        if (
+            promptActions.Any(action =>
+                action.IsEnabled
+                && !string.Equals(action.Id, editedActionId, StringComparison.Ordinal)
+                && HotkeyTextMatches(key.Value, modifiers, action.HotkeyKey)
+            )
+        )
+        {
+            return parsed with
+            {
+                Status = HotkeyCandidateValidationStatus.CollidesWithPromptAction,
+                NormalizedHotkey = null
+            };
+        }
+
+        if (
+            profiles.Any(profile =>
+                profile.IsEnabled
+                && HotkeyTextMatches(key.Value, modifiers, profile.HotkeyData)
+            )
+        )
+        {
+            return parsed with
+            {
+                Status = HotkeyCandidateValidationStatus.CollidesWithProfile,
+                NormalizedHotkey = null
+            };
+        }
+
+        return parsed;
+    }
+
+    /// <summary>
+    ///     Validates a proposed profile chord against the canonical fixed and dynamic sources.
+    ///     Selected-text bindings additionally require a linked action present in the enabled
+    ///     action collection, matching direct prompt-action execution semantics.
+    /// </summary>
+    public HotkeyCandidateValidationResult ValidateProfileHotkeyCandidate(
+        string? hotkey,
+        ProfileHotkeyBehavior behavior,
+        string? promptActionId,
+        string? editedProfileId,
+        IEnumerable<PromptAction> promptActions,
+        IEnumerable<Profile> profiles
+    )
+    {
+        ArgumentNullException.ThrowIfNull(promptActions);
+        ArgumentNullException.ThrowIfNull(profiles);
+
+        var parsed = ParseCandidate(hotkey);
+        if (!parsed.IsValid || parsed.NormalizedHotkey is null)
+        {
+            return parsed;
+        }
+
+        var actionSnapshot = promptActions.ToArray();
+        if (
+            behavior == ProfileHotkeyBehavior.ProcessSelectedText
+            && !actionSnapshot.Any(action =>
+                action.IsEnabled
+                && string.Equals(action.Id, promptActionId, StringComparison.Ordinal)
+            )
+        )
+        {
+            return parsed with
+            {
+                Status = HotkeyCandidateValidationStatus.MissingEnabledPromptAction,
+                NormalizedHotkey = null
+            };
+        }
+
+        if (!TryParseHotkey(parsed.NormalizedHotkey, out var key, out var modifiers) || key is null)
+        {
+            return parsed;
+        }
+
+        if (HotkeyMatchesAny(key.Value, modifiers, GetFixedHotkeys()))
+        {
+            return parsed with
+            {
+                Status = HotkeyCandidateValidationStatus.CollidesWithFixedBinding,
+                NormalizedHotkey = null
+            };
+        }
+
+        if (
+            actionSnapshot.Any(action =>
+                action.IsEnabled
+                && HotkeyTextMatches(key.Value, modifiers, action.HotkeyKey)
+            )
+        )
+        {
+            return parsed with
+            {
+                Status = HotkeyCandidateValidationStatus.CollidesWithPromptAction,
+                NormalizedHotkey = null
+            };
+        }
+
+        if (
+            profiles.Any(profile =>
+                profile.IsEnabled
+                && !string.Equals(profile.Id, editedProfileId, StringComparison.Ordinal)
+                && HotkeyTextMatches(key.Value, modifiers, profile.HotkeyData)
+            )
+        )
+        {
+            return parsed with
+            {
+                Status = HotkeyCandidateValidationStatus.CollidesWithProfile,
+                NormalizedHotkey = null
+            };
+        }
+
+        return parsed;
+    }
+
+    /// <summary>
     ///     Replaces the requested prompt-action candidates, then reconciles both dynamic lists.
     ///     Rejected candidates remain retained so a later reconciliation can activate them.
     /// </summary>
@@ -968,6 +1139,41 @@ public sealed class HotkeyService : IDisposable
             || CollidesAsModifierPrefix(otherKey.Value, otherModifiers, key, modifiers);
     }
 
+    private static HotkeyCandidateValidationResult ParseCandidate(string? hotkey)
+    {
+        if (string.IsNullOrWhiteSpace(hotkey))
+        {
+            return new HotkeyCandidateValidationResult(
+                HotkeyCandidateValidationStatus.Valid,
+                null
+            );
+        }
+
+        if (!TryParseHotkey(hotkey, out var key, out var modifiers) || key is null)
+        {
+            return new HotkeyCandidateValidationResult(
+                HotkeyCandidateValidationStatus.Malformed,
+                null
+            );
+        }
+
+        return new HotkeyCandidateValidationResult(
+            HotkeyCandidateValidationStatus.Valid,
+            FormatHotkey(key.Value, modifiers)
+        );
+    }
+
+    private static bool HotkeyTextMatches(
+        KeyCode key,
+        ModifierMask modifiers,
+        string? otherHotkey
+    )
+    {
+        return !string.IsNullOrWhiteSpace(otherHotkey)
+            && TryParseHotkey(otherHotkey, out var otherKey, out var otherModifiers)
+            && HotkeyMatches(key, modifiers, otherKey, otherModifiers);
+    }
+
     private static bool CollidesAsModifierPrefix(
         KeyCode modifierOnlyKey,
         ModifierMask modifierOnlyMods,
@@ -1015,6 +1221,30 @@ public sealed class HotkeyService : IDisposable
         HotkeyBinding? exclude = null
     )
     {
+        foreach (var binding in GetFixedHotkeys(exclude))
+        {
+            yield return binding;
+        }
+
+        // Dynamic prompt-action bindings make collision detection symmetric: fixed-binding
+        // changes that would shadow a prompt-action chord are also rejected. Dynamic
+        // reconciliation clears both accepted lists before it captures fixed bindings.
+        foreach (var entry in _promptActionHotkeys)
+        {
+            yield return (entry.Key, entry.Modifiers);
+        }
+
+        // Per-profile bindings use the same symmetry rule as prompt actions.
+        foreach (var entry in _profileHotkeys)
+        {
+            yield return (entry.Key, entry.Modifiers);
+        }
+    }
+
+    private IEnumerable<(KeyCode? Key, ModifierMask Modifiers)> GetFixedHotkeys(
+        HotkeyBinding? exclude = null
+    )
+    {
         if (exclude != HotkeyBinding.Dictation)
         {
             yield return (_key, _modifiers);
@@ -1038,20 +1268,6 @@ public sealed class HotkeyService : IDisposable
         if (exclude != HotkeyBinding.TransformSelection)
         {
             yield return (_transformSelectionKey, _transformSelectionModifiers);
-        }
-
-        // Dynamic prompt-action bindings make collision detection symmetric: fixed-binding
-        // changes that would shadow a prompt-action chord are also rejected. Dynamic
-        // reconciliation clears both accepted lists before it captures fixed bindings.
-        foreach (var entry in _promptActionHotkeys)
-        {
-            yield return (entry.Key, entry.Modifiers);
-        }
-
-        // Per-profile bindings use the same symmetry rule as prompt actions.
-        foreach (var entry in _profileHotkeys)
-        {
-            yield return (entry.Key, entry.Modifiers);
         }
     }
 
