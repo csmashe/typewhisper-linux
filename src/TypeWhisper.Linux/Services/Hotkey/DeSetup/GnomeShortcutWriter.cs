@@ -24,13 +24,16 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
 
     private const string ListKey = "custom-keybindings";
 
+    private static readonly TimeSpan s_gsettingsTimeout = TimeSpan.FromSeconds(5);
+
     private readonly string _backupDirectory;
     private readonly IProcessRunner _processRunner;
 
     public GnomeShortcutWriter()
         : this(new ProcessRunner()) { }
 
-    private GnomeShortcutWriter(IProcessRunner processRunner)
+    // ReSharper disable once MemberCanBePrivate.Global -- public DI seam: callers inject an IProcessRunner; the parameterless overload chains here with a real ProcessRunner.
+    public GnomeShortcutWriter(IProcessRunner processRunner)
         : this(processRunner, Path.Join(TypeWhisperEnvironment.BasePath, "backups")) { }
 
     internal GnomeShortcutWriter(IProcessRunner processRunner, string backupDirectory)
@@ -641,11 +644,19 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         CancellationToken ct
     )
     {
-        var result = await _processRunner.RunAsync(fileName, args, ct: ct)
+        var result = await _processRunner.RunAsync(
+                fileName,
+                args,
+                timeout: s_gsettingsTimeout,
+                ct: ct
+            )
             .ConfigureAwait(false);
         // Some runners report cancellation as a result rather than throwing; enforce it either way.
         ct.ThrowIfCancellationRequested();
-        return (result.Succeeded, result.StandardOutput, result.StandardError);
+        var error = result.TimedOut
+            ? $"{fileName} timed out after {s_gsettingsTimeout.TotalSeconds:0} seconds."
+            : result.StandardError;
+        return (result.Succeeded, result.StandardOutput, error);
     }
 
     private sealed record ListMutationOutcome(
