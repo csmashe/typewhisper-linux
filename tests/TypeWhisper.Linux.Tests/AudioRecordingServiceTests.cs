@@ -1,4 +1,6 @@
 using PortAudioSharp;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using Xunit;
 
@@ -137,6 +139,167 @@ public sealed class AudioRecordingServiceTests
 
         Assert.Equal(StreamCallbackResult.Continue, result);
         Assert.False(invoked);
+    }
+
+    [Fact]
+    public void ApplyConfiguredMicrophone_WhenSavedIdentityIsMissing_UsesDefaultWithoutChangingPreference()
+    {
+        const int staleIndex = 4;
+        const int defaultIndex = 9;
+        const string missingId = "Wanted Mic|1";
+        IReadOnlyList<AudioInputDevice> devices =
+        [
+            new(staleIndex, "Replacement Mic", 1, false, "Replacement Mic|1"),
+            new(defaultIndex, "Current Default", 1, true, "Current Default|1")
+        ];
+        var operations = new List<string>();
+        using var service = CreateConfiguredDeviceService(devices, defaultIndex, operations);
+        service.SelectedDeviceIndex = staleIndex;
+        var originalSettings = AppSettings.Default with
+        {
+            SelectedMicrophoneDevice = staleIndex,
+            SelectedMicrophoneDeviceId = missingId
+        };
+        var settings = new FakeSettingsService(originalSettings);
+
+        App.ApplyConfiguredMicrophone(service, settings);
+
+        Assert.Equal(0, settings.SaveCount);
+        Assert.Same(originalSettings, settings.Current);
+        Assert.Equal(staleIndex, settings.Current.SelectedMicrophoneDevice);
+        Assert.Equal(missingId, settings.Current.SelectedMicrophoneDeviceId);
+        Assert.Null(service.SelectedDeviceIndex);
+
+        var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+        Assert.Equal(["open:9"], operations);
+
+        service.StopRecording(session);
+        Assert.Equal(["open:9", "stop:9"], operations);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("   ")]
+    public void ApplyConfiguredMicrophone_WhenStoredIdentityIsAbsent_DoesNotTrustCachedIndex(
+        string? storedDeviceId
+    )
+    {
+        const int staleIndex = 6;
+        const int defaultIndex = 8;
+        IReadOnlyList<AudioInputDevice> devices =
+        [
+            new(staleIndex, "Cached Index Device", 1, false, "Cached Index Device|1"),
+            new(defaultIndex, "Current Default", 1, true, "Current Default|1")
+        ];
+        var operations = new List<string>();
+        using var service = CreateConfiguredDeviceService(devices, defaultIndex, operations);
+        service.SelectedDeviceIndex = staleIndex;
+        var originalSettings = AppSettings.Default with
+        {
+            SelectedMicrophoneDevice = staleIndex,
+            SelectedMicrophoneDeviceId = storedDeviceId
+        };
+        var settings = new FakeSettingsService(originalSettings);
+
+        App.ApplyConfiguredMicrophone(service, settings);
+
+        Assert.Equal(0, settings.SaveCount);
+        Assert.Same(originalSettings, settings.Current);
+        Assert.Equal(staleIndex, settings.Current.SelectedMicrophoneDevice);
+        Assert.Equal(storedDeviceId, settings.Current.SelectedMicrophoneDeviceId);
+        Assert.Null(service.SelectedDeviceIndex);
+
+        var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+        Assert.Equal(["open:8"], operations);
+
+        service.StopRecording(session);
+        Assert.Equal(["open:8", "stop:8"], operations);
+    }
+
+    [Theory]
+    [InlineData(4, 1)]
+    [InlineData(9, 0)]
+    public void ApplyConfiguredMicrophone_WhenStoredIdentityIsUnique_SelectsItAndRefreshesIndexOnlyWhenNeeded(
+        int storedIndex,
+        int expectedSaveCount
+    )
+    {
+        const int intendedIndex = 9;
+        const int defaultIndex = 12;
+        const string intendedId = "Wanted Mic|1";
+        IReadOnlyList<AudioInputDevice> devices =
+        [
+            new(4, "Replacement Mic", 1, false, "Replacement Mic|1"),
+            new(intendedIndex, "Wanted Mic", 1, false, intendedId),
+            new(defaultIndex, "Current Default", 1, true, "Current Default|1")
+        ];
+        var operations = new List<string>();
+        using var service = CreateConfiguredDeviceService(devices, defaultIndex, operations);
+        var settings = new FakeSettingsService(
+            AppSettings.Default with
+            {
+                SelectedMicrophoneDevice = storedIndex,
+                SelectedMicrophoneDeviceId = intendedId
+            }
+        );
+
+        App.ApplyConfiguredMicrophone(service, settings);
+
+        Assert.Equal(expectedSaveCount, settings.SaveCount);
+        Assert.Equal(intendedIndex, settings.Current.SelectedMicrophoneDevice);
+        Assert.Equal(intendedId, settings.Current.SelectedMicrophoneDeviceId);
+        Assert.Equal(intendedIndex, service.SelectedDeviceIndex);
+
+        var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+        Assert.Equal(["open:9"], operations);
+
+        service.StopRecording(session);
+        Assert.Equal(["open:9", "stop:9"], operations);
+    }
+
+    [Fact]
+    public void ApplyConfiguredMicrophone_WhenStoredIdentityIsAmbiguous_UsesDefaultWithoutChangingPreference()
+    {
+        const int staleIndex = 4;
+        const int defaultIndex = 12;
+        const string duplicateId = "Identical Mic|1";
+        IReadOnlyList<AudioInputDevice> devices =
+        [
+            new(7, "Identical Mic", 1, false, duplicateId),
+            new(staleIndex, "Identical Mic", 1, false, duplicateId),
+            new(defaultIndex, "Current Default", 1, true, "Current Default|1")
+        ];
+        var operations = new List<string>();
+        using var service = CreateConfiguredDeviceService(devices, defaultIndex, operations);
+        service.SelectedDeviceIndex = staleIndex;
+        var originalSettings = AppSettings.Default with
+        {
+            SelectedMicrophoneDevice = staleIndex,
+            SelectedMicrophoneDeviceId = duplicateId
+        };
+        var settings = new FakeSettingsService(originalSettings);
+
+        App.ApplyConfiguredMicrophone(service, settings);
+
+        Assert.Equal(0, settings.SaveCount);
+        Assert.Same(originalSettings, settings.Current);
+        Assert.Equal(staleIndex, settings.Current.SelectedMicrophoneDevice);
+        Assert.Equal(duplicateId, settings.Current.SelectedMicrophoneDeviceId);
+        Assert.Null(service.SelectedDeviceIndex);
+
+        var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+        Assert.Equal(["open:12"], operations);
+
+        service.StopRecording(session);
+        Assert.Equal(["open:12", "stop:12"], operations);
     }
 
     [Fact]
@@ -376,5 +539,50 @@ public sealed class AudioRecordingServiceTests
         Assert.True(service.IsRecordingOwnedBy(sessionB));
         Assert.True(service.StopRecording(sessionB).Length > 44);
         Assert.Equal(2, streamStopCount);
+    }
+
+    private static AudioRecordingService CreateConfiguredDeviceService(
+        IReadOnlyList<AudioInputDevice> devices,
+        int defaultDeviceIndex,
+        List<string> operations
+    )
+    {
+        int? openDeviceIndex = null;
+        return new AudioRecordingService(
+            () => devices,
+            deviceIndex =>
+            {
+                Assert.Null(openDeviceIndex);
+                openDeviceIndex = deviceIndex;
+                operations.Add($"open:{deviceIndex}");
+            },
+            () => defaultDeviceIndex,
+            () =>
+            {
+                Assert.True(openDeviceIndex.HasValue);
+                operations.Add($"stop:{openDeviceIndex.Value}");
+                openDeviceIndex = null;
+            }
+        );
+    }
+
+    private sealed class FakeSettingsService(AppSettings current) : ISettingsService
+    {
+        public int SaveCount { get; private set; }
+        public AppSettings Current { get; private set; } = current;
+
+        public AppSettings Load()
+        {
+            return Current;
+        }
+
+        public void Save(AppSettings settings)
+        {
+            SaveCount++;
+            Current = settings;
+            SettingsChanged?.Invoke(settings);
+        }
+
+        public event Action<AppSettings>? SettingsChanged;
     }
 }
