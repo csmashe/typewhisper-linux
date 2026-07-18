@@ -26,6 +26,28 @@ public sealed class LocalizationResourcesTests
         Assert.DoesNotContain(en, kv => string.IsNullOrWhiteSpace(kv.Value));
     }
 
+    [Fact]
+    public void CanonicalCatalog_HasNativeDictationDisclosuresWithoutObsoleteEvdevClaims()
+    {
+        var en = Load(CanonicalLanguage);
+        var disclosureKeys = new[]
+        {
+            "Shortcuts.NativeDictationOwnershipActive",
+            "Shortcuts.NativeDictationInstallDeferred",
+            "Shortcuts.NativeDictationRemovalActive",
+            "Shortcuts.NativeDictationRemovalDeferred"
+        };
+
+        foreach (var key in disclosureKeys)
+        {
+            Assert.True(en.TryGetValue(key, out var value), $"Missing canonical key: {key}");
+            Assert.False(string.IsNullOrWhiteSpace(value), $"Canonical key is empty: {key}");
+        }
+
+        Assert.DoesNotContain("Shortcuts.EvdevDisabledForIntegration", en.Keys);
+        Assert.DoesNotContain("Shortcuts.EvdevStillOffAfterRemoval", en.Keys);
+    }
+
     [Theory]
     [MemberData(nameof(NonCanonicalLanguages))]
     public void TranslationKeysAreSubsetOfEnglish(string lang)

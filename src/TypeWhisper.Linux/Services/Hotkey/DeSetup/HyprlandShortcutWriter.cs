@@ -12,6 +12,9 @@ namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 /// </summary>
 public sealed class HyprlandShortcutWriter : IDeShortcutWriter
 {
+    private const string RemovalRequiresReloadWarning =
+        "Hyprland may still have the live binding. Run `hyprctl reload` (or restart Hyprland) to remove it.";
+
     public string DesktopId => "hyprland";
     public string DisplayName => "Hyprland";
     public bool SupportsPushToTalk => true;
@@ -130,7 +133,8 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 true,
                 "No hyprland.conf to update.",
-                []
+                [],
+                RemovalRequiresReloadWarning
             );
         }
 
@@ -150,7 +154,8 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             return new DeShortcutWriteResult(
                 true,
                 "No Hyprland integration to remove.",
-                []
+                [],
+                RemovalRequiresReloadWarning
             );
         }
 
@@ -172,8 +177,9 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
         // to reload is more robust than attempting a live removal.
         return new DeShortcutWriteResult(
             true,
-            "Hyprland managed block removed. Run `hyprctl reload` (or restart Hyprland) to drop the live binding.",
-            [path]
+            "Hyprland managed block removed.",
+            [path],
+            RemovalRequiresReloadWarning
         );
     }
 

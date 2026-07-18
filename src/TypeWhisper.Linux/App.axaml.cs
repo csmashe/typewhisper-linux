@@ -66,6 +66,35 @@ public class App : Application
             Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(settings.Current.UiLanguage);
             BootTrace.Stage("Loc.Initialize");
 
+            // Reconcile configured state and verify native ownership before DictationOrchestrator
+            // starts HotkeyService. This keeps the first backend snapshot free of a duplicate
+            // app-owned dictation route when the current desktop spec is installed.
+            var hotkey = services.GetRequiredService<HotkeyService>();
+            ReconcileHotkeyOnStartup(hotkey, settings);
+            var shortcuts = services.GetRequiredService<ShortcutsSectionViewModel>();
+            using (var nativeBindingProbeCts = new CancellationTokenSource(TimeSpan.FromSeconds(2)))
+            {
+                try
+                {
+                    shortcuts
+                        .RefreshNativeDictationBindingStateAsync(nativeBindingProbeCts.Token)
+                        .GetAwaiter()
+                        .GetResult();
+                }
+                catch (OperationCanceledException ex)
+                {
+                    hotkey.SetNativeDictationBindingActive(false);
+                    Trace.WriteLine($"[App] Native dictation binding probe timed out: {ex.Message}");
+                }
+                catch (Exception ex)
+                {
+                    hotkey.SetNativeDictationBindingActive(false);
+                    Trace.WriteLine($"[App] Native dictation binding probe failed: {ex}");
+                }
+            }
+
+            BootTrace.Stage("native dictation binding reconciled");
+
             // Tray must be initialized before MainWindow so IsTrayAvailable is set when
             // GeneralSection's close-to-tray binding latches (the probe raises no PropertyChanged).
             var tray = services.GetRequiredService<TrayIconService>();
@@ -191,11 +220,6 @@ public class App : Application
             services.GetRequiredService<RecordingNotificationService>().Initialize();
             BootTrace.Stage("recordingNotification.Initialize");
 
-            // ReconcileHotkeyOnStartup migrates any upstream default and writes the service's
-            // current binding back to settings so subsequent SettingsChanged events don't
-            // silently rebind to a key the user never chose.
-            var hotkey = services.GetRequiredService<HotkeyService>();
-            ReconcileHotkeyOnStartup(hotkey, settings);
             var errorLog = services.GetRequiredService<IErrorLogService>();
             var promptActions = services.GetRequiredService<IPromptActionService>();
             // Seed the disabled auto-cleanup prompt + profile on a first install,
