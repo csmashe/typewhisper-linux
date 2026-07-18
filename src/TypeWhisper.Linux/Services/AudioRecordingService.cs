@@ -45,11 +45,13 @@ public sealed class AudioRecordingService : IDisposable
     private static readonly Lock s_paInitLock = new();
 
     private readonly Lock _captureLock = new();
-    private readonly Func<bool> _ensureInputStreamStarted;
+    private readonly Func<int> _defaultInputDeviceIndexProvider;
+    private readonly Action _ensurePortAudioInitialized;
     private readonly IErrorLogService? _errorLog;
+    private readonly Action<int> _openInputStream;
     private readonly List<float[]> _sampleChunks = [];
     private readonly Lock _sampleLock = new();
-    private readonly Action _stopAndDisposeInputStream;
+    private readonly Action _stopAndDisposeInputStreamCore;
     private readonly bool _terminatePortAudioOnDispose;
     private AudioCaptureSession? _activeCaptureSession;
     private long _captureSessionGeneration;
@@ -63,7 +65,9 @@ public sealed class AudioRecordingService : IDisposable
     // Must be allocation-free and non-blocking; sink borrows processedBuffer (no copy).
     // A throw detaches the sink via CAS so the same exception can't kill every frame.
     private LiveFrameSubscription? _liveFrameSink;
+    private int? _openStreamDeviceIndex;
     private int _sampleCount;
+    private int? _selectedDeviceIndex;
     private PaStream? _stream;
     private int _whisperModeEnabled;
     internal int CaptureSampleRate { get; private set; } = SampleRate;
@@ -77,22 +81,27 @@ public sealed class AudioRecordingService : IDisposable
     public AudioRecordingService(IErrorLogService? errorLog = null)
     {
         _errorLog = errorLog;
-        _ensureInputStreamStarted = EnsureInputStreamStarted;
-        _stopAndDisposeInputStream = StopAndDisposeInputStream;
+        _defaultInputDeviceIndexProvider = static () => PortAudio.DefaultInputDevice;
+        _ensurePortAudioInitialized = EnsurePortAudioInitialized;
+        _openInputStream = OpenInputStream;
+        _stopAndDisposeInputStreamCore = StopAndDisposeInputStreamCore;
         _terminatePortAudioOnDispose = true;
     }
 
-    // Test seam: exercises the real ownership/buffering state machine
-    // without loading PortAudio or touching a device.
+    // Test seam: exercises the production device-selection and ownership state machines
+    // while replacing only PortAudio initialization and stream operations.
     internal AudioRecordingService(
-        Func<bool> ensureInputStreamStarted,
+        Action<int> openInputStream,
+        Func<int> defaultInputDeviceIndexProvider,
         Action stopAndDisposeInputStream,
         IErrorLogService? errorLog = null
     )
     {
         _errorLog = errorLog;
-        _ensureInputStreamStarted = ensureInputStreamStarted;
-        _stopAndDisposeInputStream = stopAndDisposeInputStream;
+        _defaultInputDeviceIndexProvider = defaultInputDeviceIndexProvider;
+        _ensurePortAudioInitialized = static () => { };
+        _openInputStream = openInputStream;
+        _stopAndDisposeInputStreamCore = stopAndDisposeInputStream;
         _terminatePortAudioOnDispose = false;
     }
 
@@ -101,7 +110,23 @@ public sealed class AudioRecordingService : IDisposable
     public float CurrentRmsLevel => Volatile.Read(ref _currentRmsLevel);
     public bool HasSpeechEnergy => CurrentRmsLevel >= SpeechEnergyThreshold;
 
-    public int? SelectedDeviceIndex { get; set; }
+    public int? SelectedDeviceIndex
+    {
+        get
+        {
+            lock (_captureLock)
+            {
+                return _selectedDeviceIndex;
+            }
+        }
+        set
+        {
+            lock (_captureLock)
+            {
+                _selectedDeviceIndex = value;
+            }
+        }
+    }
 
     public void Dispose()
     {
@@ -117,7 +142,7 @@ public sealed class AudioRecordingService : IDisposable
             Volatile.Write(ref _liveFrameSink, null);
             Volatile.Write(ref _isPreviewing, 0);
             Volatile.Write(ref _isRecording, 0);
-            _stopAndDisposeInputStream();
+            StopAndDisposeInputStream();
         }
 
         UpdateLevel(0f);
@@ -170,7 +195,7 @@ public sealed class AudioRecordingService : IDisposable
 
             try
             {
-                if (!_ensureInputStreamStarted())
+                if (!EnsureInputStreamStarted())
                 {
                     _errorLog?.AddEntry(
                         "Recording could not start: no usable microphone was found. "
@@ -267,7 +292,7 @@ public sealed class AudioRecordingService : IDisposable
 
             if (!IsPreviewing)
             {
-                _stopAndDisposeInputStream();
+                StopAndDisposeInputStream();
             }
 
             // Keep the capture lock through materialization. A new owner cannot
@@ -336,7 +361,7 @@ public sealed class AudioRecordingService : IDisposable
 
             try
             {
-                if (!_ensureInputStreamStarted())
+                if (!EnsureInputStreamStarted())
                 {
                     return false;
                 }
@@ -354,7 +379,7 @@ public sealed class AudioRecordingService : IDisposable
                 Volatile.Write(ref _isPreviewing, 0);
                 if (_activeCaptureSession is null)
                 {
-                    _stopAndDisposeInputStream();
+                    StopAndDisposeInputStream();
                 }
 
                 return false;
@@ -374,7 +399,7 @@ public sealed class AudioRecordingService : IDisposable
             Volatile.Write(ref _isPreviewing, 0);
             if (_activeCaptureSession is null)
             {
-                _stopAndDisposeInputStream();
+                StopAndDisposeInputStream();
             }
         }
 
@@ -649,7 +674,9 @@ public sealed class AudioRecordingService : IDisposable
 
     private int? ResolveSelectedDeviceIndex()
     {
-        var deviceIndex = SelectedDeviceIndex ?? PortAudio.DefaultInputDevice;
+        // Called with _captureLock held. Read the selected index once so
+        // resolve/compare/rebuild sees one consistent device snapshot.
+        var deviceIndex = _selectedDeviceIndex ?? _defaultInputDeviceIndexProvider();
         if (deviceIndex != PortAudio.NoDevice)
         {
             return deviceIndex;
@@ -661,26 +688,71 @@ public sealed class AudioRecordingService : IDisposable
 
     private bool EnsureInputStreamStarted()
     {
-        if (_stream is not null)
+        _ensurePortAudioInitialized();
+
+        // Resolve before considering reuse: a preview stream is reusable only
+        // when it was opened for this exact requested/default device index.
+        var deviceIndex = ResolveSelectedDeviceIndex();
+        if (deviceIndex is not null && _openStreamDeviceIndex == deviceIndex)
         {
             return true;
         }
 
-        EnsurePortAudioInitialized();
-
-        var deviceIndex = ResolveSelectedDeviceIndex();
-        if (deviceIndex is null)
+        var replacingPreviewStream = IsPreviewing && _openStreamDeviceIndex is not null;
+        try
         {
-            return false;
-        }
+            StopAndDisposeInputStream();
 
-        // _captureSampleRate is committed only after Start() succeeds — the
-        // PaStream constructor accepts rates that the device rejects at start time.
-        _stream = CreateInputStream(deviceIndex.Value, InputAudioCallback);
-        return true;
+            if (deviceIndex is null)
+            {
+                if (replacingPreviewStream)
+                {
+                    Volatile.Write(ref _isPreviewing, 0);
+                }
+
+                return false;
+            }
+
+            // CaptureSampleRate is committed only after Start() succeeds; publish
+            // the owning device only after the opener returns successfully.
+            _openInputStream(deviceIndex.Value);
+            _openStreamDeviceIndex = deviceIndex.Value;
+            return true;
+        }
+        catch
+        {
+            // The old preview no longer owns a live stream. Do not let a failed
+            // replacement leave the service logically previewing disposed input.
+            if (replacingPreviewStream)
+            {
+                Volatile.Write(ref _isPreviewing, 0);
+            }
+
+            throw;
+        }
     }
 
     private void StopAndDisposeInputStream()
+    {
+        if (_openStreamDeviceIndex is null && _stream is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _stopAndDisposeInputStreamCore();
+        }
+        finally
+        {
+            // Keep the physical stream and its concrete device owner synchronized,
+            // even when best-effort native teardown throws.
+            _stream = null;
+            _openStreamDeviceIndex = null;
+        }
+    }
+
+    private void StopAndDisposeInputStreamCore()
     {
         try
         {
@@ -692,7 +764,13 @@ public sealed class AudioRecordingService : IDisposable
         }
 
         _stream?.Dispose();
-        _stream = null;
+    }
+
+    private void OpenInputStream(int deviceIndex)
+    {
+        // The constructor can accept rates that the device rejects at Start(),
+        // so assign the physical stream only after CreateInputStream has started it.
+        _stream = CreateInputStream(deviceIndex, InputAudioCallback);
     }
 
     private static string GetStableDeviceId(string deviceName, int maxInputChannels)

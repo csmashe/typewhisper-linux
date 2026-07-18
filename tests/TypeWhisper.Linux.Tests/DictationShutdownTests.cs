@@ -200,7 +200,7 @@ public sealed class DictationShutdownTests
 
     private static AudioRecordingService CreateAudioService(Action stopStream)
     {
-        return new AudioRecordingService(() => true, stopStream);
+        return new AudioRecordingService(_ => { }, () => 0, stopStream);
     }
 
     private static AudioRecordingService.AudioCaptureSession StartRecording(
