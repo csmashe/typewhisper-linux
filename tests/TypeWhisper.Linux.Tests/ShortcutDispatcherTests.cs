@@ -8,7 +8,7 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class ShortcutDispatcherTests
 {
     [Fact]
-    public void PromptActionPress_FiresPromptActionRequestedWithId()
+    public void PromptAction_WaitsForTriggerAndAllModifiers_ThenFiresWithId()
     {
         var d = new ShortcutDispatcher();
         d.UpdateShortcuts(
@@ -27,19 +27,24 @@ public sealed class ShortcutDispatcherTests
         };
 
         d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+        Assert.Null(observed);
+        Assert.Equal(0, count);
+
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, false);
+        Assert.Equal(0, count);
+
+        d.Handle(KeyCode.VcLeftAlt, ModifierMask.LeftCtrl, false);
+        Assert.Equal(0, count);
+
+        d.Handle(KeyCode.VcLeftControl, ModifierMask.CapsLock, false);
 
         Assert.Equal("alpha", observed);
         Assert.Equal(1, count);
     }
 
     [Fact]
-    public void PromptActionRelease_ClearsDedupEvenAfterShortcutsReplaced()
+    public void PromptAction_ShortcutsReplacedMidHold_PreservesPayloadAndLaterBinding()
     {
-        // Scenario: user holds Ctrl+Alt+R (alpha fires once). Mid-hold,
-        // the prompt-action list is replaced (action deleted, rebound,
-        // etc.). The release must still clear the press-time entry so a
-        // subsequent press of the same physical key fires again instead
-        // of being dedup'd against a ghost.
         var d = new ShortcutDispatcher();
         d.UpdateShortcuts(
             SetWithPromptAction(
@@ -48,12 +53,12 @@ public sealed class ShortcutDispatcherTests
                 ModifierMask.LeftCtrl | ModifierMask.LeftAlt
             )
         );
-        var count = 0;
-        d.PromptActionRequested += _ => count++;
+        var observed = new List<string>();
+        d.PromptActionRequested += observed.Add;
 
         d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+        Assert.Empty(observed);
 
-        // Replace shortcut set mid-hold — alpha is gone, beta is now on R.
         d.UpdateShortcuts(
             SetWithPromptAction(
                 "beta",
@@ -62,17 +67,22 @@ public sealed class ShortcutDispatcherTests
             )
         );
 
-        d.Handle(KeyCode.VcR, ModifierMask.None, false);
-        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, false);
+        d.Handle(KeyCode.VcLeftAlt, ModifierMask.LeftCtrl, false);
+        d.Handle(KeyCode.VcLeftControl, ModifierMask.None, false);
 
-        // Two distinct presses (alpha then beta) must both fire — the
-        // dedup dictionary must have cleared on release of the physical
-        // key despite the set no longer naming the original action.
-        Assert.Equal(2, count);
+        Assert.Equal(["alpha"], observed);
+
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+        Assert.Equal(["alpha"], observed);
+
+        d.Handle(KeyCode.VcR, ModifierMask.None, false);
+
+        Assert.Equal(["alpha", "beta"], observed);
     }
 
     [Fact]
-    public void PromptActionRepeatedPress_DedupsUntilRelease()
+    public void PromptActionRepeatedPress_DedupsUntilGatedDispatch()
     {
         var d = new ShortcutDispatcher();
         d.UpdateShortcuts(
@@ -87,8 +97,15 @@ public sealed class ShortcutDispatcherTests
 
         d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
         d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
-        d.Handle(KeyCode.VcR, ModifierMask.None, false);
+        Assert.Equal(0, count);
+
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, false);
+        d.Handle(KeyCode.VcLeftAlt, ModifierMask.LeftCtrl, false);
+        d.Handle(KeyCode.VcLeftControl, ModifierMask.None, false);
+        Assert.Equal(1, count);
+
         d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+        d.Handle(KeyCode.VcR, ModifierMask.None, false);
 
         Assert.Equal(2, count);
     }
@@ -214,7 +231,7 @@ public sealed class ShortcutDispatcherTests
     }
 
     [Fact]
-    public void PalettePress_FiresPalette()
+    public void Palette_WaitsForModifiersReleasedBeforeTrigger()
     {
         var d = new ShortcutDispatcher();
         d.UpdateShortcuts(Set(RecordingMode.Toggle));
@@ -222,8 +239,114 @@ public sealed class ShortcutDispatcherTests
         d.PromptPaletteRequested += () => palette++;
 
         d.Handle(KeyCode.VcP, ModifierMask.LeftCtrl, true);
+        Assert.Equal(0, palette);
+
+        d.Handle(KeyCode.VcLeftControl, ModifierMask.None, false);
+        Assert.Equal(0, palette);
+
+        d.Handle(KeyCode.VcP, ModifierMask.CapsLock | ModifierMask.NumLock, false);
 
         Assert.Equal(1, palette);
+    }
+
+    [Fact]
+    public void TransformSelection_WaitsForTriggerAndCtrlShiftAltMetaReleased()
+    {
+        const ModifierMask allShortcutModifiers =
+            ModifierMask.LeftCtrl
+            | ModifierMask.LeftShift
+            | ModifierMask.LeftAlt
+            | ModifierMask.LeftMeta;
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(
+            Set(RecordingMode.Toggle) with
+            {
+                TransformSelectionKey = KeyCode.VcT,
+                TransformSelectionModifiers = allShortcutModifiers
+            }
+        );
+        var transform = 0;
+        d.TransformSelectionRequested += () => transform++;
+
+        d.Handle(KeyCode.VcT, allShortcutModifiers, true);
+        Assert.Equal(0, transform);
+
+        d.Handle(KeyCode.VcT, allShortcutModifiers, false);
+        d.Handle(
+            KeyCode.VcLeftControl,
+            ModifierMask.LeftShift | ModifierMask.LeftAlt | ModifierMask.LeftMeta,
+            false
+        );
+        d.Handle(
+            KeyCode.VcLeftShift,
+            ModifierMask.LeftAlt | ModifierMask.LeftMeta,
+            false
+        );
+        d.Handle(KeyCode.VcLeftAlt, ModifierMask.LeftMeta, false);
+        Assert.Equal(0, transform);
+
+        d.Handle(KeyCode.VcLeftMeta, ModifierMask.None, false);
+
+        Assert.Equal(1, transform);
+    }
+
+    [Fact]
+    public void ResetState_DropsPendingTransformSelection()
+    {
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(
+            Set(RecordingMode.Toggle) with
+            {
+                TransformSelectionKey = KeyCode.VcT,
+                TransformSelectionModifiers = ModifierMask.LeftAlt
+            }
+        );
+        var transform = 0;
+        d.TransformSelectionRequested += () => transform++;
+
+        d.Handle(KeyCode.VcT, ModifierMask.LeftAlt, true);
+        Assert.Equal(0, transform);
+
+        d.ResetState();
+        d.Handle(KeyCode.VcT, ModifierMask.None, false);
+
+        Assert.Equal(0, transform);
+    }
+
+    [Fact]
+    public void ClearShortcuts_DropsPendingWorkflow_OnlyReboundActionFiresAfterReRegister()
+    {
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(
+            SetWithPromptAction(
+                "alpha",
+                KeyCode.VcR,
+                ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+            )
+        );
+        var observed = new List<string>();
+        d.PromptActionRequested += observed.Add;
+
+        // Press queues "alpha", then unregister (clear) before the release that would dispatch it.
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+        d.ClearShortcuts();
+
+        // Re-register the same physical key to a different action.
+        d.UpdateShortcuts(
+            SetWithPromptAction(
+                "beta",
+                KeyCode.VcR,
+                ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+            )
+        );
+
+        // A fresh press/release chord must fire the rebound action, not the stale "alpha".
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, false);
+        d.Handle(KeyCode.VcLeftAlt, ModifierMask.LeftCtrl, false);
+        d.Handle(KeyCode.VcLeftControl, ModifierMask.None, false);
+
+        Assert.Equal(["beta"], observed);
     }
 
     [Fact]
@@ -333,7 +456,7 @@ public sealed class ShortcutDispatcherTests
     }
 
     [Fact]
-    public void ProfileProcessSelectedText_FiresOncePerKeyDown_NotDictation()
+    public void ProfileProcessSelectedText_WaitsForReleaseAndDoesNotStartDictation()
     {
         var d = new ShortcutDispatcher();
         d.UpdateShortcuts(
@@ -355,15 +478,19 @@ public sealed class ShortcutDispatcherTests
         d.ProfileDictationToggleRequested += _ => dictationCount++;
         d.ProfileDictationStartRequested += _ => dictationCount++;
 
-        // Auto-repeat: two presses without a release fire only once.
         d.Handle(KeyCode.VcS, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
-        d.Handle(KeyCode.VcS, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
-        // Release then press again fires a second time.
-        d.Handle(KeyCode.VcS, ModifierMask.None, false);
-        d.Handle(KeyCode.VcS, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        Assert.Null(observed);
+        Assert.Equal(0, textCount);
+        Assert.Equal(0, dictationCount);
+
+        d.Handle(KeyCode.VcS, ModifierMask.LeftCtrl | ModifierMask.LeftShift, false);
+        d.Handle(KeyCode.VcLeftControl, ModifierMask.LeftShift, false);
+        Assert.Equal(0, textCount);
+
+        d.Handle(KeyCode.VcLeftShift, ModifierMask.None, false);
 
         Assert.Equal("summarize", observed);
-        Assert.Equal(2, textCount);
+        Assert.Equal(1, textCount);
         Assert.Equal(0, dictationCount);
     }
 
