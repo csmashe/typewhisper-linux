@@ -94,12 +94,22 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
 
         ct.ThrowIfCancellationRequested();
 
-        // espeak/espeak-ng and spd-say both own their audio output; passing the
-        // text as a single argv avoids a shell and keeps the runner in sole control.
+        var language = NormalizeLanguageHint(request.Language);
+        var args = BuildArguments(command, request.Text, language);
+        IReadOnlyList<string>? fallbackArgs = language is not null && args.Count > 1
+            ? [request.Text]
+            : null;
+
+        // espeak/espeak-ng and spd-say both own their audio output. Arguments
+        // remain separate argv items so no shell or intermediate audio is needed.
+        // If a backend rejects a requested language/voice with a nonzero exit,
+        // the session makes one best-effort default-voice attempt within the same
+        // timeout budget. Launch failures, timeouts, and cancellation never retry.
         var session = new TaskBackedTtsPlaybackSession(
             _processRunner,
             command,
-            [request.Text],
+            args,
+            fallbackArgs,
             CalculatePlaybackTimeout(request.Text.Length),
             ct
         );
@@ -107,6 +117,34 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
     }
 
     public void Dispose() { }
+
+    private static string? NormalizeLanguageHint(string? language)
+    {
+        var normalized = language?.Trim();
+        return string.IsNullOrEmpty(normalized)
+               || string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : normalized;
+    }
+
+    private static IReadOnlyList<string> BuildArguments(
+        string command,
+        string text,
+        string? language
+    )
+    {
+        if (language is null)
+        {
+            return [text];
+        }
+
+        return command switch
+        {
+            "espeak" or "espeak-ng" => ["-v", language, text],
+            "spd-say" => ["-l", language, text],
+            _ => [text]
+        };
+    }
 
     internal static TimeSpan CalculatePlaybackTimeout(int utf16CharacterCount)
     {
@@ -140,15 +178,17 @@ internal sealed class TaskBackedTtsPlaybackSession : ITtsPlaybackSession, IDispo
         IProcessRunner processRunner,
         string command,
         IReadOnlyList<string> args,
+        IReadOnlyList<string>? fallbackArgs,
         TimeSpan timeout,
         CancellationToken ct
     )
     {
         _invocationCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _runnerTask = RunInvocationAsync(
+        _runnerTask = RunInvocationSequenceAsync(
             processRunner,
             command,
             args,
+            fallbackArgs,
             timeout,
             _invocationCts.Token
         );
@@ -216,6 +256,45 @@ internal sealed class TaskBackedTtsPlaybackSession : ITtsPlaybackSession, IDispo
     public void Dispose()
     {
         Stop();
+    }
+
+    private static async Task<ProcessRunResult> RunInvocationSequenceAsync(
+        IProcessRunner processRunner,
+        string command,
+        IReadOnlyList<string> args,
+        IReadOnlyList<string>? fallbackArgs,
+        TimeSpan timeout,
+        CancellationToken ct
+    )
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var result = await RunInvocationAsync(processRunner, command, args, timeout, ct)
+            .ConfigureAwait(false);
+        if (
+            fallbackArgs is null
+            || !result.Started
+            || result.TimedOut
+            || result.ExitCode == 0
+        )
+        {
+            return result;
+        }
+
+        ct.ThrowIfCancellationRequested();
+        var remainingTimeout = timeout - stopwatch.Elapsed;
+        if (remainingTimeout <= TimeSpan.Zero)
+        {
+            return result;
+        }
+
+        return await RunInvocationAsync(
+                processRunner,
+                command,
+                fallbackArgs,
+                remainingTimeout,
+                ct
+            )
+            .ConfigureAwait(false);
     }
 
     private static async Task<ProcessRunResult> RunInvocationAsync(
