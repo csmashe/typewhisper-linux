@@ -174,13 +174,14 @@ public sealed class UpdateCheckService
             // the rate-limit clock or wipe the cached latest version.
             if (!result.Faulted)
             {
-                _prefs.Save(
-                    _prefs.Current with
-                    {
-                        LastUpdateCheckUtc = DateTime.UtcNow,
-                        LastKnownLatestVersion = result.LatestVersion,
-                        LastKnownLatestUrl = result.ReleaseUrl
-                    }
+                _prefs.Update(
+                    preferences =>
+                        preferences with
+                        {
+                            LastUpdateCheckUtc = DateTime.UtcNow,
+                            LastKnownLatestVersion = result.LatestVersion,
+                            LastKnownLatestUrl = result.ReleaseUrl
+                        }
                 );
             }
 
@@ -201,7 +202,7 @@ public sealed class UpdateCheckService
             return;
         }
 
-        _prefs.Save(_prefs.Current with { DismissedUpdateVersion = version });
+        _prefs.Update(current => current with { DismissedUpdateVersion = version });
 
         // Re-raise so banner listeners recompute visibility.
         ResultChanged?.Invoke(LastResult);
