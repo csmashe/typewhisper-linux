@@ -278,39 +278,13 @@ public sealed class DictationOrchestrator : IDisposable
             _sessionActivityMonitor.InputAllowedChanged -= _sessionActivityHandler;
         }
 
-        // Stop any active recording and undo ducking/media-pause before teardown
-        // so the user isn't left with a muted system after exit.
         var captureSession = _audioCaptureSession;
-        if (_audio.IsRecordingOwnedBy(captureSession))
-        {
-            try
-            {
-                _audio.StopRecording(captureSession!);
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Dictation] StopRecording during dispose failed: {ex.Message}");
-            }
-
-            try
-            {
-                _audioDucking.RestoreAudio();
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Dictation] RestoreAudio during dispose failed: {ex.Message}");
-            }
-
-            try
-            {
-                _mediaPause.ResumeMedia();
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Dictation] ResumeMedia during dispose failed: {ex.Message}");
-            }
-        }
-
+        StopCaptureAndRestoreSystemAudio(
+            _audio,
+            captureSession,
+            _audioDucking,
+            _mediaPause
+        );
         Interlocked.CompareExchange(ref _audioCaptureSession, null, captureSession);
 
         ShutdownPartialTranscriptionSession();
@@ -349,6 +323,44 @@ public sealed class DictationOrchestrator : IDisposable
         }
 
         _toggleGate.Dispose();
+    }
+
+    internal static void StopCaptureAndRestoreSystemAudio(
+        AudioRecordingService audio,
+        AudioRecordingService.AudioCaptureSession? captureSession,
+        IAudioDuckingService audioDucking,
+        IMediaPauseService mediaPause
+    )
+    {
+        if (captureSession is not null)
+        {
+            try
+            {
+                audio.StopRecording(captureSession);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] StopRecording during dispose failed: {ex.Message}");
+            }
+        }
+
+        try
+        {
+            audioDucking.RestoreAudio();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] RestoreAudio during dispose failed: {ex.Message}");
+        }
+
+        try
+        {
+            mediaPause.ResumeMedia();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] ResumeMedia during dispose failed: {ex.Message}");
+        }
     }
 
     public void Initialize()

@@ -566,6 +566,11 @@ public class App : Application
             Debug.WriteLine($"[App] Tray dispose failed: {ex.Message}");
         }
 
+        DisposeDictationBeforeAudio(
+            services.GetService<DictationOrchestrator>(),
+            services.GetService<AudioRecordingService>()
+        );
+
         try
         {
             var models = services.GetService<ModelManagerService>();
@@ -577,16 +582,6 @@ public class App : Application
         catch (Exception ex)
         {
             Debug.WriteLine($"[App] Model unload failed: {ex.Message}");
-        }
-
-        try
-        {
-            var audio = services.GetService<AudioRecordingService>();
-            audio?.Dispose();
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[App] Audio dispose failed: {ex.Message}");
         }
 
         try
@@ -617,6 +612,30 @@ public class App : Application
         catch (Exception ex)
         {
             Debug.WriteLine($"[App] Dictation session result store dispose failed: {ex.Message}");
+        }
+    }
+
+    internal static void DisposeDictationBeforeAudio(
+        IDisposable? dictation,
+        IDisposable? audio
+    )
+    {
+        try
+        {
+            dictation?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Dictation dispose failed: {ex.Message}");
+        }
+
+        try
+        {
+            audio?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Audio dispose failed: {ex.Message}");
         }
     }
 
