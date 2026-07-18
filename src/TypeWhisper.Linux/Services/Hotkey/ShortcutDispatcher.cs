@@ -23,7 +23,7 @@ internal sealed class ShortcutDispatcher
 
     // Profile dictation dedup, keyed by physical KeyCode at press time. Also records the
     // recording mode and timestamp so the release path can compute hold duration for
-    // PushToTalk/Hybrid using the press-time mode (mirrors _dictationKeyDownTime).
+    // PushToTalk/Hybrid using the press-time mode (mirrors _mainDictationHeld).
     private readonly Dictionary<KeyCode, (string ProfileId, RecordingMode Mode, DateTime DownAt)>
         _profileDictationKeyDown = new();
 
@@ -31,8 +31,7 @@ internal sealed class ShortcutDispatcher
         new();
     private bool _cancelKeyDown;
     private bool _copyLastKeyDown;
-    private bool _dictationKeyDown;
-    private DateTime _dictationKeyDownTime;
+    private (KeyCode Key, RecordingMode Mode, DateTime DownAt)? _mainDictationHeld;
     private bool _recentKeyDown;
 
     private GlobalShortcutSet? _shortcuts;
@@ -71,8 +70,7 @@ internal sealed class ShortcutDispatcher
             _pendingSelectionWorkflows.Clear();
             _cancelKeyDown = false;
             _copyLastKeyDown = false;
-            _dictationKeyDown = false;
-            _dictationKeyDownTime = default;
+            _mainDictationHeld = null;
             _recentKeyDown = false;
         }
 
@@ -269,22 +267,14 @@ internal sealed class ShortcutDispatcher
                 return;
 
             case ShortcutMatchKind.Dictation:
-                bool claimed;
                 lock (_lock)
                 {
-                    if (_dictationKeyDown)
+                    if (_mainDictationHeld is not null)
                     {
                         return;
                     }
 
-                    _dictationKeyDown = true;
-                    _dictationKeyDownTime = DateTime.UtcNow;
-                    claimed = true;
-                }
-
-                if (!claimed)
-                {
-                    return;
+                    _mainDictationHeld = (key, set.Mode, DateTime.UtcNow);
                 }
 
                 // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined RecordingMode values are handled; the default (out-of-range) branch is intentionally omitted.
@@ -407,26 +397,22 @@ internal sealed class ShortcutDispatcher
             }
         }
 
-        if (key != set.DictationKey)
-        {
-            return;
-        }
-
-        DateTime keyDownAt;
+        (KeyCode Key, RecordingMode Mode, DateTime DownAt) held;
         lock (_lock)
         {
-            if (!_dictationKeyDown)
+            var current = _mainDictationHeld;
+            if (!current.HasValue || current.Value.Key != key)
             {
                 return;
             }
 
-            _dictationKeyDown = false;
-            keyDownAt = _dictationKeyDownTime;
+            held = current.Value;
+            _mainDictationHeld = null;
         }
 
-        var heldMs = (DateTime.UtcNow - keyDownAt).TotalMilliseconds;
+        var heldMs = (DateTime.UtcNow - held.DownAt).TotalMilliseconds;
         // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined RecordingMode values are handled; the default (out-of-range) branch is intentionally omitted.
-        switch (set.Mode)
+        switch (held.Mode)
         {
             case RecordingMode.PushToTalk:
                 Raise(DictationStopRequested, nameof(DictationStopRequested));
