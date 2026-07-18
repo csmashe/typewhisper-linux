@@ -144,6 +144,54 @@ public sealed class ShortcutDispatcherTests
     }
 
     [Fact]
+    public void PushToTalk_BindingReplacedDuringHold_ReleasesOldKeyAndAcceptsNewBinding()
+    {
+        var d = new ShortcutDispatcher();
+        var set = Set(RecordingMode.PushToTalk);
+        d.UpdateShortcuts(set);
+        var start = 0;
+        var stop = 0;
+        d.DictationStartRequested += () => start++;
+        d.DictationStopRequested += () => stop++;
+
+        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        Assert.Equal(1, start);
+
+        d.UpdateShortcuts(set with { DictationKey = KeyCode.VcD });
+        d.Handle(KeyCode.VcSpace, ModifierMask.None, false);
+
+        Assert.Equal(1, stop);
+
+        d.Handle(KeyCode.VcD, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        d.Handle(KeyCode.VcD, ModifierMask.None, false);
+
+        Assert.Equal(2, start);
+        Assert.Equal(2, stop);
+    }
+
+    [Fact]
+    public void PushToTalk_ModeReplacedDuringHold_StopsUsingPressTimeMode()
+    {
+        var d = new ShortcutDispatcher();
+        var set = Set(RecordingMode.PushToTalk);
+        d.UpdateShortcuts(set);
+        var toggle = 0;
+        var start = 0;
+        var stop = 0;
+        d.DictationToggleRequested += () => toggle++;
+        d.DictationStartRequested += () => start++;
+        d.DictationStopRequested += () => stop++;
+
+        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        d.UpdateShortcuts(set with { Mode = RecordingMode.Toggle });
+        d.Handle(KeyCode.VcSpace, ModifierMask.None, false);
+
+        Assert.Equal(0, toggle);
+        Assert.Equal(1, start);
+        Assert.Equal(1, stop);
+    }
+
+    [Fact]
     public void HybridShortPress_DoesNotFireStopOnRelease()
     {
         var d = new ShortcutDispatcher();
