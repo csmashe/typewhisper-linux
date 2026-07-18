@@ -131,8 +131,8 @@ public partial class AboutSection : UserControl
 
             var result = await viewModel.RestoreSettingsBackupAsync(path);
             await ShowMessage(
-                "Settings restored",
-                $"Restored {result.FileCount} file(s). Some restored settings may require an app restart."
+                "Settings restore staged",
+                $"Validated and staged {result.FileCount} file(s). Quit and reopen TypeWhisper to apply the restore."
             );
         }
         catch (Exception ex)

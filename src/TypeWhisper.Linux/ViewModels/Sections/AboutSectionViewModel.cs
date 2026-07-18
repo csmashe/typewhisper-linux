@@ -17,8 +17,6 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class AboutSectionViewModel : ObservableObject
 {
     private readonly IErrorLogService _errorLog;
-    private readonly LinuxPreferencesService _linuxPreferences;
-    private readonly ISettingsService _settings;
     private readonly SettingsBackupService _settingsBackup;
     private readonly UpdateCheckService _updateCheck;
 
@@ -50,15 +48,11 @@ public partial class AboutSectionViewModel : ObservableObject
 
     public AboutSectionViewModel(
         IErrorLogService errorLog,
-        ISettingsService settings,
-        LinuxPreferencesService linuxPreferences,
         SettingsBackupService settingsBackup,
         UpdateCheckService updateCheck
     )
     {
         _errorLog = errorLog;
-        _settings = settings;
-        _linuxPreferences = linuxPreferences;
         _settingsBackup = settingsBackup;
         _updateCheck = updateCheck;
         RefreshErrors();
@@ -156,13 +150,9 @@ public partial class AboutSectionViewModel : ObservableObject
         BackupStatusText = Loc.Instance["About.RestoringBackup"];
         try
         {
-            var result = await Task.Run(() => _settingsBackup.RestoreBackup(path));
-            // Re-load and re-save each settings file so in-memory state
-            // reflects the just-restored files and SettingsChanged is fired.
-            _settings.Save(_settings.Load());
-            _linuxPreferences.Save(_linuxPreferences.Load());
+            var result = await Task.Run(() => _settingsBackup.StageRestore(path));
             BackupStatusText =
-                Loc.Instance.GetString("About.BackupRestored", result.FileCount);
+                Loc.Instance.GetString("About.BackupStaged", result.FileCount);
             return result;
         }
         finally
