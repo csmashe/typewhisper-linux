@@ -40,15 +40,132 @@ public sealed class AudioRecordingServiceTests
         Assert.Same(samples, processed);
     }
 
-    [Fact]
-    public void ResampleToSampleRate_DownsamplesToTargetLength()
+    [Theory]
+    [InlineData(480, 48000, 16000)]
+    [InlineData(441, 44100, 16000)]
+    public void ResampleToSampleRate_DownsamplesToRoundedTargetLength(
+        int inputLength,
+        int sourceSampleRate,
+        int targetSampleRate
+    )
     {
-        var samples = Enumerable.Range(0, 480).Select(i => i / 480f).ToArray();
+        var samples = new float[inputLength];
+        var expectedLength = Math.Max(
+            1,
+            (int)Math.Round(inputLength * (double)targetSampleRate / sourceSampleRate)
+        );
+
+        var processed = AudioRecordingService.ResampleToSampleRate(
+            samples,
+            sourceSampleRate,
+            targetSampleRate
+        );
+
+        Assert.Equal(expectedLength, processed.Length);
+    }
+
+    [Fact]
+    public void ResampleToSampleRate_DownsamplingRejectsStopbandAlias()
+    {
+        const int sourceSampleRate = 48000;
+        const int targetSampleRate = 16000;
+        const int edgeGuard = 256;
+        var samples = GenerateTone(12000, sourceSampleRate);
+
+        var processed = AudioRecordingService.ResampleToSampleRate(
+            samples,
+            sourceSampleRate,
+            targetSampleRate
+        );
+        var baseline = DownsampleThreeToOneUnfiltered(samples, processed.Length);
+        var baselinePower = MeanSquare(baseline, edgeGuard, baseline.Length - edgeGuard);
+        var filteredPower = MeanSquare(processed, edgeGuard, processed.Length - edgeGuard);
+        var attenuationDb = 10 * Math.Log10(Math.Max(filteredPower, 1e-300) / baselinePower);
+
+        Assert.True(baselinePower > 0.1, $"Baseline power was only {baselinePower:R}.");
+        Assert.True(
+            attenuationDb <= -50,
+            $"Stopband attenuation was {attenuationDb:R} dB."
+        );
+    }
+
+    [Fact]
+    public void ResampleToSampleRate_DownsamplingPreservesInBandGainAndAlignment()
+    {
+        const int sourceSampleRate = 48000;
+        const int targetSampleRate = 16000;
+        const int edgeGuard = 256;
+        var samples = GenerateTone(1000, sourceSampleRate);
+
+        var processed = AudioRecordingService.ResampleToSampleRate(
+            samples,
+            sourceSampleRate,
+            targetSampleRate
+        );
+        var baseline = DownsampleThreeToOneUnfiltered(samples, processed.Length);
+        var baselinePower = MeanSquare(baseline, edgeGuard, baseline.Length - edgeGuard);
+        var outputPower = MeanSquare(processed, edgeGuard, processed.Length - edgeGuard);
+        var gainDb = 10 * Math.Log10(outputPower / baselinePower);
+        var rmsError = RootMeanSquareError(
+            processed,
+            baseline,
+            edgeGuard,
+            processed.Length - edgeGuard
+        );
+
+        Assert.InRange(gainDb, -0.25, 0.25);
+        Assert.True(rmsError < 0.01, $"In-band RMS sample error was {rmsError:R}.");
+    }
+
+    [Fact]
+    public void ResampleToSampleRate_DownsamplingPreservesPassbandEdgeTone()
+    {
+        // 6 kHz sits inside the passband (Fp = 0.40 * 16 kHz = 6.4 kHz) and below
+        // the 8 kHz output Nyquist, so its unfiltered 3:1 baseline is alias-free
+        // and the anti-alias filter must pass it at essentially unity gain. A
+        // decimate-then-filter design using source-rate coefficients would instead
+        // gut the 2.4-8 kHz band, so this probe fails that mistake decisively.
+        const int sourceSampleRate = 48000;
+        const int targetSampleRate = 16000;
+        const int edgeGuard = 256;
+        var samples = GenerateTone(6000, sourceSampleRate);
+
+        var processed = AudioRecordingService.ResampleToSampleRate(
+            samples,
+            sourceSampleRate,
+            targetSampleRate
+        );
+        var baseline = DownsampleThreeToOneUnfiltered(samples, processed.Length);
+        var baselinePower = MeanSquare(baseline, edgeGuard, baseline.Length - edgeGuard);
+        var outputPower = MeanSquare(processed, edgeGuard, processed.Length - edgeGuard);
+        var gainDb = 10 * Math.Log10(outputPower / baselinePower);
+        var rmsError = RootMeanSquareError(
+            processed,
+            baseline,
+            edgeGuard,
+            processed.Length - edgeGuard
+        );
+
+        Assert.InRange(gainDb, -1.0, 1.0);
+        Assert.True(rmsError < 0.01, $"Passband-edge RMS sample error was {rmsError:R}.");
+    }
+
+    [Fact]
+    public void ResampleToSampleRate_DownsamplingPreservesConstantSignalAndFiniteEndpoints()
+    {
+        const float signal = 0.25f;
+        var samples = Enumerable.Repeat(signal, 480).ToArray();
 
         var processed = AudioRecordingService.ResampleToSampleRate(samples, 48000, 16000);
 
-        Assert.Equal(160, processed.Length);
-        Assert.Equal(samples[0], processed[0]);
+        Assert.All(
+            processed,
+            sample =>
+            {
+                Assert.True(float.IsFinite(sample));
+                Assert.InRange(sample, signal - 1e-5f, signal + 1e-5f);
+            }
+        );
     }
 
     [Fact]
@@ -645,6 +762,62 @@ public sealed class AudioRecordingServiceTests
         Assert.True(service.IsRecordingOwnedBy(sessionB));
         Assert.True(service.StopRecording(sessionB).Length > 44);
         Assert.Equal(2, streamStopCount);
+    }
+
+    private static float[] GenerateTone(
+        double frequency,
+        int sampleRate,
+        double durationSeconds = 0.5,
+        double amplitude = 0.8,
+        double phase = 0.37
+    )
+    {
+        var samples = new float[(int)(durationSeconds * sampleRate)];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            samples[i] = (float)(amplitude * Math.Sin(2 * Math.PI * frequency * i / sampleRate + phase));
+        }
+
+        return samples;
+    }
+
+    private static float[] DownsampleThreeToOneUnfiltered(float[] samples, int outputLength)
+    {
+        var output = new float[outputLength];
+        for (var i = 0; i < output.Length; i++)
+        {
+            output[i] = samples[3 * i];
+        }
+
+        return output;
+    }
+
+    private static double MeanSquare(float[] samples, int startIndex, int endIndex)
+    {
+        double sumSquares = 0;
+        for (var i = startIndex; i < endIndex; i++)
+        {
+            sumSquares += (double)samples[i] * samples[i];
+        }
+
+        return sumSquares / (endIndex - startIndex);
+    }
+
+    private static double RootMeanSquareError(
+        float[] actual,
+        float[] expected,
+        int startIndex,
+        int endIndex
+    )
+    {
+        double sumSquares = 0;
+        for (var i = startIndex; i < endIndex; i++)
+        {
+            var error = (double)actual[i] - expected[i];
+            sumSquares += error * error;
+        }
+
+        return Math.Sqrt(sumSquares / (endIndex - startIndex));
     }
 
     private static AudioRecordingService CreateConfiguredDeviceService(

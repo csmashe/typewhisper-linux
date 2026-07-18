@@ -508,8 +508,9 @@ public sealed class AudioRecordingService : IDisposable
         return (float)Math.Sqrt(sumSquares / samples.Length);
     }
 
-    // Linear-interpolation resampler: adequate quality for speech (well below
-    // Nyquist for any capture rate) without a native resampling library.
+    // Downsampling applies a symmetric Blackman-windowed sinc low-pass with a
+    // 0.40-to-0.50 target-rate transition band before retaining the existing
+    // linear interpolation and sample alignment. Upsampling uses interpolation alone.
     internal static float[] ResampleToSampleRate(
         float[] samples,
         int sourceSampleRate,
@@ -528,6 +529,41 @@ public sealed class AudioRecordingService : IDisposable
         var output = new float[outputLength];
         var ratio = (double)sourceSampleRate / targetSampleRate;
 
+        if (targetSampleRate > 0 && sourceSampleRate > targetSampleRate)
+        {
+            var filterRadius = (int)Math.Ceiling(24 * ratio);
+            var coefficientCount = filterRadius + 1;
+            const int maxStackAllocatedCoefficientCount = 256;
+            Span<double> coefficients = coefficientCount <= maxStackAllocatedCoefficientCount
+                ? stackalloc double[coefficientCount]
+                : new double[coefficientCount];
+            CreateDownsamplingFilter(
+                coefficients,
+                filterRadius,
+                sourceSampleRate,
+                targetSampleRate
+            );
+
+            for (var i = 0; i < output.Length; i++)
+            {
+                var sourceIndex = i * ratio;
+                var leftIndex = (int)Math.Floor(sourceIndex);
+                var rightIndex = Math.Min(leftIndex + 1, samples.Length - 1);
+                var fraction = (float)(sourceIndex - leftIndex);
+                var leftSample = EvaluateFirAtIndex(samples, leftIndex, coefficients);
+
+                if (rightIndex != leftIndex && fraction != 0f)
+                {
+                    var rightSample = EvaluateFirAtIndex(samples, rightIndex, coefficients);
+                    leftSample += (rightSample - leftSample) * fraction;
+                }
+
+                output[i] = (float)leftSample;
+            }
+
+            return output;
+        }
+
         for (var i = 0; i < output.Length; i++)
         {
             var sourceIndex = i * ratio;
@@ -539,6 +575,56 @@ public sealed class AudioRecordingService : IDisposable
         }
 
         return output;
+    }
+
+    private static void CreateDownsamplingFilter(
+        Span<double> coefficients,
+        int filterRadius,
+        int sourceSampleRate,
+        int targetSampleRate
+    )
+    {
+        var normalizedCutoff = 0.45 * targetSampleRate / sourceSampleRate;
+        double coefficientSum = 0;
+
+        for (var offset = 0; offset <= filterRadius; offset++)
+        {
+            var sincArgument = 2 * normalizedCutoff * offset;
+            var sinc = offset == 0
+                ? 1
+                : Math.Sin(Math.PI * sincArgument) / (Math.PI * sincArgument);
+            var ideal = 2 * normalizedCutoff * sinc;
+            var window = 0.42
+                + 0.50 * Math.Cos(Math.PI * offset / filterRadius)
+                + 0.08 * Math.Cos(2 * Math.PI * offset / filterRadius);
+            var coefficient = ideal * window;
+            coefficients[offset] = coefficient;
+            coefficientSum += offset == 0 ? coefficient : 2 * coefficient;
+        }
+
+        for (var offset = 0; offset < coefficients.Length; offset++)
+        {
+            coefficients[offset] /= coefficientSum;
+        }
+    }
+
+    private static double EvaluateFirAtIndex(
+        float[] samples,
+        int index,
+        ReadOnlySpan<double> coefficients
+    )
+    {
+        var result = coefficients[0] * samples[index];
+        var finalIndex = samples.Length - 1;
+
+        for (var offset = 1; offset < coefficients.Length; offset++)
+        {
+            var leftIndex = Math.Max(index - offset, 0);
+            var rightIndex = Math.Min(index + offset, finalIndex);
+            result += coefficients[offset] * (samples[leftIndex] + samples[rightIndex]);
+        }
+
+        return result;
     }
 
     internal StreamCallbackResult ProcessAudioBufferForTest(float[] frame)
