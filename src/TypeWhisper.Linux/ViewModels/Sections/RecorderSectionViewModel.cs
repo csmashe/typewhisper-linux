@@ -24,6 +24,7 @@ public partial class RecorderSectionViewModel : ObservableObject
     private readonly AudioRecordingService _audio;
     private readonly ModelManagerService _models;
     private readonly ISettingsService _settings;
+    private AudioRecordingService.AudioCaptureSession? _captureSession;
 
     // Command execution and continuations that access this flag run on the UI thread.
     private bool _stopSaveInProgress;
@@ -104,13 +105,14 @@ public partial class RecorderSectionViewModel : ObservableObject
 
     private void StartRecording()
     {
-        _audio.StartRecording();
-        if (!_audio.IsRecording)
+        var captureSession = _audio.TryStartRecording(_settings.Current.WhisperModeEnabled);
+        if (captureSession is null)
         {
             StatusText = Loc.Instance["Recorder.StatusNoMicrophone"];
             return;
         }
 
+        _captureSession = captureSession;
         IsRecording = true;
         OnPropertyChanged(nameof(RecordButtonText));
         _recordingStart = DateTime.UtcNow;
@@ -134,12 +136,16 @@ public partial class RecorderSectionViewModel : ObservableObject
         _timer = null;
 
         var duration = DateTime.UtcNow - _recordingStart;
+        var captureSession = _captureSession;
+        _captureSession = null;
         byte[] wav;
         string filePath;
 
         try
         {
-            wav = await _audio.StopRecordingAsync();
+            wav = captureSession is null
+                ? []
+                : await _audio.StopRecordingAsync(captureSession);
             if (wav.Length == 0)
             {
                 StatusText = Loc.Instance["Recorder.StatusNoAudio"];

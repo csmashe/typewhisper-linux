@@ -162,10 +162,10 @@ public sealed class TransformSelectionService
             return;
         }
 
-        _audio.WhisperModeEnabled = _settings.Current.WhisperModeEnabled;
+        AudioRecordingService.AudioCaptureSession? captureSession;
         try
         {
-            _audio.StartRecording();
+            captureSession = _audio.TryStartRecording(_settings.Current.WhisperModeEnabled);
         }
         catch (Exception ex)
         {
@@ -174,13 +174,19 @@ public sealed class TransformSelectionService
             return;
         }
 
-        if (!_audio.IsRecording)
+        if (captureSession is null)
         {
             await ShowWarningAsync("Could not start recording. Check your microphone settings.");
             return;
         }
 
-        _session = new TransformSelectionSession(selectedText, windowId, processName, windowTitle);
+        _session = new TransformSelectionSession(
+            selectedText,
+            windowId,
+            processName,
+            windowTitle,
+            captureSession
+        );
         PublishOverlay(state =>
             state with
             {
@@ -225,7 +231,7 @@ public sealed class TransformSelectionService
         byte[] wav;
         try
         {
-            wav = await _audio.StopRecordingAsync();
+            wav = await _audio.StopRecordingAsync(session.CaptureSession);
         }
         catch (Exception ex)
         {
@@ -434,6 +440,7 @@ public sealed class TransformSelectionService
         string SelectedText,
         string? WindowId,
         string? ProcessName,
-        string? WindowTitle
+        string? WindowTitle,
+        AudioRecordingService.AudioCaptureSession CaptureSession
     );
 }

@@ -15,6 +15,23 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed class AudioRecordingService : IDisposable
 {
+    internal sealed class AudioCaptureSession
+    {
+        internal AudioCaptureSession(long diagnosticId)
+        {
+            DiagnosticId = diagnosticId;
+        }
+
+        internal long DiagnosticId { get; }
+
+        public override string ToString() => $"AudioCaptureSession({DiagnosticId})";
+    }
+
+    private sealed record LiveFrameSubscription(
+        AudioCaptureSession Session,
+        Action<float[]> Sink
+    );
+
     private const int SampleRate = 16000;
     private const int Channels = 1;
     private const uint FramesPerBuffer = 512;
@@ -27,21 +44,28 @@ public sealed class AudioRecordingService : IDisposable
     private static int s_paInitCount;
     private static readonly Lock s_paInitLock = new();
 
+    private readonly Lock _captureLock = new();
+    private readonly Func<bool> _ensureInputStreamStarted;
+    private readonly IErrorLogService? _errorLog;
     private readonly List<float[]> _sampleChunks = [];
     private readonly Lock _sampleLock = new();
+    private readonly Action _stopAndDisposeInputStream;
+    private readonly bool _terminatePortAudioOnDispose;
+    private AudioCaptureSession? _activeCaptureSession;
+    private long _captureSessionGeneration;
     private float _currentRmsLevel;
     private int _disposed;
     private int _isPreviewing;
     private int _isRecording;
     private long _lastLevelPostedTicksUtc;
 
-    // Per-frame tap fired from the PortAudio realtime thread when copySamples is true.
+    // Per-frame tap fired from the PortAudio realtime thread during an owned capture.
     // Must be allocation-free and non-blocking; sink borrows processedBuffer (no copy).
     // A throw detaches the sink via CAS so the same exception can't kill every frame.
-    private Action<float[]>? _liveFrameSink;
+    private LiveFrameSubscription? _liveFrameSink;
     private int _sampleCount;
     private PaStream? _stream;
-    private readonly IErrorLogService? _errorLog;
+    private int _whisperModeEnabled;
     internal int CaptureSampleRate { get; private set; } = SampleRate;
 
     // PortAudio is initialized lazily via EnsurePortAudioInitialized, so
@@ -53,6 +77,23 @@ public sealed class AudioRecordingService : IDisposable
     public AudioRecordingService(IErrorLogService? errorLog = null)
     {
         _errorLog = errorLog;
+        _ensureInputStreamStarted = EnsureInputStreamStarted;
+        _stopAndDisposeInputStream = StopAndDisposeInputStream;
+        _terminatePortAudioOnDispose = true;
+    }
+
+    // Test seam: exercises the real ownership/buffering state machine
+    // without loading PortAudio or touching a device.
+    internal AudioRecordingService(
+        Func<bool> ensureInputStreamStarted,
+        Action stopAndDisposeInputStream,
+        IErrorLogService? errorLog = null
+    )
+    {
+        _errorLog = errorLog;
+        _ensureInputStreamStarted = ensureInputStreamStarted;
+        _stopAndDisposeInputStream = stopAndDisposeInputStream;
+        _terminatePortAudioOnDispose = false;
     }
 
     public bool IsRecording => Volatile.Read(ref _isRecording) == 1;
@@ -62,27 +103,29 @@ public sealed class AudioRecordingService : IDisposable
 
     public int? SelectedDeviceIndex { get; set; }
 
-    public bool WhisperModeEnabled { get; set; }
-
-    internal Action<float[]>? LiveFrameSink
-    {
-        get => _liveFrameSink;
-        set => _liveFrameSink = value;
-    }
-
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 1)
+        lock (_captureLock)
         {
-            return;
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                return;
+            }
+
+            Volatile.Write(ref _disposed, 1);
+            Volatile.Write(ref _activeCaptureSession, null);
+            Volatile.Write(ref _liveFrameSink, null);
+            Volatile.Write(ref _isPreviewing, 0);
+            Volatile.Write(ref _isRecording, 0);
+            _stopAndDisposeInputStream();
         }
 
-        Volatile.Write(ref _isPreviewing, 0);
-        Volatile.Write(ref _isRecording, 0);
-        StopAndDisposeInputStream();
         UpdateLevel(0f);
 
-        TerminatePortAudioIfInitialized();
+        if (_terminatePortAudioOnDispose)
+        {
+            TerminatePortAudioIfInitialized();
+        }
     }
 
     public static IReadOnlyList<AudioInputDevice> GetInputDevices()
@@ -116,72 +159,129 @@ public sealed class AudioRecordingService : IDisposable
         return result;
     }
 
-    public void StartRecording()
+    internal AudioCaptureSession? TryStartRecording(bool whisperModeEnabled)
     {
-        if (IsRecording || Volatile.Read(ref _disposed) == 1)
+        lock (_captureLock)
         {
-            return;
-        }
-
-        lock (_sampleLock)
-        {
-            _sampleChunks.Clear();
-            _sampleCount = 0;
-            // Do NOT reset _captureSampleRate: EnsureInputStreamStarted may reuse a
-            // preview stream, and the negotiated rate is only assigned inside
-            // CreateInputStream. Resetting early would tag samples at the wrong rate.
-        }
-
-        try
-        {
-            if (!EnsureInputStreamStarted())
+            if (_activeCaptureSession is not null || Volatile.Read(ref _disposed) == 1)
             {
+                return null;
+            }
+
+            try
+            {
+                if (!_ensureInputStreamStarted())
+                {
+                    _errorLog?.AddEntry(
+                        "Recording could not start: no usable microphone was found. "
+                        + "Check that an input device is connected and selected in Recorder settings.",
+                        ErrorCategory.Recording
+                    );
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                // Surface a stuck-at-silent dictation: the user pressed the hotkey but no
+                // input stream could be opened (device busy, all sample rates rejected, …).
                 _errorLog?.AddEntry(
-                    "Recording could not start: no usable microphone was found. "
-                    + "Check that an input device is connected and selected in Recorder settings.",
+                    $"Recording could not start: the microphone could not be opened ({ex.Message}).",
                     ErrorCategory.Recording
                 );
-                return;
+                throw;
             }
-        }
-        catch (Exception ex)
-        {
-            // Surface a stuck-at-silent dictation: the user pressed the hotkey but no
-            // input stream could be opened (device busy, all sample rates rejected, …).
-            _errorLog?.AddEntry(
-                $"Recording could not start: the microphone could not be opened ({ex.Message}).",
-                ErrorCategory.Recording
+
+            lock (_sampleLock)
+            {
+                _sampleChunks.Clear();
+                _sampleCount = 0;
+                // Do NOT reset CaptureSampleRate: the input seam may reuse a preview
+                // stream, whose negotiated rate was assigned when that stream opened.
+            }
+
+            Volatile.Write(ref _whisperModeEnabled, whisperModeEnabled ? 1 : 0);
+            Volatile.Write(ref _liveFrameSink, null);
+            var session = new AudioCaptureSession(++_captureSessionGeneration);
+            Volatile.Write(ref _activeCaptureSession, session);
+            Volatile.Write(ref _isRecording, 1);
+
+            Trace.WriteLine(
+                $"[AudioRecordingService] Recording started: session={session.DiagnosticId}, "
+                + $"captureSampleRate={CaptureSampleRate} Hz, target={SampleRate} Hz."
             );
-            throw;
+            return session;
         }
-
-        Trace.WriteLine(
-            $"[AudioRecordingService] Recording started: captureSampleRate={CaptureSampleRate} Hz, target={SampleRate} Hz."
-        );
-
-        Volatile.Write(ref _isRecording, 1);
     }
 
-    public byte[] StopRecording()
+    internal bool IsRecordingOwnedBy(AudioCaptureSession? session)
     {
-        if (!IsRecording)
+        lock (_captureLock)
         {
-            return [];
+            return session is not null && ReferenceEquals(_activeCaptureSession, session);
         }
-
-        Volatile.Write(ref _isRecording, 0);
-
-        if (!IsPreviewing)
-        {
-            StopAndDisposeInputStream();
-        }
-
-        return BuildWavFromRecordedAudio();
     }
 
-    public async Task<byte[]> StopRecordingAsync(CancellationToken cancellationToken = default)
+    internal bool TrySetWhisperMode(AudioCaptureSession session, bool enabled)
     {
-        if (!IsRecording)
+        lock (_captureLock)
+        {
+            if (!ReferenceEquals(_activeCaptureSession, session))
+            {
+                return false;
+            }
+
+            Volatile.Write(ref _whisperModeEnabled, enabled ? 1 : 0);
+            return true;
+        }
+    }
+
+    internal bool TrySetLiveFrameSink(AudioCaptureSession session, Action<float[]>? sink)
+    {
+        lock (_captureLock)
+        {
+            if (!ReferenceEquals(_activeCaptureSession, session))
+            {
+                return false;
+            }
+
+            Volatile.Write(
+                ref _liveFrameSink,
+                sink is null ? null : new LiveFrameSubscription(session, sink)
+            );
+            return true;
+        }
+    }
+
+    internal byte[] StopRecording(AudioCaptureSession session)
+    {
+        lock (_captureLock)
+        {
+            if (!ReferenceEquals(_activeCaptureSession, session))
+            {
+                return [];
+            }
+
+            Volatile.Write(ref _activeCaptureSession, null);
+            Volatile.Write(ref _liveFrameSink, null);
+            Volatile.Write(ref _isRecording, 0);
+
+            if (!IsPreviewing)
+            {
+                _stopAndDisposeInputStream();
+            }
+
+            // Keep the capture lock through materialization. A new owner cannot
+            // clear or reuse the sample list until this WAV is complete.
+            return BuildWavFromRecordedAudio();
+        }
+    }
+
+    internal async Task<byte[]> StopRecordingAsync(
+        AudioCaptureSession session,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (!IsRecordingOwnedBy(session))
         {
             return [];
         }
@@ -195,72 +295,87 @@ public sealed class AudioRecordingService : IDisposable
             // Still stop and return the samples captured so far.
         }
 
-        return StopRecording();
+        // StopRecording validates again so a stale delayed stop cannot affect a
+        // newer capture that started while this method was draining.
+        return StopRecording(session);
     }
 
-    public byte[]? GetCurrentBuffer()
+    internal byte[]? GetCurrentBuffer(AudioCaptureSession session)
     {
-        if (!IsRecording)
+        lock (_captureLock)
         {
-            return null;
-        }
-
-        lock (_sampleLock)
-        {
-            if (_sampleCount == 0)
+            if (!ReferenceEquals(_activeCaptureSession, session))
             {
                 return null;
             }
-        }
 
-        return BuildWavFromRecordedAudio();
+            lock (_sampleLock)
+            {
+                if (_sampleCount == 0)
+                {
+                    return null;
+                }
+            }
+
+            return BuildWavFromRecordedAudio();
+        }
     }
 
     public bool StartPreview()
     {
-        if (Volatile.Read(ref _disposed) == 1 || IsRecording || IsPreviewing)
+        lock (_captureLock)
         {
-            return false;
-        }
-
-        try
-        {
-            if (!EnsureInputStreamStarted())
+            if (
+                Volatile.Read(ref _disposed) == 1
+                || _activeCaptureSession is not null
+                || IsPreviewing
+            )
             {
                 return false;
             }
 
-            Volatile.Write(ref _isPreviewing, 1);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[AudioRecordingService] Failed to start preview: {ex.Message}");
-            _errorLog?.AddEntry(
-                $"Microphone preview could not start: {ex.Message}",
-                ErrorCategory.Recording
-            );
-            Volatile.Write(ref _isPreviewing, 0);
-            if (!IsRecording)
+            try
             {
-                StopAndDisposeInputStream();
-            }
+                if (!_ensureInputStreamStarted())
+                {
+                    return false;
+                }
 
-            return false;
+                Volatile.Write(ref _isPreviewing, 1);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[AudioRecordingService] Failed to start preview: {ex.Message}");
+                _errorLog?.AddEntry(
+                    $"Microphone preview could not start: {ex.Message}",
+                    ErrorCategory.Recording
+                );
+                Volatile.Write(ref _isPreviewing, 0);
+                if (_activeCaptureSession is null)
+                {
+                    _stopAndDisposeInputStream();
+                }
+
+                return false;
+            }
         }
     }
 
     public void StopPreview()
     {
-        if (!IsPreviewing)
+        lock (_captureLock)
         {
-            return;
-        }
+            if (!IsPreviewing)
+            {
+                return;
+            }
 
-        Volatile.Write(ref _isPreviewing, 0);
-        if (!IsRecording)
-        {
-            StopAndDisposeInputStream();
+            Volatile.Write(ref _isPreviewing, 0);
+            if (_activeCaptureSession is null)
+            {
+                _stopAndDisposeInputStream();
+            }
         }
 
         UpdateLevel(0f);
@@ -378,7 +493,7 @@ public sealed class AudioRecordingService : IDisposable
         return output;
     }
 
-    internal StreamCallbackResult ProcessAudioBufferForTest(float[] frame, bool copySamples)
+    internal StreamCallbackResult ProcessAudioBufferForTest(float[] frame)
     {
         var handle = GCHandle.Alloc(frame, GCHandleType.Pinned);
         try
@@ -386,7 +501,7 @@ public sealed class AudioRecordingService : IDisposable
             return ProcessAudioBuffer(
                 handle.AddrOfPinnedObject(),
                 (uint)frame.Length,
-                copySamples
+                Volatile.Read(ref _activeCaptureSession)
             );
         }
         finally
@@ -412,10 +527,18 @@ public sealed class AudioRecordingService : IDisposable
         IntPtr userData
     )
     {
-        return ProcessAudioBuffer(input, frameCount, IsRecording);
+        return ProcessAudioBuffer(
+            input,
+            frameCount,
+            Volatile.Read(ref _activeCaptureSession)
+        );
     }
 
-    private StreamCallbackResult ProcessAudioBuffer(IntPtr input, uint frameCount, bool copySamples)
+    private StreamCallbackResult ProcessAudioBuffer(
+        IntPtr input,
+        uint frameCount,
+        AudioCaptureSession? captureSession
+    )
     {
         if (input == IntPtr.Zero || frameCount == 0)
         {
@@ -425,29 +548,42 @@ public sealed class AudioRecordingService : IDisposable
         var buffer = new float[frameCount];
         Marshal.Copy(input, buffer, 0, (int)frameCount);
 
-        var processedBuffer = ApplyWhisperModeGain(buffer, copySamples && WhisperModeEnabled);
+        var processedBuffer = ApplyWhisperModeGain(
+            buffer,
+            captureSession is not null && Volatile.Read(ref _whisperModeEnabled) == 1
+        );
         UpdateLevel(ComputeRmsLevel(processedBuffer));
 
-        if (!copySamples)
+        if (captureSession is null)
         {
             return StreamCallbackResult.Continue;
         }
 
         lock (_sampleLock)
         {
+            // Re-check the token here: a callback from a stopped preview-backed
+            // recording can still land after a later owner reset the buffer.
+            if (!ReferenceEquals(Volatile.Read(ref _activeCaptureSession), captureSession))
+            {
+                return StreamCallbackResult.Continue;
+            }
+
             _sampleChunks.Add(processedBuffer);
             _sampleCount += processedBuffer.Length;
         }
 
-        var sink = _liveFrameSink;
-        if (sink is null)
+        var subscription = Volatile.Read(ref _liveFrameSink);
+        if (
+            subscription is null
+            || !ReferenceEquals(subscription.Session, captureSession)
+        )
         {
             return StreamCallbackResult.Continue;
         }
 
         try
         {
-            sink(processedBuffer);
+            subscription.Sink(processedBuffer);
         }
         catch (Exception ex)
         {
@@ -457,7 +593,7 @@ public sealed class AudioRecordingService : IDisposable
             Trace.WriteLine(
                 $"[AudioRecordingService] LiveFrameSink threw, detaching: {ex.Message}"
             );
-            Interlocked.CompareExchange(ref _liveFrameSink, null, sink);
+            Interlocked.CompareExchange(ref _liveFrameSink, null, subscription);
         }
 
         return StreamCallbackResult.Continue;
