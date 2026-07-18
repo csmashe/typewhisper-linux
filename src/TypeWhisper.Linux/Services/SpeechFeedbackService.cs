@@ -64,6 +64,7 @@ public sealed class SpeechFeedbackService : IDisposable
 
     private readonly Func<TimeSpan, Task> _delay;
     private readonly Lock _lock = new();
+    private readonly Action<long, bool>? _playbackVersionAllocated;
     private readonly PluginManager _pluginManager;
 
     private readonly ISettingsService _settings;
@@ -93,13 +94,15 @@ public sealed class SpeechFeedbackService : IDisposable
         ISettingsService settings,
         PluginManager pluginManager,
         ITtsProviderPlugin systemProvider,
-        Func<TimeSpan, Task>? delay = null
+        Func<TimeSpan, Task>? delay = null,
+        Action<long, bool>? playbackVersionAllocated = null
     )
     {
         _settings = settings;
         _pluginManager = pluginManager;
         _systemProvider = systemProvider;
         _delay = delay ?? Task.Delay;
+        _playbackVersionAllocated = playbackVersionAllocated;
         _pluginManager.PluginStateChanged += OnPluginStateChanged;
     }
 
@@ -269,14 +272,18 @@ public sealed class SpeechFeedbackService : IDisposable
             }
 
             request.CancelAndStop();
+            ReleasePlaybackOwnership(request);
             _ = await WaitForCompletionAsync(request, s_stopPlaybackTimeout)
                 .ConfigureAwait(false);
+            request.Complete();
         }
         catch (Exception ex)
         {
             // Spoken feedback is optional; a failed timeout wait or provider
             // completion must not leave the request's session unstopped.
             request.CancelAndStop();
+            ReleasePlaybackOwnership(request);
+            request.Complete();
             Debug.WriteLine($"SpeechFeedback recording announcement error: {ex.Message}");
         }
     }
@@ -335,19 +342,29 @@ public sealed class SpeechFeedbackService : IDisposable
             request = ApplyConfiguredLanguageFallback(request);
         }
 
-        Stop();
-
-        var version = Interlocked.Increment(ref _playbackVersion);
-        var playbackRequest = new PlaybackRequest(version);
+        PlaybackRequest? supersededRequest;
+        PlaybackRequest playbackRequest;
 
         lock (_lock)
         {
+            supersededRequest = _playbackRequest;
+            var version = AllocatePlaybackVersion();
+            playbackRequest = new PlaybackRequest(version);
             _playbackRequest = playbackRequest;
+            _playbackSession = null;
             _isPlaybackPending = true;
         }
 
+        supersededRequest?.CancelAndStop();
         _ = SpeakAsync(request, playbackRequest);
         return playbackRequest;
+    }
+
+    private long AllocatePlaybackVersion()
+    {
+        var version = Interlocked.Increment(ref _playbackVersion);
+        _playbackVersionAllocated?.Invoke(version, _lock.IsHeldByCurrentThread);
+        return version;
     }
 
     // When a transcription / manual-readback request carries no language, fall
@@ -412,6 +429,13 @@ public sealed class SpeechFeedbackService : IDisposable
                 }
             }
 
+            if (!accepted)
+            {
+                playbackRequest.CancelAndStop();
+                ClearPending(playbackRequest);
+                return;
+            }
+
             EventHandler? completedHandler = null;
             completedHandler = (_, _) =>
             {
@@ -419,11 +443,6 @@ public sealed class SpeechFeedbackService : IDisposable
                 OnPlaybackCompleted(session, playbackRequest);
             };
             session.Completed += completedHandler;
-
-            if (!accepted)
-            {
-                playbackRequest.CancelAndStop();
-            }
 
             if (!session.IsActive)
             {
@@ -466,6 +485,12 @@ public sealed class SpeechFeedbackService : IDisposable
 
     private void ClearPending(PlaybackRequest playbackRequest)
     {
+        ReleasePlaybackOwnership(playbackRequest);
+        playbackRequest.Complete();
+    }
+
+    private void ReleasePlaybackOwnership(PlaybackRequest playbackRequest)
+    {
         lock (_lock)
         {
             if (
@@ -474,11 +499,10 @@ public sealed class SpeechFeedbackService : IDisposable
             )
             {
                 _playbackRequest = null;
+                _playbackSession = null;
                 _isPlaybackPending = false;
             }
         }
-
-        playbackRequest.Complete();
     }
 
     private PlaybackRequest? StopPlayback()
