@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.PluginSDK;
@@ -292,6 +293,212 @@ public sealed class SpeechFeedbackServiceTests
         await Task.WhenAll(newerAnnouncement, stopNewer).WaitAsync(s_testGuard);
     }
 
+    [Fact]
+    public async Task Concurrent_starts_serialize_version_allocation_and_publication()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        var allocations = new ConcurrentQueue<(long Version, bool LockHeld)>();
+        var firstAllocationReached = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseFirstAllocation = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            provider,
+            playbackVersionAllocated: (version, lockHeld) =>
+            {
+                allocations.Enqueue((version, lockHeld));
+                if (version != 1)
+                {
+                    return;
+                }
+
+                firstAllocationReached.TrySetResult();
+                releaseFirstAllocation.Task.WaitAsync(s_testGuard).GetAwaiter().GetResult();
+            }
+        );
+
+        var olderStart = Task.Run(() =>
+            // ReSharper disable once AccessToDisposedClosure -- Task.WhenAll below awaits completion before sut disposal
+            sut.SpeakAutomaticTranscription("older playback")
+        );
+        await firstAllocationReached.Task.WaitAsync(s_testGuard);
+
+        var newerStartAttempted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var newerStart = Task.Run(() =>
+        {
+            newerStartAttempted.TrySetResult();
+            // ReSharper disable once AccessToDisposedClosure -- Task.WhenAll below awaits completion before sut disposal
+            sut.SpeakAutomaticTranscription("newer playback");
+        });
+        await newerStartAttempted.Task.WaitAsync(s_testGuard);
+
+        releaseFirstAllocation.TrySetResult();
+        await Task.WhenAll(olderStart, newerStart).WaitAsync(s_testGuard);
+
+        Assert.Equal([(1, true), (2, true)], allocations.ToArray());
+
+        var firstCall = await provider.NextRequestAsync();
+        var secondCall = await provider.NextRequestAsync();
+        var calls = new[] { firstCall, secondCall }.ToDictionary(
+            call => call.Request.Text
+        );
+        var olderCall = calls["older playback"];
+        var newerCall = calls["newer playback"];
+        Assert.True(olderCall.CancellationToken.IsCancellationRequested);
+        Assert.False(newerCall.CancellationToken.IsCancellationRequested);
+
+        var newerSession = new ControlledPlaybackSession();
+        newerCall.Return(newerSession);
+        await newerSession.HandlerAttached.Task.WaitAsync(s_testGuard);
+
+        var olderSession = new ControlledPlaybackSession();
+        olderCall.Return(olderSession);
+        await olderSession.StopCalled.Task.WaitAsync(s_testGuard);
+
+        Assert.Equal(0, olderSession.SubscriberCount);
+        Assert.True(newerSession.IsActive);
+        Assert.Equal(0, newerSession.StopCount);
+        sut.ReadBack("toggle newer playback");
+        Assert.Equal(1, newerSession.StopCount);
+        Assert.Equal(2, provider.Requests.Length);
+
+        newerSession.Complete();
+
+        sut.ReadBack("subsequent readback");
+        var readBackCall = await provider.NextRequestAsync();
+        Assert.Equal("subsequent readback", readBackCall.Request.Text);
+        Assert.Equal(TtsPurpose.ManualReadback, readBackCall.Request.Purpose);
+
+        var readBackSession = new ControlledPlaybackSession();
+        readBackCall.Return(readBackSession);
+        await readBackSession.HandlerAttached.Task.WaitAsync(s_testGuard);
+
+        olderSession.Complete();
+        sut.ReadBack("toggle current readback");
+
+        Assert.Equal(1, readBackSession.StopCount);
+        Assert.Equal(3, provider.Requests.Length);
+        readBackSession.Complete();
+    }
+
+    [Fact]
+    public async Task Recording_timeout_releases_late_cancellation_ignoring_request()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        var delay = new ControlledDelay();
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            provider,
+            delay.WaitAsync
+        );
+
+        var announcement = sut.AnnounceRecordingStartedAsync(
+            spokenFeedbackEnabled: true
+        );
+        var announcementCall = await provider.NextRequestAsync();
+        var announcementTimeout = await delay.NextRequestAsync();
+
+        Assert.Equal(
+            SpeechFeedbackService.s_recordingAnnouncementTimeout,
+            announcementTimeout.Duration
+        );
+        announcementTimeout.Complete();
+
+        var cleanupTimeout = await delay.NextRequestAsync();
+        Assert.Equal(
+            SpeechFeedbackService.s_stopPlaybackTimeout,
+            cleanupTimeout.Duration
+        );
+        Assert.True(announcementCall.CancellationToken.IsCancellationRequested);
+
+        var lateSession = new ControlledPlaybackSession();
+        announcementCall.Return(lateSession);
+        await lateSession.StopCalled.Task.WaitAsync(s_testGuard);
+        Assert.Equal(1, lateSession.StopCount);
+        Assert.Equal(0, lateSession.SubscriberCount);
+
+        cleanupTimeout.Complete();
+        await announcement.WaitAsync(s_testGuard);
+
+        sut.ReadBack("manual readback");
+        var readBackCall = await provider.NextRequestAsync();
+        Assert.Equal("manual readback", readBackCall.Request.Text);
+        Assert.Equal(TtsPurpose.ManualReadback, readBackCall.Request.Purpose);
+
+        var readBackSession = new ControlledPlaybackSession();
+        readBackCall.Return(readBackSession);
+        await readBackSession.HandlerAttached.Task.WaitAsync(s_testGuard);
+
+        lateSession.Complete();
+        readBackSession.Complete();
+    }
+
+    [Fact]
+    public async Task Recording_timeout_releases_hung_provider_request()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        var delay = new ControlledDelay();
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            provider,
+            delay.WaitAsync
+        );
+
+        var announcement = sut.AnnounceRecordingStartedAsync(
+            spokenFeedbackEnabled: true
+        );
+        var announcementCall = await provider.NextRequestAsync();
+        var announcementTimeout = await delay.NextRequestAsync();
+
+        Assert.Equal(
+            SpeechFeedbackService.s_recordingAnnouncementTimeout,
+            announcementTimeout.Duration
+        );
+        announcementTimeout.Complete();
+
+        var cleanupTimeout = await delay.NextRequestAsync();
+        Assert.Equal(
+            SpeechFeedbackService.s_stopPlaybackTimeout,
+            cleanupTimeout.Duration
+        );
+        Assert.True(announcementCall.CancellationToken.IsCancellationRequested);
+        cleanupTimeout.Complete();
+        await announcement.WaitAsync(s_testGuard);
+
+        Assert.Single(provider.Requests);
+        sut.ReadBack("manual readback after hung announcement");
+        Assert.Equal(2, provider.Requests.Length);
+
+        var readBackCall = await provider.NextRequestAsync();
+        Assert.Equal("manual readback after hung announcement", readBackCall.Request.Text);
+        Assert.Equal(TtsPurpose.ManualReadback, readBackCall.Request.Purpose);
+
+        var readBackSession = new ControlledPlaybackSession();
+        readBackCall.Return(readBackSession);
+        await readBackSession.HandlerAttached.Task.WaitAsync(s_testGuard);
+        readBackSession.Complete();
+    }
+
     private sealed class ControlledDelay
     {
         private readonly Queue<DelayRequest> _requests = new();
@@ -332,10 +539,25 @@ public sealed class SpeechFeedbackServiceTests
         }
     }
 
-    private sealed class ControlledTtsProvider(params ITtsPlaybackSession[] sessions)
-        : ITtsProviderPlugin
+    private sealed class ControlledTtsProvider : ITtsProviderPlugin
     {
-        private readonly Queue<ITtsPlaybackSession> _sessions = new(sessions);
+        private readonly bool _controlResponses;
+        private readonly Lock _sync = new();
+        private readonly Queue<ControlledProviderCall> _calls = new();
+        private readonly SemaphoreSlim _callAvailable = new(0);
+        private readonly List<TtsSpeakRequest> _requests = [];
+        private readonly Queue<ITtsPlaybackSession> _sessions;
+
+        public ControlledTtsProvider(params ITtsPlaybackSession[] sessions)
+        {
+            _sessions = new Queue<ITtsPlaybackSession>(sessions);
+        }
+
+        public ControlledTtsProvider(bool controlResponses)
+        {
+            _controlResponses = controlResponses;
+            _sessions = new Queue<ITtsPlaybackSession>();
+        }
 
         public string PluginId => "plugin.controlled";
         public string PluginName => "Controlled";
@@ -345,7 +567,16 @@ public sealed class SpeechFeedbackServiceTests
         public bool IsConfigured => true;
         public IReadOnlyList<PluginVoiceInfo> AvailableVoices => [];
         public string? SelectedVoiceId => null;
-        public List<TtsSpeakRequest> Requests { get; } = [];
+        public TtsSpeakRequest[] Requests
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _requests.ToArray();
+                }
+            }
+        }
 
         public Task ActivateAsync(IPluginHostServices host)
         {
@@ -364,11 +595,55 @@ public sealed class SpeechFeedbackServiceTests
             CancellationToken ct
         )
         {
-            Requests.Add(request);
-            return Task.FromResult(_sessions.Dequeue());
+            ControlledProviderCall call;
+            ITtsPlaybackSession? session = null;
+            lock (_sync)
+            {
+                _requests.Add(request);
+                call = new ControlledProviderCall(request, ct);
+                _calls.Enqueue(call);
+                if (!_controlResponses)
+                {
+                    session = _sessions.Dequeue();
+                }
+            }
+
+            _callAvailable.Release();
+            if (session is not null)
+            {
+                call.Return(session);
+            }
+
+            return call.Session.Task;
+        }
+
+        public async Task<ControlledProviderCall> NextRequestAsync()
+        {
+            await _callAvailable.WaitAsync().WaitAsync(s_testGuard);
+            lock (_sync)
+            {
+                return _calls.Dequeue();
+            }
         }
 
         public void Dispose() { }
+    }
+
+    private sealed class ControlledProviderCall(
+        TtsSpeakRequest request,
+        CancellationToken cancellationToken
+    )
+    {
+        public TtsSpeakRequest Request { get; } = request;
+        public CancellationToken CancellationToken { get; } = cancellationToken;
+        public TaskCompletionSource<ITtsPlaybackSession> Session { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        public void Return(ITtsPlaybackSession session)
+        {
+            Session.TrySetResult(session);
+        }
     }
 
     private sealed class ControlledPlaybackSession(bool completeOnStop = false)
@@ -391,7 +666,20 @@ public sealed class SpeechFeedbackServiceTests
         }
 
         public int StopCount => Volatile.Read(ref _stopCount);
+        public int SubscriberCount
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _completed?.GetInvocationList().Length ?? 0;
+                }
+            }
+        }
         public TaskCompletionSource HandlerAttached { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        public TaskCompletionSource StopCalled { get; } = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
 
@@ -435,6 +723,7 @@ public sealed class SpeechFeedbackServiceTests
         public void Stop()
         {
             Interlocked.Increment(ref _stopCount);
+            StopCalled.TrySetResult();
             if (completeOnStop)
             {
                 Complete();
