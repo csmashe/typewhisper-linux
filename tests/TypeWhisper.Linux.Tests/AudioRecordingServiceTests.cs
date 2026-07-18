@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Text;
 using PortAudioSharp;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -57,6 +59,110 @@ public sealed class AudioRecordingServiceTests
         var processed = AudioRecordingService.ResampleToSampleRate(samples, 16000, 16000);
 
         Assert.Same(samples, processed);
+    }
+
+    [Fact]
+    public void GetCurrentBuffer_GrowingSnapshotsPreserveEverySampleInOrder()
+    {
+        using var service = new AudioRecordingService(_ => { }, () => 0, () => { });
+        var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+        var firstFrame = new[] { 0.25f, -0.5f, 0.75f };
+        var secondFrame = new[] { -1f, 0.125f };
+        var lateFrame = new[] { 0.5f, -0.25f, 1f, -0.125f };
+
+        service.ProcessAudioBufferForTest(firstFrame);
+        service.ProcessAudioBufferForTest(secondFrame);
+        var snapshotA = Assert.IsType<byte[]>(service.GetCurrentBuffer(session));
+        var expectedA = ToPcm16(firstFrame, secondFrame);
+        var pcmA = AssertPcm16Wav(snapshotA, expectedA);
+
+        service.ProcessAudioBufferForTest(lateFrame);
+        var snapshotB = Assert.IsType<byte[]>(service.GetCurrentBuffer(session));
+        var expectedLate = ToPcm16(lateFrame);
+        var expectedB = expectedA.Concat(expectedLate).ToArray();
+        var pcmB = AssertPcm16Wav(snapshotB, expectedB);
+
+        Assert.Equal(pcmA, pcmB[..pcmA.Length]);
+        Assert.Equal(expectedLate, pcmB[pcmA.Length..]);
+
+        var finalWav = service.StopRecording(session);
+        Assert.Equal(snapshotB, finalWav);
+    }
+
+    [Fact]
+    public void GetCurrentBuffer_MaterializationStartsWithoutHoldingSampleLock()
+    {
+        var observerInvoked = false;
+        var sampleLockHeld = true;
+        using var service = new AudioRecordingService(
+            _ => { },
+            () => 0,
+            () => { },
+            wavMaterializationObserver: isSampleLockHeld =>
+            {
+                observerInvoked = true;
+                sampleLockHeld = isSampleLockHeld;
+            }
+        );
+        var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+        service.ProcessAudioBufferForTest([0.25f, -0.5f, 0.75f]);
+
+        Assert.NotNull(service.GetCurrentBuffer(session));
+
+        Assert.True(observerInvoked);
+        Assert.False(sampleLockHeld);
+    }
+
+    [Fact]
+    public void GetCurrentBuffer_CallbackAtSnapshotBoundaryAppearsInNextSnapshotExactlyOnce()
+    {
+        var shouldInjectLateFrame = true;
+        var injectionCount = 0;
+        AudioRecordingService? recorder = null;
+        var prefixFrame = new[] { 0.1f, -0.3f, 0.7f };
+        var secondPrefixFrame = new[] { -0.2f, 0.4f };
+        var lateFrame = new[] { -0.9f, 0.6f, -0.1f, 0.3f };
+        using var service = new AudioRecordingService(
+            _ => { },
+            () => 0,
+            () => { },
+            // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local -- asserting the lock is not held is the point of this seam
+            wavMaterializationObserver: isSampleLockHeld =>
+            {
+                Assert.False(isSampleLockHeld);
+                if (!shouldInjectLateFrame)
+                {
+                    return;
+                }
+
+                shouldInjectLateFrame = false;
+                injectionCount++;
+                // ReSharper disable once AccessToModifiedClosure -- deliberate late binding: the service reference exists only after construction
+                recorder!.ProcessAudioBufferForTest(lateFrame);
+            }
+        );
+        recorder = service;
+        var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+        service.ProcessAudioBufferForTest(prefixFrame);
+        service.ProcessAudioBufferForTest(secondPrefixFrame);
+        var expectedPrefix = ToPcm16(prefixFrame, secondPrefixFrame);
+
+        var firstSnapshot = Assert.IsType<byte[]>(service.GetCurrentBuffer(session));
+        AssertPcm16Wav(firstSnapshot, expectedPrefix);
+
+        var expectedComplete = expectedPrefix.Concat(ToPcm16(lateFrame)).ToArray();
+        var secondSnapshot = Assert.IsType<byte[]>(service.GetCurrentBuffer(session));
+        AssertPcm16Wav(secondSnapshot, expectedComplete);
+
+        var finalWav = service.StopRecording(session);
+        AssertPcm16Wav(finalWav, expectedComplete);
+        Assert.Equal(1, injectionCount);
     }
 
     [Fact]
@@ -564,6 +670,40 @@ public sealed class AudioRecordingServiceTests
                 openDeviceIndex = null;
             }
         );
+    }
+
+    private static short[] ToPcm16(params float[][] frames)
+    {
+        return frames
+            .SelectMany(frame => frame)
+            .Select(AudioRecordingService.ToPcm16)
+            .ToArray();
+    }
+
+    private static short[] AssertPcm16Wav(byte[] wav, short[] expectedSamples)
+    {
+        var expectedDataSize = expectedSamples.Length * sizeof(short);
+        Assert.Equal(44 + expectedDataSize, wav.Length);
+        Assert.Equal("RIFF", Encoding.ASCII.GetString(wav, 0, 4));
+        Assert.Equal(36 + expectedDataSize, BinaryPrimitives.ReadInt32LittleEndian(wav.AsSpan(4, 4)));
+        Assert.Equal("WAVE", Encoding.ASCII.GetString(wav, 8, 4));
+        Assert.Equal("fmt ", Encoding.ASCII.GetString(wav, 12, 4));
+        Assert.Equal(16, BinaryPrimitives.ReadInt32LittleEndian(wav.AsSpan(16, 4)));
+        Assert.Equal(1, BinaryPrimitives.ReadInt16LittleEndian(wav.AsSpan(20, 2)));
+        Assert.Equal(1, BinaryPrimitives.ReadInt16LittleEndian(wav.AsSpan(22, 2)));
+        Assert.Equal(16000, BinaryPrimitives.ReadInt32LittleEndian(wav.AsSpan(24, 4)));
+        Assert.Equal(32000, BinaryPrimitives.ReadInt32LittleEndian(wav.AsSpan(28, 4)));
+        Assert.Equal(2, BinaryPrimitives.ReadInt16LittleEndian(wav.AsSpan(32, 2)));
+        Assert.Equal(16, BinaryPrimitives.ReadInt16LittleEndian(wav.AsSpan(34, 2)));
+        Assert.Equal("data", Encoding.ASCII.GetString(wav, 36, 4));
+        Assert.Equal(expectedDataSize, BinaryPrimitives.ReadInt32LittleEndian(wav.AsSpan(40, 4)));
+
+        var actualSamples = Enumerable
+            .Range(0, expectedSamples.Length)
+            .Select(i => BinaryPrimitives.ReadInt16LittleEndian(wav.AsSpan(44 + i * 2, 2)))
+            .ToArray();
+        Assert.Equal(expectedSamples, actualSamples);
+        return actualSamples;
     }
 
     private sealed class FakeSettingsService(AppSettings current) : ISettingsService

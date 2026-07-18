@@ -32,6 +32,12 @@ public sealed class AudioRecordingService : IDisposable
         Action<float[]> Sink
     );
 
+    private sealed record RecordedAudioSnapshot(
+        float[][] Chunks,
+        int SampleCount,
+        int CaptureSampleRate
+    );
+
     private const int SampleRate = 16000;
     private const int Channels = 1;
     private const uint FramesPerBuffer = 512;
@@ -54,6 +60,7 @@ public sealed class AudioRecordingService : IDisposable
     private readonly Lock _sampleLock = new();
     private readonly Action _stopAndDisposeInputStreamCore;
     private readonly bool _terminatePortAudioOnDispose;
+    private readonly Action<bool>? _wavMaterializationObserver;
     private AudioCaptureSession? _activeCaptureSession;
     private long _captureSessionGeneration;
     private float _currentRmsLevel;
@@ -88,6 +95,7 @@ public sealed class AudioRecordingService : IDisposable
         _openInputStream = OpenInputStream;
         _stopAndDisposeInputStreamCore = StopAndDisposeInputStreamCore;
         _terminatePortAudioOnDispose = true;
+        _wavMaterializationObserver = null;
     }
 
     // Test seam: exercises the production device-selection and ownership state machines
@@ -96,14 +104,16 @@ public sealed class AudioRecordingService : IDisposable
         Action<int> openInputStream,
         Func<int> defaultInputDeviceIndexProvider,
         Action stopAndDisposeInputStream,
-        IErrorLogService? errorLog = null
+        IErrorLogService? errorLog = null,
+        Action<bool>? wavMaterializationObserver = null
     )
         : this(
             static () => [],
             openInputStream,
             defaultInputDeviceIndexProvider,
             stopAndDisposeInputStream,
-            errorLog
+            errorLog,
+            wavMaterializationObserver
         )
     {
     }
@@ -115,7 +125,8 @@ public sealed class AudioRecordingService : IDisposable
         Action<int> openInputStream,
         Func<int> defaultInputDeviceIndexProvider,
         Action stopAndDisposeInputStream,
-        IErrorLogService? errorLog = null
+        IErrorLogService? errorLog = null,
+        Action<bool>? wavMaterializationObserver = null
     )
     {
         _errorLog = errorLog;
@@ -125,6 +136,7 @@ public sealed class AudioRecordingService : IDisposable
         _openInputStream = openInputStream;
         _stopAndDisposeInputStreamCore = stopAndDisposeInputStream;
         _terminatePortAudioOnDispose = false;
+        _wavMaterializationObserver = wavMaterializationObserver;
     }
 
     public bool IsRecording => Volatile.Read(ref _isRecording) == 1;
@@ -319,7 +331,7 @@ public sealed class AudioRecordingService : IDisposable
 
             // Keep the capture lock through materialization. A new owner cannot
             // clear or reuse the sample list until this WAV is complete.
-            return BuildWavFromRecordedAudio();
+            return BuildWavFromRecordedAudio(SnapshotRecordedAudio());
         }
     }
 
@@ -356,15 +368,13 @@ public sealed class AudioRecordingService : IDisposable
                 return null;
             }
 
-            lock (_sampleLock)
+            var snapshot = SnapshotRecordedAudio();
+            if (snapshot.SampleCount == 0)
             {
-                if (_sampleCount == 0)
-                {
-                    return null;
-                }
+                return null;
             }
 
-            return BuildWavFromRecordedAudio();
+            return BuildWavFromRecordedAudio(snapshot);
         }
     }
 
@@ -898,27 +908,42 @@ public sealed class AudioRecordingService : IDisposable
         );
     }
 
-    private byte[] BuildWavFromRecordedAudio()
+    private RecordedAudioSnapshot SnapshotRecordedAudio()
     {
         lock (_sampleLock)
         {
-            var samples = new float[_sampleCount];
-            var offset = 0;
-            foreach (var chunk in _sampleChunks)
-            {
-                Array.Copy(chunk, 0, samples, offset, chunk.Length);
-                offset += chunk.Length;
-            }
-
-            var outputSamples = ResampleToSampleRate(samples, CaptureSampleRate, SampleRate);
-            Trace.WriteLine(
-                $"[AudioRecordingService] Finalized WAV: capturedSamples={samples.Length} @ {CaptureSampleRate} Hz "
-                + $"({samples.Length / (double)CaptureSampleRate:F2}s real-time), "
-                + $"outputSamples={outputSamples.Length} @ {SampleRate} Hz "
-                + $"({outputSamples.Length / (double)SampleRate:F2}s tagged)."
+            return new RecordedAudioSnapshot(
+                _sampleChunks.ToArray(),
+                _sampleCount,
+                CaptureSampleRate
             );
-            return FloatSamplesToWav(outputSamples, SampleRate);
         }
+    }
+
+    private byte[] BuildWavFromRecordedAudio(RecordedAudioSnapshot snapshot)
+    {
+        _wavMaterializationObserver?.Invoke(_sampleLock.IsHeldByCurrentThread);
+
+        var samples = new float[snapshot.SampleCount];
+        var offset = 0;
+        foreach (var chunk in snapshot.Chunks)
+        {
+            Array.Copy(chunk, 0, samples, offset, chunk.Length);
+            offset += chunk.Length;
+        }
+
+        var outputSamples = ResampleToSampleRate(
+            samples,
+            snapshot.CaptureSampleRate,
+            SampleRate
+        );
+        Trace.WriteLine(
+            $"[AudioRecordingService] Finalized WAV: capturedSamples={samples.Length} @ {snapshot.CaptureSampleRate} Hz "
+            + $"({samples.Length / (double)snapshot.CaptureSampleRate:F2}s real-time), "
+            + $"outputSamples={outputSamples.Length} @ {SampleRate} Hz "
+            + $"({outputSamples.Length / (double)SampleRate:F2}s tagged)."
+        );
+        return FloatSamplesToWav(outputSamples, SampleRate);
     }
 
     private static byte[] WriteWav(
