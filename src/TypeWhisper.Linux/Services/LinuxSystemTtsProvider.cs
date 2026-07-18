@@ -13,6 +13,9 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
     private const long PlaybackMillisecondsPerUtf16Character = 200;
     private const long MinimumPlaybackMilliseconds = 15_000;
     private const long MaximumPlaybackMilliseconds = 10 * 60 * 1_000;
+    private static readonly TimeSpan s_dispatcherCancellationTimeout = TimeSpan.FromMilliseconds(
+        500
+    );
 
     private readonly Func<string?> _speechFeedbackCommand;
     private readonly IProcessRunner _processRunner;
@@ -97,11 +100,15 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
         var language = NormalizeLanguageHint(request.Language);
         var args = BuildArguments(command, request.Text, language);
         IReadOnlyList<string>? fallbackArgs = language is not null && args.Count > 1
-            ? [request.Text]
+            ? BuildDefaultArguments(command, request.Text)
             : null;
+        IReadOnlyList<string>? cancellationArgs = command == "spd-say" ? ["-C"] : null;
 
         // espeak/espeak-ng and spd-say both own their audio output. Arguments
         // remain separate argv items so no shell or intermediate audio is needed.
+        // spd-say waits for END/CANCEL so the session tracks the utterance. Its
+        // stock CLI exposes only global CANCEL ALL for discarding both current
+        // and queued messages, so cancellation can affect other dispatcher clients.
         // If a backend rejects a requested language/voice with a nonzero exit,
         // the session makes one best-effort default-voice attempt within the same
         // timeout budget. Launch failures, timeouts, and cancellation never retry.
@@ -110,6 +117,8 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
             command,
             args,
             fallbackArgs,
+            cancellationArgs,
+            s_dispatcherCancellationTimeout,
             CalculatePlaybackTimeout(request.Text.Length),
             ct
         );
@@ -135,15 +144,20 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
     {
         if (language is null)
         {
-            return [text];
+            return BuildDefaultArguments(command, text);
         }
 
         return command switch
         {
             "espeak" or "espeak-ng" => ["-v", language, text],
-            "spd-say" => ["-l", language, text],
-            _ => [text]
+            "spd-say" => ["--wait", "-l", language, text],
+            _ => BuildDefaultArguments(command, text)
         };
+    }
+
+    private static IReadOnlyList<string> BuildDefaultArguments(string command, string text)
+    {
+        return command == "spd-say" ? ["--wait", text] : [text];
     }
 
     internal static TimeSpan CalculatePlaybackTimeout(int utf16CharacterCount)
@@ -179,6 +193,8 @@ internal sealed class TaskBackedTtsPlaybackSession : ITtsPlaybackSession, IDispo
         string command,
         IReadOnlyList<string> args,
         IReadOnlyList<string>? fallbackArgs,
+        IReadOnlyList<string>? cancellationArgs,
+        TimeSpan cancellationTimeout,
         TimeSpan timeout,
         CancellationToken ct
     )
@@ -189,6 +205,8 @@ internal sealed class TaskBackedTtsPlaybackSession : ITtsPlaybackSession, IDispo
             command,
             args,
             fallbackArgs,
+            cancellationArgs,
+            cancellationTimeout,
             timeout,
             _invocationCts.Token
         );
@@ -263,38 +281,127 @@ internal sealed class TaskBackedTtsPlaybackSession : ITtsPlaybackSession, IDispo
         string command,
         IReadOnlyList<string> args,
         IReadOnlyList<string>? fallbackArgs,
+        IReadOnlyList<string>? cancellationArgs,
+        TimeSpan cancellationTimeout,
         TimeSpan timeout,
         CancellationToken ct
     )
     {
-        var stopwatch = Stopwatch.StartNew();
-        var result = await RunInvocationAsync(processRunner, command, args, timeout, ct)
-            .ConfigureAwait(false);
-        if (
-            fallbackArgs is null
-            || !result.Started
-            || result.TimedOut
-            || result.ExitCode == 0
-        )
+        try
         {
-            return result;
+            var stopwatch = Stopwatch.StartNew();
+            var result = await RunInvocationAsync(processRunner, command, args, timeout, ct)
+                .ConfigureAwait(false);
+            if (result.TimedOut)
+            {
+                await RunCancellationAsync(
+                        processRunner,
+                        command,
+                        cancellationArgs,
+                        cancellationTimeout
+                    )
+                    .ConfigureAwait(false);
+                return result;
+            }
+
+            if (fallbackArgs is null || !result.Started || result.ExitCode == 0)
+            {
+                return result;
+            }
+
+            ct.ThrowIfCancellationRequested();
+            var remainingTimeout = timeout - stopwatch.Elapsed;
+            if (remainingTimeout <= TimeSpan.Zero)
+            {
+                return result;
+            }
+
+            var fallbackResult = await RunInvocationAsync(
+                    processRunner,
+                    command,
+                    fallbackArgs,
+                    remainingTimeout,
+                    ct
+                )
+                .ConfigureAwait(false);
+            if (fallbackResult.TimedOut)
+            {
+                await RunCancellationAsync(
+                        processRunner,
+                        command,
+                        cancellationArgs,
+                        cancellationTimeout
+                    )
+                    .ConfigureAwait(false);
+            }
+
+            return fallbackResult;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await RunCancellationAsync(
+                    processRunner,
+                    command,
+                    cancellationArgs,
+                    cancellationTimeout
+                )
+                .ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async Task RunCancellationAsync(
+        IProcessRunner processRunner,
+        string command,
+        IReadOnlyList<string>? cancellationArgs,
+        TimeSpan cancellationTimeout
+    )
+    {
+        if (cancellationArgs is null)
+        {
+            return;
         }
 
-        ct.ThrowIfCancellationRequested();
-        var remainingTimeout = timeout - stopwatch.Elapsed;
-        if (remainingTimeout <= TimeSpan.Zero)
+        try
         {
-            return result;
-        }
+            var result = await processRunner
+                .RunAsync(
+                    command,
+                    cancellationArgs,
+                    timeout: cancellationTimeout,
+                    ct: CancellationToken.None
+                )
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                return;
+            }
 
-        return await RunInvocationAsync(
-                processRunner,
-                command,
-                fallbackArgs,
-                remainingTimeout,
-                ct
-            )
-            .ConfigureAwait(false);
+            if (result.TimedOut)
+            {
+                Debug.WriteLine(
+                    "[LinuxSystemTtsProvider] Speech Dispatcher cancellation timed out."
+                );
+            }
+            else if (!result.Started)
+            {
+                Debug.WriteLine(
+                    "[LinuxSystemTtsProvider] Speech Dispatcher cancellation did not start."
+                );
+            }
+            else
+            {
+                Debug.WriteLine(
+                    $"[LinuxSystemTtsProvider] Speech Dispatcher cancellation exited with code {result.ExitCode}."
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine(
+                $"[LinuxSystemTtsProvider] Speech Dispatcher cancellation failed ({ex.GetType().Name})."
+            );
+        }
     }
 
     private static async Task<ProcessRunResult> RunInvocationAsync(
