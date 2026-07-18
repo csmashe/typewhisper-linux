@@ -22,12 +22,10 @@ public sealed record RecordingItem(
 public partial class RecorderSectionViewModel : ObservableObject
 {
     private readonly AudioRecordingService _audio;
-    private readonly ModelManagerService _models;
+    private readonly string _recordingDirectory;
     private readonly ISettingsService _settings;
+    private readonly Func<byte[], Task<string?>> _transcribeAsync;
     private AudioRecordingService.AudioCaptureSession? _captureSession;
-
-    // Command execution and continuations that access this flag run on the UI thread.
-    private bool _stopSaveInProgress;
 
     [ObservableProperty]
     private double _audioLevel;
@@ -53,10 +51,31 @@ public partial class RecorderSectionViewModel : ObservableObject
         ModelManagerService models,
         ISettingsService settings
     )
+        : this(
+            audio,
+            settings,
+            TypeWhisperEnvironment.AudioPath,
+            CreateTranscriptionDelegate(models, settings)
+        )
     {
+    }
+
+    internal RecorderSectionViewModel(
+        AudioRecordingService audio,
+        ISettingsService settings,
+        string recordingDirectory,
+        Func<byte[], Task<string?>> transcribeAsync
+    )
+    {
+        ArgumentNullException.ThrowIfNull(audio);
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentException.ThrowIfNullOrWhiteSpace(recordingDirectory);
+        ArgumentNullException.ThrowIfNull(transcribeAsync);
+
         _audio = audio;
-        _models = models;
         _settings = settings;
+        _recordingDirectory = recordingDirectory;
+        _transcribeAsync = transcribeAsync;
         _audio.LevelChanged += (_, level) =>
             Dispatcher.UIThread.Post(() => AudioLevel = Math.Clamp(level * 8, 0, 1));
         LoadExistingRecordings();
@@ -68,39 +87,17 @@ public partial class RecorderSectionViewModel : ObservableObject
     public ObservableCollection<RecordingItem> Recordings { get; } = [];
     public bool HasRecordings => Recordings.Count > 0;
 
-    [RelayCommand(CanExecute = nameof(CanToggleRecording))]
-    private void ToggleRecording()
+    [RelayCommand]
+    private async Task ToggleRecording()
     {
-        if (_stopSaveInProgress)
-        {
-            return;
-        }
-
         if (IsRecording)
         {
-            SetStopSaveInProgress(true);
-            _ = StopRecordingAsync();
+            await StopRecordingAsync();
         }
         else
         {
             StartRecording();
         }
-    }
-
-    private bool CanToggleRecording()
-    {
-        return !_stopSaveInProgress;
-    }
-
-    private void SetStopSaveInProgress(bool value)
-    {
-        if (_stopSaveInProgress == value)
-        {
-            return;
-        }
-
-        _stopSaveInProgress = value;
-        ToggleRecordingCommand.NotifyCanExecuteChanged();
     }
 
     private void StartRecording()
@@ -155,10 +152,9 @@ public partial class RecorderSectionViewModel : ObservableObject
 
             // Off the dispatcher so a large WAV or slow disk doesn't freeze the UI;
             // CommitRecording touches no UI state.
-            var recordingPath = TypeWhisperEnvironment.AudioPath;
             var wavBytes = wav;
             filePath = await Task.Run(
-                () => RecorderFileNamer.CommitRecording(recordingPath, DateTime.Now, wavBytes)
+                () => RecorderFileNamer.CommitRecording(_recordingDirectory, DateTime.Now, wavBytes)
             );
         }
         catch
@@ -172,7 +168,6 @@ public partial class RecorderSectionViewModel : ObservableObject
             IsRecording = false;
             OnPropertyChanged(nameof(RecordButtonText));
             AudioLevel = 0;
-            SetStopSaveInProgress(false);
         }
 
         var fileName = Path.GetFileName(filePath);
@@ -183,28 +178,7 @@ public partial class RecorderSectionViewModel : ObservableObject
         string? transcript;
         try
         {
-            var effectiveModelId = _settings.Current.SelectedModelId;
-            await using var lease = await _models.AcquireTranscriptionAsync(effectiveModelId);
-            try
-            {
-                var result = await lease.Plugin.TranscribeAsync(
-                    wav,
-                    null,
-                    false,
-                    null,
-                    CancellationToken.None
-                );
-                transcript = result.Text;
-            }
-            finally
-            {
-                // Release the model lock before writing to disk so a concurrent
-                // dictation isn't blocked by the file I/O that follows.
-                // The using-statement above will call DisposeAsync again on
-                // exit, but the lease is idempotent so the double-dispose is safe.
-                // ReSharper disable once DisposeOnUsingVariable -- intentional early release of the model lock before the file I/O below.
-                await lease.DisposeAsync();
-            }
+            transcript = await _transcribeAsync(wav);
         }
         catch
         {
@@ -213,11 +187,13 @@ public partial class RecorderSectionViewModel : ObservableObject
         }
 
         var transcriptWriteFailed = false;
+        var transcriptPersisted = false;
         if (!string.IsNullOrWhiteSpace(transcript))
         {
             try
             {
                 AtomicFileWrite.WriteAllText(Path.ChangeExtension(filePath, ".txt"), transcript);
+                transcriptPersisted = true;
             }
             catch
             {
@@ -235,10 +211,50 @@ public partial class RecorderSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(HasRecordings));
         StatusText = transcriptWriteFailed
             ? Loc.Instance["Recorder.StatusTranscriptSaveFailed"]
-            : transcript is not null
+            : transcriptPersisted
                 ? Loc.Instance["Recorder.StatusDone"]
                 : Loc.Instance["Recorder.StatusSavedNoModel"];
         DurationText = "0:00";
+    }
+
+    private static Func<byte[], Task<string?>> CreateTranscriptionDelegate(
+        ModelManagerService models,
+        ISettingsService settings
+    )
+    {
+        ArgumentNullException.ThrowIfNull(models);
+        ArgumentNullException.ThrowIfNull(settings);
+        return wav => TranscribeAsync(models, settings, wav);
+    }
+
+    private static async Task<string?> TranscribeAsync(
+        ModelManagerService models,
+        ISettingsService settings,
+        byte[] wav
+    )
+    {
+        var effectiveModelId = settings.Current.SelectedModelId;
+        await using var lease = await models.AcquireTranscriptionAsync(effectiveModelId);
+        try
+        {
+            var result = await lease.Plugin.TranscribeAsync(
+                wav,
+                null,
+                false,
+                null,
+                CancellationToken.None
+            );
+            return result.Text;
+        }
+        finally
+        {
+            // Release the model lock before writing to disk so a concurrent
+            // dictation isn't blocked by the file I/O that follows.
+            // The using-statement above will call DisposeAsync again on
+            // exit, but the lease is idempotent so the double-dispose is safe.
+            // ReSharper disable once DisposeOnUsingVariable -- intentional early release of the model lock before the file I/O below.
+            await lease.DisposeAsync();
+        }
     }
 
     [RelayCommand]
@@ -275,14 +291,14 @@ public partial class RecorderSectionViewModel : ObservableObject
     {
         try
         {
-            if (!Directory.Exists(TypeWhisperEnvironment.AudioPath))
+            if (!Directory.Exists(_recordingDirectory))
             {
                 return;
             }
 
             foreach (
                 var file in Directory
-                    .GetFiles(TypeWhisperEnvironment.AudioPath, "recording-*.wav")
+                    .GetFiles(_recordingDirectory, "recording-*.wav")
                     .OrderByDescending(path => path)
             )
             {
