@@ -209,6 +209,118 @@ public sealed class GnomeShortcutWriterTests : IDisposable
     }
 
     [Fact]
+    public async Task WriteAsync_AllGSettingsCallsUseFiveSecondTimeoutAndCallerToken()
+    {
+        var runner = new StatefulGSettingsRunner("[]");
+        var writer = new GnomeShortcutWriter(
+            runner,
+            Path.Join(_tempDirectory, "bounded-write-backups")
+        );
+        using var callerCts = new CancellationTokenSource();
+
+        var result = await writer.WriteAsync(CreateSpec(), callerCts.Token);
+
+        Assert.True(result.Success);
+        AssertGSettingsContract(runner, callerCts.Token);
+        Assert.Equal(2, runner.Invocations.Count(call => IsListGet(call.Args)));
+        Assert.Single(runner.Invocations, call => IsListSet(call.Args));
+        Assert.Equal(
+            3,
+            runner.Invocations.Count(call => call.Args is ["set", _, var key, _]
+                                                     && key != "custom-keybindings")
+        );
+    }
+
+    [Fact]
+    public async Task RemoveAsync_AllGSettingsCallsUseFiveSecondTimeoutAndCallerToken()
+    {
+        var spec = CreateSpec();
+        var probe = new GnomeShortcutWriter(
+            new StatefulGSettingsRunner("[]"),
+            Path.Join(_tempDirectory, "bounded-remove-probe-backups")
+        );
+        var managedPath = GetManagedPath(probe, spec);
+        var runner = new StatefulGSettingsRunner(
+            GnomeShortcutWriter.FormatGSettingsList([managedPath])
+        );
+        var writer = new GnomeShortcutWriter(
+            runner,
+            Path.Join(_tempDirectory, "bounded-remove-backups")
+        );
+        using var callerCts = new CancellationTokenSource();
+
+        var result = await writer.RemoveAsync(ShortcutId, callerCts.Token);
+
+        Assert.True(result.Success);
+        AssertGSettingsContract(runner, callerCts.Token);
+        Assert.Equal(2, runner.Invocations.Count(call => IsListGet(call.Args)));
+        Assert.Single(runner.Invocations, call => IsListSet(call.Args));
+        Assert.Equal(
+            3,
+            runner.Invocations.Count(call => call.Args is ["reset", _, _])
+        );
+    }
+
+    [Fact]
+    public async Task StatusProbes_AllGSettingsCallsUseFiveSecondTimeoutAndCallerToken()
+    {
+        var runner = new StatefulGSettingsRunner("[]");
+        var writer = new GnomeShortcutWriter(
+            runner,
+            Path.Join(_tempDirectory, "bounded-probe-backups")
+        );
+        var spec = CreateSpec();
+        var write = await writer.WriteAsync(spec, CancellationToken.None);
+        Assert.True(write.Success);
+        runner.Invocations.Clear();
+        using var callerCts = new CancellationTokenSource();
+
+        Assert.True(await writer.IsInstalledAsync(spec, callerCts.Token));
+        Assert.True(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, callerCts.Token)
+        );
+
+        AssertGSettingsContract(runner, callerCts.Token);
+        Assert.Equal(2, runner.Invocations.Count(call => IsListGet(call.Args)));
+        Assert.Equal(
+            2,
+            runner.Invocations.Count(call => call.Args is ["get", _, var key]
+                                                     && key != "custom-keybindings")
+        );
+    }
+
+    [Fact]
+    public async Task WriteAsync_GSettingsTimeoutFailsPromptlyWithTimeoutDetail()
+    {
+        var runner = new StatefulGSettingsRunner(
+            "[]",
+            resultOverride: args => IsListSet(args)
+                ? new ProcessRunResult(
+                    true,
+                    true,
+                    -1,
+                    string.Empty,
+                    string.Empty
+                )
+                : null
+        );
+        var writer = new GnomeShortcutWriter(
+            runner,
+            Path.Join(_tempDirectory, "timed-out-write-backups")
+        );
+        using var callerCts = new CancellationTokenSource();
+
+        // ReSharper disable once MethodSupportsCancellation -- deliberate hard test-timeout guard; the caller token already flows into WriteAsync, and tying the wait to it would defeat the fail-fast bound.
+        var result = await writer.WriteAsync(CreateSpec(), callerCts.Token)
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.False(result.Success);
+        Assert.Contains("gsettings timed out after 5 seconds.", result.UserMessage);
+        AssertGSettingsContract(runner, callerCts.Token);
+        Assert.Single(runner.Invocations, call => IsListSet(call.Args));
+    }
+
+    [Fact]
     public async Task WriteAsync_ConcurrentListAddition_RetriesMergeAndBacksUpLatestList()
     {
         var runner = new StatefulGSettingsRunner(
@@ -404,6 +516,33 @@ public sealed class GnomeShortcutWriterTests : IDisposable
         return firstLine[prefix.Length..];
     }
 
+    private static void AssertGSettingsContract(
+        StatefulGSettingsRunner runner,
+        CancellationToken callerToken
+    )
+    {
+        Assert.NotEmpty(runner.Invocations);
+        Assert.All(
+            runner.Invocations,
+            invocation =>
+            {
+                Assert.Equal("gsettings", invocation.FileName);
+                Assert.Equal(TimeSpan.FromSeconds(5), invocation.Timeout);
+                Assert.Equal(callerToken, invocation.CancellationToken);
+            }
+        );
+    }
+
+    private static bool IsListGet(IReadOnlyList<string> args)
+    {
+        return args is ["get", _, "custom-keybindings"];
+    }
+
+    private static bool IsListSet(IReadOnlyList<string> args)
+    {
+        return args is ["set", _, "custom-keybindings", _];
+    }
+
     private enum MutationMode
     {
         None,
@@ -415,21 +554,25 @@ public sealed class GnomeShortcutWriterTests : IDisposable
     {
         private readonly string _concurrentPath;
         private readonly MutationMode _mutationMode;
+        private readonly Func<IReadOnlyList<string>, ProcessRunResult?>? _resultOverride;
         private readonly Dictionary<(string Schema, string Key), string> _properties = [];
         private int _listGetCount;
 
         public StatefulGSettingsRunner(
             string initialRaw,
             MutationMode mutationMode = MutationMode.None,
-            string concurrentPath = ConcurrentPath
+            string concurrentPath = ConcurrentPath,
+            Func<IReadOnlyList<string>, ProcessRunResult?>? resultOverride = null
         )
         {
             CurrentRaw = initialRaw;
             _mutationMode = mutationMode;
             _concurrentPath = concurrentPath;
+            _resultOverride = resultOverride;
         }
 
         public string CurrentRaw { get; private set; }
+        public List<Invocation> Invocations { get; } = [];
         public int PropertyResetCount { get; private set; }
         public int PropertySetCount { get; private set; }
         public int WholeListSetCount { get; private set; }
@@ -443,8 +586,14 @@ public sealed class GnomeShortcutWriterTests : IDisposable
             CancellationToken ct = default
         )
         {
+            Invocations.Add(new Invocation(fileName, args.ToArray(), timeout, ct));
             ct.ThrowIfCancellationRequested();
             Assert.Equal("gsettings", fileName);
+            var overridden = _resultOverride?.Invoke(args);
+            if (overridden is not null)
+            {
+                return Task.FromResult(overridden);
+            }
 
             if (IsListGet(args))
             {
@@ -498,19 +647,16 @@ public sealed class GnomeShortcutWriterTests : IDisposable
             return Task.FromResult(Success());
         }
 
-        private static bool IsListGet(IReadOnlyList<string> args)
-        {
-            return args is ["get", _, "custom-keybindings"];
-        }
-
-        private static bool IsListSet(IReadOnlyList<string> args)
-        {
-            return args is ["set", _, "custom-keybindings", _];
-        }
-
         private static ProcessRunResult Success(string stdout = "")
         {
             return new ProcessRunResult(true, false, 0, stdout, string.Empty);
         }
+
+        public sealed record Invocation(
+            string FileName,
+            IReadOnlyList<string> Args,
+            TimeSpan? Timeout,
+            CancellationToken CancellationToken
+        );
     }
 }

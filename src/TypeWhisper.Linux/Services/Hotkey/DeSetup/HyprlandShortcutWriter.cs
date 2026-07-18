@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
@@ -16,6 +15,8 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
     private const string RemovalRequiresReloadWarning =
         "Hyprland may still have the live binding. Run `hyprctl reload` (or restart Hyprland) to remove it.";
 
+    private static readonly TimeSpan s_reloadTimeout = TimeSpan.FromSeconds(10);
+
     private readonly Func<
         AtomicFileSnapshot,
         string,
@@ -23,13 +24,26 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
         Task<bool>
     > _conditionalWriteAsync;
 
+    private readonly IProcessRunner _processRunner;
+
     public HyprlandShortcutWriter()
-        : this(AtomicFileWriter.WriteIfUnchangedAsync) { }
+        : this(new ProcessRunner()) { }
+
+    // ReSharper disable once MemberCanBePrivate.Global -- public DI seam: callers inject an IProcessRunner; the parameterless overload chains here with a real ProcessRunner.
+    public HyprlandShortcutWriter(IProcessRunner processRunner)
+        : this(processRunner, AtomicFileWriter.WriteIfUnchangedAsync) { }
 
     internal HyprlandShortcutWriter(
         Func<AtomicFileSnapshot, string, CancellationToken, Task<bool>> conditionalWriteAsync
     )
+        : this(new ProcessRunner(), conditionalWriteAsync) { }
+
+    internal HyprlandShortcutWriter(
+        IProcessRunner processRunner,
+        Func<AtomicFileSnapshot, string, CancellationToken, Task<bool>> conditionalWriteAsync
+    )
     {
+        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _conditionalWriteAsync = conditionalWriteAsync
                                  ?? throw new ArgumentNullException(nameof(conditionalWriteAsync));
     }
@@ -323,15 +337,23 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
         }
     }
 
-    private static async Task<bool> ReloadAsync(CancellationToken ct)
+    private async Task<bool> ReloadAsync(CancellationToken ct)
     {
         if (!DesktopDetector.BinaryExists("hyprctl"))
         {
             return false;
         }
 
-        var (ok, _, _) = await RunAsync("hyprctl", ["reload"], ct).ConfigureAwait(false);
-        return ok;
+        var result = await _processRunner.RunAsync(
+                "hyprctl",
+                ["reload"],
+                timeout: s_reloadTimeout,
+                ct: ct
+            )
+            .ConfigureAwait(false);
+        // Some runners report cancellation as a result rather than throwing; enforce it either way.
+        ct.ThrowIfCancellationRequested();
+        return result.Succeeded;
     }
 
     private static string ResolveConfigPath()
@@ -340,51 +362,5 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
         var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
         var configHome = string.IsNullOrEmpty(xdg) ? Path.Join(home, ".config") : xdg;
         return Path.Join(configHome, "hypr", "hyprland.conf");
-    }
-
-    private static async Task<(bool ok, string stdout, string stderr)> RunAsync(
-        string fileName,
-        IReadOnlyList<string> args,
-        CancellationToken ct
-    )
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = fileName,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        foreach (var a in args)
-        {
-            psi.ArgumentList.Add(a);
-        }
-
-        try
-        {
-            using var proc = Process.Start(psi);
-            if (proc is null)
-            {
-                return (false, string.Empty, $"Could not start {fileName}");
-            }
-
-            var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
-            var stderrTask = proc.StandardError.ReadToEndAsync(ct);
-            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
-            var stdout = await stdoutTask.ConfigureAwait(false);
-            var stderr = await stderrTask.ConfigureAwait(false);
-            return (proc.ExitCode == 0, stdout, stderr);
-        }
-        catch (OperationCanceledException)
-        {
-            // Cancellation must propagate to callers; only genuine process/apply
-            // errors are flattened into the failure tuple below.
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return (false, string.Empty, ex.Message);
-        }
     }
 }

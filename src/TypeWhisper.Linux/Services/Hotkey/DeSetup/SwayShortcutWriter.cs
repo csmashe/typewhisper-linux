@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
@@ -12,6 +11,8 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
 {
     private const int MaxWriteAttempts = 3;
 
+    private static readonly TimeSpan s_reloadTimeout = TimeSpan.FromSeconds(10);
+
     private readonly Func<
         AtomicFileSnapshot,
         string,
@@ -19,13 +20,26 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
         Task<bool>
     > _conditionalWriteAsync;
 
+    private readonly IProcessRunner _processRunner;
+
     public SwayShortcutWriter()
-        : this(AtomicFileWriter.WriteIfUnchangedAsync) { }
+        : this(new ProcessRunner()) { }
+
+    // ReSharper disable once MemberCanBePrivate.Global -- public DI seam: callers inject an IProcessRunner; the parameterless overload chains here with a real ProcessRunner.
+    public SwayShortcutWriter(IProcessRunner processRunner)
+        : this(processRunner, AtomicFileWriter.WriteIfUnchangedAsync) { }
 
     internal SwayShortcutWriter(
         Func<AtomicFileSnapshot, string, CancellationToken, Task<bool>> conditionalWriteAsync
     )
+        : this(new ProcessRunner(), conditionalWriteAsync) { }
+
+    internal SwayShortcutWriter(
+        IProcessRunner processRunner,
+        Func<AtomicFileSnapshot, string, CancellationToken, Task<bool>> conditionalWriteAsync
+    )
     {
+        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _conditionalWriteAsync = conditionalWriteAsync
                                  ?? throw new ArgumentNullException(nameof(conditionalWriteAsync));
     }
@@ -362,60 +376,22 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
         return Path.Join(configHome, "sway", "config");
     }
 
-    private static async Task<bool> ReloadAsync(CancellationToken ct)
+    private async Task<bool> ReloadAsync(CancellationToken ct)
     {
         if (!DesktopDetector.BinaryExists("swaymsg"))
         {
             return false;
         }
 
-        var (ok, _, _) = await RunAsync("swaymsg", ["reload"], ct).ConfigureAwait(false);
-        return ok;
-    }
-
-    private static async Task<(bool ok, string stdout, string stderr)> RunAsync(
-        string fileName,
-        IReadOnlyList<string> args,
-        CancellationToken ct
-    )
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = fileName,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        foreach (var a in args)
-        {
-            psi.ArgumentList.Add(a);
-        }
-
-        try
-        {
-            using var proc = Process.Start(psi);
-            if (proc is null)
-            {
-                return (false, string.Empty, $"Could not start {fileName}");
-            }
-
-            var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
-            var stderrTask = proc.StandardError.ReadToEndAsync(ct);
-            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
-            var stdout = await stdoutTask.ConfigureAwait(false);
-            var stderr = await stderrTask.ConfigureAwait(false);
-            return (proc.ExitCode == 0, stdout, stderr);
-        }
-        catch (OperationCanceledException)
-        {
-            // Cancellation must propagate to callers; only genuine Sway/process
-            // errors are flattened into the failure tuple below.
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return (false, string.Empty, ex.Message);
-        }
+        var result = await _processRunner.RunAsync(
+                "swaymsg",
+                ["reload"],
+                timeout: s_reloadTimeout,
+                ct: ct
+            )
+            .ConfigureAwait(false);
+        // Some runners report cancellation as a result rather than throwing; enforce it either way.
+        ct.ThrowIfCancellationRequested();
+        return result.Succeeded;
     }
 }

@@ -1,3 +1,4 @@
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Tests;
 using Xunit;
@@ -40,6 +41,60 @@ public sealed class CompositorShortcutWriterConcurrencyTests : IDisposable
         {
             // Best-effort cleanup for temp test directories.
         }
+    }
+
+    [Theory]
+    [InlineData("hyprland", false)]
+    [InlineData("hyprland", true)]
+    [InlineData("sway", false)]
+    [InlineData("sway", true)]
+    public async Task WriteAsync_ReloadUsesInjectedRunnerWithBoundAndCallerToken(
+        string compositor,
+        bool timedOut
+    )
+    {
+        var runner = new RecordingProcessRunner(
+            timedOut
+                ? new ProcessRunResult(
+                    true,
+                    true,
+                    -1,
+                    string.Empty,
+                    string.Empty
+                )
+                : null
+        );
+        IDeShortcutWriter writer = compositor == "hyprland"
+            ? new HyprlandShortcutWriter(runner, AtomicFileWriter.WriteIfUnchangedAsync)
+            : new SwayShortcutWriter(runner, AtomicFileWriter.WriteIfUnchangedAsync);
+        using var callerCts = new CancellationTokenSource();
+
+        var result = await writer.WriteAsync(CreateSpec(), callerCts.Token);
+
+        Assert.True(result.Success);
+        var executable = compositor == "hyprland" ? "hyprctl" : "swaymsg";
+        if (timedOut)
+        {
+            Assert.NotNull(result.Warning);
+            Assert.Contains($"{executable} reload", result.Warning);
+        }
+        else
+        {
+            Assert.Null(result.Warning);
+        }
+
+        var invocation = Assert.Single(runner.Invocations);
+        Assert.Equal(executable, invocation.FileName);
+        Assert.Equal(["reload"], invocation.Args);
+        Assert.Equal(TimeSpan.FromSeconds(10), invocation.Timeout);
+        Assert.Equal(callerCts.Token, invocation.CancellationToken);
+        Assert.False(File.Exists(_liveInvocationLog));
+
+        var configPath = compositor == "hyprland" ? HyprlandConfigPath : SwayConfigPath;
+        Assert.Contains(
+            "typewhisper record toggle",
+            await File.ReadAllTextAsync(configPath, callerCts.Token)
+        );
     }
 
     [Fact]
@@ -352,5 +407,45 @@ public sealed class CompositorShortcutWriterConcurrencyTests : IDisposable
     private static int CountOccurrences(string value, string needle)
     {
         return value.Split(needle).Length - 1;
+    }
+
+    private sealed class RecordingProcessRunner : IProcessRunner
+    {
+        private readonly ProcessRunResult _result;
+
+        public RecordingProcessRunner(ProcessRunResult? result = null)
+        {
+            _result = result
+                      ?? new ProcessRunResult(
+                          true,
+                          false,
+                          0,
+                          string.Empty,
+                          string.Empty
+                      );
+        }
+
+        public List<Invocation> Invocations { get; } = [];
+
+        public Task<ProcessRunResult> RunAsync(
+            string fileName,
+            IReadOnlyList<string> args,
+            IReadOnlyDictionary<string, string>? environment = null,
+            string? standardInput = null,
+            TimeSpan? timeout = null,
+            CancellationToken ct = default
+        )
+        {
+            Invocations.Add(new Invocation(fileName, args.ToArray(), timeout, ct));
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(_result);
+        }
+
+        public sealed record Invocation(
+            string FileName,
+            IReadOnlyList<string> Args,
+            TimeSpan? Timeout,
+            CancellationToken CancellationToken
+        );
     }
 }
