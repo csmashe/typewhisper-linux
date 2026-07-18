@@ -48,6 +48,29 @@ public sealed class LocalizationResourcesTests
         Assert.DoesNotContain("Shortcuts.EvdevStillOffAfterRemoval", en.Keys);
     }
 
+    [Fact]
+    public void CanonicalCatalog_HasDesktopIntegrationStaleAndRefreshMessages()
+    {
+        var en = Load(CanonicalLanguage);
+        var keys = new[]
+        {
+            "Shortcuts.DesktopIntegrationStale",
+            "Shortcuts.DesktopIntegrationStaleHint",
+            "Shortcuts.DesktopIntegrationStaleUnsupported",
+            "Shortcuts.RefreshDesktopIntegrationOn"
+        };
+
+        foreach (var key in keys)
+        {
+            Assert.True(en.TryGetValue(key, out var value), $"Missing canonical key: {key}");
+            Assert.False(string.IsNullOrWhiteSpace(value), $"Canonical key is empty: {key}");
+        }
+
+        Assert.Contains("older hotkey or activation mode", en["Shortcuts.DesktopIntegrationStaleHint"]);
+        Assert.Contains("old desktop shortcut may remain active", en["Shortcuts.DesktopIntegrationStaleHint"]);
+        Assert.Contains("Refresh desktop integration", en["Shortcuts.RefreshDesktopIntegrationOn"]);
+    }
+
     [Theory]
     [MemberData(nameof(NonCanonicalLanguages))]
     public void TranslationKeysAreSubsetOfEnglish(string lang)

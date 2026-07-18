@@ -63,6 +63,7 @@ public sealed class CompositorShortcutWriterConcurrencyTests : IDisposable
         Assert.Contains("typewhisper record toggle", contents);
         Assert.DoesNotContain("old hyprland managed bind", contents);
         Assert.Equal(1, CountOccurrences(contents, SentinelBlock.OpenSentinel));
+        Assert.Equal(["hyprctl reload"], await File.ReadAllLinesAsync(_liveInvocationLog));
         return;
 
         async Task<bool> EditBeforeFirstCommit(
@@ -71,6 +72,7 @@ public sealed class CompositorShortcutWriterConcurrencyTests : IDisposable
             CancellationToken ct
         )
         {
+            Assert.False(File.Exists(_liveInvocationLog));
             attempts++;
             if (attempts == 1)
             {
@@ -96,12 +98,13 @@ public sealed class CompositorShortcutWriterConcurrencyTests : IDisposable
 
         var contents = await File.ReadAllTextAsync(HyprlandConfigPath);
         Assert.True(result.Success);
-        Assert.NotNull(result.Warning);
+        Assert.Null(result.Warning);
         Assert.Equal(2, attempts);
         Assert.Contains("monitor = preferred", contents);
         Assert.Contains(concurrentLine, contents);
         Assert.DoesNotContain(SentinelBlock.OpenSentinel, contents);
         Assert.DoesNotContain("old hyprland managed bind", contents);
+        Assert.Equal(["hyprctl reload"], await File.ReadAllLinesAsync(_liveInvocationLog));
         return;
 
         async Task<bool> EditBeforeFirstCommit(
@@ -110,6 +113,7 @@ public sealed class CompositorShortcutWriterConcurrencyTests : IDisposable
             CancellationToken ct
         )
         {
+            Assert.False(File.Exists(_liveInvocationLog));
             attempts++;
             if (attempts == 1)
             {
@@ -233,16 +237,77 @@ public sealed class CompositorShortcutWriterConcurrencyTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("hyprland")]
+    [InlineData("sway")]
+    public async Task ManagedPresence_DistinguishesAbsentCurrentStaleAndUnbalanced(
+        string compositor
+    )
+    {
+        var path = compositor == "hyprland" ? HyprlandConfigPath : SwayConfigPath;
+        IDeShortcutWriter writer = compositor == "hyprland"
+            ? new HyprlandShortcutWriter()
+            : new SwayShortcutWriter();
+        var installed = CreateSpec();
+        var changed = installed with { Trigger = "Alt+F8" };
+
+        Assert.False(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+        Assert.False(await writer.IsInstalledAsync(installed, CancellationToken.None));
+
+        var write = await writer.WriteAsync(installed, CancellationToken.None);
+
+        Assert.True(write.Success);
+        Assert.True(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+        Assert.True(await writer.IsInstalledAsync(installed, CancellationToken.None));
+        Assert.False(await writer.IsInstalledAsync(changed, CancellationToken.None));
+        Assert.True(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+
+        WriteConfig(path, SentinelBlock.OpenSentinel + "\nstale bind\n");
+
+        Assert.False(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+    }
+
+    [Fact]
+    public async Task HyprlandWriteAndRemoval_ReloadFailureWarnsAfterCommittedChanges()
+    {
+        CreateLiveCommand("hyprctl", exitCode: 1);
+        var writer = new HyprlandShortcutWriter();
+
+        var write = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
+
+        Assert.True(write.Success);
+        Assert.NotNull(write.Warning);
+        Assert.Contains("hyprctl reload", write.Warning);
+
+        var removal = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
+
+        Assert.True(removal.Success);
+        Assert.NotNull(removal.Warning);
+        Assert.Contains("hyprctl reload", removal.Warning);
+        Assert.Equal(
+            ["hyprctl reload", "hyprctl reload"],
+            await File.ReadAllLinesAsync(_liveInvocationLog)
+        );
+    }
+
     private string HyprlandConfigPath => Path.Join(_tempDirectory, "hypr", "hyprland.conf");
 
     private string SwayConfigPath => Path.Join(_tempDirectory, "sway", "config");
 
-    private void CreateLiveCommand(string name)
+    private void CreateLiveCommand(string name, int exitCode = 0)
     {
         var path = Path.Join(_binDirectory, name);
         File.WriteAllText(
             path,
-            $"#!/bin/sh\nprintf '%s\\n' {name} >> \"{_liveInvocationLog}\"\n"
+            $"#!/bin/sh\nprintf '%s %s\\n' {name} \"$*\" >> \"{_liveInvocationLog}\"\nexit {exitCode}\n"
         );
         if (!OperatingSystem.IsWindows())
         {

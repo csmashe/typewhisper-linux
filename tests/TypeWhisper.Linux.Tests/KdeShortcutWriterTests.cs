@@ -73,6 +73,9 @@ public sealed class KdeShortcutWriterTests : IDisposable
 
         Assert.False(result.Success);
         Assert.Equal(foreignContents, File.ReadAllText(TargetPath));
+        Assert.False(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
     }
 
     [Fact]
@@ -87,6 +90,34 @@ public sealed class KdeShortcutWriterTests : IDisposable
 
         Assert.False(result.Success);
         Assert.Equal(mismatchedContents, File.ReadAllText(TargetPath));
+        Assert.False(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+    }
+
+    [Fact]
+    public async Task ManagedPresence_DistinguishesAbsentCurrentAndStale()
+    {
+        var writer = new KdeShortcutWriter();
+        var installed = CreateSpec();
+        var changed = CreateSpec("Alt+F8");
+
+        Assert.False(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+        Assert.False(await writer.IsInstalledAsync(installed, CancellationToken.None));
+
+        var write = await writer.WriteAsync(installed, CancellationToken.None);
+
+        Assert.True(write.Success);
+        Assert.True(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+        Assert.True(await writer.IsInstalledAsync(installed, CancellationToken.None));
+        Assert.False(await writer.IsInstalledAsync(changed, CancellationToken.None));
+        Assert.True(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
     }
 
     [Fact]

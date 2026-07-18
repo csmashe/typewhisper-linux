@@ -154,6 +154,322 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task RefreshSectionState_AfterStartupMismatchShowsStaleBannerWithoutWriting()
+    {
+        var settings = CreateToggleSettings("Alt+F8");
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter
+        {
+            InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space")
+        };
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
+        hotkey.SetNativeDictationBindingActive(true);
+
+        // Simulate M5's restart-time exact-current-spec probe first: it fails open because
+        // the persisted desktop entry still contains the old chord.
+        await sut.RefreshNativeDictationBindingStateAsync(CancellationToken.None);
+        Assert.False(hotkey.NativeDictationBindingActive);
+
+        sut.RefreshSectionState();
+        await sut.PendingDesktopIntegrationRefresh;
+
+        Assert.Equal(ManagedDesktopIntegrationState.Stale, sut.DesktopIntegrationState);
+        Assert.True(sut.ShowStaleIntegrationBanner);
+        Assert.True(sut.CanRefreshDesktopIntegration);
+        Assert.True(sut.CanRemoveDesktopIntegration);
+        Assert.Contains("old desktop shortcut may remain active", sut.StaleIntegrationMessage);
+        Assert.Contains("Refresh desktop integration", sut.SetupAutomaticallyLabel);
+        Assert.Equal(2, writer.IsInstalledCallCount);
+        Assert.Equal(1, writer.IsManagedShortcutPresentCallCount);
+        Assert.Equal("typewhisper.dictation.toggle", writer.LastPresenceShortcutId);
+        Assert.Equal(0, writer.WriteCallCount);
+        Assert.False(hotkey.NativeDictationBindingActive);
+    }
+
+    [Fact]
+    public async Task ApplyHotkey_MarksInstalledOldSpecStaleWithoutAutomaticWriteAndPreservesOwnership()
+    {
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter();
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
+        await sut.SetupAutomaticallyCommand.ExecuteAsync(null);
+        var installed = writer.InstalledSpec;
+
+        sut.HotkeyText = "Alt+F8";
+        await sut.ApplyHotkeyCommand.ExecuteAsync(null);
+
+        Assert.Equal("Alt+F8", settings.Current.ToggleHotkey);
+        Assert.Equal("Alt+F8", hotkey.CurrentHotkeyString);
+        Assert.Equal("Ctrl+Shift+Space", installed?.Trigger);
+        Assert.Equal(installed, writer.InstalledSpec);
+        Assert.Equal(1, writer.WriteCallCount);
+        Assert.Equal(ManagedDesktopIntegrationState.Stale, sut.DesktopIntegrationState);
+        Assert.True(sut.ShowStaleIntegrationBanner);
+        Assert.Contains("Refresh desktop integration", sut.SetupAutomaticallyLabel);
+        Assert.True(hotkey.NativeDictationBindingActive);
+    }
+
+    [Fact]
+    public async Task SwitchingBackToExactlyInstalledHotkeyClearsStaleWithoutWriting()
+    {
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter();
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
+        await sut.SetupAutomaticallyCommand.ExecuteAsync(null);
+        sut.HotkeyText = "Alt+F8";
+        await sut.ApplyHotkeyCommand.ExecuteAsync(null);
+        Assert.True(sut.ShowStaleIntegrationBanner);
+
+        sut.HotkeyText = "Ctrl+Shift+Space";
+        await sut.ApplyHotkeyCommand.ExecuteAsync(null);
+
+        Assert.Equal(ManagedDesktopIntegrationState.Current, sut.DesktopIntegrationState);
+        Assert.False(sut.ShowStaleIntegrationBanner);
+        Assert.Equal(1, writer.WriteCallCount);
+        Assert.Contains("Set up automatically", sut.SetupAutomaticallyLabel);
+    }
+
+    [Fact]
+    public async Task ModeChangesDetectStaleCommandsAndSwitchingBackClearsWithoutWriting()
+    {
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter { SupportsPushToTalk = true };
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
+        await sut.SetupAutomaticallyCommand.ExecuteAsync(null);
+        Assert.Null(writer.InstalledSpec?.OnReleaseCommand);
+
+        sut.Mode = RecordingMode.PushToTalk;
+        await sut.PendingDesktopIntegrationRefresh;
+
+        Assert.Equal(RecordingMode.PushToTalk, settings.Current.Mode);
+        Assert.NotNull(writer.LastInstalledSpec?.OnReleaseCommand);
+        Assert.Equal(ManagedDesktopIntegrationState.Stale, sut.DesktopIntegrationState);
+        Assert.True(sut.CanRefreshDesktopIntegration);
+        Assert.Equal(1, writer.WriteCallCount);
+
+        sut.Mode = RecordingMode.Toggle;
+        await sut.PendingDesktopIntegrationRefresh;
+
+        Assert.Equal(ManagedDesktopIntegrationState.Current, sut.DesktopIntegrationState);
+        Assert.False(sut.ShowStaleIntegrationBanner);
+        Assert.Equal(1, writer.WriteCallCount);
+    }
+
+    [Theory]
+    [InlineData(RecordingMode.Hybrid, true)]
+    [InlineData(RecordingMode.PushToTalk, false)]
+    public async Task UnsupportedModeStillDetectsStaleAndLeavesOnlyRemovalAvailable(
+        RecordingMode mode,
+        bool supportsPushToTalk
+    )
+    {
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter { SupportsPushToTalk = supportsPushToTalk };
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
+        await sut.SetupAutomaticallyCommand.ExecuteAsync(null);
+        var exactCallsBeforeChange = writer.IsInstalledCallCount;
+
+        sut.Mode = mode;
+        await sut.PendingDesktopIntegrationRefresh;
+
+        Assert.Equal(ManagedDesktopIntegrationState.Stale, sut.DesktopIntegrationState);
+        Assert.True(sut.ShowStaleIntegrationBanner);
+        Assert.False(sut.CanRefreshDesktopIntegration);
+        Assert.False(sut.CanWriteDesktopIntegration);
+        Assert.True(sut.CanRemoveDesktopIntegration);
+        Assert.Contains("can't refresh", sut.StaleIntegrationMessage);
+        Assert.Contains("remove the old integration", sut.StaleIntegrationMessage);
+        Assert.Equal(exactCallsBeforeChange, writer.IsInstalledCallCount);
+        Assert.Equal(1, writer.IsManagedShortcutPresentCallCount);
+        Assert.Equal(1, writer.WriteCallCount);
+    }
+
+    [Fact]
+    public async Task ImmediateRefreshFromRestartStaleStateReestablishesSuppressionAndKeepsOtherShortcuts()
+    {
+        var settings = CreateToggleSettings("Alt+F8");
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        Assert.True(hotkey.TrySetHotkeyFromString("Alt+F8"));
+        Assert.True(hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Alt+P"));
+        var writer = new FakeDeShortcutWriter
+        {
+            InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space")
+        };
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
+        await sut.RefreshDesktopIntegrationStateAsync(CancellationToken.None);
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+        Assert.Equal(KeyCode.VcF8, backend.LastSet?.DictationKey);
+
+        await sut.SetupAutomaticallyCommand.ExecuteAsync(null);
+        await backend.WaitUntilSettledAsync();
+
+        Assert.Equal("Alt+F8", writer.LastWrittenSpec?.Trigger);
+        Assert.Equal(1, writer.WriteCallCount);
+        Assert.Equal(ManagedDesktopIntegrationState.Current, sut.DesktopIntegrationState);
+        Assert.False(sut.ShowStaleIntegrationBanner);
+        Assert.True(hotkey.NativeDictationBindingActive);
+        Assert.Equal(KeyCode.VcUndefined, backend.LastSet?.DictationKey);
+        Assert.Equal(KeyCode.VcP, backend.LastSet?.PromptPaletteKey);
+        Assert.True(settings.Current.WaylandEvdevHotkeysEnabled);
+        Assert.True(sut.WaylandEvdevHotkeysEnabled);
+    }
+
+    [Theory]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    public async Task DeferredRefreshPreservesPriorSuppression(
+        bool priorSuppression,
+        bool requiresRestart,
+        bool warning
+    )
+    {
+        var settings = CreateToggleSettings("Alt+F8");
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        hotkey.SetNativeDictationBindingActive(priorSuppression);
+        var writer = new FakeDeShortcutWriter
+        {
+            InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space"),
+            RequiresSessionRestartToApply = requiresRestart,
+            WriteResult = new DeShortcutWriteResult(
+                true,
+                "Shortcut refreshed.",
+                [],
+                warning ? "Live apply failed." : null
+            )
+        };
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
+        await sut.RefreshDesktopIntegrationStateAsync(CancellationToken.None);
+        Assert.True(sut.ShowStaleIntegrationBanner);
+
+        await sut.SetupAutomaticallyCommand.ExecuteAsync(null);
+
+        Assert.Equal(priorSuppression, hotkey.NativeDictationBindingActive);
+        Assert.Equal(ManagedDesktopIntegrationState.Current, sut.DesktopIntegrationState);
+        Assert.False(sut.ShowStaleIntegrationBanner);
+        Assert.Contains("later startup", sut.IntegrationStatusMessage);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RefreshFailurePreservesPriorSuppressionAndStaleBanner(bool throws)
+    {
+        var settings = CreateToggleSettings("Alt+F8");
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        hotkey.SetNativeDictationBindingActive(true);
+        var writer = new FakeDeShortcutWriter
+        {
+            InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space"),
+            WriteResult = new DeShortcutWriteResult(false, "Write failed.", []),
+            WriteException = throws ? new InvalidOperationException("boom") : null
+        };
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
+        await sut.RefreshDesktopIntegrationStateAsync(CancellationToken.None);
+
+        await sut.SetupAutomaticallyCommand.ExecuteAsync(null);
+
+        Assert.True(hotkey.NativeDictationBindingActive);
+        Assert.Equal(ManagedDesktopIntegrationState.Stale, sut.DesktopIntegrationState);
+        Assert.True(sut.ShowStaleIntegrationBanner);
+    }
+
+    [Fact]
+    public async Task LateOldHotkeyProbeCannotOverwriteNewerStaleResult()
+    {
+        var oldProbeGate = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter
+        {
+            IsManagedShortcutPresentResult = true,
+            IsInstalledHandler = (spec, _) =>
+                spec.Trigger == "Ctrl+Shift+Space"
+                    ? oldProbeGate.Task
+                    : Task.FromResult(false)
+        };
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
+        var oldProbe = sut.RefreshDesktopIntegrationStateAsync(CancellationToken.None);
+
+        sut.HotkeyText = "Alt+F8";
+        await sut.ApplyHotkeyCommand.ExecuteAsync(null);
+        Assert.Equal(ManagedDesktopIntegrationState.Stale, sut.DesktopIntegrationState);
+
+        oldProbeGate.SetResult(true);
+        await oldProbe;
+
+        Assert.Equal(ManagedDesktopIntegrationState.Stale, sut.DesktopIntegrationState);
+        Assert.True(sut.ShowStaleIntegrationBanner);
+    }
+
+    [Fact]
+    public async Task LatePreRefreshProbeCannotRestoreStaleAfterSuccessfulRefresh()
+    {
+        var probeGate = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var blockProbe = false;
+        var settings = CreateToggleSettings("Alt+F8");
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter
+        {
+            InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space"),
+            // ReSharper disable once AccessToModifiedClosure -- the test deliberately flips blockProbe after setup so the next probe blocks on probeGate.
+            IsInstalledHandler = (_, _) =>
+                blockProbe ? probeGate.Task : Task.FromResult(false)
+        };
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
+        await sut.RefreshDesktopIntegrationStateAsync(CancellationToken.None);
+        Assert.True(sut.ShowStaleIntegrationBanner);
+        blockProbe = true;
+        var oldProbe = sut.RefreshDesktopIntegrationStateAsync(CancellationToken.None);
+
+        await sut.SetupAutomaticallyCommand.ExecuteAsync(null);
+        Assert.Equal(ManagedDesktopIntegrationState.Current, sut.DesktopIntegrationState);
+
+        probeGate.SetResult(false);
+        await oldProbe;
+
+        Assert.Equal(ManagedDesktopIntegrationState.Current, sut.DesktopIntegrationState);
+        Assert.False(sut.ShowStaleIntegrationBanner);
+    }
+
+    [Fact]
+    public async Task LatePreRemovalProbeCannotRestoreCurrentAfterSuccessfulRemoval()
+    {
+        var probeGate = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter
+        {
+            InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space"),
+            IsInstalledHandler = (_, _) => probeGate.Task
+        };
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
+        var oldProbe = sut.RefreshDesktopIntegrationStateAsync(CancellationToken.None);
+
+        await sut.RemoveIntegrationCommand.ExecuteAsync(null);
+        Assert.Equal(ManagedDesktopIntegrationState.Absent, sut.DesktopIntegrationState);
+
+        probeGate.SetResult(true);
+        await oldProbe;
+
+        Assert.Equal(ManagedDesktopIntegrationState.Absent, sut.DesktopIntegrationState);
+        Assert.False(sut.ShowStaleIntegrationBanner);
+    }
+
+    [Fact]
     public async Task SetupAutomatically_PushToTalkWithPressOnlyWriter_ShowsUnsupportedAndDoesNotWrite()
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
@@ -490,5 +806,18 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
             }
         );
         return settings;
+    }
+
+    private static DeShortcutSpec CreateToggleSpec(string trigger)
+    {
+        return new DeShortcutSpec(
+            DictationShortcutSpecFactory.DictationShortcutId,
+            "TypeWhisper: Toggle Dictation",
+            trigger,
+            "typewhisper",
+            null,
+            null,
+            null
+        );
     }
 }

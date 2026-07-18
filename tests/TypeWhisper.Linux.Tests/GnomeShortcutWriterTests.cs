@@ -16,12 +16,31 @@ public sealed class GnomeShortcutWriterTests : IDisposable
 {
     private const string ConcurrentPath = "/org/example/custom-keybindings/concurrent/";
     private const string ShortcutId = "typewhisper.dictation.toggle";
+    private readonly string? _originalPath = Environment.GetEnvironmentVariable("PATH");
     private readonly string _tempDirectory = TestPaths.CreateTempDirectory(
         "gnome-shortcut-writer"
     );
 
+    public GnomeShortcutWriterTests()
+    {
+        var binDirectory = Path.Join(_tempDirectory, "bin");
+        Directory.CreateDirectory(binDirectory);
+        var executable = Path.Join(binDirectory, "gsettings");
+        File.WriteAllText(executable, "#!/bin/sh\nexit 0\n");
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                executable,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            );
+        }
+
+        Environment.SetEnvironmentVariable("PATH", binDirectory);
+    }
+
     public void Dispose()
     {
+        Environment.SetEnvironmentVariable("PATH", _originalPath);
         try
         {
             TestPaths.DeleteDirectory(_tempDirectory);
@@ -335,6 +354,35 @@ public sealed class GnomeShortcutWriterTests : IDisposable
         Assert.Contains(malformed, await File.ReadAllTextAsync(backup));
     }
 
+    [Fact]
+    public async Task ManagedPresence_DistinguishesAbsentCurrentAndStaleWithoutWriting()
+    {
+        var runner = new StatefulGSettingsRunner("[]");
+        var writer = new GnomeShortcutWriter(
+            runner,
+            Path.Join(_tempDirectory, "presence-backups")
+        );
+        var installed = CreateSpec();
+        var changed = installed with { Trigger = "Alt+F8" };
+
+        Assert.False(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+        Assert.False(await writer.IsInstalledAsync(installed, CancellationToken.None));
+
+        var write = await writer.WriteAsync(installed, CancellationToken.None);
+
+        Assert.True(write.Success);
+        Assert.True(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+        Assert.True(await writer.IsInstalledAsync(installed, CancellationToken.None));
+        Assert.False(await writer.IsInstalledAsync(changed, CancellationToken.None));
+        Assert.True(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+    }
+
     private static DeShortcutSpec CreateSpec()
     {
         return new DeShortcutSpec(
@@ -367,6 +415,7 @@ public sealed class GnomeShortcutWriterTests : IDisposable
     {
         private readonly string _concurrentPath;
         private readonly MutationMode _mutationMode;
+        private readonly Dictionary<(string Schema, string Key), string> _properties = [];
         private int _listGetCount;
 
         public StatefulGSettingsRunner(
@@ -418,6 +467,17 @@ public sealed class GnomeShortcutWriterTests : IDisposable
                 return Task.FromResult(Success(returnedRaw));
             }
 
+            if (args is ["get", var schema, var key])
+            {
+                return Task.FromResult(
+                    Success(
+                        _properties.TryGetValue((schema, key), out var value)
+                            ? $"'{value}'"
+                            : "''"
+                    )
+                );
+            }
+
             // ReSharper disable once ConvertIfStatementToSwitchStatement -- the branches mix a list-pattern helper with args[0] guards; a switch would not read more clearly.
             if (IsListSet(args))
             {
@@ -427,10 +487,12 @@ public sealed class GnomeShortcutWriterTests : IDisposable
             else if (args.Count > 0 && args[0] == "set")
             {
                 PropertySetCount++;
+                _properties[(args[1], args[2])] = args[3];
             }
             else if (args.Count > 0 && args[0] == "reset")
             {
                 PropertyResetCount++;
+                _properties.Remove((args[1], args[2]));
             }
 
             return Task.FromResult(Success());
