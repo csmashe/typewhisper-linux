@@ -9,6 +9,127 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class EvdevGlobalShortcutBackendTests
 {
     [Fact]
+    public async Task SameModifierHeldByTwoReaders_OneReleaseKeepsRemainingChordUsable()
+    {
+        var monitor = new FakeSessionActivityMonitor(true);
+        var enumerator = new FakeKeyboardEnumerator("/dev/input/event1", "/dev/input/event2");
+        var factory = new FakeReaderFactory();
+        await using var backend = new EvdevGlobalShortcutBackend(monitor, enumerator, factory);
+        var toggleCount = 0;
+        backend.DictationToggleRequested += (_, _) => toggleCount++;
+
+        var shortcuts = DefaultShortcuts() with
+        {
+            DictationModifiers = ModifierMask.LeftCtrl
+        };
+        Assert.True((await backend.RegisterAsync(shortcuts, CancellationToken.None)).Success);
+        var readers = factory.Readers;
+
+        readers[0].Emit(LinuxKeyMap.KeyLeftctrl, true);
+        readers[1].Emit(LinuxKeyMap.KeyLeftctrl, true);
+        readers[0].Emit(LinuxKeyMap.KeyLeftctrl, false);
+        readers[1].Emit(57, true); // KEY_SPACE
+
+        // A global bitmask clears LeftCtrl on reader 0's release and misses this chord.
+        Assert.Equal(1, toggleCount);
+    }
+
+    [Fact]
+    public async Task ReaderFailure_SubtractsOnlyFailedReaderState()
+    {
+        var monitor = new FakeSessionActivityMonitor(true);
+        var enumerator = new FakeKeyboardEnumerator("/dev/input/event1", "/dev/input/event2");
+        var factory = new FakeReaderFactory();
+        await using var backend = new EvdevGlobalShortcutBackend(monitor, enumerator, factory);
+        var toggleCount = 0;
+        backend.DictationToggleRequested += (_, _) => toggleCount++;
+
+        var shortcuts = DefaultShortcuts() with
+        {
+            DictationModifiers = ModifierMask.LeftCtrl
+        };
+        Assert.True((await backend.RegisterAsync(shortcuts, CancellationToken.None)).Success);
+        var readers = factory.Readers;
+
+        readers[0].Emit(LinuxKeyMap.KeyLeftshift, true);
+        readers[1].Emit(LinuxKeyMap.KeyLeftctrl, true);
+        readers[0].Fail();
+        readers[1].Emit(57, true); // KEY_SPACE
+
+        // Clearing the old process-wide mask on any failure loses reader 1's held LeftCtrl.
+        Assert.Equal(1, toggleCount);
+        Assert.True(readers[0].IsDisposed);
+    }
+
+    [Fact]
+    public async Task ReaderFailure_ReleasesSoleModifierAndPreventsFalseLaterChord()
+    {
+        var monitor = new FakeSessionActivityMonitor(true);
+        var enumerator = new FakeKeyboardEnumerator("/dev/input/event1", "/dev/input/event2");
+        var factory = new FakeReaderFactory();
+        await using var backend = new EvdevGlobalShortcutBackend(monitor, enumerator, factory);
+        var paletteCount = 0;
+        var toggleCount = 0;
+        backend.PromptPaletteRequested += (_, _) => paletteCount++;
+        backend.DictationToggleRequested += (_, _) => toggleCount++;
+
+        var shortcuts = DefaultShortcuts() with
+        {
+            DictationModifiers = ModifierMask.LeftCtrl,
+            PromptPaletteKey = KeyCode.VcLeftControl,
+            PromptPaletteModifiers = ModifierMask.None
+        };
+        Assert.True((await backend.RegisterAsync(shortcuts, CancellationToken.None)).Success);
+        var readers = factory.Readers;
+
+        readers[0].Emit(LinuxKeyMap.KeyLeftctrl, true);
+        Assert.Equal(0, paletteCount); // Selection workflows remain release-gated.
+        readers[0].Fail();
+        readers[1].Emit(57, true); // KEY_SPACE
+
+        // The palette proves detach emitted the modifier release; clearing only a mask leaves the
+        // workflow pending. The later Space proves the lost modifier no longer forms a chord.
+        Assert.Equal(1, paletteCount);
+        Assert.Equal(0, toggleCount);
+    }
+
+    [Fact]
+    public async Task ReaderFailure_ReleasesHeldDictationKeyUsingPressTimeMode()
+    {
+        var monitor = new FakeSessionActivityMonitor(true);
+        var enumerator = new FakeKeyboardEnumerator("/dev/input/event1", "/dev/input/event2");
+        var factory = new FakeReaderFactory();
+        await using var backend = new EvdevGlobalShortcutBackend(monitor, enumerator, factory);
+        var startCount = 0;
+        var stopCount = 0;
+        var toggleCount = 0;
+        backend.DictationStartRequested += (_, _) => startCount++;
+        backend.DictationStopRequested += (_, _) => stopCount++;
+        backend.DictationToggleRequested += (_, _) => toggleCount++;
+
+        var pushToTalk = DefaultShortcuts() with
+        {
+            DictationModifiers = ModifierMask.None,
+            Mode = RecordingMode.PushToTalk
+        };
+        Assert.True((await backend.RegisterAsync(pushToTalk, CancellationToken.None)).Success);
+        var readers = factory.Readers;
+
+        readers[0].Emit(57, true); // KEY_SPACE
+        Assert.Equal(1, startCount);
+
+        var rebound = pushToTalk with { Mode = RecordingMode.Toggle };
+        Assert.True((await backend.RegisterAsync(rebound, CancellationToken.None)).Success);
+        readers[0].Fail();
+        readers[1].Emit(57, true);
+
+        // Detach must release the captured PTT hold even after the mode changes, and the next
+        // aggregate press must not be stranded behind the old dispatcher's key-down guard.
+        Assert.Equal(1, stopCount);
+        Assert.Equal(1, toggleCount);
+    }
+
+    [Fact]
     public async Task Lock_DisposesAllReaders_ResetsState_AndDropsStaleEvents()
     {
         var monitor = new FakeSessionActivityMonitor(true);
@@ -320,7 +441,7 @@ public sealed class EvdevGlobalShortcutBackendTests
             Action<string, Exception> onFailure
         )
         {
-            var reader = new FakeReader(path, onKeyEvent);
+            var reader = new FakeReader(path, onKeyEvent, onFailure);
             lock (_lock)
             {
                 _readers.Add(reader);
@@ -330,7 +451,11 @@ public sealed class EvdevGlobalShortcutBackendTests
         }
     }
 
-    private sealed class FakeReader(string path, Action<string, int, bool> onKeyEvent)
+    private sealed class FakeReader(
+        string path,
+        Action<string, int, bool> onKeyEvent,
+        Action<string, Exception> onFailure
+    )
         : IEvdevDeviceReader
     {
         public string Path { get; } = path;
@@ -350,6 +475,11 @@ public sealed class EvdevGlobalShortcutBackendTests
         public void Emit(int linuxKeyCode, bool pressed)
         {
             onKeyEvent(Path, linuxKeyCode, pressed);
+        }
+
+        public void Fail(Exception? exception = null)
+        {
+            onFailure(Path, exception ?? new IOException("Fake evdev reader failure."));
         }
     }
 }
