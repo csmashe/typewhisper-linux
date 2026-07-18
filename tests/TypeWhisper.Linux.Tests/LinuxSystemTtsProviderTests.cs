@@ -28,6 +28,7 @@ public sealed class LinuxSystemTtsProviderTests
         var completedCount = 0;
         session.Completed += (_, _) => completedCount++;
         Assert.Equal(1, completedCount);
+        Assert.False(runner.SurplusInvocationObserved);
     }
 
     [Theory]
@@ -49,6 +50,7 @@ public sealed class LinuxSystemTtsProviderTests
         Assert.DoesNotContain(invocation.FileName, s_audioPlaybackCommands);
         Assert.Equal(TimeSpan.FromSeconds(15), invocation.Timeout);
         Assert.Null(invocation.StandardInput);
+        Assert.False(runner.SurplusInvocationObserved);
     }
 
     [Theory]
@@ -69,22 +71,33 @@ public sealed class LinuxSystemTtsProviderTests
         Assert.Equal(command, invocation.FileName);
         Assert.Equal(["-v", "fr", text], invocation.Args);
         Assert.Null(invocation.StandardInput);
+        Assert.False(runner.SurplusInvocationObserved);
     }
 
     [Fact]
-    public async Task SpeakAsync_routes_spd_say_through_runner_with_existing_argument_contract()
+    public async Task SpeakAsync_routes_spd_say_with_wait_and_text_as_one_argv_item()
     {
         const string text = "keep this as one argument";
         var runner = ControlledProcessRunner.WithImmediateResult(Success());
         using var provider = CreateProvider("spd-say", runner);
 
-        await provider.SpeakAsync(new TtsSpeakRequest(text), CancellationToken.None);
+        var session = await provider.SpeakAsync(
+            new TtsSpeakRequest(text),
+            CancellationToken.None
+        );
 
         var invocation = Assert.Single(runner.Invocations);
         Assert.Equal("spd-say", invocation.FileName);
-        Assert.Equal([text], invocation.Args);
+        Assert.Equal(["--wait", text], invocation.Args);
+        Assert.NotEqual("sh", invocation.FileName);
+        Assert.DoesNotContain(invocation.FileName, s_audioPlaybackCommands);
         Assert.Equal(TimeSpan.FromSeconds(15), invocation.Timeout);
         Assert.Null(invocation.StandardInput);
+        session.Stop();
+        session.Stop();
+        Assert.Single(runner.Invocations);
+        Assert.Equal(0, runner.CancellationCount);
+        Assert.False(runner.SurplusInvocationObserved);
     }
 
     [Fact]
@@ -101,10 +114,11 @@ public sealed class LinuxSystemTtsProviderTests
 
         var invocation = Assert.Single(runner.Invocations);
         Assert.Equal("spd-say", invocation.FileName);
-        Assert.Equal(["-l", "pt-BR", text], invocation.Args);
+        Assert.Equal(["--wait", "-l", "pt-BR", text], invocation.Args);
         Assert.NotEqual("sh", invocation.FileName);
         Assert.DoesNotContain(invocation.FileName, s_audioPlaybackCommands);
         Assert.Null(invocation.StandardInput);
+        Assert.False(runner.SurplusInvocationObserved);
     }
 
     [Theory]
@@ -128,6 +142,7 @@ public sealed class LinuxSystemTtsProviderTests
 
         var invocation = Assert.Single(runner.Invocations);
         Assert.Equal([text], invocation.Args);
+        Assert.False(runner.SurplusInvocationObserved);
     }
 
     [Fact]
@@ -144,6 +159,7 @@ public sealed class LinuxSystemTtsProviderTests
 
         var invocation = Assert.Single(runner.Invocations);
         Assert.Equal([text], invocation.Args);
+        Assert.False(runner.SurplusInvocationObserved);
     }
 
     [Fact]
@@ -172,7 +188,7 @@ public sealed class LinuxSystemTtsProviderTests
         await completion.Task.WaitAsync(s_testGuard);
         Assert.False(session.IsActive);
         Assert.Equal(1, Volatile.Read(ref completedCount));
-        Assert.Equal(2, runner.Invocations.Count);
+        Assert.Equal(2, runner.Invocations.Length);
         var primary = runner.Invocations[0];
         var fallback = runner.Invocations[1];
         Assert.Equal("espeak-ng", primary.FileName);
@@ -188,22 +204,59 @@ public sealed class LinuxSystemTtsProviderTests
         );
         Assert.Null(primary.StandardInput);
         Assert.Null(fallback.StandardInput);
+        Assert.False(runner.SurplusInvocationObserved);
+    }
+
+    [Fact]
+    public async Task Rejected_localized_spd_say_invocation_retries_waiting_default_voice_once()
+    {
+        const string text = "fallback text";
+        var runner = ControlledProcessRunner.WithImmediateResults(
+            new ProcessRunResult(true, false, 23, "", "voice unavailable"),
+            Success()
+        );
+        using var provider = CreateProvider("spd-say", runner);
+
+        var session = await provider.SpeakAsync(
+            new TtsSpeakRequest(text, "nl-BE"),
+            CancellationToken.None
+        );
+        var completion = NewCompletionSignal();
+        session.Completed += (_, _) => completion.TrySetResult();
+
+        await completion.Task.WaitAsync(s_testGuard);
+        Assert.False(session.IsActive);
+        Assert.Equal(2, runner.Invocations.Length);
+        var primary = runner.Invocations[0];
+        var fallback = runner.Invocations[1];
+        Assert.Equal("spd-say", primary.FileName);
+        Assert.Equal(["--wait", "-l", "nl-BE", text], primary.Args);
+        Assert.Equal("spd-say", fallback.FileName);
+        Assert.Equal(["--wait", text], fallback.Args);
+        Assert.NotNull(primary.Timeout);
+        Assert.NotNull(fallback.Timeout);
+        Assert.True(fallback.Timeout > TimeSpan.Zero);
+        Assert.True(
+            fallback.Timeout < primary.Timeout,
+            $"Expected fallback timeout {fallback.Timeout} to be less than primary timeout {primary.Timeout}."
+        );
+        Assert.Null(primary.StandardInput);
+        Assert.Null(fallback.StandardInput);
+        Assert.False(runner.SurplusInvocationObserved);
     }
 
     [Theory]
     [InlineData("success")]
     [InlineData("not-started")]
-    [InlineData("timed-out")]
     public async Task Localized_invocation_does_not_retry_without_voice_rejection(string outcome)
     {
         var result = outcome switch
         {
             "success" => Success(),
             "not-started" => new ProcessRunResult(false, false, -1, "", "launch failed"),
-            "timed-out" => new ProcessRunResult(true, true, -1, "", ""),
             _ => throw new ArgumentOutOfRangeException(nameof(outcome))
         };
-        var runner = ControlledProcessRunner.WithImmediateResults(result, Success());
+        var runner = ControlledProcessRunner.WithImmediateResult(result);
         using var provider = CreateProvider("spd-say", runner);
 
         var session = await provider.SpeakAsync(
@@ -215,7 +268,65 @@ public sealed class LinuxSystemTtsProviderTests
 
         await completion.Task.WaitAsync(s_testGuard);
         var invocation = Assert.Single(runner.Invocations);
-        Assert.Equal(["-l", "it", "say once"], invocation.Args);
+        Assert.Equal(["--wait", "-l", "it", "say once"], invocation.Args);
+        Assert.False(runner.SurplusInvocationObserved);
+    }
+
+    [Fact]
+    public async Task Localized_spd_say_timeout_runs_only_bounded_dispatcher_cancellation()
+    {
+        const string text = "say once";
+        var runner = ControlledProcessRunner.WithImmediateResults(
+            new ProcessRunResult(true, true, -1, "", ""),
+            Success()
+        );
+        using var provider = CreateProvider("spd-say", runner);
+
+        var session = await provider.SpeakAsync(
+            new TtsSpeakRequest(text, "it"),
+            CancellationToken.None
+        );
+        var completion = NewCompletionSignal();
+        session.Completed += (_, _) => completion.TrySetResult();
+
+        await completion.Task.WaitAsync(s_testGuard);
+        Assert.False(session.IsActive);
+        Assert.Equal(2, runner.Invocations.Length);
+        var primary = runner.Invocations[0];
+        var cancellation = runner.Invocations[1];
+        Assert.Equal("spd-say", primary.FileName);
+        Assert.Equal(["--wait", "-l", "it", text], primary.Args);
+        Assert.Equal(LinuxSystemTtsProvider.CalculatePlaybackTimeout(text.Length), primary.Timeout);
+        Assert.Null(primary.StandardInput);
+        AssertDispatcherCancellation(cancellation);
+        Assert.False(runner.SurplusInvocationObserved);
+    }
+
+    [Fact]
+    public async Task Timed_out_spd_say_fallback_runs_one_dispatcher_cancellation()
+    {
+        const string text = "fallback timeout";
+        var runner = ControlledProcessRunner.WithImmediateResults(
+            new ProcessRunResult(true, false, 23, "", "voice unavailable"),
+            new ProcessRunResult(true, true, -1, "", ""),
+            Success()
+        );
+        using var provider = CreateProvider("spd-say", runner);
+
+        var session = await provider.SpeakAsync(
+            new TtsSpeakRequest(text, "sv"),
+            CancellationToken.None
+        );
+        var completion = NewCompletionSignal();
+        session.Completed += (_, _) => completion.TrySetResult();
+
+        await completion.Task.WaitAsync(s_testGuard);
+        Assert.False(session.IsActive);
+        Assert.Equal(3, runner.Invocations.Length);
+        Assert.Equal(["--wait", "-l", "sv", text], runner.Invocations[0].Args);
+        Assert.Equal(["--wait", text], runner.Invocations[1].Args);
+        AssertDispatcherCancellation(runner.Invocations[2]);
+        Assert.False(runner.SurplusInvocationObserved);
     }
 
     [Theory]
@@ -242,6 +353,7 @@ public sealed class LinuxSystemTtsProviderTests
         Assert.Equal(TimeSpan.FromMilliseconds(expectedMilliseconds), invocation.Timeout);
         Assert.True(invocation.Timeout > TimeSpan.Zero);
         Assert.True(invocation.Timeout <= TimeSpan.FromMinutes(10));
+        Assert.False(runner.SurplusInvocationObserved);
     }
 
     [Fact]
@@ -253,10 +365,10 @@ public sealed class LinuxSystemTtsProviderTests
     }
 
     [Fact]
-    public async Task Pending_runner_is_active_and_success_completes_once()
+    public async Task Pending_spd_say_waiter_is_active_until_utterance_invocation_completes()
     {
         var runner = new ControlledProcessRunner();
-        using var provider = CreateProvider("espeak-ng", runner);
+        using var provider = CreateProvider("spd-say", runner);
         var session = await provider.SpeakAsync(
             new TtsSpeakRequest("pending"),
             CancellationToken.None
@@ -271,20 +383,26 @@ public sealed class LinuxSystemTtsProviderTests
         };
 
         Assert.True(session.IsActive);
-        runner.Complete(Success());
+        Assert.Equal(["--wait", "pending"], Assert.Single(runner.Invocations).Args);
+        Assert.False(completion.Task.IsCompleted);
+        runner.CompleteInvocation(1, Success());
 
         await completion.Task.WaitAsync(s_testGuard);
         Assert.False(session.IsActive);
         Assert.Equal(1, Volatile.Read(ref completedCount));
         session.Stop();
         Assert.Equal(0, runner.CancellationCount);
+        Assert.Single(runner.Invocations);
+        Assert.False(runner.SurplusInvocationObserved);
     }
 
-    [Fact]
-    public async Task Stop_is_idempotent_and_cancels_pending_runner_once()
+    [Theory]
+    [InlineData("espeak")]
+    [InlineData("espeak-ng")]
+    public async Task Stop_is_idempotent_for_espeak_without_dispatcher_control(string command)
     {
         var runner = new ControlledProcessRunner();
-        using var provider = CreateProvider("espeak", runner);
+        using var provider = CreateProvider(command, runner);
         var session = await provider.SpeakAsync(
             new TtsSpeakRequest("stop me"),
             CancellationToken.None
@@ -306,6 +424,119 @@ public sealed class LinuxSystemTtsProviderTests
         Assert.False(session.IsActive);
         Assert.Equal(1, runner.CancellationCount);
         Assert.Equal(1, Volatile.Read(ref completedCount));
+        var invocation = Assert.Single(runner.Invocations);
+        Assert.Equal(command, invocation.FileName);
+        Assert.Equal(["stop me"], invocation.Args);
+        Assert.DoesNotContain("-C", invocation.Args);
+        Assert.DoesNotContain("-S", invocation.Args);
+        Assert.False(runner.SurplusInvocationObserved);
+    }
+
+    [Theory]
+    [InlineData("stop")]
+    [InlineData("caller-token")]
+    public async Task Spd_say_cancellation_waits_for_one_bounded_dispatcher_control(
+        string cancellationSource
+    )
+    {
+        const string text = "cancel pending speech";
+        var runner = ControlledProcessRunner.WithPendingResults(2);
+        using var provider = CreateProvider("spd-say", runner);
+        using var callerCts = new CancellationTokenSource();
+        var session = await provider.SpeakAsync(
+            new TtsSpeakRequest(text, "de"),
+            callerCts.Token
+        );
+        var completion = NewCompletionSignal();
+        var completedCount = 0;
+        session.Completed += (_, _) =>
+        {
+            // ReSharper disable once AccessToModifiedClosure -- completedCount is deliberately shared between the completion handler and the test body (read via Volatile.Read); interlocked/volatile access is the intended synchronization.
+            Interlocked.Increment(ref completedCount);
+            completion.TrySetResult();
+        };
+
+        if (cancellationSource == "stop")
+        {
+            session.Stop();
+            session.Stop();
+            session.Stop();
+        }
+        else
+        {
+            // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel signals cancellation before the test proceeds; CancelAsync would defer callbacks.
+            callerCts.Cancel();
+        }
+
+        // ReSharper disable once MethodSupportsCancellation -- the 2s guard must not be tied to callerCts; forwarding its token would abort the wait on the caller-cancel path.
+        await runner.WaitForInvocationAsync(2).WaitAsync(s_testGuard);
+        Assert.True(session.IsActive);
+        Assert.False(completion.Task.IsCompleted);
+        Assert.Equal(1, runner.CancellationCount);
+        Assert.Equal(2, runner.Invocations.Length);
+        Assert.Equal(
+            ["--wait", "-l", "de", text],
+            runner.Invocations[0].Args
+        );
+        AssertDispatcherCancellation(runner.Invocations[1]);
+
+        runner.CompleteInvocation(2, Success());
+
+        // ReSharper disable once MethodSupportsCancellation -- the 2s guard must not be tied to callerCts; forwarding its token would abort the wait on the caller-cancel path.
+        await completion.Task.WaitAsync(s_testGuard);
+        Assert.False(session.IsActive);
+        Assert.Equal(1, Volatile.Read(ref completedCount));
+        Assert.Equal(2, runner.Invocations.Length);
+        Assert.False(runner.SurplusInvocationObserved);
+    }
+
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("timed-out")]
+    [InlineData("throwing")]
+    public async Task Dispatcher_control_failure_still_completes_once_without_recursion(
+        string outcome
+    )
+    {
+        ProcessRunResult? controlResult = outcome switch
+        {
+            "failed" => new ProcessRunResult(false, false, -1, "", "launch failed"),
+            "timed-out" => new ProcessRunResult(true, true, -1, "", ""),
+            "throwing" => null,
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome))
+        };
+        var runner = ControlledProcessRunner.WithPendingResults(2);
+        using var provider = CreateProvider("spd-say", runner);
+        var session = await provider.SpeakAsync(
+            new TtsSpeakRequest("best effort cleanup"),
+            CancellationToken.None
+        );
+        var completion = NewCompletionSignal();
+        var completedCount = 0;
+        session.Completed += (_, _) =>
+        {
+            // ReSharper disable once AccessToModifiedClosure -- completedCount is deliberately shared between the completion handler and the test body (read via Volatile.Read); interlocked/volatile access is the intended synchronization.
+            Interlocked.Increment(ref completedCount);
+            completion.TrySetResult();
+        };
+
+        session.Stop();
+        await runner.WaitForInvocationAsync(2).WaitAsync(s_testGuard);
+        if (controlResult is null)
+        {
+            runner.FailInvocation(2, new InvalidOperationException("control failed"));
+        }
+        else
+        {
+            runner.CompleteInvocation(2, controlResult);
+        }
+
+        await completion.Task.WaitAsync(s_testGuard);
+        Assert.False(session.IsActive);
+        Assert.Equal(1, Volatile.Read(ref completedCount));
+        Assert.Equal(2, runner.Invocations.Length);
+        AssertDispatcherCancellation(runner.Invocations[1]);
+        Assert.False(runner.SurplusInvocationObserved);
     }
 
     [Fact]
@@ -328,10 +559,13 @@ public sealed class LinuxSystemTtsProviderTests
         };
 
         Assert.True(session.IsActive);
-        runner.Complete(new ProcessRunResult(true, false, 17, "", "voice unavailable"));
+        runner.CompleteInvocation(
+            1,
+            new ProcessRunResult(true, false, 17, "", "voice unavailable")
+        );
         await runner.WaitForInvocationAsync(2).WaitAsync(s_testGuard);
         Assert.True(session.IsActive);
-        Assert.Equal(2, runner.Invocations.Count);
+        Assert.Equal(2, runner.Invocations.Length);
         Assert.Equal(["-v", "pl", text], runner.Invocations[0].Args);
         Assert.Equal([text], runner.Invocations[1].Args);
 
@@ -342,7 +576,8 @@ public sealed class LinuxSystemTtsProviderTests
         Assert.False(session.IsActive);
         Assert.Equal(1, runner.CancellationCount);
         Assert.Equal(1, Volatile.Read(ref completedCount));
-        Assert.Equal(2, runner.Invocations.Count);
+        Assert.Equal(2, runner.Invocations.Length);
+        Assert.False(runner.SurplusInvocationObserved);
     }
 
     [Theory]
@@ -372,6 +607,8 @@ public sealed class LinuxSystemTtsProviderTests
         Assert.Equal(1, completedCount);
         session.Stop();
         Assert.Equal(0, runner.CancellationCount);
+        Assert.Single(runner.Invocations);
+        Assert.False(runner.SurplusInvocationObserved);
     }
 
     [Fact]
@@ -404,7 +641,7 @@ public sealed class LinuxSystemTtsProviderTests
             var runnerTask = Task.Run(async () =>
             {
                 await start.Task;
-                runner.Complete(Success());
+                runner.CompleteInvocation(1, Success());
             });
             start.TrySetResult();
 
@@ -413,6 +650,8 @@ public sealed class LinuxSystemTtsProviderTests
             Assert.False(session.IsActive);
             Assert.Equal(1, Volatile.Read(ref completedCount));
             Assert.InRange(runner.CancellationCount, 0, 1);
+            Assert.Single(runner.Invocations);
+            Assert.False(runner.SurplusInvocationObserved);
         }
     }
 
@@ -423,6 +662,14 @@ public sealed class LinuxSystemTtsProviderTests
     {
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
         return new LinuxSystemTtsProvider(settings.Object, processRunner, command);
+    }
+
+    private static void AssertDispatcherCancellation(Invocation invocation)
+    {
+        Assert.Equal("spd-say", invocation.FileName);
+        Assert.Equal(["-C"], invocation.Args);
+        Assert.Equal(TimeSpan.FromMilliseconds(500), invocation.Timeout);
+        Assert.Null(invocation.StandardInput);
     }
 
     private static ProcessRunResult Success()
@@ -437,10 +684,12 @@ public sealed class LinuxSystemTtsProviderTests
 
     private sealed class ControlledProcessRunner : IProcessRunner
     {
+        private readonly Lock _sync = new();
         private readonly ControlledResult[] _results;
+        private readonly List<Invocation> _invocations = [];
         private int _cancellationCount;
-        private int _completionIndex;
         private int _invocationIndex;
+        private int _surplusInvocationCount;
 
         public ControlledProcessRunner()
             : this(1) { }
@@ -454,8 +703,22 @@ public sealed class LinuxSystemTtsProviderTests
                 .ToArray();
         }
 
-        public List<Invocation> Invocations { get; } = [];
+        public Invocation[] Invocations
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _invocations.ToArray();
+                }
+            }
+        }
+
         public int CancellationCount => Volatile.Read(ref _cancellationCount);
+
+        private int SurplusInvocationCount => Volatile.Read(ref _surplusInvocationCount);
+
+        public bool SurplusInvocationObserved => SurplusInvocationCount != 0;
 
         public static ControlledProcessRunner WithImmediateResult(ProcessRunResult result)
         {
@@ -467,9 +730,9 @@ public sealed class LinuxSystemTtsProviderTests
         )
         {
             var runner = new ControlledProcessRunner(results.Length);
-            foreach (var result in results)
+            for (var index = 0; index < results.Length; index++)
             {
-                runner.Complete(result);
+                runner.CompleteInvocation(index + 1, results[index]);
             }
 
             return runner;
@@ -491,6 +754,16 @@ public sealed class LinuxSystemTtsProviderTests
             return _results[invocationNumber - 1].Invoked.Task;
         }
 
+        public void CompleteInvocation(int invocationNumber, ProcessRunResult result)
+        {
+            GetResult(invocationNumber).Completion.TrySetResult(result);
+        }
+
+        public void FailInvocation(int invocationNumber, Exception exception)
+        {
+            GetResult(invocationNumber).Completion.TrySetException(exception);
+        }
+
         public async Task<ProcessRunResult> RunAsync(
             string fileName,
             IReadOnlyList<string> args,
@@ -501,13 +774,19 @@ public sealed class LinuxSystemTtsProviderTests
         )
         {
             var invocationIndex = Interlocked.Increment(ref _invocationIndex) - 1;
+            lock (_sync)
+            {
+                _invocations.Add(new Invocation(fileName, args.ToArray(), standardInput, timeout));
+            }
+
             if (invocationIndex >= _results.Length)
             {
+                Interlocked.Increment(ref _surplusInvocationCount);
                 throw new InvalidOperationException("No controlled process result remains.");
             }
 
             var result = _results[invocationIndex];
-            Invocations.Add(new Invocation(fileName, args.ToArray(), standardInput, timeout));
+
             result.Invoked.TrySetResult();
             if (result.Completion.Task.IsCompleted)
             {
@@ -525,15 +804,15 @@ public sealed class LinuxSystemTtsProviderTests
             }
         }
 
-        public void Complete(ProcessRunResult result)
+        private ControlledResult GetResult(int invocationNumber)
         {
-            var completionIndex = Interlocked.Increment(ref _completionIndex) - 1;
-            if (completionIndex >= _results.Length)
+            ArgumentOutOfRangeException.ThrowIfLessThan(invocationNumber, 1);
+            if (invocationNumber > _results.Length)
             {
-                throw new InvalidOperationException("No controlled process completion remains.");
+                throw new ArgumentOutOfRangeException(nameof(invocationNumber));
             }
 
-            _results[completionIndex].Completion.TrySetResult(result);
+            return _results[invocationNumber - 1];
         }
 
         private sealed class ControlledResult
