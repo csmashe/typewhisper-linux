@@ -220,7 +220,7 @@ public partial class GeneralSectionViewModel : ObservableObject
             return;
         }
 
-        _linuxPrefs.Save(_linuxPrefs.Current with { CloseToTray = value });
+        _linuxPrefs.Update(current => current with { CloseToTray = value });
     }
 }
 

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using TypeWhisper.Core;
+using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -56,11 +57,20 @@ public sealed class LinuxPreferencesService
         WriteIndented = true, PropertyNameCaseInsensitive = true
     };
 
+    private readonly Action<string, string> _atomicWrite;
+    private readonly Lock _gate = new();
     private readonly string _path;
 
     public LinuxPreferencesService()
+        : this(Path.Join(TypeWhisperEnvironment.BasePath, "linux-preferences.json")) { }
+
+    internal LinuxPreferencesService(
+        string path,
+        Action<string, string>? atomicWrite = null
+    )
     {
-        _path = Path.Join(TypeWhisperEnvironment.BasePath, "linux-preferences.json");
+        _path = path;
+        _atomicWrite = atomicWrite ?? AtomicFileWrite.WriteAllText;
         Load();
     }
 
@@ -76,6 +86,7 @@ public sealed class LinuxPreferencesService
         try
         {
             var json = File.ReadAllText(_path);
+            // ReSharper disable once InconsistentlySynchronizedField -- s_jsonOptions is an immutable static readonly options instance; reads require no synchronization.
             Current =
                 JsonSerializer.Deserialize<LinuxPreferences>(json, s_jsonOptions)
                 ?? LinuxPreferences.Default;
@@ -91,17 +102,44 @@ public sealed class LinuxPreferencesService
 
     public void Save(LinuxPreferences next)
     {
-        Current = next;
+        lock (_gate)
+        {
+            SaveLocked(next);
+        }
+    }
+
+    public LinuxPreferences Update(Func<LinuxPreferences, LinuxPreferences> mutate)
+    {
+        ArgumentNullException.ThrowIfNull(mutate);
+        lock (_gate)
+        {
+            var updated = mutate(Current);
+            SaveLocked(updated);
+            return updated;
+        }
+    }
+
+    private void SaveLocked(LinuxPreferences next)
+    {
         try
         {
-            Directory.CreateDirectory(TypeWhisperEnvironment.BasePath);
-            File.WriteAllText(_path, JsonSerializer.Serialize(next, s_jsonOptions));
-            Changed?.Invoke(next);
+            var directory = Path.GetDirectoryName(_path);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var json = JsonSerializer.Serialize(next, s_jsonOptions);
+            _atomicWrite(_path, json);
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[LinuxPreferencesService] Save failed: {ex.Message}");
+            throw;
         }
+
+        Current = next;
+        Changed?.Invoke(next);
     }
 
     // ReSharper disable once EventNeverSubscribedTo.Global -- public API; raised on preference changes for external/future subscribers.
