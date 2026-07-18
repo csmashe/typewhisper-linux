@@ -14,18 +14,30 @@ internal sealed class EvdevDeviceReader : IEvdevDeviceReader
     private readonly CancellationTokenSource _cts = new();
     private readonly Action<string, Exception> _onFailure;
     private readonly Action<string, int, bool> _onKeyEvent;
+    private readonly HashSet<int> _pressedKeys = [];
 
     private int _disposed;
+    private IEvdevInputDevice? _inputDevice;
     private Task? _readLoop;
-    private FileStream? _stream;
 
     public EvdevDeviceReader(
         string path,
         Action<string, int, bool> onKeyEvent,
         Action<string, Exception> onFailure
     )
+        : this(path, new EvdevInputDevice(path), onKeyEvent, onFailure)
+    {
+    }
+
+    internal EvdevDeviceReader(
+        string path,
+        IEvdevInputDevice inputDevice,
+        Action<string, int, bool> onKeyEvent,
+        Action<string, Exception> onFailure
+    )
     {
         Path = path;
+        _inputDevice = inputDevice;
         _onKeyEvent = onKeyEvent;
         _onFailure = onFailure;
     }
@@ -45,12 +57,12 @@ internal sealed class EvdevDeviceReader : IEvdevDeviceReader
         // session safety instead comes from EvdevGlobalShortcutBackend.OnKeyEvent: its cached and
         // live input checks, lifecycle generation, and reader-membership guard drop stale events.
         // The generation check alone rejects the old reader after the device is reattached on unlock.
-        var stream = Interlocked.Exchange(ref _stream, null);
+        var inputDevice = Interlocked.Exchange(ref _inputDevice, null);
         try
         {
             // ReSharper disable once MethodHasAsyncOverload -- synchronous Dispose is deliberate:
             // it closes promptly when no read is in flight; DisposeAsync would defer even that.
-            stream?.Dispose();
+            inputDevice?.Dispose();
         }
         catch (Exception ex)
         {
@@ -88,14 +100,9 @@ internal sealed class EvdevDeviceReader : IEvdevDeviceReader
     {
         try
         {
-            _stream = new FileStream(
-                Path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite,
-                0,
-                true
-            );
+            var inputDevice = _inputDevice
+                              ?? throw new ObjectDisposedException(nameof(EvdevDeviceReader));
+            inputDevice.Open();
         }
         catch (Exception ex)
         {
@@ -109,13 +116,14 @@ internal sealed class EvdevDeviceReader : IEvdevDeviceReader
 
     private async Task RunAsync(CancellationToken ct)
     {
-        var stream = _stream;
-        if (stream is null)
+        var inputDevice = _inputDevice;
+        if (inputDevice is null)
         {
             return;
         }
 
         var buf = new byte[InputEvent.SizeBytes];
+        var recovering = false;
         Exception? terminating = null;
         try
         {
@@ -127,7 +135,7 @@ internal sealed class EvdevDeviceReader : IEvdevDeviceReader
                     int n;
                     try
                     {
-                        n = await stream
+                        n = await inputDevice
                             .ReadAsync(buf.AsMemory(read, InputEvent.SizeBytes - read), ct)
                             .ConfigureAwait(false);
                     }
@@ -156,17 +164,37 @@ internal sealed class EvdevDeviceReader : IEvdevDeviceReader
                 }
 
                 var evt = MemoryMarshal.Read<InputEvent>(buf);
+                if (recovering)
+                {
+                    if (evt is { Type: InputEvent.EvSyn, Code: InputEvent.SynReport })
+                    {
+                        Reconcile(inputDevice.QueryPressedKeyBitmap());
+                        recovering = false;
+                    }
+
+                    continue;
+                }
+
+                if (evt is { Type: InputEvent.EvSyn, Code: InputEvent.SynDropped })
+                {
+                    recovering = true;
+                    continue;
+                }
+
                 if (evt.Type != InputEvent.EvKey)
                 {
                     continue;
                 }
 
-                if (evt.Value == InputEvent.Repeated)
+                switch (evt.Value)
                 {
-                    continue;
+                    case InputEvent.Pressed when _pressedKeys.Add(evt.Code):
+                        _onKeyEvent(Path, evt.Code, true);
+                        break;
+                    case InputEvent.Released when _pressedKeys.Remove(evt.Code):
+                        _onKeyEvent(Path, evt.Code, false);
+                        break;
                 }
-
-                _onKeyEvent(Path, evt.Code, evt.Value == InputEvent.Pressed);
             }
         }
         catch (Exception ex)
@@ -187,5 +215,45 @@ internal sealed class EvdevDeviceReader : IEvdevDeviceReader
                 }
             }
         }
+    }
+
+    private void Reconcile(ReadOnlySpan<byte> keyBits)
+    {
+        var snapshot = new HashSet<int>();
+        var highestKey = Math.Min(EvdevInputDevice.KeyMax, keyBits.Length * 8 - 1);
+        for (var keyCode = 0; keyCode <= highestKey; keyCode++)
+        {
+            if ((keyBits[keyCode / 8] & (1 << (keyCode % 8))) != 0)
+            {
+                snapshot.Add(keyCode);
+            }
+        }
+
+        // Clear terminal-key guards before modifiers, then rebuild modifiers before terminal keys
+        // so reconstructed chords carry the same aggregate modifier snapshot as normal input.
+        foreach (
+            var keyCode in _pressedKeys
+                .Except(snapshot)
+                .OrderBy(static code => LinuxKeyMap.IsModifier(code) ? 1 : 0)
+                .ThenBy(static code => code)
+        )
+        {
+            _onKeyEvent(Path, keyCode, false);
+        }
+
+        foreach (
+            var keyCode in snapshot
+                .Except(_pressedKeys)
+                .OrderBy(static code => LinuxKeyMap.IsModifier(code) ? 0 : 1)
+                .ThenBy(static code => code)
+        )
+        {
+            _onKeyEvent(Path, keyCode, true);
+        }
+
+        // Keep the pre-drop set intact until every logical edge has been accepted. If a callback
+        // throws, the failure path detaches the reader and the backend subtracts what it received.
+        _pressedKeys.Clear();
+        _pressedKeys.UnionWith(snapshot);
     }
 }
