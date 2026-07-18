@@ -13,16 +13,27 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed partial class AudioDuckingService : IAudioDuckingService
 {
+    private const double MaximumRawVolume = 98_304d;
+    private static readonly TimeSpan s_pactlTimeout = TimeSpan.FromMilliseconds(1500);
+    private static readonly IReadOnlyDictionary<string, string> s_pactlEnvironment =
+        new Dictionary<string, string>(StringComparer.Ordinal) { ["LC_ALL"] = "C" };
+
     // "Sink Input #593" — block header in `pactl list sink-inputs` output.
     [GeneratedRegex(@"^Sink Input #(\d+)")]
     private static partial Regex SinkInputIdRegex();
 
-    // First percentage on a "Volume:" line (e.g. "... / 65% / -9.30 dB").
-    [GeneratedRegex(@"(\d+)%")]
-    private static partial Regex VolumePercentRegex();
+    // Raw pa_volume_t followed by its percentage representation.
+    [GeneratedRegex(@"(?<![-0-9.])([0-9]+)\s*/\s*[0-9]+%")]
+    private static partial Regex RawVolumeRegex();
 
-    private readonly Dictionary<string, string> _savedVolumes = new(StringComparer.Ordinal);
+    private readonly IProcessRunner _processRunner;
+    private readonly Dictionary<string, string[]> _savedVolumes = new(StringComparer.Ordinal);
     private bool _isDucked;
+
+    public AudioDuckingService(IProcessRunner processRunner)
+    {
+        _processRunner = processRunner;
+    }
 
     public void DuckAudio(float factor)
     {
@@ -35,17 +46,27 @@ public sealed partial class AudioDuckingService : IAudioDuckingService
         {
             // pactl has no "get-sink-input-volume" subcommand, so read current
             // volumes by parsing the long `list sink-inputs` output instead.
-            var listing = CommandRunner.Run("pactl", "list", "sink-inputs");
-            if (string.IsNullOrWhiteSpace(listing))
+            var listingResult = RunPactl(["list", "sink-inputs"]);
+            if (
+                !listingResult.Succeeded
+                || string.IsNullOrWhiteSpace(listingResult.StandardOutput)
+            )
             {
                 return;
             }
 
-            foreach (var (inputId, currentVolume) in ParseSinkInputVolumes(listing))
+            foreach (
+                var (inputId, currentVolumes) in ParseSinkInputVolumes(
+                    listingResult.StandardOutput
+                )
+            )
             {
-                _savedVolumes[inputId] = currentVolume;
-                var duckedVolume = ScaleVolume(currentVolume, factor);
-                CommandRunner.Run("pactl", "set-sink-input-volume", inputId, duckedVolume);
+                var savedVolumes = currentVolumes.ToArray();
+                _savedVolumes[inputId] = savedVolumes;
+                var duckedVolumes = savedVolumes
+                    .Select(volume => ScaleVolume(volume, factor))
+                    .ToArray();
+                SetSinkInputVolume(inputId, duckedVolumes);
             }
 
             _isDucked = _savedVolumes.Count > 0;
@@ -67,9 +88,9 @@ public sealed partial class AudioDuckingService : IAudioDuckingService
 
         try
         {
-            foreach (var (inputId, volume) in _savedVolumes)
+            foreach (var (inputId, volumes) in _savedVolumes)
             {
-                CommandRunner.Run("pactl", "set-sink-input-volume", inputId, volume);
+                SetSinkInputVolume(inputId, volumes);
             }
         }
         catch (Exception ex)
@@ -84,10 +105,12 @@ public sealed partial class AudioDuckingService : IAudioDuckingService
     }
 
     /// <summary>
-    ///     Walks the <c>pactl list sink-inputs</c> output, yielding the first
-    ///     volume percentage of each "Sink Input #N" block.
+    ///     Walks the <c>pactl list sink-inputs</c> output, yielding every raw
+    ///     channel volume from the first "Volume:" line of each "Sink Input #N" block.
     /// </summary>
-    private static IEnumerable<(string Id, string Volume)> ParseSinkInputVolumes(string listing)
+    private static IEnumerable<(string Id, string[] Volumes)> ParseSinkInputVolumes(
+        string listing
+    )
     {
         string? currentId = null;
 
@@ -105,10 +128,13 @@ public sealed partial class AudioDuckingService : IAudioDuckingService
                 continue;
             }
 
-            var volMatch = VolumePercentRegex().Match(line);
-            if (volMatch.Success)
+            var volumes = RawVolumeRegex()
+                .Matches(line)
+                .Select(match => match.Groups[1].Value)
+                .ToArray();
+            if (volumes.Length > 0)
             {
-                yield return (currentId, volMatch.Groups[1].Value + "%");
+                yield return (currentId, volumes);
             }
 
             // Only the first Volume line per block is relevant.
@@ -116,22 +142,46 @@ public sealed partial class AudioDuckingService : IAudioDuckingService
         }
     }
 
-    private static string ScaleVolume(string volumePercent, float factor)
+    private void SetSinkInputVolume(string inputId, string[] volumes)
     {
-        var numericPart = volumePercent.Trim().TrimEnd('%');
+        var arguments = new List<string>(2 + volumes.Length)
+        {
+            "set-sink-input-volume",
+            inputId
+        };
+        arguments.AddRange(volumes);
+        RunPactl(arguments);
+    }
+
+    private ProcessRunResult RunPactl(IReadOnlyList<string> arguments)
+    {
+        return _processRunner
+            .RunAsync(
+                "pactl",
+                arguments,
+                environment: s_pactlEnvironment,
+                timeout: s_pactlTimeout
+            )
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private static string ScaleVolume(string rawVolume, float factor)
+    {
         if (
-            !float.TryParse(
-                numericPart,
-                NumberStyles.Float,
+            !ulong.TryParse(
+                rawVolume,
+                NumberStyles.None,
                 CultureInfo.InvariantCulture,
-                out var percent
+                out var numericVolume
             )
         )
         {
-            return volumePercent;
+            return rawVolume;
         }
 
-        var scaled = Math.Clamp(percent * factor, 0f, 150f);
-        return $"{scaled.ToString("0.##", CultureInfo.InvariantCulture)}%";
+        var scaled = Math.Clamp(numericVolume * (double)factor, 0d, MaximumRawVolume);
+        var rounded = Math.Round(scaled, MidpointRounding.AwayFromZero);
+        return rounded.ToString("0", CultureInfo.InvariantCulture);
     }
 }
