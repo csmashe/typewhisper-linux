@@ -498,6 +498,50 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Orders optional startup feedback ahead of capture. Feedback is best
+    ///     effort; the permission check and capture result remain exact.
+    /// </summary>
+    internal static async Task<TCapture?> StartCaptureAfterFeedbackAsync<TCapture>(
+        bool soundFeedbackEnabled,
+        Func<Task> stopPriorSpeechAsync,
+        Func<Task> playStartSoundAsync,
+        Func<Task> announceRecordingStartedAsync,
+        Func<bool> isInputAllowed,
+        Func<TCapture?> startCapture
+    )
+        where TCapture : class
+    {
+        try
+        {
+            await stopPriorSpeechAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Could not finish prior speech before capture: {ex.Message}");
+        }
+
+        try
+        {
+            if (soundFeedbackEnabled)
+            {
+                await playStartSoundAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                await announceRecordingStartedAsync().ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Optional recording-start feedback failed: {ex.Message}");
+        }
+
+        // The cue adds bounded work while the startup gate is held. Revalidate
+        // immediately before opening capture so a lock during feedback wins.
+        return isInputAllowed() ? startCapture() : null;
+    }
+
     public async Task<int> StartAsync(string? forcedProfileId = null)
     {
         if (!_toggleGate.TryBeginStartup(() => _cancelRequested = false))
@@ -525,15 +569,30 @@ public sealed class DictationOrchestrator : IDisposable
                 goto StartupComplete;
             }
 
-            // Start capturing immediately — user may already be speaking (especially PTT).
-            _recordingStart = DateTime.UtcNow;
-            _lastSpeechDetectedAtUtc = _recordingStart;
-            _silenceStopRequested = false;
+            // One immutable view controls cue arbitration and the initial capture
+            // mode even if settings change while the bounded cue is playing.
+            var startupSettings = _settings.Current;
+            var inputRejectedAfterCue = false;
             AudioRecordingService.AudioCaptureSession? captureSession;
             try
             {
-                captureSession = _audio.TryStartRecording(
-                    _settings.Current.WhisperModeEnabled
+                captureSession = await StartCaptureAfterFeedbackAsync(
+                    startupSettings.SoundFeedbackEnabled,
+                    _speechFeedback.StopCurrentPlaybackBeforeCaptureAsync,
+                    () => _soundFeedback.PlayRecordingStartedAsync(),
+                    () => _speechFeedback.AnnounceRecordingStartedAsync(
+                        startupSettings.SpokenFeedbackEnabled
+                    ),
+                    () =>
+                    {
+                        // Disposal can restore system audio and stop capture while the
+                        // bounded cue is still pending; never open a new capture session
+                        // once shutdown has begun.
+                        var allowed = !_disposed && _sessionActivityMonitor.IsInputAllowed;
+                        inputRejectedAfterCue = !allowed;
+                        return allowed;
+                    },
+                    () => _audio.TryStartRecording(startupSettings.WhisperModeEnabled)
                 );
             }
             catch (Exception ex)
@@ -547,6 +606,14 @@ public sealed class DictationOrchestrator : IDisposable
 
             if (captureSession is null)
             {
+                if (inputRejectedAfterCue)
+                {
+                    Trace.WriteLine(
+                        "[Dictation] Start rejected: session locked or inactive during feedback."
+                    );
+                    goto StartupComplete;
+                }
+
                 var message = BuildRecordingStartFailureMessage(null);
                 ReportStatus(message);
                 ShowFeedback(message, true);
@@ -554,9 +621,12 @@ public sealed class DictationOrchestrator : IDisposable
             }
 
             _audioCaptureSession = captureSession;
+            _recordingStart = DateTime.UtcNow;
+            _lastSpeechDetectedAtUtc = _recordingStart;
+            _silenceStopRequested = false;
 
             // Set overlay to "Recording…" after the stream is confirmed open but
-            // before slow startup work (playerctl, sound). On Wayland the earlier
+            // before slow startup work (playerctl). On Wayland the earlier
             // ordering made the stale feedback bubble linger until after PauseMedia.
             SetOverlayState(state =>
                 // ReSharper disable once WithExpressionModifiesAllMembers -- `with` preserves any future-added state members; intentional even though all current members are set.
@@ -578,29 +648,22 @@ public sealed class DictationOrchestrator : IDisposable
 
             try
             {
-                if (_settings.Current.AudioDuckingEnabled)
+                if (startupSettings.AudioDuckingEnabled)
                 {
-                    _audioDucking.DuckAudio(_settings.Current.AudioDuckingLevel);
+                    _audioDucking.DuckAudio(startupSettings.AudioDuckingLevel);
                 }
 
-                if (_settings.Current.PauseMediaDuringRecording)
+                if (startupSettings.PauseMediaDuringRecording)
                 {
                     _mediaPause.PauseMedia();
                 }
 
-                if (_settings.Current.SoundFeedbackEnabled)
-                {
-                    _soundFeedback.PlayRecordingStarted();
-                }
-
-                _speechFeedback.AnnounceRecordingStarted();
                 RecordingStateChanged?.Invoke(this, true);
                 // Bump the session version once per recording; both the polling loop
                 // and the streaming coordinator share this version. Bumping twice
                 // would immediately invalidate the streaming session.
                 var sessionVersion = _partialTranscriptState.StartSession();
 
-                var startupSettings = _settings.Current;
                 // A profile hotkey forces a specific profile; resolve it
                 // synchronously here so streaming/language decisions don't use the
                 // stale _recordingProfile from the previous session. The background
