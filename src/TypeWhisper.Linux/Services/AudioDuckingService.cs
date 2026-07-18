@@ -11,7 +11,7 @@ namespace TypeWhisper.Linux.Services;
 ///     Uses <c>pactl</c> — available on PipeWire via pipewire-pulse as well as
 ///     on native PulseAudio. Silently no-ops when pactl is absent.
 /// </summary>
-public sealed partial class AudioDuckingService : IAudioDuckingService
+public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposable
 {
     private const double MaximumRawVolume = 98_304d;
     private static readonly TimeSpan s_pactlTimeout = TimeSpan.FromMilliseconds(1500);
@@ -27,12 +27,14 @@ public sealed partial class AudioDuckingService : IAudioDuckingService
     private static partial Regex RawVolumeRegex();
 
     private readonly IProcessRunner _processRunner;
+    private readonly IErrorLogService _errorLog;
     private readonly Dictionary<string, string[]> _savedVolumes = new(StringComparer.Ordinal);
     private bool _isDucked;
 
-    public AudioDuckingService(IProcessRunner processRunner)
+    public AudioDuckingService(IProcessRunner processRunner, IErrorLogService errorLog)
     {
         _processRunner = processRunner;
+        _errorLog = errorLog;
     }
 
     public void DuckAudio(float factor)
@@ -66,7 +68,7 @@ public sealed partial class AudioDuckingService : IAudioDuckingService
                 var duckedVolumes = savedVolumes
                     .Select(volume => ScaleVolume(volume, factor))
                     .ToArray();
-                SetSinkInputVolume(inputId, duckedVolumes);
+                _ = SetSinkInputVolume(inputId, duckedVolumes);
             }
 
             _isDucked = _savedVolumes.Count > 0;
@@ -86,22 +88,35 @@ public sealed partial class AudioDuckingService : IAudioDuckingService
             return;
         }
 
-        try
+        foreach (var (inputId, volumes) in _savedVolumes.ToArray())
         {
-            foreach (var (inputId, volumes) in _savedVolumes)
+            try
             {
-                SetSinkInputVolume(inputId, volumes);
+                var result = SetSinkInputVolume(inputId, volumes);
+                if (result.Succeeded)
+                {
+                    _savedVolumes.Remove(inputId);
+                    continue;
+                }
+
+                ReportRestoreFailure(
+                    $"Failed to restore sink input {inputId}: {DescribeFailure(result)}"
+                );
+            }
+            catch (Exception ex)
+            {
+                ReportRestoreFailure(
+                    $"Failed to restore sink input {inputId}: exception: {ex.Message}"
+                );
             }
         }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[AudioDuckingService] Restore failed: {ex.Message}");
-        }
-        finally
-        {
-            _savedVolumes.Clear();
-            _isDucked = false;
-        }
+
+        _isDucked = _savedVolumes.Count > 0;
+    }
+
+    public void Dispose()
+    {
+        RestoreAudio();
     }
 
     /// <summary>
@@ -142,7 +157,7 @@ public sealed partial class AudioDuckingService : IAudioDuckingService
         }
     }
 
-    private void SetSinkInputVolume(string inputId, string[] volumes)
+    private ProcessRunResult SetSinkInputVolume(string inputId, string[] volumes)
     {
         var arguments = new List<string>(2 + volumes.Length)
         {
@@ -150,7 +165,7 @@ public sealed partial class AudioDuckingService : IAudioDuckingService
             inputId
         };
         arguments.AddRange(volumes);
-        RunPactl(arguments);
+        return RunPactl(arguments);
     }
 
     private ProcessRunResult RunPactl(IReadOnlyList<string> arguments)
@@ -164,6 +179,42 @@ public sealed partial class AudioDuckingService : IAudioDuckingService
             )
             .GetAwaiter()
             .GetResult();
+    }
+
+    private void ReportRestoreFailure(string message)
+    {
+        WriteDiagnostic($"[AudioDuckingService] {message}");
+        try
+        {
+            _errorLog.AddEntry(message);
+        }
+        catch (Exception ex)
+        {
+            WriteDiagnostic($"[AudioDuckingService] Error reporting failed: {ex.Message}");
+        }
+    }
+
+    private static string DescribeFailure(ProcessRunResult result)
+    {
+        var outcome = !result.Started
+            ? "process did not start (Started=false)"
+            : result.TimedOut
+                ? "process timed out (TimedOut=true)"
+                : $"process exited with ExitCode={result.ExitCode}";
+        var error = result.StandardError.Trim();
+        return string.IsNullOrWhiteSpace(error) ? outcome : $"{outcome}; error: {error}";
+    }
+
+    private static void WriteDiagnostic(string message)
+    {
+        try
+        {
+            Debug.WriteLine(message);
+        }
+        catch
+        {
+            // Restoration and retries must not depend on diagnostic output.
+        }
     }
 
     private static string ScaleVolume(string rawVolume, float factor)

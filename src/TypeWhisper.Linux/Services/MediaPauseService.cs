@@ -8,9 +8,21 @@ namespace TypeWhisper.Linux.Services;
 ///     <c>playerctl</c> and resumes them afterward. Silently no-ops when
 ///     playerctl is absent or no players are currently playing.
 /// </summary>
-public sealed class MediaPauseService : IMediaPauseService
+public sealed class MediaPauseService : IMediaPauseService, IDisposable
 {
+    private static readonly TimeSpan s_playerctlTimeout = TimeSpan.FromMilliseconds(1500);
+    private static readonly IReadOnlyDictionary<string, string> s_playerctlEnvironment =
+        new Dictionary<string, string>(StringComparer.Ordinal) { ["LC_ALL"] = "C" };
+
+    private readonly IProcessRunner _processRunner;
+    private readonly IErrorLogService _errorLog;
     private readonly HashSet<string> _pausedPlayers = new(StringComparer.OrdinalIgnoreCase);
+
+    public MediaPauseService(IProcessRunner processRunner, IErrorLogService errorLog)
+    {
+        _processRunner = processRunner;
+        _errorLog = errorLog;
+    }
 
     public void PauseMedia()
     {
@@ -21,20 +33,19 @@ public sealed class MediaPauseService : IMediaPauseService
 
         try
         {
-            var players = CommandRunner.Run(
-                "playerctl",
-                "-a",
-                "--format",
-                "{{playerName}} {{status}}",
-                "status"
+            var playersResult = RunPlayerctl(
+                ["-a", "--format", "{{playerName}} {{status}}", "status"]
             );
-            if (string.IsNullOrWhiteSpace(players))
+            if (
+                !playersResult.Succeeded
+                || string.IsNullOrWhiteSpace(playersResult.StandardOutput)
+            )
             {
                 return;
             }
 
             foreach (
-                var line in players.Split(
+                var line in playersResult.StandardOutput.Split(
                     '\n',
                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
                 )
@@ -53,7 +64,7 @@ public sealed class MediaPauseService : IMediaPauseService
                     continue;
                 }
 
-                if (CommandRunner.Run("playerctl", "-p", parts[0], "pause") is not null)
+                if (RunPlayerctl(["-p", parts[0], "pause"]).Succeeded)
                 {
                     _pausedPlayers.Add(parts[0]);
                 }
@@ -73,20 +84,81 @@ public sealed class MediaPauseService : IMediaPauseService
             return;
         }
 
+        foreach (var player in _pausedPlayers.ToArray())
+        {
+            try
+            {
+                var result = RunPlayerctl(["-p", player, "play"]);
+                if (result.Succeeded)
+                {
+                    _pausedPlayers.Remove(player);
+                    continue;
+                }
+
+                ReportResumeFailure(
+                    $"Failed to resume media player {player}: {DescribeFailure(result)}"
+                );
+            }
+            catch (Exception ex)
+            {
+                ReportResumeFailure(
+                    $"Failed to resume media player {player}: exception: {ex.Message}"
+                );
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        ResumeMedia();
+    }
+
+    private ProcessRunResult RunPlayerctl(IReadOnlyList<string> arguments)
+    {
+        return _processRunner
+            .RunAsync(
+                "playerctl",
+                arguments,
+                environment: s_playerctlEnvironment,
+                timeout: s_playerctlTimeout
+            )
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private void ReportResumeFailure(string message)
+    {
+        WriteDiagnostic($"[MediaPauseService] {message}");
         try
         {
-            foreach (var player in _pausedPlayers)
-            {
-                CommandRunner.Run("playerctl", "-p", player, "play");
-            }
+            _errorLog.AddEntry(message);
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[MediaPauseService] Resume failed: {ex.Message}");
+            WriteDiagnostic($"[MediaPauseService] Error reporting failed: {ex.Message}");
         }
-        finally
+    }
+
+    private static string DescribeFailure(ProcessRunResult result)
+    {
+        var outcome = !result.Started
+            ? "process did not start (Started=false)"
+            : result.TimedOut
+                ? "process timed out (TimedOut=true)"
+                : $"process exited with ExitCode={result.ExitCode}";
+        var error = result.StandardError.Trim();
+        return string.IsNullOrWhiteSpace(error) ? outcome : $"{outcome}; error: {error}";
+    }
+
+    private static void WriteDiagnostic(string message)
+    {
+        try
         {
-            _pausedPlayers.Clear();
+            Debug.WriteLine(message);
+        }
+        catch
+        {
+            // Restoration and retries must not depend on diagnostic output.
         }
     }
 }
