@@ -497,6 +497,262 @@ public sealed class HotkeyServiceTests
     }
 
     [Fact]
+    public async Task DynamicHotkeys_CrossListWinnerIsIndependentOfSetterOrder()
+    {
+        var action = new PromptActionHotkey(
+            "action",
+            KeyCode.VcR,
+            ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+        );
+        var profile = new ProfileHotkey(
+            "profile",
+            KeyCode.VcR,
+            ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+            ProfileHotkeyBehavior.StartDictation
+        );
+        var actionFirstBackend = new TestShortcutBackend();
+        var profileFirstBackend = new TestShortcutBackend();
+        using var actionFirst = new HotkeyService(
+            new BackendSelector(() => actionFirstBackend)
+        );
+        using var profileFirst = new HotkeyService(
+            new BackendSelector(() => profileFirstBackend)
+        );
+        actionFirst.Initialize();
+        profileFirst.Initialize();
+
+        actionFirst.SetPromptActionHotkeys([action]);
+        actionFirst.SetProfileHotkeys([profile]);
+        profileFirst.SetProfileHotkeys([profile]);
+        profileFirst.SetPromptActionHotkeys([action]);
+        await Task.WhenAll(
+            actionFirstBackend.WaitUntilSettledAsync(),
+            profileFirstBackend.WaitUntilSettledAsync()
+        );
+
+        foreach (var snapshot in new[]
+                 {
+                     actionFirstBackend.LastSet,
+                     profileFirstBackend.LastSet
+                 })
+        {
+            Assert.NotNull(snapshot);
+            Assert.Equal(
+                ["action"],
+                snapshot.PromptActionHotkeys.Select(entry => entry.ActionId)
+            );
+            Assert.Empty(snapshot.ProfileHotkeys);
+        }
+    }
+
+    [Fact]
+    public async Task DynamicHotkeys_RemovingWinnerResurrectsRetainedProfileCandidate()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        hotkey.SetPromptActionHotkeys(
+            [new PromptActionHotkey("action", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)]
+        );
+        hotkey.SetProfileHotkeys(
+            [
+                new ProfileHotkey(
+                    "profile",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                    ProfileHotkeyBehavior.StartDictation
+                )
+            ]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        hotkey.SetPromptActionHotkeys([]);
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Empty(snapshot.PromptActionHotkeys);
+        var resurrected = Assert.Single(snapshot.ProfileHotkeys);
+        Assert.Equal("profile", resurrected.ProfileId);
+    }
+
+    [Fact]
+    public async Task DynamicHotkeys_IncrementalResultMatchesFreshCombinedReconciliation()
+    {
+        PromptActionHotkey[] actions =
+        [
+            new("action-winner", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt),
+            new("action-only", KeyCode.VcT, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)
+        ];
+        ProfileHotkey[] profiles =
+        [
+            new(
+                "profile-loser",
+                KeyCode.VcR,
+                ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                ProfileHotkeyBehavior.StartDictation
+            ),
+            new(
+                "profile-only",
+                KeyCode.VcE,
+                ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                ProfileHotkeyBehavior.ProcessSelectedText
+            )
+        ];
+        var incrementalBackend = new TestShortcutBackend();
+        var freshBackend = new TestShortcutBackend();
+        using var incremental = new HotkeyService(
+            new BackendSelector(() => incrementalBackend)
+        );
+        using var fresh = new HotkeyService(new BackendSelector(() => freshBackend));
+        incremental.Initialize();
+        fresh.Initialize();
+
+        incremental.SetProfileHotkeys(profiles);
+        incremental.SetPromptActionHotkeys(actions);
+        fresh.SetDynamicHotkeys(actions, profiles);
+        await Task.WhenAll(
+            incrementalBackend.WaitUntilSettledAsync(),
+            freshBackend.WaitUntilSettledAsync()
+        );
+
+        var incrementalSnapshot = incrementalBackend.LastSet;
+        var freshSnapshot = freshBackend.LastSet;
+        Assert.NotNull(incrementalSnapshot);
+        Assert.NotNull(freshSnapshot);
+        Assert.Equal(
+            freshSnapshot.PromptActionHotkeys.Select(entry => entry.ActionId),
+            incrementalSnapshot.PromptActionHotkeys.Select(entry => entry.ActionId)
+        );
+        Assert.Equal(
+            freshSnapshot.ProfileHotkeys.Select(entry => entry.ProfileId),
+            incrementalSnapshot.ProfileHotkeys.Select(entry => entry.ProfileId)
+        );
+    }
+
+    [Fact]
+    public async Task SetDynamicHotkeys_ReturnsIdentifyingMessageForEveryRejection()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        var rejections = hotkey.SetDynamicHotkeys(
+            [
+                new PromptActionHotkey(
+                    "action-winner",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+                ),
+                new PromptActionHotkey(
+                    "duplicate-action",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+                ),
+                new PromptActionHotkey(
+                    "fixed-action",
+                    KeyCode.VcSpace,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftShift
+                ),
+                new PromptActionHotkey(
+                    "",
+                    KeyCode.VcT,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+                )
+            ],
+            [
+                new ProfileHotkey(
+                    "colliding-profile",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                    ProfileHotkeyBehavior.StartDictation
+                ),
+                new ProfileHotkey(
+                    "profile-winner",
+                    KeyCode.VcE,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                    ProfileHotkeyBehavior.ProcessSelectedText
+                )
+            ]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        Assert.Equal(4, rejections.Count);
+        Assert.Equal(rejections.Count, rejections.Distinct().Count());
+        Assert.Contains(
+            rejections,
+            message =>
+                message.Contains("duplicate-action", StringComparison.Ordinal)
+                && message.Contains("Ctrl+Alt+R", StringComparison.Ordinal)
+                && message.Contains("higher-priority", StringComparison.Ordinal)
+        );
+        Assert.Contains(
+            rejections,
+            message =>
+                message.Contains("colliding-profile", StringComparison.Ordinal)
+                && message.Contains("Ctrl+Alt+R", StringComparison.Ordinal)
+                && message.Contains("higher-priority", StringComparison.Ordinal)
+        );
+        Assert.Contains(
+            rejections,
+            message =>
+                message.Contains("fixed-action", StringComparison.Ordinal)
+                && message.Contains("Ctrl+Shift+Space", StringComparison.Ordinal)
+                && message.Contains("higher-priority", StringComparison.Ordinal)
+        );
+        Assert.Contains(
+            rejections,
+            message =>
+                message.Contains("Prompt-action", StringComparison.Ordinal)
+                && message.Contains("Ctrl+Alt+T", StringComparison.Ordinal)
+                && message.Contains("blank", StringComparison.Ordinal)
+        );
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(
+            ["action-winner"],
+            snapshot.PromptActionHotkeys.Select(entry => entry.ActionId)
+        );
+        Assert.Equal(
+            ["profile-winner"],
+            snapshot.ProfileHotkeys.Select(entry => entry.ProfileId)
+        );
+    }
+
+    [Fact]
+    public async Task DynamicHotkeys_DefensivelySnapshotsRetainedCandidates()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        var profiles = new List<ProfileHotkey>
+        {
+            new(
+                "profile",
+                KeyCode.VcR,
+                ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                ProfileHotkeyBehavior.StartDictation
+            )
+        };
+        hotkey.SetProfileHotkeys(profiles);
+
+        profiles.Clear();
+        hotkey.SetPromptActionHotkeys(
+            [new PromptActionHotkey("action", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)]
+        );
+        hotkey.SetPromptActionHotkeys([]);
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(
+            ["profile"],
+            snapshot.ProfileHotkeys.Select(entry => entry.ProfileId)
+        );
+    }
+
+    [Fact]
     public void ParseProfileHotkeys_SkipsDisabledBlankUnparseable_AndCarriesBehavior()
     {
         var parsed = HotkeyService.ParseProfileHotkeys(

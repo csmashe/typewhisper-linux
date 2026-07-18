@@ -58,11 +58,17 @@ public sealed class HotkeyService : IDisposable
     // Serializes backend updates so a burst of TrySet*/Mode= calls applies in order.
     private Task _pendingBackendUpdate = Task.CompletedTask;
 
-    // Per-profile hotkeys. Rebuilt wholesale by SetProfileHotkeys; snapshot captures by reference.
+    // Latest requested dynamic hotkeys are retained separately from accepted bindings so a
+    // rejected candidate can become active when a higher-priority dynamic binding disappears.
+    private ProfileHotkey[] _profileHotkeyCandidates = [];
+    private PromptActionHotkey[] _promptActionHotkeyCandidates = [];
+
+    // Accepted per-profile hotkeys. Rebuilt wholesale during dynamic reconciliation;
+    // backend snapshots capture the list by reference.
     private IReadOnlyList<ProfileHotkey> _profileHotkeys = [];
 
-    // Direct-execution prompt action hotkeys (B12). Rebuilt wholesale by SetPromptActionHotkeys;
-    // snapshot captures by reference so post-push mutations are invisible to the running matcher.
+    // Accepted direct-execution prompt action hotkeys (B12). Rebuilt wholesale during dynamic
+    // reconciliation; backend snapshots capture the list by reference.
     private IReadOnlyList<PromptActionHotkey> _promptActionHotkeys =
         [];
 
@@ -479,58 +485,18 @@ public sealed class HotkeyService : IDisposable
     }
 
     /// <summary>
-    ///     Replaces the dynamic per-action hotkey list atomically. Entries colliding with a
-    ///     fixed binding or an earlier accepted entry in this batch are dropped (matching
-    ///     the silent-rejection style of <c>TrySet*HotkeyFromString</c>). Pushes a fresh
-    ///     snapshot so the matcher sees the new list immediately.
+    ///     Replaces the requested prompt-action candidates, then reconciles both dynamic lists.
+    ///     Rejected candidates remain retained so a later reconciliation can activate them.
     /// </summary>
-    public void SetPromptActionHotkeys(IReadOnlyList<PromptActionHotkey> entries)
+    // ReSharper disable once UnusedMethodReturnValue.Global  returns the rejection list symmetric with SetDynamicHotkeys; part of the public API contract, no in-tree caller consumes it yet
+    public IReadOnlyList<string> SetPromptActionHotkeys(
+        IReadOnlyList<PromptActionHotkey> entries
+    )
     {
         ArgumentNullException.ThrowIfNull(entries);
 
-        // Clear first so GetBoundHotkeys() doesn't flag re-submitted unchanged entries as
-        // already-bound (ActionsChanged fires on every add/update/delete and reuses most
-        // existing entries). Intra-batch dedup is handled by the accepted.Any(...) check.
-        _promptActionHotkeys = [];
-
-        var accepted = new List<PromptActionHotkey>(entries.Count);
-        foreach (var entry in entries)
-        {
-            if (string.IsNullOrWhiteSpace(entry.ActionId))
-            {
-                Trace.WriteLine(
-                    "[HotkeyService] Refusing prompt-action hotkey with empty action id."
-                );
-                continue;
-            }
-
-            if (HotkeyMatchesAny(entry.Key, entry.Modifiers, GetBoundHotkeys()))
-            {
-                Trace.WriteLine(
-                    $"[HotkeyService] Refusing prompt-action hotkey for '{entry.ActionId}' that collides with another shortcut."
-                );
-                continue;
-            }
-
-            // Intra-batch collision check using full HotkeyMatches so prefix-collision
-            // rules apply between prompt-action entries too.
-            if (
-                accepted.Any(prior =>
-                    HotkeyMatches(entry.Key, entry.Modifiers, prior.Key, prior.Modifiers)
-                )
-            )
-            {
-                Trace.WriteLine(
-                    $"[HotkeyService] Refusing prompt-action hotkey for '{entry.ActionId}' that collides with an earlier entry."
-                );
-                continue;
-            }
-
-            accepted.Add(entry);
-        }
-
-        _promptActionHotkeys = accepted;
-        PushShortcutsIfRunning();
+        _promptActionHotkeyCandidates = entries.ToArray();
+        return ReconcileDynamicHotkeys();
     }
 
     /// <summary>
@@ -570,40 +536,123 @@ public sealed class HotkeyService : IDisposable
     }
 
     /// <summary>
-    ///     Replaces the per-profile hotkey list atomically. Same collision rules as
-    ///     <see cref="SetPromptActionHotkeys" /> — entries colliding with any fixed binding
-    ///     (including prompt-action and other profile chords) or an earlier batch entry are
-    ///     dropped with a <see cref="Trace.WriteLine(string)" />. Pushes a fresh snapshot immediately.
+    ///     Replaces the requested profile candidates, then reconciles both dynamic lists.
+    ///     Rejected candidates remain retained so a later reconciliation can activate them.
     /// </summary>
-    public void SetProfileHotkeys(IReadOnlyList<ProfileHotkey> entries)
+    // ReSharper disable once UnusedMethodReturnValue.Global  returns the rejection list symmetric with SetDynamicHotkeys; part of the public API contract, no in-tree caller consumes it yet
+    public IReadOnlyList<string> SetProfileHotkeys(IReadOnlyList<ProfileHotkey> entries)
     {
         ArgumentNullException.ThrowIfNull(entries);
 
-        // Clear first — same reason as SetPromptActionHotkeys: reuse of existing entries
-        // across ProfilesChanged events must not register as collisions.
-        _profileHotkeys = [];
+        _profileHotkeyCandidates = entries.ToArray();
+        return ReconcileDynamicHotkeys();
+    }
 
-        var accepted = new List<ProfileHotkey>(entries.Count);
-        foreach (var entry in entries)
+    /// <summary>
+    ///     Atomically replaces both requested dynamic candidate lists and reconciles them once.
+    /// </summary>
+    public IReadOnlyList<string> SetDynamicHotkeys(
+        IReadOnlyList<PromptActionHotkey> promptActions,
+        IReadOnlyList<ProfileHotkey> profiles
+    )
+    {
+        ArgumentNullException.ThrowIfNull(promptActions);
+        ArgumentNullException.ThrowIfNull(profiles);
+
+        _promptActionHotkeyCandidates = promptActions.ToArray();
+        _profileHotkeyCandidates = profiles.ToArray();
+        return ReconcileDynamicHotkeys();
+    }
+
+    /// <summary>
+    ///     Rebuilds accepted dynamic bindings under one deterministic priority: existing fixed
+    ///     bindings first, then prompt actions in source order, then profiles in source order.
+    /// </summary>
+    private List<string> ReconcileDynamicHotkeys()
+    {
+        // Exclude both previously accepted dynamic lists before capturing fixed bindings. This
+        // prevents unchanged candidates from colliding with themselves during a rebuild.
+        _promptActionHotkeys = [];
+        _profileHotkeys = [];
+        var fixedBindings = GetBoundHotkeys().ToArray();
+        var acceptedActions = new List<PromptActionHotkey>(
+            _promptActionHotkeyCandidates.Length
+        );
+        var acceptedProfiles = new List<ProfileHotkey>(_profileHotkeyCandidates.Length);
+        var rejections = new List<string>();
+
+        foreach (var entry in _promptActionHotkeyCandidates)
+        {
+            if (string.IsNullOrWhiteSpace(entry.ActionId))
+            {
+                Trace.WriteLine(
+                    "[HotkeyService] Refusing prompt-action hotkey with empty action id."
+                );
+                rejections.Add(
+                    $"Prompt-action hotkey ({FormatHotkey(entry.Key, entry.Modifiers)}) is inactive because its action ID is blank."
+                );
+                continue;
+            }
+
+            if (HotkeyMatchesAny(entry.Key, entry.Modifiers, fixedBindings))
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing prompt-action hotkey for '{entry.ActionId}' that collides with another shortcut."
+                );
+                rejections.Add(DynamicCollisionMessage("Prompt-action", entry.ActionId, entry.Key, entry.Modifiers));
+                continue;
+            }
+
+            if (
+                acceptedActions.Any(prior =>
+                    HotkeyMatches(entry.Key, entry.Modifiers, prior.Key, prior.Modifiers)
+                )
+            )
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing prompt-action hotkey for '{entry.ActionId}' that collides with an earlier entry."
+                );
+                rejections.Add(DynamicCollisionMessage("Prompt-action", entry.ActionId, entry.Key, entry.Modifiers));
+                continue;
+            }
+
+            acceptedActions.Add(entry);
+        }
+
+        foreach (var entry in _profileHotkeyCandidates)
         {
             if (string.IsNullOrWhiteSpace(entry.ProfileId))
             {
                 Trace.WriteLine(
                     "[HotkeyService] Refusing profile hotkey with empty profile id."
                 );
-                continue;
-            }
-
-            if (HotkeyMatchesAny(entry.Key, entry.Modifiers, GetBoundHotkeys()))
-            {
-                Trace.WriteLine(
-                    $"[HotkeyService] Refusing profile hotkey for '{entry.ProfileId}' that collides with another shortcut."
+                rejections.Add(
+                    $"Profile hotkey ({FormatHotkey(entry.Key, entry.Modifiers)}) is inactive because its profile ID is blank."
                 );
                 continue;
             }
 
             if (
-                accepted.Any(prior =>
+                HotkeyMatchesAny(entry.Key, entry.Modifiers, fixedBindings)
+                || acceptedActions.Any(action =>
+                    HotkeyMatches(
+                        entry.Key,
+                        entry.Modifiers,
+                        action.Key,
+                        action.Modifiers
+                    )
+                )
+            )
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing profile hotkey for '{entry.ProfileId}' that collides with another shortcut."
+                );
+                rejections.Add(DynamicCollisionMessage("Profile", entry.ProfileId, entry.Key, entry.Modifiers));
+                continue;
+            }
+
+            if (
+                acceptedProfiles.Any(prior =>
                     HotkeyMatches(entry.Key, entry.Modifiers, prior.Key, prior.Modifiers)
                 )
             )
@@ -611,14 +660,27 @@ public sealed class HotkeyService : IDisposable
                 Trace.WriteLine(
                     $"[HotkeyService] Refusing profile hotkey for '{entry.ProfileId}' that collides with an earlier entry."
                 );
+                rejections.Add(DynamicCollisionMessage("Profile", entry.ProfileId, entry.Key, entry.Modifiers));
                 continue;
             }
 
-            accepted.Add(entry);
+            acceptedProfiles.Add(entry);
         }
 
-        _profileHotkeys = accepted;
+        _promptActionHotkeys = acceptedActions;
+        _profileHotkeys = acceptedProfiles;
         PushShortcutsIfRunning();
+        return rejections;
+    }
+
+    private static string DynamicCollisionMessage(
+        string bindingKind,
+        string id,
+        KeyCode key,
+        ModifierMask modifiers
+    )
+    {
+        return $"{bindingKind} hotkey '{id}' ({FormatHotkey(key, modifiers)}) is inactive because it conflicts with a higher-priority shortcut.";
     }
 
     /// <summary>
@@ -957,15 +1019,15 @@ public sealed class HotkeyService : IDisposable
             yield return (_transformSelectionKey, _transformSelectionModifiers);
         }
 
-        // Dynamic prompt-action bindings: makes collision detection symmetric — fixed-binding
-        // changes that would shadow a prompt-action chord are also rejected. No exclude needed
-        // because SetPromptActionHotkeys clears the list before its reconcile loop.
+        // Dynamic prompt-action bindings make collision detection symmetric: fixed-binding
+        // changes that would shadow a prompt-action chord are also rejected. Dynamic
+        // reconciliation clears both accepted lists before it captures fixed bindings.
         foreach (var entry in _promptActionHotkeys)
         {
             yield return (entry.Key, entry.Modifiers);
         }
 
-        // Per-profile bindings — same symmetry reason as prompt-action loop above.
+        // Per-profile bindings use the same symmetry rule as prompt actions.
         foreach (var entry in _profileHotkeys)
         {
             yield return (entry.Key, entry.Modifiers);

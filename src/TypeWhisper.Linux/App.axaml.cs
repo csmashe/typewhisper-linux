@@ -196,9 +196,10 @@ public class App : Application
             // silently rebind to a key the user never chose.
             var hotkey = services.GetRequiredService<HotkeyService>();
             ReconcileHotkeyOnStartup(hotkey, settings);
+            var errorLog = services.GetRequiredService<IErrorLogService>();
             var promptActions = services.GetRequiredService<IPromptActionService>();
             // Seed the disabled auto-cleanup prompt + profile on a first install,
-            // before the hotkey snapshots below read them (both are disabled, so
+            // before dynamic reconciliation reads them (both are disabled, so
             // their Ctrl+Alt+E binding stays inert until the user enables them).
             try
             {
@@ -207,28 +208,41 @@ public class App : Application
             catch (Exception ex)
             {
                 Trace.WriteLine($"[App] Failed to seed first-run prompt actions: {ex}");
-                services.GetRequiredService<IErrorLogService>().AddEntry(
+                errorLog.AddEntry(
                     $"Could not seed first-run prompt actions: {ex.Message}",
                     ErrorCategory.Prompt
                 );
             }
 
-            hotkey.SetPromptActionHotkeys(
-                HotkeyService.ParsePromptActionHotkeys(promptActions.Actions)
-            );
-            promptActions.ActionsChanged += () =>
-                hotkey.SetPromptActionHotkeys(
-                    HotkeyService.ParsePromptActionHotkeys(promptActions.Actions)
-                );
             var profileService = services.GetRequiredService<IProfileService>();
             profileService.SeedFirstRunDefaultsIfMissing();
-            hotkey.SetProfileHotkeys(
-                HotkeyService.ParseProfileHotkeys(profileService.Profiles)
-            );
-            profileService.ProfilesChanged += () =>
-                hotkey.SetProfileHotkeys(
-                    HotkeyService.ParseProfileHotkeys(profileService.Profiles)
-                );
+
+            // ActionsChanged fires on the UI thread while ProfilesChanged can fire off the
+            // HTTP worker thread (e.g. /v1/profiles/toggle), so the two subscriptions can enter
+            // this reconcile concurrently. Serialize the snapshot-and-apply so a handler cannot
+            // capture a stale view of the other service and revive a just-disabled binding.
+            var reconcileLock = new object();
+
+            void ReconcileDynamicHotkeys()
+            {
+                IReadOnlyList<string> rejections;
+                lock (reconcileLock)
+                {
+                    rejections = hotkey.SetDynamicHotkeys(
+                        HotkeyService.ParsePromptActionHotkeys(promptActions.Actions),
+                        HotkeyService.ParseProfileHotkeys(profileService.Profiles)
+                    );
+                }
+
+                foreach (var message in rejections)
+                {
+                    errorLog.AddEntry(message);
+                }
+            }
+
+            ReconcileDynamicHotkeys();
+            promptActions.ActionsChanged += ReconcileDynamicHotkeys;
+            profileService.ProfilesChanged += ReconcileDynamicHotkeys;
             var lastApplied = hotkey.CurrentHotkeyString;
             var lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
             var lastRecentTranscriptionsApplied = hotkey.CurrentRecentTranscriptionsHotkeyString;
