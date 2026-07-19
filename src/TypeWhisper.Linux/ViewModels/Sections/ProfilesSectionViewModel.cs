@@ -716,7 +716,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             return;
         }
 
-        _profiles.UpdateProfile(profile with { IsEnabled = !profile.IsEnabled });
+        _profiles.ToggleProfileEnabled(profile.Id);
         RefreshProfiles();
     }
 

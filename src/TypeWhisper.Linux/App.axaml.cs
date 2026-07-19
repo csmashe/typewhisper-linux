@@ -243,18 +243,23 @@ public class App : Application
 
             // ActionsChanged fires on the UI thread while ProfilesChanged can fire off the
             // HTTP worker thread (e.g. /v1/profiles/toggle), so the two subscriptions can enter
-            // this reconcile concurrently. Serialize the snapshot-and-apply so a handler cannot
-            // capture a stale view of the other service and revive a just-disabled binding.
+            // this reconcile concurrently. Serialize the apply so the candidate lists are replaced
+            // atomically for each independently captured service-state snapshot.
+            // Never read gate-guarded service state (Profiles/Actions) while holding reconcileLock — snapshot first.
+            // ProfilesChanged/ActionsChanged fire under their service gates, so a read-under-reconcileLock inverts
+            // the lock order and deadlocks.
             var reconcileLock = new object();
 
             void ReconcileDynamicHotkeys()
             {
+                var actionsSnapshot = promptActions.Actions;
+                var profilesSnapshot = profileService.Profiles;
                 IReadOnlyList<string> rejections;
                 lock (reconcileLock)
                 {
                     rejections = hotkey.SetDynamicHotkeys(
-                        HotkeyService.ParsePromptActionHotkeys(promptActions.Actions),
-                        HotkeyService.ParseProfileHotkeys(profileService.Profiles)
+                        HotkeyService.ParsePromptActionHotkeys(actionsSnapshot),
+                        HotkeyService.ParseProfileHotkeys(profilesSnapshot)
                     );
                 }
 

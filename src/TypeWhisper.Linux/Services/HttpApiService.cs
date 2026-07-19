@@ -863,14 +863,13 @@ public sealed class HttpApiService : IDisposable
             return (400, Serialize(new { error = "Missing id parameter" }));
         }
 
-        var profile = _profiles.Profiles.FirstOrDefault(item => item.Id == id);
+        var profile = _profiles.ToggleProfileEnabled(id);
         if (profile is null)
         {
             return (404, Serialize(new { error = "Profile not found" }));
         }
 
-        var isEnabled = !profile.IsEnabled;
-        _profiles.UpdateProfile(profile with { IsEnabled = isEnabled });
+        var isEnabled = profile.IsEnabled;
         return (200, Serialize(new { id, isEnabled }));
     }
 

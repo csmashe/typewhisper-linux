@@ -77,6 +77,40 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ToggleProfileEnabled_UsesAtomicServiceOperationAndRefreshesProfiles()
+    {
+        var profile = CreateEditableProfile() with { IsEnabled = false };
+        var committed = profile with { IsEnabled = true };
+        var profiles = new Mock<IProfileService>();
+        profiles
+            .SetupSequence(service => service.Profiles)
+            .Returns([profile])
+            .Returns([committed]);
+        profiles
+            .Setup(service => service.ToggleProfileEnabled(profile.Id))
+            .Returns(committed);
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var sut = new ProfilesSectionViewModel(
+            profiles.Object,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper()
+        );
+
+        sut.ToggleProfileEnabledCommand.Execute(profile);
+
+        profiles.Verify(service => service.ToggleProfileEnabled(profile.Id), Times.Once);
+        profiles.Verify(service => service.UpdateProfile(It.IsAny<Profile>()), Times.Never);
+        Assert.True(Assert.Single(sut.Profiles).IsEnabled);
+    }
+
+    [Fact]
     public void SaveProfile_PersistsConfiguredOverrides()
     {
         var service = CreateProfileService();
