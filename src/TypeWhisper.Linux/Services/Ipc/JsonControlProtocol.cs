@@ -34,6 +34,7 @@ internal static class JsonControlProtocol
     public const string CmdStatus = "status";
 
     public const string StateIdle = "idle";
+    public const string StateStarting = "starting";
     public const string StateRecording = "recording";
     // ReSharper disable once UnusedMember.Global  IPC control-protocol state string (status wire vocabulary, mirrors StateIdle/StateRecording); part of the protocol surface even if not emitted in-tree
     public const string StateTranscribing = "transcribing";

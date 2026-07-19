@@ -42,6 +42,7 @@ internal sealed class ControlSocketServer : IDisposable
 
     private readonly DictationOrchestrator _orchestrator;
     private readonly ISettingsService? _settings;
+    private readonly ControlSocketStartCoordinator _startCoordinator;
     private Task? _acceptLoop;
 
     // True after a successful bind — lets Dispose distinguish "we own this path" from
@@ -49,12 +50,6 @@ internal sealed class ControlSocketServer : IDisposable
     private bool _bound;
     private CancellationTokenSource? _cts;
     private int _disposed;
-    private Task? _lastStartTask;
-
-    // UTC ticks of the last accepted record.start; used by the tap race guard to decide
-    // whether an arriving record.stop should await the in-flight start before calling StopAsync.
-    // Stored as ticks so reads are atomic without a lock.
-    private long _lastStartTicks;
     private Socket? _listener;
 
     // ReSharper disable once IntroduceOptionalParameters.Global -- kept as explicit overloads; collapsing into optional parameters would delete a member.
@@ -72,6 +67,13 @@ internal sealed class ControlSocketServer : IDisposable
         _orchestrator = orchestrator;
         _hotkey = hotkey;
         _settings = settings;
+        _startCoordinator = new ControlSocketStartCoordinator(
+            () => _orchestrator.CurrentStateLabel,
+            ex =>
+                Trace.WriteLine(
+                    $"[ControlSocketServer] StartAsync faulted: {ex.GetBaseException().Message}"
+                )
+        );
         SocketPath = SocketPathResolver.ResolveControlSocketPath();
     }
 
@@ -417,32 +419,9 @@ internal sealed class ControlSocketServer : IDisposable
         }
     }
 
-    private async Task<string> HandleStartAsync()
+    private Task<string> HandleStartAsync()
     {
-        var prev = SnapshotState();
-
-        // Publish the TCS BEFORE invoking the orchestrator: StartAsync runs synchronously
-        // until its first real await and can hold _toggleGate before yielding. A concurrent
-        // record.stop would otherwise see IsRecording==false and no-op. HandleStopAsync awaits
-        // this TCS to ensure the start has completed before calling StopAsync.
-        var startCompletion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        Interlocked.Exchange(ref _lastStartTicks, DateTime.UtcNow.Ticks);
-        _lastStartTask = startCompletion.Task;
-
-        try
-        {
-            await _orchestrator.StartAsync().ConfigureAwait(false);
-            startCompletion.TrySetResult();
-        }
-        catch (Exception ex)
-        {
-            startCompletion.TrySetException(ex);
-            throw;
-        }
-
-        return JsonControlProtocol.SerializeAction(prev, SnapshotState());
+        return _startCoordinator.DispatchStart(() => _orchestrator.StartAsync());
     }
 
     private async Task<string> HandleStopAsync()
@@ -452,11 +431,10 @@ internal sealed class ControlSocketServer : IDisposable
         // Hyprland `bindr` tap guard: a record.stop within StartStopRaceWindow of a start is
         // treated as a tap. Await the in-flight start's TCS so StopAsync sees IsRecording==true;
         // without this, _toggleGate.WaitAsync(0) fails and the user ends up with a stuck recording.
-        var startTicks = Interlocked.Read(ref _lastStartTicks);
+        var (startTicks, pendingStart) = _startCoordinator.GetLastStart();
         var elapsed = DateTime.UtcNow - new DateTime(startTicks, DateTimeKind.Utc);
         if (elapsed < s_startStopRaceWindow)
         {
-            var pendingStart = _lastStartTask;
             if (pendingStart is not null && !pendingStart.IsCompleted)
             {
                 try
@@ -540,10 +518,13 @@ internal sealed class ControlSocketServer : IDisposable
         return JsonControlProtocol.SerializeStatus(response);
     }
 
-    /// <summary>Maps observable orchestrator state to the wire string via <see cref="DictationOrchestrator.CurrentStateLabel" />.</summary>
+    /// <summary>
+    ///     Projects an accepted start as <c>starting</c> until capture is observably open or
+    ///     the complete start operation settles.
+    /// </summary>
     private string SnapshotState()
     {
-        return _orchestrator.CurrentStateLabel;
+        return _startCoordinator.SnapshotState();
     }
 
     /// <summary>
@@ -611,6 +592,137 @@ internal sealed class ControlSocketServer : IDisposable
             // out of paranoia; leaking a socket file is fine, deleting
             // someone else's is not.
             return false;
+        }
+    }
+}
+
+/// <summary>
+///     Coordinates the one accepted control-socket start phase. The published completion is
+///     a tap-stop ordering signal; the separately observed orchestrator task carries failures.
+/// </summary>
+internal sealed class ControlSocketStartCoordinator
+{
+    private readonly Lock _gate = new();
+    private readonly Action<Exception> _onFault;
+    private readonly Func<string> _readState;
+    private Task? _lastStartTask;
+    private long _lastStartTicks;
+
+    public ControlSocketStartCoordinator(Func<string> readState, Action<Exception> onFault)
+    {
+        _readState = readState;
+        _onFault = onFault;
+    }
+
+    /// <summary>
+    ///     Accepts one start at a time and returns its action response without awaiting the
+    ///     complete orchestrator operation. The delegate is invoked directly so its synchronous
+    ///     startup-gate prefix runs on the request handler rather than being deferred to the pool.
+    /// </summary>
+    public Task<string> DispatchStart(Func<Task> start)
+    {
+        var prev = SnapshotState();
+        TaskCompletionSource? startCompletion = null;
+
+        lock (_gate)
+        {
+            if (_lastStartTask is null || _lastStartTask.IsCompleted)
+            {
+                startCompletion = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                _lastStartTask = startCompletion.Task;
+                _lastStartTicks = DateTime.UtcNow.Ticks;
+            }
+        }
+
+        if (startCompletion is null)
+        {
+            return Task.FromResult(JsonControlProtocol.SerializeAction(prev, SnapshotState()));
+        }
+
+        Task startTask;
+        try
+        {
+            startTask = start();
+        }
+        catch (Exception ex)
+        {
+            ReportFault(ex);
+            startCompletion.TrySetResult();
+            return Task.FromResult(
+                JsonControlProtocol.SerializeError(JsonControlProtocol.ErrInternal)
+            );
+        }
+
+        _ = ObserveStartAsync(startTask, startCompletion);
+
+        // A failure that settled synchronously is known before the response is committed.
+        if (startTask is { IsCompleted: true, IsCompletedSuccessfully: false })
+        {
+            return Task.FromResult(
+                JsonControlProtocol.SerializeError(JsonControlProtocol.ErrInternal)
+            );
+        }
+
+        return Task.FromResult(JsonControlProtocol.SerializeAction(prev, SnapshotState()));
+    }
+
+    /// <summary>
+    ///     Returns the timestamp/task pair used by the server's 100 ms tap-stop guard under the
+    ///     same synchronization boundary that publishes a new accepted start.
+    /// </summary>
+    public (long Ticks, Task? Completion) GetLastStart()
+    {
+        lock (_gate)
+        {
+            return (_lastStartTicks, _lastStartTask);
+        }
+    }
+
+    /// <summary>Returns the real state, augmented only by the pending startup phase.</summary>
+    public string SnapshotState()
+    {
+        var state = _readState();
+        if (state == JsonControlProtocol.StateRecording)
+        {
+            return state;
+        }
+
+        lock (_gate)
+        {
+            return _lastStartTask is { IsCompleted: false }
+                ? JsonControlProtocol.StateStarting
+                : state;
+        }
+    }
+
+    private async Task ObserveStartAsync(Task startTask, TaskCompletionSource startCompletion)
+    {
+        try
+        {
+            await startTask.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            ReportFault(ex);
+        }
+        finally
+        {
+            // Tap-stop waiters need ordering completion, not the orchestrator's fault.
+            startCompletion.TrySetResult();
+        }
+    }
+
+    private void ReportFault(Exception ex)
+    {
+        try
+        {
+            _onFault(ex);
+        }
+        catch
+        {
+            // Diagnostics must never turn the observer into an unobserved faulted task.
         }
     }
 }
