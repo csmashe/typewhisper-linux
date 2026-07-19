@@ -40,14 +40,9 @@ internal static class ControlSocketClient
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
         {
-            try
-            {
-                File.Delete(path);
-            }
-            catch
-            {
-                /* best-effort */
-            }
+            // ECONNREFUSED alone isn't proof of staleness — the peer may have bound but not
+            // yet started listening. Re-probe under the ownership lock before unlinking.
+            ControlSocketOwnership.TryCleanupStaleSocket(path);
 
             return false;
         }
@@ -137,15 +132,8 @@ internal static class ControlSocketClient
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
         {
-            // Stale socket — remove so the new instance can bind without EADDRINUSE.
-            try
-            {
-                File.Delete(path);
-            }
-            catch
-            {
-                /* best-effort */
-            }
+            // ECONNREFUSED alone isn't proof of staleness; re-probe under the ownership lock before unlinking.
+            ControlSocketOwnership.TryCleanupStaleSocket(path);
 
             return false;
         }
@@ -249,15 +237,8 @@ internal static class ControlSocketClient
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
         {
-            // Stale socket — clean up so a follow-up GUI launch can bind cleanly.
-            try
-            {
-                File.Delete(path);
-            }
-            catch
-            {
-                /* best-effort */
-            }
+            // ECONNREFUSED alone isn't proof of staleness; re-probe under the ownership lock before unlinking.
+            ControlSocketOwnership.TryCleanupStaleSocket(path);
 
             return false;
         }
