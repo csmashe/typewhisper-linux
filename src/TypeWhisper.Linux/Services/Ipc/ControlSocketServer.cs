@@ -43,14 +43,15 @@ internal sealed class ControlSocketServer : IDisposable
     private readonly DictationOrchestrator _orchestrator;
     private readonly ISettingsService? _settings;
     private readonly ControlSocketStartCoordinator _startCoordinator;
+    private readonly Lock _lifecycleGate = new();
     private Task? _acceptLoop;
 
-    // True after a successful bind — lets Dispose distinguish "we own this path" from
-    // "we never bound", while the live-probe guard still covers a successor stealing the path.
+    // True only after the complete bind/listen startup has been published.
     private bool _bound;
     private CancellationTokenSource? _cts;
     private int _disposed;
     private Socket? _listener;
+    private ControlSocketOwnership? _ownership;
 
     // ReSharper disable once IntroduceOptionalParameters.Global -- kept as explicit overloads; collapsing into optional parameters would delete a member.
     public ControlSocketServer(DictationOrchestrator orchestrator)
@@ -87,20 +88,232 @@ internal sealed class ControlSocketServer : IDisposable
             return;
         }
 
-        // Order: cancel → close listener (unblocks in-flight AcceptAsync) → await loop → unlink.
-        // Reversing close/wait risks an indefinite accept block; reversing wait/unlink risks
-        // deleting the file while the loop still holds it.
+        lock (_lifecycleGate)
+        {
+            var listener = _listener;
+            var cts = _cts;
+            var acceptLoop = _acceptLoop;
+            var ownership = _ownership;
+
+            _listener = null;
+            _cts = null;
+            _acceptLoop = null;
+            _ownership = null;
+
+            // Order: cancel → close → await loop → unlink → release, all under _lifecycleGate.
+            // Reversing close/wait risks an indefinite accept block; unlinking before the loop
+            // drains risks deleting the file while a handler still holds it.
+            try
+            {
+                cts?.Cancel();
+            }
+            catch
+            {
+                /* ignored */
+            }
+
+            try
+            {
+                listener?.Close();
+            }
+            catch
+            {
+                /* ignored */
+            }
+
+            try
+            {
+                listener?.Dispose();
+            }
+            catch
+            {
+                /* ignored */
+            }
+
+            try
+            {
+                acceptLoop?.Wait(TimeSpan.FromMilliseconds(500));
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[ControlSocketServer] Accept loop wait threw: {ex.Message}");
+            }
+
+            try
+            {
+                cts?.Dispose();
+            }
+            catch
+            {
+                /* ignored */
+            }
+
+            try
+            {
+                if (_bound && ownership is not null)
+                {
+                    var cleanup = ownership.CleanupStaleSocket();
+                    if (cleanup is ControlSocketCleanupResult.Live)
+                    {
+                        Trace.WriteLine(
+                            $"[ControlSocketServer] Socket path {SocketPath} is held by another listener; leaving it in place."
+                        );
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine(
+                    $"[ControlSocketServer] Could not remove socket file on dispose: {ex.Message}"
+                );
+            }
+            finally
+            {
+                _bound = false;
+                try
+                {
+                    ownership?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine(
+                        $"[ControlSocketServer] Could not release socket ownership: {ex.Message}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Binds the socket and starts the accept loop. Throws
+    ///     <see cref="SocketException" /> with
+    ///     <see cref="SocketError.AddressAlreadyInUse" /> when another live
+    ///     instance owns the path, and — failing closed — whenever ownership
+    ///     cannot be established (lock contention or an indeterminate probe);
+    ///     callers should treat that as the single-instance signal and exit.
+    /// </summary>
+    public void Start()
+    {
+        lock (_lifecycleGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+
+            if (_listener is not null)
+            {
+                return;
+            }
+
+            ControlSocketOwnership ownership;
+            try
+            {
+                if (!ControlSocketOwnership.TryAcquire(SocketPath, out var acquiredOwnership))
+                {
+                    throw AddressAlreadyInUse();
+                }
+
+                ownership = acquiredOwnership;
+            }
+            catch (SocketException ex)
+                when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Lock uncertainty must fail closed; App already treats this socket error as
+                // the authoritative single-instance signal.
+                Trace.WriteLine(
+                    $"[ControlSocketServer] Could not acquire socket ownership: {ex.Message}"
+                );
+                throw AddressAlreadyInUse();
+            }
+
+            Socket? listener = null;
+            CancellationTokenSource? cts = null;
+            Task? acceptLoop = null;
+            var boundThisAttempt = false;
+            try
+            {
+                var cleanup = ownership.CleanupStaleSocket();
+                if (
+                    cleanup
+                    is not (
+                        ControlSocketCleanupResult.Missing
+                        or ControlSocketCleanupResult.Removed
+                    )
+                )
+                {
+                    throw AddressAlreadyInUse();
+                }
+
+                listener = new Socket(
+                    AddressFamily.Unix,
+                    SocketType.Stream,
+                    ProtocolType.Unspecified
+                );
+                listener.Bind(new UnixDomainSocketEndPoint(SocketPath));
+                boundThisAttempt = true;
+
+                // 0600: owner-only read/write. Defense in depth on shared /tmp; on
+                // XDG_RUNTIME_DIR the parent dir is already 0700.
+                SocketPathResolver.TryChmod(SocketPath, 0b110_000_000); // 0600
+                listener.Listen(8);
+
+                cts = new CancellationTokenSource();
+                var token = cts.Token;
+                acceptLoop = Task.Run(() => AcceptLoopAsync(listener, token));
+
+                // Publish only after bind, chmod, listen, and accept-loop creation succeed.
+                _ownership = ownership;
+                _listener = listener;
+                _cts = cts;
+                _acceptLoop = acceptLoop;
+                _bound = true;
+
+                Trace.WriteLine($"[ControlSocketServer] Listening on {SocketPath}");
+            }
+            catch
+            {
+                CleanupFailedStart(
+                    ownership,
+                    listener,
+                    cts,
+                    acceptLoop,
+                    boundThisAttempt
+                );
+                throw;
+            }
+        }
+    }
+
+    private static SocketException AddressAlreadyInUse()
+    {
+        return new SocketException((int)SocketError.AddressAlreadyInUse);
+    }
+
+    private void CleanupFailedStart(
+        ControlSocketOwnership ownership,
+        Socket? listener,
+        CancellationTokenSource? cts,
+        Task? acceptLoop,
+        bool boundThisAttempt
+    )
+    {
+        _listener = null;
+        _cts = null;
+        _acceptLoop = null;
+        _ownership = null;
+        _bound = false;
+
         try
         {
-            _cts?.Cancel();
+            cts?.Cancel();
         }
         catch
         {
             /* ignored */
         }
 
-        var listener = _listener;
-        _listener = null;
         try
         {
             listener?.Close();
@@ -121,95 +334,52 @@ internal sealed class ControlSocketServer : IDisposable
 
         try
         {
-            _acceptLoop?.Wait(TimeSpan.FromMilliseconds(500));
+            acceptLoop?.Wait(TimeSpan.FromMilliseconds(500));
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[ControlSocketServer] Accept loop wait threw: {ex.Message}");
+            Trace.WriteLine(
+                $"[ControlSocketServer] Failed-start accept loop wait threw: {ex.Message}"
+            );
         }
 
         try
         {
-            _cts?.Dispose();
+            cts?.Dispose();
         }
         catch
         {
             /* ignored */
         }
 
-        // Unlink only if we own the path AND no live peer is listening — a successor instance
-        // may have already taken it over before our Dispose reaches this point.
-        try
+        if (boundThisAttempt)
         {
-            if (!_bound || !File.Exists(SocketPath))
+            try
             {
-                return;
+                ownership.CleanupStaleSocket();
             }
-
-            if (NoLivePeer(SocketPath))
-            {
-                File.Delete(SocketPath);
-            }
-            else
+            catch (Exception ex)
             {
                 Trace.WriteLine(
-                    $"[ControlSocketServer] Socket path {SocketPath} is held by another listener; leaving it in place."
+                    $"[ControlSocketServer] Failed-start socket cleanup threw: {ex.Message}"
                 );
             }
+        }
+
+        try
+        {
+            ownership.Dispose();
         }
         catch (Exception ex)
         {
             Trace.WriteLine(
-                $"[ControlSocketServer] Could not remove socket file on dispose: {ex.Message}"
+                $"[ControlSocketServer] Failed-start ownership release threw: {ex.Message}"
             );
         }
     }
 
-    /// <summary>
-    ///     Binds the socket and starts the accept loop. Throws
-    ///     <see cref="SocketException" /> with
-    ///     <see cref="SocketError.AddressAlreadyInUse" /> when another live
-    ///     instance owns the path; callers should treat that as the
-    ///     single-instance signal and exit.
-    /// </summary>
-    public void Start()
+    private async Task AcceptLoopAsync(Socket listener, CancellationToken ct)
     {
-        ObjectDisposedException.ThrowIf(_disposed != 0, this);
-
-        if (_listener is not null)
-        {
-            return;
-        }
-
-        TryRemoveStaleSocket(SocketPath);
-
-        var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        try
-        {
-            listener.Bind(new UnixDomainSocketEndPoint(SocketPath));
-        }
-        catch
-        {
-            listener.Dispose();
-            throw;
-        }
-
-        // 0600: owner-only read/write. Defense in depth on shared /tmp; on
-        // XDG_RUNTIME_DIR the parent dir is already 0700.
-        SocketPathResolver.TryChmod(SocketPath, 0b110_000_000); // 0600
-        _bound = true;
-        listener.Listen(8);
-
-        _listener = listener;
-        _cts = new CancellationTokenSource();
-        _acceptLoop = Task.Run(() => AcceptLoopAsync(_cts.Token));
-
-        Trace.WriteLine($"[ControlSocketServer] Listening on {SocketPath}");
-    }
-
-    private async Task AcceptLoopAsync(CancellationToken ct)
-    {
-        var listener = _listener!;
         while (!ct.IsCancellationRequested)
         {
             Socket client;
@@ -527,73 +697,6 @@ internal sealed class ControlSocketServer : IDisposable
         return _startCoordinator.SnapshotState();
     }
 
-    /// <summary>
-    ///     If the socket path exists but no live peer is listening, deletes it.
-    ///     Never deletes a path that has a live peer — that would silently
-    ///     detach another running instance.
-    /// </summary>
-    private static void TryRemoveStaleSocket(string path)
-    {
-        if (!File.Exists(path))
-        {
-            return;
-        }
-
-        try
-        {
-            using var probe = new Socket(
-                AddressFamily.Unix,
-                SocketType.Stream,
-                ProtocolType.Unspecified
-            );
-            probe.Connect(new UnixDomainSocketEndPoint(path));
-            // A live peer accepted us; do NOT delete.
-        }
-        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
-        {
-            try
-            {
-                File.Delete(path);
-                Trace.WriteLine($"[ControlSocketServer] Removed stale socket at {path}.");
-            }
-            catch (Exception delEx)
-            {
-                Trace.WriteLine(
-                    $"[ControlSocketServer] Failed to remove stale socket {path}: {delEx.Message}"
-                );
-            }
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[ControlSocketServer] Probe of {path} threw: {ex.Message}");
-        }
-    }
-
-    /// <summary>True when ECONNREFUSED — no live listener, safe to unlink. False on any other outcome.</summary>
-    private static bool NoLivePeer(string path)
-    {
-        try
-        {
-            using var probe = new Socket(
-                AddressFamily.Unix,
-                SocketType.Stream,
-                ProtocolType.Unspecified
-            );
-            probe.Connect(new UnixDomainSocketEndPoint(path));
-            return false;
-        }
-        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
-        {
-            return true;
-        }
-        catch
-        {
-            // Any other error (e.g. permission denied) — refuse to delete
-            // out of paranoia; leaking a socket file is fine, deleting
-            // someone else's is not.
-            return false;
-        }
-    }
 }
 
 /// <summary>
