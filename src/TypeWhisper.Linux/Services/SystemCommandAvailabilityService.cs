@@ -34,9 +34,16 @@ public sealed partial class SystemCommandAvailabilityService
         "/usr/local/cuda-12.0/lib64",
         "/usr/local/cuda-12.0/targets/x86_64-linux/lib"
     ];
+    private static readonly string[] s_requiredCuda12RuntimeLibraries =
+    [
+        "libcudart.so.12",
+        "libcublas.so.12"
+    ];
 
     private static readonly Lock s_cudaPreloadLock = new();
-    private static readonly List<IntPtr> s_cudaPreloadHandles = [];
+    private static readonly Dictionary<string, IntPtr> s_cudaPreloadHandles = new(
+        StringComparer.Ordinal
+    );
 
     private LinuxCapabilitySnapshot _snapshot = BuildSnapshot();
 
@@ -238,30 +245,64 @@ public sealed partial class SystemCommandAvailabilityService
         // so native whisper/sherpa libs find them even without LD_LIBRARY_PATH.
         lock (s_cudaPreloadLock)
         {
-            if (s_cudaPreloadHandles.Count > 0)
+            return TryPreloadCuda12RuntimeLibrariesFromDirectory(
+                directory,
+                s_cudaPreloadHandles,
+                LoadCuda12RuntimeLibrary,
+                out message
+            );
+        }
+    }
+
+    // Callers sharing loadedHandles must synchronize access around this operation.
+    internal static bool TryPreloadCuda12RuntimeLibrariesFromDirectory(
+        string directory,
+        IDictionary<string, IntPtr> loadedHandles,
+        Func<string, (IntPtr Handle, string? Error)> loadLibrary,
+        out string message
+    )
+    {
+        if (
+            s_requiredCuda12RuntimeLibraries.All(library =>
+                loadedHandles.TryGetValue(library, out var handle) && handle != IntPtr.Zero
+            )
+        )
+        {
+            message = $"CUDA 12 runtime libraries were preloaded from {directory}.";
+            return true;
+        }
+
+        foreach (var library in s_requiredCuda12RuntimeLibraries)
+        {
+            if (
+                loadedHandles.TryGetValue(library, out var loadedHandle)
+                && loadedHandle != IntPtr.Zero
+            )
             {
-                message = $"CUDA 12 runtime libraries were preloaded from {directory}.";
-                return true;
+                continue;
             }
 
-            foreach (var library in new[] { "libcudart.so.12", "libcublas.so.12" })
+            var (handle, error) = loadLibrary(Path.Join(directory, library));
+            if (handle == IntPtr.Zero)
             {
-                var path = Path.Join(directory, library);
-                var handle = dlopen(path, RtldNow | RtldGlobal);
-                if (handle == IntPtr.Zero)
-                {
-                    var error = Marshal.PtrToStringAnsi(dlerror());
-                    message =
-                        $"Could not load {library} from {directory}: {error ?? "unknown error"}";
-                    return false;
-                }
-
-                s_cudaPreloadHandles.Add(handle);
+                message =
+                    $"Could not load {library} from {directory}: {error ?? "unknown error"}";
+                return false;
             }
+
+            loadedHandles[library] = handle;
         }
 
         message = $"CUDA 12 runtime libraries were loaded from {directory}.";
         return true;
+    }
+
+    private static (IntPtr Handle, string? Error) LoadCuda12RuntimeLibrary(string path)
+    {
+        var handle = dlopen(path, RtldNow | RtldGlobal);
+        return handle == IntPtr.Zero
+            ? (handle, Marshal.PtrToStringAnsi(dlerror()))
+            : (handle, null);
     }
 
     public async Task<CudaBenchmarkResult> RunCudaBenchmarkAsync(

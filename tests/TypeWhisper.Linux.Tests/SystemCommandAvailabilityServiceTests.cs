@@ -6,6 +6,146 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class SystemCommandAvailabilityServiceTests
 {
     [Fact]
+    public void TryPreloadCuda12RuntimeLibraries_PartialLoadRemainsIncompleteAndRetriesMissingLibrary()
+    {
+        const string directory = "/fake/cuda";
+        var cudartPath = Path.Join(directory, "libcudart.so.12");
+        var cublasPath = Path.Join(directory, "libcublas.so.12");
+        var loadedHandles = new Dictionary<string, IntPtr>(StringComparer.Ordinal);
+        var calls = new List<string>();
+        var cublasAttempts = 0;
+
+        (IntPtr Handle, string? Error) LoadLibrary(string path)
+        {
+            calls.Add(path);
+            if (path == cudartPath)
+            {
+                return (new IntPtr(1), null);
+            }
+
+            Assert.Equal(cublasPath, path);
+            cublasAttempts++;
+            return cublasAttempts == 1
+                ? (IntPtr.Zero, "simulated cublas failure")
+                : (new IntPtr(2), null);
+        }
+
+        var firstResult =
+            SystemCommandAvailabilityService.TryPreloadCuda12RuntimeLibrariesFromDirectory(
+                directory,
+                loadedHandles,
+                LoadLibrary,
+                out var firstMessage
+            );
+
+        Assert.False(firstResult);
+        Assert.Equal(
+            "Could not load libcublas.so.12 from /fake/cuda: simulated cublas failure",
+            firstMessage
+        );
+        Assert.Single(loadedHandles);
+        Assert.Equal(new IntPtr(1), loadedHandles["libcudart.so.12"]);
+        Assert.False(loadedHandles.ContainsKey("libcublas.so.12"));
+
+        var secondResult =
+            SystemCommandAvailabilityService.TryPreloadCuda12RuntimeLibrariesFromDirectory(
+                directory,
+                loadedHandles,
+                LoadLibrary,
+                out var secondMessage
+            );
+
+        Assert.True(secondResult);
+        Assert.Equal("CUDA 12 runtime libraries were loaded from /fake/cuda.", secondMessage);
+        Assert.Equal(2, loadedHandles.Count);
+        Assert.Equal(new IntPtr(2), loadedHandles["libcublas.so.12"]);
+        Assert.Equal(1, calls.Count(path => path == cudartPath));
+        Assert.Equal(2, calls.Count(path => path == cublasPath));
+    }
+
+    [Fact]
+    public void TryPreloadCuda12RuntimeLibraries_CompleteLoadIsCached()
+    {
+        const string directory = "/fake/cuda";
+        var cudartPath = Path.Join(directory, "libcudart.so.12");
+        var cublasPath = Path.Join(directory, "libcublas.so.12");
+        var loadedHandles = new Dictionary<string, IntPtr>(StringComparer.Ordinal);
+        var calls = new List<string>();
+
+        (IntPtr Handle, string? Error) LoadLibrary(string path)
+        {
+            calls.Add(path);
+            if (path == cudartPath)
+            {
+                return (new IntPtr(1), null);
+            }
+
+            Assert.Equal(cublasPath, path);
+            return (new IntPtr(2), null);
+        }
+
+        var firstResult =
+            SystemCommandAvailabilityService.TryPreloadCuda12RuntimeLibrariesFromDirectory(
+                directory,
+                loadedHandles,
+                LoadLibrary,
+                out var firstMessage
+            );
+
+        Assert.True(firstResult);
+        Assert.Equal("CUDA 12 runtime libraries were loaded from /fake/cuda.", firstMessage);
+        Assert.Equal(new[] { cudartPath, cublasPath }, calls);
+        Assert.Equal(new IntPtr(1), loadedHandles["libcudart.so.12"]);
+        Assert.Equal(new IntPtr(2), loadedHandles["libcublas.so.12"]);
+
+        var secondResult =
+            SystemCommandAvailabilityService.TryPreloadCuda12RuntimeLibrariesFromDirectory(
+                directory,
+                loadedHandles,
+                LoadLibrary,
+                out var secondMessage
+            );
+
+        Assert.True(secondResult);
+        Assert.Equal(
+            "CUDA 12 runtime libraries were preloaded from /fake/cuda.",
+            secondMessage
+        );
+        Assert.Equal(2, calls.Count);
+    }
+
+    [Fact]
+    public void TryPreloadCuda12RuntimeLibraries_FailedLoadReturnsFalseAndReportsError()
+    {
+        const string directory = "/fake/cuda";
+        var cudartPath = Path.Join(directory, "libcudart.so.12");
+        var loadedHandles = new Dictionary<string, IntPtr>(StringComparer.Ordinal);
+        var calls = new List<string>();
+
+        (IntPtr Handle, string? Error) LoadLibrary(string path)
+        {
+            calls.Add(path);
+            return (IntPtr.Zero, "simulated dlopen error");
+        }
+
+        var result =
+            SystemCommandAvailabilityService.TryPreloadCuda12RuntimeLibrariesFromDirectory(
+                directory,
+                loadedHandles,
+                LoadLibrary,
+                out var message
+            );
+
+        Assert.False(result);
+        Assert.Empty(loadedHandles);
+        Assert.Equal(
+            "Could not load libcudart.so.12 from /fake/cuda: simulated dlopen error",
+            message
+        );
+        Assert.Equal(new[] { cudartPath }, calls);
+    }
+
+    [Fact]
     public void LinuxCapabilitySnapshot_CanAutoPasteRequiresClipboardAndPasteTools()
     {
         var snapshot = new LinuxCapabilitySnapshot(
