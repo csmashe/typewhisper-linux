@@ -1,4 +1,5 @@
 using System.Collections.Specialized;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.Core.Models;
@@ -16,7 +17,7 @@ public class HttpApiRequestParserTests
     };
 
     [Fact]
-    public void ParseTranscribe_ReadsMultipartFileAndFields()
+    public void ParseTranscribe_MultipartAudioSharesRequestBodyBackingArray()
     {
         const string boundary = "Boundary123";
         var body = Multipart(
@@ -45,7 +46,15 @@ public class HttpApiRequestParserTests
 
         var parsed = HttpApiRequestParser.ParseTranscribe(request);
 
-        Assert.Equal([1, 2, 3, 4], parsed.AudioData);
+        Assert.True(MemoryMarshal.TryGetArray(request.Body, out var bodySegment));
+        Assert.True(MemoryMarshal.TryGetArray(parsed.AudioData, out var audioSegment));
+        Assert.Same(bodySegment.Array, audioSegment.Array);
+        Assert.Equal(
+            bodySegment.Offset + body.AsSpan().IndexOf(new byte[] { 1, 2, 3, 4 }),
+            audioSegment.Offset
+        );
+        Assert.Equal(4, audioSegment.Count);
+        Assert.Equal([1, 2, 3, 4], parsed.AudioData.ToArray());
         Assert.Equal("wav", parsed.FileExtension);
         Assert.Null(parsed.Language);
         Assert.Equal(["de", "en"], parsed.LanguageHints);
@@ -76,11 +85,12 @@ public class HttpApiRequestParserTests
                 ["x-engine"] = "openai",
                 ["x-model"] = "gpt-4o-transcribe"
             },
-            [9, 8, 7]
+            new byte[] { 9, 8, 7 }
         );
 
         var parsed = HttpApiRequestParser.ParseTranscribe(request);
 
+        Assert.Equal([9, 8, 7], parsed.AudioData.ToArray());
         Assert.Equal("mp3", parsed.FileExtension);
         Assert.Equal(["de", "en"], parsed.LanguageHints);
         Assert.Equal(TranscriptionTask.Translate, parsed.Task);
@@ -205,6 +215,58 @@ public class HttpApiRequestParserTests
         Assert.True(withFlag!.CaseSensitive);
     }
 
+    [Fact]
+    public async Task ReadBodyAsync_KnownOversizedLengthRejectsBeforeReading()
+    {
+        var stream = new CountingThrowingReadStream();
+
+        var ex = await Assert.ThrowsAsync<HttpApiRequestException>(() =>
+            HttpApiRequestParser.ReadBodyAsync(
+                stream,
+                declaredLength: 9,
+                maxBytes: 8,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Equal(413, ex.StatusCode);
+        Assert.Equal("Request body too large", ex.Message);
+        Assert.Equal(0, stream.ReadCalls);
+    }
+
+    [Fact]
+    public async Task ReadBodyAsync_UnknownLengthRejectsOverCapAndAcceptsExactCap()
+    {
+        var ex = await Assert.ThrowsAsync<HttpApiRequestException>(() =>
+            HttpApiRequestParser.ReadBodyAsync(
+                new MemoryStream([1, 2, 3, 4, 5, 6, 7, 8, 9]),
+                declaredLength: -1,
+                maxBytes: 8,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Equal(413, ex.StatusCode);
+        Assert.Equal("Request body too large", ex.Message);
+
+        var exact = await HttpApiRequestParser.ReadBodyAsync(
+            new MemoryStream([1, 2, 3, 4, 5, 6, 7, 8]),
+            declaredLength: -1,
+            maxBytes: 8,
+            CancellationToken.None
+        );
+
+        Assert.Equal(8, exact.Length);
+        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8], exact.ToArray());
+    }
+
+    [Fact]
+    public void RequestBodyCaps_ArePinned()
+    {
+        Assert.Equal(100L * 1024 * 1024, HttpApiService.MaxTranscribeRequestBytes);
+        Assert.Equal(1L * 1024 * 1024, HttpApiService.MaxJsonRequestBytes);
+    }
+
     private static byte[] Multipart(
         string boundary,
         params (string Name, string? FileName, string? ContentType, byte[] Data)[] parts
@@ -239,5 +301,55 @@ public class HttpApiRequestParserTests
     {
         var bytes = Encoding.UTF8.GetBytes(value);
         stream.Write(bytes);
+    }
+
+    private sealed class CountingThrowingReadStream : Stream
+    {
+        public int ReadCalls { get; private set; }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            ReadCalls++;
+            throw new InvalidOperationException("The body must not be read.");
+        }
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default
+        )
+        {
+            ReadCalls++;
+            throw new InvalidOperationException("The body must not be read.");
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override void SetLength(long value)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            throw new NotSupportedException();
+        }
     }
 }
