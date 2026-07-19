@@ -16,6 +16,8 @@ public sealed record CliInstallState(
 public sealed class CliInstallService
 {
     private const string CliFileName = "typewhisper";
+    private const string LauncherShebang = "#!/usr/bin/env sh";
+    private const string LauncherOwnershipMarker = "# Installed by TypeWhisper";
     private readonly Func<string?> _bundledPathProvider;
     private readonly Func<string> _installDirectoryProvider;
     private readonly Func<string> _launcherDirectoryProvider;
@@ -43,26 +45,14 @@ public sealed class CliInstallService
         var installPath = Path.Join(installDirectory, CliFileName);
         var launcherPath = Path.Join(launcherDirectory, CliFileName);
         var bundledPath = _bundledPathProvider();
-        var installed =
-            FileExistsWithExactName(installPath) && FileExistsWithExactName(launcherPath);
-        var inPath = IsDirectoryInPath(launcherDirectory);
+        var launcherEntry = ClassifyLauncherEntry(launcherPath, installPath);
 
-        var status = installed
-            ? inPath
-                ? $"Installed at {launcherPath}"
-                : $"Installed at {launcherPath}; add {launcherDirectory} to PATH or restart your shell"
-            : bundledPath is null
-                ? "CLI binary not found in this build"
-                : "Not installed";
-
-        return new CliInstallState(
-            bundledPath is not null,
-            installed,
+        return CreateState(
             bundledPath,
             installPath,
             launcherPath,
-            inPath,
-            status
+            launcherDirectory,
+            launcherEntry
         );
     }
 
@@ -74,15 +64,27 @@ public sealed class CliInstallService
             return state;
         }
 
+        var launcherDirectory =
+            Path.GetDirectoryName(state.LauncherPath)
+            ?? throw new InvalidOperationException("Missing CLI launcher directory.");
+        var launcherEntry = ClassifyLauncherEntry(state.LauncherPath, state.InstallPath);
+        if (launcherEntry == LauncherEntryClassification.Foreign)
+        {
+            return CreateState(
+                state.BundledPath,
+                state.InstallPath,
+                state.LauncherPath,
+                launcherDirectory,
+                launcherEntry
+            );
+        }
+
         var sourceDirectory =
             Path.GetDirectoryName(state.BundledPath)
             ?? throw new InvalidOperationException("Missing CLI bundle directory.");
         var installDirectory =
             Path.GetDirectoryName(state.InstallPath)
             ?? throw new InvalidOperationException("Missing CLI install directory.");
-        var launcherDirectory =
-            Path.GetDirectoryName(state.LauncherPath)
-            ?? throw new InvalidOperationException("Missing CLI launcher directory.");
 
         Directory.CreateDirectory(installDirectory);
         Directory.CreateDirectory(launcherDirectory);
@@ -90,6 +92,18 @@ public sealed class CliInstallService
         File.Copy(state.BundledPath, state.InstallPath, true);
         CopyCliPayload(sourceDirectory, installDirectory);
         MarkExecutable(state.InstallPath);
+
+        launcherEntry = ClassifyLauncherEntry(state.LauncherPath, state.InstallPath);
+        if (launcherEntry == LauncherEntryClassification.Foreign)
+        {
+            return CreateState(
+                state.BundledPath,
+                state.InstallPath,
+                state.LauncherPath,
+                launcherDirectory,
+                launcherEntry
+            );
+        }
 
         File.WriteAllText(state.LauncherPath, BuildLauncherScript(state.InstallPath));
         MarkExecutable(state.LauncherPath);
@@ -134,10 +148,17 @@ public sealed class CliInstallService
 
     private static string BuildLauncherScript(string installPath)
     {
-        return $"""
-                #!/usr/bin/env sh
-                exec "{installPath}" "$@"
-                """;
+        return $"{LauncherShebang}\n{LauncherOwnershipMarker}\n{BuildLauncherExecLine(installPath)}";
+    }
+
+    private static string BuildLegacyLauncherScript(string installPath)
+    {
+        return $"{LauncherShebang}\n{BuildLauncherExecLine(installPath)}";
+    }
+
+    private static string BuildLauncherExecLine(string installPath)
+    {
+        return $"exec \"{installPath}\" \"$@\"";
     }
 
     private static string DefaultInstallDirectory()
@@ -195,6 +216,126 @@ public sealed class CliInstallService
     private static bool IsCliAppHost(string path)
     {
         return FileExistsWithExactName(path);
+    }
+
+    private static CliInstallState CreateState(
+        string? bundledPath,
+        string installPath,
+        string launcherPath,
+        string launcherDirectory,
+        LauncherEntryClassification launcherEntry
+    )
+    {
+        var launcherExists = launcherEntry != LauncherEntryClassification.Absent;
+        var launcherOwned = launcherEntry == LauncherEntryClassification.Owned;
+        var installed = launcherOwned && FileExistsWithExactName(installPath);
+        var inPath = IsDirectoryInPath(launcherDirectory);
+
+        var status = launcherExists && !launcherOwned
+            ? $"Left {launcherPath} untouched — it is not managed by TypeWhisper and will not be overwritten."
+            : installed
+                ? inPath
+                    ? $"Installed at {launcherPath}"
+                    : $"Installed at {launcherPath}; add {launcherDirectory} to PATH or restart your shell"
+                : bundledPath is null
+                    ? "CLI binary not found in this build"
+                    : "Not installed";
+
+        return new CliInstallState(
+            bundledPath is not null,
+            installed,
+            bundledPath,
+            installPath,
+            launcherPath,
+            inPath,
+            status
+        );
+    }
+
+    private static LauncherEntryClassification ClassifyLauncherEntry(
+        string launcherPath,
+        string installPath
+    )
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(launcherPath);
+            var fileName = Path.GetFileName(launcherPath);
+            if (
+                string.IsNullOrWhiteSpace(directory)
+                || string.IsNullOrWhiteSpace(fileName)
+                || !Directory.Exists(directory)
+            )
+            {
+                return LauncherEntryClassification.Absent;
+            }
+
+            // Enumerate case-insensitively so a differently-cased alias is returned even
+            // when the launcher directory sits on a case-folded filesystem (the process
+            // default casing follows the temp/root filesystem, not this directory). We then
+            // pick the ordinal-exact entry ourselves; if only an aliasing variant exists we
+            // refuse to overwrite it even though it is not our exact name.
+            var candidates = Directory
+                .EnumerateFileSystemEntries(
+                    directory,
+                    fileName,
+                    new EnumerationOptions
+                    {
+                        MatchCasing = MatchCasing.CaseInsensitive,
+                        AttributesToSkip = 0
+                    }
+                )
+                .ToArray();
+            var entry = candidates.FirstOrDefault(candidate =>
+                string.Equals(Path.GetFileName(candidate), fileName, StringComparison.Ordinal)
+            );
+            if (entry is null)
+            {
+                return candidates.Length == 0
+                    ? LauncherEntryClassification.Absent
+                    : LauncherEntryClassification.Foreign;
+            }
+
+            var attributes = File.GetAttributes(entry);
+            if (
+                (attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0
+                || new FileInfo(entry).LinkTarget is not null
+            )
+            {
+                return LauncherEntryClassification.Foreign;
+            }
+
+            var contents = File.ReadAllText(entry);
+            return HasMarkedOwnershipHeader(contents) || IsLegacyOwnedLauncher(contents, installPath)
+                ? LauncherEntryClassification.Owned
+                : LauncherEntryClassification.Foreign;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Refuse destructive changes when the entry cannot be inspected safely.
+            return LauncherEntryClassification.Foreign;
+        }
+    }
+
+    private static bool HasMarkedOwnershipHeader(string contents)
+    {
+        using var reader = new StringReader(contents);
+        return string.Equals(reader.ReadLine(), LauncherShebang, StringComparison.Ordinal)
+            && string.Equals(
+                reader.ReadLine(),
+                LauncherOwnershipMarker,
+                StringComparison.Ordinal
+            );
+    }
+
+    private static bool IsLegacyOwnedLauncher(string contents, string installPath)
+    {
+        var expected = BuildLegacyLauncherScript(installPath);
+        var expectedWindows = expected.Replace("\n", "\r\n", StringComparison.Ordinal);
+        return string.Equals(contents, expected, StringComparison.Ordinal)
+            || string.Equals(contents, expected + "\n", StringComparison.Ordinal)
+            || string.Equals(contents, expectedWindows, StringComparison.Ordinal)
+            || string.Equals(contents, expectedWindows + "\r\n", StringComparison.Ordinal);
     }
 
     private static bool FileExistsWithExactName(string path)
@@ -269,5 +410,12 @@ public sealed class CliInstallService
         {
             Trace.WriteLine($"[CliInstallService] chmod failed for {path}: {ex.Message}");
         }
+    }
+
+    private enum LauncherEntryClassification
+    {
+        Absent,
+        Owned,
+        Foreign
     }
 }
