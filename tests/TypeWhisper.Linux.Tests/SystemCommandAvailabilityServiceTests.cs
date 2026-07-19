@@ -1,10 +1,146 @@
+using System.Net.Sockets;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Tests;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
 
 public sealed class SystemCommandAvailabilityServiceTests
 {
+    [Fact]
+    public void IsCommandAvailable_RequiresExecutePermissionAndContinuesSearchingPath()
+    {
+        var originalPath = Environment.GetEnvironmentVariable("PATH");
+        var tempDirectory = TestPaths.CreateTempDirectory("command-availability");
+        var firstDirectory = Path.Join(tempDirectory, "first");
+        var secondDirectory = Path.Join(tempDirectory, "second");
+        var firstCandidate = Path.Join(firstDirectory, "fake-command");
+        var secondCandidate = Path.Join(secondDirectory, "fake-command");
+
+        try
+        {
+            Directory.CreateDirectory(firstDirectory);
+            Directory.CreateDirectory(secondDirectory);
+            File.WriteAllText(firstCandidate, "not executed");
+#pragma warning disable CA1416 // TypeWhisper.Linux is a Linux-only assembly.
+            File.SetUnixFileMode(
+                firstCandidate,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite
+            );
+#pragma warning restore CA1416
+            Environment.SetEnvironmentVariable("PATH", firstDirectory);
+
+            Assert.False(
+                SystemCommandAvailabilityService.IsCommandAvailable("fake-command")
+            );
+
+#pragma warning disable CA1416 // TypeWhisper.Linux is a Linux-only assembly.
+            File.SetUnixFileMode(
+                firstCandidate,
+                UnixFileMode.UserRead
+                    | UnixFileMode.UserWrite
+                    | UnixFileMode.UserExecute
+            );
+#pragma warning restore CA1416
+
+            Assert.True(
+                SystemCommandAvailabilityService.IsCommandAvailable("fake-command")
+            );
+
+#pragma warning disable CA1416 // TypeWhisper.Linux is a Linux-only assembly.
+            File.SetUnixFileMode(
+                firstCandidate,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite
+            );
+#pragma warning restore CA1416
+            File.WriteAllText(secondCandidate, "also not executed");
+#pragma warning disable CA1416 // TypeWhisper.Linux is a Linux-only assembly.
+            File.SetUnixFileMode(
+                secondCandidate,
+                UnixFileMode.UserRead
+                    | UnixFileMode.UserWrite
+                    | UnixFileMode.GroupExecute
+            );
+#pragma warning restore CA1416
+            Environment.SetEnvironmentVariable(
+                "PATH",
+                string.Join(Path.PathSeparator, firstDirectory, secondDirectory)
+            );
+
+            Assert.True(
+                SystemCommandAvailabilityService.IsCommandAvailable("fake-command")
+            );
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+            TestPaths.DeleteDirectory(tempDirectory);
+        }
+    }
+
+    [Fact]
+    public void ResolveYdotoolSocketPath_DeadDatagramSocketIsUnavailable()
+    {
+        var tempDirectory = TestPaths.CreateTempDirectory("ydotool-dead");
+        var boundSocketPath = Path.Join(tempDirectory, "bound.sock");
+        var socketPath = Path.Join(tempDirectory, "ydotool.sock");
+
+        try
+        {
+            CreateStaleDatagramSocket(boundSocketPath, socketPath);
+
+            Assert.Contains(
+                socketPath,
+                Directory.EnumerateFileSystemEntries(tempDirectory)
+            );
+
+            var resolved = SystemCommandAvailabilityService.ResolveYdotoolSocketPath(
+                [socketPath]
+            );
+
+            Assert.Null(resolved);
+            Assert.Contains(
+                socketPath,
+                Directory.EnumerateFileSystemEntries(tempDirectory)
+            );
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(tempDirectory);
+        }
+    }
+
+    [Fact]
+    public void ResolveYdotoolSocketPath_SkipsDeadCandidateAndReturnsLiveDatagramSocket()
+    {
+        var tempDirectory = TestPaths.CreateTempDirectory("ydotool-live");
+        var boundSocketPath = Path.Join(tempDirectory, "bound.sock");
+        var deadSocketPath = Path.Join(tempDirectory, "dead.sock");
+        var liveSocketPath = Path.Join(tempDirectory, "live.sock");
+
+        try
+        {
+            CreateStaleDatagramSocket(boundSocketPath, deadSocketPath);
+
+            using var liveSocket = new Socket(
+                AddressFamily.Unix,
+                SocketType.Dgram,
+                ProtocolType.Unspecified
+            );
+            liveSocket.Bind(new UnixDomainSocketEndPoint(liveSocketPath));
+
+            var resolved = SystemCommandAvailabilityService.ResolveYdotoolSocketPath(
+                [deadSocketPath, liveSocketPath]
+            );
+
+            Assert.Equal(liveSocketPath, resolved);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(tempDirectory);
+        }
+    }
+
     [Fact]
     public void TryPreloadCuda12RuntimeLibraries_PartialLoadRemainsIncompleteAndRetriesMissingLibrary()
     {
@@ -276,5 +412,19 @@ public sealed class SystemCommandAvailabilityServiceTests
 
         Assert.True(snapshot.HasAutomaticPasteTool);
         Assert.Equal("xdotool available (XWayland only)", snapshot.PasteStatus);
+    }
+
+    private static void CreateStaleDatagramSocket(string boundPath, string stalePath)
+    {
+        using var socket = new Socket(
+            AddressFamily.Unix,
+            SocketType.Dgram,
+            ProtocolType.Unspecified
+        );
+        socket.Bind(new UnixDomainSocketEndPoint(boundPath));
+
+        // .NET removes the original bound path on dispose. Renaming the live inode
+        // first leaves a real, closed datagram endpoint at the test's stale path.
+        File.Move(boundPath, stalePath);
     }
 }

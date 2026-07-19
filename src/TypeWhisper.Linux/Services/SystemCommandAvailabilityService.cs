@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
@@ -8,6 +9,10 @@ public sealed partial class SystemCommandAvailabilityService
 {
     private const int RtldNow = 2;
     private const int RtldGlobal = 0x100;
+    private const UnixFileMode ExecutableModeMask =
+        UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+    private static readonly TimeSpan s_ydotoolSocketConnectTimeout =
+        TimeSpan.FromMilliseconds(250);
 
     private static readonly string[] s_cudaLibraryPathCandidates =
     [
@@ -436,7 +441,12 @@ public sealed partial class SystemCommandAvailabilityService
             try
             {
                 var candidate = Path.Join(directory, commandName);
-                if (File.Exists(candidate))
+#pragma warning disable CA1416 // TypeWhisper.Linux is a Linux-only assembly.
+                if (
+                    File.Exists(candidate)
+                    && (File.GetUnixFileMode(candidate) & ExecutableModeMask) != 0
+                )
+#pragma warning restore CA1416
                 {
                     return true;
                 }
@@ -469,8 +479,7 @@ public sealed partial class SystemCommandAvailabilityService
 
     /// <summary>
     ///     Finds the ydotool socket path using the standard priority list.
-    ///     Returns null if no candidate exists. Permissions are not stat-checked —
-    ///     we only need to know whether a candidate is reachable.
+    ///     Returns null if no candidate accepts a bounded datagram connection.
     /// </summary>
     internal static string? ResolveYdotoolSocketPath()
     {
@@ -490,6 +499,11 @@ public sealed partial class SystemCommandAvailabilityService
             candidates.Add($"/run/user/{uid}/.ydotool_socket");
         }
 
+        return ResolveYdotoolSocketPath(candidates);
+    }
+
+    internal static string? ResolveYdotoolSocketPath(IEnumerable<string?> candidates)
+    {
         // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- the explicit whitespace guard keeps socket-path resolution linear; the partial LINQ form only hoists this one guard while the try/catch + early-return stay in the body
         foreach (var candidate in candidates)
         {
@@ -500,14 +514,23 @@ public sealed partial class SystemCommandAvailabilityService
 
             try
             {
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
+                using var socket = new Socket(
+                    AddressFamily.Unix,
+                    SocketType.Dgram,
+                    ProtocolType.Unspecified
+                );
+                using var timeout = new CancellationTokenSource(
+                    s_ydotoolSocketConnectTimeout
+                );
+                socket
+                    .ConnectAsync(new UnixDomainSocketEndPoint(candidate), timeout.Token)
+                    .GetAwaiter()
+                    .GetResult();
+                return candidate;
             }
             catch
             {
-                // Inaccessible socket path — skip it.
+                // Missing, stale, inaccessible, or non-datagram endpoint — skip it.
             }
         }
 
