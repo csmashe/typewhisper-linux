@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using TypeWhisper.Core;
 
 namespace TypeWhisper.Linux.Services.Ipc;
 
@@ -9,12 +10,16 @@ namespace TypeWhisper.Linux.Services.Ipc;
 /// </summary>
 /// <remarks>
 ///     Preferred: <c>$XDG_RUNTIME_DIR/typewhisper/control.sock</c> (runtime dir is
-///     already 0700 via systemd-logind). Falls back to <c>/tmp/typewhisper-$UID/</c>
-///     with an explicit chmod 0700 when <c>XDG_RUNTIME_DIR</c> is unset.
+///     already 0700 via systemd-logind). Falls back to
+///     <c>TypeWhisperEnvironment.BasePath/Runtime/control.sock</c> with an explicit
+///     chmod 0700 when <c>XDG_RUNTIME_DIR</c> is absent or unusable.
 /// </remarks>
 internal static partial class SocketPathResolver
 {
     private const string SocketFileName = "control.sock";
+
+    internal static string DefaultFallbackDirectory =>
+        Path.Join(TypeWhisperEnvironment.BasePath, "Runtime");
 
     // statx(2) ABI: kernel-defined struct, arch-independent. stx_uid is at
     // offset 20 (after stx_mask:4, stx_blksize:4, stx_attributes:8, stx_nlink:4).
@@ -33,50 +38,34 @@ internal static partial class SocketPathResolver
     /// </summary>
     public static string ResolveControlSocketPath()
     {
+        return ResolveControlSocketPath(DefaultFallbackDirectory);
+    }
+
+    internal static string ResolveControlSocketPath(string fallbackDirectory)
+    {
+        var uid = (int)geteuid();
         var xdg = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
         if (!string.IsNullOrEmpty(xdg) && Directory.Exists(xdg))
         {
             var dir = Path.Join(xdg, "typewhisper");
             try
             {
-                Directory.CreateDirectory(dir);
-                // Explicit chmod is cheap insurance against odd umasks.
-                TryChmod(dir, 0b111_000_000); // 0700
+                PreparePrivateDirectory(dir, uid);
                 return Path.Join(dir, SocketFileName);
             }
             catch (Exception ex)
             {
                 Trace.WriteLine(
-                    $"[SocketPathResolver] XDG path {dir} unusable: {ex.Message}. Falling back to /tmp."
+                    $"[SocketPathResolver] XDG path {dir} unusable: {ex.Message}. Falling back to {fallbackDirectory}."
                 );
             }
         }
 
-        var uid = (int)geteuid();
-        var fallback = $"/tmp/typewhisper-{uid}";
-
-        // /tmp is world-writable, so a hostile local user could pre-create
-        // this directory with permissive modes. If it exists with wrong bits,
-        // we try chmod; if verification still fails we use a per-process
-        // scratch dir rather than binding inside an attacker-controlled path.
-        try
-        {
-            if (!Directory.Exists(fallback))
-            {
-                Directory.CreateDirectory(fallback);
-            }
-
-            TryChmod(fallback, 0b111_000_000); // 0700
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[SocketPathResolver] Could not prepare {fallback}: {ex.Message}");
-            return CreatePrivateSocketPath(uid);
-        }
-
-        return !IsDirectoryPrivateAndOwned(fallback, uid)
-            ? CreatePrivateSocketPath(uid)
-            : Path.Join(fallback, SocketFileName);
+        PreparePrivateDirectory(fallbackDirectory, uid);
+        Trace.WriteLine(
+            $"[SocketPathResolver] Using user-data socket directory {fallbackDirectory}."
+        );
+        return Path.Join(fallbackDirectory, SocketFileName);
     }
 
     /// <summary>Best-effort <c>chmod</c>; logs on failure but never throws.</summary>
@@ -98,34 +87,27 @@ internal static partial class SocketPathResolver
         }
     }
 
-    private static string CreatePrivateSocketPath(int uid)
+    private static void PreparePrivateDirectory(string directory, int uid)
     {
-        var privatePath = Path.Join(
-            Path.GetTempPath(),
-            $"typewhisper-{uid}-{Environment.ProcessId}"
-        );
-        Directory.CreateDirectory(privatePath);
-        TryChmod(privatePath, 0b111_000_000); // 0700
-        // If chmod didn't take (read-only FS, odd mount), refuse rather than
-        // expose a group/other-readable socket — the caller surfaces the exception.
-        if (!IsDirectoryPrivateAndOwned(privatePath, uid))
+        try
         {
-            try
-            {
-                Directory.Delete(privatePath, true);
-            }
-            catch
-            {
-                /* best effort */
-            }
-
+            Directory.CreateDirectory(directory);
+        }
+        catch (Exception ex)
+        {
             throw new IOException(
-                $"Could not secure private socket directory {privatePath} with mode 0700."
+                $"Could not create private control socket directory {directory}.",
+                ex
             );
         }
 
-        Trace.WriteLine($"[SocketPathResolver] Using private socket directory {privatePath}.");
-        return Path.Join(privatePath, SocketFileName);
+        TryChmod(directory, 0b111_000_000); // 0700
+        if (!IsDirectoryPrivateAndOwned(directory, uid))
+        {
+            throw new IOException(
+                $"Could not secure private control socket directory {directory} with owner-only mode 0700."
+            );
+        }
     }
 
     private static bool IsDirectoryPrivateAndOwned(string path, int uid)
