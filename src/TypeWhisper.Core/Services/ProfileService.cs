@@ -12,21 +12,30 @@ public sealed class ProfileService : IProfileService
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
+    private readonly Action<string, string> _atomicWrite;
     private readonly string _filePath;
+    private readonly Lock _gate = new();
     private List<Profile> _cache = [];
     private bool _cacheLoaded;
 
     public ProfileService(string filePath)
+        : this(filePath, AtomicFileWrite.WriteAllText) { }
+
+    internal ProfileService(string filePath, Action<string, string>? atomicWrite)
     {
         _filePath = filePath;
+        _atomicWrite = atomicWrite ?? AtomicFileWrite.WriteAllText;
     }
 
     public IReadOnlyList<Profile> Profiles
     {
         get
         {
-            EnsureCacheLoaded();
-            return _cache;
+            lock (_gate)
+            {
+                EnsureCacheLoadedLocked();
+                return _cache;
+            }
         }
     }
 
@@ -34,63 +43,85 @@ public sealed class ProfileService : IProfileService
 
     public void SeedFirstRunDefaultsIfMissing()
     {
-        // Seed only when the file has never been written; if the user later deletes
-        // the seeded profile the file still exists, so we never resurrect it.
-        if (File.Exists(_filePath))
+        lock (_gate)
         {
-            return;
-        }
+            // Seed only when the file has never been written; if the user later deletes
+            // the seeded profile the file still exists, so we never resurrect it.
+            if (File.Exists(_filePath))
+            {
+                return;
+            }
 
-        EnsureCacheLoaded();
-        if (_cache.Any(p => p.Id == FirstRunDefaults.AutoFormatProfileId))
-        {
-            return;
-        }
+            EnsureCacheLoadedLocked();
+            if (_cache.Any(p => p.Id == FirstRunDefaults.AutoFormatProfileId))
+            {
+                return;
+            }
 
-        var newCache = new List<Profile>(_cache) { FirstRunDefaults.CreateAutoFormatProfile() };
-        SortList(newCache);
-        SaveToDisk(newCache);
-        _cache = newCache;
-        ProfilesChanged?.Invoke();
+            var newCache = new List<Profile>(_cache) { FirstRunDefaults.CreateAutoFormatProfile() };
+            CommitLocked(newCache);
+        }
     }
 
     public void AddProfile(Profile profile)
     {
-        EnsureCacheLoaded();
-        // Persist before swapping _cache so a save failure can't leave the service
-        // holding an unsaved profile that a later successful save would silently flush.
-        var newCache = new List<Profile>(_cache) { profile };
-        SortList(newCache);
-        SaveToDisk(newCache);
-        _cache = newCache;
-        ProfilesChanged?.Invoke();
+        lock (_gate)
+        {
+            EnsureCacheLoadedLocked();
+            var newCache = new List<Profile>(_cache) { profile };
+            CommitLocked(newCache);
+        }
     }
 
     public void UpdateProfile(Profile profile)
     {
-        EnsureCacheLoaded();
-        var updated = profile with { UpdatedAt = DateTime.UtcNow };
-        var newCache = new List<Profile>(_cache);
-        var idx = newCache.FindIndex(p => p.Id == profile.Id);
-        if (idx >= 0)
+        lock (_gate)
         {
-            newCache[idx] = updated;
-        }
+            EnsureCacheLoadedLocked();
+            var updated = profile with { UpdatedAt = DateTime.UtcNow };
+            var newCache = new List<Profile>(_cache);
+            var idx = newCache.FindIndex(p => p.Id == profile.Id);
+            if (idx >= 0)
+            {
+                newCache[idx] = updated;
+            }
 
-        SortList(newCache);
-        SaveToDisk(newCache);
-        _cache = newCache;
-        ProfilesChanged?.Invoke();
+            CommitLocked(newCache);
+        }
     }
 
     public void DeleteProfile(string id)
     {
-        EnsureCacheLoaded();
-        var newCache = new List<Profile>(_cache);
-        newCache.RemoveAll(p => p.Id == id);
-        SaveToDisk(newCache);
-        _cache = newCache;
-        ProfilesChanged?.Invoke();
+        lock (_gate)
+        {
+            EnsureCacheLoadedLocked();
+            var newCache = new List<Profile>(_cache);
+            newCache.RemoveAll(p => p.Id == id);
+            CommitLocked(newCache);
+        }
+    }
+
+    public Profile? ToggleProfileEnabled(string id)
+    {
+        lock (_gate)
+        {
+            EnsureCacheLoadedLocked();
+            var newCache = new List<Profile>(_cache);
+            var idx = newCache.FindIndex(profile => profile.Id == id);
+            if (idx < 0)
+            {
+                return null;
+            }
+
+            var updated = newCache[idx] with
+            {
+                IsEnabled = !newCache[idx].IsEnabled,
+                UpdatedAt = DateTime.UtcNow
+            };
+            newCache[idx] = updated;
+            CommitLocked(newCache);
+            return updated;
+        }
     }
 
     public MatchResult MatchProfile(
@@ -99,8 +130,19 @@ public sealed class ProfileService : IProfileService
         string? forcedProfileId = null
     )
     {
-        EnsureCacheLoaded();
+        lock (_gate)
+        {
+            EnsureCacheLoadedLocked();
+            return MatchProfileLocked(processName, url, forcedProfileId);
+        }
+    }
 
+    private MatchResult MatchProfileLocked(
+        string? processName,
+        string? url,
+        string? forcedProfileId
+    )
+    {
         if (forcedProfileId is not null)
         {
             // A forced selection pointing at a disabled profile should still fall through —
@@ -248,7 +290,7 @@ public sealed class ProfileService : IProfileService
         profiles.Sort((a, b) => b.Priority.CompareTo(a.Priority));
     }
 
-    private void EnsureCacheLoaded()
+    private void EnsureCacheLoadedLocked()
     {
         if (_cacheLoaded)
         {
@@ -281,6 +323,16 @@ public sealed class ProfileService : IProfileService
         }
 
         var json = JsonSerializer.Serialize(profiles, s_jsonOptions);
-        AtomicFileWrite.WriteAllText(_filePath, json);
+        _atomicWrite(_filePath, json);
+    }
+
+    private void CommitLocked(List<Profile> newCache)
+    {
+        SortList(newCache);
+        // Persist before swapping _cache so a save failure can't leave a published-but-unsaved
+        // cache; on throw _cache stays on its prior committed list and ProfilesChanged never fires.
+        SaveToDisk(newCache);
+        _cache = newCache;
+        ProfilesChanged?.Invoke();
     }
 }
