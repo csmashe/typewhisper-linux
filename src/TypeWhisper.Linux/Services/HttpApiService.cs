@@ -10,6 +10,48 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services;
 
+internal sealed class HttpApiRequestDispatcher
+{
+    private readonly Action<Exception> _reportException;
+    private readonly SemaphoreSlim _slots;
+
+    public HttpApiRequestDispatcher(int capacity, Action<Exception>? reportException = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
+        _slots = new SemaphoreSlim(capacity, capacity);
+        _reportException = reportException ?? (ex =>
+            Trace.WriteLine($"[HttpApiService] Dispatched request failed: {ex}"));
+    }
+
+    public Task? TryRun(Func<Task> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        return _slots.Wait(0) ? RunAsync(handler) : null;
+    }
+
+    private async Task RunAsync(Func<Task> handler)
+    {
+        try
+        {
+            await handler();
+        }
+        catch (Exception ex)
+        {
+            _reportException(ex);
+        }
+        finally
+        {
+            _slots.Release();
+        }
+    }
+}
+
+internal sealed record HttpApiOverCapacityResponse(
+    int StatusCode,
+    string RetryAfter,
+    string Body
+);
+
 /// <summary>
 ///     Local HTTP API for dictation/transcription/history. Binds to localhost
 ///     only; CORS is echoed only for the same loopback origin and port so a
@@ -17,7 +59,9 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed class HttpApiService : IDisposable
 {
-    private const long MaxTranscribeRequestBytes = 100 * 1024 * 1024;
+    internal const int MaxConcurrentRequests = 2;
+    internal const long MaxTranscribeRequestBytes = 100 * 1024 * 1024;
+    internal const long MaxJsonRequestBytes = 1 * 1024 * 1024;
 
     private const string AllowedCorsHeaders =
         "Authorization, Content-Type, X-Language, X-Language-Hints, X-Task, X-Target-Language, "
@@ -38,6 +82,7 @@ public sealed class HttpApiService : IDisposable
     private readonly ModelManagerService _models;
     private readonly IPostProcessingPipeline _pipeline;
     private readonly IProfileService _profiles;
+    private readonly HttpApiRequestDispatcher _requestDispatcher = new(MaxConcurrentRequests);
     private readonly DictationSessionResultStore _sessionResults;
     private readonly ISettingsService _settings;
     private readonly ITranslationService _translation;
@@ -225,7 +270,13 @@ public sealed class HttpApiService : IDisposable
             try
             {
                 var context = await listener.GetContextAsync();
-                _ = Task.Run(() => HandleRequestAsync(context, ct), ct);
+                var handlerTask = _requestDispatcher.TryRun(() =>
+                    HandleRequestAsync(context, ct)
+                );
+                if (handlerTask is null)
+                {
+                    await RejectOverCapacityAsync(context, ct);
+                }
             }
             catch (HttpListenerException) when (ct.IsCancellationRequested)
             {
@@ -238,6 +289,50 @@ public sealed class HttpApiService : IDisposable
             catch
             {
                 // Keep the local API alive after malformed requests.
+            }
+        }
+    }
+
+    internal static HttpApiOverCapacityResponse CreateOverCapacityResponse()
+    {
+        return new HttpApiOverCapacityResponse(
+            (int)HttpStatusCode.TooManyRequests,
+            "1",
+            Serialize(new { error = "Too many concurrent requests" })
+        );
+    }
+
+    private async Task RejectOverCapacityAsync(
+        HttpListenerContext context,
+        CancellationToken ct
+    )
+    {
+        var response = context.Response;
+        try
+        {
+            var rejection = CreateOverCapacityResponse();
+            response.Headers["Retry-After"] = rejection.RetryAfter;
+            await WriteJsonAsync(
+                response,
+                rejection.StatusCode,
+                rejection.Body,
+                GetAllowedOrigin(context.Request),
+                ct
+            );
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[HttpApiService] Over-capacity response failed: {ex}");
+        }
+        finally
+        {
+            try
+            {
+                response.Close();
+            }
+            catch
+            {
+                // Best-effort close for disconnected overload clients.
             }
         }
     }
@@ -422,13 +517,27 @@ public sealed class HttpApiService : IDisposable
         CancellationToken ct
     )
     {
-        // ContentLength64 is -1 for chunked uploads; reject empty/over-limit known
-        // lengths up front, let chunked requests through for LimitedReadStream to cap.
-        if (request.ContentLength64 is 0 or > MaxTranscribeRequestBytes)
+        if (request.ContentLength64 == 0)
         {
             return (413, Serialize(new { error = "Request body too large" }));
         }
 
+        var prepared = await PrepareTranscriptionRequestAsync(request, ct);
+        try
+        {
+            return await RunTranscriptionAsync(prepared.TempPath, prepared.Options, ct);
+        }
+        finally
+        {
+            DeleteTemporaryFileBestEffort(prepared.TempPath);
+        }
+    }
+
+    private static async Task<PreparedTranscriptionRequest> PrepareTranscriptionRequestAsync(
+        HttpListenerRequest request,
+        CancellationToken ct
+    )
+    {
         var apiRequest = await HttpApiRequestParser.FromListenerRequestAsync(
             request,
             MaxTranscribeRequestBytes,
@@ -454,18 +563,24 @@ public sealed class HttpApiService : IDisposable
                 transcribeRequest.Model,
                 transcribeRequest.AwaitDownload
             );
-            return await RunTranscriptionAsync(tempPath, opts, ct);
+            return new PreparedTranscriptionRequest(tempPath, opts);
         }
-        finally
+        catch
         {
-            try
-            {
-                File.Delete(tempPath);
-            }
-            catch
-            {
-                // Best-effort temp-file cleanup.
-            }
+            DeleteTemporaryFileBestEffort(tempPath);
+            throw;
+        }
+    }
+
+    private static void DeleteTemporaryFileBestEffort(string tempPath)
+    {
+        try
+        {
+            File.Delete(tempPath);
+        }
+        catch
+        {
+            // Best-effort temp-file cleanup.
         }
     }
 
@@ -476,7 +591,7 @@ public sealed class HttpApiService : IDisposable
     {
         var apiRequest = await HttpApiRequestParser.FromListenerRequestAsync(
             request,
-            MaxTranscribeRequestBytes,
+            MaxJsonRequestBytes,
             ct
         );
         if (apiRequest.Body.Length == 0)
@@ -488,7 +603,7 @@ public sealed class HttpApiService : IDisposable
         try
         {
             payload = JsonSerializer.Deserialize<LocalFileTranscribeRequest>(
-                apiRequest.Body,
+                apiRequest.Body.Span,
                 s_jsonOptions
             );
         }
@@ -864,7 +979,7 @@ public sealed class HttpApiService : IDisposable
     {
         var apiRequest = await HttpApiRequestParser.FromListenerRequestAsync(
             request,
-            MaxTranscribeRequestBytes,
+            MaxJsonRequestBytes,
             ct
         );
         if (apiRequest.Body.Length == 0)
@@ -876,7 +991,7 @@ public sealed class HttpApiService : IDisposable
         try
         {
             payload = JsonSerializer.Deserialize<DictionaryTermsRequest>(
-                apiRequest.Body,
+                apiRequest.Body.Span,
                 s_jsonOptions
             );
         }
@@ -902,7 +1017,7 @@ public sealed class HttpApiService : IDisposable
     {
         var apiRequest = await HttpApiRequestParser.FromListenerRequestAsync(
             request,
-            MaxTranscribeRequestBytes,
+            MaxJsonRequestBytes,
             ct
         );
         if (apiRequest.Body.Length == 0)
@@ -914,7 +1029,7 @@ public sealed class HttpApiService : IDisposable
         try
         {
             payload = JsonSerializer.Deserialize<DictionaryTermDeleteRequest>(
-                apiRequest.Body,
+                apiRequest.Body.Span,
                 s_jsonOptions
             );
         }
@@ -958,7 +1073,7 @@ public sealed class HttpApiService : IDisposable
     {
         var apiRequest = await HttpApiRequestParser.FromListenerRequestAsync(
             request,
-            MaxTranscribeRequestBytes,
+            MaxJsonRequestBytes,
             ct
         );
         if (apiRequest.Body.Length == 0)
@@ -970,7 +1085,7 @@ public sealed class HttpApiService : IDisposable
         try
         {
             payload = JsonSerializer.Deserialize<CorrectionUpsertRequest>(
-                apiRequest.Body,
+                apiRequest.Body.Span,
                 s_jsonOptions
             );
         }
@@ -1018,7 +1133,7 @@ public sealed class HttpApiService : IDisposable
     {
         var apiRequest = await HttpApiRequestParser.FromListenerRequestAsync(
             request,
-            MaxTranscribeRequestBytes,
+            MaxJsonRequestBytes,
             ct
         );
         if (apiRequest.Body.Length == 0)
@@ -1030,7 +1145,7 @@ public sealed class HttpApiService : IDisposable
         try
         {
             payload = JsonSerializer.Deserialize<CorrectionDeleteRequest>(
-                apiRequest.Body,
+                apiRequest.Body.Span,
                 s_jsonOptions
             );
         }
@@ -1291,6 +1406,11 @@ public sealed class HttpApiService : IDisposable
         string? Engine,
         string? Model,
         bool AwaitDownload
+    );
+
+    private sealed record PreparedTranscriptionRequest(
+        string TempPath,
+        TranscriptionRunOptions Options
     );
 }
 

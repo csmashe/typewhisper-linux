@@ -12,7 +12,7 @@ internal sealed record HttpApiRequest(
     string Path,
     NameValueCollection QueryString,
     IReadOnlyDictionary<string, string> Headers,
-    byte[] Body
+    ReadOnlyMemory<byte> Body
 );
 
 internal sealed class HttpApiRequestException : Exception
@@ -27,7 +27,7 @@ internal sealed class HttpApiRequestException : Exception
 }
 
 internal sealed record TranscribeApiRequest(
-    byte[] AudioData,
+    ReadOnlyMemory<byte> AudioData,
     string FileExtension,
     string? Language,
     IReadOnlyList<string> LanguageHints,
@@ -44,7 +44,7 @@ internal sealed record MultipartPart(
     string Name,
     string? FileName,
     string? ContentType,
-    byte[] Data
+    ReadOnlyMemory<byte> Data
 );
 
 internal sealed record LocalFileTranscribeRequest(
@@ -75,9 +75,8 @@ internal sealed record DictionaryTermDeleteRequest(string Term);
 ///     because HttpListener has no multipart support and System.Net.Http's
 ///     parser is server-side only in MultipartReader on netfx-style streams;
 ///     pulling in ASP.NET Core just for boundary scanning is overkill for a
-///     single localhost-only endpoint. Body size is capped via
-///     <see cref="LimitedReadStream" /> so a malicious / runaway client
-///     cannot OOM the dictation host.
+///     single localhost-only endpoint. Body size is capped while streaming so
+///     a malicious / runaway client cannot OOM the dictation host.
 /// </summary>
 internal static class HttpApiRequestParser
 {
@@ -87,18 +86,12 @@ internal static class HttpApiRequestParser
         CancellationToken ct
     )
     {
-        byte[] body;
-        try
-        {
-            await using var buffer = new MemoryStream();
-            await using var limited = new LimitedReadStream(request.InputStream, maxBytes);
-            await limited.CopyToAsync(buffer, ct);
-            body = buffer.ToArray();
-        }
-        catch (InvalidOperationException)
-        {
-            throw new HttpApiRequestException(413, "Request body too large");
-        }
+        var body = await ReadBodyAsync(
+            request.InputStream,
+            request.ContentLength64,
+            maxBytes,
+            ct
+        );
 
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var key in request.Headers.AllKeys)
@@ -118,10 +111,57 @@ internal static class HttpApiRequestParser
         );
     }
 
+    internal static async Task<ReadOnlyMemory<byte>> ReadBodyAsync(
+        Stream input,
+        long declaredLength,
+        long maxBytes,
+        CancellationToken ct
+    )
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        if (declaredLength < -1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(declaredLength));
+        }
+
+        if (maxBytes is < 0 or > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxBytes));
+        }
+
+        if (declaredLength > maxBytes)
+        {
+            throw new HttpApiRequestException(413, "Request body too large");
+        }
+
+        var initialCapacity = declaredLength >= 0 ? checked((int)declaredLength) : 0;
+        using var buffer = new MemoryStream(initialCapacity);
+        try
+        {
+            await using var limited = new LimitedReadStream(input, maxBytes);
+            await limited.CopyToAsync(buffer, ct);
+        }
+        catch (RequestBodyTooLargeException)
+        {
+            throw new HttpApiRequestException(413, "Request body too large");
+        }
+
+        if (!buffer.TryGetBuffer(out var segment))
+        {
+            throw new InvalidOperationException("Request body buffer is not publicly visible.");
+        }
+
+        return new ReadOnlyMemory<byte>(
+            segment.Array!,
+            segment.Offset,
+            checked((int)buffer.Length)
+        );
+    }
+
     public static TranscribeApiRequest ParseTranscribe(HttpApiRequest request)
     {
         var contentType = Header(request.Headers, "content-type") ?? "";
-        byte[] audioData;
+        ReadOnlyMemory<byte> audioData;
         string fileExtension;
         string? language;
         var languageHints = new List<string>();
@@ -223,16 +263,20 @@ internal static class HttpApiRequestParser
 
     // ReSharper disable once MemberCanBePrivate.Global
     // only used internally, but privatizing surfaces CA1859 (return-type) which can't be fixed without altering the signature
-    public static IReadOnlyList<MultipartPart> ParseMultipart(byte[] body, string boundary)
+    public static IReadOnlyList<MultipartPart> ParseMultipart(
+        ReadOnlyMemory<byte> body,
+        string boundary
+    )
     {
         var boundaryBytes = Encoding.UTF8.GetBytes("--" + boundary);
-        var doubleCrlf = "\r\n\r\n"u8.ToArray();
+        ReadOnlySpan<byte> doubleCrlf = "\r\n\r\n"u8;
         var parts = new List<MultipartPart>();
         var searchStart = 0;
+        var bodySpan = body.Span;
 
-        while (searchStart < body.Length)
+        while (searchStart < bodySpan.Length)
         {
-            var boundaryStart = IndexOf(body, boundaryBytes, searchStart);
+            var boundaryStart = IndexOf(bodySpan, boundaryBytes, searchStart);
             if (boundaryStart < 0)
             {
                 break;
@@ -240,9 +284,9 @@ internal static class HttpApiRequestParser
 
             var afterBoundary = boundaryStart + boundaryBytes.Length;
             if (
-                afterBoundary + 1 < body.Length
-                && body[afterBoundary] == (byte)'-'
-                && body[afterBoundary + 1] == (byte)'-'
+                afterBoundary + 1 < bodySpan.Length
+                && bodySpan[afterBoundary] == (byte)'-'
+                && bodySpan[afterBoundary + 1] == (byte)'-'
             )
             {
                 break;
@@ -250,22 +294,22 @@ internal static class HttpApiRequestParser
 
             var partHeaderStart = afterBoundary;
             if (
-                partHeaderStart + 1 < body.Length
-                && body[partHeaderStart] == (byte)'\r'
-                && body[partHeaderStart + 1] == (byte)'\n'
+                partHeaderStart + 1 < bodySpan.Length
+                && bodySpan[partHeaderStart] == (byte)'\r'
+                && bodySpan[partHeaderStart + 1] == (byte)'\n'
             )
             {
                 partHeaderStart += 2;
             }
 
-            var headerEnd = IndexOf(body, doubleCrlf, partHeaderStart);
+            var headerEnd = IndexOf(bodySpan, doubleCrlf, partHeaderStart);
             if (headerEnd < 0)
             {
                 break;
             }
 
             var partBodyStart = headerEnd + doubleCrlf.Length;
-            var nextBoundary = IndexOf(body, boundaryBytes, partBodyStart);
+            var nextBoundary = IndexOf(bodySpan, boundaryBytes, partBodyStart);
             if (nextBoundary < 0)
             {
                 break;
@@ -274,8 +318,8 @@ internal static class HttpApiRequestParser
             var partBodyEnd = nextBoundary;
             if (
                 partBodyEnd >= 2
-                && body[partBodyEnd - 2] == (byte)'\r'
-                && body[partBodyEnd - 1] == (byte)'\n'
+                && bodySpan[partBodyEnd - 2] == (byte)'\r'
+                && bodySpan[partBodyEnd - 1] == (byte)'\n'
             )
             {
                 partBodyEnd -= 2;
@@ -288,21 +332,17 @@ internal static class HttpApiRequestParser
             }
 
             var headers = Encoding.UTF8.GetString(
-                body,
-                partHeaderStart,
-                headerEnd - partHeaderStart
+                bodySpan.Slice(partHeaderStart, headerEnd - partHeaderStart)
             );
             var parsedHeaders = ParsePartHeaders(headers);
             if (!string.IsNullOrEmpty(parsedHeaders.Name))
             {
-                var data = new byte[partBodyEnd - partBodyStart];
-                Buffer.BlockCopy(body, partBodyStart, data, 0, data.Length);
                 parts.Add(
                     new MultipartPart(
                         parsedHeaders.Name,
                         parsedHeaders.FileName,
                         parsedHeaders.ContentType,
-                        data
+                        body.Slice(partBodyStart, partBodyEnd - partBodyStart)
                     )
                 );
             }
@@ -415,7 +455,7 @@ internal static class HttpApiRequestParser
     {
         return parts
             .Where(p => p.Name == name)
-            .Select(p => Clean(Encoding.UTF8.GetString(p.Data)))
+            .Select(p => Clean(Encoding.UTF8.GetString(p.Data.Span)))
             .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
     }
 
@@ -423,7 +463,7 @@ internal static class HttpApiRequestParser
     {
         return parts
             .Where(p => p.Name == name)
-            .Select(p => Clean(Encoding.UTF8.GetString(p.Data)))
+            .Select(p => Clean(Encoding.UTF8.GetString(p.Data.Span)))
             .Where(v => !string.IsNullOrWhiteSpace(v))!;
     }
 
@@ -492,35 +532,19 @@ internal static class HttpApiRequestParser
         return lower.Contains("webm") ? "webm" : null;
     }
 
-    private static int IndexOf(byte[] haystack, byte[] needle, int startIndex)
+    private static int IndexOf(
+        ReadOnlySpan<byte> haystack,
+        ReadOnlySpan<byte> needle,
+        int startIndex
+    )
     {
         if (needle.Length == 0)
         {
             return startIndex;
         }
 
-        for (var i = startIndex; i <= haystack.Length - needle.Length; i++)
-        {
-            var found = true;
-            // ReSharper disable once LoopCanBeConvertedToQuery -- naive byte-array substring match; the explicit loop is the intended hot-path form.
-            for (var j = 0; j < needle.Length; j++)
-            {
-                if (haystack[i + j] == needle[j])
-                {
-                    continue;
-                }
-
-                found = false;
-                break;
-            }
-
-            if (found)
-            {
-                return i;
-            }
-        }
-
-        return -1;
+        var relativeIndex = haystack[startIndex..].IndexOf(needle);
+        return relativeIndex < 0 ? -1 : startIndex + relativeIndex;
     }
 
     private sealed class LimitedReadStream(Stream inner, long maxBytes) : Stream
@@ -598,8 +622,10 @@ internal static class HttpApiRequestParser
             _bytesRead += read;
             if (_bytesRead > maxBytes)
             {
-                throw new InvalidOperationException("Request body exceeded the configured limit.");
+                throw new RequestBodyTooLargeException();
             }
         }
     }
+
+    private sealed class RequestBodyTooLargeException : Exception;
 }
