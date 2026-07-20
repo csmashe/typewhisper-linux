@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.ActiveWindow;
@@ -31,7 +32,27 @@ internal static class ServiceRegistrations
         services.AddSingleton<ISettingsService>(
             new SettingsService(TypeWhisperEnvironment.SettingsFilePath)
         );
-        services.AddSingleton<IErrorLogService>(new ErrorLogService(dataPath));
+        var errorLog = new ErrorLogService(dataPath);
+        // EnsureDirectories runs before any of this exists and can only write to the boot log,
+        // which a desktop-entry launch never shows. Repeat it here so the About screen and any
+        // exported diagnostics carry it too.
+        if (!TypeWhisperEnvironment.AudioDirectoryIsOwnerOnly)
+        {
+            var warning =
+                $"Recordings folder '{TypeWhisperEnvironment.AudioPath}' could not be made "
+                + "owner-only; recordings saved there may be readable by other users of this "
+                + "machine.";
+
+            // The condition is a persistent property of the mount, not a one-off event, and the
+            // log is a bounded ring persisted across launches — appending every startup would
+            // evict real failures. One standing entry says the same thing.
+            if (!errorLog.Entries.Any(e => e.Message == warning))
+            {
+                errorLog.AddEntry(warning, ErrorCategory.Recording);
+            }
+        }
+
+        services.AddSingleton<IErrorLogService>(errorLog);
         services.AddSingleton<IHistoryService>(
             new HistoryService(
                 Path.Join(dataPath, "history.json"),

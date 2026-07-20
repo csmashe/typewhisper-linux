@@ -30,6 +30,16 @@ public static class Program
         BootTrace.Initialize();
         BootTrace.Stage("EnsureDirectories");
 
+        // EnsureDirectories runs before the boot trace exists, so re-report the one outcome that
+        // is a privacy boundary rather than a startup detail.
+        if (!TypeWhisperEnvironment.AudioDirectoryIsOwnerOnly)
+        {
+            BootTrace.Stage(
+                $"WARNING: '{TypeWhisperEnvironment.AudioPath}' is not owner-only; "
+                + "recordings stored there may be readable by other local users"
+            );
+        }
+
         // GNOME launches menu apps at nice 6 / ionice idle, which throttles cold start ~60×
         // for a CPU+IO-heavy .NET app. Restore defaults so menu launch matches terminal launch.
         var priorityResult = ProcessPriority.ResetToDefaults();
