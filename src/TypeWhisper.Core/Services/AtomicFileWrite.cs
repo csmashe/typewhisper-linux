@@ -17,34 +17,31 @@ public static class AtomicFileWrite
     private static extern int Link(string oldPath, string newPath);
 
     /// <summary>
-    ///     Publishes a fully-written temporary file to <paramref name="path" /> without ever
-    ///     replacing an existing destination, so the destination goes straight from absent to
-    ///     complete.
+    ///     Publishes a fully-written temporary file to <paramref name="path" />, which goes
+    ///     straight from absent to complete.
     ///     <para>
     ///         <see cref="File.Move(string, string)" /> cannot do this on Unix: its no-overwrite
     ///         guarantee is a check followed by <c>rename(2)</c>, which silently clobbers, so
     ///         concurrent callers all "succeed" and each destroys the previous one's content.
-    ///         <c>link(2)</c> fails with <c>EEXIST</c> instead, atomically, which is exactly the
-    ///         documented contract. Reserving the destination up front is not an option either —
-    ///         that publishes an empty file for the duration of the write.
+    ///         <c>link(2)</c> fails with <c>EEXIST</c> atomically instead. Reserving the
+    ///         destination up front is not an option either — that publishes an empty file for
+    ///         the duration of the write.
     ///     </para>
     /// </summary>
     private static void PublishCreateNew(string tempPath, string path)
     {
         if (OperatingSystem.IsWindows())
         {
-            // MoveFileEx without MOVEFILE_REPLACE_EXISTING already fails when the destination
-            // exists, so the framework call is atomic here.
+            // MoveFileEx without MOVEFILE_REPLACE_EXISTING already fails atomically here.
             File.Move(tempPath, path);
             return;
         }
 
         if (Link(tempPath, path) == 0)
         {
-            // Committed: the destination now names this content and was never visible in a
-            // partial state. Dropping the temporary name is cleanup only — throwing here would
-            // report failure for a write that succeeded, and callers that retry on IOException
-            // (RecorderFileNamer) would then publish a duplicate under the next free name.
+            // Already committed, so dropping the temporary name is cleanup only: throwing here
+            // would report failure for a write that succeeded, and callers that retry on
+            // IOException (RecorderFileNamer) would publish a duplicate.
             try
             {
                 File.Delete(tempPath);

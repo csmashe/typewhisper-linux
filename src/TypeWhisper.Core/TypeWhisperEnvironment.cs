@@ -22,9 +22,9 @@ public static class TypeWhisperEnvironment
 
     /// <summary>
     ///     Whether <see cref="AudioPath" /> is owner-only after the last <see cref="EnsureDirectories" />.
-    ///     False means recordings written there may be readable by other local users — the mount
-    ///     ignored the mode (exFAT/NTFS) or the chmod failed. Surfaced at startup rather than made
-    ///     fatal: refusing to run would strand users whose data directory lives on such a mount.
+    ///     False means recordings there may be readable by other local users. Surfaced rather than
+    ///     made fatal: refusing to run would strand users whose data directory is on a mount that
+    ///     carries no Unix modes.
     /// </summary>
     public static bool AudioDirectoryIsOwnerOnly { get; private set; } = true;
 
@@ -37,11 +37,9 @@ public static class TypeWhisperEnvironment
         Directory.CreateDirectory(PluginsPath);
         Directory.CreateDirectory(PluginDataPath);
 
-        // Recordings and their transcript sidecars are raw captures of the user's speech, so the
-        // directory is owner-only. Created at 0700 rather than created-then-chmodded so a fresh
-        // install is never briefly group/other-readable. Creation failures stay fatal like every
-        // other directory above: without this directory dictation and recording cannot work, so
-        // continuing would only defer the same failure to the first save.
+        // Recordings and their transcript sidecars are raw captures of the user's speech, so this
+        // one is owner-only. Created at 0700 rather than created-then-chmodded so a fresh install
+        // is never briefly group-readable. Creation failures stay fatal like the directories above.
         if (OperatingSystem.IsWindows())
         {
             Directory.CreateDirectory(AudioPath);
@@ -51,17 +49,16 @@ public static class TypeWhisperEnvironment
             Directory.CreateDirectory(AudioPath, DirMode0700);
         }
 
-        // Only the hardening itself degrades to a warning — it covers directories left at 0755 by
-        // earlier versions, and mounts that cannot carry the mode at all. Files stay umask-governed
-        // by design (see AtomicFileWrite); the directory is the boundary that closes this.
+        // Only the hardening degrades to a warning; it also tightens directories left at 0755 by
+        // earlier versions. Files stay umask-governed by design (see AtomicFileWrite) — the
+        // directory is the boundary that closes this.
         AudioDirectoryIsOwnerOnly = TryMakeOwnerOnly(AudioPath);
     }
 
     /// <summary>
-    ///     Tightens an existing directory to 0700 and confirms it took. Returns <c>false</c> when
-    ///     the owner-only boundary could not be established, so a caller can surface it. Never
-    ///     throws: a mount that ignores modes must not stop the app from starting, but it must not
-    ///     pass silently either.
+    ///     Tightens a directory to 0700 and confirms it took, returning <c>false</c> when the
+    ///     owner-only boundary could not be established. Never throws: a mount that ignores modes
+    ///     must not stop startup, but it must not pass silently either.
     /// </summary>
     private static bool TryMakeOwnerOnly(string path)
     {
@@ -74,9 +71,8 @@ public static class TypeWhisperEnvironment
         {
             File.SetUnixFileMode(path, DirMode0700);
 
-            // Verify rather than trust: the chmod can be a silent no-op on filesystems that do
-            // not carry Unix modes (a mounted exFAT/NTFS recordings folder), and that is exactly
-            // the case where the recordings stay readable to everyone.
+            // Verify rather than trust: chmod is a silent no-op on filesystems carrying no Unix
+            // modes (exFAT/NTFS), which is exactly when recordings stay readable to everyone.
             const UnixFileMode exposed =
                 UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
                 | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;

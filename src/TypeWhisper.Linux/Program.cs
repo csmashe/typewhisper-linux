@@ -30,8 +30,8 @@ public static class Program
         BootTrace.Initialize();
         BootTrace.Stage("EnsureDirectories");
 
-        // EnsureDirectories runs before the boot trace exists, so re-report the one outcome that
-        // is a privacy boundary rather than a startup detail.
+        // EnsureDirectories runs before the boot trace exists, so re-report its one privacy-
+        // relevant outcome here.
         if (!TypeWhisperEnvironment.AudioDirectoryIsOwnerOnly)
         {
             BootTrace.Stage(

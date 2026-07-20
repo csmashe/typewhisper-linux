@@ -33,9 +33,8 @@ internal static class ServiceRegistrations
             new SettingsService(TypeWhisperEnvironment.SettingsFilePath)
         );
         var errorLog = new ErrorLogService(dataPath);
-        // EnsureDirectories runs before any of this exists and can only write to the boot log,
-        // which a desktop-entry launch never shows. Repeat it here so the About screen and any
-        // exported diagnostics carry it too.
+        // EnsureDirectories can only reach the boot log, which a desktop-entry launch never shows.
+        // Repeat it here so the About screen and exported diagnostics carry it too.
         if (!TypeWhisperEnvironment.AudioDirectoryIsOwnerOnly)
         {
             var warning =
@@ -43,9 +42,8 @@ internal static class ServiceRegistrations
                 + "owner-only; recordings saved there may be readable by other users of this "
                 + "machine.";
 
-            // The condition is a persistent property of the mount, not a one-off event, and the
-            // log is a bounded ring persisted across launches — appending every startup would
-            // evict real failures. One standing entry says the same thing.
+            // A standing property of the mount, not an event, and the log is a bounded ring
+            // persisted across launches — appending every startup would evict real failures.
             if (!errorLog.Entries.Any(e => e.Message == warning))
             {
                 errorLog.AddEntry(warning, ErrorCategory.Recording);
