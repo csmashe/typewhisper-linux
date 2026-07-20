@@ -81,11 +81,12 @@ public sealed class ProfileService : IProfileService
             var updated = profile with { UpdatedAt = DateTime.UtcNow };
             var newCache = new List<Profile>(_cache);
             var idx = newCache.FindIndex(p => p.Id == profile.Id);
-            if (idx >= 0)
+            if (idx < 0)
             {
-                newCache[idx] = updated;
+                return;
             }
 
+            newCache[idx] = updated;
             CommitLocked(newCache);
         }
     }

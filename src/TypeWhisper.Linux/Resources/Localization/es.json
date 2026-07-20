@@ -7,6 +7,7 @@
   "About.BackupInvalidManifest": "El manifiesto de la copia de seguridad de TypeWhisper no es válido o no se puede leer. Se canceló la restauración.",
   "About.BackupRestored": "Copia de seguridad restaurada desde {0} archivo(s). Es posible que algunos ajustes restaurados requieran reiniciar la aplicación.",
   "About.BackupStatusDefault": "Haz una copia de seguridad de ajustes, perfiles, fragmentos y datos de plugins.",
+  "About.BackupTooLarge": "Esta copia de seguridad se expande a muchos más datos de los que contiene una copia de ajustes y puede haber sido manipulada. Se canceló la restauración.",
   "About.BackupUnsafePath": "Esta copia de seguridad contiene una ruta no segura y puede haber sido manipulada: {0}",
   "About.BackupUnsupportedPath": "Esta copia de seguridad contiene una ruta no admitida y puede haber sido manipulada: {0}",
   "About.CheckForUpdates": "Buscar actualizaciones",

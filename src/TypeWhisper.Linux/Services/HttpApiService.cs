@@ -275,7 +275,10 @@ public sealed class HttpApiService : IDisposable
                 );
                 if (handlerTask is null)
                 {
-                    await RejectOverCapacityAsync(context, ct);
+                    // Fire-and-forget like the admitted path: awaiting the rejection
+                    // would let one slow client stall accepts. The method swallows its
+                    // own exceptions and closes the response.
+                    _ = RejectOverCapacityAsync(context, ct);
                 }
             }
             catch (HttpListenerException) when (ct.IsCancellationRequested)
@@ -517,9 +520,10 @@ public sealed class HttpApiService : IDisposable
         CancellationToken ct
     )
     {
+        // Empty body — answer with the same contract ParseTranscribe would produce.
         if (request.ContentLength64 == 0)
         {
-            return (413, Serialize(new { error = "Request body too large" }));
+            return (400, Serialize(new { error = "No audio data provided" }));
         }
 
         var prepared = await PrepareTranscriptionRequestAsync(request, ct);

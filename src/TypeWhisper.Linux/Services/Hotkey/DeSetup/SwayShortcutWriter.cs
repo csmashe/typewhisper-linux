@@ -11,6 +11,9 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
 {
     private const int MaxWriteAttempts = 3;
 
+    private const string RemovalRequiresReloadWarning =
+        "Sway may still have the live binding. Run `swaymsg reload` (or restart Sway) to remove it.";
+
     private static readonly TimeSpan s_reloadTimeout = TimeSpan.FromSeconds(10);
 
     private readonly Func<
@@ -174,7 +177,8 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
                     return new DeShortcutWriteResult(
                         true,
                         "No sway config to update.",
-                        []
+                        [],
+                        RemovalRequiresReloadWarning
                     );
                 }
 
@@ -193,7 +197,8 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
                     return new DeShortcutWriteResult(
                         true,
                         "No Sway integration to remove.",
-                        []
+                        [],
+                        RemovalRequiresReloadWarning
                     );
                 }
 
@@ -208,7 +213,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
                 var reloaded = await ReloadAsync(ct).ConfigureAwait(false);
                 var warning = reloaded
                     ? null
-                    : "Block removed, but `swaymsg reload` failed. Reload Sway manually to drop the live bindings.";
+                    : RemovalRequiresReloadWarning;
                 return new DeShortcutWriteResult(
                     true,
                     "Sway managed block removed.",

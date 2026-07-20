@@ -272,7 +272,9 @@ public sealed class ProcessRunnerTests
             );
             processIds = await WaitForProcessIdsAsync(pidFile);
 
-            var callerDeadline = TimeSpan.FromMilliseconds(800) - stopwatch.Elapsed;
+            // Well clear of the 1s private timeout: on a loaded machine an 800ms
+            // target left too little margin and the timeout could win the race.
+            var callerDeadline = TimeSpan.FromMilliseconds(300) - stopwatch.Elapsed;
             if (callerDeadline > TimeSpan.Zero)
             {
                 cts.CancelAfter(callerDeadline);

@@ -7,6 +7,7 @@
   "About.BackupInvalidManifest": "Das Manifest der TypeWhisper-Sicherung ist ungültig oder nicht lesbar. Die Wiederherstellung wurde abgebrochen.",
   "About.BackupRestored": "Backup aus {0} Datei(en) wiederhergestellt. Einige wiederhergestellte Einstellungen erfordern möglicherweise einen Neustart der App.",
   "About.BackupStatusDefault": "Einstellungen, Profile, Textbausteine und Plugin-Daten sichern.",
+  "About.BackupTooLarge": "Diese Sicherung entpackt weit mehr Daten, als eine Einstellungssicherung je enthält, und wurde möglicherweise manipuliert. Die Wiederherstellung wurde abgebrochen.",
   "About.BackupUnsafePath": "Diese Sicherung enthält einen unsicheren Pfad und wurde möglicherweise manipuliert: {0}",
   "About.BackupUnsupportedPath": "Diese Sicherung enthält einen nicht unterstützten Pfad und wurde möglicherweise manipuliert: {0}",
   "About.CheckForUpdates": "Nach Updates suchen",

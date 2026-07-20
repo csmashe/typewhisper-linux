@@ -46,6 +46,13 @@ public sealed class SettingsBackupService
     // manifest can't be materialized into memory before shape validation runs.
     private const long MaxManifestBytes = 64 * 1024;
 
+    // Path/extension validation says nothing about size: a decompression bomb made
+    // entirely of allowed paths would still fill the disk during staging. Cap the
+    // restored total and entry count well above any real settings backup and abort
+    // as soon as an entry would cross the line.
+    private const long MaxRestoreBytes = 512L * 1024 * 1024;
+    private const int MaxRestoreEntries = 50_000;
+
     private const string ManifestApp = "TypeWhisper";
     private const string ManifestKind = "settings-backup";
 
@@ -228,11 +235,17 @@ public sealed class SettingsBackupService
                     continue;
                 }
 
+                if (fileCount >= MaxRestoreEntries)
+                {
+                    throw new InvalidDataException(Loc.Instance["About.BackupTooLarge"]);
+                }
+
                 var targetPath = GetSafeDestinationPath(contentDirectory, entry.FullName);
                 Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-                entry.ExtractToFile(targetPath, true);
+                // Count the bytes actually written, not entry.Length — the declared
+                // length comes from the archive and a crafted one can understate it.
+                bytes += ExtractCapped(entry, targetPath, MaxRestoreBytes - bytes);
                 fileCount++;
-                bytes += entry.Length;
             }
 
             WriteDurableJson(
@@ -751,6 +764,47 @@ public sealed class SettingsBackupService
         bytes += new FileInfo(path).Length;
     }
 
+    /// <summary>
+    ///     Extracts one entry, aborting as soon as it would write more than
+    ///     <paramref name="remainingBytes" />. Returns the bytes actually written.
+    ///     A partial file is left behind; the caller discards the staging tree.
+    /// </summary>
+    private static long ExtractCapped(
+        ZipArchiveEntry entry,
+        string targetPath,
+        long remainingBytes
+    )
+    {
+        long written = 0;
+        using (var source = entry.Open())
+        using (
+            var destination = new FileStream(
+                targetPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None
+            )
+        )
+        {
+            var buffer = new byte[81920];
+            int read;
+            while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                written += read;
+                if (written > remainingBytes)
+                {
+                    throw new InvalidDataException(Loc.Instance["About.BackupTooLarge"]);
+                }
+
+                destination.Write(buffer, 0, read);
+            }
+        }
+
+        // Parity with ExtractToFile, which carries the archive timestamp across.
+        File.SetLastWriteTimeUtc(targetPath, entry.LastWriteTime.UtcDateTime);
+        return written;
+    }
+
     private static void ValidateArchive(ZipArchive archive)
     {
         var manifestEntries = archive
@@ -826,8 +880,23 @@ public sealed class SettingsBackupService
         BackupManifest? manifest;
         try
         {
+            // The declared length above is archive-controlled and can understate the
+            // real size, so cap the bytes actually decompressed before deserializing.
             using var stream = manifestEntry.Open();
-            manifest = JsonSerializer.Deserialize<BackupManifest>(stream);
+            using var buffer = new MemoryStream();
+            var chunk = new byte[4096];
+            int read;
+            while ((read = stream.Read(chunk, 0, chunk.Length)) > 0)
+            {
+                if (buffer.Length + read > MaxManifestBytes)
+                {
+                    throw new InvalidDataException(Loc.Instance["About.BackupInvalidManifest"]);
+                }
+
+                buffer.Write(chunk, 0, read);
+            }
+
+            manifest = JsonSerializer.Deserialize<BackupManifest>(buffer.ToArray());
         }
         catch (Exception ex) when (ex is JsonException or IOException or InvalidDataException)
         {

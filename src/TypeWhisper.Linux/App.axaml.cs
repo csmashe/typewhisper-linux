@@ -169,9 +169,31 @@ public class App : Application
             var sessionResults = services.GetRequiredService<DictationSessionResultStore>();
             dictation.SessionCompleted += sessionResults.Record;
 
+            // Construction resolves the socket path. Failing here means we cannot tell
+            // whether another instance already owns it, and ownership uncertainty fails
+            // closed (ControlSocketServer.Start does the same) — a second instance would
+            // share settings, hotkeys, and runtime state with the first.
+            ControlSocketServer controlSocket;
+            try
+            {
+                controlSocket = services.GetRequiredService<ControlSocketServer>();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[App] Control socket path unavailable: {ex}");
+                Console.Error.WriteLine(
+                    "TypeWhisper could not verify that no other instance is running. Startup was canceled."
+                );
+                ShuttingDown = true;
+                LinuxStartupNotification.NotifyComplete();
+                // Nonzero, matching Program's preflight probe failure: this is a
+                // canceled startup, not the "already running" success path below.
+                _ = ShutdownAndExitAsync(services, desktop, 1);
+                return;
+            }
+
             // The bind doubles as the single-instance guard; AddressAlreadyInUse means
             // a live peer got here first — shut this instance down cleanly.
-            var controlSocket = services.GetRequiredService<ControlSocketServer>();
             try
             {
                 controlSocket.Start();
@@ -496,7 +518,8 @@ public class App : Application
 
     private static async Task ShutdownAndExitAsync(
         IServiceProvider services,
-        IClassicDesktopStyleApplicationLifetime desktop)
+        IClassicDesktopStyleApplicationLifetime desktop,
+        int exitCode = 0)
     {
         try
         {
@@ -511,7 +534,7 @@ public class App : Application
             ClosePermitted = true;
             // Must call Shutdown explicitly: DictationOverlayWindow is always-shown
             // (backlog #16 Opacity workaround) so OnLastWindowClose never fires.
-            desktop.Shutdown();
+            desktop.Shutdown(exitCode);
         }
     }
 

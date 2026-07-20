@@ -15,9 +15,10 @@ internal static class ControlSocketClient
     private const int TimeoutMillis = 2000;
 
     /// <summary>
-    ///     Side-effect-free liveness probe: returns true if a server is bound to
-    ///     <paramref name="path" />. Used by argument-bearing launches (e.g. <c>--minimized</c>)
-    ///     that must not trigger a toggle merely to check for a running instance.
+    ///     Liveness probe: returns true if a server is bound to <paramref name="path" />.
+    ///     Never toggles recording state, so argument-bearing launches (e.g. <c>--minimized</c>)
+    ///     can use it to check for a running instance. It may, however, unlink a socket path
+    ///     confirmed stale under the ownership lock.
     /// </summary>
     public static bool IsLivePeer(string path)
     {
