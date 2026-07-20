@@ -19,7 +19,12 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     private readonly ISettingsService _settings;
     private TranscriptionAccelerationPreference? _activeModelAccelerationPreference;
     private string? _activeModelId;
+    // Guards _autoUnloadTimer, _autoUnloadGeneration and _disposed. Load/unload/acquire paths
+    // already hold _modelLock, but Dispose() runs on an arbitrary thread and must not block on
+    // that async lock — without its own gate it can race a lease's re-arm and leave a zombie timer.
+    private readonly Lock _timerGate = new();
     private Timer? _autoUnloadTimer;
+    private int _autoUnloadGeneration;
     private bool _disposed;
 
     public ModelManagerService(
@@ -42,7 +47,16 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     internal Func<(bool Success, string Message)> CudaRuntimePreflight { get; set; }
 
     /// <summary>Test seam: true while the idle auto-unload timer is armed and pending.</summary>
-    internal bool IsAutoUnloadArmed => _autoUnloadTimer is { Enabled: true };
+    internal bool IsAutoUnloadArmed
+    {
+        get
+        {
+            lock (_timerGate)
+            {
+                return _autoUnloadTimer is { Enabled: true };
+            }
+        }
+    }
 
     public string? ActiveModelId
     {
@@ -99,13 +113,17 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
+        lock (_timerGate)
         {
-            return;
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            CancelAutoUnloadLocked();
         }
 
-        _disposed = true;
-        CancelAutoUnload();
         // _modelLock is intentionally NOT disposed: an outstanding TranscriptionLease or
         // fire-and-forget UnloadModelAsync may Release() after Dispose returns. SemaphoreSlim
         // only requires disposal when AvailableWaitHandle has been accessed (it has not).
@@ -264,28 +282,36 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
     private void ScheduleAutoUnload()
     {
-        CancelAutoUnload();
-
         var seconds = _settings.Current.ModelAutoUnloadSeconds;
-        // Never arm after disposal: a lease outstanding when Dispose() runs re-arms here on
-        // its DisposeAsync, which would otherwise leave a zombie timer that fires plugin
-        // unloading during or after app teardown.
-        if (_disposed || seconds <= 0 || ActiveModelId is null)
-        {
-            return;
-        }
+        var armable = seconds > 0 && ActiveModelId is not null;
 
-        // System.Timers.Timer throws for intervals above int.MaxValue ms, and
-        // ModelAutoUnloadSeconds is a raw setting a corrupt or hand-edited config could push
-        // past that. Every load/lease path runs through here, so a throw must never be possible.
-        var intervalMs = Math.Min(seconds * 1000.0, int.MaxValue);
-        _autoUnloadTimer = new Timer(intervalMs) { AutoReset = false };
-        _autoUnloadTimer.Elapsed += (_, _) =>
+        lock (_timerGate)
         {
-            Debug.WriteLine($"Auto-unloading model after {seconds}s idle");
-            UnloadModel();
-        };
-        _autoUnloadTimer.Start();
+            CancelAutoUnloadLocked();
+
+            // Never arm after disposal: a lease outstanding when Dispose() runs re-arms here on
+            // its DisposeAsync, which would otherwise leave a zombie timer that fires plugin
+            // unloading during or after app teardown.
+            if (_disposed || !armable)
+            {
+                return;
+            }
+
+            // Stop()/Dispose() cannot recall an Elapsed callback already dispatched to the
+            // thread pool, so a superseded timer can still fire after a newer model was loaded.
+            // Each callback carries the generation it was armed with; see
+            // UnloadIfGenerationCurrentAsync for where that is validated.
+            var generation = _autoUnloadGeneration;
+
+            // System.Timers.Timer throws for intervals above int.MaxValue ms, and
+            // ModelAutoUnloadSeconds is a raw setting a corrupt or hand-edited config could push
+            // past that. Every load/lease path runs through here, so a throw must never be possible.
+            var intervalMs = Math.Min(seconds * 1000.0, int.MaxValue);
+            _autoUnloadTimer = new Timer(intervalMs) { AutoReset = false };
+            _autoUnloadTimer.Elapsed += (_, _) =>
+                _ = UnloadIfGenerationCurrentAsync(generation, seconds);
+            _autoUnloadTimer.Start();
+        }
     }
 
     public bool CanDeleteModel(string modelId)
@@ -842,8 +868,47 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         _activeModelAccelerationPreference = null;
     }
 
+    /// <summary>
+    ///     Idle-timer unload. Checking the generation before taking <c>_modelLock</c> would not be
+    ///     enough: a load or lease can win the lock in that gap, re-arm, and release — leaving this
+    ///     already-validated callback to unload a model that was just loaded. Every re-arm happens
+    ///     under <c>_modelLock</c>, so validating after acquiring it serializes check and unload.
+    /// </summary>
+    private async Task UnloadIfGenerationCurrentAsync(int generation, int idleSeconds)
+    {
+        await _modelLock.WaitAsync();
+        try
+        {
+            lock (_timerGate)
+            {
+                if (_disposed || generation != _autoUnloadGeneration)
+                {
+                    return;
+                }
+            }
+
+            Debug.WriteLine($"Auto-unloading model after {idleSeconds}s idle");
+            await UnloadModelCoreAsync();
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+    }
+
     private void CancelAutoUnload()
     {
+        lock (_timerGate)
+        {
+            CancelAutoUnloadLocked();
+        }
+    }
+
+    private void CancelAutoUnloadLocked()
+    {
+        // Bump first: this retires any Elapsed callback already in flight from the timer
+        // being torn down, whether or not a replacement is armed afterwards.
+        _autoUnloadGeneration++;
         _autoUnloadTimer?.Stop();
         _autoUnloadTimer?.Dispose();
         _autoUnloadTimer = null;

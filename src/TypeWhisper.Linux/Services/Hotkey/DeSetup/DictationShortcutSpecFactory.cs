@@ -25,6 +25,7 @@ public static class DictationShortcutSpecFactory
             ? DefaultTrigger
             : settings.Current.ToggleHotkey;
         var gui = ResolveGuiCommand();
+        var cancelTrigger = SwapKeyForCancel(trigger);
 
         return settings.Current.Mode switch
         {
@@ -43,8 +44,8 @@ public static class DictationShortcutSpecFactory
                 trigger,
                 $"{gui} record start",
                 $"{gui} record stop",
-                SwapKeyForCancel(trigger),
-                $"{gui} record cancel"
+                cancelTrigger,
+                cancelTrigger is null ? null : $"{gui} record cancel"
             ),
             _ => null
         };
@@ -67,7 +68,13 @@ public static class DictationShortcutSpecFactory
         return "typewhisper";
     }
 
-    private static string SwapKeyForCancel(string trigger)
+    /// <summary>
+    ///     Derives the cancel accelerator by swapping the trigger's final key for Escape, or returns
+    ///     null when that yields the recording trigger itself (a trigger already ending in Escape,
+    ///     e.g. Ctrl+Shift+Escape). Binding start and cancel to one accelerator would fire both
+    ///     commands, so the cancel bind is dropped instead — writers skip it for a null trigger.
+    /// </summary>
+    private static string? SwapKeyForCancel(string trigger)
     {
         var parts = trigger.Split(
             '+',
@@ -78,7 +85,13 @@ public static class DictationShortcutSpecFactory
             return "Ctrl+Shift+Escape";
         }
 
+        // Compare against the trigger rebuilt from the same parts so spacing and casing
+        // differences ("ctrl + shift + escape") can't hide a collision.
+        var normalizedTrigger = string.Join('+', parts);
         parts[^1] = "Escape";
-        return string.Join('+', parts);
+        var cancel = string.Join('+', parts);
+        return string.Equals(cancel, normalizedTrigger, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : cancel;
     }
 }

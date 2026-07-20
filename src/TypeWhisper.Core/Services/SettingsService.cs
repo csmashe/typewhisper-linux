@@ -35,6 +35,16 @@ public sealed class SettingsService : ISettingsService
 
     public AppSettings Load()
     {
+        // Load writes Current, so an unsynchronized Load could clobber what an
+        // in-flight Update just persisted.
+        lock (_gate)
+        {
+            return LoadLocked();
+        }
+    }
+
+    private AppSettings LoadLocked()
+    {
         var result = TryLoadFrom(_filePath);
         if (result is not null)
         {

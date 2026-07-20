@@ -631,6 +631,33 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task InsertTextAsync_skips_restore_when_ownership_read_cannot_prove_our_text()
+    {
+        // The ownership read comes back null — an image landed on the clipboard, or the read
+        // timed out. Either way ownership is unproven, which must not license a restore.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            ClipboardReadResults = new Queue<string?>(
+                [
+                    "previous", // snapshot
+                    "new text", // verify — serving
+                    null // ownership check — clipboard no longer reads back as text
+                ]
+            )
+        };
+        var confirmation = new FakePasteConfirmationSource { Result = true };
+        var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        // No restore write happened: only the initial set.
+        Assert.Equal(1, platform.SetClipboardCount);
+    }
+
+    [Fact]
     public async Task InsertTextAsync_null_previous_clipboard_skips_wait_and_restore()
     {
         // Nothing to restore means no restore write can cut off the in-flight paste —

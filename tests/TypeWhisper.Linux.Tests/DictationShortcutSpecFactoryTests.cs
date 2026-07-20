@@ -62,6 +62,28 @@ public sealed class DictationShortcutSpecFactoryTests : IDisposable
     }
 
     [Theory]
+    [InlineData("Ctrl+Shift+Escape")]
+    [InlineData("Escape")]
+    [InlineData("ctrl + shift + escape")]
+    public void Build_PushToTalk_EscapeEndingTrigger_DropsCancelBindInsteadOfDuplicatingTrigger(
+        string trigger
+    )
+    {
+        var settings = CreateSettings(RecordingMode.PushToTalk, trigger);
+
+        var spec = Assert.IsType<DeShortcutSpec>(
+            DictationShortcutSpecFactory.Build(settings, CreateWriter("hyprland"))
+        );
+
+        // Swapping the last key for Escape would reproduce the record trigger, so the cancel
+        // bind is dropped rather than firing both commands off one accelerator.
+        Assert.Null(spec.OnCancelTrigger);
+        Assert.Null(spec.OnCancelCommand);
+        Assert.EndsWith("record start", spec.OnPressCommand);
+        Assert.EndsWith("record stop", spec.OnReleaseCommand);
+    }
+
+    [Theory]
     [InlineData("gnome")]
     [InlineData("kde")]
     public void Build_PushToTalk_ReturnsNullForPressOnlyWriter(string writerId)
@@ -87,7 +109,7 @@ public sealed class DictationShortcutSpecFactoryTests : IDisposable
         Assert.Null(spec);
     }
 
-    private SettingsService CreateSettings(RecordingMode mode)
+    private SettingsService CreateSettings(RecordingMode mode, string trigger = "Ctrl+Shift+Space")
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
@@ -95,7 +117,7 @@ public sealed class DictationShortcutSpecFactoryTests : IDisposable
             settings.Current with
             {
                 Mode = mode,
-                ToggleHotkey = "Ctrl+Shift+Space"
+                ToggleHotkey = trigger
             }
         );
         return settings;

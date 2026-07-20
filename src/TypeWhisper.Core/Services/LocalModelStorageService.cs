@@ -123,7 +123,8 @@ public sealed class LocalModelStorageService
                 // Settings already point at targetRoot, so this cleanup is best-effort: a failure or
                 // interruption wastes disk space, never data — hence CancellationToken.None after the commit.
                 await Task.Run(
-                    () => DeletePluginAssetSourceContents(pluginAssetSourceRoot, targetRoot),
+                    () => TryCleanUp(() =>
+                        DeletePluginAssetSourceContents(pluginAssetSourceRoot, targetRoot)),
                     CancellationToken.None);
             }
 
@@ -176,8 +177,8 @@ public sealed class LocalModelStorageService
         // Best-effort cleanup after the commit above — see comment in the currentIsDefault branch.
         await Task.Run(() =>
         {
-            DeleteModelRootSourceContents(sourceRoot, targetRoot);
-            DeletePluginAssetSourceContents(pluginAssetSourceRoot, targetRoot);
+            TryCleanUp(() => DeleteModelRootSourceContents(sourceRoot, targetRoot));
+            TryCleanUp(() => DeletePluginAssetSourceContents(pluginAssetSourceRoot, targetRoot));
         }, CancellationToken.None);
     }
 
@@ -318,8 +319,7 @@ public sealed class LocalModelStorageService
     }
 
     // Files land at target only via an atomic same-directory rename, so a crash or I/O error
-    // mid-copy never leaves a partial file visible there — a later resume can trust
-    // File.Exists(target) to mean fully copied.
+    // mid-copy never leaves a partial file visible there.
     private static void CopyEntry(string source, string target, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -338,7 +338,13 @@ public sealed class LocalModelStorageService
             return;
         }
 
-        if (!File.Exists(source) || File.Exists(target))
+        if (!File.Exists(source))
+            return;
+
+        // Nothing marks a pre-existing target as this migration's work, so content is the only
+        // proof. Skipping on anything weaker would let an unrelated file stand in for the
+        // source — DeleteMigratedEntry reads a present target as permission to delete it.
+        if (File.Exists(target) && FilesHaveIdenticalContent(source, target, ct))
             return;
 
         var targetDir = Path.GetDirectoryName(target)!;
@@ -349,7 +355,7 @@ public sealed class LocalModelStorageService
         try
         {
             File.Copy(source, stagingTarget);
-            File.Move(stagingTarget, target);
+            File.Move(stagingTarget, target, true);
         }
         catch
         {
@@ -363,6 +369,37 @@ public sealed class LocalModelStorageService
             }
 
             throw;
+        }
+    }
+
+    private static bool FilesHaveIdenticalContent(string source, string target, CancellationToken ct)
+    {
+        try
+        {
+            using var sourceStream = File.OpenRead(source);
+            using var targetStream = File.OpenRead(target);
+            if (sourceStream.Length != targetStream.Length)
+                return false;
+
+            var sourceBuffer = new byte[81920];
+            var targetBuffer = new byte[81920];
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var read = sourceStream.ReadAtLeast(sourceBuffer, sourceBuffer.Length, false);
+                if (read == 0)
+                    return true;
+
+                targetStream.ReadExactly(targetBuffer, 0, read);
+                if (!sourceBuffer.AsSpan(0, read).SequenceEqual(targetBuffer.AsSpan(0, read)))
+                    return false;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Unproven match: fall through to a fresh copy rather than skip one.
+            return false;
         }
     }
 
@@ -387,6 +424,23 @@ public sealed class LocalModelStorageService
             return;
 
         TryDeleteFile(source);
+    }
+
+    // The per-entry delete helpers swallow their own I/O failures, but the directory walks
+    // around them do not — and cleanup runs after the settings commit, so an unreadable
+    // source directory must not surface as a failed migration.
+    private static void TryCleanUp(Action cleanUp)
+    {
+        try
+        {
+            cleanUp();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            System.Diagnostics.Trace.TraceWarning(
+                "Model storage migration cleanup failed: {0}",
+                ex.Message);
+        }
     }
 
     private static void TryDeleteFile(string path)

@@ -50,6 +50,10 @@ public sealed class TransformSelectionServiceTests
     [InlineData(null, "code", null, "firefox", true)]
     [InlineData(null, null, null, null, false)]
     [InlineData(null, "code", null, null, true)]
+    // Asymmetric window id with no process name on either side: the only identity signal
+    // appeared or vanished, so the target can no longer be confirmed.
+    [InlineData("123", null, null, null, true)]
+    [InlineData(null, null, "123", null, true)]
     public void HasSelectionTargetChanged_ReturnsExpectedResult(
         string? capturedWindowId,
         string? capturedProcessName,

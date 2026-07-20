@@ -452,7 +452,7 @@
   "Notify.BodyPushToTalk": "Jetzt sprechen — loslassen zum Einfügen",
   "Notify.BodyToggle": "Jetzt sprechen — das Tastenkürzel erneut drücken zum Stoppen",
   "Overlay.Canceled": "Abgebrochen",
-  "Overlay.CaptureSaveFailed": "Aufnahme konnte nicht gespeichert werden.",
+  "Overlay.CaptureSaveFailed": "Aufnahme konnte nicht gespeichert oder transkribiert werden.",
   "Overlay.NoRecentTranscriptions": "Keine letzten Transkriptionen.",
   "Overlay.NoSpeech": "Keine Sprache erkannt",
   "Overlay.Processing": "Wird verarbeitet…",

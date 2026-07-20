@@ -130,6 +130,14 @@ public sealed class TransformSelectionService
             );
         }
 
+        // Neither side offered a process name. A window id on exactly one side means identity
+        // appeared or vanished between capture and replace — usually the captured window
+        // closing — so treat it as changed rather than replacing into an unconfirmable window.
+        if (!string.IsNullOrEmpty(capturedWindowId) || !string.IsNullOrEmpty(currentWindowId))
+        {
+            return true;
+        }
+
         // No identity signal on either side — fail open rather than block a replacement we can't validate.
         return false;
     }

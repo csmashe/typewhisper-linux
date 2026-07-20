@@ -61,6 +61,8 @@ public sealed class TextInsertionService
         "Clipboard preservation skipped: the previous clipboard offered a non-text format (e.g. an image or file list) that cannot be captured as plain text, so it was replaced and could not be restored.";
     private const string ClipboardRichRestoreSkippedMessage =
         "Clipboard preservation skipped: the previous clipboard also offered a richer, non-text format (e.g. HTML) that would be lost if restored as plain text, so it was left as-is instead of a lossy restore.";
+    private const string ClipboardUnprovableRestoreSkippedMessage =
+        "Clipboard preservation skipped: the clipboard no longer reads back as text — another app may have replaced it with an image or file list — so the previous text was not restored over it.";
     private const string ClipboardRichRestoreLossyMessage =
         "Clipboard preservation was lossy: the previous clipboard also offered a richer, non-text format (e.g. HTML) that could not be restored; only its plain-text content was restored.";
     private static readonly TimeSpan s_focusDelay = TimeSpan.FromMilliseconds(100);
@@ -650,9 +652,17 @@ public sealed class TextInsertionService
             // trailing newline. If another app replaced it meanwhile, restoring would
             // clobber the user's newer copy.
             var current = await _platform.TryGetClipboardTextAsync();
+            if (current is null)
+            {
+                // Null is not proof the clipboard is still ours: another app may have replaced
+                // it with content serving no plain text (an image, a file list), or the read
+                // timed out. Unproven ownership is not permission to overwrite.
+                LogInsertionFallback(ClipboardUnprovableRestoreSkippedMessage);
+                return;
+            }
+
             if (
-                current is not null
-                && !string.Equals(
+                !string.Equals(
                     current.TrimEnd('\n'),
                     pastedText.TrimEnd('\n'),
                     StringComparison.Ordinal

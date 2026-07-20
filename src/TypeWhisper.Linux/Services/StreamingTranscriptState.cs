@@ -17,6 +17,10 @@ internal sealed class StreamingTranscriptState
     private string _confirmedText = "";
     private string _lastDisplayedText = "";
     private int _sessionVersion;
+    // Bumped on every _confirmedText commit. A value compare cannot tell "nobody committed" from
+    // "someone committed and stabilization landed back on the same string" — the ABA that would
+    // let a stale poll overwrite a newer result.
+    private int _commitRevision;
 
     public int StartSession()
     {
@@ -52,6 +56,7 @@ internal sealed class StreamingTranscriptState
     {
         displayText = "";
         string confirmedSnapshot;
+        int revisionSnapshot;
         lock (_lock)
         {
             if (sessionVersion != _sessionVersion)
@@ -60,6 +65,7 @@ internal sealed class StreamingTranscriptState
             }
 
             confirmedSnapshot = _confirmedText;
+            revisionSnapshot = _commitRevision;
         }
 
         var text = rawText.Trim();
@@ -80,12 +86,13 @@ internal sealed class StreamingTranscriptState
         lock (_lock)
         {
             // A version check alone cannot detect another poll committing within this same
-            // session; the value compare discards this stale result instead of clobbering it.
-            if (sessionVersion != _sessionVersion || _confirmedText != confirmedSnapshot)
+            // session; the revision compare discards this stale result instead of clobbering it.
+            if (sessionVersion != _sessionVersion || _commitRevision != revisionSnapshot)
             {
                 return false;
             }
 
+            _commitRevision++;
             _confirmedText = stable;
             _lastDisplayedText = stable;
             displayText = stable;

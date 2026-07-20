@@ -62,6 +62,10 @@ internal sealed class DictationInsertionOrderGate
     /// </summary>
     internal async Task WaitForTurnAsync(int sessionId, CancellationToken cancellationToken)
     {
+        // Before the fast path too: an already-canceled session that happens to be the
+        // queue head would otherwise return normally and go on to insert.
+        cancellationToken.ThrowIfCancellationRequested();
+
         TaskCompletionSource tcs;
         lock (_lock)
         {

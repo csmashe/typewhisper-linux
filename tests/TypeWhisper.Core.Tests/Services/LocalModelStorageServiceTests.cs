@@ -97,6 +97,64 @@ public sealed class LocalModelStorageServiceTests : IDisposable
         Assert.Equal(Path.GetFullPath(target), settings.Current.LocalModelStoragePath);
     }
 
+    [Theory]
+    // Same byte length as the source, so a length-only check would wrongly accept it.
+    [InlineData("stale-x-weights")]
+    // Different length.
+    [InlineData("stale")]
+    public async Task MoveDownloadsAndUsePathAsync_ConflictingPreExistingTarget_IsReplacedNotTrusted(
+        string staleContent
+    )
+    {
+        var source = Path.Join(_tempRoot, $"source-stale-{staleContent.Length}");
+        var target = Path.Join(_tempRoot, $"target-stale-{staleContent.Length}");
+        var modelDir = Path.Join(source, LocalModelStoragePaths.PluginDataFolderName, "com.typewhisper.whisper-cpp", "Models");
+        Directory.CreateDirectory(modelDir);
+        const string sourceContent = "current weights";
+        await File.WriteAllTextAsync(Path.Join(modelDir, "ggml-base.bin"), sourceContent);
+
+        // A leftover from an earlier manual copy or an older install. Treating its presence —
+        // or its size — as "already migrated" would skip the copy and delete the real source.
+        var stalePath = Path.Join(target, LocalModelStoragePaths.PluginDataFolderName, "com.typewhisper.whisper-cpp", "Models", "ggml-base.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(stalePath)!);
+        await File.WriteAllTextAsync(stalePath, staleContent);
+
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source });
+        var service = new LocalModelStorageService(settings);
+
+        await service.MoveDownloadsAndUsePathAsync(target);
+
+        Assert.Equal(sourceContent, await File.ReadAllTextAsync(stalePath));
+    }
+
+    [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_MatchingPreExistingTarget_SkipsRecopyAndCleansSource()
+    {
+        var source = Path.Join(_tempRoot, "source-resume");
+        var target = Path.Join(_tempRoot, "target-resume");
+        var modelDir = Path.Join(source, LocalModelStoragePaths.PluginDataFolderName, "com.typewhisper.whisper-cpp", "Models");
+        Directory.CreateDirectory(modelDir);
+        var sourceModel = Path.Join(modelDir, "ggml-base.bin");
+        const string content = "current weights";
+        await File.WriteAllTextAsync(sourceModel, content);
+
+        // An interrupted earlier run already copied this through; identical content is the
+        // proof that lets a resume skip re-copying it.
+        var alreadyCopied = Path.Join(target, LocalModelStoragePaths.PluginDataFolderName, "com.typewhisper.whisper-cpp", "Models", "ggml-base.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(alreadyCopied)!);
+        await File.WriteAllTextAsync(alreadyCopied, content);
+        var copiedAt = File.GetLastWriteTimeUtc(alreadyCopied);
+
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source });
+        var service = new LocalModelStorageService(settings);
+
+        await service.MoveDownloadsAndUsePathAsync(target);
+
+        Assert.Equal(content, await File.ReadAllTextAsync(alreadyCopied));
+        Assert.Equal(copiedAt, File.GetLastWriteTimeUtc(alreadyCopied));
+        Assert.False(File.Exists(sourceModel));
+    }
+
     [Fact]
     public async Task MoveDownloadsAndUsePathAsync_SaveFails_LeavesSourceIntact()
     {
