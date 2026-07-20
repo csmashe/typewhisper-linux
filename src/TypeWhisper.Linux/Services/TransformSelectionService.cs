@@ -133,6 +133,7 @@ public sealed class TransformSelectionService
         // Neither side offered a process name. A window id on exactly one side means identity
         // appeared or vanished between capture and replace — usually the captured window
         // closing — so treat it as changed rather than replacing into an unconfirmable window.
+        // ReSharper disable once ConvertIfStatementToReturnStatement -- collapsing to one return would strip the comment explaining the fail-open false branch.
         if (!string.IsNullOrEmpty(capturedWindowId) || !string.IsNullOrEmpty(currentWindowId))
         {
             return true;

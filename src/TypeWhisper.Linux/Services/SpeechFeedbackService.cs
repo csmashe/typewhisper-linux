@@ -493,6 +493,7 @@ public sealed class SpeechFeedbackService : IDisposable
     {
         lock (_lock)
         {
+            // ReSharper disable once InvertIf -- last statement in the lock; inverting would add a return inside the lock.
             if (
                 ReferenceEquals(_playbackRequest, playbackRequest)
                 && playbackRequest.Version == Volatile.Read(ref _playbackVersion)

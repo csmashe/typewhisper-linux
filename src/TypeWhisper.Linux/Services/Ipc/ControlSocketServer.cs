@@ -150,6 +150,7 @@ internal sealed class ControlSocketServer : IDisposable
 
             try
             {
+                // ReSharper disable once InvertIf -- inverting would early-return out of a multi-stage cleanup and skip the stages below.
                 if (_bound && ownership is not null)
                 {
                     var cleanup = ownership.CleanupStaleSocket();
@@ -261,7 +262,7 @@ internal sealed class ControlSocketServer : IDisposable
 
                 cts = new CancellationTokenSource();
                 var token = cts.Token;
-                acceptLoop = Task.Run(() => AcceptLoopAsync(listener, token));
+                acceptLoop = Task.Run(() => AcceptLoopAsync(listener, token), token);
 
                 // Publish only after bind, chmod, listen, and accept-loop creation succeed.
                 _ownership = ownership;
@@ -761,14 +762,11 @@ internal sealed class ControlSocketStartCoordinator
         _ = ObserveStartAsync(startTask, startCompletion);
 
         // A failure that settled synchronously is known before the response is committed.
-        if (startTask is { IsCompleted: true, IsCompletedSuccessfully: false })
-        {
-            return Task.FromResult(
+        return startTask is { IsCompleted: true, IsCompletedSuccessfully: false }
+            ? Task.FromResult(
                 JsonControlProtocol.SerializeError(JsonControlProtocol.ErrInternal)
-            );
-        }
-
-        return Task.FromResult(JsonControlProtocol.SerializeAction(prev, SnapshotState()));
+            )
+            : Task.FromResult(JsonControlProtocol.SerializeAction(prev, SnapshotState()));
     }
 
     /// <summary>

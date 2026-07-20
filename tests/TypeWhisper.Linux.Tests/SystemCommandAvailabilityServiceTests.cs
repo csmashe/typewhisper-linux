@@ -151,6 +151,7 @@ public sealed class SystemCommandAvailabilityServiceTests
         var calls = new List<string>();
         var cublasAttempts = 0;
 
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- kept adjacent to the call sites and captured state below.
         (IntPtr Handle, string? Error) LoadLibrary(string path)
         {
             calls.Add(path);
@@ -208,6 +209,7 @@ public sealed class SystemCommandAvailabilityServiceTests
         var loadedHandles = new Dictionary<string, IntPtr>(StringComparer.Ordinal);
         var calls = new List<string>();
 
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- kept adjacent to the call sites and captured state below.
         (IntPtr Handle, string? Error) LoadLibrary(string path)
         {
             calls.Add(path);
@@ -258,6 +260,7 @@ public sealed class SystemCommandAvailabilityServiceTests
         var loadedHandles = new Dictionary<string, IntPtr>(StringComparer.Ordinal);
         var calls = new List<string>();
 
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- kept adjacent to the call sites and captured state below.
         (IntPtr Handle, string? Error) LoadLibrary(string path)
         {
             calls.Add(path);

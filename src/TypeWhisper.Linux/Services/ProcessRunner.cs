@@ -242,6 +242,7 @@ public sealed class ProcessRunner : IProcessRunner
         }
         catch (Exception ex)
         {
+            // ReSharper disable once InvertIf -- inverting would duplicate the `return ProcessRunResult.NotStarted(...)` tail.
             if (ct.IsCancellationRequested)
             {
                 if (process is not null)

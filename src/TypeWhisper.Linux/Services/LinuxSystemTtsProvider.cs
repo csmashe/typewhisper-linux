@@ -99,6 +99,7 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
 
         var language = NormalizeLanguageHint(request.Language);
         var args = BuildArguments(command, request.Text, language);
+        // ReSharper disable once SuggestVarOrType_Elsewhere -- the collection-expression arm has no natural type; `var` would not compile.
         IReadOnlyList<string>? fallbackArgs = language is not null && args.Count > 1
             ? BuildDefaultArguments(command, request.Text)
             : null;

@@ -63,6 +63,7 @@ internal sealed partial class ControlSocketOwnership : IDisposable
     {
         ownership = null;
         var lockPath = Path.Join(Path.GetDirectoryName(socketPath)!, "control.lock");
+        // ReSharper disable once SuggestVarOrType_SimpleTypes -- OpenLockFile returns a non-nullable handle; the explicit nullable type is required for the `handle = null` ownership transfer below.
         SafeFileHandle? handle = OpenLockFile(lockPath);
         try
         {
@@ -70,6 +71,7 @@ internal sealed partial class ControlSocketOwnership : IDisposable
             while (flock(handle, LockExclusive | LockNonBlocking) != 0)
             {
                 var error = Marshal.GetLastPInvokeError();
+                // ReSharper disable once ConvertIfStatementToSwitchStatement -- errno guard chain inside the retry loop; a switch would obscure the continue/return/throw split.
                 if (error == ErrorInterrupted)
                 {
                     continue;

@@ -76,6 +76,8 @@ public sealed class LinuxPreferencesService
 
     public LinuxPreferences Current { get; private set; } = LinuxPreferences.Default;
 
+    // ReSharper disable once UnusedMethodReturnValue.Global -- returns Current so callers that reload on demand get the fresh value.
+    // ReSharper disable once MemberCanBePrivate.Global -- public reload entry point mirroring ISettingsService.Load(); only the constructor calls it in-tree.
     public LinuxPreferences Load()
     {
         if (!File.Exists(_path))

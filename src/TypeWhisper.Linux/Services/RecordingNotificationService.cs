@@ -256,6 +256,7 @@ public sealed partial class RecordingNotificationService : IDisposable
                 }
             }
 
+            // ReSharper disable once InvertIf -- last statement in the loop; inverting into a `continue` would obscure the signal-and-stop intent.
             if (completed is not null)
             {
                 completed.TrySetResult();

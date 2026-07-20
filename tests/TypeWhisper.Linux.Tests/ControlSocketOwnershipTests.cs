@@ -289,8 +289,15 @@ public sealed class ControlSocketOwnershipTests
     }
 
     // Test-only: simulates the pathname a crashed process leaves behind. DllImport
-    // (not LibraryImport) avoids requiring this test project to allow unsafe code.
+    // (not LibraryImport) avoids requiring unsafe code here, so SYSLIB1054 is declined.
+    // CA2101 wants Unicode marshaling, wrong for libc — POSIX pathnames are byte
+    // strings, so LPUTF8Str is the correct encoding.
+#pragma warning disable SYSLIB1054, CA2101
     // ReSharper disable once InconsistentNaming -- mirrors the native libc function.
     [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi)]
-    private static extern int link(string oldpath, string newpath);
+    private static extern int link(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string oldpath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string newpath
+    );
+#pragma warning restore SYSLIB1054, CA2101
 }

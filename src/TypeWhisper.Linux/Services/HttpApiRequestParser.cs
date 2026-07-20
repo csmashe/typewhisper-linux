@@ -119,10 +119,7 @@ internal static class HttpApiRequestParser
     )
     {
         ArgumentNullException.ThrowIfNull(input);
-        if (declaredLength < -1)
-        {
-            throw new ArgumentOutOfRangeException(nameof(declaredLength));
-        }
+        ArgumentOutOfRangeException.ThrowIfLessThan(declaredLength, -1);
 
         if (maxBytes is < 0 or > int.MaxValue)
         {
@@ -269,7 +266,7 @@ internal static class HttpApiRequestParser
     )
     {
         var boundaryBytes = Encoding.UTF8.GetBytes("--" + boundary);
-        ReadOnlySpan<byte> doubleCrlf = "\r\n\r\n"u8;
+        var doubleCrlf = "\r\n\r\n"u8;
         var parts = new List<MultipartPart>();
         var searchStart = 0;
         var bodySpan = body.Span;

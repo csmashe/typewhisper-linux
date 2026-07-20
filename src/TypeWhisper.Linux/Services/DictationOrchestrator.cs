@@ -1114,6 +1114,7 @@ public sealed class DictationOrchestrator : IDisposable
         Action<RecordingContext, string, bool, bool> showFeedback
     )
     {
+        // ReSharper disable once SwitchExpressionHandlesSomeKnownEnumValuesWithExceptionInDefault -- only discard outcomes are reportable; the default arm rejects the rest by design.
         var messageKey = discardReason switch
         {
             LinuxShortSpeechDecision.DiscardTooShort => "Overlay.TooShort",

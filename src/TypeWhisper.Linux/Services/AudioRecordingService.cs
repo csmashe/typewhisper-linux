@@ -369,12 +369,7 @@ public sealed class AudioRecordingService : IDisposable
             }
 
             var snapshot = SnapshotRecordedAudio();
-            if (snapshot.SampleCount == 0)
-            {
-                return null;
-            }
-
-            return BuildWavFromRecordedAudio(snapshot);
+            return snapshot.SampleCount == 0 ? null : BuildWavFromRecordedAudio(snapshot);
         }
     }
 
@@ -534,6 +529,7 @@ public sealed class AudioRecordingService : IDisposable
             var filterRadius = (int)Math.Ceiling(24 * ratio);
             var coefficientCount = filterRadius + 1;
             const int maxStackAllocatedCoefficientCount = 256;
+            // ReSharper disable once SuggestVarOrType_Elsewhere -- the explicit Span<double> is the shared target type that unifies the stackalloc and heap arms.
             Span<double> coefficients = coefficientCount <= maxStackAllocatedCoefficientCount
                 ? stackalloc double[coefficientCount]
                 : new double[coefficientCount];

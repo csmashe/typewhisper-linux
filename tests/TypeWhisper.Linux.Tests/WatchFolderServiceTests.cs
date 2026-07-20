@@ -1,3 +1,4 @@
+// ReSharper disable MethodSupportsCancellation -- every WaitAsync here uses only a test-guard timeout; there is no ambient cancellation token to pass.
 // ReSharper disable MethodHasAsyncOverload -- synchronous File.Read/WriteAllText is deliberate in these test assertions; the async overload would only add await noise with no benefit off the hot path.
 using System.Collections.Concurrent;
 using TypeWhisper.Linux.Services;
@@ -36,7 +37,7 @@ public sealed class WatchFolderServiceTests : IDisposable
         File.WriteAllBytes(wavPath, [1, 2, 3]);
         File.WriteAllBytes(mp3Path, [4, 5, 6]);
 
-        using var service = new WatchFolderService(Path.Join(_tempDir, "data"));
+        await using var service = new WatchFolderService(Path.Join(_tempDir, "data"));
         var processed = await StartAndWaitForProcessedItemsAsync(
             service,
             expectedCount: 2,
@@ -75,7 +76,7 @@ public sealed class WatchFolderServiceTests : IDisposable
         var baseBytes = File.ReadAllBytes(baseOutputPath);
         var firstSuffixBytes = File.ReadAllBytes(firstSuffixPath);
 
-        using var service = new WatchFolderService(Path.Join(_tempDir, "data"));
+        await using var service = new WatchFolderService(Path.Join(_tempDir, "data"));
         var processed = await StartAndWaitForProcessedItemsAsync(
             service,
             expectedCount: 1,
@@ -107,7 +108,7 @@ public sealed class WatchFolderServiceTests : IDisposable
         File.WriteAllBytes(sourcePath, [1, 2, 3]);
         Directory.CreateDirectory(Path.Join(outputPath, "meeting.txt"));
 
-        using var service = new WatchFolderService(Path.Join(_tempDir, "data"));
+        await using var service = new WatchFolderService(Path.Join(_tempDir, "data"));
         var processed = await StartAndWaitForProcessedItemsAsync(
             service,
             expectedCount: 1,
@@ -222,8 +223,10 @@ public sealed class WatchFolderServiceTests : IDisposable
         var retiredWorkersWereIncomplete = false;
         var waitCallCount = 0;
 
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- kept adjacent to the call sites and captured state below.
         Task WaitForWorkers(Task workers, TimeSpan timeout)
         {
+            // ReSharper disable once InvertIf -- the first-call special case reads better as the guard.
             if (Interlocked.Increment(ref waitCallCount) == 1)
             {
                 retiredWorkers = workers;
@@ -249,6 +252,7 @@ public sealed class WatchFolderServiceTests : IDisposable
                 {
                     var fileName = Path.GetFileName(request.FilePath);
                     oldCalls.Enqueue(fileName);
+                    // ReSharper disable once InvertIf -- inverting would duplicate the `return CreateResult(request)` tail.
                     if (fileName == "a-blocked.wav")
                     {
                         oldEntered.TrySetResult(ct);
@@ -380,8 +384,10 @@ public sealed class WatchFolderServiceTests : IDisposable
         Task? retiredWorkers = null;
         var waitCallCount = 0;
 
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- kept adjacent to the call sites and captured state below.
         Task WaitForWorkers(Task workers, TimeSpan timeout)
         {
+            // ReSharper disable once InvertIf -- the first-call special case reads better as the guard.
             if (Interlocked.Increment(ref waitCallCount) == 1)
             {
                 retiredWorkers = workers;
@@ -518,6 +524,7 @@ public sealed class WatchFolderServiceTests : IDisposable
         Task? retiredWorkers = null;
         TimeSpan? requestedDeadline = null;
 
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- kept adjacent to the call sites and captured state below.
         Task WaitForWorkers(Task workers, TimeSpan timeout)
         {
             retiredWorkers = workers;

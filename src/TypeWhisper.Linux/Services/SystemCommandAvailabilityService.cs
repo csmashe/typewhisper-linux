@@ -524,6 +524,7 @@ public sealed partial class SystemCommandAvailabilityService
                 );
                 socket
                     .ConnectAsync(new UnixDomainSocketEndPoint(candidate), timeout.Token)
+                    .AsTask()
                     .GetAwaiter()
                     .GetResult();
                 return candidate;

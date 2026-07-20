@@ -176,6 +176,7 @@ public sealed class SoundFeedbackServiceTests
     {
         var pattern =
             $@"public\s+void\s+{Regex.Escape(methodName)}\s*\(\s*\)\s*\{{\s*"
+            // ReSharper disable once UseRawString -- interpolated regex with `{{` brace escapes; a raw string would need `$$"""` and re-escaping.
             + $@"Observe\s*\(\s*PlayAsync\s*\(\s*""{Regex.Escape(cueFileName)}""\s*,\s*"
             + @"s_startCueTimeout\s*\)\s*\)\s*;\s*\}";
 

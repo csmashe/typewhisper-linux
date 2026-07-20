@@ -210,8 +210,10 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
             throw;
         }
 
+        // ReSharper disable once MethodSupportsCancellation -- the worker observes run.CancellationSource internally; passing the token to Task.Run would leave a Canceled task for StopCoreAsync to await.
         var queueWorker = Task.Run(() => ProcessQueueAsync(run));
         // Periodic rescan catches files missed when the OS event buffer overflows.
+        // ReSharper disable once MethodSupportsCancellation -- the worker observes run.CancellationSource internally; passing the token to Task.Run would leave a Canceled task for StopCoreAsync to await.
         var rescanWorker = Task.Run(() => RescanLoopAsync(run));
         run.SetWorkers(queueWorker, rescanWorker);
 
@@ -250,6 +252,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
             run.Watcher.Dispose();
             try
             {
+                // ReSharper disable once MethodHasAsyncOverload -- CancelAsync would add a yield point between watcher teardown and worker cancellation that a concurrent Start could interleave with.
                 run.CancellationSource.Cancel();
             }
             catch (AggregateException ex)

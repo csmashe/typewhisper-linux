@@ -11,7 +11,7 @@ public sealed class ControlSocketServerTests
     [Fact]
     public async Task Delayed_accepted_start_returns_starting_before_start_completes()
     {
-        var state = JsonControlProtocol.StateIdle;
+        const string state = JsonControlProtocol.StateIdle;
         var startEntered = NewSignal();
         var releaseStart = NewSignal();
         var coordinator = CreateCoordinator(() => state);
@@ -114,7 +114,7 @@ public sealed class ControlSocketServerTests
     [Fact]
     public async Task Repeated_start_reuses_in_flight_correlation()
     {
-        var state = JsonControlProtocol.StateIdle;
+        const string state = JsonControlProtocol.StateIdle;
         var releaseStart = NewSignal();
         var startInvocations = 0;
         var coordinator = CreateCoordinator(() => state);

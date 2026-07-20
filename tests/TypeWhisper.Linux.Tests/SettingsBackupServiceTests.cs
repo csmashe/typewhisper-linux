@@ -14,6 +14,8 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class SettingsBackupServiceTests : IDisposable
 {
+    private static readonly JsonSerializerOptions s_indentedJson = new() { WriteIndented = true };
+
     private readonly string _tempDir = TestPaths.CreateTempDirectory(
         "TypeWhisper.SettingsBackupServiceTests"
     );
@@ -855,10 +857,7 @@ public sealed class SettingsBackupServiceTests : IDisposable
     {
         Write(
             path,
-            JsonSerializer.Serialize(
-                profiles,
-                new JsonSerializerOptions { WriteIndented = true }
-            )
+            JsonSerializer.Serialize(profiles, s_indentedJson)
         );
     }
 

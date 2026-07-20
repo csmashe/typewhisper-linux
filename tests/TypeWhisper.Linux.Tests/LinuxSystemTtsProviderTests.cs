@@ -498,6 +498,7 @@ public sealed class LinuxSystemTtsProviderTests
         string outcome
     )
     {
+        // ReSharper disable once SuggestVarOrType_SimpleTypes -- the "throwing" arm is null, so the explicit nullable type carries nullability `var` would drop.
         ProcessRunResult? controlResult = outcome switch
         {
             "failed" => new ProcessRunResult(false, false, -1, "", "launch failed"),
@@ -746,11 +747,7 @@ public sealed class LinuxSystemTtsProviderTests
         public Task WaitForInvocationAsync(int invocationNumber)
         {
             ArgumentOutOfRangeException.ThrowIfLessThan(invocationNumber, 1);
-            if (invocationNumber > _results.Length)
-            {
-                throw new ArgumentOutOfRangeException(nameof(invocationNumber));
-            }
-
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(invocationNumber, _results.Length);
             return _results[invocationNumber - 1].Invoked.Task;
         }
 
@@ -807,11 +804,7 @@ public sealed class LinuxSystemTtsProviderTests
         private ControlledResult GetResult(int invocationNumber)
         {
             ArgumentOutOfRangeException.ThrowIfLessThan(invocationNumber, 1);
-            if (invocationNumber > _results.Length)
-            {
-                throw new ArgumentOutOfRangeException(nameof(invocationNumber));
-            }
-
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(invocationNumber, _results.Length);
             return _results[invocationNumber - 1];
         }
 

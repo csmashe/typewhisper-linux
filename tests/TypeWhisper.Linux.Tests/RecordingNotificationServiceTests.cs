@@ -477,19 +477,17 @@ public sealed class RecordingNotificationServiceTests
         )
         {
             Invocations.Add(new Invocation(fileName, args.ToArray(), timeout));
-            if (Invocations.Count == 1)
+            switch (Invocations.Count)
             {
-                FirstStarted.TrySetResult();
-                return _firstCompletion.Task;
+                case 1:
+                    FirstStarted.TrySetResult();
+                    return _firstCompletion.Task;
+                case 2:
+                    SecondStarted.TrySetResult();
+                    return _secondCompletion.Task;
+                default:
+                    return Task.FromResult(Success(41));
             }
-
-            if (Invocations.Count == 2)
-            {
-                SecondStarted.TrySetResult();
-                return _secondCompletion.Task;
-            }
-
-            return Task.FromResult(Success(41));
         }
 
         public void CompleteFirst(uint id)
