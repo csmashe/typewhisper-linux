@@ -32,9 +32,15 @@ public sealed partial class GoogleCloudSttPlugin
     public GoogleCloudSttPlugin()
         : this(new HttpClientHandler()) { }
 
+    // Budget for the whole round trip — base64 PCM upload, Google's recognition, response read —
+    // not for the audio length. Matching MaxSyncSeconds left a near-limit clip zero headroom: 60s
+    // of LINEAR16 is ~1.9 MB PCM, ~2.6 MB once base64'd inline into the JSON body, which alone can
+    // take tens of seconds on a weak uplink. 120s matches the other cloud STT plugins here.
+    private static readonly TimeSpan s_requestTimeout = TimeSpan.FromSeconds(120);
+
     // Test seam: lets a stub handler answer requests without hitting the network.
     internal GoogleCloudSttPlugin(HttpMessageHandler handler) =>
-        _httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(60) };
+        _httpClient = new HttpClient(handler) { Timeout = s_requestTimeout };
 
     public string PluginId => "com.typewhisper.google-cloud-stt";
     public string PluginName => "Google Cloud STT";
