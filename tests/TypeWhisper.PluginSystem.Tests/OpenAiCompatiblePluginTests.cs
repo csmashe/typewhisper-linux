@@ -27,7 +27,7 @@ public sealed class OpenAiCompatiblePluginTests
             capturedBody = body;
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -56,7 +56,7 @@ public sealed class OpenAiCompatiblePluginTests
         {
             Content = new StringContent(
                 """{"choices":[{"message":{"content":"bulk"}}]}""",
-                Encoding.UTF8, "application/json")
+                Encoding.UTF8, "application/json"),
         });
 
         var host = new TestPluginHostServices();
@@ -80,7 +80,7 @@ public sealed class OpenAiCompatiblePluginTests
         {
             Content = new StringContent(
                 """{"data":[{"id":"m1"},{"id":"m2"}]}""",
-                Encoding.UTF8, "application/json")
+                Encoding.UTF8, "application/json"),
         }));
 
     private static PluginCollectionItem ProfileItem(
@@ -92,7 +92,7 @@ public sealed class OpenAiCompatiblePluginTests
             ["baseUrl"] = baseUrl,
             ["api-key"] = apiKey,
             ["selectedLlmModel"] = llmModel,
-            ["__id"] = id
+            ["__id"] = id,
         });
 
     [Fact]
@@ -186,7 +186,7 @@ public sealed class OpenAiCompatiblePluginTests
                 : """{"data":[{"id":"x1"}]}""";
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(models, Encoding.UTF8, "application/json")
+                Content = new StringContent(models, Encoding.UTF8, "application/json"),
             };
         });
         using var httpClient = new HttpClient(handler);
@@ -216,7 +216,7 @@ public sealed class OpenAiCompatiblePluginTests
             // Reading the reassigned-below modelsJson is the point (see comment above):
             // each call returns the server's current model list.
             // ReSharper disable once AccessToModifiedClosure
-            Content = new StringContent(modelsJson, Encoding.UTF8, "application/json")
+            Content = new StringContent(modelsJson, Encoding.UTF8, "application/json"),
         });
         using var httpClient = new HttpClient(handler);
         var sut = new OpenAiCompatiblePlugin(httpClient);
@@ -249,12 +249,12 @@ public sealed class OpenAiCompatiblePluginTests
             return path.EndsWith("/chat/completions", StringComparison.Ordinal)
                 ? new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                    Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
                 }
                 : new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(
-                        """{"data":[{"id":"m1"}]}""", Encoding.UTF8, "application/json")
+                        """{"data":[{"id":"m1"}]}""", Encoding.UTF8, "application/json"),
                 };
         });
         using var httpClient = new HttpClient(handler);
@@ -289,7 +289,7 @@ public sealed class OpenAiCompatiblePluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

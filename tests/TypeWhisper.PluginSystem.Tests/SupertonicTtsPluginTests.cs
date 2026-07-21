@@ -125,13 +125,13 @@ public class SupertonicTtsPluginTests
             calls.Add(request.RequestUri!.ToString());
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent("payload"u8.ToArray())
+                Content = new ByteArrayContent("payload"u8.ToArray()),
             };
         });
         var files = new[]
         {
             new SupertonicAssetFile("onnx/a.onnx", "https://example.test/a.onnx", 1),
-            new SupertonicAssetFile("voice_styles/M1.json", "https://example.test/M1.json", 1)
+            new SupertonicAssetFile("voice_styles/M1.json", "https://example.test/M1.json", 1),
         };
         using var httpClient = new HttpClient(handler);
         var sut = new SupertonicAssetManager(tempDir, httpClient, files, "https://example.test/LICENSE");
@@ -170,7 +170,7 @@ public class SupertonicTtsPluginTests
                 SupertonicTtsPlugin.LicenseAcceptedSettingName,
                 SupertonicTtsPlugin.SelectedVoiceSettingName,
                 SupertonicTtsPlugin.SpeedSettingName,
-                SupertonicTtsPlugin.DenoisingStepsSettingName
+                SupertonicTtsPlugin.DenoisingStepsSettingName,
             ],
             keys);
 
@@ -237,7 +237,7 @@ public class SupertonicTtsPluginTests
         {
             var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent("short"u8.ToArray())
+                Content = new ByteArrayContent("short"u8.ToArray()),
             };
             response.Content.Headers.ContentLength = 4096; // server claims more than it sent
             return response;
@@ -379,7 +379,7 @@ public class SupertonicTtsPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

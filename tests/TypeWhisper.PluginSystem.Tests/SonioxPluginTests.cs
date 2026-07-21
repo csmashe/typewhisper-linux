@@ -315,7 +315,7 @@ public class SonioxPluginTests
     {
         var host = new TestPluginHostServices
         {
-            StoreSecretException = new InvalidOperationException("store failed")
+            StoreSecretException = new InvalidOperationException("store failed"),
         };
         var sut = new SonioxPlugin();
         await sut.ActivateAsync(host);
@@ -643,7 +643,7 @@ public class SonioxPluginTests
     private static HttpResponseMessage JsonResponse(string json, HttpStatusCode statusCode = HttpStatusCode.OK) =>
         new(statusCode)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
 
     private sealed class SonioxFlowHandler(Action<string> inspectCreateBody) : HttpMessageHandler
@@ -705,7 +705,7 @@ public class SonioxPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

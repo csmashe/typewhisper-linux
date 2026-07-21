@@ -18,7 +18,7 @@ public class GroqPluginTests
 {
     private static readonly JsonSerializerOptions s_manifestJsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
     };
 
     [Fact]
@@ -82,7 +82,7 @@ public class GroqPluginTests
             new List<FetchedLlmModel>
             {
                 new("openai/gpt-oss-120b", "OpenAI"),
-                new("llama-3.1-8b-instant", "Meta")
+                new("llama-3.1-8b-instant", "Meta"),
             }
         );
         host.SetSetting("selectedLlmModel", "whisper-large-v3");
@@ -300,7 +300,7 @@ public class GroqPluginTests
                 capturedBody = body;
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                    Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
                 };
             }
         );
@@ -359,7 +359,7 @@ public class GroqPluginTests
     {
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
     }
 
@@ -383,7 +383,7 @@ public class GroqPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

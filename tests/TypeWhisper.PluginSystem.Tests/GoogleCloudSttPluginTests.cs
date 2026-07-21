@@ -50,7 +50,7 @@ public class GoogleCloudSttPluginTests
             .ReturnsAsync(
                 new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent("{\"results\":[]}")
+                    Content = new StringContent("{\"results\":[]}"),
                 }
             );
 

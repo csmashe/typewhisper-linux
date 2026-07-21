@@ -29,7 +29,7 @@ public sealed class PackageInstaller
     [
         new("dnf", "dnf", ["install", "-y"]), new("apt", "apt-get", ["install", "-y"]),
         new("pacman", "pacman", ["-S", "--noconfirm"]),
-        new("zypper", "zypper", ["--non-interactive", "install"])
+        new("zypper", "zypper", ["--non-interactive", "install"]),
     ];
 
     private readonly IProcessRunner _runner;
@@ -189,7 +189,7 @@ public sealed class PackageInstaller
             "debian" or "ubuntu" or "linuxmint" or "pop" or "raspbian" => "apt",
             "arch" or "manjaro" or "endeavouros" or "garuda" or "cachyos" => "pacman",
             "opensuse" or "opensuse-leap" or "opensuse-tumbleweed" or "sles" or "suse" => "zypper",
-            _ => null
+            _ => null,
         };
     }
 

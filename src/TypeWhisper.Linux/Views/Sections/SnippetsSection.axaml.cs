@@ -36,7 +36,7 @@ public partial class SnippetsSection : UserControl
                     Title = Loc.Instance["Dialog.ExportSnippets"],
                     SuggestedFileName = "typewhisper-snippets.json",
                     DefaultExtension = "json",
-                    FileTypeChoices = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }]
+                    FileTypeChoices = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }],
                 }
             );
 
@@ -73,7 +73,7 @@ public partial class SnippetsSection : UserControl
                 {
                     Title = Loc.Instance["Dialog.ImportSnippets"],
                     AllowMultiple = false,
-                    FileTypeFilter = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }]
+                    FileTypeFilter = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }],
                 }
             );
 

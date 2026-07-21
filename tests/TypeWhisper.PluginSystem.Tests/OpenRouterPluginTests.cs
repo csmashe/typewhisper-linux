@@ -70,7 +70,7 @@ public class OpenRouterPluginTests
         host.SetSetting("fetchedTranscriptionModels", new List<OpenRouterFetchedModel>
         {
             new("z/stt", "Zulu STT", "0.000002", "0"),
-            new("a/stt", "Alpha STT", "0", "0")
+            new("a/stt", "Alpha STT", "0", "0"),
         });
         host.SetSetting("selectedTranscriptionModel", "missing/stt");
 
@@ -159,7 +159,7 @@ public class OpenRouterPluginTests
         host.SetSetting("fetchedModels", new List<OpenRouterFetchedModel>
         {
             new("z/model", "Z Model", "0.000002", "0.000003"),
-            new("a/model", "A Model", "0", "0")
+            new("a/model", "A Model", "0", "0"),
         });
         host.SetSetting("selectedLlmModel", "missing/model");
 
@@ -542,7 +542,7 @@ public class OpenRouterPluginTests
                 request.RequestUri?.ToString());
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -575,7 +575,7 @@ public class OpenRouterPluginTests
             {
                 Content = new StringContent(
                     "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n",
-                    Encoding.UTF8, "text/event-stream")
+                    Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -637,7 +637,7 @@ public class OpenRouterPluginTests
                 "selectedLlmModel",
                 "llmTemperatureMode",
                 "llmTemperatureValue",
-                "streamResponses"
+                "streamResponses",
             ],
             keys);
     }
@@ -755,7 +755,7 @@ public class OpenRouterPluginTests
                           ]
                         }
                         """),
-                _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
             };
         });
 
@@ -809,7 +809,7 @@ public class OpenRouterPluginTests
     private static HttpResponseMessage JsonResponse(string json) =>
         new(HttpStatusCode.OK)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
 
     private sealed class CapturingHandler(
@@ -830,7 +830,7 @@ public class OpenRouterPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

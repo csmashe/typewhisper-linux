@@ -353,7 +353,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         {
             _watcher = new FileSystemWatcher(InputDir, "event*")
             {
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.CreationTime
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.CreationTime,
             };
             _watcher.Created += OnDeviceCreated;
             _watcher.Deleted += OnDeviceDeleted;

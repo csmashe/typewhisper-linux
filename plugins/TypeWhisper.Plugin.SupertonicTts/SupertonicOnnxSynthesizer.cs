@@ -114,6 +114,7 @@ internal sealed partial class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
                 NamedOnnxValue.CreateFromTensor("latent_mask", new DenseTensor<float>(latentMask, new[] { 1, 1, latentLength })),
                 // ReSharper disable once UseCollectionExpression -- explicit int[]/float[] keeps the DenseTensor constructor overload unambiguous.
                 NamedOnnxValue.CreateFromTensor("total_step", new DenseTensor<float>(new[] { (float)totalSteps }, new[] { 1 })),
+                // ReSharper disable once UseCollectionExpression -- explicit int[]/float[] keeps the DenseTensor constructor overload unambiguous.
                 NamedOnnxValue.CreateFromTensor("current_step", new DenseTensor<float>(new[] { (float)step }, new[] { 1 })),
             ]);
             latent = vectorOutputs.First(output => output.Name == "denoised_latent").AsTensor<float>().ToArray();

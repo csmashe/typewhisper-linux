@@ -611,6 +611,7 @@ public class CudaRuntimeProvisioner
 
     private bool IsResolvableOnSystem(string soname)
     {
+        // ReSharper disable once InlineTemporaryVariable -- the pattern binding carries the non-null narrowing; inlining it reads worse.
         if (SystemLibraryProbeForTests is { } probe)
             return probe(soname);
 

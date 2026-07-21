@@ -38,7 +38,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         "waterfox",
         "zen",
         "zen-browser",
-        "zen-bin"
+        "zen-bin",
     };
 
     private static readonly string[] s_browserAppNameHints =
@@ -54,7 +54,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         "firefox",
         "waterfox",
         "zen browser",
-        "zen"
+        "zen",
     ];
 
     private readonly AtSpiUrlExtractor _atSpiUrlExtractor;
@@ -521,7 +521,7 @@ public sealed class ActiveWindowService : IActiveWindowService
             using var p = Process.Start(
                 new ProcessStartInfo(command, args)
                 {
-                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
+                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
                 }
             );
             p?.WaitForExit(1000);
@@ -548,7 +548,7 @@ public sealed class ActiveWindowService : IActiveWindowService
             using var p = Process.Start(
                 new ProcessStartInfo(fileName, args)
                 {
-                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
+                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
                 }
             );
             if (p is null)
@@ -594,7 +594,7 @@ public sealed class ActiveWindowService : IActiveWindowService
                     RedirectStandardInput = true,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
-                    UseShellExecute = false
+                    UseShellExecute = false,
                 }
             );
             if (p is null)

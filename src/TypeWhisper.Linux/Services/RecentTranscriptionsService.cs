@@ -148,7 +148,7 @@ public sealed class RecentTranscriptionsService
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             InsertionResult.MissingPasteTool => _commands.GetSnapshot().PasteToolInstallHint,
             InsertionResult.Failed => "Text insertion failed.",
-            _ => "Done."
+            _ => "Done.",
         };
     }
 

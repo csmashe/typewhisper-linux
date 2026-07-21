@@ -67,7 +67,7 @@ public class Reson8PluginTests
         host.SetSetting("customAuthHeader", "X-Api-Key");
         host.SetSetting("fetchedCustomModels", new[]
         {
-            new Reson8CustomModel("domain-model", "Domain Model", "Support vocabulary", 42)
+            new Reson8CustomModel("domain-model", "Domain Model", "Support vocabulary", 42),
         });
 
         var sut = new Reson8Plugin();
@@ -121,7 +121,7 @@ public class Reson8PluginTests
     {
         var host = new TestPluginHostServices
         {
-            StoreSecretException = new InvalidOperationException("store failed")
+            StoreSecretException = new InvalidOperationException("store failed"),
         };
         var sut = new Reson8Plugin();
         await sut.ActivateAsync(host);
@@ -195,7 +195,7 @@ public class Reson8PluginTests
             HttpStatusCode.InternalServerError,
             HttpStatusCode.MethodNotAllowed,
             HttpStatusCode.Forbidden,
-            HttpStatusCode.Unauthorized
+            HttpStatusCode.Unauthorized,
         ]);
         var handler = new CapturingHandler((_, _) =>
             JsonResponse("""{ "message": "probe" }""", statuses.Dequeue()));
@@ -232,7 +232,7 @@ public class Reson8PluginTests
         host.SetSetting("selectedModel", "domain-model");
         host.SetSetting("fetchedCustomModels", new[]
         {
-            new Reson8CustomModel("domain-model", "Domain Model", null, null)
+            new Reson8CustomModel("domain-model", "Domain Model", null, null),
         });
 
         using var httpClient = new HttpClient(handler);
@@ -287,7 +287,7 @@ public class Reson8PluginTests
             HttpStatusCode.NotFound,
             HttpStatusCode.RequestEntityTooLarge,
             HttpStatusCode.TooManyRequests,
-            HttpStatusCode.InternalServerError
+            HttpStatusCode.InternalServerError,
         ]);
         var handler = new CapturingHandler((_, _) =>
             JsonResponse("""{ "code": "ERR", "message": "details" }""", statuses.Dequeue()));
@@ -433,7 +433,7 @@ public class Reson8PluginTests
         HttpStatusCode statusCode = HttpStatusCode.OK) =>
         new(statusCode)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
 
     private sealed class CapturingHandler(
@@ -454,7 +454,7 @@ public class Reson8PluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

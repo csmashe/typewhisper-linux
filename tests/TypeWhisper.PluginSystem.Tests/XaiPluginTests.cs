@@ -171,7 +171,7 @@ public class XaiPluginTests
             Assert.Equal("https://api.x.ai/v1/responses", request.RequestUri?.ToString());
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -249,7 +249,7 @@ public class XaiPluginTests
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
@@ -614,7 +614,7 @@ public class XaiPluginTests
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent([0, 1, 2, 3])
+                Content = new ByteArrayContent([0, 1, 2, 3]),
             };
         });
 
@@ -649,7 +649,7 @@ public class XaiPluginTests
             requestCount++;
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent([0, 1, 2, 3])
+                Content = new ByteArrayContent([0, 1, 2, 3]),
             };
         });
 
@@ -683,7 +683,7 @@ public class XaiPluginTests
                 "selectedVoice",
                 "customVoiceId",
                 "ttsLowLatency",
-                "ttsTextNormalization"
+                "ttsTextNormalization",
             ],
             keys);
     }
@@ -721,7 +721,7 @@ public class XaiPluginTests
                 "https://api.x.ai/v1/tts/voices" => JsonResponse("""
                     { "voices": [ { "voice_id": "leo", "name": "Leo" } ] }
                     """),
-                _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
             });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
@@ -752,7 +752,7 @@ public class XaiPluginTests
     private static HttpResponseMessage JsonResponse(string json) =>
         new(HttpStatusCode.OK)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
 
     private sealed class CapturingHandler(
@@ -773,7 +773,7 @@ public class XaiPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

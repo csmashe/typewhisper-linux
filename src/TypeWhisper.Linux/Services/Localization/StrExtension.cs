@@ -33,7 +33,7 @@ public sealed class StrExtension : MarkupExtension
             Source = Loc.Instance,
             Mode = BindingMode.OneWay,
             Converter = LocKeyConverter.Instance,
-            ConverterParameter = Key
+            ConverterParameter = Key,
         };
     }
 }

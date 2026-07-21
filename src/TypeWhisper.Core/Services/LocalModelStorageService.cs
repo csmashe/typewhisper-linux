@@ -26,8 +26,8 @@ public sealed class LocalModelStorageService
                 "hf-cache",
                 ".setup-complete",
                 "python-embed.zip",
-                "get-pip.py"
-            ]
+                "get-pip.py",
+            ],
         };
 
     private readonly ISettingsService _settings;

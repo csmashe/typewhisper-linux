@@ -207,7 +207,7 @@ public sealed class TransformSelectionService
                 StatusText = Localization.Loc.Instance["Overlay.TransformPrompt"],
                 PartialText = selectedText,
                 ActiveAppName = string.IsNullOrWhiteSpace(processName) ? windowTitle : processName,
-                SessionStartedAtUtc = DateTime.UtcNow
+                SessionStartedAtUtc = DateTime.UtcNow,
             }
         );
     }
@@ -233,7 +233,7 @@ public sealed class TransformSelectionService
                 ActiveAppName = string.IsNullOrWhiteSpace(session.ProcessName)
                     ? session.WindowTitle
                     : session.ProcessName,
-                SessionStartedAtUtc = null
+                SessionStartedAtUtc = null,
             }
         );
 
@@ -390,7 +390,7 @@ public sealed class TransformSelectionService
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             _ =>
                 "Focus changed while transforming, and the transformed text could not be copied. "
-                + "The original selection was left alone."
+                + "The original selection was left alone.",
         };
         await ShowWarningAsync(message);
     }
@@ -415,7 +415,7 @@ public sealed class TransformSelectionService
                 ShowFeedback = false,
                 FeedbackText = null,
                 IsRecording = false,
-                SessionStartedAtUtc = null
+                SessionStartedAtUtc = null,
             }
         );
     }
@@ -428,7 +428,7 @@ public sealed class TransformSelectionService
             ShowFeedback = true,
             FeedbackIsError = isError,
             FeedbackText = message,
-            StatusText = message
+            StatusText = message,
         });
     }
 

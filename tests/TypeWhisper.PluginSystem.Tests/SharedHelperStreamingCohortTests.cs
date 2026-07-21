@@ -90,7 +90,7 @@ public sealed class SharedHelperStreamingCohortTests
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "test-key" } };
@@ -239,7 +239,7 @@ public sealed class SharedHelperStreamingCohortTests
             capturedUrl = request.RequestUri?.ToString();
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -268,7 +268,7 @@ public sealed class SharedHelperStreamingCohortTests
         {
             Content = new StringContent(
                 """{"choices":[{"message":{"content":"bulk"}}]}""",
-                Encoding.UTF8, "application/json")
+                Encoding.UTF8, "application/json"),
         });
 
         var host = new TestPluginHostServices { Secrets = { [secretKey] = "test-key" } };
@@ -294,7 +294,7 @@ public sealed class SharedHelperStreamingCohortTests
     {
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "test-key" } };
@@ -328,7 +328,7 @@ public sealed class SharedHelperStreamingCohortTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

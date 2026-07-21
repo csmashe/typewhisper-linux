@@ -49,7 +49,7 @@ public sealed class ClaudePluginTests
             Assert.Equal("https://api.anthropic.com/v1/messages", request.RequestUri?.ToString());
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -79,7 +79,7 @@ public sealed class ClaudePluginTests
         {
             Content = new StringContent(
                 """{"content":[{"type":"text","text":"bulk"}]}""",
-                Encoding.UTF8, "application/json")
+                Encoding.UTF8, "application/json"),
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-ant-test" } };
@@ -116,7 +116,7 @@ public sealed class ClaudePluginTests
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-ant-test" } };
@@ -179,7 +179,7 @@ public sealed class ClaudePluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

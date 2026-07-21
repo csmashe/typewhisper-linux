@@ -15,7 +15,7 @@ public sealed partial class IdeFileReferenceService
         "tag ",
         "file tag ",
         "file reference ",
-        "reference "
+        "reference ",
     ];
 
     private static readonly string[] s_plainReferencePrefixes = ["file ", "open file "];
@@ -39,7 +39,7 @@ public sealed partial class IdeFileReferenceService
         ["json"] = "json",
         ["yaml"] = "yaml",
         ["yml"] = "yml",
-        ["env"] = "env"
+        ["env"] = "env",
     };
 
     public static string ToFileReference(string spokenText)

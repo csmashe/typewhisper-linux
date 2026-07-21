@@ -101,8 +101,8 @@ public partial class HistorySection : UserControl
                         new FilePickerFileType("Text") { Patterns = ["*.txt"] },
                         new FilePickerFileType("CSV") { Patterns = ["*.csv"] },
                         new FilePickerFileType("Markdown") { Patterns = ["*.md"] },
-                        new FilePickerFileType("JSON") { Patterns = ["*.json"] }
-                    ]
+                        new FilePickerFileType("JSON") { Patterns = ["*.json"] },
+                    ],
                 }
             );
 

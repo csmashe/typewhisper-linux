@@ -642,7 +642,7 @@ public sealed class DictationOrchestrator : IDisposable
                     StatusText = Localization.Loc.Instance["Dictation.StatusRecording"],
                     ActiveProfileName = null,
                     ActiveAppName = null,
-                    SessionStartedAtUtc = DateTime.UtcNow
+                    SessionStartedAtUtc = DateTime.UtcNow,
                 }
             );
 
@@ -796,7 +796,7 @@ public sealed class DictationOrchestrator : IDisposable
                                 "kde" => "kwin",
                                 "hyprland" => "hyprland",
                                 "sway" => "sway",
-                                _ => "xdotool"
+                                _ => "xdotool",
                             },
                             "No active-window provider returned a snapshot"
                         );
@@ -1123,7 +1123,7 @@ public sealed class DictationOrchestrator : IDisposable
                 nameof(discardReason),
                 discardReason,
                 "Only discard outcomes can be reported."
-            )
+            ),
         };
         var message = Localization.Loc.Instance[messageKey];
 
@@ -1291,7 +1291,7 @@ public sealed class DictationOrchestrator : IDisposable
                                 IsRecording = false,
                                 StatusText = Localization.Loc.Instance["Overlay.Canceled"],
                                 PartialText = null,
-                                SessionStartedAtUtc = null
+                                SessionStartedAtUtc = null,
                             }
                         );
                         StatusMessage?.Invoke(this, "Canceled");
@@ -1300,7 +1300,7 @@ public sealed class DictationOrchestrator : IDisposable
                             {
                                 DurationSeconds = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(
                                     wav
-                                )
+                                ),
                             }
                         );
                         _ = await TeardownStreamingSessionAsync(
@@ -1322,7 +1322,7 @@ public sealed class DictationOrchestrator : IDisposable
                             FeedbackIsError = false,
                             IsRecording = false,
                             StatusText = Localization.Loc.Instance["Overlay.Processing"],
-                            SessionStartedAtUtc = null
+                            SessionStartedAtUtc = null,
                         }
                     );
                     var duration = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav);
@@ -1393,7 +1393,7 @@ public sealed class DictationOrchestrator : IDisposable
                         recordingContext = recordingContext with
                         {
                             StreamingFinalText = streamingFinalText,
-                            StreamingFaulted = streamingFaulted
+                            StreamingFaulted = streamingFaulted,
                         };
                     }
 
@@ -1816,7 +1816,7 @@ public sealed class DictationOrchestrator : IDisposable
                 _models.PluginManager.EventBus.Publish(
                     new TranscriptionFailedEvent
                     {
-                        ErrorMessage = ex.Message, ModelId = engineModelId, AppName = context.AppTitle
+                        ErrorMessage = ex.Message, ModelId = engineModelId, AppName = context.AppTitle,
                     }
                 );
                 ReportStatus(context, $"Transcription failed: {ex.Message}");
@@ -1955,7 +1955,7 @@ public sealed class DictationOrchestrator : IDisposable
                 ActiveAppName = context.AppTitle,
                 ActiveAppProcessName = context.AppProcess,
                 ProfileName = context.Profile?.Name,
-                AudioDurationSeconds = duration
+                AudioDurationSeconds = duration,
             };
 
             var promptAction = ResolvePromptAction(context);
@@ -2049,7 +2049,7 @@ public sealed class DictationOrchestrator : IDisposable
                             status == "AI" ? "Processing prompt action…" : $"Processing {status}…"
                         );
                         return Task.CompletedTask;
-                    }
+                    },
                 },
                 cancelToken
             );
@@ -2086,7 +2086,7 @@ public sealed class DictationOrchestrator : IDisposable
                     ProfileName = context.Profile?.Name,
                     AppName = context.AppTitle,
                     AppProcessName = context.AppProcess,
-                    Url = context.AppUrl
+                    Url = context.AppUrl,
                 }
             );
             PublishSessionResult(
@@ -2243,7 +2243,7 @@ public sealed class DictationOrchestrator : IDisposable
                         "Text insertion failed. Dictated text could not be copied or pasted.",
                     InsertionResult.NoText when commandResult.CancelInsertion =>
                         "Dictation canceled.",
-                    _ => "Done."
+                    _ => "Done.",
                 };
                 var isError =
                     insertion
@@ -2362,7 +2362,7 @@ public sealed class DictationOrchestrator : IDisposable
             _models.PluginManager.EventBus.Publish(
                 new TranscriptionFailedEvent
                 {
-                    ErrorMessage = ex.Message, ModelId = engineModelId, AppName = context.AppTitle
+                    ErrorMessage = ex.Message, ModelId = engineModelId, AppName = context.AppTitle,
                 }
             );
             ReportStatus(context, $"Transcription failed: {ex.Message}");
@@ -2413,7 +2413,7 @@ public sealed class DictationOrchestrator : IDisposable
                 _models.PluginManager.EventBus.Publish(
                     new LlmResponseTokenEvent
                     {
-                        AccumulatedText = accumulated, StepName = PostProcessingStepNames.Llm
+                        AccumulatedText = accumulated, StepName = PostProcessingStepNames.Llm,
                     });
             });
 
@@ -2439,7 +2439,7 @@ public sealed class DictationOrchestrator : IDisposable
                     AccumulatedText = result,
                     IsFinal = true,
                     Faulted = pump.Faulted,
-                    StepName = PostProcessingStepNames.Llm
+                    StepName = PostProcessingStepNames.Llm,
                 });
 
             return result;
@@ -2646,7 +2646,7 @@ public sealed class DictationOrchestrator : IDisposable
                             ShowFeedback = false,
                             FeedbackText = null,
                             LlmResponseText = null,
-                            PartialText = null
+                            PartialText = null,
                         }
                     );
                     // Re-activate the window the command was issued from before typing the first
@@ -2991,7 +2991,7 @@ public sealed class DictationOrchestrator : IDisposable
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             InsertionResult.MissingPasteTool =>
                 $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
-            _ => "Text insertion failed. Command result could not be inserted."
+            _ => "Text insertion failed. Command result could not be inserted.",
         };
         var isError =
             insertion
@@ -3051,7 +3051,7 @@ public sealed class DictationOrchestrator : IDisposable
             Id = id,
             Name = "Spoken command",
             SystemPrompt = systemPrompt,
-            ProviderOverride = _settings.Current.SpokenCommandLlmProvider
+            ProviderOverride = _settings.Current.SpokenCommandLlmProvider,
         };
     }
 
@@ -3148,7 +3148,7 @@ public sealed class DictationOrchestrator : IDisposable
                 $"Copied to clipboard. {_commands.GetSnapshot().PasteToolInstallHint}",
             InsertionFailureReason.FocusFailed =>
                 "Copied to clipboard. Target window could not be focused for auto-paste — paste with Ctrl+V.",
-            _ => "Copied to clipboard (paste with Ctrl+V)."
+            _ => "Copied to clipboard (paste with Ctrl+V).",
         };
     }
 
@@ -3200,7 +3200,7 @@ public sealed class DictationOrchestrator : IDisposable
                 ActionId = actionPlugin.ActionId,
                 Success = result.Success,
                 Message = result.Message,
-                AppName = context.AppTitle
+                AppName = context.AppTitle,
             }
         );
 
@@ -3339,7 +3339,7 @@ public sealed class DictationOrchestrator : IDisposable
             ProfileName = context.Profile?.Name,
             EngineUsed = engine,
             ModelUsed = modelUsed,
-            AudioFileName = Path.GetFileName(wavPath)
+            AudioFileName = Path.GetFileName(wavPath),
         };
     }
 
@@ -3384,7 +3384,7 @@ public sealed class DictationOrchestrator : IDisposable
                     CleanupLevelUsed = CleanupLevel.None,
                     PromptActionApplied = true,
                     IsSpokenCommand = true,
-                    LlmCalls = context.Capture?.Calls ?? []
+                    LlmCalls = context.Capture?.Calls ?? [],
                 }
             );
         }
@@ -3449,7 +3449,7 @@ public sealed class DictationOrchestrator : IDisposable
                         pipelineResult,
                         PostProcessingStepNames.Translation
                     ),
-                    LlmCalls = context.Capture?.Calls ?? []
+                    LlmCalls = context.Capture?.Calls ?? [],
                 }
             );
         }
@@ -3473,7 +3473,7 @@ public sealed class DictationOrchestrator : IDisposable
             InsertionResult.MissingClipboardTool => TextInsertionStatus.MissingClipboardTool,
             InsertionResult.MissingPasteTool => TextInsertionStatus.MissingPasteTool,
             InsertionResult.Failed => TextInsertionStatus.Failed,
-            _ => TextInsertionStatus.Unknown
+            _ => TextInsertionStatus.Unknown,
         };
     }
 
@@ -3501,7 +3501,7 @@ public sealed class DictationOrchestrator : IDisposable
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             InsertionResult.MissingPasteTool => "Automatic paste tool is unavailable.",
             InsertionResult.Failed => "Text insertion failed.",
-            _ => null
+            _ => null,
         };
     }
 
@@ -3574,7 +3574,7 @@ public sealed class DictationOrchestrator : IDisposable
                 IsRecording = false,
                 ActiveProfileName = null,
                 ActiveAppName = null,
-                SessionStartedAtUtc = null
+                SessionStartedAtUtc = null,
             }
         );
 
@@ -3695,7 +3695,7 @@ public sealed class DictationOrchestrator : IDisposable
                 StatusText = Localization.Loc.Instance["Overlay.Ready"],
                 ActiveProfileName = null,
                 ActiveAppName = null,
-                SessionStartedAtUtc = null
+                SessionStartedAtUtc = null,
             }
         );
     }
@@ -4200,7 +4200,7 @@ public sealed class DictationOrchestrator : IDisposable
                 ElapsedSeconds =
                     _recordingStart == default
                         ? 0
-                        : Math.Max(0, (DateTime.UtcNow - _recordingStart).TotalSeconds)
+                        : Math.Max(0, (DateTime.UtcNow - _recordingStart).TotalSeconds),
             }
         );
 

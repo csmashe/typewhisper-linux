@@ -634,7 +634,7 @@ public partial class SherpaOnnxPluginTests
         Directory.CreateDirectory(dir);
         foreach (var f in new[]
                  {
-                     "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"
+                     "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt",
                  })
             File.WriteAllText(Path.Join(dir, f), "dummy");
     }

@@ -71,7 +71,7 @@ public sealed class HttpApiService : IDisposable
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         PropertyNameCaseInsensitive = true,
-        WriteIndented = false
+        WriteIndented = false,
     };
 
     private readonly AudioFileService _audioFiles;
@@ -232,7 +232,7 @@ public sealed class HttpApiService : IDisposable
             activeBackend = FormatAccelerationBackend(status.ActiveBackend),
             displayText = status.DisplayText,
             detail = status.Detail,
-            requiresRestart = status.RequiresRestart
+            requiresRestart = status.RequiresRestart,
         };
     }
 
@@ -418,7 +418,7 @@ public sealed class HttpApiService : IDisposable
                     await HandlePutDictionaryCorrectionAsync(request, ct),
                 ("/v1/dictionary/corrections", "DELETE") =>
                     await HandleDeleteDictionaryCorrectionAsync(request, ct),
-                _ => (404, Serialize(new { error = "Not found" }))
+                _ => (404, Serialize(new { error = "Not found" })),
             };
 
             await WriteJsonAsync(response, statusCode, body, allowedOrigin, ct);
@@ -473,7 +473,7 @@ public sealed class HttpApiService : IDisposable
                     apiVersion = "1.0",
                     supportsStreaming = plugin?.SupportsStreaming ?? false,
                     supportsTranslation = plugin?.SupportsTranslation ?? false,
-                    acceleration = BuildAccelerationDto(plugin, _settings.Current)
+                    acceleration = BuildAccelerationDto(plugin, _settings.Current),
                 }
             )
         );
@@ -484,7 +484,7 @@ public sealed class HttpApiService : IDisposable
         return backend switch
         {
             TranscriptionAccelerationBackend.NvidiaCuda => "nvidia-cuda",
-            _ => "cpu"
+            _ => "cpu",
         };
     }
 
@@ -507,7 +507,7 @@ public sealed class HttpApiService : IDisposable
                     active = _models.ActiveModelId == id,
                     status = _models.IsDownloaded(id) ? "ready"
                         : engine.SupportsModelDownload ? "not_downloaded"
-                        : "not_configured"
+                        : "not_configured",
                 };
             })
         );
@@ -724,7 +724,7 @@ public sealed class HttpApiService : IDisposable
                 VocabularyBooster = settings.VocabularyBoostingEnabled
                     ? _vocabularyBoosting.Apply
                     : null,
-                DictionaryCorrector = _dictionary.ApplyCorrections
+                DictionaryCorrector = _dictionary.ApplyCorrections,
             },
             ct
         );
@@ -766,8 +766,8 @@ public sealed class HttpApiService : IDisposable
                         model = selectedModelId,
                         segments = result.Segments.Select(segment => new
                         {
-                            text = segment.Text, start = segment.Start, end = segment.End
-                        })
+                            text = segment.Text, start = segment.Start, end = segment.End,
+                        }),
                     }
                 )
             );
@@ -783,7 +783,7 @@ public sealed class HttpApiService : IDisposable
                     duration = result.DurationSeconds,
                     noSpeechProbability = result.NoSpeechProbability,
                     engine = engineProviderId,
-                    model = selectedModelId
+                    model = selectedModelId,
                 }
             )
         );
@@ -816,7 +816,7 @@ public sealed class HttpApiService : IDisposable
                 engine = record.EngineUsed,
                 model = record.ModelUsed,
                 profile = record.ProfileName,
-                words = record.WordCount
+                words = record.WordCount,
             });
 
         return (
@@ -853,7 +853,7 @@ public sealed class HttpApiService : IDisposable
             translationTarget = profile.TranslationTarget,
             selectedTask = profile.SelectedTask,
             modelOverride = profile.TranscriptionModelOverride,
-            promptActionId = profile.PromptActionId
+            promptActionId = profile.PromptActionId,
         });
 
         return (200, Serialize(new { profiles }));
@@ -929,7 +929,7 @@ public sealed class HttpApiService : IDisposable
                         durationSeconds = stored.DurationSeconds,
                         engine = stored.EngineUsed,
                         model = stored.ModelUsed,
-                        message = stored.Message
+                        message = stored.Message,
                     }
                 )
             );
@@ -963,7 +963,7 @@ public sealed class HttpApiService : IDisposable
                 {
                     state = _dictation.IsRecording ? "recording" : "idle",
                     isRecording = _dictation.IsRecording,
-                    activeModel = _models.ActiveModelId
+                    activeModel = _models.ActiveModelId,
                 }
             )
         );
@@ -1061,9 +1061,9 @@ public sealed class HttpApiService : IDisposable
                 {
                     corrections = corrections.Select(c => new
                     {
-                        original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive
+                        original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive,
                     }),
-                    count = corrections.Count
+                    count = corrections.Count,
                 }
             )
         );
@@ -1121,9 +1121,9 @@ public sealed class HttpApiService : IDisposable
                 {
                     corrections = corrections.Select(c => new
                     {
-                        original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive
+                        original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive,
                     }),
-                    count = corrections.Count
+                    count = corrections.Count,
                 }
             )
         );
@@ -1172,9 +1172,9 @@ public sealed class HttpApiService : IDisposable
                     deleted,
                     corrections = corrections.Select(c => new
                     {
-                        original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive
+                        original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive,
                     }),
-                    count = corrections.Count
+                    count = corrections.Count,
                 }
             )
         );
@@ -1247,7 +1247,7 @@ public sealed class HttpApiService : IDisposable
                 $"Ambiguous model '{requestedModel}': provided by multiple engines. "
                     + "Specify the engine explicitly or use the full plugin-qualified model id."
             ),
-            _ => ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), requestedModel)
+            _ => ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), requestedModel),
         };
     }
 

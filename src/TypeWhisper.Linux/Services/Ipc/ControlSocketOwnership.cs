@@ -13,7 +13,7 @@ internal enum ControlSocketCleanupResult
     Removed,
     Live,
     Indeterminate,
-    OwnershipContended
+    OwnershipContended,
 }
 
 /// <summary>

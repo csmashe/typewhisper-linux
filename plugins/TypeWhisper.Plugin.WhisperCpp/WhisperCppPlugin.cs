@@ -786,8 +786,9 @@ public sealed class WhisperCppPlugin
             // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- local function kept near its point of use for readability.
             async IAsyncEnumerable<WhisperCppTranscriptionSegment> GetSegmentsAsync()
             {
-                // ReSharper disable once AccessToDisposedClosure -- GetSegmentsAsync is fully consumed within the await-using scope, so processor/audioStream stay alive throughout.
-                // ReSharper disable once AccessToDisposedClosure -- the closure runs within the using-scope, so the captured resource is still alive.
+                // AccumulateSegmentsAsync awaits this enumerable to completion before the
+                // await-using scope exits, so processor/audioStream stay alive throughout.
+                // ReSharper disable AccessToDisposedClosure
                 await foreach (var segment in processor.ProcessAsync(audioStream, ct))
                 {
                     yield return new WhisperCppTranscriptionSegment(
@@ -797,6 +798,7 @@ public sealed class WhisperCppPlugin
                         segment.NoSpeechProbability
                     );
                 }
+                // ReSharper restore AccessToDisposedClosure
             }
 
             return await AccumulateSegmentsAsync(GetSegmentsAsync(), threshold);

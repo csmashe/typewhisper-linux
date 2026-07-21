@@ -558,7 +558,7 @@ public class OpenAiPluginTests
                 "streamResponses",
                 "selectedVoice",
                 "ttsInstructions",
-                "forgetChatGptLogin"
+                "forgetChatGptLogin",
             ],
             keys);
     }
@@ -680,7 +680,7 @@ public class OpenAiPluginTests
 
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent([0, 1, 2, 3])
+                Content = new ByteArrayContent([0, 1, 2, 3]),
             });
         });
 
@@ -712,7 +712,7 @@ public class OpenAiPluginTests
             requestCount++;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent([0, 1, 2, 3])
+                Content = new ByteArrayContent([0, 1, 2, 3]),
             });
         });
 
@@ -1048,7 +1048,7 @@ public class OpenAiPluginTests
             0x80, 0x3e, 0, 0,  // sample rate 16000
             0, 0x7d, 0, 0,     // byte rate
             2, 0,      // block align
-            16, 0 // bits per sample
+            16, 0, // bits per sample
         };
         var listData = "INFO"u8.ToArray();  // 4 bytes ("INFO")
         var oddListPayload = new byte[] { 1, 2, 3 };  // odd size triggers pad
@@ -1248,7 +1248,7 @@ public class OpenAiPluginTests
             capturedBody = body;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             });
         });
 
@@ -1290,7 +1290,7 @@ public class OpenAiPluginTests
     private static HttpResponseMessage JsonResponse(string json) =>
         new(HttpStatusCode.OK)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
 
     private sealed class CapturingHandler(
@@ -1311,7 +1311,7 @@ public class OpenAiPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

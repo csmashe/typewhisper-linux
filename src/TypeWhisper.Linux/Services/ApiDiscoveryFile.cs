@@ -80,7 +80,7 @@ public sealed class ApiDiscoveryFile
             // UnixCreateMode is Linux/macOS-only — guard to avoid PNSE on Windows.
             var options = new FileStreamOptions
             {
-                Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None
+                Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None,
             };
 
             if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())

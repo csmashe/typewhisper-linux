@@ -228,6 +228,7 @@ public sealed class ScriptService
     {
         var (fileName, arguments) = ResolveShell(script);
 
+        // ReSharper disable once UseObjectOrCollectionInitializer -- the Environment entries are set after the core initializer for readability.
         var psi = new ProcessStartInfo
         {
             FileName = fileName,
