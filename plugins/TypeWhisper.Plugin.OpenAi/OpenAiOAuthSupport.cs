@@ -52,6 +52,9 @@ internal static class OpenAiOAuthClient
 
     private const string AuthorizeOriginator = "opencode";
 
+    private static readonly JsonSerializerOptions s_jsonReadOptions =
+        new() { PropertyNameCaseInsensitive = true };
+
     public static OpenAiPkceCodes GeneratePkceCodes()
     {
         var verifier = RandomOAuthString(64);
@@ -145,9 +148,7 @@ internal static class OpenAiOAuthClient
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException($"OpenAI token request failed with status {(int)response.StatusCode}: {json}");
 
-        return JsonSerializer.Deserialize<OpenAiOAuthTokenResponse>(
-            json,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+        return JsonSerializer.Deserialize<OpenAiOAuthTokenResponse>(json, s_jsonReadOptions)
             ?? throw new InvalidOperationException("OpenAI token response could not be parsed.");
     }
 

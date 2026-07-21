@@ -1134,7 +1134,7 @@ public sealed class WhisperCppPlugin
         );
     }
 
-    private ModelDefinition GetModel(string modelId) =>
+    private static ModelDefinition GetModel(string modelId) =>
         s_models.FirstOrDefault(model => model.Id == modelId)
         ?? throw new ArgumentException($"Unknown model: {modelId}");
 

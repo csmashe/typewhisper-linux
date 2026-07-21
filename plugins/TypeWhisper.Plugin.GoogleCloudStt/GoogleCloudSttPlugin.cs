@@ -216,7 +216,7 @@ public sealed class GoogleCloudSttPlugin
         {
             var billedStr = billedTime.GetString() ?? "";
             if (
-                billedStr.EndsWith("s")
+                billedStr.EndsWith('s')
                 && double.TryParse(
                     billedStr[..^1],
                     System.Globalization.NumberStyles.Float,

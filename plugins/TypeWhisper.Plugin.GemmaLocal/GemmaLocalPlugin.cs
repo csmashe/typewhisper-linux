@@ -381,7 +381,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
-    internal IReadOnlyList<GemmaModelDefinition> ModelDefinitions => s_models;
+    internal static IReadOnlyList<GemmaModelDefinition> ModelDefinitions => s_models;
 
     internal void SelectModel(string modelId)
     {

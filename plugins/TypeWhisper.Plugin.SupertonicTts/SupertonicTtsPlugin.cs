@@ -339,8 +339,7 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
 
     internal async Task DownloadAssetsAsync(IProgress<double>? progress, CancellationToken ct)
     {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(SupertonicTtsPlugin));
+        ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (!HasAcceptedModelLicense)
             throw new InvalidOperationException("The Supertonic 3 OpenRAIL-M license must be accepted before downloading model assets.");

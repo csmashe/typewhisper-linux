@@ -794,6 +794,10 @@ public class CudaRuntimeProvisioner
         }
     }
 
+    // Kept as DllImport: this file is shared-compiled into several plugin projects, so
+    // LibraryImport's generated string marshalling would require AllowUnsafeBlocks in every
+    // consumer. CharSet.Ansi marshals as UTF-8 on Linux — correct for these libc/libcuda paths.
+#pragma warning disable SYSLIB1054, CA2101
     [DllImport("libcuda.so.1", EntryPoint = "cuInit")]
     private static extern int cuInit(uint flags);
 
@@ -802,6 +806,7 @@ public class CudaRuntimeProvisioner
 
     [DllImport("libdl.so.2")]
     private static extern IntPtr dlerror();
+#pragma warning restore SYSLIB1054, CA2101
 
     private sealed record CudaWheel(
         string Package,

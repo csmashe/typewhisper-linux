@@ -43,6 +43,9 @@ public sealed class OpenAiPlugin
     private const string TemperatureModeProviderDefault = "providerDefault";
     private const string TemperatureModeCustom = "custom";
 
+    private static readonly JsonSerializerOptions s_jsonReadOptions =
+        new() { PropertyNameCaseInsensitive = true };
+
     private readonly HttpClient _httpClient;
     private readonly Func<byte[], ITtsPlaybackSession> _ttsPlaybackFactory;
     private readonly Func<bool> _ttsPlaybackAvailableProbe;
@@ -580,7 +583,7 @@ public sealed class OpenAiPlugin
             var json = await response.Content.ReadAsStringAsync(ct);
             var decoded = JsonSerializer.Deserialize<OpenAiModelsResponse>(
                 json,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                s_jsonReadOptions);
 
             return decoded?.Data
                 .Where(model => IsChatModel(model.Id))
@@ -703,7 +706,7 @@ public sealed class OpenAiPlugin
         var json = await File.ReadAllTextAsync(authFilePath);
         var store = JsonSerializer.Deserialize<OpenAiExistingLoginStore>(
             json,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            s_jsonReadOptions)
             ?? throw new InvalidOperationException("Existing login file could not be parsed.");
 
         var tokens = new OpenAiOAuthTokenResponse(

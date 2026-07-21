@@ -3,6 +3,7 @@
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
+using System.Buffers;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -17,7 +18,7 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
     private const string ApiKeySecretName = "api-key";
     private const string SelectedModelSettingName = "selectedModel";
 
-    private static readonly char[] s_invalidKeytermCharacters = ['<', '>', '{', '}', '[', ']', '\\'];
+    private static readonly SearchValues<char> s_invalidKeytermCharacters = SearchValues.Create("<>{}[]\\");
 
     private static readonly IReadOnlyList<ElevenLabsModelEntry> s_modelEntries =
     [
@@ -369,7 +370,7 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
             if (
                 term.Length == 0
                 || term.Length >= 50
-                || term.IndexOfAny(s_invalidKeytermCharacters) >= 0
+                || term.AsSpan().IndexOfAny(s_invalidKeytermCharacters) >= 0
                 || term.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length > 5
                 || !seen.Add(term)
             )

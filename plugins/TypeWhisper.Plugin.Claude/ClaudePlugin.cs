@@ -19,6 +19,9 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
     // the stable version that covers the Messages API used here.
     private const string AnthropicVersion = "2023-06-01";
 
+    private static readonly JsonSerializerOptions s_jsonOptions =
+        new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
     private bool _streamResponses = true;
@@ -78,10 +81,7 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
             messages = new[] { new { role = "user", content = userText } },
         };
 
-        var json = JsonSerializer.Serialize(
-            requestBody,
-            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }
-        );
+        var json = JsonSerializer.Serialize(requestBody, s_jsonOptions);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/messages");
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -136,10 +136,7 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
             messages = new[] { new { role = "user", content = userText } },
         };
 
-        var json = JsonSerializer.Serialize(
-            requestBody,
-            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }
-        );
+        var json = JsonSerializer.Serialize(requestBody, s_jsonOptions);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/messages");
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -304,7 +301,7 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
         }
     }
 
-    internal bool ValidateApiKeyFormat(string apiKey)
+    internal static bool ValidateApiKeyFormat(string apiKey)
     {
         return !string.IsNullOrWhiteSpace(apiKey) && apiKey.StartsWith("sk-ant-");
     }

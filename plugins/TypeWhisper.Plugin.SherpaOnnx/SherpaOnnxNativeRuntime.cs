@@ -148,9 +148,13 @@ internal static class SherpaOnnxNativeRuntime
         return name;
     }
 
+    // Kept as DllImport (Linux-only libc interop): CharSet.Ansi marshals as UTF-8 here, and
+    // LibraryImport would need AllowUnsafeBlocks for the string marshalling for no real gain.
+#pragma warning disable SYSLIB1054, CA2101
     [DllImport("libdl.so.2", CharSet = CharSet.Ansi)]
     private static extern IntPtr dlopen(string fileName, int flags);
 
     [DllImport("libdl.so.2")]
     private static extern IntPtr dlerror();
+#pragma warning restore SYSLIB1054, CA2101
 }
