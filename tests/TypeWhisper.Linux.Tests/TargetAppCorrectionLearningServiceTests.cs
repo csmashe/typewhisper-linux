@@ -70,7 +70,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         // of silently skipping (the "first dictation is a dud" bug).
         var client = new FakeAtSpiEventClient
         {
-            CurrentFocusedElement = null, BootstrapResult = s_field
+            CurrentFocusedElement = null, BootstrapResult = s_field,
         };
         using var service = CreateService(client, enabled: true);
 
@@ -288,7 +288,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         var client = new FakeAtSpiEventClient
         {
             CurrentFocusedElement = pane,
-            TextProvider = e => e.Equals(s_field) ? "I deployed to kubernets today" : null
+            TextProvider = e => e.Equals(s_field) ? "I deployed to kubernets today" : null,
         };
         client.RecentFocusedElements.AddRange([pane, s_field]);
         using var service = CreateService(client, enabled: true);
@@ -315,7 +315,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         var client = new FakeAtSpiEventClient
         {
             CurrentFocusedElement = pane,
-            TextProvider = e => e.Equals(foreignField) ? "hello world" : null
+            TextProvider = e => e.Equals(foreignField) ? "hello world" : null,
         };
         client.RecentFocusedElements.AddRange([pane, foreignField]);
         using var service = CreateService(client, enabled: true);
@@ -446,7 +446,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     {
         var client = new FakeAtSpiEventClient
         {
-            CurrentFocusedElement = s_field, PasswordResult = true
+            CurrentFocusedElement = s_field, PasswordResult = true,
         };
         using var service = CreateService(client, enabled: true);
 
@@ -475,7 +475,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         {
             CurrentFocusedElement = password,
             PasswordProvider = e => e.Equals(password),
-            TextProvider = _ => "hunter2"
+            TextProvider = _ => "hunter2",
         };
         client.RecentFocusedElements.AddRange([password, sibling]);
         using var service = CreateService(client, enabled: true);
@@ -503,7 +503,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         {
             CurrentFocusedElement = pane,
             PasswordProvider = e => e.Equals(pane) ? null : false,
-            TextProvider = e => e.Equals(sibling) ? "hello world" : null
+            TextProvider = e => e.Equals(sibling) ? "hello world" : null,
         };
         client.RecentFocusedElements.AddRange([pane, sibling]);
         using var service = CreateService(client, enabled: true);
@@ -525,7 +525,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         var client = new FakeAtSpiEventClient
         {
             CurrentFocusedElement = s_field,
-            PasswordProvider = _ => isPassword ? true : (bool?)false
+            PasswordProvider = _ => isPassword ? true : (bool?)false,
         };
         using var service = CreateService(client, enabled: true);
 
@@ -549,7 +549,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         // never proceed to read the field text.
         var client = new FakeAtSpiEventClient
         {
-            CurrentFocusedElement = s_field, PasswordResult = null
+            CurrentFocusedElement = s_field, PasswordResult = null,
         };
         using var service = CreateService(client, enabled: true);
 
@@ -873,7 +873,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         var startGate = new TaskCompletionSource();
         var client = new FakeAtSpiEventClient
         {
-            CurrentFocusedElement = s_field, StartGate = startGate
+            CurrentFocusedElement = s_field, StartGate = startGate,
         };
         var settings = new FakeSettingsService(
             AppSettings.Default with { TargetAppCorrectionLearningEnabled = true }
@@ -901,7 +901,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         var startGate = new TaskCompletionSource();
         var client = new FakeAtSpiEventClient
         {
-            CurrentFocusedElement = s_field, StartGate = startGate
+            CurrentFocusedElement = s_field, StartGate = startGate,
         };
         var settings = new FakeSettingsService(
             AppSettings.Default with { TargetAppCorrectionLearningEnabled = true }
@@ -1246,7 +1246,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         var client = new FakeAtSpiEventClient
         {
             CurrentFocusedElement = s_field,
-            ExtentsToReturn = new AtSpiScreenRect(100, 200, 300, 40)
+            ExtentsToReturn = new AtSpiScreenRect(100, 200, 300, 40),
         };
         using var service = CreateService(client, enabled: true);
 

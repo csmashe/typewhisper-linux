@@ -11,7 +11,7 @@ public sealed class TransformSelectionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            SelectionText = "selected text"
+            SelectionText = "selected text",
         };
         var textInsertion = new TextInsertionService(platform);
 
@@ -30,7 +30,7 @@ public sealed class TransformSelectionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            SelectionText = "selected text"
+            SelectionText = "selected text",
         };
         var textInsertion = new TextInsertionService(platform);
 

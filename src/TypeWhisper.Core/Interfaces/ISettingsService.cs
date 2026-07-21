@@ -24,6 +24,7 @@ public interface ISettingsService
     ///     (that fallback would read and write in separate steps and silently drop a concurrent update).
     /// </summary>
     // ReSharper disable once UnusedMethodReturnValue.Global -- returns the applied settings for caller convenience/chaining; part of the public API contract.
+    // ReSharper disable once UnusedMemberInSuper.Global -- callers hold concrete types today, but the interface member is what binds implementations to the atomicity contract above.
     AppSettings Update(Func<AppSettings, AppSettings> mutate);
 
     event Action<AppSettings>? SettingsChanged;

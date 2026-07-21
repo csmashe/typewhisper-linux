@@ -92,10 +92,7 @@ public static class Program
                 if (!string.IsNullOrEmpty(probeError))
                 {
                     Trace.WriteLine($"[Program] Control socket probe: {probeError}");
-                    Console.Error.WriteLine(
-                        "TypeWhisper could not verify that no other instance is running. Startup was canceled."
-                    );
-                    LinuxStartupNotification.NotifyComplete();
+                    StartupCancellation.NotifyUnverifiedInstance();
                     return 1;
                 }
 
@@ -109,10 +106,7 @@ public static class Program
             }
             else if (File.Exists(socketPath))
             {
-                Console.Error.WriteLine(
-                    "TypeWhisper could not verify that no other instance is running. Startup was canceled."
-                );
-                LinuxStartupNotification.NotifyComplete();
+                StartupCancellation.NotifyUnverifiedInstance();
                 return 1;
             }
             else
@@ -124,10 +118,7 @@ public static class Program
         {
             Trace.WriteLine($"[Program] Control socket probe failed: {ex.Message}");
             BootTrace.Stage($"control socket probe threw: {ex.GetType().Name}");
-            Console.Error.WriteLine(
-                "TypeWhisper could not verify that no other instance is running. Startup was canceled."
-            );
-            LinuxStartupNotification.NotifyComplete();
+            StartupCancellation.NotifyUnverifiedInstance();
             return 1;
         }
 
@@ -223,7 +214,7 @@ public static class Program
                     // throws a per-frame SynchronizationLockException from GlxContext.RestoreContext.Dispose,
                     // but only after rendering — transparency works and the log noise is filtered by
                     // SuppressGlxRenderExceptionLogSink. EGL is the fallback if GLX init fails.
-                    RenderingMode = [X11RenderingMode.Glx, X11RenderingMode.Egl, X11RenderingMode.Software]
+                    RenderingMode = [X11RenderingMode.Glx, X11RenderingMode.Egl, X11RenderingMode.Software],
                 }
             )
 #if DEBUG

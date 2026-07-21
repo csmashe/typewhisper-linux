@@ -13,7 +13,7 @@ public class HttpApiRequestParserTests
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
     };
 
     [Fact]
@@ -39,7 +39,7 @@ public class HttpApiRequestParserTests
             new NameValueCollection { ["await_download"] = "1" },
             new Dictionary<string, string>
             {
-                ["content-type"] = $"multipart/form-data; boundary={boundary}"
+                ["content-type"] = $"multipart/form-data; boundary={boundary}",
             },
             body
         );
@@ -83,7 +83,7 @@ public class HttpApiRequestParserTests
                 ["x-response-format"] = "verbose_json",
                 ["x-prompt"] = "Names",
                 ["x-engine"] = "openai",
-                ["x-model"] = "gpt-4o-transcribe"
+                ["x-model"] = "gpt-4o-transcribe",
             },
             new byte[] { 9, 8, 7 }
         );
@@ -99,6 +99,81 @@ public class HttpApiRequestParserTests
         Assert.Equal("Names", parsed.Prompt);
         Assert.Equal("openai", parsed.Engine);
         Assert.Equal("gpt-4o-transcribe", parsed.Model);
+    }
+
+    [Fact]
+    public void ParseTranscribe_MultipartPayloadMayContainBoundaryLikeBytes()
+    {
+        const string boundary = "Boundary123";
+        // Boundary text lacking the CRLF prefix and CRLF/"--" suffix a real delimiter carries.
+        var audio = new List<byte> { 1, 2 };
+        audio.AddRange(Encoding.UTF8.GetBytes($"--{boundary}x"));
+        audio.AddRange("\r\n"u8.ToArray());
+        audio.AddRange(Encoding.UTF8.GetBytes($"--{boundary}"));
+        audio.AddRange(" trailing"u8.ToArray());
+        // A closing marker whose epilogue does not start on its own line is not a delimiter.
+        audio.AddRange("\r\n"u8.ToArray());
+        audio.AddRange(Encoding.UTF8.GetBytes($"--{boundary}--junk"));
+        audio.AddRange([3, 4]);
+        var payload = audio.ToArray();
+
+        var body = Multipart(
+            boundary,
+            ("file", "audio.wav", "audio/wav", payload),
+            ("language", null, null, "de"u8.ToArray())
+        );
+
+        var request = new HttpApiRequest(
+            "POST",
+            "/v1/transcribe",
+            new NameValueCollection(),
+            new Dictionary<string, string>
+            {
+                ["content-type"] = $"multipart/form-data; boundary={boundary}",
+            },
+            body
+        );
+
+        var parsed = HttpApiRequestParser.ParseTranscribe(request);
+
+        Assert.Equal(payload, parsed.AudioData.ToArray());
+        Assert.Equal("de", parsed.Language);
+    }
+
+    [Fact]
+    public void ParseTranscribe_AcceptsMultipartTransportPaddingAfterDelimiters()
+    {
+        const string boundary = "Boundary123";
+        // RFC 2046 permits SP/HTAB padding between a delimiter and its CRLF.
+        using var stream = new MemoryStream();
+        Write(stream, $"--{boundary} \t\r\n");
+        Write(
+            stream,
+            "Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n"
+        );
+        Write(stream, "Content-Type: audio/wav\r\n\r\n");
+        stream.Write([9, 8, 7]);
+        Write(stream, $"\r\n--{boundary}  \r\n");
+        Write(stream, "Content-Disposition: form-data; name=\"language\"\r\n\r\n");
+        Write(stream, "de");
+        Write(stream, $"\r\n--{boundary}--  \r\n");
+
+        var request = new HttpApiRequest(
+            "POST",
+            "/v1/transcribe",
+            new NameValueCollection(),
+            new Dictionary<string, string>
+            {
+                ["content-type"] = $"multipart/form-data; boundary={boundary}",
+            },
+            stream.ToArray()
+        );
+
+        var parsed = HttpApiRequestParser.ParseTranscribe(request);
+
+        Assert.Equal([9, 8, 7], parsed.AudioData.ToArray());
+        Assert.Equal("wav", parsed.FileExtension);
+        Assert.Equal("de", parsed.Language);
     }
 
     [Fact]
@@ -118,7 +193,7 @@ public class HttpApiRequestParserTests
             new NameValueCollection(),
             new Dictionary<string, string>
             {
-                ["content-type"] = $"multipart/form-data; boundary={boundary}"
+                ["content-type"] = $"multipart/form-data; boundary={boundary}",
             },
             body
         );
@@ -141,7 +216,7 @@ public class HttpApiRequestParserTests
             new NameValueCollection(),
             new Dictionary<string, string>
             {
-                ["content-type"] = $"multipart/form-data; boundary={boundary}"
+                ["content-type"] = $"multipart/form-data; boundary={boundary}",
             },
             body
         );

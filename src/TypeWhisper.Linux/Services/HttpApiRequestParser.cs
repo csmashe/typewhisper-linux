@@ -273,7 +273,7 @@ internal static class HttpApiRequestParser
 
         while (searchStart < bodySpan.Length)
         {
-            var boundaryStart = IndexOf(bodySpan, boundaryBytes, searchStart);
+            var boundaryStart = IndexOfDelimiter(bodySpan, boundaryBytes, searchStart);
             if (boundaryStart < 0)
             {
                 break;
@@ -289,7 +289,8 @@ internal static class HttpApiRequestParser
                 break;
             }
 
-            var partHeaderStart = afterBoundary;
+            // Already validated as part of the delimiter; skipping it keeps the header block clean.
+            var partHeaderStart = SkipTransportPadding(bodySpan, afterBoundary);
             if (
                 partHeaderStart + 1 < bodySpan.Length
                 && bodySpan[partHeaderStart] == (byte)'\r'
@@ -306,7 +307,7 @@ internal static class HttpApiRequestParser
             }
 
             var partBodyStart = headerEnd + doubleCrlf.Length;
-            var nextBoundary = IndexOf(bodySpan, boundaryBytes, partBodyStart);
+            var nextBoundary = IndexOfDelimiter(bodySpan, boundaryBytes, partBodyStart);
             if (nextBoundary < 0)
             {
                 break;
@@ -529,6 +530,75 @@ internal static class HttpApiRequestParser
         return lower.Contains("webm") ? "webm" : null;
     }
 
+    /// <summary>
+    ///     Finds the next real delimiter, skipping boundary-looking bytes inside a part body.
+    ///     RFC 2046 requires a preceding CRLF and a CRLF or "--" suffix; without that check a
+    ///     binary payload containing the boundary text truncates the part it belongs to.
+    /// </summary>
+    private static int IndexOfDelimiter(
+        ReadOnlySpan<byte> body,
+        ReadOnlySpan<byte> boundaryBytes,
+        int startIndex
+    )
+    {
+        var from = startIndex;
+        while (from < body.Length)
+        {
+            var at = IndexOf(body, boundaryBytes, from);
+            if (at < 0)
+            {
+                return -1;
+            }
+
+            if (IsDelimiterAt(body, boundaryBytes, at))
+            {
+                return at;
+            }
+
+            from = at + 1;
+        }
+
+        return -1;
+    }
+
+    private static bool IsDelimiterAt(
+        ReadOnlySpan<byte> body,
+        ReadOnlySpan<byte> boundaryBytes,
+        int at
+    )
+    {
+        // Only the opening delimiter may sit at offset 0; every later one follows the CRLF
+        // that ends the preceding part.
+        if (at != 0 && (at < 2 || body[at - 2] != (byte)'\r' || body[at - 1] != (byte)'\n'))
+        {
+            return false;
+        }
+
+        var after = at + boundaryBytes.Length;
+        if (after + 1 < body.Length && body[after] == (byte)'-' && body[after + 1] == (byte)'-')
+        {
+            // Closing delimiter — the epilogue after it still has to start on its own line.
+            after += 2;
+        }
+
+        // RFC 2046 allows transport padding (SP/HTAB) between the boundary and its CRLF.
+        after = SkipTransportPadding(body, after);
+        return after >= body.Length
+               || (after + 1 < body.Length
+                   && body[after] == (byte)'\r'
+                   && body[after + 1] == (byte)'\n');
+    }
+
+    private static int SkipTransportPadding(ReadOnlySpan<byte> body, int index)
+    {
+        while (index < body.Length && (body[index] == (byte)' ' || body[index] == (byte)'\t'))
+        {
+            index++;
+        }
+
+        return index;
+    }
+
     private static int IndexOf(
         ReadOnlySpan<byte> haystack,
         ReadOnlySpan<byte> needle,
@@ -624,5 +694,5 @@ internal static class HttpApiRequestParser
         }
     }
 
-    private sealed class RequestBodyTooLargeException : Exception { }
+    private sealed class RequestBodyTooLargeException : Exception;
 }

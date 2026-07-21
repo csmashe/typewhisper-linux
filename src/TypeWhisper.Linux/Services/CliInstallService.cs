@@ -128,7 +128,7 @@ public sealed class CliInstallService
             $"typewhisper status --port {port}",
             $"typewhisper models --port {port}",
             $"typewhisper transcribe recording.wav --port {port}",
-            $"typewhisper transcribe recording.wav --language de --json --port {port}"
+            $"typewhisper transcribe recording.wav --language de --json --port {port}",
         ];
     }
 
@@ -141,7 +141,7 @@ public sealed class CliInstallService
             $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" http://localhost:{port}/v1/models",
             $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" -X POST http://localhost:{port}/v1/transcribe -F \"file=@recording.wav\"",
             $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" -X POST http://localhost:{port}/v1/dictation/start",
-            $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" -X POST http://localhost:{port}/v1/dictation/stop"
+            $"curl -H \"Authorization: Bearer $TYPEWHISPER_API_TOKEN\" -X POST http://localhost:{port}/v1/dictation/stop",
         ];
     }
 
@@ -215,7 +215,7 @@ public sealed class CliInstallService
                 "Release",
                 "net10.0",
                 CliFileName
-            )
+            ),
         };
 
         return candidates.Select(Path.GetFullPath).FirstOrDefault(IsCliAppHost);
@@ -293,7 +293,7 @@ public sealed class CliInstallService
                     new EnumerationOptions
                     {
                         MatchCasing = MatchCasing.CaseInsensitive,
-                        AttributesToSkip = 0
+                        AttributesToSkip = 0,
                     }
                 )
                 .ToArray();
@@ -427,6 +427,6 @@ public sealed class CliInstallService
     {
         Absent,
         Owned,
-        Foreign
+        Foreign,
     }
 }

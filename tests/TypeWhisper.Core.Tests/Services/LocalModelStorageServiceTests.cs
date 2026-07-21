@@ -172,7 +172,7 @@ public sealed class LocalModelStorageServiceTests : IDisposable
         // Source is already the active custom path so the general (non-default) branch runs.
         var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source })
         {
-            ThrowOnSave = new IOException("save failed")
+            ThrowOnSave = new IOException("save failed"),
         };
         var service = new LocalModelStorageService(settings);
 

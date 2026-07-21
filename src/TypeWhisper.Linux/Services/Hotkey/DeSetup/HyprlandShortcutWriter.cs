@@ -280,7 +280,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
                     "shift" => "SHIFT",
                     "alt" => "ALT",
                     "super" or "win" or "windows" or "cmd" or "meta" => "SUPER",
-                    _ => parts[i].ToUpperInvariant()
+                    _ => parts[i].ToUpperInvariant(),
                 }
             );
         }
@@ -331,14 +331,18 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
 
             return SentinelBlock.ExtractBlockLines(existing);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
+            // Raced with a delete between the Exists probe and the read — not installed.
             return null;
         }
+        // Permission and transient I/O failures propagate: callers treat an
+        // indeterminate probe as "unknown" rather than erasing a known state.
     }
 
     private async Task<bool> ReloadAsync(CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         if (!DesktopDetector.BinaryExists("hyprctl"))
         {
             return false;

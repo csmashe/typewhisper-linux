@@ -14,7 +14,7 @@ public sealed class SettingsService : ISettingsService
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
     private readonly Lock _gate = new();
@@ -178,13 +178,13 @@ public sealed class SettingsService : ISettingsService
                     HistoryRetentionMinutes = (int)Math.Min(
                         (long)legacyDays.Value * 24 * 60,
                         int.MaxValue
-                    )
+                    ),
                 },
                 _ => settings with
                 {
                     HistoryRetentionMode = AppSettings.Default.HistoryRetentionMode,
-                    HistoryRetentionMinutes = AppSettings.Default.HistoryRetentionMinutes
-                }
+                    HistoryRetentionMinutes = AppSettings.Default.HistoryRetentionMinutes,
+                },
             };
         }
 
@@ -216,7 +216,7 @@ public sealed class SettingsService : ISettingsService
             {
                 LocalModelAcceleration = AppSettings.NormalizeLocalModelAcceleration(
                     settings.LocalModelAcceleration
-                )
+                ),
             };
         }
 
@@ -228,7 +228,7 @@ public sealed class SettingsService : ISettingsService
             {
                 LocalModelAcceleration = AppSettings.NormalizeLocalModelAcceleration(
                     settings.LocalModelAcceleration
-                )
+                ),
             };
         }
 

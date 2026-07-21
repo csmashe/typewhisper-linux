@@ -14,7 +14,7 @@ public class HistoryRetentionCoordinatorTests
             AppSettings.Default with
             {
                 HistoryRetentionMode = HistoryRetentionMode.Duration,
-                HistoryRetentionMinutes = 60
+                HistoryRetentionMinutes = 60,
             }
         );
 
@@ -33,7 +33,7 @@ public class HistoryRetentionCoordinatorTests
             AppSettings.Default with
             {
                 HistoryRetentionMode = HistoryRetentionMode.Duration,
-                HistoryRetentionMinutes = 60
+                HistoryRetentionMinutes = 60,
             }
         );
 
@@ -55,7 +55,7 @@ public class HistoryRetentionCoordinatorTests
             AppSettings.Default with
             {
                 HistoryRetentionMode = HistoryRetentionMode.Duration,
-                HistoryRetentionMinutes = 60
+                HistoryRetentionMinutes = 60,
             }
         );
 
@@ -75,7 +75,7 @@ public class HistoryRetentionCoordinatorTests
         var settings = new FakeSettingsService(
             AppSettings.Default with
             {
-                HistoryRetentionMode = HistoryRetentionMode.Forever
+                HistoryRetentionMode = HistoryRetentionMode.Forever,
             }
         );
 
@@ -95,7 +95,7 @@ public class HistoryRetentionCoordinatorTests
             AppSettings.Default with
             {
                 HistoryRetentionMode = HistoryRetentionMode.Duration,
-                HistoryRetentionMinutes = 60
+                HistoryRetentionMinutes = 60,
             }
         );
 
@@ -106,7 +106,7 @@ public class HistoryRetentionCoordinatorTests
         settings.Save(
             settings.Current with
             {
-                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses
+                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses,
             }
         );
 
@@ -121,7 +121,7 @@ public class HistoryRetentionCoordinatorTests
         var settings = new FakeSettingsService(
             AppSettings.Default with
             {
-                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses
+                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses,
             }
         );
 
@@ -141,7 +141,7 @@ public class HistoryRetentionCoordinatorTests
         var settings = new FakeSettingsService(
             AppSettings.Default with
             {
-                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses
+                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses,
             }
         );
 
@@ -159,7 +159,7 @@ public class HistoryRetentionCoordinatorTests
             AppSettings.Default with
             {
                 HistoryRetentionMode = HistoryRetentionMode.Duration,
-                HistoryRetentionMinutes = 60
+                HistoryRetentionMinutes = 60,
             }
         );
 

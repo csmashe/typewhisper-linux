@@ -272,7 +272,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
                 "shift" => "Shift",
                 "alt" => "Alt",
                 "super" or "win" or "windows" or "cmd" or "meta" => "Mod4",
-                _ => parts[i]
+                _ => parts[i],
             };
             if (sb.Length > 0)
             {
@@ -367,10 +367,13 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
 
             return SentinelBlock.ExtractBlockLines(existing);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
+            // Raced with a delete between the Exists probe and the read — not installed.
             return null;
         }
+        // Permission and transient I/O failures propagate: callers treat an
+        // indeterminate probe as "unknown" rather than erasing a known state.
     }
 
     private static string ResolveConfigPath()
@@ -383,6 +386,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
 
     private async Task<bool> ReloadAsync(CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         if (!DesktopDetector.BinaryExists("swaymsg"))
         {
             return false;

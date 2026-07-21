@@ -373,7 +373,7 @@ public sealed class AudioRecordingServiceTests
         IReadOnlyList<AudioInputDevice> devices =
         [
             new(staleIndex, "Replacement Mic", 1, false, "Replacement Mic|1"),
-            new(defaultIndex, "Current Default", 1, true, "Current Default|1")
+            new(defaultIndex, "Current Default", 1, true, "Current Default|1"),
         ];
         var operations = new List<string>();
         using var service = CreateConfiguredDeviceService(devices, defaultIndex, operations);
@@ -381,7 +381,7 @@ public sealed class AudioRecordingServiceTests
         var originalSettings = AppSettings.Default with
         {
             SelectedMicrophoneDevice = staleIndex,
-            SelectedMicrophoneDeviceId = missingId
+            SelectedMicrophoneDeviceId = missingId,
         };
         var settings = new FakeSettingsService(originalSettings);
 
@@ -414,7 +414,7 @@ public sealed class AudioRecordingServiceTests
         IReadOnlyList<AudioInputDevice> devices =
         [
             new(staleIndex, "Cached Index Device", 1, false, "Cached Index Device|1"),
-            new(defaultIndex, "Current Default", 1, true, "Current Default|1")
+            new(defaultIndex, "Current Default", 1, true, "Current Default|1"),
         ];
         var operations = new List<string>();
         using var service = CreateConfiguredDeviceService(devices, defaultIndex, operations);
@@ -422,7 +422,7 @@ public sealed class AudioRecordingServiceTests
         var originalSettings = AppSettings.Default with
         {
             SelectedMicrophoneDevice = staleIndex,
-            SelectedMicrophoneDeviceId = storedDeviceId
+            SelectedMicrophoneDeviceId = storedDeviceId,
         };
         var settings = new FakeSettingsService(originalSettings);
 
@@ -458,7 +458,7 @@ public sealed class AudioRecordingServiceTests
         [
             new(4, "Replacement Mic", 1, false, "Replacement Mic|1"),
             new(intendedIndex, "Wanted Mic", 1, false, intendedId),
-            new(defaultIndex, "Current Default", 1, true, "Current Default|1")
+            new(defaultIndex, "Current Default", 1, true, "Current Default|1"),
         ];
         var operations = new List<string>();
         using var service = CreateConfiguredDeviceService(devices, defaultIndex, operations);
@@ -466,7 +466,7 @@ public sealed class AudioRecordingServiceTests
             AppSettings.Default with
             {
                 SelectedMicrophoneDevice = storedIndex,
-                SelectedMicrophoneDeviceId = intendedId
+                SelectedMicrophoneDeviceId = intendedId,
             }
         );
 
@@ -496,7 +496,7 @@ public sealed class AudioRecordingServiceTests
         [
             new(7, "Identical Mic", 1, false, duplicateId),
             new(staleIndex, "Identical Mic", 1, false, duplicateId),
-            new(defaultIndex, "Current Default", 1, true, "Current Default|1")
+            new(defaultIndex, "Current Default", 1, true, "Current Default|1"),
         ];
         var operations = new List<string>();
         using var service = CreateConfiguredDeviceService(devices, defaultIndex, operations);
@@ -504,7 +504,7 @@ public sealed class AudioRecordingServiceTests
         var originalSettings = AppSettings.Default with
         {
             SelectedMicrophoneDevice = staleIndex,
-            SelectedMicrophoneDeviceId = duplicateId
+            SelectedMicrophoneDeviceId = duplicateId,
         };
         var settings = new FakeSettingsService(originalSettings);
 

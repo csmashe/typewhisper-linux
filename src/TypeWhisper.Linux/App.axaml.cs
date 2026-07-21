@@ -181,11 +181,8 @@ public class App : Application
             catch (Exception ex)
             {
                 Trace.WriteLine($"[App] Control socket path unavailable: {ex}");
-                Console.Error.WriteLine(
-                    "TypeWhisper could not verify that no other instance is running. Startup was canceled."
-                );
+                StartupCancellation.NotifyUnverifiedInstance();
                 ShuttingDown = true;
-                LinuxStartupNotification.NotifyComplete();
                 // Nonzero, matching Program's preflight probe failure: this is a
                 // canceled startup, not the "already running" success path below.
                 _ = ShutdownAndExitAsync(services, desktop, 1);
@@ -271,14 +268,23 @@ public class App : Application
             // ProfilesChanged/ActionsChanged fire under their service gates, so a read-under-reconcileLock inverts
             // the lock order and deadlocks.
             var reconcileLock = new object();
+            var reconcileRevision = 0L;
 
             void ReconcileDynamicHotkeys()
             {
+                var revision = Interlocked.Increment(ref reconcileRevision);
                 var actionsSnapshot = promptActions.Actions;
                 var profilesSnapshot = profileService.Profiles;
                 IReadOnlyList<string> rejections;
                 lock (reconcileLock)
                 {
+                    // A reconcile that started later snapshotted at least as fresh a state,
+                    // so applying this one behind it would reinstate what it superseded.
+                    if (revision != Interlocked.Read(ref reconcileRevision))
+                    {
+                        return;
+                    }
+
                     rejections = hotkey.SetDynamicHotkeys(
                         HotkeyService.ParsePromptActionHotkeys(actionsSnapshot),
                         HotkeyService.ParseProfileHotkeys(profilesSnapshot)
@@ -774,7 +780,7 @@ public class App : Application
                     settings.Current with
                     {
                         SelectedMicrophoneDevice = resolved.Index,
-                        SelectedMicrophoneDeviceId = resolved.PersistentId
+                        SelectedMicrophoneDeviceId = resolved.PersistentId,
                     }
                 );
             }

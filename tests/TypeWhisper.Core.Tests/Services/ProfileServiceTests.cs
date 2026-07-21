@@ -39,7 +39,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = "existing",
             Name = "Existing",
-            IsEnabled = false
+            IsEnabled = false,
         };
         new ProfileService(_filePath).AddProfile(original);
         var writes = 0;
@@ -73,7 +73,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = "profile",
             Name = "Profile",
-            IsEnabled = false
+            IsEnabled = false,
         };
         new ProfileService(_filePath).AddProfile(original);
         using var writer = new BlockingAfterCommitWriter();
@@ -105,7 +105,7 @@ public sealed class ProfileServiceTests : IDisposable
                 }
             })
             {
-                IsBackground = true
+                IsBackground = true,
             };
             secondThread.Start();
             await secondCallerStarted.Task.WaitAsync(s_testGuard);
@@ -153,14 +153,14 @@ public sealed class ProfileServiceTests : IDisposable
             Id = "profile-a",
             Name = "Profile A",
             IsEnabled = false,
-            Priority = 20
+            Priority = 20,
         };
         var profileB = new Profile
         {
             Id = "profile-b",
             Name = "Profile B",
             IsEnabled = false,
-            Priority = 10
+            Priority = 10,
         };
         var seed = new ProfileService(_filePath);
         seed.AddProfile(profileA);
@@ -194,7 +194,7 @@ public sealed class ProfileServiceTests : IDisposable
                 }
             })
             {
-                IsBackground = true
+                IsBackground = true,
             };
             secondThread.Start();
             await secondCallerStarted.Task.WaitAsync(s_testGuard);
@@ -250,7 +250,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = Guid.NewGuid().ToString(),
             Name = "Test Profile",
-            PromptActionId = "prompt-123"
+            PromptActionId = "prompt-123",
         };
 
         _sut.AddProfile(profile);
@@ -267,7 +267,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = Guid.NewGuid().ToString(),
             Name = "No Prompt",
-            PromptActionId = null
+            PromptActionId = null,
         };
 
         _sut.AddProfile(profile);
@@ -284,7 +284,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = Guid.NewGuid().ToString(),
             Name = "Test",
-            PromptActionId = null
+            PromptActionId = null,
         };
 
         _sut.AddProfile(profile);
@@ -302,7 +302,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = Guid.NewGuid().ToString(),
             Name = "With Hotkey",
-            HotkeyData = "{\"key\":\"Ctrl+1\"}"
+            HotkeyData = "{\"key\":\"Ctrl+1\"}",
         };
 
         _sut.AddProfile(profile);
@@ -331,7 +331,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = Guid.NewGuid().ToString(),
             Name = "Email",
-            StylePreset = ProfileStylePreset.FormalEmail
+            StylePreset = ProfileStylePreset.FormalEmail,
         };
 
         _sut.AddProfile(profile);
@@ -390,7 +390,7 @@ public sealed class ProfileServiceTests : IDisposable
             Id = Guid.NewGuid().ToString(),
             Name = "Selection",
             HotkeyData = "Ctrl+Shift+S",
-            HotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText
+            HotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
         };
 
         _sut.AddProfile(profile);
@@ -428,7 +428,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = "forced",
             Name = "Forced",
-            ProcessNames = ["never-matches"]
+            ProcessNames = ["never-matches"],
         };
         _sut.AddProfile(forced);
 
@@ -452,7 +452,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = "forced",
             Name = "Forced",
-            IsEnabled = false
+            IsEnabled = false,
         });
 
         var result = _sut.MatchProfile(null, null, "forced");
@@ -484,7 +484,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = "hotkey-only",
             Name = "Hotkey Only",
-            HotkeyData = "Ctrl+Alt+E"
+            HotkeyData = "Ctrl+Alt+E",
         });
 
         var result = _sut.MatchProfile("some-app", null);
@@ -502,7 +502,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = "hotkey-only",
             Name = "Hotkey Only",
-            HotkeyData = "Ctrl+Alt+E"
+            HotkeyData = "Ctrl+Alt+E",
         });
 
         var result = _sut.MatchProfile("some-app", null, "hotkey-only");
@@ -519,7 +519,7 @@ public sealed class ProfileServiceTests : IDisposable
         _sut.AddProfile(new Profile
         {
             Id = "global",
-            Name = "Global"
+            Name = "Global",
         });
 
         var result = _sut.MatchProfile("some-app", null);
