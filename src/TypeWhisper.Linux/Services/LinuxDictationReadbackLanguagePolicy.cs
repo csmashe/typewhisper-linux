@@ -61,7 +61,7 @@ internal static class LinuxDictationReadbackLanguagePolicy
         {
             FinalLanguage.TranslatedToTarget => target,
             FinalLanguage.Rewritten => null,
-            _ => engineTranslatedToEnglish ? "en" : sourceLanguage
+            _ => engineTranslatedToEnglish ? "en" : sourceLanguage,
         };
     }
 
@@ -103,6 +103,6 @@ internal static class LinuxDictationReadbackLanguagePolicy
     {
         Unchanged,          // No post-processing step changed the language.
         TranslatedToTarget, // Translation step ran and changed the language.
-        Rewritten           // Prompt/plugin rewrote into an unknown language.
+        Rewritten,           // Prompt/plugin rewrote into an unknown language.
     }
 }

@@ -159,7 +159,7 @@ public sealed class InputAccessSetupHelperTests
                 RedirectStandardInput = true,
                 RedirectStandardError = true,
                 RedirectStandardOutput = true,
-                UseShellExecute = false
+                UseShellExecute = false,
             };
             // Shim dir first so sudo/udevadm/usermod resolve to our stubs, then real
             // coreutils (head/cat) from the standard bin dirs.
@@ -354,7 +354,7 @@ public sealed class InputAccessSetupHelperTests
         var runner = new FakeProcessRunner
         {
             // Model a stalled polkit prompt that outlives the timeout window.
-            Default = new ProcessRunResult(true, true, -1, string.Empty, string.Empty)
+            Default = new ProcessRunResult(true, true, -1, string.Empty, string.Empty),
         };
         var helper = new InputAccessSetupHelper(runner);
 

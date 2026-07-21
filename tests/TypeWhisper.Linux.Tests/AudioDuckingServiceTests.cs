@@ -178,7 +178,7 @@ public sealed class AudioDuckingServiceTests
                 0,
                 string.Empty,
                 "forced timeout"
-            )
+            ),
         };
         runner.RespondWith(
             (fileName, args) => fileName == "pactl" && args.SequenceEqual(list),

@@ -277,7 +277,7 @@ public partial class DictationSectionViewModel : ObservableObject
     [
         new(AppSettings.LocalModelAccelerationAuto, Loc.Instance["Dictation.AccelerationAuto"]),
         new(AppSettings.LocalModelAccelerationCpu, Loc.Instance["Dictation.AccelerationCpu"]),
-        new(AppSettings.LocalModelAccelerationNvidiaCuda, Loc.Instance["Dictation.AccelerationNvidiaCuda"])
+        new(AppSettings.LocalModelAccelerationNvidiaCuda, Loc.Instance["Dictation.AccelerationNvidiaCuda"]),
     ];
 
     public ObservableCollection<SpokenLanguageOption> LanguageChoices { get; } =
@@ -294,7 +294,7 @@ public partial class DictationSectionViewModel : ObservableObject
         new("cs", "Čeština"),
         new("sv", "Svenska"),
         new("da", "Dansk"),
-        new("fi", "Suomi")
+        new("fi", "Suomi"),
     ];
 
     public ObservableCollection<TranslationTargetOption> TranslationTargetOptions { get; } = [];
@@ -304,7 +304,7 @@ public partial class DictationSectionViewModel : ObservableObject
         new(CleanupLevel.None, Loc.Instance["Dictation.CleanupNone"]),
         new(CleanupLevel.Light, Loc.Instance["Dictation.CleanupLight"]),
         new(CleanupLevel.Medium, Loc.Instance["Dictation.CleanupMedium"]),
-        new(CleanupLevel.High, Loc.Instance["Dictation.CleanupHigh"])
+        new(CleanupLevel.High, Loc.Instance["Dictation.CleanupHigh"]),
     ];
 
     public ObservableCollection<InsertionStrategyOption> InsertionStrategyOptions { get; } =
@@ -312,7 +312,7 @@ public partial class DictationSectionViewModel : ObservableObject
         new(TextInsertionStrategy.Auto, Loc.Instance["Dictation.AccelerationAuto"]),
         new(TextInsertionStrategy.ClipboardPaste, Loc.Instance["Dictation.StrategyClipboardPaste"]),
         new(TextInsertionStrategy.DirectTyping, Loc.Instance["Dictation.StrategyDirectTyping"]),
-        new(TextInsertionStrategy.CopyOnly, Loc.Instance["Dictation.StrategyCopyOnly"])
+        new(TextInsertionStrategy.CopyOnly, Loc.Instance["Dictation.StrategyCopyOnly"]),
     ];
 
     public ObservableCollection<AppInsertionStrategyRow> AppInsertionStrategies { get; } = [];
@@ -454,7 +454,7 @@ public partial class DictationSectionViewModel : ObservableObject
                             : Loc.Instance["Dictation.AccelCudaNotVisible"],
                     AppSettings.LocalModelAccelerationNvidiaCuda =>
                         Loc.Instance["Dictation.AccelCudaReady"],
-                    _ => Loc.Instance["Dictation.AccelAutoStatus"]
+                    _ => Loc.Instance["Dictation.AccelAutoStatus"],
                 };
             }
 
@@ -818,7 +818,7 @@ public partial class DictationSectionViewModel : ObservableObject
                 status.Progress.ToString("P0")
             ),
             ModelStatusType.Error => FormatModelStatusError(status.ErrorMessage),
-            _ => Loc.Instance["Dictation.StatusNotReady"]
+            _ => Loc.Instance["Dictation.StatusNotReady"],
         };
         OnPropertyChanged(nameof(CanDeleteSelectedModel));
         OnPropertyChanged(nameof(CanUseCuda));
@@ -938,7 +938,7 @@ public partial class DictationSectionViewModel : ObservableObject
                 LocalModelStorageUnavailableReason.NestedUnderCurrentFolder =>
                     Loc.Instance.GetString(
                         "Dictation.ModelStorageNestedUnderCurrent", ex.Path, ex.CurrentPath ?? string.Empty),
-                _ => Loc.Instance.GetString("Dictation.ModelStorageChangeFailed", ex.Message)
+                _ => Loc.Instance.GetString("Dictation.ModelStorageChangeFailed", ex.Message),
             };
         }
         catch (Exception ex)
@@ -1325,7 +1325,7 @@ public partial class DictationSectionViewModel : ObservableObject
         _settings.Save(
             _settings.Current with
             {
-                SelectedMicrophoneDevice = value.Index, SelectedMicrophoneDeviceId = value.PersistentId
+                SelectedMicrophoneDevice = value.Index, SelectedMicrophoneDeviceId = value.PersistentId,
             }
         );
     }
@@ -1636,7 +1636,7 @@ public partial class DictationSectionViewModel : ObservableObject
         _settings.Save(
             _settings.Current with
             {
-                AudioDuckingLevel = (float)Math.Clamp(value, MinDuckingLevel, MaxDuckingLevel)
+                AudioDuckingLevel = (float)Math.Clamp(value, MinDuckingLevel, MaxDuckingLevel),
             }
         );
         OnPropertyChanged(nameof(AudioDuckingReductionPercent));

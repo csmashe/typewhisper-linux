@@ -66,7 +66,7 @@ public static class FirstRunDefaults
             IsPreset = false,
             IsEnabled = false,
             SortOrder = 0,
-            ProviderOverride = null
+            ProviderOverride = null,
         };
     }
 
@@ -85,7 +85,7 @@ public static class FirstRunDefaults
             PromptActionId = AutoCleanupActionId,
             HotkeyData = "Ctrl + Alt + E",
             HotkeyBehavior = ProfileHotkeyBehavior.StartDictation,
-            StylePreset = ProfileStylePreset.Raw
+            StylePreset = ProfileStylePreset.Raw,
         };
     }
 }

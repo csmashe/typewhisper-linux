@@ -20,7 +20,7 @@ public sealed class EvdevGlobalShortcutBackendTests
 
         var shortcuts = DefaultShortcuts() with
         {
-            DictationModifiers = ModifierMask.LeftCtrl
+            DictationModifiers = ModifierMask.LeftCtrl,
         };
         Assert.True((await backend.RegisterAsync(shortcuts, CancellationToken.None)).Success);
         var readers = factory.Readers;
@@ -46,7 +46,7 @@ public sealed class EvdevGlobalShortcutBackendTests
 
         var shortcuts = DefaultShortcuts() with
         {
-            DictationModifiers = ModifierMask.LeftCtrl
+            DictationModifiers = ModifierMask.LeftCtrl,
         };
         Assert.True((await backend.RegisterAsync(shortcuts, CancellationToken.None)).Success);
         var readers = factory.Readers;
@@ -77,7 +77,7 @@ public sealed class EvdevGlobalShortcutBackendTests
         {
             DictationModifiers = ModifierMask.LeftCtrl,
             PromptPaletteKey = KeyCode.VcLeftControl,
-            PromptPaletteModifiers = ModifierMask.None
+            PromptPaletteModifiers = ModifierMask.None,
         };
         Assert.True((await backend.RegisterAsync(shortcuts, CancellationToken.None)).Success);
         var readers = factory.Readers;
@@ -110,7 +110,7 @@ public sealed class EvdevGlobalShortcutBackendTests
         var pushToTalk = DefaultShortcuts() with
         {
             DictationModifiers = ModifierMask.None,
-            Mode = RecordingMode.PushToTalk
+            Mode = RecordingMode.PushToTalk,
         };
         Assert.True((await backend.RegisterAsync(pushToTalk, CancellationToken.None)).Success);
         var readers = factory.Readers;

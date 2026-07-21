@@ -938,7 +938,7 @@ public sealed class AudioRecordingService : IDisposable
             channelCount = Channels,
             sampleFormat = SampleFormat.Float32,
             suggestedLatency = inputInfo.defaultLowInputLatency,
-            hostApiSpecificStreamInfo = IntPtr.Zero
+            hostApiSpecificStreamInfo = IntPtr.Zero,
         };
 
         return new PaStream(

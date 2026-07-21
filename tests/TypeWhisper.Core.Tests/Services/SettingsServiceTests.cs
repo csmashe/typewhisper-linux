@@ -10,7 +10,7 @@ public sealed class SettingsServiceTests : IDisposable
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
     private readonly string _filePath;
@@ -64,8 +64,8 @@ public sealed class SettingsServiceTests : IDisposable
             AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>
             {
                 ["kitty"] = TextInsertionStrategy.DirectTyping,
-                ["firefox"] = TextInsertionStrategy.ClipboardPaste
-            }
+                ["firefox"] = TextInsertionStrategy.ClipboardPaste,
+            },
         };
 
         sut.Save(settings);
@@ -227,8 +227,8 @@ public sealed class SettingsServiceTests : IDisposable
                         current.AppInsertionStrategies,
                         StringComparer.OrdinalIgnoreCase)
                     {
-                        [$"app{idx}"] = TextInsertionStrategy.DirectTyping
-                    }
+                        [$"app{idx}"] = TextInsertionStrategy.DirectTyping,
+                    },
                 });
             });
         }
@@ -289,7 +289,7 @@ public sealed class SettingsServiceTests : IDisposable
             AppSettings.Default with
             {
                 HistoryRetentionMode = HistoryRetentionMode.Duration,
-                HistoryRetentionMinutes = 60
+                HistoryRetentionMinutes = 60,
             }
         );
 
@@ -306,7 +306,7 @@ public sealed class SettingsServiceTests : IDisposable
         sut.Save(
             AppSettings.Default with
             {
-                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses
+                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses,
             }
         );
 

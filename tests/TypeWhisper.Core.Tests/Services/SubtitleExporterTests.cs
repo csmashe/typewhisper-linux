@@ -10,7 +10,7 @@ public sealed class SubtitleExporterTests
     {
         var segments = new List<TranscriptionSegment>
         {
-            new("late cue", 90001.5, 90002.5)
+            new("late cue", 90001.5, 90002.5),
         };
 
         var srt = SubtitleExporter.ToSrt(segments);
@@ -23,7 +23,7 @@ public sealed class SubtitleExporterTests
     {
         var segments = new List<TranscriptionSegment>
         {
-            new("late cue", 90001.5, 90002.5)
+            new("late cue", 90001.5, 90002.5),
         };
 
         var vtt = SubtitleExporter.ToWebVtt(segments);
@@ -36,7 +36,7 @@ public sealed class SubtitleExporterTests
     {
         var segments = new List<TranscriptionSegment>
         {
-            new("normal cue", 3661.25, 3662.25)
+            new("normal cue", 3661.25, 3662.25),
         };
 
         var srt = SubtitleExporter.ToSrt(segments);
@@ -49,7 +49,7 @@ public sealed class SubtitleExporterTests
     {
         var segments = new List<TranscriptionSegment>
         {
-            new("normal cue", 3661.25, 3662.25)
+            new("normal cue", 3661.25, 3662.25),
         };
 
         var vtt = SubtitleExporter.ToWebVtt(segments);

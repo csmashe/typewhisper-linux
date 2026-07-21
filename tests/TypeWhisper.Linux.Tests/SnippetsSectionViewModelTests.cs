@@ -62,7 +62,7 @@ public sealed class SnippetsSectionViewModelTests : IDisposable
             TriggerMode = SnippetTriggerMode.Anywhere,
             UsageCount = 4,
             LastUsedAt = lastUsedAt,
-            CreatedAt = DateTime.UtcNow.AddDays(-10)
+            CreatedAt = DateTime.UtcNow.AddDays(-10),
         };
         service.AddSnippet(existing);
         var sut = CreateViewModel(service);
@@ -105,7 +105,7 @@ public sealed class SnippetsSectionViewModelTests : IDisposable
             {
                 Id = "term-1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "Kubernetes"
+                Original = "Kubernetes",
             }
         );
         var sut = CreateViewModel(CreateSnippetService(), dictionary);
@@ -129,7 +129,7 @@ public sealed class SnippetsSectionViewModelTests : IDisposable
                 Id = "correction-1",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "wispr",
-                Replacement = "Wispr"
+                Replacement = "Wispr",
             }
         );
         var sut = CreateViewModel(CreateSnippetService(), dictionary);

@@ -10,7 +10,7 @@ public sealed class SpokenCommandActionMatcherTests
     [
         new() { Id = "clean", Name = "Clean up email", SystemPrompt = "..." },
         new() { Id = "auto", Name = "Auto Clean Up Text", SystemPrompt = "..." },
-        new() { Id = "formal", Name = "Make Formal", SystemPrompt = "..." }
+        new() { Id = "formal", Name = "Make Formal", SystemPrompt = "..." },
     ];
 
     [Theory]
@@ -59,7 +59,7 @@ public sealed class SpokenCommandActionMatcherTests
         // A create command that only mentions the word must not hijack a single-word "Email" action.
         var actions = new PromptAction[]
         {
-            new() { Id = "email", Name = "Email", SystemPrompt = "..." }
+            new() { Id = "email", Name = "Email", SystemPrompt = "..." },
         };
 
         Assert.Null(SpokenCommandActionMatcher.Match("draft an email to Bob", actions));
@@ -70,7 +70,7 @@ public sealed class SpokenCommandActionMatcherTests
     {
         var actions = new PromptAction[]
         {
-            new() { Id = "email", Name = "Email", SystemPrompt = "..." }
+            new() { Id = "email", Name = "Email", SystemPrompt = "..." },
         };
 
         var matched = SpokenCommandActionMatcher.Match("email this to the team", actions);
@@ -84,7 +84,7 @@ public sealed class SpokenCommandActionMatcherTests
         // A leading politeness filler ("please") must not hide an explicit single-word invocation.
         var actions = new PromptAction[]
         {
-            new() { Id = "email", Name = "Email", SystemPrompt = "..." }
+            new() { Id = "email", Name = "Email", SystemPrompt = "..." },
         };
 
         var matched = SpokenCommandActionMatcher.Match("please email this to the team", actions);

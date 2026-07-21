@@ -185,7 +185,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             new BrowserAccessibilitySetupHelper()
         )
         {
-            EditHotkeyData = "Ctrl+NoSuchKey"
+            EditHotkeyData = "Ctrl+NoSuchKey",
         };
 
         sut.SaveProfileCommand.Execute(null);
@@ -210,7 +210,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
                 Id = "action",
                 Name = "Action",
                 SystemPrompt = "x",
-                HotkeyKey = "Right Ctrl"
+                HotkeyKey = "Right Ctrl",
             }
         );
         var sut = new ProfilesSectionViewModel(
@@ -224,7 +224,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             new BrowserAccessibilitySetupHelper()
         )
         {
-            EditHotkeyData = "Ctrl+Alt+E"
+            EditHotkeyData = "Ctrl+Alt+E",
         };
 
         sut.SaveProfileCommand.Execute(null);
@@ -256,7 +256,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
                     Id = "disabled",
                     Name = "Disabled",
                     SystemPrompt = "x",
-                    IsEnabled = false
+                    IsEnabled = false,
                 }
             );
         }
@@ -274,7 +274,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         {
             EditHotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
             EditPromptActionId = promptActionId,
-            EditHotkeyData = "Meta+F9"
+            EditHotkeyData = "Meta+F9",
         };
 
         sut.SaveProfileCommand.Execute(null);
@@ -300,7 +300,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             {
                 Id = "enabled",
                 Name = "Enabled",
-                SystemPrompt = "x"
+                SystemPrompt = "x",
             }
         );
         var sut = new ProfilesSectionViewModel(
@@ -316,7 +316,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         {
             EditHotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
             EditPromptActionId = "enabled",
-            EditHotkeyData = " super + f9 "
+            EditHotkeyData = " super + f9 ",
         };
 
         sut.SaveProfileCommand.Execute(null);
@@ -357,7 +357,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         )
         {
             EditHotkeyBehavior = ProfileHotkeyBehavior.StartDictation,
-            EditHotkeyData = draft
+            EditHotkeyData = draft,
         };
 
         sut.SaveProfileCommand.Execute(null);
@@ -380,7 +380,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
                 IsEnabled = true,
                 Priority = 10,
                 ProcessNames = ["firefox"],
-                UrlPatterns = []
+                UrlPatterns = [],
             }
         );
 
@@ -580,7 +580,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             {
                 Id = "auto",
                 Name = "Auto",
-                SystemPrompt = "a"
+                SystemPrompt = "a",
             }
         );
         promptActions.AddAction(
@@ -589,7 +589,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
                 Id = "manual",
                 Name = "Manual",
                 SystemPrompt = "m",
-                IsManualOnly = true
+                IsManualOnly = true,
             }
         );
 
@@ -660,7 +660,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         {
             Id = "profile",
             Name = "Profile",
-            HotkeyData = hotkeyData
+            HotkeyData = hotkeyData,
         };
     }
 

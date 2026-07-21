@@ -84,7 +84,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
 
         var sut = new ShortcutsSectionViewModel(hotkey, settings)
         {
-            TransformSelectionHotkeyText = ""
+            TransformSelectionHotkeyText = "",
         };
 
         sut.ApplyTransformSelectionHotkeyCommand.Execute(null);
@@ -104,7 +104,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
 
         var sut = new ShortcutsSectionViewModel(hotkey, settings)
         {
-            TransformSelectionHotkeyText = "Ctrl+Shift+P"
+            TransformSelectionHotkeyText = "Ctrl+Shift+P",
         };
 
         sut.ApplyTransformSelectionHotkeyCommand.Execute(null);
@@ -160,7 +160,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         using var hotkey = TestShortcutBackend.CreateHotkeyService();
         var writer = new FakeDeShortcutWriter
         {
-            InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space")
+            InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space"),
         };
         var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
         hotkey.SetNativeDictationBindingActive(true);
@@ -298,7 +298,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         Assert.True(hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Alt+P"));
         var writer = new FakeDeShortcutWriter
         {
-            InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space")
+            InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space"),
         };
         var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
         await sut.RefreshDesktopIntegrationStateAsync(CancellationToken.None);
@@ -343,7 +343,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
                 "Shortcut refreshed.",
                 [],
                 warning ? "Live apply failed." : null
-            )
+            ),
         };
         var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
         await sut.RefreshDesktopIntegrationStateAsync(CancellationToken.None);
@@ -369,7 +369,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         {
             InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space"),
             WriteResult = new DeShortcutWriteResult(false, "Write failed.", []),
-            WriteException = throws ? new InvalidOperationException("boom") : null
+            WriteException = throws ? new InvalidOperationException("boom") : null,
         };
         var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
         await sut.RefreshDesktopIntegrationStateAsync(CancellationToken.None);
@@ -395,7 +395,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
             IsInstalledHandler = (spec, _) =>
                 spec.Trigger == "Ctrl+Shift+Space"
                     ? oldProbeGate.Task
-                    : Task.FromResult(false)
+                    : Task.FromResult(false),
         };
         var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
         var oldProbe = sut.RefreshDesktopIntegrationStateAsync(CancellationToken.None);
@@ -425,7 +425,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
             InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space"),
             // ReSharper disable once AccessToModifiedClosure -- the test deliberately flips blockProbe after setup so the next probe blocks on probeGate.
             IsInstalledHandler = (_, _) =>
-                blockProbe ? probeGate.Task : Task.FromResult(false)
+                blockProbe ? probeGate.Task : Task.FromResult(false),
         };
         var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
         await sut.RefreshDesktopIntegrationStateAsync(CancellationToken.None);
@@ -454,7 +454,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         var writer = new FakeDeShortcutWriter
         {
             InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space"),
-            IsInstalledHandler = (_, _) => probeGate.Task
+            IsInstalledHandler = (_, _) => probeGate.Task,
         };
         var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
         var oldProbe = sut.RefreshDesktopIntegrationStateAsync(CancellationToken.None);
@@ -558,7 +558,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
                 "Shortcut installed.",
                 [],
                 hasWarning ? "Live apply failed." : null
-            )
+            ),
         };
         var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
 
@@ -584,7 +584,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         var writer = new FakeDeShortcutWriter
         {
             WriteResult = new DeShortcutWriteResult(false, "Write failed.", []),
-            WriteException = throws ? new InvalidOperationException("boom") : null
+            WriteException = throws ? new InvalidOperationException("boom") : null,
         };
         var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
 
@@ -640,7 +640,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
                 "Shortcut removed.",
                 [],
                 hasWarning ? "Reload required." : null
-            )
+            ),
         };
         var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
 
@@ -666,7 +666,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         var writer = new FakeDeShortcutWriter
         {
             RemoveResult = new DeShortcutWriteResult(false, "Remove failed.", []),
-            RemoveException = throws ? new InvalidOperationException("boom") : null
+            RemoveException = throws ? new InvalidOperationException("boom") : null,
         };
         var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
 
@@ -746,7 +746,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         hotkey.SetNativeDictationBindingActive(true);
         var writer = new FakeDeShortcutWriter
         {
-            IsInstalledException = new InvalidOperationException("boom")
+            IsInstalledException = new InvalidOperationException("boom"),
         };
         var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
 
@@ -764,7 +764,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         hotkey.SetNativeDictationBindingActive(true);
         var writer = new FakeDeShortcutWriter
         {
-            IsInstalledException = new OperationCanceledException()
+            IsInstalledException = new OperationCanceledException(),
         };
         var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
 
@@ -802,7 +802,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
             {
                 Mode = RecordingMode.Toggle,
                 ToggleHotkey = toggleHotkey,
-                WaylandEvdevHotkeysEnabled = true
+                WaylandEvdevHotkeysEnabled = true,
             }
         );
         return settings;

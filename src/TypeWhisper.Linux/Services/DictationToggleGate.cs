@@ -4,7 +4,7 @@ internal enum DictationStopGateResult
 {
     Acquired,
     PendingStartupCompletion,
-    Busy
+    Busy,
 }
 
 /// <summary>

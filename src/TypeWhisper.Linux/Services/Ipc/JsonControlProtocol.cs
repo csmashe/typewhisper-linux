@@ -54,7 +54,7 @@ internal static class JsonControlProtocol
         // the documented response shape (camelCase would not match the spec).
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        WriteIndented = false
+        WriteIndented = false,
     };
 
     public static string SerializeError(string code)

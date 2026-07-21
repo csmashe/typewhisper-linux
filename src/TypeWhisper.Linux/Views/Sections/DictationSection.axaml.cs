@@ -73,7 +73,7 @@ public partial class DictationSection : UserControl
             new FolderPickerOpenOptions
             {
                 Title = "Choose model storage folder",
-                AllowMultiple = false
+                AllowMultiple = false,
             }
         );
 

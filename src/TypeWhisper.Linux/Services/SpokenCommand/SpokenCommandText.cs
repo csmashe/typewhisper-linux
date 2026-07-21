@@ -15,7 +15,7 @@ internal static class SpokenCommandText
     public static readonly IReadOnlySet<string> LeadingFillers =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "please", "pls", "kindly", "just", "can", "could", "would", "you"
+            "please", "pls", "kindly", "just", "can", "could", "would", "you",
         };
 
     // Splits on whitespace and keeps only alphanumerics per token, dropping empties. Casing is

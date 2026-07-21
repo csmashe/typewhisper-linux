@@ -54,7 +54,7 @@ public sealed class AppearanceSectionViewModelTests
             AppSettings.Default with
             {
                 OverlayCustomLeft = left,
-                OverlayCustomTop = top
+                OverlayCustomTop = top,
             });
 
         var sut = new AppearanceSectionViewModel(settings.Object);
@@ -69,7 +69,7 @@ public sealed class AppearanceSectionViewModelTests
             AppSettings.Default with
             {
                 OverlayCustomLeft = 120.0,
-                OverlayCustomTop = 80.0
+                OverlayCustomTop = 80.0,
             });
         var sut = new AppearanceSectionViewModel(settings.Object);
 
@@ -95,7 +95,7 @@ public sealed class AppearanceSectionViewModelTests
         var updated = AppSettings.Default with
         {
             OverlayCustomLeft = 250.0,
-            OverlayCustomTop = 150.0
+            OverlayCustomTop = 150.0,
         };
         settings.SetupGet(s => s.Current).Returns(updated);
         settings.Raise(s => s.SettingsChanged += null, updated);

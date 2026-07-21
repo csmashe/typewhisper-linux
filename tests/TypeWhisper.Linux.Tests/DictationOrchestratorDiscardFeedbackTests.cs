@@ -66,7 +66,7 @@ public sealed class DictationOrchestratorDiscardFeedbackTests
             var discardReason in new[]
             {
                 LinuxShortSpeechDecision.DiscardTooShort,
-                LinuxShortSpeechDecision.DiscardNoSpeech
+                LinuxShortSpeechDecision.DiscardNoSpeech,
             }
         )
         {

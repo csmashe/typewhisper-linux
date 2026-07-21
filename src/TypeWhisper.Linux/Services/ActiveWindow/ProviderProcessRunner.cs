@@ -18,7 +18,7 @@ internal static class ProviderProcessRunner
     {
         var psi = new ProcessStartInfo(fileName, args)
         {
-            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
+            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
         };
         return RunAsync(psi, ct);
     }
@@ -36,7 +36,7 @@ internal static class ProviderProcessRunner
     {
         var psi = new ProcessStartInfo(fileName)
         {
-            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
+            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
         };
         foreach (var a in args)
         {

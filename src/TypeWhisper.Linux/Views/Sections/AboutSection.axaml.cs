@@ -35,7 +35,7 @@ public partial class AboutSection : UserControl
                     Title = Loc.Instance["Dialog.ExportDiagnostics"],
                     SuggestedFileName = "typewhisper-diagnostics.json",
                     DefaultExtension = "json",
-                    FileTypeChoices = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }]
+                    FileTypeChoices = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }],
                 }
             );
 
@@ -75,7 +75,7 @@ public partial class AboutSection : UserControl
                         $"typewhisper-settings-backup-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
                     DefaultExtension = "zip",
                     FileTypeChoices =
-                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }]
+                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }],
                 }
             );
 
@@ -119,7 +119,7 @@ public partial class AboutSection : UserControl
                     Title = Loc.Instance["Dialog.RestoreSettings"],
                     AllowMultiple = false,
                     FileTypeFilter =
-                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }]
+                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }],
                 }
             );
 

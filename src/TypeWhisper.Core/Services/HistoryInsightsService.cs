@@ -79,7 +79,7 @@ public sealed class HistoryInsightsService : IHistoryInsightsService
             ),
             PromptActionAppliedCount = records.Count(record => record.PromptActionApplied),
             TranslationAppliedCount = records.Count(record => record.TranslationApplied),
-            TopApps = topApps
+            TopApps = topApps,
         };
     }
 }

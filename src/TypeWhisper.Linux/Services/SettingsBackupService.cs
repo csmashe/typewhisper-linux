@@ -15,7 +15,7 @@ internal enum StartupRestoreStatus
     Applied,
     PriorGenerationRestored,
     LockUnavailable,
-    UnresolvedFailure
+    UnresolvedFailure,
 }
 
 internal sealed record StartupRestoreResult(
@@ -60,7 +60,7 @@ public sealed class SettingsBackupService
     [
         "settings.json",
         "settings.json.bak",
-        "linux-preferences.json"
+        "linux-preferences.json",
     ];
 
     private static readonly string[] s_backupDirectoryRoots = ["Data", "PluginData"];
@@ -78,7 +78,7 @@ public sealed class SettingsBackupService
     private static readonly JsonSerializerOptions s_transactionJsonOptions = new()
     {
         WriteIndented = true,
-        Converters = { new JsonStringEnumConverter() }
+        Converters = { new JsonStringEnumConverter() },
     };
 
     private readonly string _basePath;
@@ -133,7 +133,7 @@ public sealed class SettingsBackupService
                 kind = ManifestKind,
                 createdUtc = DateTimeOffset.UtcNow,
                 includes = s_manifestIncludes,
-                excludes = s_manifestExcludes
+                excludes = s_manifestExcludes,
             };
             var manifestEntry = archive.CreateEntry(ManifestEntryName, CompressionLevel.Optimal);
             using (var writer = new StreamWriter(manifestEntry.Open()))
@@ -254,7 +254,7 @@ public sealed class SettingsBackupService
                 {
                     Version = PendingStateVersion,
                     FileCount = fileCount,
-                    UncompressedBytes = bytes
+                    UncompressedBytes = bytes,
                 }
             );
 
@@ -369,7 +369,7 @@ public sealed class SettingsBackupService
                 ),
                 RestoreJournalPhase.Committed => FinishCommittedTransaction(),
                 RestoreJournalPhase.RolledBack => FinishRolledBackTransaction(),
-                _ => throw new InvalidDataException("The settings restore journal phase is invalid.")
+                _ => throw new InvalidDataException("The settings restore journal phase is invalid."),
             };
         }
 
@@ -379,7 +379,7 @@ public sealed class SettingsBackupService
             .Select(relativePath => new RestoreJournalItem
             {
                 RelativePath = relativePath,
-                OriginallyExisted = File.Exists(GetLiveTargetPath(relativePath))
+                OriginallyExisted = File.Exists(GetLiveTargetPath(relativePath)),
             })
             .ToArray();
 
@@ -397,7 +397,7 @@ public sealed class SettingsBackupService
         {
             Version = JournalVersion,
             Phase = RestoreJournalPhase.Prepared,
-            Items = items
+            Items = items,
         };
 
         try
@@ -563,7 +563,7 @@ public sealed class SettingsBackupService
                 {
                     Version = JournalVersion,
                     Phase = RestoreJournalPhase.RolledBack,
-                    Items = items
+                    Items = items,
                 }
             );
             TryCleanupPendingDirectory();
@@ -683,7 +683,7 @@ public sealed class SettingsBackupService
         {
             Version = journal.Version,
             Phase = phase,
-            Items = journal.Items
+            Items = journal.Items,
         };
     }
 
@@ -1005,7 +1005,7 @@ public sealed class SettingsBackupService
     {
         Prepared,
         Committed,
-        RolledBack
+        RolledBack,
     }
 
     private sealed class PendingState

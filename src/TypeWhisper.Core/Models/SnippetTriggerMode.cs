@@ -4,5 +4,5 @@ namespace TypeWhisper.Core.Models;
 public enum SnippetTriggerMode
 {
     Anywhere,
-    ExactPhrase
+    ExactPhrase,
 }

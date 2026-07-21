@@ -547,7 +547,7 @@ public sealed class GnomeShortcutWriterTests : IDisposable
     {
         None,
         AfterFirstGet,
-        AfterEveryGet
+        AfterEveryGet,
     }
 
     private sealed class StatefulGSettingsRunner : IProcessRunner

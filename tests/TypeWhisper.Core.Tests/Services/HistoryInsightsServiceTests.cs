@@ -40,7 +40,7 @@ public sealed class HistoryInsightsServiceTests
                 true,
                 promptApplied: true,
                 translationApplied: true
-            )
+            ),
         };
 
         var result = _sut.Build(records);
@@ -108,7 +108,7 @@ public sealed class HistoryInsightsServiceTests
             SnippetApplied = snippetApplied,
             DictionaryCorrectionApplied = dictionaryApplied,
             PromptActionApplied = promptApplied,
-            TranslationApplied = translationApplied
+            TranslationApplied = translationApplied,
         };
     }
 }

@@ -94,7 +94,7 @@ public sealed class ProcessRunner : IProcessRunner
                 RedirectStandardError = true,
                 RedirectStandardInput = standardInput is not null,
                 UseShellExecute = false,
-                CreateNoWindow = true
+                CreateNoWindow = true,
             };
             foreach (var arg in args)
             {

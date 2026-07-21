@@ -101,7 +101,7 @@ public sealed class UpdateCheckService
                 LatestVersion = known,
                 ReleaseUrl = string.IsNullOrWhiteSpace(_prefs.Current.LastKnownLatestUrl)
                     ? ReleasesPage
-                    : _prefs.Current.LastKnownLatestUrl
+                    : _prefs.Current.LastKnownLatestUrl,
             }
         );
     }
@@ -140,7 +140,7 @@ public sealed class UpdateCheckService
                         Checked = true,
                         Faulted = true,
                         CurrentVersion = current,
-                        Error = "No published release was found."
+                        Error = "No published release was found.",
                     };
                 }
                 else
@@ -151,7 +151,7 @@ public sealed class UpdateCheckService
                         UpdateAvailable = AppVersion.Compare(current, latest) < 0,
                         CurrentVersion = current,
                         LatestVersion = latest,
-                        ReleaseUrl = string.IsNullOrWhiteSpace(latestUrl) ? ReleasesPage : latestUrl
+                        ReleaseUrl = string.IsNullOrWhiteSpace(latestUrl) ? ReleasesPage : latestUrl,
                     };
                 }
             }
@@ -166,7 +166,7 @@ public sealed class UpdateCheckService
                 Debug.WriteLine($"[UpdateCheckService] Check failed: {ex.Message}");
                 result = new UpdateCheckResult
                 {
-                    Checked = true, Faulted = true, CurrentVersion = current, Error = ex.Message
+                    Checked = true, Faulted = true, CurrentVersion = current, Error = ex.Message,
                 };
             }
 
@@ -180,7 +180,7 @@ public sealed class UpdateCheckService
                         {
                             LastUpdateCheckUtc = DateTime.UtcNow,
                             LastKnownLatestVersion = result.LatestVersion,
-                            LastKnownLatestUrl = result.ReleaseUrl
+                            LastKnownLatestUrl = result.ReleaseUrl,
                         }
                 );
             }

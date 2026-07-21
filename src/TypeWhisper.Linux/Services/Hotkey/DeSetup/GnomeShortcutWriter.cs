@@ -113,7 +113,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             var (key, value) in new[]
             {
                 ("name", spec.DisplayName), ("command", spec.OnPressCommand),
-                ("binding", FormatGnomeAccel(spec.Trigger))
+                ("binding", FormatGnomeAccel(spec.Trigger)),
             }
         )
         {
@@ -475,7 +475,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
                 "shift" => "Shift",
                 "alt" => "Alt",
                 "super" or "win" or "windows" or "cmd" or "meta" => "Super",
-                _ => null
+                _ => null,
             };
             if (modifier is null)
             {

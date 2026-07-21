@@ -7,7 +7,7 @@ internal enum LiveTranscriptionMode
 {
     None,
     Polling,
-    Streaming
+    Streaming,
 }
 
 // Selects the live-transcription mode for the recording loop. Ported from

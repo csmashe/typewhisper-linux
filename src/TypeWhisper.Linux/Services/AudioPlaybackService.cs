@@ -92,7 +92,7 @@ public sealed class AudioPlaybackService : IDisposable
                         channelCount = Channels,
                         sampleFormat = SampleFormat.Float32,
                         suggestedLatency = outputInfo.defaultLowOutputLatency,
-                        hostApiSpecificStreamInfo = IntPtr.Zero
+                        hostApiSpecificStreamInfo = IntPtr.Zero,
                     };
 
                     _stream = new PaStream(

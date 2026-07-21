@@ -35,7 +35,7 @@ public static class WhisperHallucinationFilter
         "bye",
         "bye bye",
         "goodbye",
-        "you"
+        "you",
     };
 
     /// <summary>

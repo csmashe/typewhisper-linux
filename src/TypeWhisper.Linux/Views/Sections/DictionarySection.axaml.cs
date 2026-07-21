@@ -36,7 +36,7 @@ public partial class DictionarySection : UserControl
                     Title = Loc.Instance["Dialog.ExportDictionary"],
                     SuggestedFileName = "typewhisper-dictionary.csv",
                     DefaultExtension = "csv",
-                    FileTypeChoices = [new FilePickerFileType("CSV") { Patterns = ["*.csv"] }]
+                    FileTypeChoices = [new FilePickerFileType("CSV") { Patterns = ["*.csv"] }],
                 }
             );
 
@@ -77,7 +77,7 @@ public partial class DictionarySection : UserControl
                 {
                     Title = Loc.Instance["Dialog.ImportDictionary"],
                     AllowMultiple = false,
-                    FileTypeFilter = [new FilePickerFileType("CSV") { Patterns = ["*.csv"] }]
+                    FileTypeFilter = [new FilePickerFileType("CSV") { Patterns = ["*.csv"] }],
                 }
             );
 

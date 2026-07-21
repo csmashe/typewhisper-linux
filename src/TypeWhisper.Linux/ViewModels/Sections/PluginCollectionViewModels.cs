@@ -65,7 +65,7 @@ public partial class PluginCollectionRow : ObservableObject
             {
                 PluginSettingKind.Boolean => "true",
                 PluginSettingKind.Dropdown when field.Options is { Count: > 0 } => field.Options[0].Value,
-                _ => string.Empty
+                _ => string.Empty,
             };
         }
 

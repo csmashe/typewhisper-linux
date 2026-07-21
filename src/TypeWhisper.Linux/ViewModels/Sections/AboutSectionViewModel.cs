@@ -282,7 +282,7 @@ public partial class AboutSectionViewModel : ObservableObject
 
         var desired = new List<CategoryFilterOption>
         {
-            new(null, Loc.Instance["About.ErrorFilterAll"])
+            new(null, Loc.Instance["About.ErrorFilterAll"]),
         };
         desired.AddRange(present.Select(c => new CategoryFilterOption(c, FormatCategory(c))));
 

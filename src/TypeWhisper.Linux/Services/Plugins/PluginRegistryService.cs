@@ -48,7 +48,7 @@ public sealed class PluginRegistryService
         "com.typewhisper.qwen3-stt",
         "com.typewhisper.obsidian",
         "com.typewhisper.linear",
-        "com.typewhisper.openai-compatible"
+        "com.typewhisper.openai-compatible",
     };
 
     private readonly HttpClient _httpClient;
