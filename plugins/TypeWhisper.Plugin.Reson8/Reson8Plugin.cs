@@ -567,25 +567,60 @@ internal static class WavPcm16Extractor
         }
 
         var offset = 12;
+        short audioFormat = 0;
+        short channels = 0;
+        var sampleRate = 0;
+        short bitsPerSample = 0;
         byte[]? data = null;
 
         while (offset + 8 <= wavAudio.Length)
         {
             var chunkId = Encoding.ASCII.GetString(wavAudio, offset, 4);
-            var chunkSize = BitConverter.ToInt32(wavAudio, offset + 4);
+            var chunkSize = BitConverter.ToUInt32(wavAudio, offset + 4);
             offset += 8;
-            if (chunkSize < 0 || offset + chunkSize > wavAudio.Length)
-                break;
+            var remaining = wavAudio.Length - offset;
 
             if (chunkId == "data")
             {
-                data = wavAudio.Skip(offset).Take(chunkSize).ToArray();
+                // A non-seekable muxer (ffmpeg's `-f wav pipe:1`) can't backfill
+                // the data size and writes 0xFFFFFFFF; treat any size past the
+                // buffer end as "everything remaining".
+                var dataLength = chunkSize > (uint)remaining ? remaining : (int)chunkSize;
+                data = wavAudio.Skip(offset).Take(dataLength).ToArray();
+                offset += dataLength + dataLength % 2;
+                continue;
             }
 
-            offset += chunkSize + chunkSize % 2;
+            // Any other chunk claiming more than the buffer holds means a
+            // truncated or corrupt file, so stop scanning.
+            if (chunkSize > (uint)remaining)
+                break;
+
+            var size = (int)chunkSize;
+            if (chunkId == "fmt " && size >= 16)
+            {
+                audioFormat = BitConverter.ToInt16(wavAudio, offset);
+                channels = BitConverter.ToInt16(wavAudio, offset + 2);
+                sampleRate = BitConverter.ToInt32(wavAudio, offset + 4);
+                bitsPerSample = BitConverter.ToInt16(wavAudio, offset + 14);
+            }
+
+            offset += size + size % 2;
         }
 
-        return data ?? wavAudio;
+        if (data is null)
+            return wavAudio;
+
+        // The endpoints advertise the body as raw pcm_s16le/16 kHz/mono, so any
+        // other format would be mislabeled and transcribed as noise; reject it.
+        if (audioFormat != 1 || channels != 1 || sampleRate != 16000 || bitsPerSample != 16)
+        {
+            throw new NotSupportedException(
+                "Reson8 requires 16-bit little-endian PCM, 16 kHz, mono audio, but received "
+                + $"format={audioFormat}, channels={channels}, sampleRate={sampleRate}, bitsPerSample={bitsPerSample}.");
+        }
+
+        return data;
     }
 
     private static bool HasAscii(byte[] bytes, int offset, string value)

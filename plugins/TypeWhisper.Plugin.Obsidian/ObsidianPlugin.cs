@@ -240,7 +240,13 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
                     // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                     if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
                     {
-                        var name = Path.GetFileName(path);
+                        // Path.GetFileName yields "" for a trailing-separator path; trim
+                        // separators first, then fall back to the vault key so the picker
+                        // never shows a blank display name.
+                        var name = Path.GetFileName(
+                            path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                        if (string.IsNullOrEmpty(name))
+                            name = vault.Name;
                         vaults.Add(new ObsidianVaultInfo(name, path));
                     }
                 }

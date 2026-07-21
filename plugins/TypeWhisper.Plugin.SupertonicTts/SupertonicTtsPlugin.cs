@@ -353,6 +353,11 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
         await _downloadLock.WaitAsync(ct);
         try
         {
+            // Dispose() sets _disposed before taking this lock, so a download that
+            // only acquired the lock after teardown began must bail out here rather
+            // than touch the now-disposed asset manager.
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
             if (_assetManager.AreAssetsReady)
                 return;
 

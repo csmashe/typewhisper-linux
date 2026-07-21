@@ -346,15 +346,11 @@ internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
     private void StopListeners()
     {
         try { _v4Listener?.Stop(); }
-        catch { //nada
-        }
+        catch { /* Listener may already be stopped or disposed. */ }
 
         try { _v6Listener?.Stop(); }
-        catch
-        {
-            //nada
-            
-        }
+        catch { /* Listener may already be stopped or disposed. */ }
+
         _v4Listener = null;
         _v6Listener = null;
     }

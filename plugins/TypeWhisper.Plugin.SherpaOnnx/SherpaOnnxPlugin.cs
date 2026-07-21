@@ -928,7 +928,7 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
 
     /// <summary>
     ///     One-shot migration from the pre-plugin layout
-    ///     (<c>%LocalAppData%/TypeWhisper/s_models/</c>) into the per-plugin data
+    ///     (<c>%LocalAppData%/TypeWhisper/Models/</c>) into the per-plugin data
     ///     directory. Best-effort: failures are logged and a stale source
     ///     directory is left alone rather than blocking activation.
     /// </summary>
