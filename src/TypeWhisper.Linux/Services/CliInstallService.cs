@@ -11,7 +11,13 @@ public sealed record CliInstallState(
     string LauncherPath,
     bool LauncherDirectoryInPath,
     string StatusText
-);
+)
+{
+    // The launcher classification GetState already computed, so Install can reuse it for its
+    // pre-copy foreign-entry check instead of re-reading the launcher file. Internal: an
+    // implementation detail, not part of the public state contract.
+    internal CliInstallService.LauncherEntryClassification LauncherEntry { get; init; }
+}
 
 public sealed class CliInstallService
 {
@@ -67,7 +73,9 @@ public sealed class CliInstallService
         var launcherDirectory =
             Path.GetDirectoryName(state.LauncherPath)
             ?? throw new InvalidOperationException("Missing CLI launcher directory.");
-        var launcherEntry = ClassifyLauncherEntry(state.LauncherPath, state.InstallPath);
+        // Reuse the classification GetState already computed — nothing has touched the launcher
+        // between GetState and here, so re-reading it would only repeat the same file probe.
+        var launcherEntry = state.LauncherEntry;
         if (launcherEntry == LauncherEntryClassification.Foreign)
         {
             return CreateState(
@@ -249,7 +257,10 @@ public sealed class CliInstallService
             launcherPath,
             inPath,
             status
-        );
+        )
+        {
+            LauncherEntry = launcherEntry,
+        };
     }
 
     private static LauncherEntryClassification ClassifyLauncherEntry(
@@ -412,7 +423,7 @@ public sealed class CliInstallService
         }
     }
 
-    private enum LauncherEntryClassification
+    internal enum LauncherEntryClassification
     {
         Absent,
         Owned,

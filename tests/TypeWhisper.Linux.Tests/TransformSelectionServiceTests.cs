@@ -54,6 +54,12 @@ public sealed class TransformSelectionServiceTests
     // appeared or vanished, so the target can no longer be confirmed.
     [InlineData("123", null, null, null, true)]
     [InlineData(null, null, "123", null, true)]
+    // Asymmetric window id even when the process names match: identity vanished/appeared on one
+    // side, so a same-process match still can't confirm it is the same window.
+    [InlineData("123", "code", null, "code", true)]
+    [InlineData(null, "code", "123", "code", true)]
+    // Captured had a window id and the current target lost every identity signal.
+    [InlineData("123", "code", null, null, true)]
     public void HasSelectionTargetChanged_ReturnsExpectedResult(
         string? capturedWindowId,
         string? capturedProcessName,

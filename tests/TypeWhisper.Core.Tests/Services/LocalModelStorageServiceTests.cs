@@ -143,7 +143,11 @@ public sealed class LocalModelStorageServiceTests : IDisposable
         var alreadyCopied = Path.Join(target, LocalModelStoragePaths.PluginDataFolderName, "com.typewhisper.whisper-cpp", "Models", "ggml-base.bin");
         Directory.CreateDirectory(Path.GetDirectoryName(alreadyCopied)!);
         await File.WriteAllTextAsync(alreadyCopied, content);
-        var copiedAt = File.GetLastWriteTimeUtc(alreadyCopied);
+        // Stamp a deterministic old mtime: a stray re-copy sets "now", which is unambiguously
+        // different from this, whereas the file's just-written time could match within the
+        // filesystem's timestamp resolution and let a re-copy slip past the assertion.
+        var copiedAt = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(alreadyCopied, copiedAt);
 
         var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source });
         var service = new LocalModelStorageService(settings);
@@ -437,6 +441,13 @@ public sealed class LocalModelStorageServiceTests : IDisposable
 
             Current = settings;
             SettingsChanged?.Invoke(settings);
+        }
+
+        public AppSettings Update(Func<AppSettings, AppSettings> mutate)
+        {
+            var updated = mutate(Current);
+            Save(updated);
+            return updated;
         }
 
         public event Action<AppSettings>? SettingsChanged;

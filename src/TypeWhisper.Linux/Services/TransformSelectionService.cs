@@ -114,13 +114,24 @@ public sealed class TransformSelectionService
     {
         // Window id is the strongest signal (X11 only) — if both sides have one, trust it
         // even if process-name detection disagrees.
-        if (!string.IsNullOrEmpty(capturedWindowId) && !string.IsNullOrEmpty(currentWindowId))
+        var capturedHasWindowId = !string.IsNullOrEmpty(capturedWindowId);
+        var currentHasWindowId = !string.IsNullOrEmpty(currentWindowId);
+        if (capturedHasWindowId && currentHasWindowId)
         {
             return !string.Equals(capturedWindowId, currentWindowId, StringComparison.Ordinal);
         }
 
-        // Wayland (and any X11 case missing an id on one side) falls back to process
-        // identity — the only cross-compositor signal ActiveWindowService exposes.
+        // A window id on exactly one side means identity appeared or vanished between capture and
+        // replace — usually the captured window closing, or detection dropping the id (including
+        // the current target losing all identity). Treat it as changed even when the process names
+        // agree: we can't confirm it's the same window, so don't replace into an unconfirmable one.
+        if (capturedHasWindowId != currentHasWindowId)
+        {
+            return true;
+        }
+
+        // Neither side has a window id. Fall back to process identity — the only cross-compositor
+        // signal ActiveWindowService exposes (Wayland, or an X11 case missing an id on both sides).
         if (!string.IsNullOrEmpty(capturedProcessName) || !string.IsNullOrEmpty(currentProcessName))
         {
             return !string.Equals(
@@ -128,15 +139,6 @@ public sealed class TransformSelectionService
                 currentProcessName,
                 StringComparison.OrdinalIgnoreCase
             );
-        }
-
-        // Neither side offered a process name. A window id on exactly one side means identity
-        // appeared or vanished between capture and replace — usually the captured window
-        // closing — so treat it as changed rather than replacing into an unconfirmable window.
-        // ReSharper disable once ConvertIfStatementToReturnStatement -- collapsing to one return would strip the comment explaining the fail-open false branch.
-        if (!string.IsNullOrEmpty(capturedWindowId) || !string.IsNullOrEmpty(currentWindowId))
-        {
-            return true;
         }
 
         // No identity signal on either side — fail open rather than block a replacement we can't validate.

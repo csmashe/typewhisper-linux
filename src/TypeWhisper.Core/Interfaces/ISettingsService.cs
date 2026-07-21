@@ -18,20 +18,13 @@ public interface ISettingsService
 
     /// <summary>
     ///     Atomically applies <paramref name="mutate" /> to the latest <see cref="Current" /> and persists the
-    ///     result. Unlike <c>Save(Current with { ... })</c>, the read of the latest settings and the write happen
-    ///     under the same synchronization, so two concurrent callers mutating disjoint properties cannot lose
-    ///     each other's change. Implementations that add real locking to <see cref="Save" /> must apply
-    ///     <paramref name="mutate" /> and persist under that same lock.
+    ///     result. The read of the latest settings and the write must happen under the same synchronization as
+    ///     <see cref="Save" />, so two concurrent callers mutating disjoint properties cannot lose each other's
+    ///     change — which is why this is abstract rather than a default <c>mutate(Current)</c> + <c>Save</c>
+    ///     (that fallback would read and write in separate steps and silently drop a concurrent update).
     /// </summary>
-    // ReSharper disable once UnusedMemberInSuper.Global -- default interface method is a fallback for other implementers; the sole in-tree implementer overrides it.
     // ReSharper disable once UnusedMethodReturnValue.Global -- returns the applied settings for caller convenience/chaining; part of the public API contract.
-    AppSettings Update(Func<AppSettings, AppSettings> mutate)
-    {
-        ArgumentNullException.ThrowIfNull(mutate);
-        var updated = mutate(Current);
-        Save(updated);
-        return updated;
-    }
+    AppSettings Update(Func<AppSettings, AppSettings> mutate);
 
     event Action<AppSettings>? SettingsChanged;
 }

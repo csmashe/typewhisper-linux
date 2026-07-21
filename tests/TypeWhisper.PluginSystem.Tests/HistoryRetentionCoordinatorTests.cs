@@ -184,6 +184,13 @@ public class HistoryRetentionCoordinatorTests
             Current = settings;
             SettingsChanged?.Invoke(settings);
         }
+
+        public AppSettings Update(Func<AppSettings, AppSettings> mutate)
+        {
+            var updated = mutate(Current);
+            Save(updated);
+            return updated;
+        }
     }
 
     private sealed class FakeHistoryService : IHistoryService

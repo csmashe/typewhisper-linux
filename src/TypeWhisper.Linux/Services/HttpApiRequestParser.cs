@@ -624,5 +624,5 @@ internal static class HttpApiRequestParser
         }
     }
 
-    private sealed class RequestBodyTooLargeException : Exception;
+    private sealed class RequestBodyTooLargeException : Exception { }
 }

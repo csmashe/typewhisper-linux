@@ -896,6 +896,13 @@ public sealed class AudioRecordingServiceTests
             SettingsChanged?.Invoke(settings);
         }
 
+        public AppSettings Update(Func<AppSettings, AppSettings> mutate)
+        {
+            var updated = mutate(Current);
+            Save(updated);
+            return updated;
+        }
+
         public event Action<AppSettings>? SettingsChanged;
     }
 }
