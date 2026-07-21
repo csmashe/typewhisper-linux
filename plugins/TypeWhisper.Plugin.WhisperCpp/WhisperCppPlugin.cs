@@ -1055,7 +1055,7 @@ public sealed class WhisperCppPlugin
             return Task.FromResult<string?>(null);
 
         var raw = _host?.GetSetting<string>(NoSpeechThresholdKey);
-        return Task.FromResult<string?>(string.IsNullOrWhiteSpace(raw) ? null : raw);
+        return Task.FromResult(string.IsNullOrWhiteSpace(raw) ? null : raw);
     }
 
     public Task SetSettingValueAsync(
@@ -1351,7 +1351,10 @@ public sealed class WhisperCppPlugin
             if (File.Exists(path))
                 File.Delete(path);
         }
-        catch { }
+        catch
+        {
+            //nada
+        }
     }
 
     private sealed record ModelDefinition(

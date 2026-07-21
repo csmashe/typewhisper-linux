@@ -121,7 +121,7 @@ public sealed class FireworksPlugin
             ct
         );
 
-        await foreach (var delta in source.WithCancellation(ct))
+        await foreach (var delta in source)
             yield return delta;
     }
 

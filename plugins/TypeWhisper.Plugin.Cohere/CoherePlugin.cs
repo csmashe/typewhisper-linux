@@ -109,7 +109,7 @@ public sealed class CoherePlugin : ILlmProviderPlugin, IDisposable, IPluginSetti
             ct
         );
 
-        await foreach (var delta in source.WithCancellation(ct))
+        await foreach (var delta in source)
             yield return delta;
     }
 

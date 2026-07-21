@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 
 namespace TypeWhisper.Core.Services;
@@ -76,7 +77,7 @@ public sealed partial class IdeFileReferenceService
     }
 
     // kept instance: injected as a DI/test seam by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
     // ReSharper disable once MemberCanBeMadeStatic.Global
     public string? TryFormatReferenceCommand(string spokenText)
     {

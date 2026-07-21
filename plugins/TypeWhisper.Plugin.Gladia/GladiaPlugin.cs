@@ -103,7 +103,7 @@ public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         // Trim defensively at the internal entry too: SetSettingValueAsync
         // already trims, but a future direct caller could re-introduce
         // trailing whitespace that breaks the x-gladia-key header.
-        var trimmed = apiKey?.Trim();
+        var trimmed = apiKey.Trim();
         _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {

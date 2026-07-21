@@ -99,7 +99,7 @@ public sealed class CerebrasPlugin : ILlmProviderPlugin, IPluginSettingsProvider
             ct
         );
 
-        await foreach (var delta in source.WithCancellation(ct))
+        await foreach (var delta in source)
             yield return delta;
     }
 

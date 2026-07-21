@@ -563,10 +563,6 @@ internal static class WavPcm16Extractor
         }
 
         var offset = 12;
-        short audioFormat = 0;
-        short channels = 0;
-        int sampleRate = 0;
-        short bitsPerSample = 0;
         byte[]? data = null;
 
         while (offset + 8 <= wavAudio.Length)
@@ -577,14 +573,7 @@ internal static class WavPcm16Extractor
             if (chunkSize < 0 || offset + chunkSize > wavAudio.Length)
                 break;
 
-            if (chunkId == "fmt " && chunkSize >= 16)
-            {
-                audioFormat = BitConverter.ToInt16(wavAudio, offset);
-                channels = BitConverter.ToInt16(wavAudio, offset + 2);
-                sampleRate = BitConverter.ToInt32(wavAudio, offset + 4);
-                bitsPerSample = BitConverter.ToInt16(wavAudio, offset + 14);
-            }
-            else if (chunkId == "data")
+            if (chunkId == "data")
             {
                 data = wavAudio.Skip(offset).Take(chunkSize).ToArray();
             }
@@ -592,13 +581,7 @@ internal static class WavPcm16Extractor
             offset += chunkSize + chunkSize % 2;
         }
 
-        if (data is null)
-            return wavAudio;
-
-        if (audioFormat == 1 && channels == 1 && sampleRate == 16000 && bitsPerSample == 16)
-            return data;
-
-        return data;
+        return data ?? wavAudio;
     }
 
     private static bool HasAscii(byte[] bytes, int offset, string value)

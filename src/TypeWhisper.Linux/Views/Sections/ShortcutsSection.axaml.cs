@@ -1,6 +1,6 @@
-using System.Diagnostics;
 using Avalonia.Controls;
 using Avalonia.Input.Platform;
+using System.Diagnostics;
 using TypeWhisper.Linux.ViewModels.Sections;
 
 namespace TypeWhisper.Linux.Views.Sections;

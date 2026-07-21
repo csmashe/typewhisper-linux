@@ -207,7 +207,7 @@ public sealed class OpenRouterPlugin
             maxOutputTokens: 2048,
             temperature: TemperatureMode == TemperatureModeCustom ? TemperatureValue : null);
 
-        await foreach (var delta in source.WithCancellation(ct))
+        await foreach (var delta in source)
             yield return delta;
     }
 

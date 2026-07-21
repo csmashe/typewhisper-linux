@@ -50,8 +50,8 @@ internal static class SherpaOnnxNativeRuntime
     ];
 
     private static readonly Lock s_sync = new();
-    private static bool _resolverRegistered;
-    private static string? _cudaRuntimeDirectory;
+    private static bool s_resolverRegistered;
+    private static string? s_cudaRuntimeDirectory;
 
     /// <summary>
     ///     Registers the import resolver once. Safe (and cheap) to call even on the
@@ -63,14 +63,14 @@ internal static class SherpaOnnxNativeRuntime
     {
         lock (s_sync)
         {
-            if (_resolverRegistered)
+            if (s_resolverRegistered)
                 return;
 
             NativeLibrary.SetDllImportResolver(
                 typeof(OfflineRecognizer).Assembly,
                 ResolveNativeLibrary
             );
-            _resolverRegistered = true;
+            s_resolverRegistered = true;
         }
     }
 
@@ -86,13 +86,13 @@ internal static class SherpaOnnxNativeRuntime
 
         lock (s_sync)
         {
-            if (!_resolverRegistered)
+            if (!s_resolverRegistered)
             {
                 NativeLibrary.SetDllImportResolver(
                     typeof(OfflineRecognizer).Assembly,
                     ResolveNativeLibrary
                 );
-                _resolverRegistered = true;
+                s_resolverRegistered = true;
             }
 
             foreach (var soname in PreloadOrder)
@@ -116,7 +116,7 @@ internal static class SherpaOnnxNativeRuntime
             // Point the resolver at the GPU dir only after every dependency loaded.
             // If a preload above threw, the resolver stays on the CPU runtime so an
             // Auto fallback gets a genuine CPU load rather than the half-wired GPU one.
-            _cudaRuntimeDirectory = runtimeDirectory;
+            s_cudaRuntimeDirectory = runtimeDirectory;
         }
     }
 
@@ -126,7 +126,7 @@ internal static class SherpaOnnxNativeRuntime
         DllImportSearchPath? searchPath
     )
     {
-        var runtimeDirectory = _cudaRuntimeDirectory;
+        var runtimeDirectory = s_cudaRuntimeDirectory;
         if (string.IsNullOrWhiteSpace(runtimeDirectory))
             return IntPtr.Zero; // CPU path: let the default loader find the nuget runtime.
 

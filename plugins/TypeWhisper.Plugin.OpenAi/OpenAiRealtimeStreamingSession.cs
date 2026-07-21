@@ -175,7 +175,7 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
 
     internal static string CreateAudioAppendPayload(ReadOnlySpan<byte> pcm16Audio)
     {
-        var resampled = Resample16kPcmTo24k(pcm16Audio);
+        var resampled = Resample16KPcmTo24K(pcm16Audio);
         return JsonSerializer.Serialize(new Dictionary<string, object?>
         {
             ["type"] = "input_audio_buffer.append",
@@ -349,7 +349,7 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
         }
     }
 
-    internal static byte[] Resample16kPcmTo24k(ReadOnlySpan<byte> pcm16Audio)
+    internal static byte[] Resample16KPcmTo24K(ReadOnlySpan<byte> pcm16Audio)
     {
         var sourceSampleCount = pcm16Audio.Length / sizeof(short);
         if (sourceSampleCount == 0)
@@ -418,7 +418,7 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
             return;
 
         _disposed = true;
-        _receiveCts.Cancel();
+        await _receiveCts.CancelAsync();
 
         if (_ws.State == WebSocketState.Open)
         {
@@ -450,7 +450,10 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
         if (_receiveTask is not null)
         {
             try { await _receiveTask; }
-            catch { }
+            catch
+            {
+                //nada
+            }
         }
 
         _sendLock.Dispose();

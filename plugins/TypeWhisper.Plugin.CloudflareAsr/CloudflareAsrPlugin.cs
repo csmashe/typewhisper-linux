@@ -183,7 +183,7 @@ public sealed class CloudflareAsrPlugin
 
     internal async Task SetApiTokenAsync(string apiToken)
     {
-        var trimmed = apiToken?.Trim();
+        var trimmed = apiToken.Trim();
         _apiToken = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {

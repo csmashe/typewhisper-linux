@@ -214,7 +214,7 @@ public sealed class XaiPlugin
             : model;
         var client = new XaiResponsesClient(_httpClient, BaseUrl, ApiKey!);
         var source = client.ProcessStreamingAsync(systemPrompt, userText, modelId, ct);
-        await foreach (var delta in source.WithCancellation(ct))
+        await foreach (var delta in source)
             yield return delta;
     }
 
@@ -225,18 +225,17 @@ public sealed class XaiPlugin
             ? _fetchedVoices.Select(v => new PluginVoiceInfo(v.VoiceId, v.DisplayName, v.Language)).ToList()
             : XaiTtsConfiguration.FallbackVoices;
 
-    public string? SelectedVoiceId =>
+    public string SelectedVoiceId =>
         !string.IsNullOrWhiteSpace(CustomVoiceId)
             ? CustomVoiceId
             : _selectedVoiceId ?? XaiTtsConfiguration.DefaultVoiceId;
 
-    public string? SettingsSummary
+    public string SettingsSummary
     {
         get
         {
             var voice = AvailableVoices.FirstOrDefault(v => v.Id == SelectedVoiceId)?.DisplayName
-                ?? SelectedVoiceId
-                ?? XaiTtsConfiguration.DefaultVoiceId;
+                ?? SelectedVoiceId;
             var latency = TtsLowLatency ? "low latency" : "quality";
             return $"Voice: {voice}; {latency}";
         }
@@ -588,7 +587,7 @@ public sealed class XaiPlugin
     private static string NormalizeSttModelId(string? modelId) =>
         s_sttModels.Any(model => model.Id == modelId) ? modelId! : DefaultSttModelId;
 
-    private static string? NormalizeVoiceId(string? voiceId) =>
+    private static string NormalizeVoiceId(string? voiceId) =>
         string.IsNullOrWhiteSpace(voiceId) ? XaiTtsConfiguration.DefaultVoiceId : voiceId.Trim();
 
     private static string? NormalizeLanguage(string? language) =>

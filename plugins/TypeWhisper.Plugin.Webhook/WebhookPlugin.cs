@@ -99,7 +99,7 @@ internal sealed class WebhookStore
         }
         finally
         {
-            if (tempPath is not null && File.Exists(tempPath))
+            if (File.Exists(tempPath))
             {
                 try
                 {

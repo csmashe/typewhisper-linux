@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 
@@ -44,7 +45,7 @@ public sealed class ApiDiscoveryFile
     private static string FilePath => Path.Join(DirectoryPath, FileName);
 
     // kept instance: injected as a DI/test seam by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
     // ReSharper disable once MemberCanBeMadeStatic.Global
     public void Write(int port, string token)
     {
@@ -104,7 +105,7 @@ public sealed class ApiDiscoveryFile
     }
 
     // kept instance: injected as a DI/test seam by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
     // ReSharper disable once MemberCanBeMadeStatic.Global
     public void Delete()
     {

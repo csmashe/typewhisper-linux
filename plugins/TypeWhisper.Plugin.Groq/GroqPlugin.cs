@@ -199,7 +199,7 @@ public sealed class GroqPlugin
             ct
         );
 
-        await foreach (var delta in source.WithCancellation(ct))
+        await foreach (var delta in source)
             yield return delta;
     }
 
@@ -237,7 +237,7 @@ public sealed class GroqPlugin
                 _fetchedLlmModels = [];
                 SelectedLlmModelId = null;
                 _host.SetSetting("fetchedLlmModels", _fetchedLlmModels);
-                _host.SetSetting<string?>("selectedLlmModel", SelectedLlmModelId);
+                _host.SetSetting("selectedLlmModel", SelectedLlmModelId);
                 NormalizeSelectedLlmModel();
 
                 if (wasConfigured != IsConfigured)

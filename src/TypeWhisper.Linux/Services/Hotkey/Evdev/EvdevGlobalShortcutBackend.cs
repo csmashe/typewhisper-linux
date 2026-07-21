@@ -1,5 +1,6 @@
 using SharpHook.Native;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
@@ -302,7 +303,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         }
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of a reader that failed to start; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and awaiting here would needlessly block the attach path.")]
+    [SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of a reader that failed to start; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and awaiting here would needlessly block the attach path.")]
     private void TryAttach_NoLock(string path, long generation)
     {
         if (
@@ -407,7 +408,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         });
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of a removed reader; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and must not block this FileSystemWatcher callback.")]
+    [SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of a removed reader; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and must not block this FileSystemWatcher callback.")]
     private void OnDeviceDeleted(object? sender, FileSystemEventArgs e)
     {
         IEvdevDeviceReader? reader;
@@ -425,7 +426,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         DispatchEdges(releases);
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of stale readers pruned during rescan; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and awaiting here is unnecessary.")]
+    [SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of stale readers pruned during rescan; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and awaiting here is unnecessary.")]
     private bool Rescan()
     {
         var added = false;
@@ -541,7 +542,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         DispatchEdgeOutsideLock(dispatchEdge);
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of the failed reader; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and must not block this failure callback.")]
+    [SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of the failed reader; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and must not block this failure callback.")]
     private void OnReaderFailure(long generation, string path, Exception ex)
     {
         Trace.WriteLine($"[EvdevBackend] Reader {path} failed: {ex.Message}");

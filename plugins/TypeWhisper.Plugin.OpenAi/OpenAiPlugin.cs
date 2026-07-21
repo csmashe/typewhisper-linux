@@ -370,7 +370,7 @@ public sealed class OpenAiPlugin
             temperature: ResolvedTemperature(modelId)
         );
 
-        await foreach (var delta in source.WithCancellation(ct))
+        await foreach (var delta in source)
             yield return delta;
     }
 

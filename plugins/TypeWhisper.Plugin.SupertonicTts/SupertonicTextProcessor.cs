@@ -56,7 +56,7 @@ internal sealed partial class SupertonicTextProcessor
 
         // Embed a deterministic lower-case tag so callers that pass "EN"/"En"
         // don't produce a different token sequence than "en".
-        language = (language ?? "").Trim().ToLowerInvariant();
+        language = language.Trim().ToLowerInvariant();
 
         text = text.Normalize(NormalizationForm.FormKD);
         text = RemoveEmojiCodePoints(text);

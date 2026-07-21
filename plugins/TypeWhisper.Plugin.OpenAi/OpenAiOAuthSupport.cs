@@ -87,17 +87,15 @@ internal static class OpenAiOAuthClient
         OpenAiPkceCodes pkce,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Issuer}/oauth/token")
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Issuer}/oauth/token");
+        request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
         {
-            Content = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["grant_type"] = "authorization_code",
-                ["code"] = code,
-                ["redirect_uri"] = RedirectUri,
-                ["client_id"] = ClientId,
-                ["code_verifier"] = pkce.Verifier,
-            }),
-        };
+            ["grant_type"] = "authorization_code",
+            ["code"] = code,
+            ["redirect_uri"] = RedirectUri,
+            ["client_id"] = ClientId,
+            ["code_verifier"] = pkce.Verifier,
+        });
 
         return await SendTokenRequestAsync(httpClient, request, ct);
     }
@@ -107,15 +105,13 @@ internal static class OpenAiOAuthClient
         string refreshToken,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Issuer}/oauth/token")
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Issuer}/oauth/token");
+        request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
         {
-            Content = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["grant_type"] = "refresh_token",
-                ["refresh_token"] = refreshToken,
-                ["client_id"] = ClientId,
-            }),
-        };
+            ["grant_type"] = "refresh_token",
+            ["refresh_token"] = refreshToken,
+            ["client_id"] = ClientId,
+        });
 
         return await SendTokenRequestAsync(httpClient, request, ct);
     }
@@ -349,9 +345,15 @@ internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
     private void StopListeners()
     {
         try { _v4Listener?.Stop(); }
-        catch { }
+        catch { //nada
+        }
+
         try { _v6Listener?.Stop(); }
-        catch { }
+        catch
+        {
+            //nada
+            
+        }
         _v4Listener = null;
         _v6Listener = null;
     }

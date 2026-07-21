@@ -217,7 +217,7 @@ public sealed class OpenAiCompatiblePlugin
             ct
         );
 
-        await foreach (var delta in source.WithCancellation(ct))
+        await foreach (var delta in source)
             yield return delta;
     }
 
@@ -842,7 +842,7 @@ public sealed class OpenAiCompatiblePlugin
             ct
         );
 
-        await foreach (var delta in source.WithCancellation(ct))
+        await foreach (var delta in source)
             yield return delta;
     }
 
@@ -854,15 +854,15 @@ public sealed class OpenAiCompatiblePlugin
         var stored = host.GetSetting<List<OpenAiCompatibleProfile>>(AdditionalProfilesSettingKey) ?? [];
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var profile in stored.Where(p => p is not null))
+        foreach (var profile in stored)
         {
             profile.Id = NormalizeProfileId(profile.Id, seen);
 
             profile.Name = string.IsNullOrWhiteSpace(profile.Name) ? "Custom Server" : profile.Name.Trim();
-            profile.BaseUrl = NormalizeBaseUrl(profile.BaseUrl ?? "");
+            profile.BaseUrl = NormalizeBaseUrl(profile.BaseUrl);
             profile.SelectedModelId = NullIfWhiteSpace(profile.SelectedModelId);
             profile.SelectedLlmModelId = NullIfWhiteSpace(profile.SelectedLlmModelId);
-            profile.FetchedModels = (profile.FetchedModels ?? [])
+            profile.FetchedModels = (profile.FetchedModels)
                 .Where(m => !string.IsNullOrWhiteSpace(m.Id))
                 .ToList();
 

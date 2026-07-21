@@ -242,7 +242,7 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult<string?>(
+        Task.FromResult(
             key switch
             {
                 LicenseAcceptedSettingName => HasAcceptedModelLicense ? "true" : "false",

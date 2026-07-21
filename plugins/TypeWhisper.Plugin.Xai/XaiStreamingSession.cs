@@ -297,7 +297,6 @@ internal sealed class XaiStreamingSession : IStreamingSession
 internal sealed class XaiTranscriptCollector
 {
     private readonly List<string> _finals = [];
-    private string _interim = "";
     private string? _doneText;
     private string? _detectedLanguage;
     private double _duration;
@@ -357,7 +356,6 @@ internal sealed class XaiTranscriptCollector
 
         if (isFinal)
         {
-            _interim = "";
             if (string.IsNullOrWhiteSpace(text))
                 return null;
 
@@ -384,7 +382,6 @@ internal sealed class XaiTranscriptCollector
             return new StreamingTranscriptEvent(text, IsFinal: true);
         }
 
-        _interim = text;
         return new StreamingTranscriptEvent(text, IsFinal: false);
     }
 
@@ -392,7 +389,6 @@ internal sealed class XaiTranscriptCollector
     {
         var text = GetString(root, "text")?.Trim() ?? "";
         RememberMetadata(root);
-        _interim = "";
         IsTerminal = true;
 
         if (string.IsNullOrWhiteSpace(text))

@@ -511,7 +511,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                 // The lock covers the full unload-then-load window so callers can't
                 // observe a torn state (e.g. _weights set but _context still old).
                 await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
-                var loaded = false;
+                bool loaded;
                 try
                 {
                     // If the user has switched models OR cleared the selection while we

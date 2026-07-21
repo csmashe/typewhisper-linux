@@ -245,7 +245,8 @@ public sealed class ScriptService
         psi.Environment["TYPEWHISPER_LANGUAGE"] = context.SourceLanguage ?? "";
         psi.Environment["TYPEWHISPER_PROFILE"] = context.ProfileName ?? "";
 
-        using var process = new Process { StartInfo = psi };
+        using var process = new Process();
+        process.StartInfo = psi;
         process.Start();
 
         // Create the 5s watchdog BEFORE the stdin write so a wedged child

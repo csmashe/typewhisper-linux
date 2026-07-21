@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -437,7 +438,7 @@ public sealed class LocalModelStorageService
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            System.Diagnostics.Trace.TraceWarning(
+            Trace.TraceWarning(
                 "Model storage migration cleanup failed: {0}",
                 ex.Message);
         }
@@ -451,14 +452,14 @@ public sealed class LocalModelStorageService
         }
         catch (IOException ex)
         {
-            System.Diagnostics.Trace.TraceWarning(
+            Trace.TraceWarning(
                 "Could not delete migrated source file '{0}': {1}",
                 path,
                 ex.Message);
         }
         catch (UnauthorizedAccessException ex)
         {
-            System.Diagnostics.Trace.TraceWarning(
+            Trace.TraceWarning(
                 "Could not delete migrated source file '{0}': {1}",
                 path,
                 ex.Message);
@@ -497,14 +498,14 @@ public sealed class LocalModelStorageService
         }
         catch (IOException ex)
         {
-            System.Diagnostics.Trace.TraceWarning(
+            Trace.TraceWarning(
                 "Could not delete empty model storage directory '{0}': {1}",
                 path,
                 ex.Message);
         }
         catch (UnauthorizedAccessException ex)
         {
-            System.Diagnostics.Trace.TraceWarning(
+            Trace.TraceWarning(
                 "Could not delete empty model storage directory '{0}': {1}",
                 path,
                 ex.Message);

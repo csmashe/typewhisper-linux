@@ -237,7 +237,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
                     if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
                     {
                         var name = Path.GetFileName(path);
-                        vaults.Add(new ObsidianVaultInfo(name ?? vault.Name, path));
+                        vaults.Add(new ObsidianVaultInfo(name, path));
                     }
                 }
             }

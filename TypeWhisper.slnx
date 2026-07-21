@@ -11,4 +11,38 @@
         <Project Path="tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj"/>
         <Project Path="tests/TypeWhisper.Cli.Tests/TypeWhisper.Cli.Tests.csproj"/>
     </Folder>
+    <Folder Name="/plugins/">
+        <Project Path="plugins/TypeWhisper.Plugin.AssemblyAi/TypeWhisper.Plugin.AssemblyAi.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Cerebras/TypeWhisper.Plugin.Cerebras.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Claude/TypeWhisper.Plugin.Claude.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.CloudflareAsr/TypeWhisper.Plugin.CloudflareAsr.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Cohere/TypeWhisper.Plugin.Cohere.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Deepgram/TypeWhisper.Plugin.Deepgram.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.ElevenLabs/TypeWhisper.Plugin.ElevenLabs.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.FileMemory/TypeWhisper.Plugin.FileMemory.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Fireworks/TypeWhisper.Plugin.Fireworks.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Gemini/TypeWhisper.Plugin.Gemini.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.GemmaLocal/TypeWhisper.Plugin.GemmaLocal.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Gladia/TypeWhisper.Plugin.Gladia.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.GoogleCloudStt/TypeWhisper.Plugin.GoogleCloudStt.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Groq/TypeWhisper.Plugin.Groq.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Linear/TypeWhisper.Plugin.Linear.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Obsidian/TypeWhisper.Plugin.Obsidian.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.OpenAi/TypeWhisper.Plugin.OpenAi.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.OpenAiCompatible/TypeWhisper.Plugin.OpenAiCompatible.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.OpenAiVectorMemory/TypeWhisper.Plugin.OpenAiVectorMemory.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.OpenRouter/TypeWhisper.Plugin.OpenRouter.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Qwen3Stt/TypeWhisper.Plugin.Qwen3Stt.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Reson8/TypeWhisper.Plugin.Reson8.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Script/TypeWhisper.Plugin.Script.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.SherpaOnnx/TypeWhisper.Plugin.SherpaOnnx.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.SmallestAi/TypeWhisper.Plugin.SmallestAi.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Soniox/TypeWhisper.Plugin.Soniox.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Speechmatics/TypeWhisper.Plugin.Speechmatics.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.SupertonicTts/TypeWhisper.Plugin.SupertonicTts.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Voxtral/TypeWhisper.Plugin.Voxtral.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Webhook/TypeWhisper.Plugin.Webhook.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.WhisperCpp/TypeWhisper.Plugin.WhisperCpp.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Xai/TypeWhisper.Plugin.Xai.csproj"/>
+    </Folder>
 </Solution>

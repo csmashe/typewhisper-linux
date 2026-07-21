@@ -112,7 +112,7 @@ public sealed class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
             ct
         );
 
-        await foreach (var delta in source.WithCancellation(ct))
+        await foreach (var delta in source)
             yield return delta;
     }
 
@@ -130,7 +130,7 @@ public sealed class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        var trimmed = apiKey?.Trim();
+        var trimmed = apiKey.Trim();
         ApiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {
