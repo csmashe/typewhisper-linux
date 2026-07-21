@@ -31,6 +31,7 @@ public sealed class LinearPlugin : IActionPlugin, IPluginSettingsProvider, IPlug
 
     public string ActionId => "create-linear-issue";
     public string ActionName => "Create Linear Issue";
+    // ReSharper disable once ReturnTypeCanBeNotNullable -- matches the interface contract, which declares this member nullable.
     public string? ActionIcon => "\U0001F4CB";
 
     public IPluginHostServices? Host { get; private set; }

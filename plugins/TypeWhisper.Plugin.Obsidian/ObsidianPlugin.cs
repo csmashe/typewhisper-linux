@@ -22,6 +22,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
 
     public string ActionId => "save-to-obsidian";
     public string ActionName => "Save to Obsidian";
+    // ReSharper disable once ReturnTypeCanBeNotNullable -- matches the interface contract, which declares this member nullable.
     public string? ActionIcon => "\ud83d\udcdd";
 
     internal IPluginHostServices? Host { get; private set; }

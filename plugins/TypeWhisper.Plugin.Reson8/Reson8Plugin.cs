@@ -75,6 +75,7 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
     public IReadOnlyList<PluginModelInfo> TranscriptionModels =>
         [new(DefaultModelId, Loc.L("Settings.DefaultModel")), .. FetchedCustomModels.Select(m => new PluginModelInfo(m.Id, m.Name))];
+    // ReSharper disable once ReturnTypeCanBeNotNullable -- matches the interface contract, which declares this member nullable.
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
@@ -165,6 +166,7 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
             {
                 var text = collector.ApplyEvent(evt);
                 if (!string.IsNullOrWhiteSpace(text) && !onProgress(text))
+                    // ReSharper disable once AccessToDisposedClosure -- the closure runs only within the using-scope (or the source is disposed after the captured resource), so the access is safe.
                     streamingCts.Cancel();
             };
 

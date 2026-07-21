@@ -87,6 +87,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_models;
 
+    // ReSharper disable once ReturnTypeCanBeNotNullable -- matches the interface contract, which declares this member nullable.
     public string? SelectedModelId => _selectedModelId;
 
     public bool SupportsTranslation => false;

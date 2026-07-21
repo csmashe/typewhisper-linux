@@ -12,7 +12,6 @@ namespace TypeWhisper.Plugin.Fireworks;
 
 public sealed class FireworksPlugin
     : ILlmProviderPlugin,
-        IDisposable,
         IPluginSettingsProvider,
         IPluginLocalizationAware
 {

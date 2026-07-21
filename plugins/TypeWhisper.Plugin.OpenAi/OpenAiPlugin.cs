@@ -53,7 +53,6 @@ public sealed class OpenAiPlugin
     private List<OpenAiFetchedModel> _fetchedLlmModels = [];
     private string? _oauthAccessToken;
     private string? _oauthRefreshToken;
-    private string? _oauthIdToken;
     private string? _oauthAccountId;
     private DateTimeOffset? _oauthExpiresAt;
     private bool _forgetChatGptLogin;
@@ -141,7 +140,6 @@ public sealed class OpenAiPlugin
         ApiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
         _oauthAccessToken = NormalizeApiKey(await host.LoadSecretAsync(OAuthAccessTokenSecretName));
         _oauthRefreshToken = NormalizeApiKey(await host.LoadSecretAsync(OAuthRefreshTokenSecretName));
-        _oauthIdToken = NormalizeApiKey(await host.LoadSecretAsync(OAuthIdTokenSecretName));
         AuthMode = OpenAiAuthModeExtensions.Parse(host.GetSetting<string>(AuthModeSettingName));
         SelectedLlmModelId = host.GetSetting<string>(SelectedLlmModelSettingName);
         _selectedVoiceId = NormalizeVoiceId(host.GetSetting<string>(SelectedVoiceSettingName));
@@ -378,8 +376,10 @@ public sealed class OpenAiPlugin
 
     public IReadOnlyList<PluginVoiceInfo> AvailableVoices => OpenAiTtsConfiguration.AvailableVoices;
 
+    // ReSharper disable once ReturnTypeCanBeNotNullable -- matches the interface contract, which declares this member nullable.
     public string? SelectedVoiceId => _selectedVoiceId ?? OpenAiTtsConfiguration.DefaultVoiceId;
 
+    // ReSharper disable once ReturnTypeCanBeNotNullable -- matches the interface contract, which declares this member nullable.
     public string? SettingsSummary
     {
         get
@@ -719,7 +719,6 @@ public sealed class OpenAiPlugin
     {
         _oauthAccessToken = null;
         _oauthRefreshToken = null;
-        _oauthIdToken = null;
         _oauthAccountId = null;
         ChatGptPlanType = null;
         _oauthExpiresAt = null;
@@ -852,7 +851,6 @@ public sealed class OpenAiPlugin
             ? _oauthRefreshToken
             : tokens.RefreshToken;
         _oauthRefreshToken = effectiveRefreshToken;
-        _oauthIdToken = tokens.IdToken;
         _oauthAccountId = metadata.AccountId;
         ChatGptPlanType = metadata.PlanType;
         _oauthExpiresAt = metadata.ExpiresAt;

@@ -9,7 +9,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.SherpaOnnx;
 
-public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEnginePlugin
+public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
 {
     private const string ParakeetRepo =
         "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main";
@@ -998,6 +998,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         string Id,
         string DisplayName,
         string SizeDescription,
+        // ReSharper disable once InconsistentNaming -- MB (megabyte) is the correct unit; the suggested Mb means megabit.
         int EstimatedSizeMB,
         int LanguageCount,
         bool IsRecommended,
@@ -1008,6 +1009,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private sealed record ModelFileDefinition(
         string FileName,
         string DownloadUrl,
+        // ReSharper disable once InconsistentNaming -- MB (megabyte) is the correct unit; the suggested Mb means megabit.
         int EstimatedSizeMB
     );
 }

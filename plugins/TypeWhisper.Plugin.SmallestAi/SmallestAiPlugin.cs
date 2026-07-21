@@ -70,6 +70,7 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
     public string ProviderDisplayName => "Smallest AI";
     public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
     public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_models;
+    // ReSharper disable once ReturnTypeCanBeNotNullable -- matches the interface contract, which declares this member nullable.
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;

@@ -22,8 +22,7 @@ internal sealed record WhisperCppTranscriptionSegment(
 );
 
 public sealed class WhisperCppPlugin
-    : ITypeWhisperPlugin,
-        ITranscriptionEnginePlugin,
+    : ITranscriptionEnginePlugin,
         IPluginSettingsProvider,
         IPluginLocalizationAware
 {
@@ -417,7 +416,6 @@ public sealed class WhisperCppPlugin
         var backend = preference switch
         {
             TranscriptionAccelerationPreference.NvidiaCuda => "cuda",
-            TranscriptionAccelerationPreference.Cpu => "cpu",
             _ => "cpu",
         };
 
@@ -787,6 +785,7 @@ public sealed class WhisperCppPlugin
 
             async IAsyncEnumerable<WhisperCppTranscriptionSegment> GetSegmentsAsync()
             {
+                // ReSharper disable once AccessToDisposedClosure -- GetSegmentsAsync is fully consumed within the await-using scope, so processor/audioStream stay alive throughout.
                 await foreach (var segment in processor.ProcessAsync(audioStream, ct))
                 {
                     yield return new WhisperCppTranscriptionSegment(
@@ -1364,6 +1363,7 @@ public sealed class WhisperCppPlugin
         QuantizationType Quantization,
         string FileName,
         string SizeDescription,
+        // ReSharper disable once InconsistentNaming -- MB (megabyte) is the correct unit; the suggested Mb means megabit.
         long EstimatedSizeMB,
         int LanguageCount,
         bool IsRecommended

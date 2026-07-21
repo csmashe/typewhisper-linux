@@ -21,6 +21,7 @@ public sealed record WebhookConfig
     public string HttpMethod { get; init; } = "POST";
     public Dictionary<string, string> Headers { get; init; } = [];
     public bool IsEnabled { get; init; } = true;
+    // ReSharper disable once TypeWithSuspiciousEqualityIsUsedInRecord.Global -- config record identity is its Id; the collection members are never compared by value.
     public List<string> ProfileFilter { get; init; } = [];
 }
 

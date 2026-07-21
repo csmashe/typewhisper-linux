@@ -385,5 +385,6 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         _lock.Dispose();
     }
 
+    // ReSharper disable once NotAccessedPositionalProperty.Local -- CreatedAt is persisted metadata in the serialized entry shape, not dead code.
     private sealed record VectorMemoryEntry(string Content, float[] Embedding, DateTime CreatedAt);
 }

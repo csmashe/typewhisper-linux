@@ -75,6 +75,7 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
         ISupertonicAssetManager? assetManager,
         Func<string, ISupertonicSynthesizer> synthesizerFactory,
         Func<float[], int, ITtsPlaybackSession>? playbackFactory,
+        // ReSharper disable once UnusedParameter.Local -- disambiguates the constructor overload; required by the signature even though unused in the body.
         bool useNullableAssetManagerOverload)
     {
         _injectedAssetManager = assetManager;
@@ -91,6 +92,7 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
     public string ProviderDisplayName => "Supertonic TTS";
     public bool IsConfigured => _assetManager?.AreAssetsReady ?? false;
     public IReadOnlyList<PluginVoiceInfo> AvailableVoices => s_voices;
+    // ReSharper disable once ReturnTypeCanBeNotNullable -- matches the interface contract, which declares this member nullable.
     public string? SelectedVoiceId => _selectedVoiceId;
     internal double Speed { get; private set; } = DefaultSpeed;
     internal int DenoisingSteps { get; private set; } = DefaultDenoisingSteps;
@@ -107,6 +109,7 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
+    // ReSharper disable once ReturnTypeCanBeNotNullable -- matches the interface contract, which declares this member nullable.
     public string? SettingsSummary
     {
         get

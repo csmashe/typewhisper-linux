@@ -670,6 +670,7 @@ internal sealed record GemmaModelDefinition(
     string Id,
     string DisplayName,
     string SizeDescription,
+    // ReSharper disable once InconsistentNaming -- MB (megabyte) is the correct unit; the suggested Mb means megabit.
     int EstimatedSizeMB,
     bool IsRecommended,
     string DownloadUrl,

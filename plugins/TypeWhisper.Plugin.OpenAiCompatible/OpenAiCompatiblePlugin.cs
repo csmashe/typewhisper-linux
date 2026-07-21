@@ -862,7 +862,7 @@ public sealed class OpenAiCompatiblePlugin
             profile.BaseUrl = NormalizeBaseUrl(profile.BaseUrl);
             profile.SelectedModelId = NullIfWhiteSpace(profile.SelectedModelId);
             profile.SelectedLlmModelId = NullIfWhiteSpace(profile.SelectedLlmModelId);
-            profile.FetchedModels = (profile.FetchedModels)
+            profile.FetchedModels = profile.FetchedModels
                 .Where(m => !string.IsNullOrWhiteSpace(m.Id))
                 .ToList();
 

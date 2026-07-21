@@ -10,7 +10,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Cohere;
 
-public sealed class CoherePlugin : ILlmProviderPlugin, IDisposable, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class CoherePlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.cohere.com/compatibility";
     private readonly HttpClient _httpClient;
