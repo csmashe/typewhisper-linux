@@ -37,7 +37,7 @@ public class CudaRuntimeProvisionerTests
         using var _ = http;
         var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
         {
-            SystemLibraryProbeForTests = _ => false
+            SystemLibraryProbeForTests = _ => false,
         };
 
         await provisioner.DownloadAndExtractAsync(
@@ -73,7 +73,7 @@ public class CudaRuntimeProvisionerTests
         using var _ = http;
         var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
         {
-            SystemLibraryProbeForTests = _ => false
+            SystemLibraryProbeForTests = _ => false,
         };
 
         await provisioner.DownloadAndExtractAsync(
@@ -96,7 +96,7 @@ public class CudaRuntimeProvisionerTests
         using var _ = http;
         var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
         {
-            SystemLibraryProbeForTests = _ => false
+            SystemLibraryProbeForTests = _ => false,
         };
 
         await provisioner.DownloadAndExtractAsync(
@@ -123,7 +123,7 @@ public class CudaRuntimeProvisionerTests
         var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
         {
             // Every soname resolvable on the "system" → no wheel is missing.
-            SystemLibraryProbeForTests = _ => true
+            SystemLibraryProbeForTests = _ => true,
         };
 
         var progress = new RecordingProgress();
@@ -193,14 +193,14 @@ public class CudaRuntimeProvisionerTests
             Wheel(CublasPackage, CublasVersion,
             [
                 ("nvidia/cublas/lib/libcublas.so.12", 16),
-                    ("nvidia/cublas/lib/libcublasLt.so.12", 16)
-            ], nullSha: true)
+                    ("nvidia/cublas/lib/libcublasLt.so.12", 16),
+            ], nullSha: true),
         };
         var handler = new FakePyPiHandler(fixtures);
         using var http = new HttpClient(handler);
         var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
         {
-            SystemLibraryProbeForTests = _ => false
+            SystemLibraryProbeForTests = _ => false,
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -223,14 +223,14 @@ public class CudaRuntimeProvisionerTests
             Wheel(CublasPackage, CublasVersion,
             [
                 ("nvidia/cublas/lib/libcublas.so.12", 16),
-                    ("nvidia/cublas/lib/libcublasLt.so.12", 16)
-            ], noManylinux: true)
+                    ("nvidia/cublas/lib/libcublasLt.so.12", 16),
+            ], noManylinux: true),
         };
         var handler = new FakePyPiHandler(fixtures);
         using var http = new HttpClient(handler);
         var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
         {
-            SystemLibraryProbeForTests = _ => false
+            SystemLibraryProbeForTests = _ => false,
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -257,13 +257,13 @@ public class CudaRuntimeProvisionerTests
             CublasPackage, CublasVersion,
             [
                 ("nvidia/cublas/lib/libcublas.so.12", 200_000),
-                ("nvidia/cublas/lib/libcublasLt.so.12", 100_000)
+                ("nvidia/cublas/lib/libcublasLt.so.12", 100_000),
             ]);
         var handler = new FakePyPiHandler([cudart, cublas]);
         using var http = new HttpClient(handler);
         var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
         {
-            SystemLibraryProbeForTests = _ => false
+            SystemLibraryProbeForTests = _ => false,
         };
 
         var progress = new RecordingProgress();
@@ -290,7 +290,7 @@ public class CudaRuntimeProvisionerTests
         using var _ = http;
         var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
         {
-            SystemLibraryProbeForTests = _ => false
+            SystemLibraryProbeForTests = _ => false,
         };
 
         var a = provisioner.DownloadAndExtractAsync(
@@ -315,8 +315,8 @@ public class CudaRuntimeProvisionerTests
             Wheel(CublasPackage, CublasVersion,
             [
                 ("nvidia/cublas/lib/libcublas.so.12", 16),
-                    ("nvidia/cublas/lib/libcublasLt.so.12", 16)
-            ])
+                    ("nvidia/cublas/lib/libcublasLt.so.12", 16),
+            ]),
         };
         var handler = new FakePyPiHandler(fixtures);
         return (handler, new HttpClient(handler));
@@ -345,7 +345,7 @@ public class CudaRuntimeProvisionerTests
             Zip = BuildWheelZip(entries),
             OmitSize = omitSize,
             NullSha = nullSha,
-            NoManylinux = noManylinux
+            NoManylinux = noManylinux,
         };
 
     private static byte[] BuildWheelZip(params (string Path, int Bytes)[] entries)
@@ -430,7 +430,7 @@ public class CudaRuntimeProvisionerTests
             return Task.FromResult(
                 new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new ByteArrayContent(fixture.Zip)
+                    Content = new ByteArrayContent(fixture.Zip),
                 });
 
         }
@@ -438,7 +438,7 @@ public class CudaRuntimeProvisionerTests
         private static HttpResponseMessage Json(string json) =>
             new(HttpStatusCode.OK)
             {
-                Content = new StringContent(json, Encoding.UTF8, "application/json")
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
             };
 
         private static string BuildPyPiJson(WheelFixture w)

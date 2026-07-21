@@ -37,7 +37,7 @@ public class ModelManagerServiceTests
                     SelectedModelId = ModelManagerService.GetPluginModelId(
                         "com.typewhisper.sherpa-onnx",
                         "parakeet"
-                    )
+                    ),
                 }
             );
 
@@ -672,7 +672,7 @@ public class ModelManagerServiceTests
             .Returns(new AppSettings
             {
                 SelectedModelId = fullModelId,
-                LocalModelAcceleration = savedPreference
+                LocalModelAcceleration = savedPreference,
             });
 
         var fake = new FakeTranscriptionPlugin(pluginId, true, null, true);
@@ -683,7 +683,7 @@ public class ModelManagerServiceTests
             // doesn't throw, then verify the plugin saw the right resolved value.
             CudaRuntimePreflight = () => savedPreference == AppSettings.LocalModelAccelerationNvidiaCuda
                 ? (true, "preflight ok")
-                : (false, "no cuda")
+                : (false, "no cuda"),
         };
 
         await sut.LoadModelAsync(fullModelId);
@@ -706,14 +706,14 @@ public class ModelManagerServiceTests
             .Returns(new AppSettings
             {
                 SelectedModelId = fullModelId,
-                LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto,
             });
 
         var fake = new FakeTranscriptionPlugin(pluginId, true, null, true);
         var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
         {
             // Simulates "CUDA libs present, GPU absent" — preflight reports failure.
-            CudaRuntimePreflight = () => (false, "No NVIDIA GPU/driver detected.")
+            CudaRuntimePreflight = () => (false, "No NVIDIA GPU/driver detected."),
         };
 
         await sut.LoadModelAsync(fullModelId);
@@ -733,13 +733,13 @@ public class ModelManagerServiceTests
             .Returns(new AppSettings
             {
                 SelectedModelId = fullModelId,
-                LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto,
             });
 
         var fake = new FakeTranscriptionPlugin(pluginId, true, null, true);
         var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
         {
-            CudaRuntimePreflight = () => (true, "preflight ok")
+            CudaRuntimePreflight = () => (true, "preflight ok"),
         };
 
         await sut.LoadModelAsync(fullModelId);
@@ -763,13 +763,13 @@ public class ModelManagerServiceTests
             .Returns(new AppSettings
             {
                 SelectedModelId = fullModelId,
-                LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda,
             });
 
         var fake = new FakeTranscriptionPlugin(pluginId, true, null, true);
         var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
         {
-            CudaRuntimePreflight = () => (false, "CUDA 12 runtime libraries are not installed.")
+            CudaRuntimePreflight = () => (false, "CUDA 12 runtime libraries are not installed."),
         };
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -794,12 +794,12 @@ public class ModelManagerServiceTests
             .Returns(new AppSettings
             {
                 SelectedModelId = fullModelId,
-                LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda,
             });
 
         var fake = new FakeTranscriptionPlugin(pluginId, true, null, true)
         {
-            ProvisionsCudaRuntimeOnDemand = true
+            ProvisionsCudaRuntimeOnDemand = true,
         };
         var preflightCalls = 0;
         var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
@@ -808,7 +808,7 @@ public class ModelManagerServiceTests
             {
                 preflightCalls++;
                 return (false, "CUDA 12 runtime libraries are not installed.");
-            }
+            },
         };
 
         await sut.LoadModelAsync(fullModelId);
@@ -835,16 +835,16 @@ public class ModelManagerServiceTests
             .Returns(new AppSettings
             {
                 SelectedModelId = fullModelId,
-                LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto,
             });
 
         var fake = new FakeTranscriptionPlugin(pluginId, true, null, true)
         {
-            ProvisionsCudaRuntimeOnDemand = true
+            ProvisionsCudaRuntimeOnDemand = true,
         };
         var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
         {
-            CudaRuntimePreflight = () => (false, "CUDA 12 runtime libraries are not installed.")
+            CudaRuntimePreflight = () => (false, "CUDA 12 runtime libraries are not installed."),
         };
 
         await sut.LoadModelAsync(fullModelId);
@@ -867,12 +867,12 @@ public class ModelManagerServiceTests
             .Returns(new AppSettings
             {
                 SelectedModelId = fullModelId,
-                LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto,
             });
 
         var fake = new FakeTranscriptionPlugin(pluginId, true, null, true)
         {
-            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu]
+            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu],
         };
         var preflightCalls = 0;
         var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
@@ -881,7 +881,7 @@ public class ModelManagerServiceTests
             {
                 preflightCalls++;
                 return (false, "should not be called");
-            }
+            },
         };
 
         await sut.LoadModelAsync(fullModelId);
@@ -907,12 +907,12 @@ public class ModelManagerServiceTests
             .Returns(new AppSettings
             {
                 SelectedModelId = fullModelId,
-                LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda,
             });
 
         var fake = new FakeTranscriptionPlugin(pluginId, true, null, true)
         {
-            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu]
+            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu],
         };
         var preflightCalls = 0;
         var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
@@ -921,7 +921,7 @@ public class ModelManagerServiceTests
             {
                 preflightCalls++;
                 return (false, "should not be called");
-            }
+            },
         };
 
         await sut.LoadModelAsync(fullModelId);
@@ -943,7 +943,7 @@ public class ModelManagerServiceTests
         var currentSettings = new AppSettings
         {
             SelectedModelId = fullModelId,
-            LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu
+            LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu,
         };
         // currentSettings is reassigned below to simulate a preference change; the
         // Setup lambda intentionally reads the latest value each time s.Current is read.
@@ -955,7 +955,7 @@ public class ModelManagerServiceTests
         {
             // Make the preflight always succeed so the explicit-NvidiaCuda case
             // can take the load path (rather than throwing).
-            CudaRuntimePreflight = () => (true, "ok")
+            CudaRuntimePreflight = () => (true, "ok"),
         };
 
         await sut.EnsureModelLoadedAsync(fullModelId);
@@ -965,7 +965,7 @@ public class ModelManagerServiceTests
 
         currentSettings = currentSettings with
         {
-            LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda
+            LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda,
         };
 
         await sut.EnsureModelLoadedAsync(fullModelId);
@@ -986,13 +986,13 @@ public class ModelManagerServiceTests
             .Returns(new AppSettings
             {
                 SelectedModelId = fullModelId,
-                LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu,
             });
 
         var fake = new FakeTranscriptionPlugin(pluginId, true, null, true);
         var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
         {
-            CudaRuntimePreflight = () => (false, "no cuda")
+            CudaRuntimePreflight = () => (false, "no cuda"),
         };
 
         await sut.EnsureModelLoadedAsync(fullModelId);
@@ -1011,15 +1011,15 @@ public class ModelManagerServiceTests
 
         var sherpa = new FakeTranscriptionPlugin("com.typewhisper.sherpa-onnx", true, null)
         {
-            ProvisionsCudaRuntimeOnDemand = true
+            ProvisionsCudaRuntimeOnDemand = true,
         };
         var whisper = new FakeTranscriptionPlugin("com.typewhisper.whisper-cpp", true, null)
         {
-            ProvisionsCudaRuntimeOnDemand = true
+            ProvisionsCudaRuntimeOnDemand = true,
         };
         var cloud = new FakeTranscriptionPlugin("com.typewhisper.openai", true, null)
         {
-            ProvisionsCudaRuntimeOnDemand = false
+            ProvisionsCudaRuntimeOnDemand = false,
         };
         var sut = new ModelManagerService(
             CreatePluginManager(sherpa, whisper, cloud),
@@ -1045,11 +1045,11 @@ public class ModelManagerServiceTests
         var failing = new FakeTranscriptionPlugin("com.typewhisper.sherpa-onnx", true, null)
         {
             ProvisionsCudaRuntimeOnDemand = true,
-            ClearCudaRuntimeError = "permission denied"
+            ClearCudaRuntimeError = "permission denied",
         };
         var succeeding = new FakeTranscriptionPlugin("com.typewhisper.whisper-cpp", true, null)
         {
-            ProvisionsCudaRuntimeOnDemand = true
+            ProvisionsCudaRuntimeOnDemand = true,
         };
         var sut = new ModelManagerService(
             CreatePluginManager(failing, succeeding),
@@ -1080,7 +1080,7 @@ public class ModelManagerServiceTests
             .Returns(new AppSettings
             {
                 SelectedModelId = fullModelId,
-                ModelAutoUnloadSeconds = modelAutoUnloadSeconds
+                ModelAutoUnloadSeconds = modelAutoUnloadSeconds,
             });
 
         var fake = new FakeTranscriptionPlugin(
@@ -1111,7 +1111,7 @@ public class ModelManagerServiceTests
             .Returns(new AppSettings
             {
                 SelectedModelId = oldModelId,
-                ModelAutoUnloadSeconds = 60
+                ModelAutoUnloadSeconds = 60,
             });
 
         var oldPlugin = new FakeTranscriptionPlugin(oldPluginId, true, null, true);
@@ -1121,7 +1121,7 @@ public class ModelManagerServiceTests
             _settings.Object
         )
         {
-            CudaRuntimePreflight = () => (false, "CUDA not available in test")
+            CudaRuntimePreflight = () => (false, "CUDA not available in test"),
         };
         return service;
     }
@@ -1167,7 +1167,7 @@ public class ModelManagerServiceTests
             TranscriptionModels =
             [
                 new PluginModelInfo("parakeet", "Parakeet"),
-                new PluginModelInfo("whisper", "Whisper")
+                new PluginModelInfo("whisper", "Whisper"),
             ];
         }
 

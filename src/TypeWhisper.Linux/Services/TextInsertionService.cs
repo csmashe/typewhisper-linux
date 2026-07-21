@@ -16,7 +16,7 @@ public enum InsertionResult
     MissingClipboardTool,
     MissingPasteTool,
     Failed,
-    ActionUnavailable
+    ActionUnavailable,
 }
 
 /// <summary>
@@ -32,7 +32,7 @@ public enum InsertionFailureReason
     NoWaylandTypingTool,
     FocusFailed,
     PasteRetriesExhausted,
-    PartialTypingFailure
+    PartialTypingFailure,
 }
 
 public sealed record TextInsertionRequest(
@@ -222,7 +222,7 @@ public sealed class TextInsertionService
                          && string.IsNullOrEmpty(targetWindowTitle)
                          && _platform.PrefersDirectTypingForUnknownTarget
                          && IsAsciiSafe(text)
-                     )
+                     ),
             };
 
         if (shouldTypeDirectly)
@@ -1012,7 +1012,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             "STRING",
             "UTF8_STRING",
             "TEXT",
-            "COMPOUND_TEXT"
+            "COMPOUND_TEXT",
         ],
         StringComparer.OrdinalIgnoreCase
     );
@@ -1296,7 +1296,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                         ? YdotoolBackend.TerminalPasteArgs()
                         : YdotoolBackend.PasteArgs()
                 ),
-                _ => false
+                _ => false,
             }
         );
     }
@@ -1389,7 +1389,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 null
             ) == 0,
             InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.TypeArgs(segment)),
-            _ => false
+            _ => false,
         };
     }
 
@@ -1404,7 +1404,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 null
             ) == 0,
             InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.ShiftEnterArgs()),
-            _ => false
+            _ => false,
         };
     }
 
@@ -1422,7 +1422,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 InputBackend.Ydotool => await RunYdotoolAsync(
                     useTerminalShortcut ? YdotoolBackend.TerminalCopyArgs() : YdotoolBackend.CopyArgs()
                 ),
-                _ => false
+                _ => false,
             }
         );
     }
@@ -1439,7 +1439,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                     null
                 ) == 0,
                 InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.EnterArgs()),
-                _ => false
+                _ => false,
             }
         );
     }
@@ -1615,7 +1615,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         {
             var psi = new ProcessStartInfo("xdotool", arguments)
             {
-                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
+                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
             };
             using var p = Process.Start(psi);
             if (p is null)
@@ -1811,7 +1811,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         None,
         Xdotool,
         Wtype,
-        Ydotool
+        Ydotool,
     }
 
     internal delegate Task<int> ProcessRunnerWithEnv(

@@ -54,7 +54,7 @@ public sealed class LinuxPreferencesService
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        WriteIndented = true, PropertyNameCaseInsensitive = true
+        WriteIndented = true, PropertyNameCaseInsensitive = true,
     };
 
     private readonly Action<string, string> _atomicWrite;

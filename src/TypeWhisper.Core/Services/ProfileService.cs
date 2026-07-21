@@ -117,7 +117,7 @@ public sealed class ProfileService : IProfileService
             var updated = newCache[idx] with
             {
                 IsEnabled = !newCache[idx].IsEnabled,
-                UpdatedAt = DateTime.UtcNow
+                UpdatedAt = DateTime.UtcNow,
             };
             newCache[idx] = updated;
             CommitLocked(newCache);

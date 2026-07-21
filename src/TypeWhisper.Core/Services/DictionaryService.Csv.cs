@@ -137,7 +137,7 @@ public sealed partial class DictionaryService
                     IsEnabled = row.Count <= 4 || ReadBool(row, 4),
                     IsStarred = ReadBool(row, 5),
                     Priority = ReadInt(row, 6),
-                    Source = ReadSource(row, 7)
+                    Source = ReadSource(row, 7),
                 };
 
                 if (entryType == DictionaryEntryType.Correction)
@@ -157,7 +157,7 @@ public sealed partial class DictionaryService
                             IsEnabled = entry.IsEnabled,
                             IsStarred = entry.IsStarred,
                             Priority = entry.Priority,
-                            Source = entry.Source
+                            Source = entry.Source,
                         };
                         imported++;
                         continue;

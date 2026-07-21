@@ -45,7 +45,7 @@ public sealed class WebhookCollectionSettingsTests : IDisposable
             CollectionKey,
             [
                 Item("Hook A", "https://a.example/x"),
-                Item("Hook B", "http://b.example/y", "PUT", enabled: "false")
+                Item("Hook B", "http://b.example/y", "PUT", enabled: "false"),
             ]
         );
 
@@ -311,7 +311,7 @@ public sealed class WebhookCollectionSettingsTests : IDisposable
             ["method"] = method,
             ["headers"] = headers,
             ["profiles"] = profiles,
-            ["enabled"] = enabled
+            ["enabled"] = enabled,
         };
         if (id is not null)
         {

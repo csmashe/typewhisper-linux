@@ -269,7 +269,7 @@ public sealed partial class DictionaryService : IDictionaryService
                 newCache.Add(
                     new DictionaryEntry
                     {
-                        Id = Guid.NewGuid().ToString(), EntryType = DictionaryEntryType.Term, Original = term
+                        Id = Guid.NewGuid().ToString(), EntryType = DictionaryEntryType.Term, Original = term,
                     }
                 );
             }
@@ -370,7 +370,7 @@ public sealed partial class DictionaryService : IDictionaryService
                 {
                     newCache[idx] = existing with
                     {
-                        Replacement = replacement, CaseSensitive = caseSensitive, IsEnabled = true
+                        Replacement = replacement, CaseSensitive = caseSensitive, IsEnabled = true,
                     };
                 }
             }
@@ -384,7 +384,7 @@ public sealed partial class DictionaryService : IDictionaryService
                         Original = original,
                         Replacement = replacement,
                         CaseSensitive = caseSensitive,
-                        Source = DictionaryEntrySource.Manual
+                        Source = DictionaryEntrySource.Manual,
                     }
                 );
             }
@@ -459,7 +459,7 @@ public sealed partial class DictionaryService : IDictionaryService
                         Replacement = replacement,
                         UsageCount = existing.UsageCount + 1,
                         TimesCorrected = existing.TimesCorrected + 1,
-                        LastCorrectedAt = DateTime.UtcNow
+                        LastCorrectedAt = DateTime.UtcNow,
                     };
                 }
             }
@@ -474,7 +474,7 @@ public sealed partial class DictionaryService : IDictionaryService
                         Replacement = replacement,
                         TimesCorrected = 1,
                         LastCorrectedAt = DateTime.UtcNow,
-                        Source = DictionaryEntrySource.CorrectionSuggestion
+                        Source = DictionaryEntrySource.CorrectionSuggestion,
                     }
                 );
             }
@@ -543,7 +543,7 @@ public sealed partial class DictionaryService : IDictionaryService
                     {
                         Replacement = replacement,
                         TimesCorrected = existing.TimesCorrected + 1,
-                        LastCorrectedAt = DateTime.UtcNow
+                        LastCorrectedAt = DateTime.UtcNow,
                     };
                     newCache[idx] = updated;
                     learned.Add(
@@ -561,7 +561,7 @@ public sealed partial class DictionaryService : IDictionaryService
                     Replacement = replacement,
                     TimesCorrected = 1,
                     LastCorrectedAt = DateTime.UtcNow,
-                    Source = DictionaryEntrySource.AutoLearned
+                    Source = DictionaryEntrySource.AutoLearned,
                 };
                 newCache.Add(entry);
                 learned.Add(new LearnedDictionaryCorrection(entry.Id, entry.Original, replacement));
@@ -649,7 +649,7 @@ public sealed partial class DictionaryService : IDictionaryService
                 .Terms.Where(t => !existingPackIds.Contains($"pack:{pack.Id}:{t}"))
                 .Select(t => new DictionaryEntry
                 {
-                    Id = $"pack:{pack.Id}:{t}", EntryType = DictionaryEntryType.Term, Original = t
+                    Id = $"pack:{pack.Id}:{t}", EntryType = DictionaryEntryType.Term, Original = t,
                 })
                 .ToList();
 
@@ -737,7 +737,7 @@ public sealed partial class DictionaryService : IDictionaryService
                 {
                     UsageCount = newCache[idx].UsageCount + delta,
                     TimesApplied = newCache[idx].TimesApplied + delta,
-                    LastUsedAt = now
+                    LastUsedAt = now,
                 };
                 changed = true;
             }

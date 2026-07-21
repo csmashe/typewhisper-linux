@@ -278,7 +278,7 @@ public sealed partial class SnippetService : ISnippetService
                         "time" => now.ToString(format ?? "HH:mm"),
                         "datetime" => now.ToString(format ?? "yyyy-MM-dd HH:mm"),
                         "clipboard" => clipboardProvider?.Invoke() ?? "",
-                        _ => match.Value
+                        _ => match.Value,
                     };
                 }
             );
@@ -317,7 +317,7 @@ public sealed partial class SnippetService : ISnippetService
                 next[idx] = next[idx] with
                 {
                     UsageCount = next[idx].UsageCount + delta,
-                    LastUsedAt = now
+                    LastUsedAt = now,
                 };
                 changed = true;
             }

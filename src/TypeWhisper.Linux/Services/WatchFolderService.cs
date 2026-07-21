@@ -13,7 +13,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
 
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true
+        WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true,
     };
 
     private readonly ConcurrentDictionary<string, WatchFolderRun> _activeFiles = new(
@@ -190,7 +190,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
             {
                 NotifyFilter =
                     NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size,
-                IncludeSubdirectories = false
+                IncludeSubdirectories = false,
             };
             run = new WatchFolderRun(
                 cancellationSource,
@@ -578,7 +578,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
                     ProcessedAtUtc = DateTime.UtcNow,
                     OutputPath = outputPath,
                     Success = true,
-                    ErrorMessage = sourceDeletionError
+                    ErrorMessage = sourceDeletionError,
                 }
             );
         }
@@ -612,7 +612,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
                     ProcessedAtUtc = DateTime.UtcNow,
                     OutputPath = "",
                     Success = false,
-                    ErrorMessage = ex.Message
+                    ErrorMessage = ex.Message,
                 }
             );
         }

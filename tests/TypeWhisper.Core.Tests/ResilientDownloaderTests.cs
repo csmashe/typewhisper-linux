@@ -161,7 +161,7 @@ public sealed class ResilientDownloaderTests
 
             var handler = new ScriptedHandler(body)
             {
-                WrapStream = slice => new FaultyStream(slice, k, FaultKind.Drop)
+                WrapStream = slice => new FaultyStream(slice, k, FaultKind.Drop),
             };
             using var client = new HttpClient(handler);
 
@@ -200,7 +200,7 @@ public sealed class ResilientDownloaderTests
 
             var handler = new ScriptedHandler(body)
             {
-                WrapStream = slice => new FaultyStream(slice, k, FaultKind.Stall)
+                WrapStream = slice => new FaultyStream(slice, k, FaultKind.Stall),
             };
             using var client = new HttpClient(handler);
 
@@ -228,7 +228,7 @@ public sealed class ResilientDownloaderTests
 
             var handler = new ScriptedHandler(body)
             {
-                WrapStream = slice => new FaultyStream(slice, 1000, FaultKind.Stall)
+                WrapStream = slice => new FaultyStream(slice, 1000, FaultKind.Stall),
             };
             using var client = new HttpClient(handler);
             using var cts = new CancellationTokenSource();
@@ -259,7 +259,7 @@ public sealed class ResilientDownloaderTests
             // Declares the full slice length but serves only k bytes then clean-EOFs.
             var handler = new ScriptedHandler(body)
             {
-                WrapStream = slice => new FaultyStream(slice, k, FaultKind.Truncate)
+                WrapStream = slice => new FaultyStream(slice, k, FaultKind.Truncate),
             };
             using var client = new HttpClient(handler);
 
@@ -330,7 +330,7 @@ public sealed class ResilientDownloaderTests
 
             var handler = new ScriptedHandler(body)
             {
-                WrapStream = slice => new FaultyStream(slice, 2000, FaultKind.Drop)
+                WrapStream = slice => new FaultyStream(slice, 2000, FaultKind.Drop),
             };
             using var client = new HttpClient(handler);
 

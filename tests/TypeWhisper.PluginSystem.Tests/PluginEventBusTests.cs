@@ -223,7 +223,7 @@ public class PluginEventBusTests
                 Text = "Hello world",
                 DetectedLanguage = "en",
                 DurationSeconds = 3.5,
-                ModelId = "whisper-large-v3"
+                ModelId = "whisper-large-v3",
             }
         );
 

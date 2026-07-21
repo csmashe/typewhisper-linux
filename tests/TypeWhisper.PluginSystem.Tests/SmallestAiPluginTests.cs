@@ -96,7 +96,7 @@ public class SmallestAiPluginTests
     {
         var host = new TestPluginHostServices
         {
-            SecretWriteDelay = TimeSpan.FromMilliseconds(30)
+            SecretWriteDelay = TimeSpan.FromMilliseconds(30),
         };
         var sut = new SmallestAiPlugin();
         await sut.ActivateAsync(host);
@@ -358,7 +358,7 @@ public class SmallestAiPluginTests
     private static HttpResponseMessage JsonResponse(string json, HttpStatusCode statusCode = HttpStatusCode.OK) =>
         new(statusCode)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
 
     private sealed class CapturingHandler(
@@ -379,7 +379,7 @@ public class SmallestAiPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

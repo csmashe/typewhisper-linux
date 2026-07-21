@@ -104,7 +104,7 @@ public sealed class PluginManagerTests : IDisposable
     {
         var customSettings = new AppSettings
         {
-            PluginEnabledState = new Dictionary<string, bool> { ["com.test.plugin"] = true }
+            PluginEnabledState = new Dictionary<string, bool> { ["com.test.plugin"] = true },
         };
         _settings.Setup(s => s.Current).Returns(customSettings);
 

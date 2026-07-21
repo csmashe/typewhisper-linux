@@ -21,7 +21,7 @@ public sealed class PluginHostServices : IPluginHostServices
 
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        WriteIndented = true, PropertyNameCaseInsensitive = true
+        WriteIndented = true, PropertyNameCaseInsensitive = true,
     };
 
     private readonly IActiveWindowService _activeWindow;
@@ -148,7 +148,7 @@ public sealed class PluginHostServices : IPluginHostServices
             var current = LoadSettings();
             var next = new Dictionary<string, JsonElement>(current)
             {
-                [$"{SecretPrefix}{key}"] = JsonSerializer.SerializeToElement(encrypted)
+                [$"{SecretPrefix}{key}"] = JsonSerializer.SerializeToElement(encrypted),
             };
             SaveSettings(next);
             _settingsCache = next;
@@ -227,7 +227,7 @@ public sealed class PluginHostServices : IPluginHostServices
             var current = LoadSettings();
             var next = new Dictionary<string, JsonElement>(current)
             {
-                [key] = JsonSerializer.SerializeToElement(value, s_jsonOptions)
+                [key] = JsonSerializer.SerializeToElement(value, s_jsonOptions),
             };
             SaveSettings(next);
             _settingsCache = next;

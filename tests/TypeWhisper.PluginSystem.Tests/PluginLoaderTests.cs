@@ -51,7 +51,7 @@ public sealed class PluginLoaderTests : IDisposable
         var result = _loader.DiscoverAndLoad([
             Path.Join(_tempDir, "a"),
             Path.Join(_tempDir, "b"),
-            Path.Join(_tempDir, "c")
+            Path.Join(_tempDir, "c"),
         ]);
         Assert.Empty(result);
     }
@@ -89,7 +89,7 @@ public sealed class PluginLoaderTests : IDisposable
             Name = "No Assembly",
             Version = "1.0.0",
             AssemblyName = "NonExistent.dll",
-            PluginClass = "NonExistent.Plugin"
+            PluginClass = "NonExistent.Plugin",
         };
 
         File.WriteAllText(

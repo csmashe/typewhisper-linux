@@ -49,8 +49,8 @@ public sealed class PluginRegistryServiceTests : IDisposable
                 Description = "A test plugin",
                 Size = 1024L,
                 DownloadUrl = "https://example.com/plugin.zip",
-                RequiresApiKey = false
-            }
+                RequiresApiKey = false,
+            },
         };
 
         var json = JsonSerializer.Serialize(plugins);
@@ -80,8 +80,8 @@ public sealed class PluginRegistryServiceTests : IDisposable
                 Description = "D",
                 Size = 100L,
                 DownloadUrl = "u",
-                RequiresApiKey = false
-            }
+                RequiresApiKey = false,
+            },
         };
         var json = JsonSerializer.Serialize(plugins);
 
@@ -99,7 +99,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
                 callCount++;
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent(json)
+                    Content = new StringContent(json),
                 };
             });
 
@@ -128,7 +128,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
                 Description = "D",
                 Size = 100L,
                 DownloadUrl = "u",
-                RequiresApiKey = false
+                RequiresApiKey = false,
             },
             new
             {
@@ -140,8 +140,8 @@ public sealed class PluginRegistryServiceTests : IDisposable
                 Description = "D",
                 Size = 100L,
                 DownloadUrl = "u",
-                RequiresApiKey = false
-            }
+                RequiresApiKey = false,
+            },
         };
 
         var json = JsonSerializer.Serialize(plugins);
@@ -181,7 +181,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
             Author = "A",
             Description = "D",
             Size = 100,
-            DownloadUrl = "u"
+            DownloadUrl = "u",
         };
 
         Assert.Equal(PluginInstallState.NotInstalled, service.GetInstallState(registryPlugin));

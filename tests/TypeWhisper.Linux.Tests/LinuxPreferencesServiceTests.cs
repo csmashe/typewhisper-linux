@@ -11,7 +11,7 @@ public sealed class LinuxPreferencesServiceTests
     private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(5);
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        WriteIndented = true, PropertyNameCaseInsensitive = true
+        WriteIndented = true, PropertyNameCaseInsensitive = true,
     };
 
     [Fact]
@@ -26,7 +26,7 @@ public sealed class LinuxPreferencesServiceTests
             LastUpdateCheckUtc = new DateTime(2026, 7, 18, 12, 34, 56, DateTimeKind.Utc),
             LastKnownLatestVersion = "1.2.3",
             LastKnownLatestUrl = "https://example.com/releases/1.2.3",
-            DismissedUpdateVersion = null
+            DismissedUpdateVersion = null,
         };
         var service = new LinuxPreferencesService(path);
         var changedCount = 0;
@@ -93,7 +93,7 @@ public sealed class LinuxPreferencesServiceTests
                 }
             })
             {
-                IsBackground = true
+                IsBackground = true,
             };
             secondThread.Start();
             await secondCallerStarted.Task.WaitAsync(s_testGuard);
@@ -130,7 +130,7 @@ public sealed class LinuxPreferencesServiceTests
         );
         var expected = new LinuxPreferences
         {
-            CloseToTray = true, DismissedUpdateVersion = "1.2.3"
+            CloseToTray = true, DismissedUpdateVersion = "1.2.3",
         };
         Assert.Equal(expected, results[1]);
         Assert.Equal(expected, service.Current);
@@ -149,12 +149,12 @@ public sealed class LinuxPreferencesServiceTests
         {
             CloseToTray = true,
             LastKnownLatestVersion = "first",
-            LastKnownLatestUrl = "https://example.com/first"
+            LastKnownLatestUrl = "https://example.com/first",
         };
         var second = new LinuxPreferences
         {
             CheckForUpdatesOnStartup = false,
-            DismissedUpdateVersion = "second"
+            DismissedUpdateVersion = "second",
         };
         var secondCallerStarted = CreateCompletionSource();
         var secondCompletion = CreateCompletionSource();
@@ -181,7 +181,7 @@ public sealed class LinuxPreferencesServiceTests
                 }
             })
             {
-                IsBackground = true
+                IsBackground = true,
             };
             secondThread.Start();
             await secondCallerStarted.Task.WaitAsync(s_testGuard);
@@ -223,7 +223,7 @@ public sealed class LinuxPreferencesServiceTests
         {
             CloseToTray = true,
             LastKnownLatestVersion = "old",
-            LastKnownLatestUrl = "https://example.com/old"
+            LastKnownLatestUrl = "https://example.com/old",
         };
         using var failurePath = new MaximumFileNameTestPath(Serialize(oldPreferences));
         var service = new LinuxPreferencesService(failurePath.FilePath);
@@ -232,7 +232,7 @@ public sealed class LinuxPreferencesServiceTests
         service.Changed += _ => changedCount++;
         var replacement = oldPreferences with
         {
-            CloseToTray = false, LastKnownLatestVersion = "new"
+            CloseToTray = false, LastKnownLatestVersion = "new",
         };
 
         Assert.ThrowsAny<IOException>(() => service.Save(replacement));
@@ -251,7 +251,7 @@ public sealed class LinuxPreferencesServiceTests
         var path = Path.Join(directory.Path, "linux-preferences.json");
         var oldPreferences = new LinuxPreferences
         {
-            CloseToTray = true, DismissedUpdateVersion = "old"
+            CloseToTray = true, DismissedUpdateVersion = "old",
         };
         new LinuxPreferencesService(path).Save(oldPreferences);
         var before = File.ReadAllBytes(path);

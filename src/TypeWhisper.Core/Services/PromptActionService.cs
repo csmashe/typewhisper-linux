@@ -154,7 +154,7 @@ public sealed class PromptActionService : IPromptActionService
                 "Reply",
                 "\U0001F4AC",
                 "Write a concise, professional reply to the following message. Match the tone of the original. Return only the reply text."
-            )
+            ),
         };
 
         var next = new List<PromptAction>(_cache);
@@ -169,7 +169,7 @@ public sealed class PromptActionService : IPromptActionService
                     SystemPrompt = prompt,
                     Icon = icon,
                     IsPreset = true,
-                    SortOrder = i
+                    SortOrder = i,
                 }
             );
         }

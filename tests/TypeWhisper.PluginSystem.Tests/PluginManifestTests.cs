@@ -7,7 +7,7 @@ public class PluginManifestTests
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
     };
 
     [Fact]
@@ -77,7 +77,7 @@ public class PluginManifestTests
             Description = "Test roundtrip",
             AssemblyName = "RT.dll",
             PluginClass = "RT.Plugin",
-            MinHostVersion = "2.0.0"
+            MinHostVersion = "2.0.0",
         };
 
         var json = JsonSerializer.Serialize(original, s_jsonOptions);
@@ -144,7 +144,7 @@ public class PluginManifestTests
             Name = "Eq",
             Version = "1.0.0",
             AssemblyName = "Eq.dll",
-            PluginClass = "Eq.Plugin"
+            PluginClass = "Eq.Plugin",
         };
 
         var b = new PluginManifest
@@ -153,7 +153,7 @@ public class PluginManifestTests
             Name = "Eq",
             Version = "1.0.0",
             AssemblyName = "Eq.dll",
-            PluginClass = "Eq.Plugin"
+            PluginClass = "Eq.Plugin",
         };
 
         Assert.Equal(a, b);
@@ -168,7 +168,7 @@ public class PluginManifestTests
             Name = "Original",
             Version = "1.0.0",
             AssemblyName = "With.dll",
-            PluginClass = "With.Plugin"
+            PluginClass = "With.Plugin",
         };
 
         var modified = original with { Name = "Modified", Version = "2.0.0" };

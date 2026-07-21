@@ -16,7 +16,7 @@ public sealed class OpenAiChatHelperTests
             typeof(string),
             typeof(string),
             typeof(string),
-            typeof(CancellationToken)
+            typeof(CancellationToken),
         };
 
         var method = typeof(OpenAiChatHelper).GetMethod(

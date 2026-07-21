@@ -90,13 +90,13 @@ public sealed class ErrorLogService : IErrorLogService
                 os_version = Environment.OSVersion.VersionString,
                 dotnet_version = Environment.Version.ToString(),
                 locale = CultureInfo.CurrentCulture.Name,
-                timezone = TimeZoneInfo.Local.Id
+                timezone = TimeZoneInfo.Local.Id,
             },
             error_count = snapshot.Count,
             errors = snapshot.Select(e => new
             {
-                timestamp = e.Timestamp.ToString("o"), category = e.Category, message = e.Message
-            })
+                timestamp = e.Timestamp.ToString("o"), category = e.Category, message = e.Message,
+            }),
         };
 
         return JsonSerializer.Serialize(report, s_jsonOptions);
