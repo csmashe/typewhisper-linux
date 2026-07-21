@@ -191,6 +191,7 @@ internal sealed class SpeechmaticsStreamingSession : IStreamingSession
                 );
 
             var message = ParseMessage(json);
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
             if (message.MessageType == "RecognitionStarted")
                 return;
             if (message.MessageType == "Error")
@@ -314,6 +315,7 @@ internal sealed class SpeechmaticsStreamingSession : IStreamingSession
 
     public async ValueTask DisposeAsync()
     {
+        // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
         _receiveCts.Cancel();
 
         if (_ws.State == WebSocketState.Open)

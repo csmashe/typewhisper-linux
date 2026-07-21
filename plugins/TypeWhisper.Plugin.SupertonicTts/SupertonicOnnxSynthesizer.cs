@@ -36,6 +36,7 @@ internal sealed partial class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
     {
         var style = GetVoiceStyle(request.VoiceStylePath);
         var samples = new List<float>();
+        // ReSharper disable once MergeIntoLogicalPattern -- subjective style; kept as-is.
         var chunks = ChunkText(request.Text, request.Language == "ko" || request.Language == "ja" ? 120 : 300);
 
         foreach (var chunk in chunks)
@@ -109,7 +110,9 @@ internal sealed partial class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
                 NamedOnnxValue.CreateFromTensor("text_emb", textEmbedding),
                 NamedOnnxValue.CreateFromTensor("style_ttl", style.Ttl),
                 NamedOnnxValue.CreateFromTensor("text_mask", features.TextMask),
+                // ReSharper disable once UseCollectionExpression -- explicit int[]/float[] keeps the DenseTensor constructor overload unambiguous.
                 NamedOnnxValue.CreateFromTensor("latent_mask", new DenseTensor<float>(latentMask, new[] { 1, 1, latentLength })),
+                // ReSharper disable once UseCollectionExpression -- explicit int[]/float[] keeps the DenseTensor constructor overload unambiguous.
                 NamedOnnxValue.CreateFromTensor("total_step", new DenseTensor<float>(new[] { (float)totalSteps }, new[] { 1 })),
                 NamedOnnxValue.CreateFromTensor("current_step", new DenseTensor<float>(new[] { (float)step }, new[] { 1 })),
             ]);

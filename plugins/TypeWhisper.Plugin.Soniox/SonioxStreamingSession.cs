@@ -160,6 +160,7 @@ internal sealed class SonioxStreamingSession : IStreamingSession
             if (root.TryGetProperty("tokens", out var tokensEl)
                 && tokensEl.ValueKind == JsonValueKind.Array)
             {
+                // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- explicit loop kept; the LINQ form switches enumerators and obscures the side effects.
                 foreach (var tok in tokensEl.EnumerateArray())
                 {
                     if (tok.ValueKind != JsonValueKind.Object)
@@ -299,6 +300,7 @@ internal sealed class SonioxStreamingSession : IStreamingSession
 
     public async ValueTask DisposeAsync()
     {
+        // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
         _receiveCts.Cancel();
 
         if (_ws.State == WebSocketState.Open)

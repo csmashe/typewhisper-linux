@@ -58,7 +58,7 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
         : this(
             assetManager: null,
             synthesizerFactory: assetRoot => new SupertonicOnnxSynthesizer(assetRoot),
-            playbackFactory: (samples, sampleRate) => SupertonicTtsPlaybackSession.Create(samples, sampleRate),
+            playbackFactory: SupertonicTtsPlaybackSession.Create,
             useNullableAssetManagerOverload: true)
     {
     }
@@ -81,8 +81,7 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
         _injectedAssetManager = assetManager;
         _assetManager = assetManager;
         _synthesizerFactory = synthesizerFactory;
-        _playbackFactory = playbackFactory
-            ?? ((samples, sampleRate) => SupertonicTtsPlaybackSession.Create(samples, sampleRate));
+        _playbackFactory = playbackFactory ?? SupertonicTtsPlaybackSession.Create;
     }
 
     public string PluginId => "com.typewhisper.supertonic-tts";

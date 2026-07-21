@@ -173,6 +173,7 @@ public sealed class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
             var root = doc.RootElement;
             var status = root.GetProperty("status").GetString();
 
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
             if (status == "error")
             {
                 var error = root.TryGetProperty("error", out var errEl)
@@ -188,7 +189,7 @@ public sealed class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
                 var duration = root.TryGetProperty("audio_duration", out var durEl)
                     ? durEl.GetDouble()
                     : 0.0;
-                string? detectedLanguage = root.TryGetProperty("language_code", out var langEl)
+                var detectedLanguage = root.TryGetProperty("language_code", out var langEl)
                     ? langEl.GetString()
                     : null;
                 return new PluginTranscriptionResult(

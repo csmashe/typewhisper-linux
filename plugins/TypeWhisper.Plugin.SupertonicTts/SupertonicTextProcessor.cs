@@ -113,6 +113,7 @@ internal sealed partial class SupertonicTextProcessor
 
     private static bool IsEmoji(int codePoint) =>
         codePoint is >= 0x1F600 and <= 0x1F64F
+        // ReSharper disable once MergeIntoLogicalPattern -- subjective style; kept as-is.
         || codePoint is >= 0x1F300 and <= 0x1F5FF
         || codePoint is >= 0x1F680 and <= 0x1F6FF
         || codePoint is >= 0x1F700 and <= 0x1F77F

@@ -124,6 +124,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         {
             try
             {
+                // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
                 startupCts.Cancel();
             }
             catch (ObjectDisposedException) { }
@@ -146,6 +147,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         // Acquire _inferenceLock so we can't dispose _context/_weights while
         // ProcessAsync is mid-inference. Mirrors the unload path in
         // SetSettingValueAsync and LoadModelAsync.
+        // ReSharper disable once MethodSupportsCancellation -- short teardown/unload path; adding a cancellation point offers no real value.
         await _inferenceLock.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -381,6 +383,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
+    // ReSharper disable once ConvertToAutoPropertyWhenPossible -- expression-bodied accessor returning the shared static list; not an auto-property candidate.
     internal static IReadOnlyList<GemmaModelDefinition> ModelDefinitions => s_models;
 
     internal void SelectModel(string modelId)
@@ -651,6 +654,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
         // Mirror DeactivateAsync: serialize teardown with any in-flight
         // ProcessAsync so we don't dispose _context/_weights mid-inference.
+        // ReSharper disable once MethodSupportsCancellation -- short teardown/unload path; adding a cancellation point offers no real value.
         _inferenceLock.Wait();
         try
         {

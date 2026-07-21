@@ -913,6 +913,7 @@ public sealed class OpenRouterPlugin
 
     private sealed record OpenRouterModelsResponse(List<OpenRouterApiModel> Data);
 
+    // ReSharper disable ClassNeverInstantiated.Local -- these records are populated by JSON deserialization of the models response.
     private sealed record OpenRouterApiModel(
         string Id,
         string Name,

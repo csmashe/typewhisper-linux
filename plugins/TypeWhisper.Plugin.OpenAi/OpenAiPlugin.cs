@@ -913,7 +913,7 @@ public sealed class OpenAiPlugin
         try
         {
             var value = host.GetSetting<DateTimeOffset?>(OAuthExpiresAtSettingName);
-            return value == default ? null : value;
+            return value;
         }
         catch
         {

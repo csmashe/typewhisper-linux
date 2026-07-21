@@ -197,6 +197,7 @@ internal class SherpaCudaRuntimeInstaller
         // report (the resume baseline jump) always fires.
         var lastReport = DateTime.MinValue;
 
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- local function kept near its point of use for readability.
         void OnBytesOnDisk(long onDisk)
         {
             var now = DateTime.UtcNow;

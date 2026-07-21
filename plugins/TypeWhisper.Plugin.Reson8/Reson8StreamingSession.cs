@@ -191,6 +191,7 @@ internal sealed class Reson8StreamingSession : IStreamingSession
             return;
 
         _disposed = true;
+        // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
         _receiveCts.Cancel();
         _flushConfirmed.TrySetResult();
 

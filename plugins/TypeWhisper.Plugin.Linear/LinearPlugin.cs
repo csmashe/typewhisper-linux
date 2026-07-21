@@ -109,11 +109,10 @@ public sealed class LinearPlugin : IActionPlugin, IPluginSettingsProvider, IPlug
             );
 
         var title = ExtractTitle(input);
-        var description = input;
 
         try
         {
-            var issueUrl = await CreateIssueAsync(title, description, ct);
+            var issueUrl = await CreateIssueAsync(title, input, ct);
 
             if (issueUrl is not null)
                 return new ActionResult(
@@ -192,6 +191,7 @@ public sealed class LinearPlugin : IActionPlugin, IPluginSettingsProvider, IPlug
             var data = response.Value.GetProperty("data").GetProperty("teams").GetProperty("nodes");
             var teams = new List<LinearTeam>();
 
+            // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- explicit loop kept; the LINQ form switches enumerators.
             foreach (var node in data.EnumerateArray())
             {
                 teams.Add(
@@ -362,6 +362,7 @@ public sealed class LinearPlugin : IActionPlugin, IPluginSettingsProvider, IPlug
             {
                 throw;
             }
+            // ReSharper disable once MergeIntoLogicalPattern -- subjective style; kept as-is.
             catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException)
             {
                 var fp = ShortFingerprint(ex.ToString());
@@ -388,6 +389,7 @@ public sealed class LinearPlugin : IActionPlugin, IPluginSettingsProvider, IPlug
         {
             throw;
         }
+        // ReSharper disable once MergeIntoLogicalPattern -- subjective style; kept as-is.
         catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException)
         {
             var fingerprint = ShortFingerprint(ex.ToString());

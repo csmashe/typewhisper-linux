@@ -537,12 +537,12 @@ public sealed class OpenAiCompatiblePlugin
 
     public IReadOnlyList<ITranscriptionEnginePlugin> AdditionalTranscriptionEngines =>
         _additionalProfiles
-            .Select(p => (ITranscriptionEnginePlugin)new OpenAiCompatibleProfileRole(this, p.Id))
+            .Select(ITranscriptionEnginePlugin (p) => new OpenAiCompatibleProfileRole(this, p.Id))
             .ToList();
 
     public IReadOnlyList<ILlmProviderPlugin> AdditionalLlmProviders =>
         _additionalProfiles
-            .Select(p => (ILlmProviderPlugin)new OpenAiCompatibleProfileRole(this, p.Id))
+            .Select(ILlmProviderPlugin (p) => new OpenAiCompatibleProfileRole(this, p.Id))
             .ToList();
 
     public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions() =>
@@ -926,12 +926,12 @@ public sealed class OpenAiCompatiblePlugin
     }
 
     private static string? Get(PluginCollectionItem item, string key) =>
-        item.Values.TryGetValue(key, out var value) ? value : null;
+        item.Values.GetValueOrDefault(key);
 
     private static string SecretKeyFor(string profileId) => $"api-key.{profileId}";
 
     private string? GetProfileApiKey(string id) =>
-        _additionalApiKeys.TryGetValue(id, out var key) ? key : null;
+        _additionalApiKeys.GetValueOrDefault(id);
 
     private OpenAiCompatibleProfile? FindAdditional(string id) =>
         _additionalProfiles.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.Ordinal));

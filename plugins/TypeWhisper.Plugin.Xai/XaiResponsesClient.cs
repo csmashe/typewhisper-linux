@@ -173,6 +173,7 @@ internal sealed class XaiResponsesClient
                 return null;
             }
 
+            // ReSharper disable once ConvertSwitchStatementToSwitchExpression -- subjective style; the statement switch reads fine here.
             switch (typeEl.GetString())
             {
                 case "error":
@@ -230,6 +231,7 @@ internal sealed class XaiResponsesClient
                     continue;
                 }
 
+                // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- explicit loop kept; the LINQ form switches enumerators and obscures the side effects.
                 foreach (var contentItem in content.EnumerateArray())
                 {
                     var type = TryGetNonEmptyString(contentItem, "type");
@@ -259,7 +261,7 @@ internal sealed class XaiResponsesClient
         foreach (var part in parts.Where(static part => !string.IsNullOrEmpty(part)))
         {
             if (builder.Length > 0
-                && !char.IsWhiteSpace(builder[builder.Length - 1])
+                && !char.IsWhiteSpace(builder[^1])
                 && !char.IsWhiteSpace(part[0])
                 && !char.IsPunctuation(part[0]))
             {

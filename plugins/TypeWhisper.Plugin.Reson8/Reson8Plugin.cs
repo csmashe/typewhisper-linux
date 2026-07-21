@@ -524,6 +524,8 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     private void ThrowForApiError(HttpStatusCode statusCode, string json)
     {
         var message = ExtractApiError(json);
+        // ReSharper disable once ConvertSwitchStatementToSwitchExpression -- subjective style; the statement switch reads fine here.
+        // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- the default arm intentionally covers the remaining enum values.
         switch (statusCode)
         {
             case HttpStatusCode.Unauthorized:
@@ -591,6 +593,7 @@ internal static class WavPcm16Extractor
         if (offset + value.Length > bytes.Length)
             return false;
 
+        // ReSharper disable once LoopCanBeConvertedToQuery -- explicit loop kept; clearer than the LINQ form here.
         for (var i = 0; i < value.Length; i++)
         {
             if (bytes[offset + i] != value[i])

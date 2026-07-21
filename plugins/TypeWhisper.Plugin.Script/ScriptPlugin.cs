@@ -180,6 +180,7 @@ public sealed class ScriptService
     {
         var current = text;
 
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- explicit loop kept; the LINQ form switches enumerators and obscures the side effects.
         foreach (var script in Scripts.ToList())
         {
             if (!script.IsEnabled)

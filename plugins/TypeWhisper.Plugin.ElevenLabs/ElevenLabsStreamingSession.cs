@@ -94,7 +94,7 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
             // Always send a terminal commit so the server knows the audio
             // stream is done, even when the buffer happens to be empty
             // because SendAudioAsync just flushed an exact-chunk boundary.
-            var chunk = _audioBuffer.Length == 0 ? Array.Empty<byte>() : _audioBuffer.ToArray();
+            var chunk = _audioBuffer.Length == 0 ? [] : _audioBuffer.ToArray();
             _audioBuffer.SetLength(0);
             await SendAudioPayloadAsync(chunk, commit: true, ct);
         }
@@ -165,6 +165,7 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
                 return false;
             }
 
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
             if (messageType is "partial_transcript")
             {
                 var text = GetText(root);
@@ -283,6 +284,7 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
         await _sendLock.WaitAsync(CancellationToken.None);
         try
         {
+            // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
             _receiveCts.Cancel();
 
             if (_ws.State == WebSocketState.Open)
@@ -316,6 +318,7 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
                 }
             }
 
+            // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
             _audioBuffer.Dispose();
         }
         finally

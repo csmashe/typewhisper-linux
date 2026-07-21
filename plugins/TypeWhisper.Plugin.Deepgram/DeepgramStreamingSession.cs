@@ -54,7 +54,7 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
     {
         if (_ws.State != WebSocketState.Open)
             return;
-        var msg = Encoding.UTF8.GetBytes("""{"type":"CloseStream"}""");
+        var msg = """{"type":"CloseStream"}"""u8.ToArray();
         await _ws.SendAsync(msg, WebSocketMessageType.Text, true, ct);
     }
 
@@ -123,6 +123,7 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
 
     public async ValueTask DisposeAsync()
     {
+        // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
         _receiveCts.Cancel();
 
         if (_ws.State == WebSocketState.Open)

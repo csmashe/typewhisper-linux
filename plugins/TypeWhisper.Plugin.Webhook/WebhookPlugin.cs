@@ -266,6 +266,7 @@ public sealed class WebhookService
         lock (_webhooksLock)
             snapshot = Webhooks.ToList();
 
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- explicit loop kept; the LINQ form switches enumerators and obscures the side effects.
         foreach (var webhook in snapshot)
         {
             if (!webhook.IsEnabled)
@@ -681,7 +682,7 @@ public sealed class WebhookPlugin
     }
 
     private static string? Get(PluginCollectionItem item, string key) =>
-        item.Values.TryGetValue(key, out var value) ? value : null;
+        item.Values.GetValueOrDefault(key);
 
     private static bool TryGetBool(PluginCollectionItem item, string key, out bool value)
     {
@@ -746,6 +747,7 @@ public sealed class WebhookPlugin
     /// <summary>Parses multiline profile text; trims each entry and skips blank lines.</summary>
     internal static List<string> ParseProfiles(string? text)
     {
+        // ReSharper disable once ConvertIfStatementToReturnStatement -- subjective style; kept as an explicit if.
         if (string.IsNullOrWhiteSpace(text))
             return [];
 

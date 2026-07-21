@@ -178,6 +178,7 @@ internal sealed class SmallestAiStreamingSession : IStreamingSession
             return;
 
         _disposed = true;
+        // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
         _receiveCts.Cancel();
         _lastResponseReceived.TrySetResult();
 
@@ -268,6 +269,7 @@ internal sealed class SmallestAiTranscriptCollector
         }
 
         var transcript = GetString(root, "transcript")?.Trim() ?? "";
+        // ReSharper disable once ConvertIfStatementToReturnStatement -- subjective style; kept as an explicit if.
         if (string.IsNullOrWhiteSpace(transcript))
             return null;
 

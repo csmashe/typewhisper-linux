@@ -333,6 +333,7 @@ public class CudaRuntimeProvisioner
         // The single linux x64 wheel: a manylinux build for x86_64. Excludes
         // win_amd64 and aarch64. The exact glibc tag (2_17 vs 2_27) varies per
         // package, so match on the platform family rather than a fixed tag.
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- local function kept near its point of use for readability.
         static bool IsLinuxX64Wheel(JsonElement entry)
         {
             if (entry.TryGetProperty("packagetype", out var pkgType)
@@ -489,6 +490,7 @@ public class CudaRuntimeProvisioner
     {
         // Keep only the shared objects under nvidia/<component>/lib/, skipping
         // directory entries, Python stubs, headers, and metadata.
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- local function kept near its point of use for readability.
         static bool IsLibEntry(ZipArchiveEntry entry) =>
             !entry.FullName.EndsWith('/')
             && entry.FullName.Contains("/lib/", StringComparison.Ordinal)
@@ -605,7 +607,7 @@ public class CudaRuntimeProvisioner
     // dev box with the CUDA toolkit installed would otherwise satisfy every wheel and skip
     // the download/extract/marker path under test. Null = production behavior (real system
     // dirs + ldconfig). Only consulted here; PreloadAll's path resolution is untouched.
-    internal Func<string, bool>? SystemLibraryProbeForTests { get; set; }
+    internal Func<string, bool>? SystemLibraryProbeForTests { get; init; }
 
     private bool IsResolvableOnSystem(string soname)
     {

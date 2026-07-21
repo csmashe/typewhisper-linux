@@ -35,6 +35,7 @@ internal class WhisperCudaRuntimeInstaller
     private const string PackageId = "whisper.net.runtime.cuda.linux";
 
     // The canonical, immutable package artifact on nuget.org's flat container.
+    // ReSharper disable once ConvertToConstant.Global -- kept as static readonly; const would force a PascalCase rename off the s_ convention.
     internal static readonly string s_downloadUrl =
         $"https://api.nuget.org/v3-flatcontainer/{PackageId}/{RuntimeVersion}/"
         + $"{PackageId}.{RuntimeVersion}.nupkg";
@@ -220,6 +221,7 @@ internal class WhisperCudaRuntimeInstaller
         // report (the resume baseline jump) always fires.
         var lastReport = DateTime.MinValue;
 
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- local function kept near its point of use for readability.
         void OnBytesOnDisk(long onDisk)
         {
             var now = DateTime.UtcNow;
@@ -239,7 +241,7 @@ internal class WhisperCudaRuntimeInstaller
             idleTimeout: TimeSpan.FromSeconds(60),
             allowResume: true,
             onBytesOnDisk: OnBytesOnDisk,
-            verifyComplete: path => VerifySha256(path),
+            verifyComplete: VerifySha256,
             ct
         );
     }

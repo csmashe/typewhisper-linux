@@ -568,6 +568,7 @@ internal sealed class OpenAiRealtimeTranscriptCollector
         // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (root.TryGetProperty("error", out var error))
         {
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
             if (error.ValueKind == JsonValueKind.Object)
             {
                 if (GetString(error, "message") is { } message)

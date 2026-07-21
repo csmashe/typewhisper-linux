@@ -81,7 +81,7 @@ internal sealed class GladiaStreamingSession : IStreamingSession
         {
             try
             {
-                var stop = Encoding.UTF8.GetBytes("""{"type":"stop_recording"}""");
+                var stop = """{"type":"stop_recording"}"""u8.ToArray();
                 await _ws.SendAsync(stop, WebSocketMessageType.Text, true, ct);
             }
             catch (Exception ex) when (ex is WebSocketException or OperationCanceledException)
@@ -258,6 +258,7 @@ internal sealed class GladiaStreamingSession : IStreamingSession
 
     public async ValueTask DisposeAsync()
     {
+        // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
         _receiveCts.Cancel();
 
         if (_ws.State == WebSocketState.Open)

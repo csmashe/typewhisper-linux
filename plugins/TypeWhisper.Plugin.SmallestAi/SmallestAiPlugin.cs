@@ -313,6 +313,7 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
             return true;
         }
 
+        // ReSharper disable once ConvertIfStatementToReturnStatement -- subjective style; kept as an explicit if.
         if (root.TryGetProperty("error", out var error)
             && error.ValueKind is JsonValueKind.Object or JsonValueKind.String)
         {
@@ -340,6 +341,7 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
         // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (root.TryGetProperty("error", out var error))
         {
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
             if (error.ValueKind == JsonValueKind.String)
                 return error.GetString() ?? "Unknown error";
 

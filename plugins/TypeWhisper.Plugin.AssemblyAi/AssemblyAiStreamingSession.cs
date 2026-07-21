@@ -59,7 +59,7 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
     {
         if (_ws.State != WebSocketState.Open)
             return;
-        var msg = Encoding.UTF8.GetBytes("""{"terminate_session":true}""");
+        var msg = """{"terminate_session":true}"""u8.ToArray();
         await _ws.SendAsync(msg, WebSocketMessageType.Text, true, ct);
     }
 
@@ -125,6 +125,7 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
 
     public async ValueTask DisposeAsync()
     {
+        // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
         _receiveCts.Cancel();
 
         if (_ws.State == WebSocketState.Open)

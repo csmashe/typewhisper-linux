@@ -156,6 +156,7 @@ internal sealed class SupertonicTtsPlaybackSession : ITtsPlaybackSession, IDispo
         if (CommandExists("paplay"))
             return "paplay";
 
+        // ReSharper disable once ConvertIfStatementToReturnStatement -- subjective style; kept as an explicit if.
         if (CommandExists("aplay"))
             return "aplay";
 

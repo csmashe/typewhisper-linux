@@ -77,6 +77,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
 
         string filePath;
         string filename;
+        // ReSharper disable once TooWideLocalVariableScope -- declared with its siblings; both branches assign it before the shared use below.
         string content;
 
         if (dailyNoteMode)
@@ -171,6 +172,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
 
         foreach (var c in filename)
         {
+            // ReSharper disable once ConvertIfStatementToConditionalTernaryExpression -- subjective style; kept as an explicit if.
             if (Array.IndexOf(invalid, c) >= 0)
                 sanitized.Append('_');
             else
@@ -203,6 +205,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
         return candidate;
     }
 
+    // ReSharper disable once UseVerbatimString -- the mixed backslash/quote escapes read no better as a verbatim string.
     private static string EscapeYaml(string value) =>
         value.Replace("\\", "\\\\").Replace("\"", "\\\"");
 

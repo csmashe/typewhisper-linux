@@ -233,6 +233,7 @@ internal sealed class XaiStreamingSession : IStreamingSession
             return;
 
         _disposed = true;
+        // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
         _receiveCts.Cancel();
 
         await _sendLock.WaitAsync(CancellationToken.None);
@@ -354,6 +355,7 @@ internal sealed class XaiTranscriptCollector
         var speechFinal = GetBool(root, "speech_final");
         RememberMetadata(root);
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (isFinal)
         {
             if (string.IsNullOrWhiteSpace(text))
@@ -456,6 +458,7 @@ internal sealed class XaiTranscriptCollector
         // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (root.TryGetProperty("error", out var error))
         {
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
             if (error.ValueKind == JsonValueKind.Object && GetString(error, "message") is { } objectMessage)
                 return objectMessage;
             if (error.ValueKind == JsonValueKind.String)

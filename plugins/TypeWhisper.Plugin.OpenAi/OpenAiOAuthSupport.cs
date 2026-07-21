@@ -414,14 +414,14 @@ internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
         """;
 
     private static string ErrorHtml(string message) =>
-        $$"""
+        $"""
         <!doctype html>
         <html>
           <head><meta charset="utf-8"><title>TypeWhisper Login</title></head>
           <body style="font-family:Segoe UI,sans-serif;background:#111827;color:#f9fafb;display:grid;min-height:100vh;place-items:center;margin:0">
             <main style="max-width:520px;padding:28px;border-radius:12px;background:#1f2937">
               <h1 style="margin-top:0;color:#fca5a5">Login failed</h1>
-              <p>{{message}}</p>
+              <p>{message}</p>
             </main>
           </body>
         </html>

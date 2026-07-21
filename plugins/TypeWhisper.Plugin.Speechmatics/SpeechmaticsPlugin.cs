@@ -104,13 +104,11 @@ public sealed class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPluginSett
                 "Speechmatics does not support automatic language detection. Choose an explicit language for this profile."
             );
 
-        var lang = normalized;
-
         var config = JsonSerializer.Serialize(
             new
             {
                 type = "transcription",
-                transcription_config = new { language = lang, operating_point = "enhanced" },
+                transcription_config = new { language = normalized, operating_point = "enhanced" },
             }
         );
 
@@ -187,6 +185,7 @@ public sealed class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPluginSett
             var job = statusDoc.RootElement.GetProperty("job");
             var status = job.GetProperty("status").GetString();
 
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
             if (status == "done")
             {
                 using var transcriptRequest = new HttpRequestMessage(
@@ -216,6 +215,7 @@ public sealed class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPluginSett
                 return ParseTranscript(transcriptJson, job);
             }
 
+            // ReSharper disable once MergeIntoLogicalPattern -- subjective style; kept as-is.
             if (status == "rejected" || status == "deleted")
                 throw new InvalidOperationException($"Speechmatics job {jobId} {status}");
         }
