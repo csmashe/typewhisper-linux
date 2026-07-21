@@ -8,6 +8,13 @@ public sealed class ProfileServiceTests : IDisposable
 {
     private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(5);
 
+    // The blocking writer holds the ProfileService lock until the test's finally (or Dispose)
+    // calls ReleaseFirst — which happens AFTER the orchestration's SpinUntil(s_testGuard) returns.
+    // Its own release-wait must therefore outlast s_testGuard by a wide margin, or under heavy load
+    // (parallel test projects) the two 5 s timers race and the writer times out first. This is a
+    // pure backstop against a genuinely wedged test, not part of the timing contract.
+    private static readonly TimeSpan s_writerReleaseGuard = TimeSpan.FromSeconds(60);
+
     private readonly string _filePath;
     private readonly ProfileService _sut;
 
@@ -578,7 +585,7 @@ public sealed class ProfileServiceTests : IDisposable
                 {
                     AtomicFileWrite.WriteAllText(path, contents);
                     _firstCommitted.TrySetResult();
-                    if (!_releaseFirst.Wait(s_testGuard))
+                    if (!_releaseFirst.Wait(s_writerReleaseGuard))
                     {
                         throw new TimeoutException("The first committed writer was not released.");
                     }
