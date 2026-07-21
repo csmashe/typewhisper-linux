@@ -1,4 +1,7 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -66,9 +69,9 @@ internal sealed class OpenAiChatGptClient
                     role = "user",
                     content = new[]
                     {
-                        new { type = "input_text", text = userText }
-                    }
-                }
+                        new { type = "input_text", text = userText },
+                    },
+                },
             }),
             ["store"] = OpenAiJson.Element(false),
             ["stream"] = OpenAiJson.Element(true),

@@ -1,17 +1,19 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Gladia;
 
-public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(120) };
     private IPluginHostServices? _host;
     private string? _apiKey;
-    private string? _selectedModelId;
 
-    private static readonly IReadOnlyList<PluginModelInfo> Models =
+    private static readonly IReadOnlyList<PluginModelInfo> s_models =
     [
         new("default", "Gladia (Auto)"),
     ];
@@ -28,7 +30,7 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
         // with trailing whitespace while IsConfigured still reports true.
         var loaded = await host.LoadSecretAsync("api-key");
         _apiKey = string.IsNullOrWhiteSpace(loaded) ? null : loaded.Trim();
-        _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
+        SelectedModelId = host.GetSetting<string>("selectedModel") ?? s_models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -42,9 +44,9 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
     public string ProviderDisplayName => "Gladia";
     public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
 
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels => Models;
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_models;
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
 
@@ -60,9 +62,9 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
 
     public void SelectModel(string modelId)
     {
-        if (Models.All(m => m.Id != modelId))
+        if (s_models.All(m => m.Id != modelId))
             throw new ArgumentException($"Unknown model: {modelId}");
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
@@ -127,7 +129,7 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
                 "selectedModel",
                 Loc.L("Settings.TranscriptionModel"),
                 Description: Loc.L("Settings.ModelDescription"),
-                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+                Options: s_models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
             ),
         ];
 
@@ -136,7 +138,7 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
             key switch
             {
                 "api-key" => _apiKey,
-                "selectedModel" => _selectedModelId,
+                "selectedModel" => SelectedModelId,
                 _ => null,
             }
         );

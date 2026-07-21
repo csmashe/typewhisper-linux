@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.IO;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -43,7 +42,7 @@ internal sealed class SmallestAiStreamingSession : IStreamingSession
         var query = new List<string>
         {
             "encoding=linear16",
-            "sample_rate=16000"
+            "sample_rate=16000",
         };
 
         var normalizedLanguage = SmallestAiPlugin.NormalizeLanguage(language);
@@ -59,7 +58,7 @@ internal sealed class SmallestAiStreamingSession : IStreamingSession
     public static IReadOnlyDictionary<string, string> CreateStreamingHeaders(string apiKey) =>
         new Dictionary<string, string>
         {
-            ["Authorization"] = $"Bearer {apiKey}"
+            ["Authorization"] = $"Bearer {apiKey}",
         };
 
     private static ClientWebSocket CreateConfiguredWebSocket(string apiKey)

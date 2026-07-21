@@ -44,7 +44,7 @@ internal static class ServiceRegistrations
 
             // A standing property of the mount, not an event, and the log is a bounded ring
             // persisted across launches — appending every startup would evict real failures.
-            if (!errorLog.Entries.Any(e => e.Message == warning))
+            if (errorLog.Entries.All(e => e.Message != warning))
             {
                 errorLog.AddEntry(warning, ErrorCategory.Recording);
             }

@@ -1,6 +1,8 @@
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Globalization;
-using System.IO;
-using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text;
 using TypeWhisper.Plugins.Shared.Cuda;
@@ -27,7 +29,7 @@ public sealed class WhisperCppPlugin
 {
     private const string NoSpeechThresholdKey = "noSpeechThreshold";
     private const float DefaultNoSpeechThreshold = 0.6f;
-    private static readonly IReadOnlyList<ModelDefinition> Models =
+    private static readonly IReadOnlyList<ModelDefinition> s_models =
     [
         new(
             "tiny",
@@ -220,13 +222,12 @@ public sealed class WhisperCppPlugin
     private readonly HttpClient _httpClient =
         new(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(30) })
         {
-            Timeout = TimeSpan.FromHours(2)
+            Timeout = TimeSpan.FromHours(2),
         };
     private IPluginHostServices? _host;
     private WhisperFactory? _factory;
     private CudaRuntimeProvisioner? _cudaProvisioner;
     private WhisperCudaRuntimeInstaller? _whisperCudaInstaller;
-    private string? _selectedModelId;
     private string? _loadedModelId;
     private string _computeBackend = "cpu";
     private bool _runtimeLibraryOrderInitialized;
@@ -246,10 +247,7 @@ public sealed class WhisperCppPlugin
     // an app restart. We short-circuit subsequent loads instead of re-entering
     // FromPath and re-throwing Whisper.net's cached failure.
     private bool _nativeRuntimeLoadFailed;
-    private TranscriptionAccelerationPreference _accelerationPreference =
-        TranscriptionAccelerationPreference.Auto;
-    private TranscriptionAccelerationStatus _accelerationStatus =
-        new(TranscriptionAccelerationBackend.Cpu, "Using CPU");
+
     private float _noSpeechThreshold = DefaultNoSpeechThreshold;
 
     public string PluginId => "com.typewhisper.whisper-cpp";
@@ -269,7 +267,8 @@ public sealed class WhisperCppPlugin
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
+
     public bool SupportsTranslation => true;
     public bool SupportsModelDownload => true;
     public IReadOnlyList<string> SupportedLanguages => [];
@@ -288,12 +287,12 @@ public sealed class WhisperCppPlugin
         _cudaProvisioner?.IsProfileSatisfied(CudaRuntimeProfile.WhisperCublas) == true
         && _whisperCudaInstaller?.IsInstalled == true;
 
-    public TranscriptionAccelerationPreference AccelerationPreference => _accelerationPreference;
+    public TranscriptionAccelerationPreference AccelerationPreference { get; private set; } = TranscriptionAccelerationPreference.Auto;
 
-    public TranscriptionAccelerationStatus AccelerationStatus => _accelerationStatus;
+    public TranscriptionAccelerationStatus AccelerationStatus { get; private set; } = new(TranscriptionAccelerationBackend.Cpu, "Using CPU");
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-        Models
+        s_models
             .Select(model => new PluginModelInfo(model.Id, model.DisplayName)
             {
                 SizeDescription = model.SizeDescription,
@@ -306,7 +305,7 @@ public sealed class WhisperCppPlugin
     public Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _selectedModelId = host.GetSetting<string>("selectedModel");
+        SelectedModelId = host.GetSetting<string>("selectedModel");
         _noSpeechThreshold = ReadNoSpeechThreshold(host);
 
         // Create the CUDA provisioner/installer eagerly so IsCudaRuntimeProvisioned can
@@ -357,7 +356,7 @@ public sealed class WhisperCppPlugin
     public void SelectModel(string modelId)
     {
         _ = GetModel(modelId);
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
@@ -399,6 +398,7 @@ public sealed class WhisperCppPlugin
             }
 
             _computeBackend = normalized;
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (_factory is not null)
             {
                 DisposeFactoryUnsafe();
@@ -423,9 +423,9 @@ public sealed class WhisperCppPlugin
 
         // Always record the host's last requested preference so the SDK getter
         // reflects user intent, even when the runtime can't honour it yet.
-        _accelerationPreference = preference;
+        AccelerationPreference = preference;
 
-        _accelerationStatus = TryConfigureComputeBackend(backend)
+        AccelerationStatus = TryConfigureComputeBackend(backend)
             ? CreatePendingAccelerationStatus(preference)
             // Swap was rejected because the native runtime is already pinned.
             // Report the still-active backend with RequiresRestart=true so the UI
@@ -687,7 +687,7 @@ public sealed class WhisperCppPlugin
                 // The one-shot native loader is poisoned for the process; only a restart
                 // can recover, so this is genuinely restart-required (the pin isn't even
                 // set yet here — it's recorded only after a successful validation below).
-                _accelerationStatus = CreateCudaUnavailableStatus(
+                AccelerationStatus = CreateCudaUnavailableStatus(
                     "The GPU runtime could not be loaded. Restart TypeWhisper to use CPU.",
                     requiresRestart: true
                 );
@@ -732,14 +732,14 @@ public sealed class WhisperCppPlugin
             _pinnedRuntimeBackend ??= appliedOrder;
             _runtimeLibraryOrderInitialized = true;
             _loadedModelId = modelId;
-            _selectedModelId = modelId;
+            SelectedModelId = modelId;
             _host?.SetSetting("selectedModel", modelId);
             // Restart is required only if the process pinned the [Cpu] .so set (a
             // provisioning-failure downgrade). A GPU-context fallback pinned [Cuda], so CUDA
             // is reachable again by a reload — no restart (matches CreateLoadedAcceleration
             // Status / TryConfigureComputeBackend).
-            _accelerationStatus = cudaUnavailableDetail is null
-                ? CreateLoadedAccelerationStatus(_computeBackend, _accelerationPreference)
+            AccelerationStatus = cudaUnavailableDetail is null
+                ? CreateLoadedAccelerationStatus(_computeBackend, AccelerationPreference)
                 : CreateCudaUnavailableStatus(
                     cudaUnavailableDetail,
                     requiresRestart: _pinnedRuntimeBackend == "cpu"
@@ -838,6 +838,7 @@ public sealed class WhisperCppPlugin
                 continue;
 
             var segmentText = segment.Text.Trim();
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (segmentText.Length > 0)
             {
                 if (text.Length > 0)
@@ -862,7 +863,7 @@ public sealed class WhisperCppPlugin
         {
             DisposeFactoryUnsafe();
             _loadedModelId = null;
-            _selectedModelId = null;
+            SelectedModelId = null;
         }
         finally
         {
@@ -882,9 +883,9 @@ public sealed class WhisperCppPlugin
                 _loadedModelId = null;
             }
 
-            if (_selectedModelId == modelId)
+            if (SelectedModelId == modelId)
             {
-                _selectedModelId = null;
+                SelectedModelId = null;
                 _host?.SetSetting("selectedModel", "");
             }
 
@@ -1135,7 +1136,7 @@ public sealed class WhisperCppPlugin
     }
 
     private ModelDefinition GetModel(string modelId) =>
-        Models.FirstOrDefault(model => model.Id == modelId)
+        s_models.FirstOrDefault(model => model.Id == modelId)
         ?? throw new ArgumentException($"Unknown model: {modelId}");
 
     private string GetModelPath(string modelId)
@@ -1270,17 +1271,17 @@ public sealed class WhisperCppPlugin
     {
         return preference switch
         {
-            TranscriptionAccelerationPreference.NvidiaCuda => new(
+            TranscriptionAccelerationPreference.NvidiaCuda => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.NvidiaCuda,
                 "Preparing NVIDIA CUDA",
                 "The GPU runtime downloads on the next model load."
             ),
-            TranscriptionAccelerationPreference.Cpu => new(
+            TranscriptionAccelerationPreference.Cpu => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
                 "Preparing CPU",
                 "Will apply on next model load."
             ),
-            _ => new(
+            _ => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
                 "Preparing acceleration",
                 "Will apply on next model load."

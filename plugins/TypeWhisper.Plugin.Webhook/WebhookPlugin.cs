@@ -1,6 +1,10 @@
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedAutoPropertyAccessor.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Collections.ObjectModel;
-using System.IO;
-using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -128,13 +132,13 @@ public sealed class WebhookService
     // and the EventBus delivery thread. SendWebhooksAsync only holds this
     // lock briefly to take a snapshot, so a slow disk write inside Save()
     // can't stall webhook deliveries.
-    private readonly object _webhooksLock = new();
+    private readonly Lock _webhooksLock = new();
     // Serializes the mutate-then-persist sequence so two overlapping saves
     // can't reorder writes — without this, thread A could snapshot first,
     // thread B could snapshot (including A's mutation) and write first, then
     // thread A would write its older snapshot last and clobber B's state on
     // disk while memory still reflects B's mutation.
-    private readonly object _saveLock = new();
+    private readonly Lock _saveLock = new();
     private bool _loadSucceeded;
 
     public ObservableCollection<WebhookConfig> Webhooks { get; } = [];
@@ -194,6 +198,7 @@ public sealed class WebhookService
             {
                 for (var i = 0; i < Webhooks.Count; i++)
                 {
+                    // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                     if (Webhooks[i].Id == updated.Id)
                     {
                         Webhooks[i] = updated;
@@ -295,8 +300,8 @@ public sealed class WebhookService
 
             var json = JsonSerializer.Serialize(payload, s_jsonOptions);
             var method = webhook.HttpMethod.Equals("PUT", StringComparison.OrdinalIgnoreCase)
-                ? System.Net.Http.HttpMethod.Put
-                : System.Net.Http.HttpMethod.Post;
+                ? HttpMethod.Put
+                : HttpMethod.Post;
 
             using var request = new HttpRequestMessage(method, webhook.Url);
             request.Content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -430,7 +435,6 @@ public sealed class WebhookPlugin
         IPluginLocalizationAware
 {
     private IDisposable? _subscription;
-    private IPluginHostServices? _host;
     private string? _dataDirectory;
 
     public string PluginId => "com.typewhisper.webhook";
@@ -441,7 +445,7 @@ public sealed class WebhookPlugin
 
     public Task ActivateAsync(IPluginHostServices host)
     {
-        _host = host;
+        Host = host;
         // Single canonical data dir: prefer the one set via SetDataDirectory
         // (called by the loader before ActivateAsync); fall back to the host's
         // value for hosts that don't drive IPluginDataLocationAware. Threading
@@ -467,7 +471,8 @@ public sealed class WebhookPlugin
         return Task.CompletedTask;
     }
 
-    public IPluginHostServices? Host => _host;
+    public IPluginHostServices? Host { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -476,7 +481,7 @@ public sealed class WebhookPlugin
     // Prefer the host's localization once activated; fall back to the catalog
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
-    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
+    internal IPluginLocalization? Loc => Host?.Localization ?? _injectedLocalization;
 
     private Task OnTranscriptionCompleted(TranscriptionCompletedEvent evt) =>
         Service?.SendWebhooksAsync(evt) ?? Task.CompletedTask;
@@ -496,7 +501,7 @@ public sealed class WebhookPlugin
 
     public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions() =>
         [
-            new PluginCollectionDefinition(
+            new(
                 Key: "webhooks",
                 Label: Loc.L("Settings.Webhooks"),
                 Description: Loc.L("Settings.WebhooksDescription"),
@@ -567,7 +572,7 @@ public sealed class WebhookPlugin
             }
             catch (Exception ex)
             {
-                _host?.Log(PluginLogLevel.Warning, $"Failed to load webhooks: {ex.Message}");
+                Host?.Log(PluginLogLevel.Warning, $"Failed to load webhooks: {ex.Message}");
                 source = [];
             }
         }

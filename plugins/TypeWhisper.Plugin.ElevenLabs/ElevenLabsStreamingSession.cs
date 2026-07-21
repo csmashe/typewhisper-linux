@@ -1,3 +1,7 @@
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Text;

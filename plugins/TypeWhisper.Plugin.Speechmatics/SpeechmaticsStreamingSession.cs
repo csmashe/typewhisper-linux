@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.IO;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -374,7 +373,7 @@ internal sealed class SpeechmaticsTranscriptAggregator
         }
 
         var completed = message.MessageType == "EndOfTranscript";
-        var preview = (_final.ToString() + _partialTail).Trim();
+        var preview = (_final + _partialTail).Trim();
         return new SpeechmaticsStreamingSession.SpeechmaticsUpdate(preview, completed, FinalText);
     }
 }

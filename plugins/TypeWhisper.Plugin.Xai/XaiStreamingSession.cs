@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.IO;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -73,7 +72,7 @@ internal sealed class XaiStreamingSession : IStreamingSession
     public static IReadOnlyDictionary<string, string> CreateStreamingHeaders(string apiKey) =>
         new Dictionary<string, string>
         {
-            ["Authorization"] = $"Bearer {apiKey}"
+            ["Authorization"] = $"Bearer {apiKey}",
         };
 
     private static ClientWebSocket CreateConfiguredWebSocket(string apiKey)
@@ -328,7 +327,7 @@ internal sealed class XaiTranscriptCollector
             "transcript.partial" => ApplyPartialEvent(root),
             "transcript.done" => ApplyDoneEvent(root),
             "error" => throw new InvalidOperationException(ExtractErrorMessage(root) ?? "Unknown xAI STT error"),
-            _ => null
+            _ => null,
         };
     }
 
@@ -415,6 +414,7 @@ internal sealed class XaiTranscriptCollector
         if (text.Equals(joined, StringComparison.Ordinal))
             return null;
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (text.StartsWith(joined, StringComparison.Ordinal)
             && text.Length > joined.Length
             && text[joined.Length] == ' ')
@@ -457,6 +457,7 @@ internal sealed class XaiTranscriptCollector
 
     private static string? ExtractErrorMessage(JsonElement root)
     {
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (root.TryGetProperty("error", out var error))
         {
             if (error.ValueKind == JsonValueKind.Object && GetString(error, "message") is { } objectMessage)

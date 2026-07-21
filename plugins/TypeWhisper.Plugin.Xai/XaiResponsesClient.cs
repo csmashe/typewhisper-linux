@@ -1,6 +1,4 @@
-using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Linq;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK.Helpers;
@@ -82,7 +80,7 @@ internal sealed class XaiResponsesClient
             {
                 401 => "Invalid API key",
                 429 => "Rate limit reached, please wait",
-                _ => $"API error {(int)response.StatusCode}: {OpenAiApiHelper.ExtractErrorMessage(errorBody)}"
+                _ => $"API error {(int)response.StatusCode}: {OpenAiApiHelper.ExtractErrorMessage(errorBody)}",
             };
             throw new InvalidOperationException(message);
         }
@@ -192,6 +190,7 @@ internal sealed class XaiResponsesClient
 
     private static string? ExtractErrorMessage(JsonElement element)
     {
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (element.TryGetProperty("error", out var error))
         {
             if (error.ValueKind == JsonValueKind.Object
@@ -219,6 +218,7 @@ internal sealed class XaiResponsesClient
         if (TryGetNonEmptyString(root, "output_text") is { } outputText)
             return outputText;
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (root.TryGetProperty("output", out var output) && output.ValueKind == JsonValueKind.Array)
         {
             var parts = new List<string>();

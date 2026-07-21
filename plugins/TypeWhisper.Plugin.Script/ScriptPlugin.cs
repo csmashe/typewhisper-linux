@@ -1,6 +1,10 @@
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -85,10 +89,12 @@ internal sealed class ScriptStore
         }
         catch
         {
-            if (File.Exists(tempPath))
+            if (!File.Exists(tempPath))
             {
-                try { File.Delete(tempPath); } catch { /* best effort */ }
+                throw;
             }
+
+            try { File.Delete(tempPath); } catch { /* best effort */ }
             throw;
         }
     }
@@ -118,44 +124,52 @@ public sealed class ScriptService
     public void RemoveScript(Guid id)
     {
         var script = Scripts.FirstOrDefault(s => s.Id == id);
-        if (script is not null)
+        if (script is null)
         {
-            Scripts.Remove(script);
-            Save();
+            return;
         }
+
+        Scripts.Remove(script);
+        Save();
     }
 
     public void UpdateScript(ScriptEntry updated)
     {
         for (var i = 0; i < Scripts.Count; i++)
         {
-            if (Scripts[i].Id == updated.Id)
+            if (Scripts[i].Id != updated.Id)
             {
-                Scripts[i] = updated;
-                Save();
-                return;
+                continue;
             }
+
+            Scripts[i] = updated;
+            Save();
+            return;
         }
     }
 
     public void MoveUp(Guid id)
     {
         var index = IndexOf(id);
-        if (index > 0)
+        if (index <= 0)
         {
-            Scripts.Move(index, index - 1);
-            Save();
+            return;
         }
+
+        Scripts.Move(index, index - 1);
+        Save();
     }
 
     public void MoveDown(Guid id)
     {
         var index = IndexOf(id);
-        if (index >= 0 && index < Scripts.Count - 1)
+        if (index < 0 || index >= Scripts.Count - 1)
         {
-            Scripts.Move(index, index + 1);
-            Save();
+            return;
         }
+
+        Scripts.Move(index, index + 1);
+        Save();
     }
 
     public async Task<string> RunScriptsAsync(

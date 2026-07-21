@@ -1,4 +1,8 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -7,7 +11,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Claude;
 
-public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.anthropic.com";
 
@@ -17,7 +21,6 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
 
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
-    private string? _apiKey;
     private bool _streamResponses = true;
 
     public ClaudePlugin()
@@ -37,7 +40,7 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
+        ApiKey = await host.LoadSecretAsync("api-key");
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
@@ -53,8 +56,8 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
 
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
     [
-        new PluginModelInfo("claude-sonnet-4-20250514", "Claude Sonnet 4"),
-        new PluginModelInfo("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+        new("claude-sonnet-4-20250514", "Claude Sonnet 4"),
+        new("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
     ];
 
     public async Task<string> ProcessAsync(
@@ -82,7 +85,7 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/messages");
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
-        request.Headers.Add("x-api-key", _apiKey);
+        request.Headers.Add("x-api-key", ApiKey);
         request.Headers.Add("anthropic-version", AnthropicVersion);
 
         var response = await _httpClient.SendAsync(request, ct);
@@ -140,7 +143,7 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/messages");
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
-        request.Headers.Add("x-api-key", _apiKey);
+        request.Headers.Add("x-api-key", ApiKey);
         request.Headers.Add("anthropic-version", AnthropicVersion);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
 
@@ -270,8 +273,9 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
         }
     }
 
-    internal bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
-    internal string? ApiKey => _apiKey;
+    internal bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -288,7 +292,7 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
         // already trims, but a future direct caller could re-introduce
         // trailing whitespace that breaks the x-api-key header.
         var trimmed = apiKey?.Trim();
-        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
+        ApiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {
             if (string.IsNullOrEmpty(trimmed))
@@ -331,7 +335,7 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
         Task.FromResult(
             key switch
             {
-                "api-key" => _apiKey,
+                "api-key" => ApiKey,
                 LlmStreamingSettings.StreamResponsesSettingKey
                     => _streamResponses ? "true" : "false",
                 _ => null,
@@ -368,12 +372,12 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
 
     public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return Task.FromResult<PluginSettingsValidationResult?>(
                 new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"))
             );
 
-        var valid = ValidateApiKeyFormat(_apiKey);
+        var valid = ValidateApiKeyFormat(ApiKey);
         return Task.FromResult<PluginSettingsValidationResult?>(
             valid
                 ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyFormatValid"))

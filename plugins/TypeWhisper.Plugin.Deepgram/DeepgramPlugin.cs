@@ -1,4 +1,9 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// ReSharper disable UnusedType.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -6,16 +11,14 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Deepgram;
 
-public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class DeepgramPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.deepgram.com";
 
     private readonly HttpClient _httpClient = new();
     private IPluginHostServices? _host;
-    private string? _apiKey;
-    private string? _selectedModelId;
 
-    private static readonly IReadOnlyList<PluginModelInfo> Models =
+    private static readonly IReadOnlyList<PluginModelInfo> s_models =
     [
         new("nova-3", "Nova-3"),
         new("nova-2", "Nova-2"),
@@ -28,8 +31,8 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
-        _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
+        ApiKey = await host.LoadSecretAsync("api-key");
+        SelectedModelId = host.GetSetting<string>("selectedModel") ?? s_models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -41,24 +44,24 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
 
     public string ProviderId => "deepgram";
     public string ProviderDisplayName => "Deepgram";
-    public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
+    public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
 
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels => Models;
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_models;
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
-        if (!IsConfigured || _selectedModelId is null)
+        if (!IsConfigured || SelectedModelId is null)
             throw new InvalidOperationException(
                 "Plugin not configured. API key and model required."
             );
         return await DeepgramStreamingSession.ConnectAsync(
-            _apiKey!,
-            _selectedModelId,
+            ApiKey!,
+            SelectedModelId,
             language,
             ct
         );
@@ -66,9 +69,9 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
 
     public void SelectModel(string modelId)
     {
-        if (Models.All(m => m.Id != modelId))
+        if (s_models.All(m => m.Id != modelId))
             throw new ArgumentException($"Unknown model: {modelId}");
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
@@ -80,7 +83,7 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
         CancellationToken ct
     )
     {
-        if (!IsConfigured || _selectedModelId is null)
+        if (!IsConfigured || SelectedModelId is null)
             throw new InvalidOperationException(
                 "Plugin not configured. API key and model required."
             );
@@ -90,10 +93,10 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
                 ? "&detect_language=true"
                 : $"&language={Uri.EscapeDataString(language)}";
         var url =
-            $"{BaseUrl}/v1/listen?model={Uri.EscapeDataString(_selectedModelId)}&smart_format=true&punctuate=true{langParam}";
+            $"{BaseUrl}/v1/listen?model={Uri.EscapeDataString(SelectedModelId)}&smart_format=true&punctuate=true{langParam}";
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Token", _apiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Token", ApiKey);
         request.Content = new ByteArrayContent(wavAudio);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
 
@@ -134,7 +137,7 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
         );
     }
 
-    internal string? ApiKey => _apiKey;
+    internal string? ApiKey { get; private set; }
 
     private IPluginLocalization? _injectedLocalization;
 
@@ -148,7 +151,7 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+        ApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
         if (_host is not null)
         {
             if (string.IsNullOrWhiteSpace(apiKey))
@@ -193,7 +196,7 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
                 "selectedModel",
                 Loc.L("Settings.TranscriptionModel"),
                 Description: Loc.L("Settings.ModelDescription"),
-                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+                Options: s_models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
             ),
         ];
 
@@ -201,8 +204,8 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
         Task.FromResult(
             key switch
             {
-                "api-key" => _apiKey,
-                "selectedModel" => _selectedModelId,
+                "api-key" => ApiKey,
+                "selectedModel" => SelectedModelId,
                 _ => null,
             }
         );
@@ -227,10 +230,10 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        var valid = await ValidateApiKeyAsync(ApiKey, ct);
         return valid
             ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
             : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));

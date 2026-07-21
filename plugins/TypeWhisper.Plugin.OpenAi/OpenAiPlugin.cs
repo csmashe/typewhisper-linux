@@ -1,8 +1,11 @@
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
-using System.IO;
-using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text.Json;
@@ -44,28 +47,19 @@ public sealed class OpenAiPlugin
     private readonly Func<byte[], ITtsPlaybackSession> _ttsPlaybackFactory;
     private readonly Func<bool> _ttsPlaybackAvailableProbe;
     private IPluginHostServices? _host;
-    private string? _apiKey;
-    private string? _selectedModelId;
     private string? _selectedApiModelName;
     private string _selectedResponseFormat = "verbose_json";
     private string? _selectedVoiceId;
-    private string _ttsInstructions = "";
-    private string _reasoningEffort = "medium";
     private List<OpenAiFetchedModel> _fetchedLlmModels = [];
-    private OpenAiAuthMode _authMode = OpenAiAuthMode.ApiKey;
-    private string? _selectedLlmModelId;
     private string? _oauthAccessToken;
     private string? _oauthRefreshToken;
     private string? _oauthIdToken;
     private string? _oauthAccountId;
-    private string? _oauthPlanType;
     private DateTimeOffset? _oauthExpiresAt;
     private bool _forgetChatGptLogin;
-    private string _temperatureMode = TemperatureModeProviderDefault;
-    private double _temperatureValue = 0.3;
     private bool _streamResponses = true;
 
-    private static readonly IReadOnlyList<TranscriptionModelEntry> TranscriptionModelEntries =
+    private static readonly IReadOnlyList<TranscriptionModelEntry> s_transcriptionModelEntries =
     [
         new("whisper-1", "Whisper 1", "whisper-1", "verbose_json", SupportsTranslation: true),
         new(
@@ -92,7 +86,7 @@ public sealed class OpenAiPlugin
         ),
     ];
 
-    private static readonly IReadOnlyList<PluginModelInfo> FallbackLlmModels =
+    private static readonly IReadOnlyList<PluginModelInfo> s_fallbackLlmModels =
     [
         new("gpt-5.5", "GPT-5.5"),
         new("gpt-4.1-nano", "GPT-4.1 Nano"),
@@ -103,7 +97,7 @@ public sealed class OpenAiPlugin
         new("o4-mini", "o4-mini"),
     ];
 
-    private static readonly IReadOnlyList<PluginModelInfo> ChatGptModels =
+    private static readonly IReadOnlyList<PluginModelInfo> s_chatGptModels =
     [
         new("gpt-5.5", "GPT-5.5"),
         new("gpt-5.4", "GPT-5.4"),
@@ -144,25 +138,25 @@ public sealed class OpenAiPlugin
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
+        ApiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
         _oauthAccessToken = NormalizeApiKey(await host.LoadSecretAsync(OAuthAccessTokenSecretName));
         _oauthRefreshToken = NormalizeApiKey(await host.LoadSecretAsync(OAuthRefreshTokenSecretName));
         _oauthIdToken = NormalizeApiKey(await host.LoadSecretAsync(OAuthIdTokenSecretName));
-        _authMode = OpenAiAuthModeExtensions.Parse(host.GetSetting<string>(AuthModeSettingName));
-        _selectedLlmModelId = host.GetSetting<string>(SelectedLlmModelSettingName);
+        AuthMode = OpenAiAuthModeExtensions.Parse(host.GetSetting<string>(AuthModeSettingName));
+        SelectedLlmModelId = host.GetSetting<string>(SelectedLlmModelSettingName);
         _selectedVoiceId = NormalizeVoiceId(host.GetSetting<string>(SelectedVoiceSettingName));
-        _ttsInstructions = host.GetSetting<string>(TtsInstructionsSettingName) ?? "";
-        _reasoningEffort = NormalizeReasoningEffort(host.GetSetting<string>(ReasoningEffortSettingName));
+        TtsInstructions = host.GetSetting<string>(TtsInstructionsSettingName) ?? "";
+        ReasoningEffort = NormalizeReasoningEffort(host.GetSetting<string>(ReasoningEffortSettingName));
         _fetchedLlmModels = host.GetSetting<List<OpenAiFetchedModel>>(FetchedLlmModelsSettingName) ?? [];
         _oauthAccountId = host.GetSetting<string>(OAuthAccountIdSettingName);
-        _oauthPlanType = host.GetSetting<string>(OAuthPlanTypeSettingName);
+        ChatGptPlanType = host.GetSetting<string>(OAuthPlanTypeSettingName);
         _oauthExpiresAt = LoadExpiresAt(host);
-        _temperatureMode = NormalizeTemperatureMode(host.GetSetting<string>(TemperatureModeSettingName));
-        _temperatureValue = NormalizeTemperatureValue(host.GetSetting<double?>(TemperatureValueSettingName));
+        TemperatureMode = NormalizeTemperatureMode(host.GetSetting<string>(TemperatureModeSettingName));
+        TemperatureValue = NormalizeTemperatureValue(host.GetSetting<double?>(TemperatureValueSettingName));
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
 
         SelectModelCore(
-            host.GetSetting<string>(SelectedModelSettingName) ?? TranscriptionModelEntries[0].Id,
+            host.GetSetting<string>(SelectedModelSettingName) ?? s_transcriptionModelEntries[0].Id,
             persist: false);
         NormalizeSelectedLlmModel(persist: false);
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
@@ -178,12 +172,12 @@ public sealed class OpenAiPlugin
 
     public string ProviderId => "openai";
     public string ProviderDisplayName => "OpenAI / ChatGPT";
-    public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
+    public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-        TranscriptionModelEntries.Select(m => new PluginModelInfo(m.Id, m.DisplayName)).ToList();
+        s_transcriptionModelEntries.Select(m => new PluginModelInfo(m.Id, m.DisplayName)).ToList();
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation =>
         IsConfigured && SelectedModelEntry is { SupportsTranslation: true };
@@ -194,7 +188,7 @@ public sealed class OpenAiPlugin
     // user is in OAuth mode even with the realtime model selected.
     public bool SupportsStreaming =>
         IsConfigured
-        && _authMode != OpenAiAuthMode.ChatGpt
+        && AuthMode != OpenAiAuthMode.ChatGpt
         && SelectedModelEntry is { SupportsStreaming: true };
 
     public void SelectModel(string modelId) => SelectModelCore(modelId, persist: true);
@@ -212,7 +206,8 @@ public sealed class OpenAiPlugin
                 "Plugin not configured. API key and model required."
             );
 
-        if (_selectedModelId == OpenAiRealtimeStreamingSession.ModelId)
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
+        if (SelectedModelId == OpenAiRealtimeStreamingSession.ModelId)
         {
             if (translate)
                 throw new InvalidOperationException(
@@ -220,7 +215,7 @@ public sealed class OpenAiPlugin
                 );
 
             return await OpenAiRealtimeStreamingSession.TranscribeWavAsync(
-                _apiKey!,
+                ApiKey!,
                 wavAudio,
                 NormalizeLanguage(language),
                 prompt,
@@ -231,7 +226,7 @@ public sealed class OpenAiPlugin
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
             BaseUrl,
-            _apiKey!,
+            ApiKey!,
             _selectedApiModelName,
             wavAudio,
             NormalizeLanguage(language),
@@ -244,20 +239,20 @@ public sealed class OpenAiPlugin
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
-        if (_authMode == OpenAiAuthMode.ChatGpt)
+        if (AuthMode == OpenAiAuthMode.ChatGpt)
             throw new InvalidOperationException(
                 "OpenAI realtime streaming requires an API key. "
                 + "ChatGPT login can't authenticate the realtime endpoint."
             );
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
-        if (_selectedModelId != OpenAiRealtimeStreamingSession.ModelId)
+        if (SelectedModelId != OpenAiRealtimeStreamingSession.ModelId)
             throw new NotSupportedException(
                 "Select GPT Realtime Whisper to use OpenAI realtime streaming."
             );
 
         return await OpenAiRealtimeStreamingSession.ConnectAsync(
-            _apiKey!,
+            ApiKey!,
             NormalizeLanguage(language),
             prompt: null,
             useServerVad: true,
@@ -269,18 +264,18 @@ public sealed class OpenAiPlugin
 
     public string ProviderName => "OpenAI";
 
-    public bool IsAvailable => _authMode switch
+    public bool IsAvailable => AuthMode switch
     {
         OpenAiAuthMode.ChatGpt => HasChatGptCredentials,
         _ => IsConfigured,
     };
 
     public IReadOnlyList<PluginModelInfo> SupportedModels =>
-        _authMode == OpenAiAuthMode.ChatGpt
-            ? ChatGptModels
+        AuthMode == OpenAiAuthMode.ChatGpt
+            ? s_chatGptModels
             : _fetchedLlmModels.Count > 0
                 ? _fetchedLlmModels.Select(model => new PluginModelInfo(model.Id, model.Id)).ToList()
-                : FallbackLlmModels;
+                : s_fallbackLlmModels;
 
     public async Task<string> ProcessAsync(
         string systemPrompt,
@@ -290,10 +285,10 @@ public sealed class OpenAiPlugin
     )
     {
         var modelId = string.IsNullOrWhiteSpace(model)
-            ? _selectedLlmModelId ?? SupportedModels[0].Id
+            ? SelectedLlmModelId ?? SupportedModels[0].Id
             : model;
 
-        if (_authMode == OpenAiAuthMode.ChatGpt)
+        if (AuthMode == OpenAiAuthMode.ChatGpt)
         {
             var accessToken = await ValidOAuthAccessTokenAsync(ct);
             var client = new OpenAiChatGptClient(_httpClient, accessToken, _oauthAccountId);
@@ -301,35 +296,36 @@ public sealed class OpenAiPlugin
                 systemPrompt,
                 userText,
                 modelId,
-                SupportsReasoningEffort(modelId) ? _reasoningEffort : null,
+                SupportsReasoningEffort(modelId) ? ReasoningEffort : null,
                 ct);
         }
 
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (UsesResponsesApi(modelId))
         {
-            var client = new OpenAiResponsesClient(_httpClient, BaseUrl, _apiKey!);
+            var client = new OpenAiResponsesClient(_httpClient, BaseUrl, ApiKey!);
             return await client.ProcessAsync(
                 systemPrompt,
                 userText,
                 modelId,
-                SupportsReasoningEffort(modelId) ? MapApiReasoningEffort(_reasoningEffort) : null,
+                SupportsReasoningEffort(modelId) ? MapApiReasoningEffort(ReasoningEffort) : null,
                 ct);
         }
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient,
             BaseUrl,
-            _apiKey!,
+            ApiKey!,
             modelId,
             systemPrompt,
             userText,
             ct,
             maxOutputTokens: 2048,
             maxOutputTokenParameter: OutputTokenParameter(modelId),
-            reasoningEffort: SupportsReasoningEffort(modelId) ? _reasoningEffort : null,
+            reasoningEffort: SupportsReasoningEffort(modelId) ? ReasoningEffort : null,
             temperature: ResolvedTemperature(modelId)
         );
     }
@@ -342,7 +338,7 @@ public sealed class OpenAiPlugin
     )
     {
         var modelId = string.IsNullOrWhiteSpace(model)
-            ? _selectedLlmModelId ?? SupportedModels[0].Id
+            ? SelectedLlmModelId ?? SupportedModels[0].Id
             : model;
 
         // Self-gated per the C7 per-provider toggle. Also bulk-yield the
@@ -350,7 +346,7 @@ public sealed class OpenAiPlugin
         // a streaming reader so far (the shared helper). The other two stay
         // byte-identical to ProcessAsync — see the C7 Phase 3 doc's scope note.
         if (!_streamResponses
-            || _authMode == OpenAiAuthMode.ChatGpt
+            || AuthMode == OpenAiAuthMode.ChatGpt
             || UsesResponsesApi(modelId))
         {
             yield return await ProcessAsync(systemPrompt, userText, modelId, ct);
@@ -363,14 +359,14 @@ public sealed class OpenAiPlugin
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
             BaseUrl,
-            _apiKey!,
+            ApiKey!,
             modelId,
             systemPrompt,
             userText,
             ct,
             maxOutputTokens: 2048,
             maxOutputTokenParameter: OutputTokenParameter(modelId),
-            reasoningEffort: SupportsReasoningEffort(modelId) ? _reasoningEffort : null,
+            reasoningEffort: SupportsReasoningEffort(modelId) ? ReasoningEffort : null,
             temperature: ResolvedTemperature(modelId)
         );
 
@@ -428,18 +424,23 @@ public sealed class OpenAiPlugin
 
     // LLM model catalog
 
-    internal OpenAiAuthMode AuthMode => _authMode;
+    internal OpenAiAuthMode AuthMode { get; private set; } = OpenAiAuthMode.ApiKey;
 
     internal bool HasChatGptCredentials =>
         !string.IsNullOrWhiteSpace(_oauthRefreshToken)
         || !string.IsNullOrWhiteSpace(_oauthAccessToken);
 
-    internal string? ChatGptPlanType => _oauthPlanType;
-    internal string? SelectedLlmModelId => _selectedLlmModelId;
-    internal string ReasoningEffort => _reasoningEffort;
-    internal string TtsInstructions => _ttsInstructions;
-    internal string TemperatureMode => _temperatureMode;
-    internal double TemperatureValue => _temperatureValue;
+    internal string? ChatGptPlanType { get; private set; }
+
+    internal string? SelectedLlmModelId { get; private set; }
+
+    internal string ReasoningEffort { get; private set; } = "medium";
+
+    internal string TtsInstructions { get; private set; } = "";
+
+    internal string TemperatureMode { get; private set; } = TemperatureModeProviderDefault;
+
+    internal double TemperatureValue { get; private set; } = 0.3;
 
     internal static bool UsesResponsesApi(string modelId)
     {
@@ -536,10 +537,10 @@ public sealed class OpenAiPlugin
     internal async Task<IReadOnlyList<PluginModelInfo>> RefreshAvailableLlmModelsAsync(
         CancellationToken ct = default)
     {
-        // ChatGPT-login mode uses the static ChatGptModels catalog and has no
+        // ChatGPT-login mode uses the static s_chatGptModels catalog and has no
         // /v1/models endpoint to refresh from — short-circuit to keep the
         // selection normalized without burning a (failing) HTTP call.
-        if (_authMode == OpenAiAuthMode.ChatGpt)
+        if (AuthMode == OpenAiAuthMode.ChatGpt)
         {
             NormalizeSelectedLlmModel(persist: true);
             return SupportedModels;
@@ -568,7 +569,7 @@ public sealed class OpenAiPlugin
             return [];
 
         using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
 
         try
         {
@@ -623,7 +624,7 @@ public sealed class OpenAiPlugin
             "audio",
             "realtime",
             "gpt-image",
-            "-search"
+            "-search",
         ];
         return !excludeSuffixes.Any(suffix => lowered.EndsWith(suffix, StringComparison.Ordinal))
             && !excludeContains.Any(fragment => lowered.Contains(fragment, StringComparison.Ordinal));
@@ -631,10 +632,10 @@ public sealed class OpenAiPlugin
 
     internal void SetAuthMode(OpenAiAuthMode mode)
     {
-        if (_authMode == mode)
+        if (AuthMode == mode)
             return;
 
-        _authMode = mode;
+        AuthMode = mode;
         _host?.SetSetting(AuthModeSettingName, mode.ToStorageValue());
         NormalizeSelectedLlmModel(persist: true);
         _host?.NotifyCapabilitiesChanged();
@@ -645,26 +646,26 @@ public sealed class OpenAiPlugin
         if (SupportedModels.All(model => !string.Equals(model.Id, modelId, StringComparison.Ordinal)))
             modelId = (SupportedModels.Count > 0 ? SupportedModels[0] : null)?.Id ?? modelId;
 
-        _selectedLlmModelId = modelId;
+        SelectedLlmModelId = modelId;
         _host?.SetSetting(SelectedLlmModelSettingName, modelId);
     }
 
     internal void SetReasoningEffort(string effort)
     {
-        _reasoningEffort = NormalizeReasoningEffort(effort);
-        _host?.SetSetting(ReasoningEffortSettingName, _reasoningEffort);
+        ReasoningEffort = NormalizeReasoningEffort(effort);
+        _host?.SetSetting(ReasoningEffortSettingName, ReasoningEffort);
     }
 
     internal void SetTemperatureMode(string? mode)
     {
-        _temperatureMode = NormalizeTemperatureMode(mode);
-        _host?.SetSetting(TemperatureModeSettingName, _temperatureMode);
+        TemperatureMode = NormalizeTemperatureMode(mode);
+        _host?.SetSetting(TemperatureModeSettingName, TemperatureMode);
     }
 
     internal void SetTemperatureValue(double value)
     {
-        _temperatureValue = NormalizeTemperatureValue(value);
-        _host?.SetSetting(TemperatureValueSettingName, _temperatureValue);
+        TemperatureValue = NormalizeTemperatureValue(value);
+        _host?.SetSetting(TemperatureValueSettingName, TemperatureValue);
     }
 
     // ChatGPT OAuth login
@@ -680,7 +681,7 @@ public sealed class OpenAiPlugin
         Process.Start(new ProcessStartInfo
         {
             FileName = authUri.ToString(),
-            UseShellExecute = true
+            UseShellExecute = true,
         });
 
         var code = await server.WaitForCodeAsync(ct);
@@ -720,7 +721,7 @@ public sealed class OpenAiPlugin
         _oauthRefreshToken = null;
         _oauthIdToken = null;
         _oauthAccountId = null;
-        _oauthPlanType = null;
+        ChatGptPlanType = null;
         _oauthExpiresAt = null;
 
         if (_host is not null)
@@ -737,7 +738,8 @@ public sealed class OpenAiPlugin
 
     // API key / settings management
 
-    internal string? ApiKey => _apiKey;
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -752,9 +754,9 @@ public sealed class OpenAiPlugin
     {
         var normalized = NormalizeApiKey(apiKey);
         var wasConfigured = IsConfigured;
-        var changed = !string.Equals(_apiKey, normalized, StringComparison.Ordinal);
+        var changed = !string.Equals(ApiKey, normalized, StringComparison.Ordinal);
 
-        _apiKey = normalized;
+        ApiKey = normalized;
         if (_host is not null)
         {
             if (normalized is null)
@@ -769,8 +771,8 @@ public sealed class OpenAiPlugin
 
     internal void SetTtsInstructions(string instructions)
     {
-        _ttsInstructions = instructions.Trim();
-        _host?.SetSetting(TtsInstructionsSettingName, _ttsInstructions);
+        TtsInstructions = instructions.Trim();
+        _host?.SetSetting(TtsInstructionsSettingName, TtsInstructions);
     }
 
     internal async Task<bool> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
@@ -798,13 +800,13 @@ public sealed class OpenAiPlugin
     }
 
     private TranscriptionModelEntry? SelectedModelEntry =>
-        TranscriptionModelEntries.FirstOrDefault(m => m.Id == _selectedModelId);
+        s_transcriptionModelEntries.FirstOrDefault(m => m.Id == SelectedModelId);
 
     private void SelectModelCore(string modelId, bool persist)
     {
-        var entry = TranscriptionModelEntries.FirstOrDefault(m => m.Id == modelId)
-            ?? TranscriptionModelEntries[0];
-        _selectedModelId = entry.Id;
+        var entry = s_transcriptionModelEntries.FirstOrDefault(m => m.Id == modelId)
+            ?? s_transcriptionModelEntries[0];
+        SelectedModelId = entry.Id;
         _selectedApiModelName = entry.ApiModelName;
         _selectedResponseFormat = entry.ResponseFormat;
 
@@ -815,9 +817,9 @@ public sealed class OpenAiPlugin
     private HttpRequestMessage CreateTtsRequest(string text)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/audio/speech");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
         request.Content = OpenAiJson.CreateJsonContent(
-            OpenAiTtsConfiguration.CreateRequestBody(text, SelectedVoiceId, _ttsInstructions));
+            OpenAiTtsConfiguration.CreateRequestBody(text, SelectedVoiceId, TtsInstructions));
         return request;
     }
 
@@ -852,7 +854,7 @@ public sealed class OpenAiPlugin
         _oauthRefreshToken = effectiveRefreshToken;
         _oauthIdToken = tokens.IdToken;
         _oauthAccountId = metadata.AccountId;
-        _oauthPlanType = metadata.PlanType;
+        ChatGptPlanType = metadata.PlanType;
         _oauthExpiresAt = metadata.ExpiresAt;
 
         if (_host is null)
@@ -866,7 +868,7 @@ public sealed class OpenAiPlugin
         else
             await _host.StoreSecretAsync(OAuthIdTokenSecretName, tokens.IdToken);
         _host.SetSetting(OAuthAccountIdSettingName, _oauthAccountId);
-        _host.SetSetting(OAuthPlanTypeSettingName, _oauthPlanType);
+        _host.SetSetting(OAuthPlanTypeSettingName, ChatGptPlanType);
         _host.SetSetting(OAuthExpiresAtSettingName, _oauthExpiresAt);
         NormalizeSelectedLlmModel(persist: true);
         _host.NotifyCapabilitiesChanged();
@@ -877,12 +879,12 @@ public sealed class OpenAiPlugin
         // When the model rejects temperature outright (e.g. GPT-5 with a
         // reasoning_effort set), honor that regardless of the user's mode —
         // sending the field would 400 the request.
-        var reasoningEffort = SupportsReasoningEffort(modelId) ? _reasoningEffort : null;
+        var reasoningEffort = SupportsReasoningEffort(modelId) ? ReasoningEffort : null;
         if (!SupportsCustomTemperature(modelId, reasoningEffort))
             return null;
 
-        return _temperatureMode == TemperatureModeCustom
-            ? _temperatureValue
+        return TemperatureMode == TemperatureModeCustom
+            ? TemperatureValue
             : ChatCompletionTemperature(modelId, reasoningEffort);
     }
 
@@ -892,17 +894,17 @@ public sealed class OpenAiPlugin
         if (available.Count == 0)
             return;
 
-        if (_selectedLlmModelId is null
-            || available.All(model => !string.Equals(model.Id, _selectedLlmModelId, StringComparison.Ordinal)))
+        if (SelectedLlmModelId is null
+            || available.All(model => !string.Equals(model.Id, SelectedLlmModelId, StringComparison.Ordinal)))
         {
-            _selectedLlmModelId = available[0].Id;
+            SelectedLlmModelId = available[0].Id;
         }
 
         // Persist even when the in-memory selection didn't change — this guards
         // against a stale-cleared setting where _selectedLlmModelId is still
         // valid but the persisted setting was lost.
         if (persist)
-            _host?.SetSetting(SelectedLlmModelSettingName, _selectedLlmModelId);
+            _host?.SetSetting(SelectedLlmModelSettingName, SelectedLlmModelId);
     }
 
     private static DateTimeOffset? LoadExpiresAt(IPluginHostServices host)
@@ -974,7 +976,7 @@ public sealed class OpenAiPlugin
                 Key: SelectedModelSettingName,
                 Label: Loc.L("Settings.TranscriptionModel"),
                 Description: Loc.L("Settings.TranscriptionModelDescription"),
-                Options: TranscriptionModelEntries
+                Options: s_transcriptionModelEntries
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList(),
                 Kind: PluginSettingKind.Dropdown
@@ -982,7 +984,7 @@ public sealed class OpenAiPlugin
             new(
                 Key: SelectedLlmModelSettingName,
                 Label: Loc.L("Settings.LlmModel"),
-                Description: _authMode == OpenAiAuthMode.ChatGpt
+                Description: AuthMode == OpenAiAuthMode.ChatGpt
                     ? Loc.L("Settings.LlmModelDescriptionChatGpt")
                     : _fetchedLlmModels.Count > 0
                         ? Loc.L("Settings.LlmModelDescriptionFetched", _fetchedLlmModels.Count)
@@ -1061,16 +1063,16 @@ public sealed class OpenAiPlugin
         Task.FromResult(
             key switch
             {
-                AuthModeSettingName => _authMode.ToStorageValue(),
-                ApiKeySecretName => _apiKey,
-                SelectedModelSettingName => _selectedModelId,
-                SelectedLlmModelSettingName => _selectedLlmModelId,
-                ReasoningEffortSettingName => _reasoningEffort,
-                TemperatureModeSettingName => _temperatureMode,
-                TemperatureValueSettingName => _temperatureValue.ToString(
+                AuthModeSettingName => AuthMode.ToStorageValue(),
+                ApiKeySecretName => ApiKey,
+                SelectedModelSettingName => SelectedModelId,
+                SelectedLlmModelSettingName => SelectedLlmModelId,
+                ReasoningEffortSettingName => ReasoningEffort,
+                TemperatureModeSettingName => TemperatureMode,
+                TemperatureValueSettingName => TemperatureValue.ToString(
                     CultureInfo.InvariantCulture),
                 SelectedVoiceSettingName => _selectedVoiceId,
-                TtsInstructionsSettingName => _ttsInstructions,
+                TtsInstructionsSettingName => TtsInstructions,
                 ForgetChatGptLoginSettingName => _forgetChatGptLogin ? "true" : "false",
                 LlmStreamingSettings.StreamResponsesSettingKey => _streamResponses ? "true" : "false",
                 _ => null,
@@ -1141,16 +1143,16 @@ public sealed class OpenAiPlugin
     }
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default) =>
-        _authMode == OpenAiAuthMode.ChatGpt
+        AuthMode == OpenAiAuthMode.ChatGpt
             ? await ValidateChatGptAsync(ct)
             : await ValidateApiKeyModeAsync(ct);
 
     private async Task<PluginSettingsValidationResult?> ValidateApiKeyModeAsync(CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        var valid = await ValidateApiKeyAsync(ApiKey, ct);
         if (!valid)
             return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
 
@@ -1239,9 +1241,9 @@ public sealed class OpenAiPlugin
     }
 
     private string ChatGptConnectedMessage() =>
-        string.IsNullOrWhiteSpace(_oauthPlanType)
+        string.IsNullOrWhiteSpace(ChatGptPlanType)
             ? Loc.L("Settings.ChatGptLoginConnected")
-            : Loc.L("Settings.ChatGptLoginConnectedPlan", _oauthPlanType);
+            : Loc.L("Settings.ChatGptLoginConnectedPlan", ChatGptPlanType);
 
     private static bool ParseBool(string? value) =>
         string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);

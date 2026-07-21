@@ -1,4 +1,3 @@
-using System.IO;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -31,9 +30,9 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
             string.IsNullOrEmpty(language)
             || string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase);
         var langParam = isUnspecified
-            ? (model.StartsWith("nova-3", StringComparison.OrdinalIgnoreCase)
+            ? model.StartsWith("nova-3", StringComparison.OrdinalIgnoreCase)
                 ? "&language=multi"
-                : string.Empty)
+                : string.Empty
             : $"&language={Uri.EscapeDataString(language!)}";
         var url =
             $"wss://api.deepgram.com/v1/listen?model={Uri.EscapeDataString(model)}&encoding=linear16&sample_rate=16000&interim_results=true&punctuate=true&smart_format=true{langParam}";

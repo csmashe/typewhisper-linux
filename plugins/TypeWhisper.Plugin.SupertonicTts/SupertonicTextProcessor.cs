@@ -1,4 +1,3 @@
-using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -12,7 +11,7 @@ internal sealed partial class SupertonicTextProcessor
     {
         "en", "ko", "ja", "ar", "bg", "cs", "da", "de", "el", "es", "et", "fi", "fr", "hi",
         "hr", "hu", "id", "it", "lt", "lv", "nl", "pl", "pt", "ro", "ru", "sk", "sl",
-        "sv", "tr", "uk", "vi"
+        "sv", "tr", "uk", "vi",
     };
 
     private readonly long[] _indexer;

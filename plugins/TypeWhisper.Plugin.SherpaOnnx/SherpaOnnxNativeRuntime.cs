@@ -1,4 +1,3 @@
-using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using SherpaOnnx;
@@ -42,14 +41,15 @@ internal static class SherpaOnnxNativeRuntime
     // (→ CPU fallback) instead of a crash.
     // internal (not private) so a regression test can assert the CUDA provider is
     // never reintroduced here (see the §6 invariant in the comment above).
+    // ReSharper disable once InconsistentNaming -- internal static field is part of the test-observable API; PascalCase intended.
     internal static readonly string[] PreloadOrder =
     [
         "libonnxruntime_providers_shared.so",
         "libonnxruntime.so",
-        "libsherpa-onnx-cxx-api.so"
+        "libsherpa-onnx-cxx-api.so",
     ];
 
-    private static readonly object Sync = new();
+    private static readonly Lock s_sync = new();
     private static bool _resolverRegistered;
     private static string? _cudaRuntimeDirectory;
 
@@ -61,7 +61,7 @@ internal static class SherpaOnnxNativeRuntime
     /// </summary>
     public static void RegisterResolver()
     {
-        lock (Sync)
+        lock (s_sync)
         {
             if (_resolverRegistered)
                 return;
@@ -84,7 +84,7 @@ internal static class SherpaOnnxNativeRuntime
         if (string.IsNullOrWhiteSpace(runtimeDirectory))
             throw new ArgumentException("Runtime directory is required.", nameof(runtimeDirectory));
 
-        lock (Sync)
+        lock (s_sync)
         {
             if (!_resolverRegistered)
             {
@@ -102,6 +102,7 @@ internal static class SherpaOnnxNativeRuntime
                     continue;
 
                 var handle = dlopen(path, RtldNow | RtldGlobal);
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (handle == IntPtr.Zero)
                 {
                     var error = Marshal.PtrToStringAnsi(dlerror());

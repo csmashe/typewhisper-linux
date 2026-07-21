@@ -1,5 +1,8 @@
-using System.Net;
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -14,22 +17,21 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
     private const string ApiKeySecretName = "api-key";
     private const string DefaultModelId = "pulse";
 
-    private static readonly IReadOnlyList<PluginModelInfo> Models =
+    private static readonly IReadOnlyList<PluginModelInfo> s_models =
     [
-        new(DefaultModelId, "Pulse")
+        new(DefaultModelId, "Pulse"),
     ];
 
-    private static readonly IReadOnlyList<string> Languages =
+    private static readonly IReadOnlyList<string> s_languages =
     [
         "ar", "bn", "de", "en", "es", "fr", "gu", "hi", "it", "ja",
         "ka", "ko", "ml", "mr", "nl", "or", "pa", "pt", "ru", "ta",
-        "te", "yue", "zh", "multi-eu", "multi-indic", "multi-asian", "multi"
+        "te", "yue", "zh", "multi-eu", "multi-indic", "multi-asian", "multi",
     ];
 
     private readonly HttpClient _httpClient;
     private readonly SemaphoreSlim _apiKeyWriteLock = new(1, 1);
     private IPluginHostServices? _host;
-    private string? _apiKey;
     private string _selectedModelId = DefaultModelId;
 
     public SmallestAiPlugin()
@@ -51,7 +53,7 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
+        ApiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
         _selectedModelId = DefaultModelId;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
@@ -66,16 +68,16 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     public string ProviderId => "smallest-ai";
     public string ProviderDisplayName => "Smallest AI";
-    public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels => Models;
+    public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_models;
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
-    public IReadOnlyList<string> SupportedLanguages => Languages;
+    public IReadOnlyList<string> SupportedLanguages => s_languages;
 
     public void SelectModel(string modelId)
     {
-        if (Models.All(model => !string.Equals(model.Id, modelId, StringComparison.Ordinal)))
+        if (s_models.All(model => !string.Equals(model.Id, modelId, StringComparison.Ordinal)))
             throw new ArgumentException($"Unknown model: {modelId}");
         _selectedModelId = modelId;
     }
@@ -94,7 +96,7 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
         using var request = new HttpRequestMessage(HttpMethod.Post, BuildPulseUri(language, includeWordTimestamps: true));
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
         request.Content = CreateWavContent(wavAudio);
 
         using var response = await _httpClient.SendAsync(request, ct);
@@ -114,12 +116,13 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
-        return await SmallestAiStreamingSession.ConnectAsync(_apiKey!, NormalizeLanguage(language), ct);
+        return await SmallestAiStreamingSession.ConnectAsync(ApiKey!, NormalizeLanguage(language), ct);
     }
 
     // Settings support
 
-    internal string? ApiKey => _apiKey;
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -139,9 +142,9 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
         try
         {
             var wasConfigured = IsConfigured;
-            var changed = !string.Equals(_apiKey, normalized, StringComparison.Ordinal);
+            var changed = !string.Equals(ApiKey, normalized, StringComparison.Ordinal);
 
-            _apiKey = normalized;
+            ApiKey = normalized;
             if (_host is not null)
             {
                 if (normalized is null)
@@ -184,7 +187,6 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
         {
             return false;
         }
-        catch (OperationCanceledException) { throw; }
         catch (HttpRequestException)
         {
             return false;
@@ -217,7 +219,7 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
         return new PluginTranscriptionResult(text, language, duration, NoSpeechProbability: null)
         {
-            Segments = segments
+            Segments = segments,
         };
     }
 
@@ -334,11 +336,13 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     internal static string ExtractApiError(JsonElement root)
     {
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (root.TryGetProperty("error", out var error))
         {
             if (error.ValueKind == JsonValueKind.String)
                 return error.GetString() ?? "Unknown error";
 
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (error.ValueKind == JsonValueKind.Object)
             {
                 if (GetString(error, "message") is { } objectMessage)
@@ -410,7 +414,7 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
         Task.FromResult(
             key switch
             {
-                ApiKeySecretName => _apiKey,
+                ApiKeySecretName => ApiKey,
                 _ => null,
             }
         );
@@ -431,10 +435,10 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        var valid = await ValidateApiKeyAsync(ApiKey, ct);
         return valid
             ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
             : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));

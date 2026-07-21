@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.IO;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -128,6 +127,7 @@ internal sealed class XaiPcmTtsPlaybackSession : ITtsPlaybackSession, IDisposabl
             process = null;
         }
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (process is null)
         {
             TryDeleteFile(wavFilePath);

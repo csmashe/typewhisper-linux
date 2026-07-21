@@ -1,5 +1,8 @@
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Buffers.Binary;
-using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -16,7 +19,7 @@ namespace TypeWhisper.Plugin.GoogleCloudStt;
 // credential. That is a research spike, not a drop-in change, so it is parked:
 // leaving the plugin as-is until that cost is justified or a streaming reference
 // to follow exists.
-public sealed partial class GoogleCloudSttPlugin
+public sealed class GoogleCloudSttPlugin
     : ITranscriptionEnginePlugin,
         IPluginSettingsProvider,
         IPluginLocalizationAware
@@ -27,7 +30,6 @@ public sealed partial class GoogleCloudSttPlugin
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
     private string? _apiKey;
-    private string? _selectedModelId;
 
     public GoogleCloudSttPlugin()
         : this(new HttpClientHandler()) { }
@@ -49,7 +51,7 @@ public sealed partial class GoogleCloudSttPlugin
     {
         _host = host;
         _apiKey = await host.LoadSecretAsync("api-key");
-        _selectedModelId = host.GetSetting<string>("selectedModel") ?? "latest_long";
+        SelectedModelId = host.GetSetting<string>("selectedModel") ?? "latest_long";
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -64,16 +66,17 @@ public sealed partial class GoogleCloudSttPlugin
     public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-    [new PluginModelInfo("latest_long", "Google Cloud (Long)")];
+    [new("latest_long", "Google Cloud (Long)")];
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
+
     public bool SupportsTranslation => false;
 
     public void SelectModel(string modelId)
     {
         if (modelId != "latest_long")
             throw new ArgumentException($"Unknown model: {modelId}");
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
@@ -158,7 +161,7 @@ public sealed partial class GoogleCloudSttPlugin
             }
 
             // Chunks are word-aligned: an odd body is followed by a pad byte.
-            var advance = (long)bodyOffset + chunkSize + (chunkSize & 1);
+            var advance = bodyOffset + chunkSize + (chunkSize & 1);
             if (advance <= offset || advance > data.Length)
                 break;
             offset = (int)advance;
@@ -185,19 +188,23 @@ public sealed partial class GoogleCloudSttPlugin
             foreach (var result in results.EnumerateArray())
             {
                 if (
-                    result.TryGetProperty("alternatives", out var alternatives)
-                    && alternatives.ValueKind == JsonValueKind.Array
+                    !result.TryGetProperty("alternatives", out var alternatives)
+                    || alternatives.ValueKind != JsonValueKind.Array
                 )
                 {
-                    foreach (var alt in alternatives.EnumerateArray())
+                    continue;
+                }
+
+                foreach (var alt in alternatives.EnumerateArray())
+                {
+                    if (!alt.TryGetProperty("transcript", out var transcript))
                     {
-                        if (alt.TryGetProperty("transcript", out var transcript))
-                        {
-                            if (sb.Length > 0)
-                                sb.Append(' ');
-                            sb.Append(transcript.GetString());
-                        }
+                        continue;
                     }
+
+                    if (sb.Length > 0)
+                        sb.Append(' ');
+                    sb.Append(transcript.GetString());
                 }
             }
         }
@@ -223,6 +230,7 @@ public sealed partial class GoogleCloudSttPlugin
         }
 
         string? detectedLang = null;
+        // ReSharper disable once InvertIf -- inverting would duplicate the multi-argument return below; kept nested for clarity.
         if (
             root.TryGetProperty("results", out var resultsForLang)
             && resultsForLang.ValueKind == JsonValueKind.Array
@@ -316,7 +324,7 @@ public sealed partial class GoogleCloudSttPlugin
             key switch
             {
                 "api-key" => _apiKey,
-                "selectedModel" => _selectedModelId,
+                "selectedModel" => SelectedModelId,
                 _ => null,
             }
         );

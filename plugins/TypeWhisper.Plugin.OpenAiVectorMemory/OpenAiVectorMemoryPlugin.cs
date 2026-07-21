@@ -1,5 +1,8 @@
-using System.IO;
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedType.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -13,7 +16,7 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     private const string EmbeddingModel = "text-embedding-3-small";
     private const string EmbeddingUrl = "https://api.openai.com/v1/embeddings";
 
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly SemaphoreSlim _lock = new(1, 1);
@@ -313,7 +316,7 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
             {
                 var json = await File.ReadAllTextAsync(_filePath, ct);
                 _entries =
-                    JsonSerializer.Deserialize<List<VectorMemoryEntry>>(json, JsonOptions) ?? [];
+                    JsonSerializer.Deserialize<List<VectorMemoryEntry>>(json, s_jsonOptions) ?? [];
             }
             catch (Exception ex)
             {
@@ -341,7 +344,7 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         if (dir is not null && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        var json = JsonSerializer.Serialize(_entries, JsonOptions);
+        var json = JsonSerializer.Serialize(_entries, s_jsonOptions);
 
         // Write to a sibling temp file and atomically replace, so a crash
         // mid-write can't leave the vector store truncated.
@@ -356,6 +359,7 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         }
         catch
         {
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (File.Exists(tempPath))
             {
                 try { File.Delete(tempPath); }

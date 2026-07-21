@@ -1,6 +1,10 @@
-using System.IO;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedAutoPropertyAccessor.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.IO.Compression;
-using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using TypeWhisper.Plugins.Shared.Net;
@@ -21,7 +25,7 @@ public enum CudaRuntimeProfile
     ///     (cudart, cuBLAS/cuBLASLt, cuFFT, cuRAND, cuDNN). Required by
     ///     sherpa-onnx's GPU build.
     /// </summary>
-    OnnxRuntimeCuda
+    OnnxRuntimeCuda,
 }
 
 /// <summary>
@@ -55,34 +59,34 @@ public class CudaRuntimeProvisioner
     // already satisfies the wheel and (b) dlopen RTLD_GLOBAL so the no-rpath ORT
     // CUDA provider resolves their symbols. We deliberately do NOT enumerate every
     // companion .so a wheel ships — extraction pulls them all out flat, and they
-    // resolve via the libraries' $ORIGIN runpath (see Cudnn below). Listing exact
+    // resolve via the libraries' $ORIGIN runpath (see s_cudnn below). Listing exact
     // companions would couple us to a wheel's internal layout, which varies by
     // version (e.g. cuDNN 9.x adds/removes engine sub-libs).
-    private static readonly CudaWheel CudaRuntime = new(
+    private static readonly CudaWheel s_cudaRuntime = new(
         "nvidia-cuda-runtime-cu12",
         "12.9.79",
         RequiredSonames: ["libcudart.so.12"]
     );
 
-    private static readonly CudaWheel Cublas = new(
+    private static readonly CudaWheel s_cublas = new(
         "nvidia-cublas-cu12",
         "12.9.2.10",
         RequiredSonames: ["libcublasLt.so.12", "libcublas.so.12"]
     );
 
-    private static readonly CudaWheel Cufft = new(
+    private static readonly CudaWheel s_cufft = new(
         "nvidia-cufft-cu12",
         "11.4.1.4",
         RequiredSonames: ["libcufft.so.11"]
     );
 
-    private static readonly CudaWheel Curand = new(
+    private static readonly CudaWheel s_curand = new(
         "nvidia-curand-cu12",
         "10.3.10.19",
         RequiredSonames: ["libcurand.so.10"]
     );
 
-    private static readonly CudaWheel Cudnn = new(
+    private static readonly CudaWheel s_cudnn = new(
         "nvidia-cudnn-cu12",
         "9.22.0.52",
         // Only the dispatcher is required. It dlopens its engine sub-libraries
@@ -102,16 +106,16 @@ public class CudaRuntimeProvisioner
     // Pinned to the CUDA 12.9.1 nvrtc that pairs with cudart 12.9.79; its
     // libnvrtc-builtins companion comes along in the flat extraction and resolves via
     // $ORIGIN. Only sherpa-onnx's ORT/cuDNN path needs this, not whisper.cpp.
-    private static readonly CudaWheel Nvrtc = new(
+    private static readonly CudaWheel s_nvrtc = new(
         "nvidia-cuda-nvrtc-cu12",
         "12.9.86",
         RequiredSonames: ["libnvrtc.so.12"]
     );
 
-    private static readonly CudaWheel[] WhisperWheels = [CudaRuntime, Cublas];
+    private static readonly CudaWheel[] s_whisperWheels = [s_cudaRuntime, s_cublas];
 
-    private static readonly CudaWheel[] OnnxRuntimeWheels =
-        [CudaRuntime, Cublas, Cufft, Curand, Nvrtc, Cudnn];
+    private static readonly CudaWheel[] s_onnxRuntimeWheels =
+        [s_cudaRuntime, s_cublas, s_cufft, s_curand, s_nvrtc, s_cudnn];
 
     private static readonly string[] s_systemLibraryDirectories = BuildSystemLibraryDirectories();
 
@@ -124,7 +128,7 @@ public class CudaRuntimeProvisioner
         var dirs = new List<string>
         {
             "/usr/local/cuda/lib64",
-            "/usr/local/cuda/targets/x86_64-linux/lib"
+            "/usr/local/cuda/targets/x86_64-linux/lib",
         };
         foreach (var minor in new[] { "9", "8", "7", "6", "5", "4", "3", "2", "1", "0" })
         {
@@ -138,7 +142,7 @@ public class CudaRuntimeProvisioner
     private readonly HttpClient _httpClient;
     private readonly Action<string>? _log;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly object _preloadSync = new();
+    private readonly Lock _preloadSync = new();
     private readonly HashSet<string> _preloaded = new(StringComparer.Ordinal);
 
     public CudaRuntimeProvisioner(string cacheRoot, HttpClient httpClient, Action<string>? log = null)
@@ -165,7 +169,7 @@ public class CudaRuntimeProvisioner
         );
 
     private static CudaWheel[] WheelsFor(CudaRuntimeProfile profile) =>
-        profile == CudaRuntimeProfile.WhisperCublas ? WhisperWheels : OnnxRuntimeWheels;
+        profile == CudaRuntimeProfile.WhisperCublas ? s_whisperWheels : s_onnxRuntimeWheels;
 
     /// <summary>
     ///     True when every CUDA library the <paramref name="profile" /> needs is
@@ -651,7 +655,7 @@ public class CudaRuntimeProvisioner
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
                 }
             );
 

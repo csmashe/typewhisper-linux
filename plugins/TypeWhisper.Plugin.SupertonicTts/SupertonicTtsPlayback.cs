@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.IO;
 using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Plugin.SupertonicTts;
@@ -80,6 +79,7 @@ internal sealed class SupertonicTtsPlaybackSession : ITtsPlaybackSession, IDispo
             process = null;
         }
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (process is null)
         {
             TryDeleteFile(wavFilePath);

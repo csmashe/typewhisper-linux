@@ -6,15 +6,15 @@ namespace TypeWhisper.Core.Services;
 ///     Writes content so the destination ends up with either the complete old or complete new
 ///     content, never a partial write. Failures throw.
 /// </summary>
-public static class AtomicFileWrite
+public static partial class AtomicFileWrite
 {
+    // ReSharper disable once InconsistentNaming -- POSIX errno macro name; PascalCase would obscure it.
     private const int EEXIST = 17;
 
-    // DllImport rather than LibraryImport: the latter's generated marshalling needs
-    // AllowUnsafeBlocks, which is not worth enabling project-wide for one call. CharSet.Ansi
-    // marshals as UTF-8 on Unix, which is what libc expects for paths.
-    [DllImport("libc", EntryPoint = "link", SetLastError = true, CharSet = CharSet.Ansi)]
-    private static extern int Link(string oldPath, string newPath);
+    // UTF-8 marshalling is what libc expects for paths.
+    [LibraryImport("libc", EntryPoint = "link", SetLastError = true,
+        StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int Link(string oldPath, string newPath);
 
     /// <summary>
     ///     Publishes a fully-written temporary file to <paramref name="path" />, which goes

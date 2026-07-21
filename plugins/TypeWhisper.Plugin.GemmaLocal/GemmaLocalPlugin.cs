@@ -1,6 +1,10 @@
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// ReSharper disable UnusedType.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Diagnostics;
-using System.IO;
-using System.Net.Http;
 using LLama;
 using LLama.Common;
 using LLama.Sampling;
@@ -11,7 +15,7 @@ namespace TypeWhisper.Plugin.GemmaLocal;
 
 public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
-    private static readonly IReadOnlyList<GemmaModelDefinition> Models =
+    private static readonly IReadOnlyList<GemmaModelDefinition> s_models =
     [
         new(
             "gemma4-e2b-it-q4",
@@ -45,10 +49,8 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromHours(2) };
     private readonly SemaphoreSlim _inferenceLock = new(1, 1);
     private IPluginHostServices? _host;
-    private string? _selectedModelId;
     private LLamaWeights? _weights;
     private LLamaContext? _context;
-    private string? _loadedModelId;
     private bool _streamResponses = true;
     private CancellationTokenSource? _startupCts;
     private Task? _startupTask;
@@ -60,31 +62,32 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     public Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _selectedModelId = host.GetSetting<string>("selectedModel");
+        SelectedModelId = host.GetSetting<string>("selectedModel");
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
-        host.Log(PluginLogLevel.Info, $"Activated (model={_selectedModelId})");
+        host.Log(PluginLogLevel.Info, $"Activated (model={SelectedModelId})");
 
-        // A persisted ID may name a model that no longer exists in Models
+        // A persisted ID may name a model that no longer exists in s_models
         // (e.g. after a release that drops a quant). IsModelDownloaded calls
         // GetModelDefinition, which throws — that would surface as a plugin
         // activation failure. Clear the stale setting instead.
-        if (!string.IsNullOrEmpty(_selectedModelId)
-            && Models.All(m => m.Id != _selectedModelId))
+        if (!string.IsNullOrEmpty(SelectedModelId)
+            && s_models.All(m => m.Id != SelectedModelId))
         {
             host.Log(
                 PluginLogLevel.Warning,
-                $"Persisted model '{_selectedModelId}' is no longer available; clearing selection."
+                $"Persisted model '{SelectedModelId}' is no longer available; clearing selection."
             );
-            _selectedModelId = null;
+            SelectedModelId = null;
             host.SetSetting("selectedModel", string.Empty);
         }
 
         // Auto-load previously selected model in background (don't block app startup).
         // Track the task + CTS so DeactivateAsync can cancel and await it instead of
         // letting it race back to life and recreate _weights/_context after teardown.
-        if (!string.IsNullOrEmpty(_selectedModelId) && IsModelDownloaded(_selectedModelId))
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
+        if (!string.IsNullOrEmpty(SelectedModelId) && IsModelDownloaded(SelectedModelId))
         {
-            var modelId = _selectedModelId;
+            var modelId = SelectedModelId;
             _startupCts = new CancellationTokenSource();
             var startupCt = _startupCts.Token;
             _startupTask = Task.Run(async () =>
@@ -161,7 +164,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                 Key: "selectedModel",
                 Label: Loc.L("Settings.Model"),
                 Description: Loc.L("Settings.ModelDescription"),
-                Options: Models
+                Options: s_models
                     .Select(m => new PluginSettingOption(
                         m.Id,
                         $"{m.DisplayName} ({m.SizeDescription})"
@@ -180,7 +183,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         Task.FromResult(
             key switch
             {
-                "selectedModel" => _selectedModelId,
+                "selectedModel" => SelectedModelId,
                 LlmStreamingSettings.StreamResponsesSettingKey => _streamResponses ? "true" : "false",
                 _ => null,
             }
@@ -211,7 +214,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                _selectedModelId = null;
+                SelectedModelId = null;
                 _host?.SetSetting("selectedModel", string.Empty);
                 UnloadModel();
             }
@@ -229,13 +232,13 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
     public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_selectedModelId))
+        if (string.IsNullOrWhiteSpace(SelectedModelId))
             return Task.FromResult<PluginSettingsValidationResult?>(
                 new PluginSettingsValidationResult(false, Loc.L("Settings.SelectModel"))
             );
 
         return Task.FromResult<PluginSettingsValidationResult?>(
-            _loadedModelId == _selectedModelId
+            LoadedModelId == SelectedModelId
                 ? new PluginSettingsValidationResult(true, Loc.L("Settings.ModelReady"))
                 : new PluginSettingsValidationResult(false, Loc.L("Settings.ModelSelectedNotLoaded"))
         );
@@ -253,6 +256,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             var progress = new Progress<double>(p =>
             {
                 var pct = (int)(p * 100);
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (pct != lastPct && pct % 5 == 0)
                 {
                     lastPct = pct;
@@ -267,10 +271,10 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     }
 
     public string ProviderName => "Gemma 4 (Local)";
-    public bool IsAvailable => _loadedModelId is not null;
+    public bool IsAvailable => LoadedModelId is not null;
 
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
-        Models
+        s_models
             .Select(m => new PluginModelInfo(m.Id, m.DisplayName)
             {
                 SizeDescription = m.SizeDescription,
@@ -364,8 +368,10 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         }
     }
 
-    internal string? SelectedModelId => _selectedModelId;
-    internal string? LoadedModelId => _loadedModelId;
+    internal string? SelectedModelId { get; private set; }
+
+    internal string? LoadedModelId { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -375,12 +381,12 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
-    internal IReadOnlyList<GemmaModelDefinition> ModelDefinitions => Models;
+    internal IReadOnlyList<GemmaModelDefinition> ModelDefinitions => s_models;
 
     internal void SelectModel(string modelId)
     {
         _ = GetModelDefinition(modelId);
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
         _host?.NotifyCapabilitiesChanged();
     }
@@ -456,6 +462,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                     bytesRead += read;
 
                     var now = DateTime.UtcNow;
+                    // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                     if ((now - lastReport).TotalMilliseconds > 250)
                     {
                         progress?.Report((double)bytesRead / totalBytes);
@@ -510,7 +517,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                     // If the user has switched models OR cleared the selection while we
                     // were queued behind the lock, abort: a late finish here would
                     // overwrite the newer state and load a model the user no longer wants.
-                    if (_selectedModelId != modelId)
+                    if (SelectedModelId != modelId)
                         return;
 
                     UnloadModel();
@@ -544,14 +551,14 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                     // so the user can switch selections while we're loading. If
                     // that happened, drop what we just loaded instead of letting
                     // the late finish silently roll back their newer choice.
-                    if (_selectedModelId != modelId)
+                    if (SelectedModelId != modelId)
                     {
                         UnloadModel();
                         return;
                     }
 
-                    _loadedModelId = modelId;
-                    _selectedModelId = modelId;
+                    LoadedModelId = modelId;
+                    SelectedModelId = modelId;
                     _host?.SetSetting("selectedModel", modelId);
                     loaded = true;
                 }
@@ -576,7 +583,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         _context = null;
         _weights?.Dispose();
         _weights = null;
-        _loadedModelId = null;
+        LoadedModelId = null;
     }
 
     // Helpers
@@ -610,7 +617,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         Path.Join(GetModelDirectory(modelId), fileName);
 
     private static GemmaModelDefinition GetModelDefinition(string modelId) =>
-        Models.FirstOrDefault(m => m.Id == modelId)
+        s_models.FirstOrDefault(m => m.Id == modelId)
         ?? throw new ArgumentException($"Unknown model: {modelId}");
 
     private void Log(PluginLogLevel level, string message)

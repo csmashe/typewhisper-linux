@@ -1,4 +1,3 @@
-using System.IO;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -7,7 +6,7 @@ namespace TypeWhisper.Plugin.FileMemory;
 
 public sealed class FileMemoryPlugin : IMemoryStoragePlugin
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
     private IPluginHostServices? _host;
     private string? _filePath;
@@ -50,7 +49,7 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
 
             var next = new List<MemoryEntry>(current)
             {
-                new(content, DateTime.UtcNow)
+                new(content, DateTime.UtcNow),
             };
             await SaveEntriesAsync(next, ct);
             _entries = next;
@@ -188,7 +187,7 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
         try
         {
             _entries =
-                JsonSerializer.Deserialize<List<MemoryEntry>>(json, JsonOptions)
+                JsonSerializer.Deserialize<List<MemoryEntry>>(json, s_jsonOptions)
                 ?? throw new JsonException("The memory file contained null JSON.");
             _loadFailed = false;
             return _entries;
@@ -248,7 +247,7 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
             if (dir is not null && !Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
 
-            var json = JsonSerializer.Serialize(entries, JsonOptions);
+            var json = JsonSerializer.Serialize(entries, s_jsonOptions);
             await File.WriteAllTextAsync(tempPath, json, ct);
             if (File.Exists(_filePath))
                 File.Replace(tempPath, _filePath, destinationBackupFileName: null);

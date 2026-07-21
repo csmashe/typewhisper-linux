@@ -1,4 +1,9 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable NotAccessedPositionalProperty.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -7,7 +12,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.OpenAiCompatible;
 
-public sealed partial class OpenAiCompatiblePlugin
+public sealed class OpenAiCompatiblePlugin
     : ITranscriptionEnginePlugin,
         ILlmProviderPlugin,
         IPluginSettingsProvider,
@@ -28,10 +33,6 @@ public sealed partial class OpenAiCompatiblePlugin
 
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
-    private string? _apiKey;
-    private string? _baseUrl;
-    private string? _selectedModelId;
-    private string? _selectedLlmModelId;
     private List<FetchedModel> _fetchedModels = [];
     private bool _streamResponses = true;
     private readonly List<OpenAiCompatibleProfile> _additionalProfiles = [];
@@ -54,10 +55,10 @@ public sealed partial class OpenAiCompatiblePlugin
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
-        _baseUrl = host.GetSetting<string>("baseUrl");
-        _selectedModelId = host.GetSetting<string>("selectedModel");
-        _selectedLlmModelId = host.GetSetting<string>("selectedLlmModel");
+        ApiKey = await host.LoadSecretAsync("api-key");
+        BaseUrl = host.GetSetting<string>("baseUrl");
+        SelectedModelId = host.GetSetting<string>("selectedModel");
+        SelectedLlmModelId = host.GetSetting<string>("selectedLlmModel");
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
 
         var modelsJson = host.GetSetting<string>("fetchedModels");
@@ -92,7 +93,7 @@ public sealed partial class OpenAiCompatiblePlugin
     public string ProviderId => "openai-compatible";
     public string ProviderDisplayName => "Custom Server";
 
-    public bool IsConfigured => !string.IsNullOrEmpty(_baseUrl);
+    public bool IsConfigured => !string.IsNullOrEmpty(BaseUrl);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels
     {
@@ -100,18 +101,18 @@ public sealed partial class OpenAiCompatiblePlugin
         {
             var models = _fetchedModels.Select(m => new PluginModelInfo(m.Id, m.Id)).ToList();
 
-            if (models.Count == 0 && !string.IsNullOrEmpty(_selectedModelId))
-                return [new PluginModelInfo(_selectedModelId, _selectedModelId)];
+            if (models.Count == 0 && !string.IsNullOrEmpty(SelectedModelId))
+                return [new PluginModelInfo(SelectedModelId, SelectedModelId)];
 
             return models;
         }
     }
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
 
     public void SelectModel(string modelId)
     {
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
@@ -125,16 +126,16 @@ public sealed partial class OpenAiCompatiblePlugin
         CancellationToken ct
     )
     {
-        if (string.IsNullOrEmpty(_baseUrl))
+        if (string.IsNullOrEmpty(BaseUrl))
             throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
-        if (string.IsNullOrEmpty(_selectedModelId))
+        if (string.IsNullOrEmpty(SelectedModelId))
             throw new InvalidOperationException(Loc.L("Settings.NoTranscriptionModelSelected"));
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
-            _baseUrl!,
-            _apiKey ?? "",
-            _selectedModelId!,
+            BaseUrl!,
+            ApiKey ?? "",
+            SelectedModelId!,
             wavAudio,
             language,
             translate,
@@ -146,7 +147,7 @@ public sealed partial class OpenAiCompatiblePlugin
 
     public string ProviderName => "OpenAI Compatible";
 
-    public bool IsAvailable => IsConfigured && !string.IsNullOrEmpty(_selectedLlmModelId);
+    public bool IsAvailable => IsConfigured && !string.IsNullOrEmpty(SelectedLlmModelId);
 
     public IReadOnlyList<PluginModelInfo> SupportedModels
     {
@@ -154,8 +155,8 @@ public sealed partial class OpenAiCompatiblePlugin
         {
             var models = _fetchedModels.Select(m => new PluginModelInfo(m.Id, m.Id)).ToList();
 
-            if (models.Count == 0 && !string.IsNullOrEmpty(_selectedLlmModelId))
-                return [new PluginModelInfo(_selectedLlmModelId, _selectedLlmModelId)];
+            if (models.Count == 0 && !string.IsNullOrEmpty(SelectedLlmModelId))
+                return [new PluginModelInfo(SelectedLlmModelId, SelectedLlmModelId)];
 
             return models;
         }
@@ -168,17 +169,17 @@ public sealed partial class OpenAiCompatiblePlugin
         CancellationToken ct
     )
     {
-        if (string.IsNullOrEmpty(_baseUrl))
+        if (string.IsNullOrEmpty(BaseUrl))
             throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
 
-        var modelId = !string.IsNullOrEmpty(model) ? model : _selectedLlmModelId ?? "";
+        var modelId = !string.IsNullOrEmpty(model) ? model : SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
             throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient,
-            _baseUrl!,
-            _apiKey ?? "",
+            BaseUrl!,
+            ApiKey ?? "",
             modelId,
             systemPrompt,
             userText,
@@ -199,17 +200,17 @@ public sealed partial class OpenAiCompatiblePlugin
             yield break;
         }
 
-        if (string.IsNullOrEmpty(_baseUrl))
+        if (string.IsNullOrEmpty(BaseUrl))
             throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
 
-        var modelId = !string.IsNullOrEmpty(model) ? model : _selectedLlmModelId ?? "";
+        var modelId = !string.IsNullOrEmpty(model) ? model : SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
             throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
 
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
-            _baseUrl!,
-            _apiKey ?? "",
+            BaseUrl!,
+            ApiKey ?? "",
             modelId,
             systemPrompt,
             userText,
@@ -220,8 +221,10 @@ public sealed partial class OpenAiCompatiblePlugin
             yield return delta;
     }
 
-    internal string? BaseUrl => _baseUrl;
-    internal string? ApiKey => _apiKey;
+    internal string? BaseUrl { get; private set; }
+
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -231,8 +234,9 @@ public sealed partial class OpenAiCompatiblePlugin
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
-    internal string? SelectedTranscriptionModelId => _selectedModelId;
-    internal string? SelectedLlmModelId => _selectedLlmModelId;
+    internal string? SelectedTranscriptionModelId => SelectedModelId;
+    internal string? SelectedLlmModelId { get; private set; }
+
     internal IReadOnlyList<FetchedModel> FetchedModels => _fetchedModels;
 
     internal void SetBaseUrl(string url)
@@ -243,14 +247,14 @@ public sealed partial class OpenAiCompatiblePlugin
         var normalized = url.Trim().TrimEnd('/');
         if (normalized.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
             normalized = normalized[..^3];
-        _baseUrl = normalized;
+        BaseUrl = normalized;
         _host?.SetSetting("baseUrl", normalized);
         _host?.NotifyCapabilitiesChanged();
     }
 
     internal async Task SetApiKeyAsync(string key)
     {
-        _apiKey = string.IsNullOrWhiteSpace(key) ? null : key;
+        ApiKey = string.IsNullOrWhiteSpace(key) ? null : key;
         if (_host is not null)
         {
             if (string.IsNullOrWhiteSpace(key))
@@ -264,7 +268,7 @@ public sealed partial class OpenAiCompatiblePlugin
 
     internal void SelectLlmModel(string modelId)
     {
-        _selectedLlmModelId = modelId;
+        SelectedLlmModelId = modelId;
         _host?.SetSetting("selectedLlmModel", modelId);
     }
 
@@ -298,14 +302,14 @@ public sealed partial class OpenAiCompatiblePlugin
     // from "couldn't reach/parse the server."
     internal async Task<List<FetchedModel>?> FetchModelsAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrEmpty(_baseUrl))
+        if (string.IsNullOrEmpty(BaseUrl))
             return null;
 
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{_baseUrl}/v1/models");
-            if (!string.IsNullOrEmpty(_apiKey))
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
+            if (!string.IsNullOrEmpty(ApiKey))
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
 
             using var response = await _httpClient.SendAsync(request, ct);
             if (!response.IsSuccessStatusCode)
@@ -338,14 +342,14 @@ public sealed partial class OpenAiCompatiblePlugin
 
     internal async Task<bool> ValidateConnectionAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrEmpty(_baseUrl))
+        if (string.IsNullOrEmpty(BaseUrl))
             return false;
 
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{_baseUrl}/v1/models");
-            if (!string.IsNullOrEmpty(_apiKey))
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
+            if (!string.IsNullOrEmpty(ApiKey))
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
 
             using var response = await _httpClient.SendAsync(request, ct);
             return response.IsSuccessStatusCode;
@@ -406,10 +410,10 @@ public sealed partial class OpenAiCompatiblePlugin
         Task.FromResult(
             key switch
             {
-                "baseUrl" => _baseUrl,
-                "api-key" => _apiKey,
-                "selectedModel" => _selectedModelId,
-                "selectedLlmModel" => _selectedLlmModelId,
+                "baseUrl" => BaseUrl,
+                "api-key" => ApiKey,
+                "selectedModel" => SelectedModelId,
+                "selectedLlmModel" => SelectedLlmModelId,
                 LlmStreamingSettings.StreamResponsesSettingKey
                     => _streamResponses ? "true" : "false",
                 _ => null,
@@ -446,7 +450,7 @@ public sealed partial class OpenAiCompatiblePlugin
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_baseUrl))
+        if (string.IsNullOrWhiteSpace(BaseUrl))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterBaseUrl"));
 
         var valid = await ValidateConnectionAsync(ct);
@@ -456,9 +460,9 @@ public sealed partial class OpenAiCompatiblePlugin
         var models = await FetchModelsAsync(ct) ?? [];
         SetFetchedModels(models, notifyCapabilitiesChanged: false);
 
-        if (string.IsNullOrWhiteSpace(_selectedModelId) && models.Count > 0)
+        if (string.IsNullOrWhiteSpace(SelectedModelId) && models.Count > 0)
             SelectModel(models[0].Id);
-        if (string.IsNullOrWhiteSpace(_selectedLlmModelId) && models.Count > 0)
+        if (string.IsNullOrWhiteSpace(SelectedLlmModelId) && models.Count > 0)
             SelectLlmModel(models[0].Id);
 
         _host?.NotifyCapabilitiesChanged();
@@ -478,7 +482,7 @@ public sealed partial class OpenAiCompatiblePlugin
     // models clears the cache.
     public async Task RefreshModelCatalogAsync(CancellationToken ct = default)
     {
-        if (!string.IsNullOrEmpty(_baseUrl))
+        if (!string.IsNullOrEmpty(BaseUrl))
         {
             var models = await FetchModelsAsync(ct);
             if (models is not null && CatalogChanged(models, _fetchedModels))
@@ -511,15 +515,16 @@ public sealed partial class OpenAiCompatiblePlugin
     {
         var models = _fetchedModels.Select(m => new PluginSettingOption(m.Id, m.Id)).ToList();
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (models.Count == 0)
         {
-            if (!string.IsNullOrWhiteSpace(_selectedModelId))
-                models.Add(new PluginSettingOption(_selectedModelId, _selectedModelId));
+            if (!string.IsNullOrWhiteSpace(SelectedModelId))
+                models.Add(new PluginSettingOption(SelectedModelId, SelectedModelId));
             if (
-                !string.IsNullOrWhiteSpace(_selectedLlmModelId)
-                && models.All(m => m.Value != _selectedLlmModelId)
+                !string.IsNullOrWhiteSpace(SelectedLlmModelId)
+                && models.All(m => m.Value != SelectedLlmModelId)
             )
-                models.Add(new PluginSettingOption(_selectedLlmModelId, _selectedLlmModelId));
+                models.Add(new PluginSettingOption(SelectedLlmModelId, SelectedLlmModelId));
         }
 
         return models.Count > 0 ? models : null;
@@ -542,7 +547,7 @@ public sealed partial class OpenAiCompatiblePlugin
 
     public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions() =>
         [
-            new PluginCollectionDefinition(
+            new(
                 Key: ProfilesCollectionKey,
                 Label: Loc.L("Settings.ProfilesLabel"),
                 Description: Loc.L("Settings.ProfilesDescription"),

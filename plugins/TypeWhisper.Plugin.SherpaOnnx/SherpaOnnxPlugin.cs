@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.IO;
-using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using SherpaOnnx;
@@ -18,7 +16,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private const string CanaryRepo =
         "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8/resolve/main";
 
-    private static readonly IReadOnlyList<string> CanarySupportedLanguages =
+    private static readonly IReadOnlyList<string> s_canarySupportedLanguages =
     [
         "en",
         "de",
@@ -26,7 +24,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         "es",
     ];
 
-    private static readonly IReadOnlyList<ModelDefinition> Models =
+    private static readonly IReadOnlyList<ModelDefinition> s_models =
     [
         new(
             "parakeet-tdt-0.6b",
@@ -37,10 +35,10 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             true,
             false,
             [
-                new("encoder.int8.onnx", $"{ParakeetRepo}/encoder.int8.onnx", 652),
-                new("decoder.int8.onnx", $"{ParakeetRepo}/decoder.int8.onnx", 12),
-                new("joiner.int8.onnx", $"{ParakeetRepo}/joiner.int8.onnx", 6),
-                new("tokens.txt", $"{ParakeetRepo}/tokens.txt", 1),
+                new ModelFileDefinition("encoder.int8.onnx", $"{ParakeetRepo}/encoder.int8.onnx", 652),
+                new ModelFileDefinition("decoder.int8.onnx", $"{ParakeetRepo}/decoder.int8.onnx", 12),
+                new ModelFileDefinition("joiner.int8.onnx", $"{ParakeetRepo}/joiner.int8.onnx", 6),
+                new ModelFileDefinition("tokens.txt", $"{ParakeetRepo}/tokens.txt", 1),
             ]
         ),
         new(
@@ -52,14 +50,14 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             false,
             true,
             [
-                new("encoder.int8.onnx", $"{CanaryRepo}/encoder.int8.onnx", 127),
-                new("decoder.int8.onnx", $"{CanaryRepo}/decoder.int8.onnx", 71),
-                new("tokens.txt", $"{CanaryRepo}/tokens.txt", 1),
+                new ModelFileDefinition("encoder.int8.onnx", $"{CanaryRepo}/encoder.int8.onnx", 127),
+                new ModelFileDefinition("decoder.int8.onnx", $"{CanaryRepo}/decoder.int8.onnx", 71),
+                new ModelFileDefinition("tokens.txt", $"{CanaryRepo}/tokens.txt", 1),
             ]
         ),
     ];
 
-    private readonly object _sync = new();
+    private readonly Lock _sync = new();
 
     // Drives the model-file downloads and the on-demand CUDA runtime fetches (the
     // ~224 MB sherpa tarball plus CUDA wheels up to ~685 MB). HttpClient.Timeout bounds
@@ -70,7 +68,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private readonly HttpClient _httpClient =
         new(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(30) })
         {
-            Timeout = TimeSpan.FromHours(2)
+            Timeout = TimeSpan.FromHours(2),
         };
     private IPluginHostServices? _host;
     private OfflineRecognizer? _recognizer;
@@ -78,7 +76,6 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     private CudaRuntimeProvisioner? _cudaProvisioner;
     private string? _loadedModelId;
     private string? _loadedModelDir;
-    private string? _selectedModelId;
     private string _computeBackend = "cpu";
 
     // The WIRED ORT native runtime, pinned to whichever loads first in the process
@@ -93,10 +90,6 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     // Lets a first-load CUDA-recognizer failure pin "cuda" (the runtime is CUDA-capable)
     // rather than "cpu", so a later CPU↔CUDA recognizer swap doesn't read as restart-required.
     private bool _cudaOrtRuntimeWired;
-    private TranscriptionAccelerationPreference _accelerationPreference =
-        TranscriptionAccelerationPreference.Auto;
-    private TranscriptionAccelerationStatus _accelerationStatus =
-        new(TranscriptionAccelerationBackend.Cpu, "Using CPU");
 
     private string _canarySrcLang = "en";
     private string _canaryTgtLang = "en";
@@ -108,8 +101,9 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     public string ProviderId => "sherpa-onnx";
     public string ProviderDisplayName => "Lokal (sherpa-onnx)";
     public bool IsConfigured => true;
-    public string? SelectedModelId => _selectedModelId;
-    public bool SupportsTranslation => _selectedModelId == "canary-180m-flash";
+    public string? SelectedModelId { get; private set; }
+
+    public bool SupportsTranslation => SelectedModelId == "canary-180m-flash";
     public bool SupportsModelDownload => true;
 
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
@@ -127,12 +121,12 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _cudaProvisioner?.IsProfileSatisfied(CudaRuntimeProfile.OnnxRuntimeCuda) == true
         && _cudaRuntimeInstaller?.IsInstalled == true;
 
-    public TranscriptionAccelerationPreference AccelerationPreference => _accelerationPreference;
+    public TranscriptionAccelerationPreference AccelerationPreference { get; private set; } = TranscriptionAccelerationPreference.Auto;
 
-    public TranscriptionAccelerationStatus AccelerationStatus => _accelerationStatus;
+    public TranscriptionAccelerationStatus AccelerationStatus { get; private set; } = new(TranscriptionAccelerationBackend.Cpu, "Using CPU");
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-        Models
+        s_models
             .Select(m => new PluginModelInfo(m.Id, m.DisplayName)
             {
                 SizeDescription = m.SizeDescription,
@@ -143,7 +137,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             .ToList();
 
     public IReadOnlyList<string> SupportedLanguages =>
-        _selectedModelId == "canary-180m-flash" ? CanarySupportedLanguages : [];
+        SelectedModelId == "canary-180m-flash" ? s_canarySupportedLanguages : [];
 
     public Task ActivateAsync(IPluginHostServices host)
     {
@@ -178,7 +172,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     public void SelectModel(string modelId)
     {
         _ = GetModelDefinition(modelId);
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
     }
 
     public Task ConfigureComputeBackendAsync(string backend)
@@ -218,7 +212,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
     public void SetAccelerationPreference(TranscriptionAccelerationPreference preference)
     {
-        _accelerationPreference = preference;
+        AccelerationPreference = preference;
 
         var desired = preference == TranscriptionAccelerationPreference.NvidiaCuda ? "cuda" : "cpu";
 
@@ -229,7 +223,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         // otherwise overwrite it). The CUDA runtime is provisioned lazily on the
         // next LoadModelAsync.
         _ = ConfigureComputeBackendAsync(desired);
-        _accelerationStatus = _loadedNativeProvider is null
+        AccelerationStatus = _loadedNativeProvider is null
             ? CreatePendingAccelerationStatus(preference)
             // Pass the EFFECTIVE provider (_computeBackend) for the "active backend"; the
             // restart flag is derived from the wired runtime inside the helper.
@@ -253,8 +247,8 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             if (_loadedModelId == modelId)
                 UnloadRecognizerUnsafe();
 
-            if (_selectedModelId == modelId)
-                _selectedModelId = null;
+            if (SelectedModelId == modelId)
+                SelectedModelId = null;
         }
 
         if (Directory.Exists(dir))
@@ -304,6 +298,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                 {
                     fileOnDisk = onDisk;
                     var now = DateTime.UtcNow;
+                    // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                     if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
                     {
                         // Clamp: real on-disk sizes sum against an estimated total, so a
@@ -421,15 +416,15 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
                     _loadedModelId = modelId;
                     _loadedModelDir = dir;
-                    _selectedModelId = modelId;
+                    SelectedModelId = modelId;
                     _canarySrcLang = "en";
                     _canaryTgtLang = "en";
                     // Restart is required only if the wired runtime is CPU-only (a
                     // provisioning failure). A CUDA-wired runtime whose recognizer fell back
                     // to CPU pins "cuda" above, so CUDA is reachable again by a reload — no
                     // restart (matches CreateLoadedAccelerationStatus / the swap logic).
-                    _accelerationStatus = cudaUnavailableDetail is null
-                        ? CreateLoadedAccelerationStatus(activeProvider, _accelerationPreference)
+                    AccelerationStatus = cudaUnavailableDetail is null
+                        ? CreateLoadedAccelerationStatus(activeProvider, AccelerationPreference)
                         : CreateCudaUnavailableStatus(
                             cudaUnavailableDetail,
                             requiresRestart: string.Equals(
@@ -701,7 +696,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     }
 
     private static ModelDefinition GetModelDefinition(string modelId) =>
-        Models.FirstOrDefault(m => m.Id == modelId)
+        s_models.FirstOrDefault(m => m.Id == modelId)
         ?? throw new ArgumentException($"Unknown model: {modelId}");
 
     private void UnloadRecognizer()
@@ -794,12 +789,12 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     ) =>
         preference switch
         {
-            TranscriptionAccelerationPreference.NvidiaCuda => new(
+            TranscriptionAccelerationPreference.NvidiaCuda => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.NvidiaCuda,
                 "Preparing NVIDIA CUDA",
                 "The GPU runtime downloads on the next model load."
             ),
-            _ => new(
+            _ => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
                 "Preparing CPU",
                 "Will apply on next model load."
@@ -853,7 +848,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         if (string.IsNullOrWhiteSpace(language) || language == "auto")
             return "en";
         var normalized = language.Trim().ToLowerInvariant();
-        return CanarySupportedLanguages.Contains(normalized) ? normalized : "en";
+        return s_canarySupportedLanguages.Contains(normalized) ? normalized : "en";
     }
 
     private static (string Text, string? DetectedLanguage) ParseCanaryResult(string rawText)
@@ -872,6 +867,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                 text = textNode.GetString()?.Trim() ?? string.Empty;
 
             string? lang = null;
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (json.RootElement.TryGetProperty("lang", out var langNode))
             {
                 var parsed = langNode.GetString();
@@ -932,7 +928,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
     /// <summary>
     ///     One-shot migration from the pre-plugin layout
-    ///     (<c>%LocalAppData%/TypeWhisper/Models/</c>) into the per-plugin data
+    ///     (<c>%LocalAppData%/TypeWhisper/s_models/</c>) into the per-plugin data
     ///     directory. Best-effort: failures are logged and a stale source
     ///     directory is left alone rather than blocking activation.
     /// </summary>
@@ -949,7 +945,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         if (!Directory.Exists(oldModelsDir))
             return;
 
-        foreach (var model in Models)
+        foreach (var model in s_models)
         {
             var oldDir = Path.Join(oldModelsDir, model.Id);
             if (!Directory.Exists(oldDir))
@@ -969,6 +965,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                 var oldPath = Path.Join(oldDir, file.FileName);
                 var newPath = Path.Join(newDir, file.FileName);
 
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (File.Exists(oldPath) && !File.Exists(newPath))
                 {
                     try

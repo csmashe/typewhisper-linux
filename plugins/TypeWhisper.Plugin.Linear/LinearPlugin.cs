@@ -1,4 +1,9 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// ReSharper disable UnusedType.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
@@ -9,7 +14,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Linear;
 
-public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class LinearPlugin : IActionPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -18,10 +23,6 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
     };
 
     private readonly HttpClient _httpClient = new();
-    private IPluginHostServices? _host;
-    private string? _apiKey;
-    private string? _defaultTeamId;
-    private string? _defaultProjectId;
     private List<LinearTeam> _cachedTeams = [];
 
     public string PluginId => "com.typewhisper.linear";
@@ -32,7 +33,8 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
     public string ActionName => "Create Linear Issue";
     public string? ActionIcon => "\U0001F4CB";
 
-    public IPluginHostServices? Host => _host;
+    public IPluginHostServices? Host { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -41,17 +43,19 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
     // Prefer the host's localization once activated; fall back to the catalog
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
-    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
-    public string? ApiKey => _apiKey;
-    public string? DefaultTeamId => _defaultTeamId;
-    public string? DefaultProjectId => _defaultProjectId;
+    internal IPluginLocalization? Loc => Host?.Localization ?? _injectedLocalization;
+    public string? ApiKey { get; private set; }
+
+    public string? DefaultTeamId { get; private set; }
+
+    public string? DefaultProjectId { get; private set; }
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
-        _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
-        _defaultTeamId = host.GetSetting<string>("default-team-id");
-        _defaultProjectId = host.GetSetting<string>("default-project-id");
+        Host = host;
+        ApiKey = await host.LoadSecretAsync("api-key");
+        DefaultTeamId = host.GetSetting<string>("default-team-id");
+        DefaultProjectId = host.GetSetting<string>("default-project-id");
         var cachedTeamsJson = host.GetSetting<string>("cached-teams");
         if (!string.IsNullOrWhiteSpace(cachedTeamsJson))
         {
@@ -81,7 +85,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
 
     public Task DeactivateAsync()
     {
-        _host?.Log(PluginLogLevel.Info, "Linear plugin deactivated");
+        Host?.Log(PluginLogLevel.Info, "Linear plugin deactivated");
         return Task.CompletedTask;
     }
 
@@ -91,13 +95,13 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         CancellationToken ct
     )
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new ActionResult(
                 false,
                 Loc.L("Settings.ApiKeyNotConfigured")
             );
 
-        if (string.IsNullOrWhiteSpace(_defaultTeamId))
+        if (string.IsNullOrWhiteSpace(DefaultTeamId))
             return new ActionResult(
                 false,
                 Loc.L("Settings.DefaultTeamNotConfigured")
@@ -129,41 +133,41 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         }
         catch (Exception ex)
         {
-            _host?.Log(PluginLogLevel.Error, $"Failed to create Linear issue: {ex.Message}");
+            Host?.Log(PluginLogLevel.Error, $"Failed to create Linear issue: {ex.Message}");
             return new ActionResult(false, Loc.L("Settings.IssueCreateError", ex.Message));
         }
     }
 
     public async Task SaveApiKeyAsync(string apiKey)
     {
-        if (_host is null)
+        if (Host is null)
             return;
 
-        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
+        ApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
         if (string.IsNullOrWhiteSpace(apiKey))
-            await _host.DeleteSecretAsync("api-key");
+            await Host.DeleteSecretAsync("api-key");
         else
-            await _host.StoreSecretAsync("api-key", apiKey.Trim());
+            await Host.StoreSecretAsync("api-key", apiKey.Trim());
 
-        _host.NotifyCapabilitiesChanged();
-        _host.Log(PluginLogLevel.Info, "Linear API key saved");
+        Host.NotifyCapabilitiesChanged();
+        Host.Log(PluginLogLevel.Info, "Linear API key saved");
     }
 
     public void SaveDefaultTeamId(string teamId)
     {
-        _defaultTeamId = string.IsNullOrWhiteSpace(teamId) ? null : teamId.Trim();
-        _host?.SetSetting("default-team-id", _defaultTeamId ?? "");
+        DefaultTeamId = string.IsNullOrWhiteSpace(teamId) ? null : teamId.Trim();
+        Host?.SetSetting("default-team-id", DefaultTeamId ?? "");
     }
 
     public void SaveDefaultProjectId(string projectId)
     {
-        _defaultProjectId = string.IsNullOrWhiteSpace(projectId) ? null : projectId.Trim();
-        _host?.SetSetting("default-project-id", _defaultProjectId ?? "");
+        DefaultProjectId = string.IsNullOrWhiteSpace(projectId) ? null : projectId.Trim();
+        Host?.SetSetting("default-project-id", DefaultProjectId ?? "");
     }
 
     public async Task<List<LinearTeam>> FetchTeamsAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return [];
 
         const string query = """
@@ -202,7 +206,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             _cachedTeams = teams;
             try
             {
-                _host?.SetSetting("cached-teams", JsonSerializer.Serialize(teams, s_jsonOptions));
+                Host?.SetSetting("cached-teams", JsonSerializer.Serialize(teams, s_jsonOptions));
             }
             catch
             {
@@ -213,7 +217,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         }
         catch (Exception ex)
         {
-            _host?.Log(PluginLogLevel.Warning, $"Failed to parse teams response: {ex.Message}");
+            Host?.Log(PluginLogLevel.Warning, $"Failed to parse teams response: {ex.Message}");
             return [];
         }
     }
@@ -228,11 +232,11 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         {
             ["title"] = title,
             ["description"] = description,
-            ["teamId"] = _defaultTeamId,
+            ["teamId"] = DefaultTeamId,
         };
 
-        if (!string.IsNullOrWhiteSpace(_defaultProjectId))
-            variables["projectId"] = _defaultProjectId;
+        if (!string.IsNullOrWhiteSpace(DefaultProjectId))
+            variables["projectId"] = DefaultProjectId;
 
         const string mutation = """
             mutation IssueCreate($title: String!, $description: String, $teamId: String!, $projectId: String) {
@@ -263,7 +267,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
 
             if (!success)
             {
-                _host?.Log(
+                Host?.Log(
                     PluginLogLevel.Warning,
                     "Linear API returned success=false for issueCreate"
                 );
@@ -274,12 +278,12 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             var url = issue.GetProperty("url").GetString();
             var identifier = issue.GetProperty("identifier").GetString();
 
-            _host?.Log(PluginLogLevel.Info, $"Created Linear issue {identifier}");
+            Host?.Log(PluginLogLevel.Info, $"Created Linear issue {identifier}");
             return url;
         }
         catch (Exception ex)
         {
-            _host?.Log(
+            Host?.Log(
                 PluginLogLevel.Warning,
                 $"Failed to parse issue creation response: {ex.Message}"
             );
@@ -305,7 +309,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             "https://api.linear.app/graphql"
         );
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
 
         HttpResponseMessage response;
         try
@@ -324,7 +328,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             // HttpClient.Timeout (not caller cancellation) surfaces as
             // TaskCanceledException — treat as transport failure.
             var fingerprint = ShortFingerprint(ex.ToString());
-            _host?.Log(
+            Host?.Log(
                 PluginLogLevel.Error,
                 $"Linear API request timed out (sha256:{fingerprint})"
             );
@@ -333,7 +337,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         catch (HttpRequestException ex)
         {
             var fingerprint = ShortFingerprint(ex.ToString());
-            _host?.Log(
+            Host?.Log(
                 PluginLogLevel.Error,
                 $"Linear API transport error: {ex.Message} (sha256:{fingerprint})"
             );
@@ -360,14 +364,14 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException)
             {
                 var fp = ShortFingerprint(ex.ToString());
-                _host?.Log(
+                Host?.Log(
                     PluginLogLevel.Error,
                     $"Linear API error {(int)response.StatusCode}; could not read body: {ex.Message} (sha256:{fp})"
                 );
                 return null;
             }
             var fingerprint = ShortFingerprint(errorBody);
-            _host?.Log(
+            Host?.Log(
                 PluginLogLevel.Error,
                 $"Linear API error {(int)response.StatusCode} (body length={errorBody.Length}, sha256:{fingerprint})"
             );
@@ -386,7 +390,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException)
         {
             var fingerprint = ShortFingerprint(ex.ToString());
-            _host?.Log(
+            Host?.Log(
                 PluginLogLevel.Error,
                 $"Linear API response read failed: {ex.Message} (sha256:{fingerprint})"
             );
@@ -397,6 +401,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         {
             using var doc = JsonDocument.Parse(responseJson);
 
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (doc.RootElement.TryGetProperty("errors", out var errors))
             {
                 // GraphQL error arrays should contain { "message": "..." } objects, but
@@ -421,14 +426,14 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
                     // reports without spilling user content into traces.
                     var raw = errors.GetRawText();
                     var fingerprint = ShortFingerprint(raw);
-                    _host?.Log(
+                    Host?.Log(
                         PluginLogLevel.Error,
                         $"Linear GraphQL error: {{redacted:length={raw.Length}, sha256:{fingerprint}}}"
                     );
                 }
                 else
                 {
-                    _host?.Log(PluginLogLevel.Error, $"Linear GraphQL error: {errorMsg}");
+                    Host?.Log(PluginLogLevel.Error, $"Linear GraphQL error: {errorMsg}");
                 }
 
                 return null;
@@ -443,7 +448,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
             // log the parse failure plus a short fingerprint (not the raw body —
             // it may echo user content), then return null so callers recover.
             var fingerprint = ShortFingerprint(responseJson);
-            _host?.Log(
+            Host?.Log(
                 PluginLogLevel.Error,
                 $"Linear API returned non-JSON body ({ex.Message}). Body length={responseJson.Length}, sha256:{fingerprint}"
             );
@@ -507,9 +512,9 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
         Task.FromResult(
             key switch
             {
-                "api-key" => _apiKey,
-                "default-team-id" => _defaultTeamId,
-                "default-project-id" => _defaultProjectId,
+                "api-key" => ApiKey,
+                "default-team-id" => DefaultTeamId,
+                "default-project-id" => DefaultProjectId,
                 _ => null,
             }
         );
@@ -536,7 +541,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
         var teams = await FetchTeamsAsync(ct);

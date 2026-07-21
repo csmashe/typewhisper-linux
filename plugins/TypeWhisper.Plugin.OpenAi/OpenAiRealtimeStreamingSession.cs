@@ -1,6 +1,10 @@
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedAutoPropertyAccessor.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Buffers.Binary;
 using System.Diagnostics;
-using System.IO;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -103,7 +107,7 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
     internal static IReadOnlyDictionary<string, string> CreateRealtimeHeaders(string apiKey) =>
         new Dictionary<string, string>
         {
-            ["Authorization"] = $"Bearer {apiKey}"
+            ["Authorization"] = $"Bearer {apiKey}",
         };
 
     internal static ClientWebSocket CreateConfiguredWebSocket(string apiKey)
@@ -118,7 +122,7 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
     {
         var transcription = new Dictionary<string, object?>
         {
-            ["model"] = ModelId
+            ["model"] = ModelId,
         };
 
         if (!string.IsNullOrWhiteSpace(language))
@@ -161,9 +165,9 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
                         },
                         ["transcription"] = transcription,
                         ["turn_detection"] = turnDetection,
-                    }
-                }
-            }
+                    },
+                },
+            },
         };
 
         return JsonSerializer.Serialize(payload);
@@ -303,6 +307,7 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
                 // keep looping until the server closes. Promote it to a
                 // captured fault so the next SendAudioAsync / FinalizeAsync
                 // throws and triggers batch fallback.
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (_collector.Error is { } providerError)
                 {
                     Interlocked.CompareExchange(
@@ -362,7 +367,7 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
             var lower = ReadSample(pcm16Audio, lowerIndex);
             var upper = ReadSample(pcm16Audio, upperIndex);
             var sample = (short)Math.Clamp(
-                (int)Math.Round(lower + ((upper - lower) * fraction)),
+                (int)Math.Round(lower + (upper - lower) * fraction),
                 short.MinValue,
                 short.MaxValue);
             BinaryPrimitives.WriteInt16LittleEndian(output.AsSpan(targetIndex * sizeof(short)), sample);
@@ -557,6 +562,7 @@ internal sealed class OpenAiRealtimeTranscriptCollector
 
     private static string? ExtractErrorMessage(JsonElement root)
     {
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (root.TryGetProperty("error", out var error))
         {
             if (error.ValueKind == JsonValueKind.Object)

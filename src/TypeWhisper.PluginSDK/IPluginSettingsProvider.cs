@@ -1,3 +1,7 @@
+// ReSharper disable UnusedParameter.Global
+// PluginSDK contract members are implemented by out-of-solution plugin projects and invoked by
+// the host; the analyzer sees no in-solution caller, so these .Global inspections misfire.
+
 // Public plugin-SDK surface. The per-item `disable once` directives below mark members
 // ReSharper/Qodana cannot see used from this project (they are consumed by external plugins/
 // the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
@@ -45,7 +49,7 @@ public enum PluginSettingKind
     Secret,
     Dropdown,
     Boolean,
-    Multiline
+    Multiline,
 }
 
 /// <summary>

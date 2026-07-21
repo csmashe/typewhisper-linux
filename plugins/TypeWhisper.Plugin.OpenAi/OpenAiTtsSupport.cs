@@ -1,7 +1,10 @@
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Buffers.Binary;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.IO;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -132,6 +135,7 @@ internal sealed class OpenAiPcmTtsPlaybackSession : ITtsPlaybackSession, IDispos
             process = null;
         }
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (process is null)
         {
             TryDeleteFile(wavFilePath);

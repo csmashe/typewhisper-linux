@@ -1,4 +1,8 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
@@ -6,7 +10,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Voxtral;
 
-public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.mistral.ai";
     private const string ModelId = "voxtral-mini-latest";
@@ -14,8 +18,6 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(60) };
     private IPluginHostServices? _host;
-    private string? _apiKey;
-    private string? _selectedModelId;
 
     public string PluginId => "com.typewhisper.voxtral";
     public string PluginName => "Voxtral";
@@ -24,9 +26,9 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
+        ApiKey = await host.LoadSecretAsync("api-key");
         var selectedModelId = host.GetSetting<string>("selectedModel");
-        _selectedModelId = selectedModelId == LegacyModelId ? ModelId : selectedModelId ?? ModelId;
+        SelectedModelId = selectedModelId == LegacyModelId ? ModelId : selectedModelId ?? ModelId;
         if (selectedModelId == LegacyModelId)
         {
             // A persistence failure must not fail activation; the in-memory migration suffices.
@@ -50,12 +52,13 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
 
     public string ProviderId => "voxtral";
     public string ProviderDisplayName => "Voxtral";
-    public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
+    public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-    [new PluginModelInfo(ModelId, "Voxtral Mini (Mistral)")];
+    [new(ModelId, "Voxtral Mini (Mistral)")];
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
+
     // Mistral documents no OpenAI-style translations endpoint; re-enable only with a documented implementation.
     public bool SupportsTranslation => false;
 
@@ -66,7 +69,7 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
             modelId = ModelId;
         if (modelId != ModelId)
             throw new ArgumentException($"Unknown model: {modelId}");
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
@@ -84,7 +87,7 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
             BaseUrl,
-            _apiKey!,
+            ApiKey!,
             ModelId,
             wavAudio,
             language,
@@ -95,7 +98,8 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
         );
     }
 
-    internal string? ApiKey => _apiKey;
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -123,7 +127,7 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
+        ApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
         if (_host is not null)
         {
             if (string.IsNullOrWhiteSpace(apiKey))
@@ -158,8 +162,8 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
         Task.FromResult(
             key switch
             {
-                "api-key" => _apiKey,
-                "selectedModel" => _selectedModelId,
+                "api-key" => ApiKey,
+                "selectedModel" => SelectedModelId,
                 _ => null,
             }
         );
@@ -184,10 +188,10 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        var valid = await ValidateApiKeyAsync(ApiKey, ct);
         return valid
             ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
             : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));

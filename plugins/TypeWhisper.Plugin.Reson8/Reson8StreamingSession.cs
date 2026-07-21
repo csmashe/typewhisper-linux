@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.IO;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -57,7 +56,7 @@ internal sealed class Reson8StreamingSession : IStreamingSession
         var builder = new UriBuilder(baseUri)
         {
             Scheme = baseUri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) ? "ws" : "wss",
-            Path = $"{basePath}/v1/speech-to-text/realtime"
+            Path = $"{basePath}/v1/speech-to-text/realtime",
         };
 
         var query = new List<string>
@@ -65,7 +64,7 @@ internal sealed class Reson8StreamingSession : IStreamingSession
             "encoding=pcm_s16le",
             "sample_rate=16000",
             "channels=1",
-            "include_interim=true"
+            "include_interim=true",
         };
 
         if (!string.IsNullOrWhiteSpace(language)
@@ -88,7 +87,7 @@ internal sealed class Reson8StreamingSession : IStreamingSession
         new Dictionary<string, string>
         {
             [string.IsNullOrWhiteSpace(authHeader) ? Reson8Plugin.DefaultAuthHeader : authHeader.Trim()] =
-                Reson8Plugin.AuthHeaderValue(apiKey, authHeader)
+                Reson8Plugin.AuthHeaderValue(apiKey, authHeader),
         };
 
     public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)

@@ -1,5 +1,8 @@
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Diagnostics;
-using System.IO;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -153,6 +156,7 @@ internal sealed class SonioxStreamingSession : IStreamingSession
                 && finEl.ValueKind == JsonValueKind.True;
 
             var tokens = new List<SonioxToken>();
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (root.TryGetProperty("tokens", out var tokensEl)
                 && tokensEl.ValueKind == JsonValueKind.Array)
             {

@@ -1,4 +1,8 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedType.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -6,7 +10,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.CloudflareAsr;
 
-public sealed partial class CloudflareAsrPlugin
+public sealed class CloudflareAsrPlugin
     : ITranscriptionEnginePlugin,
         IPluginSettingsProvider,
         IPluginLocalizationAware
@@ -15,9 +19,8 @@ public sealed partial class CloudflareAsrPlugin
     private IPluginHostServices? _host;
     private string? _apiToken;
     private string? _accountId;
-    private string? _selectedModelId;
 
-    private static readonly IReadOnlyList<PluginModelInfo> Models =
+    private static readonly IReadOnlyList<PluginModelInfo> s_models =
     [
         new("whisper", "Whisper (Cloudflare)"),
     ];
@@ -36,7 +39,7 @@ public sealed partial class CloudflareAsrPlugin
         _apiToken = string.IsNullOrWhiteSpace(loadedToken) ? null : loadedToken.Trim();
         var loadedAccount = await host.LoadSecretAsync("account-id");
         _accountId = string.IsNullOrWhiteSpace(loadedAccount) ? null : loadedAccount.Trim();
-        _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
+        SelectedModelId = host.GetSetting<string>("selectedModel") ?? s_models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -51,17 +54,17 @@ public sealed partial class CloudflareAsrPlugin
     public bool IsConfigured =>
         !string.IsNullOrEmpty(_apiToken) && !string.IsNullOrEmpty(_accountId);
 
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels => Models;
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_models;
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
 
     public void SelectModel(string modelId)
     {
-        if (Models.All(m => m.Id != modelId))
+        if (s_models.All(m => m.Id != modelId))
             throw new ArgumentException($"Unknown model: {modelId}");
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
@@ -213,7 +216,7 @@ public sealed partial class CloudflareAsrPlugin
                 "selectedModel",
                 Loc.L("Settings.TranscriptionModel"),
                 Description: Loc.L("Settings.ModelDescription"),
-                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+                Options: s_models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
             ),
         ];
 
@@ -223,7 +226,7 @@ public sealed partial class CloudflareAsrPlugin
             {
                 "account-id" => _accountId,
                 "api-token" => _apiToken,
-                "selectedModel" => _selectedModelId,
+                "selectedModel" => SelectedModelId,
                 _ => null,
             }
         );

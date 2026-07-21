@@ -1,4 +1,8 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
@@ -6,13 +10,12 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Cerebras;
 
-public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class CerebrasPlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.cerebras.ai";
 
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
-    private string? _apiKey;
     private bool _streamResponses = true;
 
     public CerebrasPlugin()
@@ -32,7 +35,7 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
+        ApiKey = await host.LoadSecretAsync("api-key");
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsAvailable})");
     }
@@ -44,10 +47,10 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
     }
 
     public string ProviderName => "Cerebras";
-    public bool IsAvailable => !string.IsNullOrEmpty(_apiKey);
+    public bool IsAvailable => !string.IsNullOrEmpty(ApiKey);
 
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
-    [new PluginModelInfo("llama-4-scout-17b-16e-instruct", "Llama 4 Scout 17B")];
+    [new("llama-4-scout-17b-16e-instruct", "Llama 4 Scout 17B")];
 
     public async Task<string> ProcessAsync(
         string systemPrompt,
@@ -62,7 +65,7 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient,
             BaseUrl,
-            _apiKey!,
+            ApiKey!,
             model,
             systemPrompt,
             userText,
@@ -89,7 +92,7 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
             BaseUrl,
-            _apiKey!,
+            ApiKey!,
             model,
             systemPrompt,
             userText,
@@ -100,7 +103,8 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
             yield return delta;
     }
 
-    internal string? ApiKey => _apiKey;
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -113,7 +117,7 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+        ApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
         if (_host is not null)
         {
             if (string.IsNullOrWhiteSpace(apiKey))
@@ -166,7 +170,7 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
         Task.FromResult(
             key switch
             {
-                "api-key" => _apiKey,
+                "api-key" => ApiKey,
                 LlmStreamingSettings.StreamResponsesSettingKey
                     => _streamResponses ? "true" : "false",
                 _ => null,
@@ -201,10 +205,10 @@ public sealed partial class CerebrasPlugin : ILlmProviderPlugin, IPluginSettings
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        var valid = await ValidateApiKeyAsync(ApiKey, ct);
         return valid
             ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
             : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));

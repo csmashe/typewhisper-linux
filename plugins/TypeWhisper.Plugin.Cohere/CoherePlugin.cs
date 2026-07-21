@@ -1,4 +1,8 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
@@ -6,7 +10,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Cohere;
 
-public sealed partial class CoherePlugin : ILlmProviderPlugin, IDisposable, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class CoherePlugin : ILlmProviderPlugin, IDisposable, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.cohere.com/compatibility";
     private readonly HttpClient _httpClient;
@@ -56,7 +60,7 @@ public sealed partial class CoherePlugin : ILlmProviderPlugin, IDisposable, IPlu
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
-    [new PluginModelInfo("command-a-03-2025", "Command A") { IsRecommended = true }];
+    [new("command-a-03-2025", "Command A") { IsRecommended = true }];
 
     public async Task<string> ProcessAsync(
         string systemPrompt,

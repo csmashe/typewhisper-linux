@@ -1,4 +1,10 @@
-using System.IO;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable NotAccessedPositionalProperty.Global
+// ReSharper disable UnusedMember.Global
+// ReSharper disable UnusedType.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -6,9 +12,8 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Obsidian;
 
-public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
-    private IPluginHostServices? _host;
     private List<ObsidianVaultInfo> _detectedVaults = [];
 
     public string PluginId => "com.typewhisper.obsidian";
@@ -19,7 +24,8 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
     public string ActionName => "Save to Obsidian";
     public string? ActionIcon => "\ud83d\udcdd";
 
-    internal IPluginHostServices? Host => _host;
+    internal IPluginHostServices? Host { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -28,11 +34,11 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
     // Prefer the host's localization once activated; fall back to the catalog
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
-    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
+    internal IPluginLocalization? Loc => Host?.Localization ?? _injectedLocalization;
 
     public Task ActivateAsync(IPluginHostServices host)
     {
-        _host = host;
+        Host = host;
         _detectedVaults = DetectVaults();
         return Task.CompletedTask;
     }
@@ -45,10 +51,10 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         CancellationToken ct
     )
     {
-        if (_host is null)
+        if (Host is null)
             return new ActionResult(false, Loc.L("Settings.PluginNotActivatedShort"));
 
-        var vaultPath = _host.GetSetting<string>("vault-path");
+        var vaultPath = Host.GetSetting<string>("vault-path");
         if (string.IsNullOrWhiteSpace(vaultPath))
             return new ActionResult(
                 false,
@@ -58,9 +64,9 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         if (!Directory.Exists(vaultPath))
             return new ActionResult(false, Loc.L("Settings.VaultPathNotFound", vaultPath));
 
-        var subfolder = _host.GetSetting<string>("subfolder") ?? "TypeWhisper";
-        var dailyNoteMode = _host.GetSetting<bool>("daily-note-mode");
-        var filenameTemplate = _host.GetSetting<string>("filename-template");
+        var subfolder = Host.GetSetting<string>("subfolder") ?? "TypeWhisper";
+        var dailyNoteMode = Host.GetSetting<bool>("daily-note-mode");
+        var filenameTemplate = Host.GetSetting<string>("filename-template");
         if (string.IsNullOrWhiteSpace(filenameTemplate))
             filenameTemplate = "{{date}} {{time}} Transcription";
 
@@ -100,7 +106,7 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
             await File.WriteAllTextAsync(filePath, content, Encoding.UTF8, ct);
         }
 
-        _host.Log(PluginLogLevel.Info, $"Saved transcription to {filePath}");
+        Host.Log(PluginLogLevel.Info, $"Saved transcription to {filePath}");
         return new ActionResult(true, Loc.L("Settings.SavedTo", filename));
     }
 
@@ -223,9 +229,11 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
 
             foreach (var vault in vaultsElement.EnumerateObject())
             {
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (vault.Value.TryGetProperty("path", out var pathElement))
                 {
                     var path = pathElement.GetString();
+                    // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                     if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
                     {
                         var name = Path.GetFileName(path);
@@ -251,6 +259,7 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         }
 
         var configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (string.IsNullOrWhiteSpace(configHome))
         {
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -298,16 +307,16 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default)
     {
-        if (_host is null)
+        if (Host is null)
             return Task.FromResult<string?>(null);
 
         return Task.FromResult(
             key switch
             {
-                "vault-path" => _host.GetSetting<string>("vault-path"),
-                "subfolder" => _host.GetSetting<string>("subfolder") ?? "TypeWhisper",
-                "daily-note-mode" => _host.GetSetting<bool>("daily-note-mode") ? "true" : "false",
-                "filename-template" => _host.GetSetting<string>("filename-template")
+                "vault-path" => Host.GetSetting<string>("vault-path"),
+                "subfolder" => Host.GetSetting<string>("subfolder") ?? "TypeWhisper",
+                "daily-note-mode" => Host.GetSetting<bool>("daily-note-mode") ? "true" : "false",
+                "filename-template" => Host.GetSetting<string>("filename-template")
                     ?? "{{date}} {{time}} Transcription",
                 _ => null,
             }
@@ -316,28 +325,28 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
 
     public Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
     {
-        if (_host is null)
+        if (Host is null)
             return Task.CompletedTask;
 
         switch (key)
         {
             case "vault-path":
-                _host.SetSetting("vault-path", value?.Trim() ?? string.Empty);
+                Host.SetSetting("vault-path", value?.Trim() ?? string.Empty);
                 break;
             case "subfolder":
-                _host.SetSetting(
+                Host.SetSetting(
                     "subfolder",
                     string.IsNullOrWhiteSpace(value) ? "TypeWhisper" : value.Trim()
                 );
                 break;
             case "daily-note-mode":
-                _host.SetSetting(
+                Host.SetSetting(
                     "daily-note-mode",
                     string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
                 );
                 break;
             case "filename-template":
-                _host.SetSetting(
+                Host.SetSetting(
                     "filename-template",
                     string.IsNullOrWhiteSpace(value)
                         ? "{{date}} {{time}} Transcription"
@@ -351,12 +360,12 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
 
     public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (_host is null)
+        if (Host is null)
             return Task.FromResult<PluginSettingsValidationResult?>(
                 new PluginSettingsValidationResult(false, Loc.L("Settings.PluginNotActivated"))
             );
 
-        var vaultPath = _host.GetSetting<string>("vault-path");
+        var vaultPath = Host.GetSetting<string>("vault-path");
         if (string.IsNullOrWhiteSpace(vaultPath))
             return Task.FromResult<PluginSettingsValidationResult?>(
                 new PluginSettingsValidationResult(false, Loc.L("Settings.EnterVaultPath"))

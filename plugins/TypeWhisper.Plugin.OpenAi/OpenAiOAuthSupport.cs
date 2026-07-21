@@ -1,7 +1,9 @@
-using System.Diagnostics;
-using System.IO;
+// ReSharper disable ClassNeverInstantiated.Global
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net;
-using System.Net.Http;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -13,7 +15,7 @@ namespace TypeWhisper.Plugin.OpenAi;
 internal enum OpenAiAuthMode
 {
     ApiKey,
-    ChatGpt
+    ChatGpt,
 }
 
 internal static class OpenAiAuthModeExtensions
@@ -94,7 +96,7 @@ internal static class OpenAiOAuthClient
                 ["redirect_uri"] = RedirectUri,
                 ["client_id"] = ClientId,
                 ["code_verifier"] = pkce.Verifier,
-            })
+            }),
         };
 
         return await SendTokenRequestAsync(httpClient, request, ct);
@@ -112,7 +114,7 @@ internal static class OpenAiOAuthClient
                 ["grant_type"] = "refresh_token",
                 ["refresh_token"] = refreshToken,
                 ["client_id"] = ClientId,
-            })
+            }),
         };
 
         return await SendTokenRequestAsync(httpClient, request, ct);

@@ -1,4 +1,7 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -7,16 +10,15 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Speechmatics;
 
-public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://asr.api.speechmatics.com/v2";
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
     private IPluginHostServices? _host;
     private string? _apiKey;
-    private string? _selectedModelId;
 
-    private static readonly IReadOnlyList<PluginModelInfo> Models =
+    private static readonly IReadOnlyList<PluginModelInfo> s_models =
     [
         new("enhanced", "Speechmatics Enhanced"),
     ];
@@ -29,7 +31,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
     {
         _host = host;
         _apiKey = await host.LoadSecretAsync("api-key");
-        _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
+        SelectedModelId = host.GetSetting<string>("selectedModel") ?? s_models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -43,9 +45,9 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
     public string ProviderDisplayName => "Speechmatics";
     public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
 
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels => Models;
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_models;
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
 
@@ -73,9 +75,9 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
 
     public void SelectModel(string modelId)
     {
-        if (Models.All(m => m.Id != modelId))
+        if (s_models.All(m => m.Id != modelId))
             throw new ArgumentException($"Unknown model: {modelId}");
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
@@ -199,6 +201,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
                 using var transcriptResponse = await _httpClient.SendAsync(transcriptRequest, ct);
                 var transcriptJson = await transcriptResponse.Content.ReadAsStringAsync(ct);
 
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (!transcriptResponse.IsSuccessStatusCode)
                 {
                     _host?.Log(
@@ -235,6 +238,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
         {
             foreach (var result in results.EnumerateArray())
             {
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (
                     result.TryGetProperty("alternatives", out var alts)
                     && alts.ValueKind == JsonValueKind.Array
@@ -311,7 +315,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
                 "selectedModel",
                 Loc.L("Settings.TranscriptionModel"),
                 Description: Loc.L("Settings.ModelDescription"),
-                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+                Options: s_models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
             ),
         ];
 
@@ -320,7 +324,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
             key switch
             {
                 "api-key" => _apiKey,
-                "selectedModel" => _selectedModelId,
+                "selectedModel" => SelectedModelId,
                 _ => null,
             }
         );

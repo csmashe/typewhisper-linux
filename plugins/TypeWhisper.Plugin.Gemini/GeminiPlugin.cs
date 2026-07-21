@@ -1,4 +1,8 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
@@ -6,7 +10,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Gemini;
 
-public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     // Google's OpenAI-compatibility layer; endpoints are appended as /v1/...
     private const string BaseUrl = "https://generativelanguage.googleapis.com/v1beta/openai";
@@ -14,7 +18,6 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
 
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
-    private string? _apiKey;
     private bool _streamResponses = true;
 
     public GeminiPlugin()
@@ -38,7 +41,7 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
         // otherwise reach the Bearer header with trailing whitespace and 401
         // every request while IsAvailable still reports true.
         var loaded = await host.LoadSecretAsync("api-key");
-        _apiKey = string.IsNullOrWhiteSpace(loaded) ? null : loaded.Trim();
+        ApiKey = string.IsNullOrWhiteSpace(loaded) ? null : loaded.Trim();
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsAvailable})");
     }
@@ -50,16 +53,16 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
     }
 
     public string ProviderName => "Google Gemini";
-    public bool IsAvailable => !string.IsNullOrEmpty(_apiKey);
+    public bool IsAvailable => !string.IsNullOrEmpty(ApiKey);
 
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
     [
-        new PluginModelInfo(DefaultModel, "Gemini 2.5 Flash") { IsRecommended = true },
-        new PluginModelInfo("gemini-2.5-pro", "Gemini 2.5 Pro"),
-        new PluginModelInfo("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite"),
-        new PluginModelInfo("gemma-4-27b-it", "Gemma 4 27B"),
-        new PluginModelInfo("gemma-4-12b-it", "Gemma 4 12B"),
-        new PluginModelInfo("gemma-4-4b-it", "Gemma 4 4B"),
+        new(DefaultModel, "Gemini 2.5 Flash") { IsRecommended = true },
+        new("gemini-2.5-pro", "Gemini 2.5 Pro"),
+        new("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite"),
+        new("gemma-4-27b-it", "Gemma 4 27B"),
+        new("gemma-4-12b-it", "Gemma 4 12B"),
+        new("gemma-4-4b-it", "Gemma 4 4B"),
     ];
 
     public async Task<string> ProcessAsync(
@@ -75,7 +78,7 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient,
             BaseUrl,
-            _apiKey!,
+            ApiKey!,
             model,
             systemPrompt,
             userText,
@@ -102,7 +105,7 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
             BaseUrl,
-            _apiKey!,
+            ApiKey!,
             model,
             systemPrompt,
             userText,
@@ -113,7 +116,8 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
             yield return delta;
     }
 
-    internal string? ApiKey => _apiKey;
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -127,7 +131,7 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
     internal async Task SetApiKeyAsync(string apiKey)
     {
         var trimmed = apiKey?.Trim();
-        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
+        ApiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {
             if (string.IsNullOrEmpty(trimmed))
@@ -180,7 +184,7 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
         Task.FromResult(
             key switch
             {
-                "api-key" => _apiKey,
+                "api-key" => ApiKey,
                 LlmStreamingSettings.StreamResponsesSettingKey
                     => _streamResponses ? "true" : "false",
                 _ => null,
@@ -215,10 +219,10 @@ public sealed partial class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsPr
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        var valid = await ValidateApiKeyAsync(ApiKey, ct);
         return valid
             ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
             : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
