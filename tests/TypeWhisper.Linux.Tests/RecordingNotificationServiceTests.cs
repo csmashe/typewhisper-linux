@@ -473,6 +473,7 @@ public sealed class RecordingNotificationServiceTests
             IReadOnlyDictionary<string, string>? environment = null,
             string? standardInput = null,
             TimeSpan? timeout = null,
+            bool detachAfterExit = false,
             CancellationToken ct = default
         )
         {

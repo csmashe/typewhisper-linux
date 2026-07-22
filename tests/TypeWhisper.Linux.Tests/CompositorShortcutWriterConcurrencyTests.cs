@@ -433,6 +433,7 @@ public sealed class CompositorShortcutWriterConcurrencyTests : IDisposable
             IReadOnlyDictionary<string, string>? environment = null,
             string? standardInput = null,
             TimeSpan? timeout = null,
+            bool detachAfterExit = false,
             CancellationToken ct = default
         )
         {

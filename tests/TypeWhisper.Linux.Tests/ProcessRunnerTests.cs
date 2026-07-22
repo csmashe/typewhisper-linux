@@ -8,8 +8,16 @@ public sealed class ProcessRunnerTests
 {
     private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(5);
 
+    // Upper bound on a detached drain: it must abandon near the 250 ms grace, not wait the full
+    // timeout. Held between that grace and the 2 s timeout the descendant test uses so a regression
+    // back to full-timeout draining trips it.
+    private static readonly TimeSpan s_maxPostExitDrain = TimeSpan.FromSeconds(1);
+
+    // Mirrors ProcessRunner's private post-exit drain grace (250 ms).
+    private static readonly TimeSpan s_postExitGrace = TimeSpan.FromMilliseconds(250);
+
     [Fact]
-    public async Task RunAsync_returns_success_when_descendant_holds_stdout_open()
+    public async Task RunAsync_with_detachAfterExit_abandons_promptly_when_descendant_holds_stdout_open()
     {
         var pidFile = NewPidFile();
         int? childProcessId = null;
@@ -24,7 +32,8 @@ public sealed class ProcessRunnerTests
                     "process-runner-test",
                     pidFile,
                 ],
-                timeout: TimeSpan.FromSeconds(2)
+                timeout: TimeSpan.FromSeconds(2),
+                detachAfterExit: true
             );
             childProcessId = await WaitForProcessIdAsync(pidFile);
 
@@ -32,8 +41,9 @@ public sealed class ProcessRunnerTests
             stopwatch.Stop();
 
             Assert.True(
-                stopwatch.Elapsed < s_testGuard,
-                $"ProcessRunner did not bound the output drain; elapsed {stopwatch.Elapsed}."
+                stopwatch.Elapsed < s_maxPostExitDrain,
+                "detachAfterExit waited the full timeout draining a descendant-held pipe instead of "
+                + $"abandoning after the post-exit grace; elapsed {stopwatch.Elapsed}."
             );
             Assert.True(result.Succeeded);
             Assert.True(result.Started);
@@ -43,6 +53,79 @@ public sealed class ProcessRunnerTests
                 ProcessExists(childProcessId.Value),
                 "A successful bounded drain unexpectedly killed the pipe-holding descendant."
             );
+        }
+        finally
+        {
+            if (childProcessId is { } leakedProcessId)
+            {
+                TryKillProcess(leakedProcessId);
+            }
+
+            File.Delete(pidFile);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_by_default_preserves_parent_output_behind_a_short_lived_descendant()
+    {
+        // Parent prints then exits, but a descendant holds the stdout pipe open past the 250 ms
+        // grace yet within the timeout. Without detachAfterExit the run must keep draining until the
+        // pipe closes, so the buffered parent output is captured rather than discarded.
+        var stopwatch = Stopwatch.StartNew();
+        var runTask = new ProcessRunner().RunAsync(
+            "/bin/bash",
+            ["-c", "printf '%s' parent-output; sleep 0.7 & exit 0"],
+            timeout: TimeSpan.FromSeconds(5)
+        );
+
+        var result = await runTask.WaitAsync(s_testGuard);
+        stopwatch.Stop();
+
+        Assert.True(result.Succeeded);
+        Assert.False(result.TimedOut);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("parent-output", result.StandardOutput);
+        // The descendant held the pipe ~700 ms; if the default had short-drained at the grace it
+        // would have abandoned the read (and lost the output) well before that.
+        Assert.True(
+            stopwatch.Elapsed > s_postExitGrace,
+            $"The default drain abandoned before the descendant released the pipe; elapsed {stopwatch.Elapsed}."
+        );
+    }
+
+    [Fact]
+    public async Task RunAsync_with_detachAfterExit_abandons_promptly_even_without_a_timeout()
+    {
+        // detachAfterExit must honor the short grace independently of a lifecycle timeout: with no
+        // timeout the run would otherwise wait for EOF forever behind the daemon-held pipe.
+        var pidFile = NewPidFile();
+        int? childProcessId = null;
+        try
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var runTask = new ProcessRunner().RunAsync(
+                "/bin/bash",
+                [
+                    "-c",
+                    "sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; exit 0",
+                    "process-runner-test",
+                    pidFile,
+                ],
+                detachAfterExit: true
+            );
+            childProcessId = await WaitForProcessIdAsync(pidFile);
+
+            var result = await runTask.WaitAsync(s_testGuard);
+            stopwatch.Stop();
+
+            Assert.True(
+                stopwatch.Elapsed < s_maxPostExitDrain,
+                "detachAfterExit ignored its grace without a timeout and waited on the descendant; "
+                + $"elapsed {stopwatch.Elapsed}."
+            );
+            Assert.True(result.Succeeded);
+            Assert.False(result.TimedOut);
+            Assert.Equal(0, result.ExitCode);
         }
         finally
         {

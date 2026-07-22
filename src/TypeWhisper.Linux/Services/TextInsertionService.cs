@@ -1224,7 +1224,10 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 fileName,
                 args,
                 standardInput: text,
-                timeout: s_clipboardOperationTimeout
+                timeout: s_clipboardOperationTimeout,
+                // wl-copy/xclip leave a selection-serving daemon holding our stdout pipe; without
+                // this every clipboard write would block the full timeout (~5 s) draining it.
+                detachAfterExit: true
             ).ConfigureAwait(false);
             // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
             if (result.TimedOut)

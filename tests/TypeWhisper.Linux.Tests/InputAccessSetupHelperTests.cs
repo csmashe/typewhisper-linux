@@ -566,6 +566,7 @@ public sealed class InputAccessSetupHelperTests
             IReadOnlyDictionary<string, string>? environment = null,
             string? standardInput = null,
             TimeSpan? timeout = null,
+            bool detachAfterExit = false,
             CancellationToken ct = default
         )
         {
@@ -580,7 +581,7 @@ public sealed class InputAccessSetupHelperTests
                 new Dictionary<string, string> { ["PATH"] = commandPath },
                 standardInput,
                 timeout,
-                ct
+                ct: ct
             );
             LastPrivilegedResult = result;
             return result;
@@ -609,6 +610,7 @@ public sealed class InputAccessSetupHelperTests
             IReadOnlyDictionary<string, string>? environment = null,
             string? standardInput = null,
             TimeSpan? timeout = null,
+            bool detachAfterExit = false,
             CancellationToken ct = default
         )
         {
@@ -617,7 +619,7 @@ public sealed class InputAccessSetupHelperTests
                 File.WriteAllText(InputAccessSetupHelper.UdevRulePath, _foreignContent);
             }
 
-            return _inner.RunAsync(fileName, args, environment, standardInput, timeout, ct);
+            return _inner.RunAsync(fileName, args, environment, standardInput, timeout, ct: ct);
         }
     }
 }

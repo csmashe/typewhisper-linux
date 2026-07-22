@@ -626,6 +626,7 @@ public sealed class YdotoolSetupHelperTests
             IReadOnlyDictionary<string, string>? environment = null,
             string? standardInput = null,
             TimeSpan? timeout = null,
+            bool detachAfterExit = false,
             CancellationToken ct = default
         )
         {
@@ -640,7 +641,7 @@ public sealed class YdotoolSetupHelperTests
                 new Dictionary<string, string> { ["PATH"] = commandPath },
                 standardInput,
                 timeout,
-                ct
+                ct: ct
             );
             LastPrivilegedResult = result;
             return result;

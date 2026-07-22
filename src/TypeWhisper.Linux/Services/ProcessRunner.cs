@@ -50,6 +50,14 @@ public interface IProcessRunner
     ///     When set, the process tree is killed if it outlives the window and the result is flagged
     ///     <see cref="ProcessRunResult.TimedOut" />.
     /// </param>
+    /// <param name="detachAfterExit">
+    ///     Set only for commands that fork a persistent descendant which keeps the redirected
+    ///     stdout/stderr pipes open after the parent exits (wl-copy/xclip spawn a daemon to serve
+    ///     the clipboard selection). Their output is uninteresting, so the run abandons the read a
+    ///     short grace after the parent exits instead of blocking the full timeout for an EOF that
+    ///     never comes. Leave false for any command whose output is parsed — that path drains up to
+    ///     the remaining timeout so no valid output is discarded.
+    /// </param>
     /// <param name="ct">Cancels the run; the process tree is killed on cancellation.</param>
     Task<ProcessRunResult> RunAsync(
         string fileName,
@@ -57,6 +65,7 @@ public interface IProcessRunner
         IReadOnlyDictionary<string, string>? environment = null,
         string? standardInput = null,
         TimeSpan? timeout = null,
+        bool detachAfterExit = false,
         CancellationToken ct = default
     );
 }
@@ -75,6 +84,7 @@ public sealed class ProcessRunner : IProcessRunner
         IReadOnlyDictionary<string, string>? environment = null,
         string? standardInput = null,
         TimeSpan? timeout = null,
+        bool detachAfterExit = false,
         CancellationToken ct = default
     )
     {
@@ -171,7 +181,26 @@ public sealed class ProcessRunner : IProcessRunner
             }
 
             var exitCode = process.ExitCode;
-            if (timeout is not { } timeoutLimit)
+
+            // How long to drain the reads now that the process has exited (a descendant may still
+            // hold the pipe): the short grace when the caller opted into detachment, otherwise the
+            // remaining timeout so valid parent output isn't dropped, or unbounded when neither.
+            TimeSpan? drainLimit;
+            if (detachAfterExit)
+            {
+                drainLimit = s_minimumDrainGrace;
+            }
+            else if (timeout is { } timeoutLimit)
+            {
+                var remaining = timeoutLimit - timeoutStopwatch!.Elapsed;
+                drainLimit = remaining > s_minimumDrainGrace ? remaining : s_minimumDrainGrace;
+            }
+            else
+            {
+                drainLimit = null;
+            }
+
+            if (drainLimit is not { } drainWindow)
             {
                 var standardOutput = await stdoutTask.ConfigureAwait(false);
                 var standardError = await stderrTask.ConfigureAwait(false);
@@ -185,14 +214,8 @@ public sealed class ProcessRunner : IProcessRunner
                 );
             }
 
-            var remaining = timeoutLimit - timeoutStopwatch!.Elapsed;
-            // Preserve the lifecycle deadline when time remains, but allow a small
-            // post-exit grace so a process exiting at the deadline can flush normal
-            // redirected output. The total run may therefore exceed the limit by at
-            // most 250 ms when the process exits at deadline-minus-epsilon.
-            var drainLimit = remaining > s_minimumDrainGrace ? remaining : s_minimumDrainGrace;
             using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            drainCts.CancelAfter(drainLimit);
+            drainCts.CancelAfter(drainWindow);
             try
             {
                 await Task.WhenAll(stdoutTask, stderrTask)
