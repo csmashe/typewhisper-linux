@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "author": "TypeWhisper",
   "description": "Vector-based memory storage using OpenAI embeddings",
+  "networkAccess": "network",
+  "categories": ["memory"],
   "assemblyName": "TypeWhisper.Plugin.OpenAiVectorMemory.dll",
   "pluginClass": "TypeWhisper.Plugin.OpenAiVectorMemory.OpenAiVectorMemoryPlugin"
 }

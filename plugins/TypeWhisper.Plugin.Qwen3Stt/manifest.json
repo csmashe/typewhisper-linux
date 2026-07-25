@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "author": "TypeWhisper",
   "description": "Qwen3 ASR transcription via OpenAI-compatible endpoint",
+  "networkAccess": "userControlled",
+  "categories": ["transcription"],
   "assemblyName": "TypeWhisper.Plugin.Qwen3Stt.dll",
   "pluginClass": "TypeWhisper.Plugin.Qwen3Stt.Qwen3SttPlugin"
 }

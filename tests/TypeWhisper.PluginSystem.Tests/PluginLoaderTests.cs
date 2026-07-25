@@ -207,6 +207,135 @@ public sealed class PluginLoaderTests : IDisposable
         }
     }
 
+    [Fact]
+    public void ResolveMetadata_NewFieldsOverrideContradictoryLegacyValues()
+    {
+        var manifest = CreateManifest("com.typewhisper.whisper-cpp") with
+        {
+            Category = "transcription",
+            IsLocal = true,
+            NetworkAccess = PluginNetworkAccess.UserControlled,
+            Categories = [PluginCategory.Integration, PluginCategory.Action],
+        };
+
+        var descriptor = PluginLoader.ResolveMetadata(manifest);
+
+        Assert.Equal(PluginNetworkAccess.UserControlled, descriptor.NetworkAccess);
+        Assert.Equal(
+            new HashSet<PluginCategory>
+            {
+                PluginCategory.Integration,
+                PluginCategory.Action,
+            },
+            descriptor.Categories
+        );
+        Assert.False(descriptor.RanLocally);
+    }
+
+    [Fact]
+    public void ResolveMetadata_LegacyExternalManifestUsesCompatibilityFallback()
+    {
+        var manifest = CreateManifest("com.typewhisper.whisper-cpp");
+
+        var descriptor = PluginLoader.ResolveMetadata(manifest);
+
+        Assert.Equal(PluginNetworkAccess.Local, descriptor.NetworkAccess);
+        Assert.Equal(
+            [PluginCategory.Transcription],
+            descriptor.Categories
+        );
+        Assert.True(descriptor.RanLocally);
+    }
+
+    [Fact]
+    public void ResolveMetadata_LegacyWebhookIsNotPresumedLocal()
+    {
+        var manifest = CreateManifest("com.typewhisper.webhook");
+
+        var descriptor = PluginLoader.ResolveMetadata(manifest);
+
+        Assert.Equal(PluginNetworkAccess.Network, descriptor.NetworkAccess);
+        Assert.False(descriptor.RanLocally);
+    }
+
+    [Fact]
+    public void ResolveMetadata_ExplicitLegacyFalseOverridesKnownLocalFallback()
+    {
+        var manifest = CreateManifest("com.typewhisper.whisper-cpp") with
+        {
+            IsLocal = false,
+        };
+
+        var descriptor = PluginLoader.ResolveMetadata(manifest);
+
+        Assert.Equal(PluginNetworkAccess.Network, descriptor.NetworkAccess);
+        Assert.False(descriptor.RanLocally);
+    }
+
+    [Fact]
+    public void ResolveMetadata_UnlabeledExternalManifestFailsClosed()
+    {
+        var manifest = CreateManifest("com.example.unlabeled") with
+        {
+            Name = "Unlabeled",
+            Description = null,
+        };
+
+        var descriptor = PluginLoader.ResolveMetadata(manifest);
+
+        Assert.Equal(PluginNetworkAccess.Network, descriptor.NetworkAccess);
+        Assert.Equal([PluginCategory.Unknown], descriptor.Categories);
+        Assert.False(descriptor.RanLocally);
+    }
+
+    [Fact]
+    public void ResolveMetadata_EmptyDeclaredCategoriesIsRejected()
+    {
+        var manifest = CreateManifest("com.example.empty") with
+        {
+            NetworkAccess = PluginNetworkAccess.Network,
+            Categories = [],
+        };
+
+        var error = Assert.Throws<InvalidDataException>(
+            () => PluginLoader.ResolveMetadata(manifest)
+        );
+
+        Assert.Contains("empty categories", error.Message);
+    }
+
+    [Theory]
+    [InlineData((PluginNetworkAccess)999, PluginCategory.Utility)]
+    [InlineData(PluginNetworkAccess.Network, (PluginCategory)999)]
+    [InlineData(PluginNetworkAccess.Network, PluginCategory.Unknown)]
+    public void ResolveMetadata_InvalidDeclaredEnumIsRejected(
+        PluginNetworkAccess networkAccess,
+        PluginCategory category
+    )
+    {
+        var manifest = CreateManifest("com.example.invalid") with
+        {
+            NetworkAccess = networkAccess,
+            Categories = [category],
+        };
+
+        Assert.Throws<InvalidDataException>(
+            () => PluginLoader.ResolveMetadata(manifest)
+        );
+    }
+
+    private static PluginManifest CreateManifest(string id)
+    {
+        return new PluginManifest
+        {
+            Id = id,
+            Name = id,
+            Version = "1.0.0",
+            AssemblyName = "fake.dll",
+            PluginClass = "Fake.Plugin",
+        };
+    }
+
     private PluginLoader CreateLoader(string hostVersion)
     {
         return new PluginLoader(Path.Join(_tempDir, "PluginData"))

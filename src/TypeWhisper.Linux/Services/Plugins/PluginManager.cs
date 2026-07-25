@@ -4,6 +4,7 @@ using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services.Plugins;
 
@@ -15,14 +16,6 @@ namespace TypeWhisper.Linux.Services.Plugins;
 public sealed class PluginManager : IDisposable
 {
     private static readonly TimeSpan s_defaultPluginShutdownTimeout = TimeSpan.FromSeconds(5);
-
-    // Fresh-install defaults: offline transcription engines only, so dictation works
-    // out of the box without a key. Cloud providers default off until opted in.
-    private static readonly HashSet<string> s_defaultEnabledPluginIds = new(StringComparer.Ordinal)
-    {
-        "com.typewhisper.whisper-cpp", // offline transcription (recommended default)
-        "com.typewhisper.sherpa-onnx", // offline transcription
-    };
 
     private readonly HashSet<string> _activatedPlugins = [];
     private readonly ConcurrentDictionary<string, Task<bool>> _activationTasks = new();
@@ -401,12 +394,11 @@ public sealed class PluginManager : IDisposable
 
         foreach (var plugin in discovered)
         {
-            // Honor saved choice; otherwise enable local/offline engines by default so a
-            // fresh install has working transcription without an API key. IsLocal in the
-            // manifest is unreliable across plugins, so we anchor on an explicit allowlist.
+            // Honor saved choice; otherwise default-enable plugins whose metadata
+            // marks them local-only.
             var isEnabled = enabledState.TryGetValue(plugin.Manifest.Id, out var state)
                 ? state
-                : s_defaultEnabledPluginIds.Contains(plugin.Manifest.Id) || plugin.Manifest.IsLocal;
+                : IsEnabledByDefault(plugin);
 
             if (isEnabled)
             {
@@ -416,6 +408,11 @@ public sealed class PluginManager : IDisposable
 
         RebuildCapabilityIndices();
         await MigrateApiKeysAsync();
+    }
+
+    internal static bool IsEnabledByDefault(LoadedPlugin plugin)
+    {
+        return plugin.Metadata.NetworkAccess == PluginNetworkAccess.Local;
     }
 
     public async Task EnablePluginAsync(string pluginId)
@@ -721,22 +718,26 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    // Pick the error-log category for a plugin's host.Log(Error) calls. The manifest
-    // Category is the plugin's self-declared primary role, but most bundled plugins omit
-    // it — so fall back to the runtime capability interfaces (transcription engines log
-    // under Transcription, LLM providers under Prompt) before the generic Plugin bucket.
+    // Same normalized categories as the UI (Transcription, then Llm, take priority).
+    // Legacy manifests that normalized to Unknown fall back to the instance's
+    // capability interfaces instead of the generic bucket.
     private static string ResolveErrorCategory(LoadedPlugin plugin)
     {
-        return plugin.Manifest.Category?.Trim().ToLowerInvariant() switch
+        if (plugin.Metadata.Categories.Contains(PluginCategory.Transcription))
         {
-            "transcription" => ErrorCategory.Transcription,
-            "llm" or "prompt" => ErrorCategory.Prompt,
-            _ => plugin.Instance switch
-            {
-                ITranscriptionEnginePlugin => ErrorCategory.Transcription,
-                ILlmProviderPlugin => ErrorCategory.Prompt,
-                _ => ErrorCategory.Plugin,
-            },
+            return ErrorCategory.Transcription;
+        }
+
+        if (plugin.Metadata.Categories.Contains(PluginCategory.Llm))
+        {
+            return ErrorCategory.Prompt;
+        }
+
+        return plugin.Instance switch
+        {
+            ITranscriptionEnginePlugin => ErrorCategory.Transcription,
+            ILlmProviderPlugin => ErrorCategory.Prompt,
+            _ => ErrorCategory.Plugin,
         };
     }
 

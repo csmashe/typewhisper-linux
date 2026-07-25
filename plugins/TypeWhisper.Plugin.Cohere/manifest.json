@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "author": "TypeWhisper",
   "description": "Cohere Command LLM for prompt processing",
+  "networkAccess": "network",
+  "categories": ["llm"],
   "assemblyName": "TypeWhisper.Plugin.Cohere.dll",
   "pluginClass": "TypeWhisper.Plugin.Cohere.CoherePlugin"
 }

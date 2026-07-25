@@ -149,6 +149,69 @@ public sealed class LocalizationResourcesTests
     }
 
     [Theory]
+    [InlineData(
+        "en",
+        "Local",
+        "Cloud",
+        "Mixed",
+        "User controlled",
+        "Text-to-Speech",
+        "Integrations",
+        "Unknown"
+    )]
+    [InlineData(
+        "de",
+        "Lokal",
+        "Cloud",
+        "Gemischt",
+        "Benutzergesteuert",
+        "Sprachausgabe",
+        "Integrationen",
+        "Unbekannt"
+    )]
+    [InlineData(
+        "es",
+        "Local",
+        "Nube",
+        "Mixto",
+        "Controlado por el usuario",
+        "Texto a voz",
+        "Integraciones",
+        "Desconocido"
+    )]
+    [InlineData(
+        "ru",
+        "Локально",
+        "Облако",
+        "Смешанный",
+        "Управляется пользователем",
+        "Синтез речи",
+        "Интеграции",
+        "Неизвестно"
+    )]
+    public void Catalogs_HaveNetworkAccessAndNewCategoryLabels(
+        string language,
+        string local,
+        string network,
+        string mixed,
+        string userControlled,
+        string tts,
+        string integration,
+        string unknown
+    )
+    {
+        var catalog = Load(language);
+
+        Assert.Equal(local, catalog["Plugins.BadgeLocal"]);
+        Assert.Equal(network, catalog["Plugins.BadgeCloud"]);
+        Assert.Equal(mixed, catalog["Plugins.BadgeMixed"]);
+        Assert.Equal(userControlled, catalog["Plugins.BadgeUserControlled"]);
+        Assert.Equal(tts, catalog["Plugins.CategoryTts"]);
+        Assert.Equal(integration, catalog["Plugins.CategoryIntegration"]);
+        Assert.Equal(unknown, catalog["Plugins.CategoryUnknown"]);
+    }
+
+    [Theory]
     [MemberData(nameof(NonCanonicalLanguages))]
     public void TranslationKeysAreSubsetOfEnglish(string lang)
     {

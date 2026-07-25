@@ -251,6 +251,26 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
         Assert.Null(savedSettings);
     }
 
+    [Theory]
+    [InlineData(PluginNetworkAccess.Local, false, true)]
+    [InlineData(PluginNetworkAccess.Network, true, false)]
+    [InlineData(PluginNetworkAccess.Mixed, true, false)]
+    [InlineData(PluginNetworkAccess.UserControlled, true, false)]
+    public void DefaultActivation_UsesDescriptorInsteadOfLegacyManifestFlag(
+        PluginNetworkAccess networkAccess,
+        bool legacyIsLocal,
+        bool expectedEnabled
+    )
+    {
+        var plugin = new LifecyclePlugin(
+            "com.test.default-activation",
+            () => Task.CompletedTask
+        );
+        var loaded = CreateLoadedPlugin(plugin, networkAccess, legacyIsLocal);
+
+        Assert.Equal(expectedEnabled, PluginManager.IsEnabledByDefault(loaded));
+    }
+
     [Fact]
     public async Task CapabilityIndices_ValidCustomTranscriptionId_RoundTripsWhileColonSiblingIsRejected()
     {
@@ -478,21 +498,36 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
         return _manager;
     }
 
-    private static LoadedPlugin CreateLoadedPlugin(ITypeWhisperPlugin plugin)
+    private static LoadedPlugin CreateLoadedPlugin(
+        ITypeWhisperPlugin plugin,
+        PluginNetworkAccess networkAccess = PluginNetworkAccess.Network,
+        bool? legacyIsLocal = null
+    )
     {
         var testAssemblyPath = typeof(PluginManagerTests).Assembly.Location;
+        var categories = plugin switch
+        {
+            ITranscriptionEnginePlugin => new[] { PluginCategory.Transcription },
+            ILlmProviderPlugin => [PluginCategory.Llm],
+            _ => [PluginCategory.Utility],
+        };
+        var manifest = new PluginManifest
+        {
+            Id = plugin.PluginId,
+            Name = plugin.PluginName,
+            Version = plugin.PluginVersion,
+            AssemblyName = "fake.dll",
+            PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name,
+            NetworkAccess = networkAccess,
+            Categories = categories,
+            IsLocal = legacyIsLocal,
+        };
         return new LoadedPlugin(
-            new PluginManifest
-            {
-                Id = plugin.PluginId,
-                Name = plugin.PluginName,
-                Version = plugin.PluginVersion,
-                AssemblyName = "fake.dll",
-                PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name,
-            },
+            manifest,
             plugin,
             new PluginAssemblyLoadContext(testAssemblyPath),
-            Path.GetDirectoryName(testAssemblyPath)!
+            Path.GetDirectoryName(testAssemblyPath)!,
+            PluginLoader.ResolveMetadata(manifest)
         );
     }
 

@@ -164,6 +164,34 @@ public sealed class WelcomeWizardViewModelTests
         );
     }
 
+    [Fact]
+    public void ExtensionRow_UsesNormalizedDescriptorMetadata()
+    {
+        var plugin = new FakeTranscriptionPlugin();
+        var loaded = TestPluginManagerFactory.CreateLoadedPlugin(
+            Path.GetTempPath(),
+            plugin.PluginId,
+            plugin,
+            PluginNetworkAccess.UserControlled,
+            [PluginCategory.Transcription, PluginCategory.Tts]
+        );
+        using var harness = CreateHarness(
+            plugin,
+            loadedPlugins: [loaded]
+        );
+
+        var row = Assert.Single(harness.ViewModel.ExtensionPlugins);
+
+        Assert.Equal(PluginNetworkAccess.UserControlled, row.NetworkAccess);
+        Assert.True(
+            row.Categories.SetEquals(
+                [PluginCategory.Transcription, PluginCategory.Tts]
+            )
+        );
+        Assert.Equal("User controlled", row.LocationBadge);
+        Assert.False(row.RanLocally);
+    }
+
     private static Mock<ISetupTask> CreateSetupTask()
     {
         var setupTask = new Mock<ISetupTask>();
@@ -179,11 +207,14 @@ public sealed class WelcomeWizardViewModelTests
 
     private static TestHarness CreateHarness(
         FakeTranscriptionPlugin? plugin = null,
-        IReadOnlyList<ISetupTask>? setupTasks = null
+        IReadOnlyList<ISetupTask>? setupTasks = null,
+        IReadOnlyList<LoadedPlugin>? loadedPlugins = null
     )
     {
         var settings = TestPluginManagerFactory.CreateSettings(AppSettings.Default);
-        var pluginManager = TestPluginManagerFactory.Create();
+        var pluginManager = TestPluginManagerFactory.Create(
+            loadedPlugins: loadedPlugins
+        );
         if (plugin is not null)
         {
             SetTranscriptionEngines(pluginManager, [plugin]);

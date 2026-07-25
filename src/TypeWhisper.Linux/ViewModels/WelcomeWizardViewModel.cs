@@ -421,8 +421,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
                     p.Manifest.Name,
                     p.Manifest.Version,
                     p.Manifest.Description ?? "",
-                    p.Manifest.Category,
-                    p.Manifest.IsLocal,
+                    p.Metadata,
                     false,
                     _pluginManager.IsEnabled(p.Manifest.Id)
                 )

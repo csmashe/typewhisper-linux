@@ -4,6 +4,8 @@
   "version": "1.0.2",
   "author": "TypeWhisper",
   "description": "Deepgram Nova transcription engine",
+  "networkAccess": "network",
+  "categories": ["transcription"],
   "assemblyName": "TypeWhisper.Plugin.Deepgram.dll",
   "pluginClass": "TypeWhisper.Plugin.Deepgram.DeepgramPlugin"
 }

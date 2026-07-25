@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "author": "TypeWhisper",
   "description": "Google Cloud Speech-to-Text v2 transcription",
+  "networkAccess": "network",
+  "categories": ["transcription"],
   "assemblyName": "TypeWhisper.Plugin.GoogleCloudStt.dll",
   "pluginClass": "TypeWhisper.Plugin.GoogleCloudStt.GoogleCloudSttPlugin"
 }

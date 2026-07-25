@@ -33,9 +33,8 @@ public class SonioxPluginTests
 
         Assert.Equal("com.typewhisper.soniox", manifest.GetProperty("id").GetString());
         Assert.Equal("Soniox", manifest.GetProperty("name").GetString());
-        Assert.Equal("transcription", manifest.GetProperty("category").GetString());
         Assert.Equal(["transcription"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
-        Assert.False(manifest.GetProperty("isLocal").GetBoolean());
+        Assert.Equal("network", manifest.GetProperty("networkAccess").GetString());
         Assert.True(manifest.GetProperty("requiresApiKey").GetBoolean());
     }
 
