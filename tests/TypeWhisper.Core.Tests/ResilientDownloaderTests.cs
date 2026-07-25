@@ -276,6 +276,77 @@ public sealed class ResilientDownloaderTests
     }
 
     [Fact]
+    public async Task AbsentLengthCleanEofWithoutVerifier_ThrowsIncompleteAndPublishesNothing()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var body = MakeBody();
+            var dest = Path.Join(dir, "asset.bin");
+            var handler = new ScriptedHandler(body) { DeclareLength = false };
+            using var client = new HttpClient(handler);
+
+            var ex = await Assert.ThrowsAsync<DownloadIncompleteException>(() =>
+                ResilientDownloader.DownloadToFileAsync(
+                    client, Url, dest,
+                    approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: false,
+                    onBytesOnDisk: null, verifyComplete: null, ct: CancellationToken.None));
+
+            Assert.Contains("cannot be verified", ex.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(dest));
+            Assert.Empty(Directory.GetFiles(dir, "*.partial"));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public async Task AbsentLengthWithAcceptingVerifier_PublishesVerifiedFile()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var body = MakeBody();
+            var dest = Path.Join(dir, "asset.bin");
+            var handler = new ScriptedHandler(body) { DeclareLength = false };
+            using var client = new HttpClient(handler);
+
+            await ResilientDownloader.DownloadToFileAsync(
+                client, Url, dest,
+                approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: false,
+                onBytesOnDisk: null, verifyComplete: VerifyEquals(body),
+                ct: CancellationToken.None);
+
+            Assert.Equal(body, await File.ReadAllBytesAsync(dest));
+            Assert.Empty(Directory.GetFiles(dir, "*.partial"));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public async Task AbsentLengthWithRejectingVerifier_DeletesPartialAndPublishesNothing()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var body = MakeBody();
+            var dest = Path.Join(dir, "asset.bin");
+            var handler = new ScriptedHandler(body) { DeclareLength = false };
+            using var client = new HttpClient(handler);
+            Action<string> reject = _ => throw new InvalidDataException("Invalid artifact.");
+
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                ResilientDownloader.DownloadToFileAsync(
+                    client, Url, dest,
+                    approxTotalBytes: null, idleTimeout: s_longIdle, allowResume: false,
+                    onBytesOnDisk: null, verifyComplete: reject, ct: CancellationToken.None));
+
+            Assert.False(File.Exists(dest));
+            Assert.Empty(Directory.GetFiles(dir, "*.partial"));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
     public async Task ChecksumMismatch_Propagates_AndDeletesPartial()
     {
         var dir = NewTempDir();
@@ -380,6 +451,7 @@ public sealed class ResilientDownloaderTests
     private sealed class ScriptedHandler(byte[] body) : HttpMessageHandler
     {
         public bool HonorRange { get; set; } = true;
+        public bool DeclareLength { get; set; } = true;
         public Func<byte[], Stream>? WrapStream { get; set; }
         public int RequestCount { get; private set; }
         public List<string?> ReceivedRanges { get; } = [];
@@ -429,7 +501,12 @@ public sealed class ResilientDownloaderTests
             var content = new StreamContent(stream);
             // Declare the FULL slice length even when a WrapStream serves fewer bytes, so
             // a truncated body trips the completeness check.
-            content.Headers.ContentLength = slice.Length;
+            if (DeclareLength)
+                content.Headers.ContentLength = slice.Length;
+            else
+                // StreamContent can infer length from a seekable MemoryStream; suppress it
+                // to model HTTP/2/chunked/proxy responses with no declared total.
+                content.Headers.ContentLength = null;
             if (contentRange is not null)
                 content.Headers.ContentRange = contentRange;
 

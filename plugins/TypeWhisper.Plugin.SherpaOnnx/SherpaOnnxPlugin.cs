@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using SherpaOnnx;
 using TypeWhisper.Plugins.Shared.Cuda;
@@ -24,6 +26,26 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
         "es",
     ];
 
+    // Native-library parse diagnostics from org.k2fsa.sherpa.onnx 1.12.23. Match only
+    // these artifact-specific signatures; generic InvalidOperationException failures
+    // (CUDA/provider/runtime setup) must leave the downloaded model intact.
+    private static readonly string[] s_invalidModelLoadMessageFragments =
+    [
+        "INVALID_PROTOBUF",
+        "INVALID_GRAPH",
+        "Failed to load model because protobuf parsing failed",
+        "Protobuf parsing failed",
+        "ModelProto does not have a graph",
+        "model format error",
+        "Missing opset in the model",
+        "number of lines in tokens.txt",
+        "tokens.txt does not include the blank token",
+        "We expect that tokens.txt contains the symbol",
+        "Error when reading tokens",
+        "tokens.size()",
+        " != output_size:",
+    ];
+
     private static readonly IReadOnlyList<ModelDefinition> s_models =
     [
         new(
@@ -34,6 +56,7 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
             25,
             true,
             false,
+            true,
             [
                 new ModelFileDefinition("encoder.int8.onnx", $"{ParakeetRepo}/encoder.int8.onnx", 652),
                 new ModelFileDefinition("decoder.int8.onnx", $"{ParakeetRepo}/decoder.int8.onnx", 12),
@@ -49,6 +72,7 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
             4,
             false,
             true,
+            false,
             [
                 new ModelFileDefinition("encoder.int8.onnx", $"{CanaryRepo}/encoder.int8.onnx", 127),
                 new ModelFileDefinition("decoder.int8.onnx", $"{CanaryRepo}/decoder.int8.onnx", 71),
@@ -72,6 +96,8 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
         };
     private IPluginHostServices? _host;
     private OfflineRecognizer? _recognizer;
+    private Func<string, string, OfflineRecognizer> _parakeetRecognizerFactory =
+        CreateParakeetRecognizer;
     private SherpaCudaRuntimeInstaller? _cudaRuntimeInstaller;
     private CudaRuntimeProvisioner? _cudaProvisioner;
     private string? _loadedModelId;
@@ -309,7 +335,8 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
                         lastReport = now;
                     }
                 },
-                verifyComplete: null,
+                verifyComplete: path =>
+                    VerifyModelArtifact(path, file.FileName, model.RequiresBlankToken),
                 ct
             );
 
@@ -365,80 +392,94 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
             }
         }
 
-        await Task.Run(
-            () =>
-            {
-                lock (_sync)
+        try
+        {
+            await Task.Run(
+                () =>
                 {
-                    // Provisioning can take minutes; the backend may have been
-                    // switched out from under us in that window. Abort the stale
-                    // load rather than pinning the process to a runtime the user
-                    // no longer wants (and possibly after downloading it for nothing).
-                    if (!string.Equals(_computeBackend, desiredProvider, StringComparison.Ordinal))
-                        throw new InvalidOperationException(
-                            "Compute backend changed during model load; reload to apply the new backend."
-                        );
-
-                    UnloadRecognizerUnsafe();
-
-                    var activeProvider = desiredProvider;
-                    try
+                    lock (_sync)
                     {
-                        _recognizer = model.SupportsTranslation
-                            ? CreateCanaryRecognizer(dir, "en", "en", activeProvider)
-                            : CreateParakeetRecognizer(dir, activeProvider);
-                    }
-                    catch (Exception ex)
-                        when (string.Equals(activeProvider, "cuda", StringComparison.Ordinal))
-                    {
-                        // Recreate with the CPU execution provider. The GPU ONNX
-                        // Runtime is already wired in by ConfigureCudaRuntime and runs
-                        // the CPU provider correctly, so this yields working CPU
-                        // transcription rather than failing the load outright.
-                        _host?.Log(
-                            PluginLogLevel.Warning,
-                            $"sherpa-onnx CUDA recognizer creation failed ({ex.Message}); falling back to CPU."
+                        // Provisioning can take minutes; the backend may have been
+                        // switched out from under us in that window. Abort the stale
+                        // load rather than pinning the process to a runtime the user
+                        // no longer wants (and possibly after downloading it for nothing).
+                        if (!string.Equals(_computeBackend, desiredProvider, StringComparison.Ordinal))
+                            throw new InvalidOperationException(
+                                "Compute backend changed during model load; reload to apply the new backend."
+                            );
+
+                        // Revalidate cached/pre-fix artifacts before the native loader
+                        // (guarantees below, at VerifyModelArtifact).
+                        UnloadRecognizerUnsafe();
+                        VerifyModelArtifacts(model, dir);
+
+                        var activeProvider = desiredProvider;
+                        try
+                        {
+                            _recognizer = model.SupportsTranslation
+                                ? CreateCanaryRecognizer(dir, "en", "en", activeProvider)
+                                : _parakeetRecognizerFactory(dir, activeProvider);
+                        }
+                        catch (Exception ex)
+                            when (string.Equals(activeProvider, "cuda", StringComparison.Ordinal))
+                        {
+                            // Recreate with the CPU execution provider. The GPU ONNX
+                            // Runtime is already wired in by ConfigureCudaRuntime and runs
+                            // the CPU provider correctly, so this yields working CPU
+                            // transcription rather than failing the load outright.
+                            _host?.Log(
+                                PluginLogLevel.Warning,
+                                $"sherpa-onnx CUDA recognizer creation failed ({ex.Message}); falling back to CPU."
+                            );
+                            cudaUnavailableDetail = ex.Message;
+                            activeProvider = "cpu";
+                            _computeBackend = "cpu";
+                            _recognizer = model.SupportsTranslation
+                                ? CreateCanaryRecognizer(dir, "en", "en", activeProvider)
+                                : _parakeetRecognizerFactory(dir, activeProvider);
+                        }
+
+                        // First successful load pins the native runtime for the process.
+                        // Record the WIRED runtime (CUDA-capable vs CPU-only), not the
+                        // recognizer's active provider: a CUDA-wired runtime whose recognizer
+                        // fell back to CPU is still CUDA-capable, so it pins "cuda" and a later
+                        // CPU↔CUDA swap needs no restart.
+                        _loadedNativeProvider ??= _cudaOrtRuntimeWired ? "cuda" : activeProvider;
+
+                        _loadedModelId = modelId;
+                        _loadedModelDir = dir;
+                        SelectedModelId = modelId;
+                        _canarySrcLang = "en";
+                        _canaryTgtLang = "en";
+                        // Restart is required only if the wired runtime is CPU-only (a
+                        // provisioning failure). A CUDA-wired runtime whose recognizer fell back
+                        // to CPU pins "cuda" above, so CUDA is reachable again by a reload — no
+                        // restart (matches CreateLoadedAccelerationStatus / the swap logic).
+                        AccelerationStatus = cudaUnavailableDetail is null
+                            ? CreateLoadedAccelerationStatus(activeProvider, AccelerationPreference)
+                            : CreateCudaUnavailableStatus(
+                                cudaUnavailableDetail,
+                                requiresRestart: string.Equals(
+                                    _loadedNativeProvider,
+                                    "cpu",
+                                    StringComparison.Ordinal
+                                )
+                            );
+
+                        Debug.WriteLine(
+                            $"[SherpaOnnx] Model {modelId} loaded from {dir} ({activeProvider})"
                         );
-                        cudaUnavailableDetail = ex.Message;
-                        activeProvider = "cpu";
-                        _computeBackend = "cpu";
-                        _recognizer = model.SupportsTranslation
-                            ? CreateCanaryRecognizer(dir, "en", "en", activeProvider)
-                            : CreateParakeetRecognizer(dir, activeProvider);
                     }
-
-                    // First successful load pins the native runtime for the process.
-                    // Record the WIRED runtime (CUDA-capable vs CPU-only), not the
-                    // recognizer's active provider: a CUDA-wired runtime whose recognizer
-                    // fell back to CPU is still CUDA-capable, so it pins "cuda" and a later
-                    // CPU↔CUDA swap needs no restart.
-                    _loadedNativeProvider ??= _cudaOrtRuntimeWired ? "cuda" : activeProvider;
-
-                    _loadedModelId = modelId;
-                    _loadedModelDir = dir;
-                    SelectedModelId = modelId;
-                    _canarySrcLang = "en";
-                    _canaryTgtLang = "en";
-                    // Restart is required only if the wired runtime is CPU-only (a
-                    // provisioning failure). A CUDA-wired runtime whose recognizer fell back
-                    // to CPU pins "cuda" above, so CUDA is reachable again by a reload — no
-                    // restart (matches CreateLoadedAccelerationStatus / the swap logic).
-                    AccelerationStatus = cudaUnavailableDetail is null
-                        ? CreateLoadedAccelerationStatus(activeProvider, AccelerationPreference)
-                        : CreateCudaUnavailableStatus(
-                            cudaUnavailableDetail,
-                            requiresRestart: string.Equals(
-                                _loadedNativeProvider, "cpu", StringComparison.Ordinal)
-                        );
-
-                    Debug.WriteLine(
-                        $"[SherpaOnnx] Model {modelId} loaded from {dir} ({activeProvider})"
-                    );
-                }
-            },
-            ct
-        )
-            .ConfigureAwait(false);
+                },
+                ct
+            )
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsArtifactInvalidLoadFailure(ex))
+        {
+            DeleteInvalidModelArtifacts(model, dir, ex);
+            throw;
+        }
     }
 
     public async Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
@@ -695,6 +736,28 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
         _cudaRuntimeInstaller = installer;
     }
 
+    // Test seam: inject a throwing recognizer factory so native-load-failure
+    // classification can be exercised without a real model, native runtime, or GPU.
+    internal void SetParakeetRecognizerFactoryForTests(
+        Func<string, string, OfflineRecognizer> factory
+    )
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+        _parakeetRecognizerFactory = factory;
+    }
+
+    // Avoid ActivateAsync's one-shot migration probe in filesystem-isolated load tests.
+    internal void SetHostForTests(IPluginHostServices host)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        _host = host;
+    }
+
+    // Test seam: run the structural preflight without the native loader, so per-model
+    // token/ONNX acceptance (e.g. Canary carries no blank token) is testable in isolation.
+    internal void RunArtifactPreflightForTests(string modelId, string modelDir) =>
+        VerifyModelArtifacts(GetModelDefinition(modelId), modelDir);
+
     private static ModelDefinition GetModelDefinition(string modelId) =>
         s_models.FirstOrDefault(m => m.Id == modelId)
         ?? throw new ArgumentException($"Unknown model: {modelId}");
@@ -713,6 +776,259 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
         _loadedModelDir = null;
         _canarySrcLang = "en";
         _canaryTgtLang = "en";
+    }
+
+    private static void VerifyModelArtifacts(ModelDefinition model, string modelDir)
+    {
+        foreach (var file in model.Files)
+            VerifyModelArtifact(
+                Path.Join(modelDir, file.FileName),
+                file.FileName,
+                model.RequiresBlankToken
+            );
+    }
+
+    // Artifact guarantees:
+    //   *.onnx     — non-empty, well-framed top-level protobuf with a positive ONNX
+    //                IR version and a non-empty GraphProto field. The graph's declared
+    //                byte range must fit inside the file, which detects clean-EOF
+    //                truncation without hashing or parsing hundreds of MB of tensors.
+    //   tokens.txt — non-empty, strict UTF-8 token/id rows with non-negative unique IDs;
+    //                transducer models (requireBlankToken) must also carry sherpa's blank
+    //                symbol, which attention encoder-decoder models (Canary) do not use.
+    // These are structural gates, not authenticity checks; upstream publishes no hashes.
+    private static void VerifyModelArtifact(string path, string fileName, bool requireBlankToken)
+    {
+        if (fileName.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase))
+        {
+            VerifyOnnxProtobuf(path, fileName);
+            return;
+        }
+
+        if (string.Equals(fileName, "tokens.txt", StringComparison.OrdinalIgnoreCase))
+        {
+            VerifyTokensFile(path, fileName, requireBlankToken);
+            return;
+        }
+
+        throw new InvalidDataException(
+            $"No structural verification is defined for model artifact '{fileName}'."
+        );
+    }
+
+    private static void VerifyOnnxProtobuf(string path, string fileName)
+    {
+        using var stream = File.OpenRead(path);
+        if (stream.Length == 0)
+            throw new InvalidDataException($"Model artifact '{fileName}' is empty.");
+
+        var hasPositiveIrVersion = false;
+        var hasNonEmptyGraph = false;
+
+        while (stream.Position < stream.Length)
+        {
+            var key = ReadProtobufVarint(stream, fileName);
+            var fieldNumber = key >> 3;
+            var wireType = key & 7;
+            if (fieldNumber == 0)
+                throw new InvalidDataException(
+                    $"Model artifact '{fileName}' has an invalid protobuf field number."
+                );
+
+            switch (wireType)
+            {
+                case 0:
+                {
+                    var value = ReadProtobufVarint(stream, fileName);
+                    if (fieldNumber == 1 && value > 0)
+                        hasPositiveIrVersion = true;
+                    break;
+                }
+                case 1:
+                    SkipProtobufBytes(stream, 8, fileName);
+                    break;
+                case 2:
+                {
+                    var length = ReadProtobufVarint(stream, fileName);
+                    if (fieldNumber == 7 && length > 0)
+                        hasNonEmptyGraph = true;
+                    SkipProtobufBytes(stream, length, fileName);
+                    break;
+                }
+                case 5:
+                    SkipProtobufBytes(stream, 4, fileName);
+                    break;
+                default:
+                    throw new InvalidDataException(
+                        $"Model artifact '{fileName}' uses an invalid top-level protobuf wire type."
+                    );
+            }
+        }
+
+        if (!hasPositiveIrVersion || !hasNonEmptyGraph)
+            throw new InvalidDataException(
+                $"Model artifact '{fileName}' is not a structurally valid ONNX ModelProto."
+            );
+    }
+
+    private static ulong ReadProtobufVarint(Stream stream, string fileName)
+    {
+        ulong value = 0;
+        for (var i = 0; i < 10; i++)
+        {
+            var next = stream.ReadByte();
+            if (next < 0)
+                throw new InvalidDataException(
+                    $"Model artifact '{fileName}' ends inside a protobuf varint."
+                );
+
+            if (i == 9 && (next & 0xfe) != 0)
+                throw new InvalidDataException(
+                    $"Model artifact '{fileName}' contains an oversized protobuf varint."
+                );
+
+            value |= (ulong)(next & 0x7f) << (i * 7);
+            if ((next & 0x80) == 0)
+                return value;
+        }
+
+        throw new InvalidDataException(
+            $"Model artifact '{fileName}' contains an unterminated protobuf varint."
+        );
+    }
+
+    private static void SkipProtobufBytes(FileStream stream, ulong count, string fileName)
+    {
+        var remaining = stream.Length - stream.Position;
+        if (count > (ulong)remaining)
+            throw new InvalidDataException(
+                $"Model artifact '{fileName}' ends before its declared protobuf field length."
+            );
+
+        stream.Position += (long)count;
+    }
+
+    private static void VerifyTokensFile(string path, string fileName, bool requireBlankToken)
+    {
+        if (new FileInfo(path).Length == 0)
+            throw new InvalidDataException($"Model artifact '{fileName}' is empty.");
+
+        var ids = new HashSet<int>();
+        var rowCount = 0;
+        var hasBlankSymbol = false;
+        try
+        {
+            using var reader = new StreamReader(
+                path,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true),
+                detectEncodingFromByteOrderMarks: true
+            );
+
+            while (reader.ReadLine() is { } line)
+            {
+                if (line.IndexOf('\0') >= 0)
+                    throw new InvalidDataException(
+                        $"Model artifact '{fileName}' contains a null character."
+                    );
+
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                var columns = line.Split(
+                    (char[]?)null,
+                    StringSplitOptions.RemoveEmptyEntries
+                );
+                if (
+                    columns.Length != 2
+                    || !int.TryParse(
+                        columns[^1],
+                        NumberStyles.None,
+                        CultureInfo.InvariantCulture,
+                        out var id
+                    )
+                    || id < 0
+                    || !ids.Add(id)
+                )
+                    throw new InvalidDataException(
+                        $"Model artifact '{fileName}' has an invalid token/id row."
+                    );
+
+                hasBlankSymbol |= columns[0] is "<blk>" or "<eps>" or "<blank>";
+                rowCount++;
+            }
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new InvalidDataException(
+                $"Model artifact '{fileName}' is not valid UTF-8.",
+                ex
+            );
+        }
+
+        if (rowCount == 0)
+            throw new InvalidDataException(
+                $"Model artifact '{fileName}' contains no token/id rows."
+            );
+
+        if (requireBlankToken && !hasBlankSymbol)
+            throw new InvalidDataException(
+                $"Model artifact '{fileName}' does not contain a required blank token."
+            );
+    }
+
+    private static bool IsArtifactInvalidLoadFailure(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is InvalidDataException)
+                return true;
+
+            if (
+                current is InvalidOperationException
+                && s_invalidModelLoadMessageFragments.Any(
+                    fragment => current.Message.Contains(
+                        fragment,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+            )
+                return true;
+        }
+
+        return false;
+    }
+
+    private void DeleteInvalidModelArtifacts(
+        ModelDefinition model,
+        string modelDir,
+        Exception failure
+    )
+    {
+        var deleteFailures = new List<string>();
+        foreach (var file in model.Files)
+        {
+            var path = Path.Join(modelDir, file.FileName);
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                deleteFailures.Add($"{file.FileName}: {ex.Message}");
+            }
+        }
+
+        _host?.Log(
+            PluginLogLevel.Warning,
+            $"sherpa-onnx rejected model '{model.Id}' as invalid ({failure.Message}); "
+                + "deleted its artifacts so it can be downloaded again."
+        );
+        if (deleteFailures.Count > 0)
+            _host?.Log(
+                PluginLogLevel.Warning,
+                "Some invalid model artifacts could not be deleted: "
+                    + string.Join("; ", deleteFailures)
+            );
     }
 
     private static OfflineRecognizer CreateParakeetRecognizer(string modelDir, string provider)
@@ -891,7 +1207,7 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
         var pos = 12; // skip the leading RIFF/WAVE header
         while (pos + 8 < wavData.Length)
         {
-            var chunkId = System.Text.Encoding.ASCII.GetString(wavData, pos, 4);
+            var chunkId = Encoding.ASCII.GetString(wavData, pos, 4);
             var chunkSize = BitConverter.ToInt32(wavData, pos + 4);
 
             // chunkSize comes from untrusted WAV bytes — reject anything
@@ -1003,6 +1319,10 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
         int LanguageCount,
         bool IsRecommended,
         bool SupportsTranslation,
+        // Transducer/CTC models (Parakeet) carry a blank token in tokens.txt and sherpa's
+        // native reader requires it; attention encoder-decoder models (Canary) do not, so
+        // the token verifier must only demand a blank symbol when this is set.
+        bool RequiresBlankToken,
         IReadOnlyList<ModelFileDefinition> Files
     );
 
