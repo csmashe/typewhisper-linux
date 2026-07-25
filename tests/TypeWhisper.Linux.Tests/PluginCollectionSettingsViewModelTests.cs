@@ -82,6 +82,45 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task SaveSettings_DropdownSentinel_SubmitsDisplayedValueThenDropsAfterRealSelection()
+    {
+        var plugin = new FakeDropdownSettingsPlugin("com.test.dropdown-save");
+        var loaded = TestPluginManagerFactory.CreateLoadedPlugin(
+            _tempDir,
+            plugin.PluginId,
+            plugin
+        );
+        var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded]);
+        var vm = new PluginsSectionViewModel(manager);
+        var row = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+
+        var field = row.SettingFields.Single(candidate => candidate.Key == "model");
+        var sentinel = Assert.IsType<PluginSettingOption>(field.SelectedOption);
+        Assert.Equal(plugin.ModelValue, sentinel.Label);
+        Assert.Equal(sentinel.Value, field.Value);
+
+        await vm.SaveSettingsCommand.ExecuteAsync(row);
+
+        Assert.Equal(["retired-model"], plugin.SavedModelValues);
+        field = row.SettingFields.Single(candidate => candidate.Key == "model");
+        var advertisedOption = field.Options.Single(option => option.Value == "current-b");
+        field.SelectedOption = advertisedOption;
+
+        Assert.Equal(advertisedOption.Value, field.Value);
+        Assert.DoesNotContain(field.Options, option => option.Value == "retired-model");
+        Assert.True(row.HasUnsavedSettings);
+
+        await vm.SaveSettingsCommand.ExecuteAsync(row);
+
+        Assert.Equal(["retired-model", "current-b"], plugin.SavedModelValues);
+        field = row.SettingFields.Single(candidate => candidate.Key == "model");
+        Assert.Equal("current-b", field.Value);
+        Assert.Equal("current-b", field.SelectedOption?.Value);
+        Assert.DoesNotContain(field.Options, option => option.Value == "retired-model");
+    }
+
+    [Fact]
     public async Task SaveSettings_FailureResultSurfacesInRowStatus()
     {
         var (vm, row, plugin) = CreateSectionWithCollectionPlugin();
@@ -339,6 +378,37 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task PluginStateChanged_DirtyRowWithDropdownSentinel_PreservesCoherentDraft()
+    {
+        var plugin = new FakeDropdownSettingsPlugin("com.test.dropdown-draft");
+        var loaded = TestPluginManagerFactory.CreateLoadedPlugin(
+            _tempDir,
+            plugin.PluginId,
+            plugin
+        );
+        var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded]);
+        var vm = new PluginsSectionViewModel(manager);
+        var row = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+        row.SettingFields.Single(field => field.Key == "notes").Value = "draft notes";
+
+        InvokeRefresh(vm);
+
+        var visibleRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        Assert.Same(row, visibleRow);
+        var dropdown = visibleRow.SettingFields.Single(field => field.Key == "model");
+        var sentinel = Assert.IsType<PluginSettingOption>(dropdown.SelectedOption);
+        Assert.Equal("retired-model", sentinel.Label);
+        Assert.Equal(sentinel.Value, dropdown.Value);
+        Assert.Contains(dropdown.Options, option => ReferenceEquals(option, sentinel));
+        Assert.Equal(
+            "draft notes",
+            visibleRow.SettingFields.Single(field => field.Key == "notes").Value
+        );
+        Assert.True(visibleRow.HasUnsavedSettings);
+    }
+
+    [Fact]
     public async Task PluginStateChanged_NewInstanceWithSameId_DropsDraftAndRecreatesRow()
     {
         var originalPlugin = new FakeEditablePlugin("com.test.instance-replacement")
@@ -478,6 +548,98 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     }
 
     // ---- PluginSettingFieldRow direct unit tests --------------------------
+
+    [Fact]
+    public void FieldRow_UnknownPersistedDropdownValue_SelectsSentinelWithoutDirtyingBaseline()
+    {
+        var field = new PluginSettingFieldRow(
+            "model",
+            "Model",
+            "",
+            "",
+            [
+                new PluginSettingOption("current-a", "Current A"),
+                new PluginSettingOption("current-b", "Current B"),
+            ],
+            false,
+            PluginSettingKind.Dropdown,
+            "retired-model"
+        );
+        var row = new PluginRow(
+            null,
+            "p",
+            "P",
+            "1",
+            "",
+            "utility",
+            true,
+            true,
+            true
+        );
+        row.SettingFields.Add(field);
+        row.CaptureSettingsBaseline();
+
+        var sentinel = Assert.IsType<PluginSettingOption>(field.SelectedOption);
+        Assert.Equal("retired-model", sentinel.Value);
+        Assert.Equal("retired-model", sentinel.Label);
+        Assert.Equal(sentinel.Value, field.Value);
+        Assert.Contains(field.Options, option => ReferenceEquals(option, sentinel));
+        Assert.False(row.HasUnsavedSettings);
+
+        field.SelectedOption = field.Options.Single(option => option.Value == "current-b");
+
+        Assert.Equal("current-b", field.Value);
+        Assert.DoesNotContain(field.Options, option => option.Value == "retired-model");
+        Assert.True(row.HasUnsavedSettings);
+    }
+
+    [Fact]
+    public void FieldRow_DropdownConstruction_KeepsUnknownKnownAndEmptyValuesCoherent()
+    {
+        PluginSettingOption[] options =
+        [
+            new("current-a", "Current A"),
+            new("current-b", "Current B"),
+        ];
+
+        var unknown = new PluginSettingFieldRow(
+            "unknown",
+            "Unknown",
+            "",
+            "",
+            options,
+            false,
+            PluginSettingKind.Dropdown,
+            "retired-model"
+        );
+        var known = new PluginSettingFieldRow(
+            "known",
+            "Known",
+            "",
+            "",
+            options,
+            false,
+            PluginSettingKind.Dropdown,
+            "current-b"
+        );
+        var empty = new PluginSettingFieldRow(
+            "empty",
+            "Empty",
+            "",
+            "",
+            options,
+            false,
+            PluginSettingKind.Dropdown,
+            ""
+        );
+
+        Assert.Equal("retired-model", unknown.SelectedOption?.Value);
+        Assert.Equal(unknown.SelectedOption?.Value, unknown.Value);
+        Assert.Same(options[1], known.SelectedOption);
+        Assert.Equal("current-b", known.Value);
+        Assert.Same(options[0], empty.SelectedOption);
+        Assert.Equal("current-a", empty.Value);
+    }
 
     [Fact]
     public void FieldRow_AutoKind_WithOptions_ResolvesToDropdown()
@@ -909,6 +1071,98 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             }
 
             return ValidationResult;
+        }
+
+        public Task ActivateAsync(IPluginHostServices host)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task DeactivateAsync()
+        {
+            return Task.CompletedTask;
+        }
+
+        public void Dispose() { }
+    }
+
+    private sealed class FakeDropdownSettingsPlugin
+        : ITypeWhisperPlugin,
+            IPluginSettingsProvider
+    {
+        private static readonly PluginSettingDefinition s_modelDefinition = new(
+            "model",
+            "Model",
+            Options:
+            [
+                new PluginSettingOption("current-a", "Current A"),
+                new PluginSettingOption("current-b", "Current B"),
+            ],
+            Kind: PluginSettingKind.Dropdown
+        );
+        private static readonly PluginSettingDefinition s_notesDefinition = new(
+            "notes",
+            "Notes",
+            Kind: PluginSettingKind.Text
+        );
+
+        public FakeDropdownSettingsPlugin(string pluginId)
+        {
+            PluginId = pluginId;
+        }
+
+        public List<string?> SavedModelValues { get; } = [];
+        public string ModelValue { get; private set; } = "retired-model";
+        private string NotesValue { get; set; } = "initial notes";
+        public string PluginId { get; }
+        public string PluginName => $"Dropdown {PluginId}";
+        public string PluginVersion => "1.0.0";
+
+        public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions()
+        {
+            return [s_modelDefinition, s_notesDefinition];
+        }
+
+        public Task<string?> GetSettingValueAsync(
+            string key,
+            CancellationToken ct = default
+        )
+        {
+            return Task.FromResult(
+                key switch
+                {
+                    "model" => ModelValue,
+                    "notes" => NotesValue,
+                    _ => null,
+                }
+            );
+        }
+
+        public Task SetSettingValueAsync(
+            string key,
+            string? value,
+            CancellationToken ct = default
+        )
+        {
+            switch (key)
+            {
+                case "model":
+                    SavedModelValues.Add(value);
+                    ModelValue = value ?? string.Empty;
+                    break;
+                case "notes":
+                    NotesValue = value ?? string.Empty;
+                    break;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task<PluginSettingsValidationResult?> ValidateAsync(
+            CancellationToken ct = default
+        )
+        {
+            return Task.FromResult<PluginSettingsValidationResult?>(null);
         }
 
         public Task ActivateAsync(IPluginHostServices host)

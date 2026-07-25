@@ -1114,14 +1114,23 @@ public sealed record PluginFailureRow(string FolderName, string Message);
 
 public sealed partial class PluginSettingFieldRow : ObservableObject
 {
+    private readonly PluginSettingOption[] _advertisedOptions;
+
     [ObservableProperty]
     private bool _boolValue;
+
+    private readonly ObservableCollection<PluginSettingOption> _options;
 
     [ObservableProperty]
     private PluginSettingOption? _selectedOption;
 
     // Prevents infinite cycling: Value↔BoolValue two-way sync would otherwise loop.
     private bool _syncingBoolValue;
+
+    // Keeps dropdown Value↔SelectedOption changes atomic and prevents recursive synchronization.
+    private bool _syncingOptionValue;
+
+    private PluginSettingOption? _unavailableOption;
 
     [ObservableProperty]
     private string _value;
@@ -1141,10 +1150,24 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
         Label = label;
         Description = description;
         Placeholder = placeholder;
-        Options = options;
         Kind = ResolveKind(kind, options, isSecret);
+        _advertisedOptions = options.ToArray();
+        _options = new ObservableCollection<PluginSettingOption>(_advertisedOptions);
+        Options = new ReadOnlyObservableCollection<PluginSettingOption>(_options);
         _value = value;
-        _selectedOption = Options.FirstOrDefault(o => o.Value == value) ?? (Options.Count > 0 ? Options[0] : null);
+        _selectedOption = _advertisedOptions.FirstOrDefault(option => option.Value == value);
+        if (
+            _selectedOption is null
+            && Kind == PluginSettingKind.Dropdown
+            && !string.IsNullOrEmpty(_value)
+        )
+        {
+            _unavailableOption = new PluginSettingOption(_value, _value);
+            _options.Insert(0, _unavailableOption);
+            _selectedOption = _unavailableOption;
+        }
+
+        _selectedOption ??= Options.Count > 0 ? Options[0] : null;
         if (_selectedOption is not null && string.IsNullOrEmpty(_value))
         {
             _value = _selectedOption.Value;
@@ -1158,8 +1181,7 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
     public string Description { get; }
     public bool HasDescription => !string.IsNullOrWhiteSpace(Description);
     public string Placeholder { get; }
-    public IReadOnlyList<PluginSettingOption> Options { get; }
-    private bool HasOptions => Options.Count > 0;
+    public ReadOnlyObservableCollection<PluginSettingOption> Options { get; }
     public PluginSettingKind Kind { get; }
 
     public bool IsTextKind => Kind == PluginSettingKind.Text;
@@ -1191,17 +1213,50 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
 
     partial void OnSelectedOptionChanged(PluginSettingOption? value)
     {
-        if (value is not null && _value != value.Value)
+        if (_syncingOptionValue)
         {
-            Value = value.Value;
+            return;
+        }
+
+        if (Kind != PluginSettingKind.Dropdown)
+        {
+            if (value is not null && _value != value.Value)
+            {
+                Value = value.Value;
+            }
+
+            return;
+        }
+
+        _syncingOptionValue = true;
+        try
+        {
+            Value = value?.Value ?? string.Empty;
+            RemoveUnavailableOptionIfDeselected(value);
+        }
+        finally
+        {
+            _syncingOptionValue = false;
         }
     }
 
     partial void OnValueChanged(string value)
     {
-        if (HasOptions)
+        if (Kind == PluginSettingKind.Dropdown && !_syncingOptionValue)
         {
-            var option = Options.FirstOrDefault(o => o.Value == value);
+            _syncingOptionValue = true;
+            try
+            {
+                SynchronizeDropdownSelection(value);
+            }
+            finally
+            {
+                _syncingOptionValue = false;
+            }
+        }
+        else if (Kind != PluginSettingKind.Dropdown && Options.Count > 0)
+        {
+            var option = Options.FirstOrDefault(candidate => candidate.Value == value);
             if (!Equals(_selectedOption, option))
             {
                 SelectedOption = option;
@@ -1228,6 +1283,56 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
         _syncingBoolValue = true;
         Value = value ? "true" : "false";
         _syncingBoolValue = false;
+    }
+
+    private void SynchronizeDropdownSelection(string value)
+    {
+        var advertisedOption = _advertisedOptions.FirstOrDefault(
+            option => option.Value == value
+        );
+        if (advertisedOption is not null)
+        {
+            SelectedOption = advertisedOption;
+            RemoveUnavailableOptionIfDeselected(advertisedOption);
+            return;
+        }
+
+        if (string.IsNullOrEmpty(value))
+        {
+            SelectedOption = null;
+            RemoveUnavailableOptionIfDeselected(null);
+            return;
+        }
+
+        if (_unavailableOption?.Value == value)
+        {
+            SelectedOption = _unavailableOption;
+            return;
+        }
+
+        var previousUnavailableOption = _unavailableOption;
+        _unavailableOption = new PluginSettingOption(value, value);
+        _options.Insert(0, _unavailableOption);
+        SelectedOption = _unavailableOption;
+        if (previousUnavailableOption is not null)
+        {
+            _options.Remove(previousUnavailableOption);
+        }
+    }
+
+    private void RemoveUnavailableOptionIfDeselected(PluginSettingOption? selectedOption)
+    {
+        if (
+            _unavailableOption is null
+            || ReferenceEquals(selectedOption, _unavailableOption)
+        )
+        {
+            return;
+        }
+
+        var unavailableOption = _unavailableOption;
+        _unavailableOption = null;
+        _options.Remove(unavailableOption);
     }
 }
 
