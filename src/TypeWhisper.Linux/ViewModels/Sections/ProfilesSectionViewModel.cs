@@ -190,6 +190,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         _windowTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _windowTimer.Tick += (_, _) => StartCurrentWindowUpdate();
+        Loc.Instance.LanguageChanged += OnInterfaceLanguageChanged;
     }
 
     public ObservableCollection<Profile> Profiles { get; } = [];
@@ -201,31 +202,13 @@ public partial class ProfilesSectionViewModel : ObservableObject
     internal bool IsLiveContextActive => _liveContextActivationCount > 0;
 
     public ObservableCollection<ProfileStylePresetOption> StylePresetOptions { get; } =
-    [
-        new(ProfileStylePreset.Raw, Loc.Instance["Profiles.StylePresetRaw"]),
-        new(ProfileStylePreset.Clean, Loc.Instance["Profiles.StylePresetClean"]),
-        new(ProfileStylePreset.Concise, Loc.Instance["Profiles.StylePresetConcise"]),
-        new(ProfileStylePreset.FormalEmail, Loc.Instance["Profiles.StylePresetFormalEmail"]),
-        new(ProfileStylePreset.CasualMessage, Loc.Instance["Profiles.StylePresetCasualMessage"]),
-        new(ProfileStylePreset.Developer, Loc.Instance["Profiles.StylePresetDeveloper"]),
-        new(ProfileStylePreset.TerminalSafe, Loc.Instance["Profiles.StylePresetTerminalSafe"]),
-        new(ProfileStylePreset.MeetingNotes, Loc.Instance["Profiles.StylePresetMeetingNotes"]),
-    ];
+        new(CreateStylePresetOptions());
 
     public ObservableCollection<ProfileHotkeyBehaviorOption> HotkeyBehaviorOptions { get; } =
-    [
-        new(ProfileHotkeyBehavior.StartDictation, Loc.Instance["Profiles.HotkeyBehaviorStartDictation"]),
-        new(ProfileHotkeyBehavior.ProcessSelectedText, Loc.Instance["Profiles.HotkeyBehaviorProcessSelectedText"]),
-    ];
+        new(CreateHotkeyBehaviorOptions());
 
     public ObservableCollection<NullableCleanupLevelOption> CleanupOverrideOptions { get; } =
-    [
-        new(null, Loc.Instance["Profiles.CleanupUseStylePreset"]),
-        new(CleanupLevel.None, Loc.Instance["Profiles.CleanupNone"]),
-        new(CleanupLevel.Light, Loc.Instance["Profiles.CleanupLight"]),
-        new(CleanupLevel.Medium, Loc.Instance["Profiles.CleanupMedium"]),
-        new(CleanupLevel.High, Loc.Instance["Profiles.CleanupHigh"]),
-    ];
+        new(CreateCleanupOverrideOptions());
 
     public ObservableCollection<string> ProcessNameChips { get; } = [];
     public ObservableCollection<string> UrlPatternChips { get; } = [];
@@ -326,12 +309,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
     public string EditIsEnabledStatusText =>
         EditIsEnabled ? Loc.Instance["Common.On"] : Loc.Instance["Common.Off"];
 
-    public IReadOnlyList<NullableBooleanOption> WhisperModeOptions { get; } =
-    [
-        new(null, Loc.Instance["Profiles.UseGlobalDefault"]),
-        new(true, Loc.Instance["Common.Enabled"]),
-        new(false, Loc.Instance["Common.Disabled"]),
-    ];
+    public IReadOnlyList<NullableBooleanOption> WhisperModeOptions { get; private set; } =
+        CreateNullableBooleanOptions();
 
     public TranslationTargetOption? SelectedTranslationTargetOption
     {
@@ -990,6 +969,99 @@ public partial class ProfilesSectionViewModel : ObservableObject
         if (SelectedProfile is null)
         {
             NotifyStateChanged();
+        }
+    }
+
+    private void OnInterfaceLanguageChanged(object? sender, EventArgs e)
+    {
+        var modelId = EditModelId;
+        var promptActionId = EditPromptActionId;
+        var stylePreset = EditStylePreset;
+        var hotkeyBehavior = EditHotkeyBehavior;
+        var cleanupLevelOverride = EditCleanupLevelOverride;
+        var whisperModeOverride = EditWhisperModeOverride;
+        var developerFormattingOverride = EditDeveloperFormattingOverride;
+
+        RefreshModelOptions();
+        RefreshPromptActionOptions();
+        ReplaceCollection(StylePresetOptions, CreateStylePresetOptions());
+        ReplaceCollection(HotkeyBehaviorOptions, CreateHotkeyBehaviorOptions());
+        ReplaceCollection(CleanupOverrideOptions, CreateCleanupOverrideOptions());
+        WhisperModeOptions = CreateNullableBooleanOptions();
+        OnPropertyChanged(nameof(WhisperModeOptions));
+
+        EditModelId = modelId;
+        EditPromptActionId = promptActionId;
+        EditStylePreset = stylePreset;
+        EditHotkeyBehavior = hotkeyBehavior;
+        EditCleanupLevelOverride = cleanupLevelOverride;
+        EditWhisperModeOverride = whisperModeOverride;
+        EditDeveloperFormattingOverride = developerFormattingOverride;
+
+        OnPropertyChanged(nameof(SelectedModelOption));
+        OnPropertyChanged(nameof(SelectedPromptActionOption));
+        OnPropertyChanged(nameof(SelectedStylePresetOption));
+        OnPropertyChanged(nameof(SelectedHotkeyBehaviorOption));
+        OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
+        OnPropertyChanged(nameof(SelectedWhisperModeOption));
+        OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
+    }
+
+    private static IReadOnlyList<ProfileStylePresetOption> CreateStylePresetOptions()
+    {
+        return
+        [
+            new(ProfileStylePreset.Raw, Loc.Instance["Profiles.StylePresetRaw"]),
+            new(ProfileStylePreset.Clean, Loc.Instance["Profiles.StylePresetClean"]),
+            new(ProfileStylePreset.Concise, Loc.Instance["Profiles.StylePresetConcise"]),
+            new(ProfileStylePreset.FormalEmail, Loc.Instance["Profiles.StylePresetFormalEmail"]),
+            new(ProfileStylePreset.CasualMessage, Loc.Instance["Profiles.StylePresetCasualMessage"]),
+            new(ProfileStylePreset.Developer, Loc.Instance["Profiles.StylePresetDeveloper"]),
+            new(ProfileStylePreset.TerminalSafe, Loc.Instance["Profiles.StylePresetTerminalSafe"]),
+            new(ProfileStylePreset.MeetingNotes, Loc.Instance["Profiles.StylePresetMeetingNotes"]),
+        ];
+    }
+
+    private static IReadOnlyList<ProfileHotkeyBehaviorOption> CreateHotkeyBehaviorOptions()
+    {
+        return
+        [
+            new(ProfileHotkeyBehavior.StartDictation, Loc.Instance["Profiles.HotkeyBehaviorStartDictation"]),
+            new(ProfileHotkeyBehavior.ProcessSelectedText, Loc.Instance["Profiles.HotkeyBehaviorProcessSelectedText"]),
+        ];
+    }
+
+    private static IReadOnlyList<NullableCleanupLevelOption> CreateCleanupOverrideOptions()
+    {
+        return
+        [
+            new(null, Loc.Instance["Profiles.CleanupUseStylePreset"]),
+            new(CleanupLevel.None, Loc.Instance["Profiles.CleanupNone"]),
+            new(CleanupLevel.Light, Loc.Instance["Profiles.CleanupLight"]),
+            new(CleanupLevel.Medium, Loc.Instance["Profiles.CleanupMedium"]),
+            new(CleanupLevel.High, Loc.Instance["Profiles.CleanupHigh"]),
+        ];
+    }
+
+    private static IReadOnlyList<NullableBooleanOption> CreateNullableBooleanOptions()
+    {
+        return
+        [
+            new(null, Loc.Instance["Profiles.UseGlobalDefault"]),
+            new(true, Loc.Instance["Common.Enabled"]),
+            new(false, Loc.Instance["Common.Disabled"]),
+        ];
+    }
+
+    private static void ReplaceCollection<T>(
+        ObservableCollection<T> target,
+        IEnumerable<T> items
+    )
+    {
+        target.Clear();
+        foreach (var item in items)
+        {
+            target.Add(item);
         }
     }
 
