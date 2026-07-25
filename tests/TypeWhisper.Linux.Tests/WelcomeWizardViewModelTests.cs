@@ -1,0 +1,451 @@
+using Moq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Hotkey;
+using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services.Setup;
+using TypeWhisper.Linux.ViewModels;
+using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Models;
+using Xunit;
+
+namespace TypeWhisper.Linux.Tests;
+
+// `token` is the view model's lifetime token; Cleanup cancels it mid-test, so the
+// .WaitAsync(timeout) guards must stay time-bounded and never forward it.
+// ReSharper disable MethodSupportsCancellation
+public sealed class WelcomeWizardViewModelTests
+{
+    private static readonly TimeSpan s_testTimeout = TimeSpan.FromSeconds(2);
+
+    [Fact]
+    public async Task CleanupDuringModelDownload_CancelsTokenAndSuppressesLateCompletionMutations()
+    {
+        var releaseDownload = NewCompletionSource();
+        var plugin = new FakeTranscriptionPlugin
+        {
+            DownloadImplementation = _ => releaseDownload.Task,
+        };
+        using var harness = CreateHarness(plugin);
+
+        var nextTask = harness.ViewModel.NextCommand.ExecuteAsync(null);
+        var token = await plugin.DownloadStarted.Task.WaitAsync(s_testTimeout);
+
+        harness.ViewModel.Cleanup();
+        var statusAfterCleanup = harness.ViewModel.ModelStatus;
+        var isDownloadingAfterCleanup = harness.ViewModel.IsModelDownloading;
+
+        Assert.True(token.IsCancellationRequested);
+
+        releaseDownload.SetResult();
+        await nextTask.WaitAsync(s_testTimeout);
+
+        harness.Settings.Verify(
+            settings => settings.Save(It.IsAny<AppSettings>()),
+            Times.Never
+        );
+        Assert.Equal(0, harness.ViewModel.StepIndex);
+        Assert.Equal(statusAfterCleanup, harness.ViewModel.ModelStatus);
+        Assert.Equal(isDownloadingAfterCleanup, harness.ViewModel.IsModelDownloading);
+        Assert.False(Assert.Single(harness.ViewModel.AvailableModels).IsDownloaded);
+    }
+
+    [Fact]
+    public async Task CleanupDuringSetupAction_CancelsTokenAndSuppressesPostAwaitRowMutation()
+    {
+        var actionStarted = NewCompletionSource<CancellationToken>();
+        var releaseAction = NewCompletionSource<SetupActionOutcome>();
+        var setupTask = CreateSetupTask();
+        setupTask
+            .Setup(task => task.RunActionAsync(It.IsAny<CancellationToken>()))
+            .Returns(
+                (CancellationToken token) =>
+                {
+                    actionStarted.TrySetResult(token);
+                    return releaseAction.Task;
+                }
+            );
+        using var harness = CreateHarness(setupTasks: [setupTask.Object]);
+        var row = new SetupTaskRow(setupTask.Object);
+        harness.ViewModel.SetupItems.Add(row);
+
+        var actionTask = harness.ViewModel.RunSetupActionCommand.ExecuteAsync(row);
+        var token = await actionStarted.Task.WaitAsync(s_testTimeout);
+        var actionMessageWhileRunning = row.ActionMessage;
+
+        harness.ViewModel.Cleanup();
+
+        Assert.True(token.IsCancellationRequested);
+
+        releaseAction.SetResult(new SetupActionOutcome(true, "late success"));
+        await actionTask.WaitAsync(s_testTimeout);
+
+        Assert.True(row.IsBusy);
+        Assert.Equal(SetupTaskStatusKind.Working, row.Kind);
+        Assert.Equal(actionMessageWhileRunning, row.ActionMessage);
+        setupTask.Verify(
+            task => task.EvaluateAsync(It.IsAny<CancellationToken>()),
+            Times.Never
+        );
+    }
+
+    [Fact]
+    public async Task LifetimeCancellation_DoesNotSurfaceModelFailureStatus()
+    {
+        var plugin = new FakeTranscriptionPlugin
+        {
+            DownloadImplementation = token =>
+                token.CanBeCanceled
+                    ? Task.Delay(Timeout.InfiniteTimeSpan, token)
+                    : Task.FromCanceled(new CancellationToken(canceled: true)),
+        };
+        using var harness = CreateHarness(plugin);
+
+        var nextTask = harness.ViewModel.NextCommand.ExecuteAsync(null);
+        var token = await plugin.DownloadStarted.Task.WaitAsync(s_testTimeout);
+        var runningStatus = harness.ViewModel.ModelStatus;
+
+        harness.ViewModel.Cleanup();
+        await nextTask.WaitAsync(s_testTimeout);
+
+        Assert.True(token.IsCancellationRequested);
+        Assert.Equal(runningStatus, harness.ViewModel.ModelStatus);
+        Assert.NotEqual(
+            Loc.Instance.GetString("Wizard.ModelFailed", "A task was canceled."),
+            harness.ViewModel.ModelStatus
+        );
+        harness.Settings.Verify(
+            settings => settings.Save(It.IsAny<AppSettings>()),
+            Times.Never
+        );
+    }
+
+    [Fact]
+    public async Task ModelDownloadWithoutCleanup_CompletesAndAppliesMutations()
+    {
+        var releaseDownload = NewCompletionSource();
+        var plugin = new FakeTranscriptionPlugin
+        {
+            DownloadImplementation = _ => releaseDownload.Task,
+        };
+        using var harness = CreateHarness(plugin);
+
+        var nextTask = harness.ViewModel.NextCommand.ExecuteAsync(null);
+        var token = await plugin.DownloadStarted.Task.WaitAsync(s_testTimeout);
+
+        Assert.True(token.CanBeCanceled);
+        Assert.False(token.IsCancellationRequested);
+
+        releaseDownload.SetResult();
+        await nextTask.WaitAsync(s_testTimeout);
+
+        Assert.False(token.IsCancellationRequested);
+        Assert.Equal(1, harness.ViewModel.StepIndex);
+        Assert.False(harness.ViewModel.IsModelDownloading);
+        Assert.True(Assert.Single(harness.ViewModel.AvailableModels).IsDownloaded);
+        Assert.Equal(plugin.FullModelId, harness.Settings.Object.Current.SelectedModelId);
+        Assert.Equal(
+            Loc.Instance.GetString(
+                "Wizard.ModelReady",
+                Assert.IsType<WizardModelRow>(harness.ViewModel.SelectedModel).DisplayName
+            ),
+            harness.ViewModel.ModelStatus
+        );
+        harness.Settings.Verify(
+            settings =>
+                settings.Save(
+                    It.Is<AppSettings>(saved => saved.SelectedModelId == plugin.FullModelId)
+                ),
+            Times.Once
+        );
+    }
+
+    private static Mock<ISetupTask> CreateSetupTask()
+    {
+        var setupTask = new Mock<ISetupTask>();
+        setupTask.SetupGet(task => task.Id).Returns("test-setup");
+        setupTask.SetupGet(task => task.Title).Returns("Test setup");
+        setupTask.SetupGet(task => task.Severity).Returns(SetupTaskSeverity.Required);
+        setupTask.Setup(task => task.AppliesToThisMachine()).Returns(true);
+        setupTask
+            .Setup(task => task.EvaluateAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SetupTaskState(SetupTaskStatusKind.Satisfied, "ready"));
+        return setupTask;
+    }
+
+    private static TestHarness CreateHarness(
+        FakeTranscriptionPlugin? plugin = null,
+        IReadOnlyList<ISetupTask>? setupTasks = null
+    )
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(AppSettings.Default);
+        var pluginManager = TestPluginManagerFactory.Create();
+        if (plugin is not null)
+        {
+            SetTranscriptionEngines(pluginManager, [plugin]);
+        }
+
+        var models = new ModelManagerService(pluginManager, settings.Object);
+        var hotkey = new HotkeyService(
+            new BackendSelector(static () => new TestShortcutBackend())
+        );
+        var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
+        var commands = CreateCommandsWithoutHostProbes();
+        var textInsertion = new TextInsertionService(new NoOpTextInsertionPlatform());
+        var dictionary = new Mock<IDictionaryService>();
+        var viewModel = new WelcomeWizardViewModel(
+            models,
+            pluginManager,
+            hotkey,
+            audio,
+            commands,
+            textInsertion,
+            setupTasks ?? [],
+            dictionary.Object,
+            settings.Object,
+            availableMics: []
+        );
+        return new TestHarness(
+            viewModel,
+            settings,
+            models,
+            pluginManager,
+            hotkey,
+            audio
+        );
+    }
+
+    private static SystemCommandAvailabilityService CreateCommandsWithoutHostProbes()
+    {
+        var commands = (SystemCommandAvailabilityService)
+            RuntimeHelpers.GetUninitializedObject(typeof(SystemCommandAvailabilityService));
+        commands.RaiseSnapshotChangedForTests(
+            new LinuxCapabilitySnapshot(
+                "Unknown",
+                false,
+                "none",
+                false,
+                false,
+                false,
+                false,
+                null,
+                false,
+                false,
+                false,
+                false,
+                false
+            )
+        );
+        return commands;
+    }
+
+    private static void SetTranscriptionEngines(
+        PluginManager pluginManager,
+        IReadOnlyList<ITranscriptionEnginePlugin> plugins
+    )
+    {
+        var field =
+            typeof(PluginManager).GetField(
+                "_transcriptionEngines",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            )
+            ?? throw new MissingFieldException(
+                typeof(PluginManager).FullName,
+                "_transcriptionEngines"
+            );
+        field.SetValue(pluginManager, plugins.ToList());
+    }
+
+    private static TaskCompletionSource NewCompletionSource()
+    {
+        return new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private static TaskCompletionSource<T> NewCompletionSource<T>()
+    {
+        return new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class TestHarness : IDisposable
+    {
+        public TestHarness(
+            WelcomeWizardViewModel viewModel,
+            Mock<ISettingsService> settings,
+            ModelManagerService models,
+            PluginManager pluginManager,
+            HotkeyService hotkey,
+            AudioRecordingService audio
+        )
+        {
+            ViewModel = viewModel;
+            Settings = settings;
+            Models = models;
+            PluginManager = pluginManager;
+            Hotkey = hotkey;
+            Audio = audio;
+        }
+
+        public WelcomeWizardViewModel ViewModel { get; }
+        public Mock<ISettingsService> Settings { get; }
+        private ModelManagerService Models { get; }
+        private PluginManager PluginManager { get; }
+        private HotkeyService Hotkey { get; }
+        private AudioRecordingService Audio { get; }
+
+        public void Dispose()
+        {
+            ViewModel.Cleanup();
+            Models.Dispose();
+            PluginManager.Dispose();
+            Hotkey.Dispose();
+            Audio.Dispose();
+        }
+    }
+
+    private sealed class FakeTranscriptionPlugin : ITranscriptionEnginePlugin
+    {
+        private const string ModelId = "test-model";
+        private const string ModelDisplayName = "Test model";
+
+        private bool _isDownloaded;
+
+        public Func<CancellationToken, Task> DownloadImplementation { get; init; } =
+            _ => Task.CompletedTask;
+
+        public TaskCompletionSource<CancellationToken> DownloadStarted { get; } =
+            NewCompletionSource<CancellationToken>();
+
+        public string FullModelId => ModelManagerService.GetPluginModelId(PluginId, ModelId);
+        public string PluginId => "com.test.welcome-wizard";
+        public string PluginName => "Welcome wizard fake";
+        public string PluginVersion => "1.0.0";
+        public string ProviderId => "welcome-wizard";
+        public string ProviderDisplayName => "Test provider";
+        public bool IsConfigured => true;
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
+            [
+                new(ModelId, ModelDisplayName)
+                {
+                    IsRecommended = true,
+                },
+            ];
+        public string? SelectedModelId { get; private set; }
+        public bool SupportsTranslation => false;
+        public bool SupportsModelDownload => true;
+
+        public Task ActivateAsync(IPluginHostServices host)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task DeactivateAsync()
+        {
+            return Task.CompletedTask;
+        }
+
+        public void SelectModel(string modelId)
+        {
+            SelectedModelId = modelId;
+        }
+
+        public bool IsModelDownloaded(string modelId)
+        {
+            return _isDownloaded;
+        }
+
+        public async Task DownloadModelAsync(
+            string modelId,
+            IProgress<double>? progress,
+            CancellationToken ct
+        )
+        {
+            DownloadStarted.TrySetResult(ct);
+            await DownloadImplementation(ct);
+            _isDownloaded = true;
+        }
+
+        public Task LoadModelAsync(string modelId, CancellationToken ct)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task<PluginTranscriptionResult> TranscribeAsync(
+            byte[] wavAudio,
+            string? language,
+            bool translate,
+            string? prompt,
+            CancellationToken ct
+        )
+        {
+            return Task.FromResult(
+                new PluginTranscriptionResult("", DetectedLanguage: null, 0)
+            );
+        }
+
+        public void Dispose() { }
+    }
+
+    private sealed class NoOpTextInsertionPlatform : ITextInsertionPlatform
+    {
+        public bool IsClipboardSetAvailable => false;
+        public bool IsPasteAvailable => false;
+        public bool IsKdePlasma => false;
+        public bool PrefersDirectTypingForUnknownTarget => false;
+        public InsertionFailureReason LastFailureReason => InsertionFailureReason.None;
+        public bool LastTypingDeliveredPartialText => false;
+
+        public Task<string?> TryGetClipboardTextAsync()
+        {
+            return Task.FromResult<string?>(null);
+        }
+
+        public Task<bool> SetClipboardTextAsync(string text)
+        {
+            return Task.FromResult(false);
+        }
+
+        public Task<bool> ClipboardHasNonTextFormatsAsync()
+        {
+            return Task.FromResult(false);
+        }
+
+        public Task DelayAsync(TimeSpan delay)
+        {
+            return Task.CompletedTask;
+        }
+
+        public string? GetActiveWindowId()
+        {
+            return null;
+        }
+
+        public Task<bool> ActivateWindowAsync(string windowId)
+        {
+            return Task.FromResult(false);
+        }
+
+        public Task<bool> SendPasteAsync(bool useTerminalShortcut = false)
+        {
+            return Task.FromResult(false);
+        }
+
+        public Task<bool> TypeTextAsync(string text)
+        {
+            return Task.FromResult(false);
+        }
+
+        public Task<bool> SendCopyAsync(bool useTerminalShortcut)
+        {
+            return Task.FromResult(false);
+        }
+
+        public Task<bool> SendEnterAsync()
+        {
+            return Task.FromResult(false);
+        }
+    }
+}
