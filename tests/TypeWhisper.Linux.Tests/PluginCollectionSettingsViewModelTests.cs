@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
 using Xunit;
@@ -282,6 +283,198 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         await vm.ValidateSettingsCommand.ExecuteAsync(row);
 
         Assert.Equal("Validated OK.", row.Status);
+    }
+
+    [Fact]
+    public async Task PluginStateChanged_SameInstance_PreservesDirtyFlatAndCollectionDrafts_ButRecreatesCleanSibling()
+    {
+        var plugin = new FakeEditablePlugin("com.test.draft-preservation");
+        plugin.Items.Add(CreateItem("A"));
+        plugin.Items.Add(CreateItem("B"));
+        var sibling = new FakeSettingsPlugin("com.test.clean-sibling");
+        var loadedPlugin = TestPluginManagerFactory.CreateLoadedPlugin(
+            _tempDir,
+            plugin.PluginId,
+            plugin
+        );
+        var loadedSibling = TestPluginManagerFactory.CreateLoadedPlugin(
+            _tempDir,
+            sibling.PluginId,
+            sibling
+        );
+        var manager = TestPluginManagerFactory.Create(
+            loadedPlugins: [loadedPlugin, loadedSibling]
+        );
+        var vm = new PluginsSectionViewModel(manager);
+        var row = vm.PluginGroups
+            .SelectMany(group => group.Plugins)
+            .Single(candidate => candidate.Id == plugin.PluginId);
+        var siblingRow = vm.PluginGroups
+            .SelectMany(group => group.Plugins)
+            .Single(candidate => candidate.Id == sibling.PluginId);
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+
+        row.SettingFields.Single().Value = "flat draft";
+        var collection = Assert.Single(row.Collections);
+        collection.AddItemCommand.Execute(null);
+        var added = collection.Items[^1];
+        added.Fields.Single(field => field.Key == "name").Value = "C";
+        collection.MoveUpCommand.Execute(added);
+
+        InvokeRefresh(vm);
+
+        var visibleRows = vm.PluginGroups.SelectMany(group => group.Plugins).ToList();
+        var visibleRow = visibleRows.Single(candidate => candidate.Id == plugin.PluginId);
+        var visibleSibling = visibleRows.Single(candidate => candidate.Id == sibling.PluginId);
+        Assert.Same(row, visibleRow);
+        Assert.Equal("flat draft", visibleRow.SettingFields.Single().Value);
+        Assert.Equal(
+            ["A", "C", "B"],
+            visibleRow
+                .Collections.Single()
+                .Items.Select(item => item.Fields.Single(field => field.Key == "name").Value)
+                .ToArray()
+        );
+        Assert.NotSame(siblingRow, visibleSibling);
+    }
+
+    [Fact]
+    public async Task PluginStateChanged_NewInstanceWithSameId_DropsDraftAndRecreatesRow()
+    {
+        var originalPlugin = new FakeEditablePlugin("com.test.instance-replacement")
+        {
+            SettingValue = "original",
+        };
+        var originalLoaded = TestPluginManagerFactory.CreateLoadedPlugin(
+            _tempDir,
+            originalPlugin.PluginId,
+            originalPlugin
+        );
+        var manager = TestPluginManagerFactory.Create(loadedPlugins: [originalLoaded]);
+        var vm = new PluginsSectionViewModel(manager);
+        var originalRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        await vm.ToggleExpandedCommand.ExecuteAsync(originalRow);
+        originalRow.SettingFields.Single().Value = "draft";
+
+        var replacementPlugin = new FakeEditablePlugin(originalPlugin.PluginId)
+        {
+            SettingValue = "replacement",
+        };
+        var replacementLoaded = TestPluginManagerFactory.CreateLoadedPlugin(
+            _tempDir,
+            replacementPlugin.PluginId,
+            replacementPlugin
+        );
+        ReplaceLoadedPlugins(manager, replacementLoaded);
+
+        InvokeRefresh(vm);
+
+        var replacementRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        Assert.NotSame(originalRow, replacementRow);
+        await WaitForAsync(
+            () => replacementRow.SettingFields.Count == 1,
+            TimeSpan.FromSeconds(2)
+        );
+        Assert.Equal("replacement", replacementRow.SettingFields.Single().Value);
+    }
+
+    [Fact]
+    public async Task SaveSuccess_ResetsBaseline_SoAmbientRefreshRecreatesRowWithSavedValues()
+    {
+        var plugin = new FakeEditablePlugin("com.test.clean-after-save");
+        plugin.Items.Add(CreateItem("Before"));
+        var loaded = TestPluginManagerFactory.CreateLoadedPlugin(
+            _tempDir,
+            plugin.PluginId,
+            plugin
+        );
+        var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded]);
+        var vm = new PluginsSectionViewModel(manager);
+        var row = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+        row.SettingFields.Single().Value = "saved flat";
+        row.Collections
+            .Single()
+            .Items.Single()
+            .Fields.Single(field => field.Key == "name")
+            .Value = "Saved item";
+
+        await vm.SaveSettingsCommand.ExecuteAsync(row);
+
+        Assert.Equal(2, plugin.GetSettingValueCallCount);
+        Assert.Equal("saved flat", row.SettingFields.Single().Value);
+        Assert.Equal(
+            "Saved item",
+            row.Collections
+                .Single()
+                .Items.Single()
+                .Fields.Single(field => field.Key == "name")
+                .Value
+        );
+
+        InvokeRefresh(vm);
+
+        var refreshedRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        Assert.NotSame(row, refreshedRow);
+        await WaitForAsync(
+            () => refreshedRow.SettingFields.Count == 1 && refreshedRow.Collections.Count == 1,
+            TimeSpan.FromSeconds(2)
+        );
+        Assert.Equal("saved flat", refreshedRow.SettingFields.Single().Value);
+        Assert.Equal(
+            "Saved item",
+            refreshedRow
+                .Collections.Single()
+                .Items.Single()
+                .Fields.Single(field => field.Key == "name")
+                .Value
+        );
+    }
+
+    [Fact]
+    public async Task AmbientRefresh_DuringInFlightSave_PostSaveReloadTargetsCurrentVisibleRow()
+    {
+        var plugin = new FakeEditablePlugin("com.test.save-refresh-race")
+        {
+            NormalizeSettingOnSave = true,
+            SetSettingStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            ),
+            ContinueSetSetting = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            ),
+        };
+        var loaded = TestPluginManagerFactory.CreateLoadedPlugin(
+            _tempDir,
+            plugin.PluginId,
+            plugin
+        );
+        var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded]);
+        var vm = new PluginsSectionViewModel(manager);
+        var commandRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        await vm.ToggleExpandedCommand.ExecuteAsync(commandRow);
+
+        var saveTask = vm.SaveSettingsCommand.ExecuteAsync(commandRow);
+        await plugin.SetSettingStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        InvokeRefresh(vm);
+
+        var visibleRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        Assert.NotSame(commandRow, visibleRow);
+        await WaitForAsync(
+            () => visibleRow.SettingFields.Count == 1,
+            TimeSpan.FromSeconds(2)
+        );
+        Assert.Equal("initial", visibleRow.SettingFields.Single().Value);
+
+        plugin.ContinueSetSetting.TrySetResult();
+        await saveTask;
+
+        Assert.Same(
+            visibleRow,
+            vm.PluginGroups.SelectMany(group => group.Plugins).Single()
+        );
+        Assert.Equal("initial-saved", visibleRow.SettingFields.Single().Value);
+        Assert.True(plugin.GetSettingValueCallCount >= 3);
     }
 
     // ---- PluginSettingFieldRow direct unit tests --------------------------
@@ -581,6 +774,22 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         refresh.Invoke(vm, null);
     }
 
+    private static void ReplaceLoadedPlugins(
+        PluginManager manager,
+        params LoadedPlugin[] loadedPlugins
+    )
+    {
+        var field =
+            typeof(PluginManager).GetField(
+                "_allPlugins",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            )
+            ?? throw new MissingFieldException(typeof(PluginManager).FullName, "_allPlugins");
+        var current = Assert.IsType<List<LoadedPlugin>>(field.GetValue(manager));
+        current.Clear();
+        current.AddRange(loadedPlugins);
+    }
+
     private static async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)
     {
         var deadline = Stopwatch.StartNew();
@@ -605,6 +814,18 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             ],
             "name",
             "Add thing"
+        );
+    }
+
+    private static PluginCollectionItem CreateItem(string name)
+    {
+        return new PluginCollectionItem(
+            new Dictionary<string, string?>
+            {
+                ["name"] = name,
+                ["enabled"] = "true",
+                ["__id"] = Guid.NewGuid().ToString("D"),
+            }
         );
     }
 
@@ -701,6 +922,114 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         }
 
         public void Dispose() { }
+    }
+
+    private sealed class FakeEditablePlugin
+        : ITypeWhisperPlugin,
+            IPluginSettingsProvider,
+            IPluginCollectionSettingsProvider
+    {
+        private static readonly PluginSettingDefinition s_settingDefinition = new(
+            "value",
+            "Value",
+            Kind: PluginSettingKind.Text
+        );
+
+        public FakeEditablePlugin(string pluginId)
+        {
+            PluginId = pluginId;
+        }
+
+        public List<PluginCollectionItem> Items { get; } = [];
+        public string SettingValue { get; set; } = "initial";
+        public int GetSettingValueCallCount { get; private set; }
+        public bool NormalizeSettingOnSave { get; init; }
+        public TaskCompletionSource? SetSettingStarted { get; init; }
+        public TaskCompletionSource? ContinueSetSetting { get; init; }
+        public string PluginId { get; }
+        public string PluginName => $"Editable {PluginId}";
+        public string PluginVersion => "1.0.0";
+
+        public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions()
+        {
+            return [s_settingDefinition];
+        }
+
+        public Task<string?> GetSettingValueAsync(
+            string key,
+            CancellationToken ct = default
+        )
+        {
+            GetSettingValueCallCount++;
+            return Task.FromResult<string?>(SettingValue);
+        }
+
+        public async Task SetSettingValueAsync(
+            string key,
+            string? value,
+            CancellationToken ct = default
+        )
+        {
+            SetSettingStarted?.TrySetResult();
+            if (ContinueSetSetting is not null)
+            {
+                await ContinueSetSetting.Task.ConfigureAwait(false);
+            }
+
+            SettingValue = NormalizeSettingOnSave ? $"{value}-saved" : value ?? string.Empty;
+        }
+
+        public Task<PluginSettingsValidationResult?> ValidateAsync(
+            CancellationToken ct = default
+        )
+        {
+            return Task.FromResult<PluginSettingsValidationResult?>(null);
+        }
+
+        public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions()
+        {
+            return [ThingsDefinition()];
+        }
+
+        public Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(
+            string collectionKey,
+            CancellationToken ct = default
+        )
+        {
+            return Task.FromResult<IReadOnlyList<PluginCollectionItem>>(
+                Items.Select(CloneItem).ToList()
+            );
+        }
+
+        public Task<PluginSettingsValidationResult> SetItemsAsync(
+            string collectionKey,
+            IReadOnlyList<PluginCollectionItem> items,
+            CancellationToken ct = default
+        )
+        {
+            Items.Clear();
+            Items.AddRange(items.Select(CloneItem));
+            return Task.FromResult(new PluginSettingsValidationResult(true, "ok"));
+        }
+
+        public Task ActivateAsync(IPluginHostServices host)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task DeactivateAsync()
+        {
+            return Task.CompletedTask;
+        }
+
+        public void Dispose() { }
+
+        private static PluginCollectionItem CloneItem(PluginCollectionItem item)
+        {
+            return new PluginCollectionItem(
+                new Dictionary<string, string?>(item.Values, StringComparer.Ordinal)
+            );
+        }
     }
 
     /// <summary>
