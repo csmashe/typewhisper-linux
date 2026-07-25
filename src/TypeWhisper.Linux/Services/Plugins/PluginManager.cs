@@ -777,28 +777,33 @@ public sealed class PluginManager : IDisposable
             // (e.g. OpenAI-compatible profiles), then de-dup by selection ID so a
             // role and the plugin's own default never collide. GroupBy().First()
             // keeps the first occurrence — the plugin's primary role is enumerated
-            // before its additional roles.
-            _llmProviders = activePlugins
-                .OfType<ILlmProviderPlugin>()
-                .Concat(
+            // before its additional roles. Resolve and validate every effective ID
+            // before grouping so one malformed external role cannot poison the rebuild.
+            _llmProviders = ValidLlmProviders(
                     activePlugins
-                        // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
-                        .OfType<IAdditionalLlmProvidersProvider>()
-                        .SelectMany(SafeAdditionalLlmProviders)
+                        .OfType<ILlmProviderPlugin>()
+                        .Concat(
+                            activePlugins
+                                // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
+                                .OfType<IAdditionalLlmProvidersProvider>()
+                                .SelectMany(SafeAdditionalLlmProviders)
+                        )
                 )
-                .GroupBy(p => p.GetLlmSelectionId(), StringComparer.Ordinal)
-                .Select(group => group.First())
+                .GroupBy(entry => entry.SelectionId, StringComparer.Ordinal)
+                .Select(group => group.First().Provider)
                 .ToList();
-            _transcriptionEngines = activePlugins
-                .OfType<ITranscriptionEnginePlugin>()
-                .Concat(
+            _transcriptionEngines = ValidTranscriptionEngines(
                     activePlugins
-                        // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
-                        .OfType<IAdditionalTranscriptionEnginesProvider>()
-                        .SelectMany(SafeAdditionalTranscriptionEngines)
+                        .OfType<ITranscriptionEnginePlugin>()
+                        .Concat(
+                            activePlugins
+                                // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
+                                .OfType<IAdditionalTranscriptionEnginesProvider>()
+                                .SelectMany(SafeAdditionalTranscriptionEngines)
+                        )
                 )
-                .GroupBy(p => p.GetTranscriptionSelectionId(), StringComparer.Ordinal)
-                .Select(group => group.First())
+                .GroupBy(entry => entry.SelectionId, StringComparer.Ordinal)
+                .Select(group => group.First().Provider)
                 .ToList();
             _postProcessors = activePlugins
                 .OfType<IPostProcessorPlugin>()
@@ -810,6 +815,73 @@ public sealed class PluginManager : IDisposable
 
         // Raise outside _lock to avoid deadlock if a handler calls back into PluginManager.
         PluginStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private IEnumerable<(ILlmProviderPlugin Provider, string SelectionId)> ValidLlmProviders(
+        IEnumerable<ILlmProviderPlugin> providers
+    )
+    {
+        foreach (var provider in providers)
+        {
+            string selectionId;
+            try
+            {
+                selectionId = provider.GetLlmSelectionId();
+            }
+            catch (Exception ex)
+            {
+                LogInvalidSelectionId(
+                    "LLM provider",
+                    provider,
+                    ex,
+                    ErrorCategory.Prompt
+                );
+                continue;
+            }
+
+            yield return (provider, selectionId);
+        }
+    }
+
+    private IEnumerable<(
+        ITranscriptionEnginePlugin Provider,
+        string SelectionId
+    )> ValidTranscriptionEngines(IEnumerable<ITranscriptionEnginePlugin> providers)
+    {
+        foreach (var provider in providers)
+        {
+            string selectionId;
+            try
+            {
+                selectionId = provider.GetTranscriptionSelectionId();
+            }
+            catch (Exception ex)
+            {
+                LogInvalidSelectionId(
+                    "transcription engine",
+                    provider,
+                    ex,
+                    ErrorCategory.Transcription
+                );
+                continue;
+            }
+
+            yield return (provider, selectionId);
+        }
+    }
+
+    private void LogInvalidSelectionId(
+        string providerRole,
+        object provider,
+        Exception exception,
+        string errorCategory
+    )
+    {
+        var message =
+            $"Skipping {providerRole} '{provider.GetType().Name}' because its effective "
+            + $"selection ID is invalid: {exception.Message}";
+        Trace.WriteLine($"[PluginManager] {message}");
+        _errorLog?.AddEntry(message, errorCategory);
     }
 
     // A misbehaving third-party plugin must not be able to abort the whole
