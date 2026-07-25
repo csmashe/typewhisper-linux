@@ -2,6 +2,10 @@
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
+using System.Diagnostics;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -9,7 +13,14 @@ namespace TypeWhisper.Plugin.Gladia;
 
 public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(120) };
+    private const string BaseUrl = "https://api.gladia.io";
+
+    private static readonly TimeSpan s_defaultPollDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan s_defaultPollWindow = TimeSpan.FromMinutes(30);
+
+    private readonly HttpClient _httpClient;
+    private readonly TimeSpan _pollDelay;
+    private readonly TimeSpan _pollWindow;
     private IPluginHostServices? _host;
     private string? _apiKey;
 
@@ -17,6 +28,34 @@ public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     [
         new("default", "Gladia (Auto)"),
     ];
+
+    public GladiaPlugin()
+        : this(CreateHttpClient())
+    {
+    }
+
+    internal GladiaPlugin(
+        HttpClient httpClient,
+        TimeSpan? pollDelay = null,
+        TimeSpan? pollWindow = null
+    )
+    {
+        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        _pollDelay = pollDelay ?? s_defaultPollDelay;
+        _pollWindow = pollWindow ?? s_defaultPollWindow;
+
+        if (_pollDelay < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(
+                nameof(pollDelay),
+                "The poll delay cannot be negative."
+            );
+
+        if (_pollWindow < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(
+                nameof(pollWindow),
+                "The polling window cannot be negative."
+            );
+    }
 
     public string PluginId => "com.typewhisper.gladia";
     public string PluginName => "Gladia";
@@ -68,8 +107,7 @@ public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         _host?.SetSetting("selectedModel", modelId);
     }
 
-    // Batch intentionally throws until Gladia's upload/initiate/poll protocol is implemented.
-    public Task<PluginTranscriptionResult> TranscribeAsync(
+    public async Task<PluginTranscriptionResult> TranscribeAsync(
         byte[] wavAudio,
         string? language,
         bool translate,
@@ -77,16 +115,495 @@ public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         CancellationToken ct
     )
     {
-        throw new NotSupportedException(
-            "Gladia batch transcription is not supported in this build; use live streaming. "
-                + "The batch API requires a multi-stage upload/poll protocol that is not yet implemented."
-        );
+        if (translate)
+            throw new InvalidOperationException("Gladia does not support translation.");
+
+        // Gladia's pre-recorded request has no prompt equivalent.
+        _ = prompt;
+
+        // Snapshot the key so a concurrent settings change cannot alter a multi-request job.
+        var apiKey = _apiKey;
+        if (string.IsNullOrEmpty(apiKey))
+            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+
+        var audioUrl = await UploadAudioAsync(wavAudio, apiKey, ct);
+        var job = await InitiateTranscriptionAsync(audioUrl, language, apiKey, ct);
+        var terminalJson = await PollUntilTerminalAsync(job, apiKey, ct);
+
+        try
+        {
+            using var terminalDocument = ParseProtocolJson(
+                terminalJson,
+                "polling"
+            );
+            var terminal = terminalDocument.RootElement;
+            var status = RequireString(terminal, "status", "polling");
+
+            if (string.Equals(status, "error", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Gladia transcription failed: {ExtractProviderDetails(terminal)}"
+                );
+            }
+
+            return ParseCompletedResult(terminal, NormalizeLanguage(language));
+        }
+        finally
+        {
+            await DeleteJobBestEffortAsync(job.Id, apiKey);
+        }
     }
 
     public void Dispose()
     {
         _httpClient.Dispose();
     }
+
+    private async Task<string> UploadAudioAsync(
+        byte[] wavAudio,
+        string apiKey,
+        CancellationToken ct
+    )
+    {
+        using var multipart = new MultipartFormDataContent();
+        using var audioContent = new ByteArrayContent(wavAudio);
+        audioContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
+        multipart.Add(audioContent, "audio", "audio.wav");
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v2/upload");
+        AddApiKey(request, apiKey);
+        request.Content = multipart;
+
+        var json = await SendJsonAsync(request, "Gladia audio upload", ct);
+        using var document = ParseProtocolJson(json, "audio upload");
+        return RequireString(document.RootElement, "audio_url", "audio upload");
+    }
+
+    private async Task<InitiatedJob> InitiateTranscriptionAsync(
+        string audioUrl,
+        string? language,
+        string apiKey,
+        CancellationToken ct
+    )
+    {
+        var payload = new Dictionary<string, object>
+        {
+            ["audio_url"] = audioUrl,
+        };
+
+        if (NormalizeLanguage(language) is { } normalizedLanguage)
+        {
+            payload["language_config"] = new Dictionary<string, object>
+            {
+                ["languages"] = new[] { normalizedLanguage },
+            };
+        }
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{BaseUrl}/v2/pre-recorded"
+        );
+        AddApiKey(request, apiKey);
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(payload),
+            Encoding.UTF8,
+            "application/json"
+        );
+
+        var json = await SendJsonAsync(request, "Gladia transcription initiation", ct);
+        using var document = ParseProtocolJson(json, "transcription initiation");
+        var id = RequireString(document.RootElement, "id", "transcription initiation");
+        var resultUrl = RequireString(
+            document.RootElement,
+            "result_url",
+            "transcription initiation"
+        );
+
+        // Require HTTPS: polling sends x-gladia-key to this URL; non-HTTPS would leak it in plaintext.
+        if (!Uri.TryCreate(resultUrl, UriKind.Absolute, out var resultUri)
+            || resultUri.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new InvalidOperationException(
+                "Gladia transcription initiation response contained an invalid result_url."
+            );
+        }
+
+        return new InitiatedJob(id, resultUri);
+    }
+
+    private async Task<string> PollUntilTerminalAsync(
+        InitiatedJob job,
+        string apiKey,
+        CancellationToken ct
+    )
+    {
+        if (_pollWindow == TimeSpan.Zero)
+            throw PollTimeout(job.Id);
+
+        using var timeoutCts = new CancellationTokenSource(_pollWindow);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            ct,
+            timeoutCts.Token
+        );
+
+        try
+        {
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                using var request = new HttpRequestMessage(HttpMethod.Get, job.ResultUrl);
+                AddApiKey(request, apiKey);
+
+                var json = await SendJsonAsync(
+                    request,
+                    "Gladia transcription polling",
+                    linkedCts.Token
+                );
+                using var document = ParseProtocolJson(json, "transcription polling");
+                var status = RequireString(
+                    document.RootElement,
+                    "status",
+                    "transcription polling"
+                );
+
+                switch (status.ToLowerInvariant())
+                {
+                    case "done":
+                    case "error":
+                        return json;
+                    case "queued":
+                    case "processing":
+                        break;
+                    default:
+                        throw new InvalidOperationException(
+                            $"Gladia transcription polling response contained unknown status '{status}'."
+                        );
+                }
+
+                if (_pollDelay > TimeSpan.Zero)
+                    await Task.Delay(_pollDelay, linkedCts.Token);
+            }
+        }
+        catch (OperationCanceledException)
+            when (!ct.IsCancellationRequested && timeoutCts.IsCancellationRequested)
+        {
+            throw PollTimeout(job.Id);
+        }
+    }
+
+    private async Task<string> SendJsonAsync(
+        HttpRequestMessage request,
+        string operation,
+        CancellationToken ct
+    )
+    {
+        using var response = await _httpClient.SendAsync(request, ct);
+        var json = await response.Content.ReadAsStringAsync(ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException(
+                $"{operation} error {(int)response.StatusCode}: {ExtractProviderDetails(json)}"
+            );
+        }
+
+        return json;
+    }
+
+    private async Task DeleteJobBestEffortAsync(string jobId, string apiKey)
+    {
+        // Cleanup is best-effort and awaited before returning; bound it short
+        // so a stalled DELETE can't hold up the finished result.
+        using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var request = new HttpRequestMessage(
+            HttpMethod.Delete,
+            $"{BaseUrl}/v2/pre-recorded/{Uri.EscapeDataString(jobId)}"
+        );
+        AddApiKey(request, apiKey);
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, cleanupCts.Token);
+            if (!response.IsSuccessStatusCode)
+            {
+                var responseBody = await response.Content.ReadAsStringAsync(cleanupCts.Token);
+                Trace.TraceWarning(
+                    "Gladia cleanup could not delete pre-recorded job "
+                        + $"{jobId}: {(int)response.StatusCode} {ExtractProviderDetails(responseBody)}"
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceWarning(
+                $"Gladia cleanup could not delete pre-recorded job {jobId}: {ex.Message}"
+            );
+        }
+    }
+
+    private static PluginTranscriptionResult ParseCompletedResult(
+        JsonElement root,
+        string? fallbackLanguage
+    )
+    {
+        if (!root.TryGetProperty("result", out var result)
+            || result.ValueKind != JsonValueKind.Object
+            || !result.TryGetProperty("transcription", out var transcription)
+            || transcription.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException(
+                "Gladia done response did not include result.transcription."
+            );
+        }
+
+        if (!transcription.TryGetProperty("full_transcript", out var transcriptElement)
+            || transcriptElement.ValueKind != JsonValueKind.String
+            || transcriptElement.GetString() is not { } transcript)
+        {
+            throw new InvalidOperationException(
+                "Gladia done response did not include a string result.transcription.full_transcript."
+            );
+        }
+
+        var detectedLanguage = FirstLanguage(transcription);
+        var duration = ReadDuration(root, result);
+        var segments = ReadSegments(transcription, ref duration, ref detectedLanguage);
+        detectedLanguage ??= fallbackLanguage;
+
+        return new PluginTranscriptionResult(
+            transcript.Trim(),
+            detectedLanguage,
+            duration,
+            NoSpeechProbability: null
+        )
+        {
+            Segments = segments,
+        };
+    }
+
+    private static string? FirstLanguage(JsonElement transcription)
+    {
+        if (!transcription.TryGetProperty("languages", out var languages)
+            || languages.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var language in languages.EnumerateArray())
+        {
+            if (language.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(language.GetString()))
+            {
+                return language.GetString();
+            }
+        }
+
+        return null;
+    }
+
+    private static double ReadDuration(JsonElement root, JsonElement result)
+    {
+        if (result.TryGetProperty("metadata", out var metadata)
+            && TryGetDouble(metadata, "audio_duration", out var resultDuration))
+        {
+            return resultDuration;
+        }
+
+        if (root.TryGetProperty("file", out var file)
+            && TryGetDouble(file, "audio_duration", out var fileDuration))
+        {
+            return fileDuration;
+        }
+
+        return 0;
+    }
+
+    private static List<PluginTranscriptionSegment> ReadSegments(
+        JsonElement transcription,
+        ref double duration,
+        ref string? detectedLanguage
+    )
+    {
+        var segments = new List<PluginTranscriptionSegment>();
+        if (!transcription.TryGetProperty("utterances", out var utterances)
+            || utterances.ValueKind != JsonValueKind.Array)
+        {
+            return segments;
+        }
+
+        foreach (var utterance in utterances.EnumerateArray())
+        {
+            if (utterance.ValueKind != JsonValueKind.Object
+                || !TryGetString(utterance, "text", out var text)
+                || !TryGetDouble(utterance, "start", out var start)
+                || !TryGetDouble(utterance, "end", out var end)
+                || end < start)
+            {
+                continue;
+            }
+
+            if (detectedLanguage is null
+                && TryGetString(utterance, "language", out var utteranceLanguage)
+                && !string.IsNullOrWhiteSpace(utteranceLanguage))
+            {
+                detectedLanguage = utteranceLanguage;
+            }
+
+            segments.Add(new PluginTranscriptionSegment(text, start, end));
+            duration = Math.Max(duration, end);
+        }
+
+        return segments;
+    }
+
+    private static JsonDocument ParseProtocolJson(string json, string operation)
+    {
+        try
+        {
+            return JsonDocument.Parse(json);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"Gladia {operation} response contained invalid JSON.",
+                ex
+            );
+        }
+    }
+
+    private static string RequireString(
+        JsonElement root,
+        string propertyName,
+        string operation
+    )
+    {
+        if (root.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(property.GetString()))
+        {
+            return property.GetString()!;
+        }
+
+        throw new InvalidOperationException(
+            $"Gladia {operation} response did not include a string {propertyName}."
+        );
+    }
+
+    private static bool TryGetString(
+        JsonElement root,
+        string propertyName,
+        out string value
+    )
+    {
+        if (root.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.String
+            && property.GetString() is { } stringValue)
+        {
+            value = stringValue;
+            return true;
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    private static bool TryGetDouble(
+        JsonElement root,
+        string propertyName,
+        out double value
+    )
+    {
+        if (root.ValueKind == JsonValueKind.Object
+            && root.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.Number
+            && property.TryGetDouble(out value))
+        {
+            return true;
+        }
+
+        value = 0;
+        return false;
+    }
+
+    private static string ExtractProviderDetails(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return "empty response";
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return ExtractProviderDetails(document.RootElement);
+        }
+        catch (JsonException)
+        {
+            return json.Trim();
+        }
+    }
+
+    private static string ExtractProviderDetails(JsonElement root)
+    {
+        // TryGetProperty throws on non-objects, so render those bodies directly.
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return root.ValueKind == JsonValueKind.String
+                ? root.GetString() ?? string.Empty
+                : root.GetRawText();
+        }
+
+        var details = new List<string>();
+        foreach (var propertyName in new[]
+                 {
+                     "status",
+                     "error_code",
+                     "error",
+                     "error_type",
+                     "error_message",
+                     "message",
+                     "request_id",
+                 })
+        {
+            if (!root.TryGetProperty(propertyName, out var value)
+                || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            {
+                continue;
+            }
+
+            var rendered = value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : value.GetRawText();
+            details.Add($"{propertyName}={rendered}");
+        }
+
+        return details.Count > 0 ? string.Join(", ", details) : root.GetRawText();
+    }
+
+    private static string? NormalizeLanguage(string? language)
+    {
+        var normalized = language?.Trim();
+        return string.IsNullOrEmpty(normalized)
+            || string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase)
+                ? null
+                : normalized;
+    }
+
+    private static void AddApiKey(HttpRequestMessage request, string apiKey) =>
+        request.Headers.Add("x-gladia-key", apiKey);
+
+    private TimeoutException PollTimeout(string jobId) =>
+        new(
+            $"Gladia transcription {jobId} did not complete within "
+                + $"{_pollWindow.TotalSeconds:0.###} seconds."
+        );
+
+    private static HttpClient CreateHttpClient() =>
+        new()
+        {
+            Timeout = TimeSpan.FromSeconds(120),
+        };
+
+    private sealed record InitiatedJob(string Id, Uri ResultUrl);
 
     private IPluginLocalization? _injectedLocalization;
 
