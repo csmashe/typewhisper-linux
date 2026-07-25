@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.IO.Compression;
-using System.Reflection;
 using System.Text.Json;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
@@ -77,6 +76,9 @@ public sealed class PluginRegistryService
         _httpClient = httpClient ?? new HttpClient();
     }
 
+    // Internal deterministic seam for compatibility tests; production uses informational SemVer.
+    internal string HostVersion { get; init; } = AppVersion.Display;
+
     public async Task<IReadOnlyList<RegistryPlugin>> FetchRegistryAsync(
         CancellationToken ct = default
     )
@@ -92,10 +94,9 @@ public sealed class PluginRegistryService
             var allPlugins =
                 JsonSerializer.Deserialize<List<RegistryPlugin>>(json, s_jsonOptions) ?? [];
 
-            var hostVersion = GetHostVersion();
             _cachedRegistry = allPlugins
                 .Where(p => s_supportedPluginIds.Contains(p.Id))
-                .Where(p => IsCompatible(p.MinHostVersion, hostVersion))
+                .Where(IsCompatible)
                 .ToList();
             _cacheTimestamp = DateTime.UtcNow;
 
@@ -329,19 +330,22 @@ public sealed class PluginRegistryService
         }
     }
 
-    private static Version GetHostVersion()
+    private bool IsCompatible(RegistryPlugin plugin)
     {
-        var asm = Assembly.GetEntryAssembly();
-        return asm?.GetName().Version ?? new Version(1, 0);
-    }
-
-    private static bool IsCompatible(string? minHostVersion, Version hostVersion)
-    {
-        if (string.IsNullOrEmpty(minHostVersion))
+        if (
+            AppVersion.IsHostCompatible(
+                plugin.MinHostVersion,
+                HostVersion,
+                out var incompatibilityReason
+            )
+        )
         {
             return true;
         }
 
-        return !Version.TryParse(minHostVersion, out var minVer) || hostVersion >= minVer;
+        Trace.WriteLine(
+            $"[PluginRegistry] Excluding incompatible plugin '{plugin.Id}': {incompatibilityReason}"
+        );
+        return false;
     }
 }

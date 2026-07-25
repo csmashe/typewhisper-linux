@@ -156,6 +156,106 @@ public sealed class PluginRegistryServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task FetchRegistryAsync_HonorsPrereleaseMinimumHostVersions()
+    {
+        var plugins = new[]
+        {
+            new
+            {
+                Id = "com.typewhisper.groq",
+                Name = "Compatible",
+                Version = "1.0.0",
+                MinHostVersion = "0.13.0-rc.2",
+                Author = "A",
+                Description = "D",
+                Size = 100L,
+                DownloadUrl = "u",
+                RequiresApiKey = false,
+            },
+            new
+            {
+                Id = "com.typewhisper.openai",
+                Name = "Newer prerelease",
+                Version = "1.0.0",
+                MinHostVersion = "0.13.0-rc.3",
+                Author = "A",
+                Description = "D",
+                Size = 100L,
+                DownloadUrl = "u",
+                RequiresApiKey = false,
+            },
+            new
+            {
+                Id = "com.typewhisper.openrouter",
+                Name = "Final release",
+                Version = "1.0.0",
+                MinHostVersion = "0.13.0",
+                Author = "A",
+                Description = "D",
+                Size = 100L,
+                DownloadUrl = "u",
+                RequiresApiKey = false,
+            },
+        };
+
+        var httpClient = CreateMockHttpClient(JsonSerializer.Serialize(plugins));
+        var manager = CreateManager();
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            HostVersion = "0.13.0-rc.2",
+        };
+
+        var result = await service.FetchRegistryAsync();
+
+        var compatible = Assert.Single(result);
+        Assert.Equal("com.typewhisper.groq", compatible.Id);
+    }
+
+    [Fact]
+    public async Task FetchRegistryAsync_RejectsMalformedMinimumHostVersion()
+    {
+        var plugins = new[]
+        {
+            new
+            {
+                Id = "com.typewhisper.groq",
+                Name = "Malformed",
+                Version = "1.0.0",
+                MinHostVersion = (string?)"not-semver",
+                Author = "A",
+                Description = "D",
+                Size = 100L,
+                DownloadUrl = "u",
+                RequiresApiKey = false,
+            },
+            new
+            {
+                Id = "com.typewhisper.openai",
+                Name = "No minimum",
+                Version = "1.0.0",
+                MinHostVersion = (string?)null,
+                Author = "A",
+                Description = "D",
+                Size = 100L,
+                DownloadUrl = "u",
+                RequiresApiKey = false,
+            },
+        };
+
+        var httpClient = CreateMockHttpClient(JsonSerializer.Serialize(plugins));
+        var manager = CreateManager();
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            HostVersion = "0.13.0",
+        };
+
+        var result = await service.FetchRegistryAsync();
+
+        var compatible = Assert.Single(result);
+        Assert.Equal("com.typewhisper.openai", compatible.Id);
+    }
+
+    [Fact]
     public async Task FetchRegistryAsync_HttpError_ReturnsEmptyList()
     {
         var httpClient = CreateMockHttpClient("", HttpStatusCode.InternalServerError);

@@ -78,6 +78,8 @@ public sealed class PluginLoader
     }
 
     public IReadOnlyList<PluginLoadFailure> LastLoadFailures => _lastLoadFailures;
+    // Internal deterministic seam for compatibility tests; production uses informational SemVer.
+    internal string HostVersion { get; init; } = AppVersion.Display;
     internal string PluginDataRoot { get; }
 
     public List<LoadedPlugin> DiscoverAndLoad(IEnumerable<string> searchDirectories)
@@ -141,6 +143,21 @@ public sealed class PluginLoader
                 new PluginLoadFailure(pluginDir, "Failed to deserialize manifest.json.")
             );
             Trace.WriteLine($"[PluginLoader] Failed to deserialize manifest in {pluginDir}");
+            return null;
+        }
+
+        if (
+            !AppVersion.IsHostCompatible(
+                manifest.MinHostVersion,
+                HostVersion,
+                out var incompatibilityReason
+            )
+        )
+        {
+            var message =
+                $"Plugin '{manifest.Id}' is incompatible with this host: {incompatibilityReason}";
+            _lastLoadFailures.Add(new PluginLoadFailure(pluginDir, message));
+            Trace.WriteLine($"[PluginLoader] {message}");
             return null;
         }
 

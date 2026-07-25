@@ -8,6 +8,13 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public static class AppVersion
 {
+    internal readonly record struct StrictSemanticVersion(
+        string Major,
+        string Minor,
+        string Patch,
+        IReadOnlyList<string> PreRelease
+    );
+
     /// <summary>
     ///     Display version, e.g. "0.5.0" or "0.5.0-rc.1". Uses AssemblyInformationalVersion
     ///     so pre-release suffixes survive (AssemblyVersion silently drops them); the +hash
@@ -58,6 +65,119 @@ public static class AppVersion
         return ComparePreRelease(preA, preB);
     }
 
+    /// <summary>
+    ///     Parses a strict SemVer 2.0 version: exactly major.minor.patch, with optional
+    ///     pre-release and build metadata. Leading zeroes in numeric core or pre-release
+    ///     identifiers and malformed/empty identifiers are rejected.
+    /// </summary>
+    internal static bool TryParseStrict(string? raw, out StrictSemanticVersion version)
+    {
+        version = default;
+        if (string.IsNullOrEmpty(raw))
+        {
+            return false;
+        }
+
+        var versionPart = raw;
+        var plus = versionPart.IndexOf('+');
+        if (plus >= 0)
+        {
+            if (
+                versionPart.IndexOf('+', plus + 1) >= 0
+                || !AreValidIdentifiers(versionPart[(plus + 1)..], false)
+            )
+            {
+                return false;
+            }
+
+            versionPart = versionPart[..plus];
+        }
+
+        var preRelease = Array.Empty<string>();
+        var dash = versionPart.IndexOf('-');
+        if (dash >= 0)
+        {
+            var rawPreRelease = versionPart[(dash + 1)..];
+            if (!AreValidIdentifiers(rawPreRelease, true))
+            {
+                return false;
+            }
+
+            preRelease = rawPreRelease.Split('.');
+            versionPart = versionPart[..dash];
+        }
+
+        var core = versionPart.Split('.');
+        if (
+            core.Length != 3
+            || !IsValidCoreIdentifier(core[0])
+            || !IsValidCoreIdentifier(core[1])
+            || !IsValidCoreIdentifier(core[2])
+        )
+        {
+            return false;
+        }
+
+        version = new StrictSemanticVersion(core[0], core[1], core[2], preRelease);
+        return true;
+    }
+
+    /// <summary>
+    ///     Strictly parses and compares two SemVer 2.0 versions. Returns false when either
+    ///     input is malformed; otherwise comparison is &lt;0/0/&gt;0 for older/equal/newer.
+    /// </summary>
+    internal static bool TryCompareStrict(string? a, string? b, out int comparison)
+    {
+        comparison = 0;
+        if (!TryParseStrict(a, out var parsedA) || !TryParseStrict(b, out var parsedB))
+        {
+            return false;
+        }
+
+        comparison = CompareStrict(parsedA, parsedB);
+        return true;
+    }
+
+    /// <summary>
+    ///     Applies the plugin minimum-host rule. A blank minimum accepts any host;
+    ///     malformed non-blank minima and hosts fail closed.
+    /// </summary>
+    internal static bool IsHostCompatible(
+        string? minimumHostVersion,
+        string hostVersion,
+        out string reason
+    )
+    {
+        if (string.IsNullOrWhiteSpace(minimumHostVersion))
+        {
+            reason = string.Empty;
+            return true;
+        }
+
+        if (!TryParseStrict(minimumHostVersion, out var minimum))
+        {
+            reason = $"Minimum host version '{minimumHostVersion}' is not valid SemVer.";
+            return false;
+        }
+
+        if (!TryParseStrict(hostVersion, out var host))
+        {
+            reason =
+                $"Host version '{hostVersion}' is not valid SemVer, so compatibility cannot be verified.";
+            return false;
+        }
+
+        if (CompareStrict(host, minimum) >= 0)
+        {
+            reason = string.Empty;
+            return true;
+        }
+
+        reason =
+            $"Requires host version '{minimumHostVersion}' or later; current host version is '{hostVersion}'.";
+        return false;
+    }
+
     private static string Resolve()
     {
         var asm = Assembly.GetExecutingAssembly();
@@ -71,6 +191,114 @@ public static class AppVersion
 
         var plus = info.IndexOf('+');
         return plus >= 0 ? info[..plus] : info;
+    }
+
+    private static int CompareStrict(StrictSemanticVersion a, StrictSemanticVersion b)
+    {
+        var core = CompareNumericIdentifier(a.Major, b.Major);
+        if (core == 0)
+        {
+            core = CompareNumericIdentifier(a.Minor, b.Minor);
+        }
+
+        if (core == 0)
+        {
+            core = CompareNumericIdentifier(a.Patch, b.Patch);
+        }
+
+        if (core != 0)
+        {
+            return core;
+        }
+
+        if (a.PreRelease.Count == 0 && b.PreRelease.Count == 0)
+        {
+            return 0;
+        }
+
+        if (a.PreRelease.Count == 0)
+        {
+            return 1;
+        }
+
+        if (b.PreRelease.Count == 0)
+        {
+            return -1;
+        }
+
+        var shared = Math.Min(a.PreRelease.Count, b.PreRelease.Count);
+        for (var i = 0; i < shared; i++)
+        {
+            var aIdentifier = a.PreRelease[i];
+            var bIdentifier = b.PreRelease[i];
+            var aNumeric = IsAsciiDigits(aIdentifier);
+            var bNumeric = IsAsciiDigits(bIdentifier);
+
+            var identifier = (aNumeric, bNumeric) switch
+            {
+                (true, true) => CompareNumericIdentifier(aIdentifier, bIdentifier),
+                (true, _) => -1,
+                (_, true) => 1,
+                _ => string.CompareOrdinal(aIdentifier, bIdentifier),
+            };
+            if (identifier != 0)
+            {
+                return identifier;
+            }
+        }
+
+        return a.PreRelease.Count.CompareTo(b.PreRelease.Count);
+    }
+
+    private static int CompareNumericIdentifier(string a, string b)
+    {
+        var length = a.Length.CompareTo(b.Length);
+        return length != 0 ? length : string.CompareOrdinal(a, b);
+    }
+
+    private static bool IsValidCoreIdentifier(string value)
+    {
+        return IsAsciiDigits(value) && (value.Length == 1 || value[0] != '0');
+    }
+
+    private static bool AreValidIdentifiers(string value, bool rejectNumericLeadingZeroes)
+    {
+        if (value.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var identifier in value.Split('.'))
+        {
+            if (
+                identifier.Length == 0
+                || !identifier.All(IsSemVerIdentifierCharacter)
+                || (
+                    rejectNumericLeadingZeroes
+                    && identifier.Length > 1
+                    && identifier[0] == '0'
+                    && IsAsciiDigits(identifier)
+                )
+            )
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsAsciiDigits(string value)
+    {
+        return value.Length > 0 && value.All(c => c is >= '0' and <= '9');
+    }
+
+    private static bool IsSemVerIdentifierCharacter(char value)
+    {
+        return value is >= '0' and <= '9'
+            or >= 'A' and <= 'Z'
+            or >= 'a' and <= 'z'
+            or '-';
     }
 
     /// <summary>
