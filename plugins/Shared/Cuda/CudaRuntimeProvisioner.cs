@@ -53,6 +53,9 @@ public class CudaRuntimeProvisioner
 
     private const int RtldNow = 0x002;
     private const int RtldGlobal = 0x100;
+    private static readonly TimeSpan s_defaultMaintenanceLockTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan s_provisioningLockAttempt = TimeSpan.FromMilliseconds(25);
+    private static readonly TimeSpan s_provisioningLockRetry = TimeSpan.FromMilliseconds(100);
 
     // Each wheel maps a PyPI package@version to the sonames it must contribute.
     // RequiredSonames are the libraries we both (a) check to decide whether the host
@@ -144,16 +147,39 @@ public class CudaRuntimeProvisioner
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Lock _preloadSync = new();
     private readonly HashSet<string> _preloaded = new(StringComparer.Ordinal);
+    private readonly string _cacheRoot;
+    private readonly string _maintenanceLockPath;
+    private readonly string _wheelLockDirectory;
 
     public CudaRuntimeProvisioner(string cacheRoot, HttpClient httpClient, Action<string>? log = null)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _log = log;
         CacheDirectory = Path.Join(cacheRoot, BundleVersion);
+
+        var cacheRootDirectory = Directory.GetParent(CacheDirectory)
+            ?? throw new ArgumentException("The CUDA cache root must have a parent directory.", nameof(cacheRoot));
+        var cacheParent = cacheRootDirectory.Parent
+            ?? throw new ArgumentException("The CUDA cache root must not be a filesystem root.", nameof(cacheRoot));
+        _cacheRoot = cacheRootDirectory.FullName;
+        _maintenanceLockPath = Path.Join(
+            cacheParent.FullName,
+            cacheRootDirectory.Name + ".maintenance.lock"
+        );
+        _wheelLockDirectory = Path.Join(
+            cacheParent.FullName,
+            cacheRootDirectory.Name + ".locks"
+        );
     }
 
     /// <summary>Directory holding the downloaded CUDA <c>.so</c> files for this bundle version.</summary>
     public string CacheDirectory { get; }
+
+    // Test seams: pin the lock paths and timeout so tests avoid a real per-user cache.
+    internal string MaintenanceLockPathForTests => _maintenanceLockPath;
+    internal string WheelLockDirectoryForTests => _wheelLockDirectory;
+    internal TimeSpan MaintenanceLockTimeoutForTests { get; init; } =
+        s_defaultMaintenanceLockTimeout;
 
     /// <summary>
     ///     The shared cache root both local engines use, so the CUDA math libraries
@@ -240,8 +266,7 @@ public class CudaRuntimeProvisioner
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            Directory.CreateDirectory(CacheDirectory);
-            PruneStaleBundles();
+            EnsureExternalLockDirectory();
 
             // A wheel is fetched unless EVERY library it provides is already
             // resolvable (on-system or in our cache). Checking only the primary
@@ -250,7 +275,16 @@ public class CudaRuntimeProvisioner
             // as complete and then fail at native session creation. cuBLAS in
             // particular is a ~580 MB wheel we still skip when the host toolkit
             // already ships its full set.
-            var missing = wheels.Where(w => !IsWheelSatisfied(w)).ToList();
+            List<CudaWheel> missing;
+            await using (
+                await InterProcessFileLock
+                    .AcquireAsync(_maintenanceLockPath, ct)
+                    .ConfigureAwait(false)
+            )
+            {
+                Directory.CreateDirectory(CacheDirectory);
+                missing = wheels.Where(w => !IsWheelSatisfied(w)).ToList();
+            }
 
             if (missing.Count > 0)
             {
@@ -265,6 +299,10 @@ public class CudaRuntimeProvisioner
                 _log?.Invoke("CUDA runtime: all required libraries already present.");
                 progress?.Report(1.0);
             }
+
+            // Pruning is best-effort; run it after provisioning so two provisioners
+            // with disjoint wheel sets can still download/extract in parallel.
+            await PruneStaleBundlesAsync(ct).ConfigureAwait(false);
         }
         finally
         {
@@ -289,30 +327,169 @@ public class CudaRuntimeProvisioner
             jobs.Add((wheel, url, size, sha256));
         }
 
-        var totalBytes = jobs.Sum(j => j.Size);
-        long completedBytes = 0;
-
-        foreach (var (wheel, url, size, sha256) in jobs)
+        // Lock coupling: root -> every wheel needed by this batch, in stable path
+        // order. The root lock is then released while the wheel locks remain held
+        // through the full batch. Clear/prune take root -> every wheel, so they wait
+        // for an active batch and prevent a new one from starting. Provisioners with
+        // disjoint wheel sets retain their existing safe parallelism.
+        await using (await AcquireProvisioningWheelLocksAsync(missing, ct).ConfigureAwait(false))
         {
-            var baseline = completedBytes;
-            var downloaded = await DownloadAndExtractWheelAsync(
-                wheel,
-                url,
-                sha256,
-                read =>
-                {
-                    if (totalBytes > 0)
-                        progress?.Report(Math.Min(1.0, (double)(baseline + read) / totalBytes));
-                },
-                ct
-            ).ConfigureAwait(false);
-            // Advance by the metadata size when known, else by what we actually read,
-            // so a wheel whose PyPI size was missing still moves the cumulative counter
-            // instead of stalling it at the previous baseline.
-            completedBytes += size > 0 ? size : downloaded;
+            // Clear may have run while PyPI metadata was resolving. Recreate the cache
+            // only after this batch owns its external wheel locks, so maintenance can
+            // no longer delete it until all of the batch's writes finish.
+            Directory.CreateDirectory(CacheDirectory);
+
+            var totalBytes = jobs.Sum(j => j.Size);
+            long completedBytes = 0;
+
+            foreach (var (wheel, url, size, sha256) in jobs)
+            {
+                var baseline = completedBytes;
+                var downloaded = await DownloadAndExtractWheelAsync(
+                    wheel,
+                    url,
+                    sha256,
+                    read =>
+                    {
+                        if (totalBytes > 0)
+                            progress?.Report(Math.Min(1.0, (double)(baseline + read) / totalBytes));
+                    },
+                    ct
+                ).ConfigureAwait(false);
+                // Advance by the metadata size when known, else by what we actually read,
+                // so a wheel whose PyPI size was missing still moves the cumulative counter
+                // instead of stalling it at the previous baseline.
+                completedBytes += size > 0 ? size : downloaded;
+            }
         }
 
         progress?.Report(1.0);
+    }
+
+    private async Task<ExternalLockLease> AcquireProvisioningWheelLocksAsync(
+        IReadOnlyList<CudaWheel> wheels,
+        CancellationToken ct
+    )
+    {
+        EnsureExternalLockDirectory();
+        var lockPaths = wheels
+            .Select(WheelLockPath)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            FileStream? rootLock = null;
+            var wheelLocks = new List<FileStream>(lockPaths.Length);
+            try
+            {
+                rootLock = await InterProcessFileLock
+                    .AcquireAsync(_maintenanceLockPath, ct)
+                    .ConfigureAwait(false);
+
+                foreach (var lockPath in lockPaths)
+                {
+                    // Do not sit on the root lock behind a busy wheel: a short
+                    // acquire attempt followed by a full retry lets a provisioner
+                    // for a disjoint wheel (or maintenance) take the root meanwhile.
+                    using var attemptCts =
+                        CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    attemptCts.CancelAfter(s_provisioningLockAttempt);
+                    wheelLocks.Add(
+                        await InterProcessFileLock
+                            .AcquireAsync(lockPath, attemptCts.Token)
+                            .ConfigureAwait(false)
+                    );
+                }
+
+                return new ExternalLockLease(wheelLocks);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                await DisposeLocksAsync(wheelLocks).ConfigureAwait(false);
+            }
+            catch
+            {
+                await DisposeLocksAsync(wheelLocks).ConfigureAwait(false);
+                throw;
+            }
+            finally
+            {
+                if (rootLock is not null)
+                    await rootLock.DisposeAsync().ConfigureAwait(false);
+            }
+
+            await Task.Delay(s_provisioningLockRetry, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<ExternalLockLease> AcquireMaintenanceLocksAsync(
+        string operation,
+        CancellationToken ct
+    )
+    {
+        EnsureExternalLockDirectory();
+        using var timeoutCts = new CancellationTokenSource(MaintenanceLockTimeoutForTests);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            ct,
+            timeoutCts.Token
+        );
+        var acquired = new List<FileStream>();
+
+        try
+        {
+            acquired.Add(
+                await InterProcessFileLock
+                    .AcquireAsync(_maintenanceLockPath, linkedCts.Token)
+                    .ConfigureAwait(false)
+            );
+
+            // Root is held before this enumeration, so no provisioner can add a new
+            // wheel sentinel after the snapshot. Include the known wheel set plus
+            // existing sentinels, for forward compatibility with bundle/package changes.
+            var wheelLockPaths = s_onnxRuntimeWheels
+                .Select(WheelLockPath)
+                .Concat(Directory.EnumerateFiles(_wheelLockDirectory, "*.lock"))
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal);
+            foreach (var lockPath in wheelLockPaths)
+            {
+                acquired.Add(
+                    await InterProcessFileLock
+                        .AcquireAsync(lockPath, linkedCts.Token)
+                        .ConfigureAwait(false)
+                );
+            }
+
+            return new ExternalLockLease(acquired);
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            await DisposeLocksAsync(acquired).ConfigureAwait(false);
+            throw new TimeoutException(
+                $"Timed out waiting for another CUDA cache operation before {operation}.",
+                ex
+            );
+        }
+        catch
+        {
+            await DisposeLocksAsync(acquired).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private string WheelLockPath(CudaWheel wheel) =>
+        Path.Join(_wheelLockDirectory, wheel.Package + ".lock");
+
+    private void EnsureExternalLockDirectory() =>
+        Directory.CreateDirectory(_wheelLockDirectory);
+
+    private static async ValueTask DisposeLocksAsync(List<FileStream> locks)
+    {
+        for (var i = locks.Count - 1; i >= 0; i--)
+            await locks[i].DisposeAsync().ConfigureAwait(false);
     }
 
     private async Task<(string Url, long Size, string Sha256)> ResolveWheelAsync(
@@ -387,13 +564,9 @@ public class CudaRuntimeProvisioner
     )
     {
         // Per-package staging name so two wheels never share a .partial and a dropped
-        // download resumes via Range. The shared cache means two provisioners (or two app
-        // processes) can pick the same path, which the per-instance _gate doesn't cover —
-        // so guard it with a cross-process lock (see InterProcessFileLock).
+        // download resumes via Range. AcquireProvisioningWheelLocksAsync already holds
+        // this package's stable EXTERNAL sentinel for the full provisioning batch.
         var wheelPath = Path.Join(CacheDirectory, $"{wheel.Package}.whl");
-
-        await using var stagingLock =
-            await InterProcessFileLock.AcquireAsync(wheelPath + ".lock", ct).ConfigureAwait(false);
 
         // A sibling that held the lock first may have just completed this wheel — re-check
         // so we don't redundantly re-fetch a hundreds-of-MB wheel.
@@ -687,33 +860,44 @@ public class CudaRuntimeProvisioner
     ///     Deletes the entire shared CUDA cache root (the parent of
     ///     <see cref="CacheDirectory" /> — every bundle version, not just the current
     ///     one) so the next <see cref="EnsureReadyAsync" /> re-downloads from scratch.
-    ///     Guarded by the same gate as provisioning so it can't race an in-flight
-    ///     download — and awaits the gate with <paramref name="ct" /> so a cancel isn't
-    ///     stuck behind that download. A missing cache is a no-op (already clear); a
-    ///     delete failure is logged and rethrown so the caller can surface it rather than
-    ///     report a corrupt runtime as repaired. Note: libraries already dlopen'd this
-    ///     process are held until exit, so a restart is required for a fresh re-provision
-    ///     to take effect.
+    ///     The per-instance gate is layered with a bounded, cross-process maintenance
+    ///     lock outside the deleted tree. Maintenance owns root -> every external wheel
+    ///     sentinel through the full delete window, so it cannot unlink a live sentinel
+    ///     or race another provisioner. A missing cache is a no-op (already clear); a
+    ///     timeout or delete failure is logged and rethrown so the caller can surface it
+    ///     rather than report a corrupt runtime as repaired. Note: libraries already
+    ///     dlopen'd this process are held until exit, so a restart is required for a fresh
+    ///     re-provision to take effect.
     /// </summary>
     public async Task ClearCacheAsync(CancellationToken ct)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var root = Directory.GetParent(CacheDirectory)?.FullName;
-            if (root is null || !Directory.Exists(root))
-                return;
-
             try
             {
-                Directory.Delete(root, recursive: true);
-                _log?.Invoke($"CUDA runtime: cleared cache at {root}.");
+                await using (
+                    await AcquireMaintenanceLocksAsync(
+                            "clearing the CUDA runtime cache",
+                            ct
+                        )
+                        .ConfigureAwait(false)
+                )
+                {
+                    if (!Directory.Exists(_cacheRoot))
+                        return;
+
+                    Directory.Delete(_cacheRoot, recursive: true);
+                    _log?.Invoke($"CUDA runtime: cleared cache at {_cacheRoot}.");
+                }
             }
             catch (Exception ex)
             {
                 // Don't swallow: the caller reports "cleared" to the user only when the
                 // cache is actually gone, so a corrupt runtime can't masquerade as repaired.
-                _log?.Invoke($"CUDA runtime: failed to clear cache at {root}: {ex.Message}");
+                _log?.Invoke(
+                    $"CUDA runtime: failed to clear cache at {_cacheRoot}: {ex.Message}"
+                );
                 throw;
             }
         }
@@ -727,24 +911,48 @@ public class CudaRuntimeProvisioner
     // don't accumulate (cuDNN alone is ~1.7 GB unpacked).
     // internal so a unit test can assert a different-version sibling dir is deleted while
     // the current version's dir is kept.
-    internal void PruneStaleBundles()
+    internal void PruneStaleBundles() =>
+        PruneStaleBundlesAsync(CancellationToken.None).GetAwaiter().GetResult();
+
+    private async Task PruneStaleBundlesAsync(CancellationToken ct)
     {
         try
         {
-            var parent = Directory.GetParent(CacheDirectory);
-            if (parent is null || !parent.Exists)
-                return;
-
-            foreach (var dir in parent.EnumerateDirectories()
-                .Where(dir => !string.Equals(dir.Name, BundleVersion, StringComparison.Ordinal)))
+            await using (
+                await AcquireMaintenanceLocksAsync(
+                        "pruning stale CUDA runtime bundles",
+                        ct
+                    )
+                    .ConfigureAwait(false)
+            )
             {
-                try { dir.Delete(recursive: true); }
-                catch { /* best effort cleanup */ }
+                var parent = new DirectoryInfo(_cacheRoot);
+                if (!parent.Exists)
+                    return;
+
+                foreach (var dir in parent.EnumerateDirectories()
+                    .Where(dir =>
+                        !string.Equals(dir.Name, BundleVersion, StringComparison.Ordinal)))
+                {
+                    try { dir.Delete(recursive: true); }
+                    catch { /* best effort cleanup */ }
+                }
             }
         }
-        catch
+        catch (TimeoutException ex)
         {
-            // Cleanup is best-effort; never block provisioning on it.
+            // Cleanup is best-effort; provisioning continues with an explicit reason.
+            _log?.Invoke($"CUDA runtime: skipped stale-bundle pruning: {ex.Message}");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log?.Invoke(
+                $"CUDA runtime: skipped stale-bundle pruning because locking failed: {ex.Message}"
+            );
         }
     }
 
@@ -810,6 +1018,11 @@ public class CudaRuntimeProvisioner
     [DllImport("libdl.so.2")]
     private static extern IntPtr dlerror();
 #pragma warning restore SYSLIB1054, CA2101
+
+    private sealed class ExternalLockLease(List<FileStream> locks) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => DisposeLocksAsync(locks);
+    }
 
     private sealed record CudaWheel(
         string Package,
