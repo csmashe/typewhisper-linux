@@ -673,6 +673,10 @@ public sealed class PluginManager : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Raised when the active plugins or their capabilities change. This event may be raised
+    ///     on any thread; UI subscribers are responsible for marshalling to the UI thread.
+    /// </summary>
     public event EventHandler? PluginStateChanged;
 
     private async Task<bool> ActivatePluginAsync(LoadedPlugin plugin)
@@ -686,11 +690,7 @@ public sealed class PluginManager : IDisposable
                 EventBus,
                 _profiles,
                 _settings,
-                () =>
-                {
-                    RebuildCapabilityIndices();
-                    PluginStateChanged?.Invoke(this, EventArgs.Empty);
-                },
+                RebuildCapabilityIndices,
                 _errorLog,
                 ResolveErrorCategory(plugin),
                 plugin.Manifest.Name,

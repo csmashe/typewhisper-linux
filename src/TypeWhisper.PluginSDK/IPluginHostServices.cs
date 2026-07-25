@@ -78,7 +78,9 @@ public interface IPluginHostServices
 
     /// <summary>
     ///     Notifies the host that the plugin's capabilities have changed (e.g. new models available).
-    ///     The host will rebuild its capability indices and update the UI accordingly.
+    ///     The host will rebuild its capability indices and update the UI accordingly. This method
+    ///     may notify host subscribers synchronously on the calling thread; subscribers are
+    ///     responsible for marshalling UI work to the UI thread.
     /// </summary>
     // ReSharper disable once UnusedMemberInSuper.Global
     void NotifyCapabilitiesChanged();
