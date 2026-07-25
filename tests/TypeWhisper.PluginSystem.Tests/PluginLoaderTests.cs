@@ -1,5 +1,6 @@
 using System.Text.Json;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 using TypeWhisper.Tests;
 
@@ -130,4 +131,151 @@ public sealed class PluginLoaderTests : IDisposable
         var result = _loader.DiscoverAndLoad([_tempDir]);
         Assert.Empty(result);
     }
+
+    [Fact]
+    public void DiscoverAndLoad_MinimumAboveHost_RecordsFailureWithoutConstruction()
+    {
+        var loader = CreateLoader("0.13.0-rc.2");
+        var pluginDir = StageConstructorTrackingPlugin("0.13.0");
+
+        var result = loader.DiscoverAndLoad([_tempDir]);
+
+        Assert.Empty(result);
+        var failure = Assert.Single(loader.LastLoadFailures);
+        Assert.Equal(pluginDir, failure.PluginDirectory);
+        Assert.Contains("Requires host version", failure.Message);
+        Assert.False(File.Exists(Path.Join(pluginDir, ConstructorMarkerFileName)));
+    }
+
+    [Theory]
+    [InlineData("0.13.0-rc.2")]
+    [InlineData("0.13.0-rc.1")]
+    public void DiscoverAndLoad_MinimumAtOrBelowHost_Loads(string minimumHostVersion)
+    {
+        var loader = CreateLoader("0.13.0-rc.2");
+        var pluginDir = StageConstructorTrackingPlugin(minimumHostVersion);
+
+        var result = loader.DiscoverAndLoad([_tempDir]);
+
+        var loaded = Assert.Single(result);
+        try
+        {
+            Assert.Equal("com.test.compatibility", loaded.Manifest.Id);
+            Assert.True(File.Exists(Path.Join(pluginDir, ConstructorMarkerFileName)));
+            Assert.Empty(loader.LastLoadFailures);
+        }
+        finally
+        {
+            loaded.Instance.Dispose();
+            loaded.LoadContext.Unload();
+        }
+    }
+
+    [Fact]
+    public void DiscoverAndLoad_MalformedMinimum_RecordsFailureWithoutConstruction()
+    {
+        var loader = CreateLoader("0.13.0");
+        var pluginDir = StageConstructorTrackingPlugin("0.13");
+
+        var result = loader.DiscoverAndLoad([_tempDir]);
+
+        Assert.Empty(result);
+        var failure = Assert.Single(loader.LastLoadFailures);
+        Assert.Equal(pluginDir, failure.PluginDirectory);
+        Assert.Contains("not valid SemVer", failure.Message);
+        Assert.False(File.Exists(Path.Join(pluginDir, ConstructorMarkerFileName)));
+    }
+
+    [Fact]
+    public void DiscoverAndLoad_AbsentMinimum_Loads()
+    {
+        var loader = CreateLoader("0.13.0-rc.2");
+        var pluginDir = StageConstructorTrackingPlugin(null, includeMinimum: false);
+
+        var result = loader.DiscoverAndLoad([_tempDir]);
+
+        var loaded = Assert.Single(result);
+        try
+        {
+            Assert.True(File.Exists(Path.Join(pluginDir, ConstructorMarkerFileName)));
+            Assert.Empty(loader.LastLoadFailures);
+        }
+        finally
+        {
+            loaded.Instance.Dispose();
+            loaded.LoadContext.Unload();
+        }
+    }
+
+    private PluginLoader CreateLoader(string hostVersion)
+    {
+        return new PluginLoader(Path.Join(_tempDir, "PluginData"))
+        {
+            HostVersion = hostVersion,
+        };
+    }
+
+    private string StageConstructorTrackingPlugin(
+        string? minimumHostVersion,
+        bool includeMinimum = true
+    )
+    {
+        var pluginDir = Path.Join(_tempDir, "com.test.compatibility");
+        Directory.CreateDirectory(pluginDir);
+
+        var sourceAssembly = typeof(PluginLoaderTests).Assembly.Location;
+        var assemblyName = Path.GetFileName(sourceAssembly);
+        File.Copy(sourceAssembly, Path.Join(pluginDir, assemblyName), true);
+
+        var manifest = new Dictionary<string, object?>
+        {
+            ["id"] = "com.test.compatibility",
+            ["name"] = "Compatibility Test Plugin",
+            ["version"] = "1.0.0",
+            ["assemblyName"] = assemblyName,
+            ["pluginClass"] = typeof(ConstructorTrackingPlugin).FullName,
+        };
+        if (includeMinimum)
+        {
+            manifest["minHostVersion"] = minimumHostVersion;
+        }
+
+        File.WriteAllText(
+            Path.Join(pluginDir, "manifest.json"),
+            JsonSerializer.Serialize(manifest)
+        );
+        return pluginDir;
+    }
+
+    private sealed class ConstructorTrackingPlugin : ITypeWhisperPlugin
+    {
+        public ConstructorTrackingPlugin()
+        {
+            var assemblyDirectory = Path.GetDirectoryName(
+                typeof(ConstructorTrackingPlugin).Assembly.Location
+            )!;
+            File.WriteAllText(
+                Path.Join(assemblyDirectory, ConstructorMarkerFileName),
+                "constructed"
+            );
+        }
+
+        public string PluginId => "com.test.compatibility";
+        public string PluginName => "Compatibility Test Plugin";
+        public string PluginVersion => "1.0.0";
+
+        public Task ActivateAsync(IPluginHostServices host)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task DeactivateAsync()
+        {
+            return Task.CompletedTask;
+        }
+
+        public void Dispose() { }
+    }
+
+    private const string ConstructorMarkerFileName = "constructor.marker";
 }
