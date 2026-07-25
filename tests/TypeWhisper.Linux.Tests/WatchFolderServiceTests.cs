@@ -327,6 +327,230 @@ public sealed class WatchFolderServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessFile_WhenReadinessRecoversWithinRetryBound_ProcessesWithoutFailedFingerprint()
+    {
+        var watchPath = Path.Join(_tempDir, "readiness-recovers-watch");
+        var outputPath = Path.Join(_tempDir, "readiness-recovers-output");
+        var dataPath = Path.Join(_tempDir, "readiness-recovers-data");
+        Directory.CreateDirectory(watchPath);
+        Directory.CreateDirectory(outputPath);
+        File.WriteAllBytes(Path.Join(watchPath, "waiting.wav"), [1, 2, 3]);
+        var processed = new TaskCompletionSource<WatchFolderHistoryItem>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var delays = new ConcurrentQueue<TimeSpan>();
+        var attempts = 0;
+        var service = new WatchFolderService(
+            dataPath,
+            readinessRetryDelay: (delay, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                delays.Enqueue(delay);
+                return Task.CompletedTask;
+            }
+        );
+        WatchFolderService.WatchFolderRun? run = null;
+        service.FileProcessed += (_, item) => processed.TrySetResult(item);
+
+        try
+        {
+            service.Start(
+                CreateOptions(watchPath, outputPath),
+                (request, ct) =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var attempt = Interlocked.Increment(ref attempts);
+                    return attempt < WatchFolderService.ReadinessRetryAttemptLimit
+                        ? Task.FromException<WatchFolderTranscriptionResult>(
+                            new WatchFolderNotReadyException(
+                                $"Capabilities unavailable on attempt {attempt}."
+                            )
+                        )
+                        : Task.FromResult(CreateResult(request));
+                }
+            );
+            run = service.CurrentRun;
+            Assert.NotNull(run);
+
+            var item = await processed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.True(item.Success, item.ErrorMessage);
+            Assert.Equal(WatchFolderService.ReadinessRetryAttemptLimit, attempts);
+            Assert.Equal(
+                [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4)],
+                delays
+            );
+            Assert.Empty(run.FailedFingerprints);
+            Assert.Same(item, Assert.Single(service.History));
+            Assert.True(File.Exists(Path.Join(outputPath, "waiting.txt")));
+        }
+        finally
+        {
+            if (service.CurrentRun is not null)
+            {
+                await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            if (run is not null)
+            {
+                await run.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            await service.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ProcessFile_WhenReadinessRetriesAreExhausted_RecordsSingleFailure()
+    {
+        var watchPath = Path.Join(_tempDir, "readiness-exhausted-watch");
+        var outputPath = Path.Join(_tempDir, "readiness-exhausted-output");
+        var dataPath = Path.Join(_tempDir, "readiness-exhausted-data");
+        Directory.CreateDirectory(watchPath);
+        Directory.CreateDirectory(outputPath);
+        File.WriteAllBytes(Path.Join(watchPath, "waiting.wav"), [1, 2, 3]);
+        var completion = new TaskCompletionSource<WatchFolderHistoryItem>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var processed = new ConcurrentQueue<WatchFolderHistoryItem>();
+        var delays = new ConcurrentQueue<TimeSpan>();
+        var attempts = 0;
+        var service = new WatchFolderService(
+            dataPath,
+            readinessRetryDelay: (delay, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                delays.Enqueue(delay);
+                return Task.CompletedTask;
+            }
+        );
+        WatchFolderService.WatchFolderRun? run = null;
+        service.FileProcessed += (_, item) =>
+        {
+            processed.Enqueue(item);
+            completion.TrySetResult(item);
+        };
+
+        try
+        {
+            service.Start(
+                CreateOptions(watchPath, outputPath),
+                (_, ct) =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    Interlocked.Increment(ref attempts);
+                    return Task.FromException<WatchFolderTranscriptionResult>(
+                        new WatchFolderNotReadyException("Capabilities are still unavailable.")
+                    );
+                }
+            );
+            run = service.CurrentRun;
+            Assert.NotNull(run);
+
+            var item = await completion.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.False(item.Success);
+            Assert.Equal("Capabilities are still unavailable.", item.ErrorMessage);
+            Assert.Equal(WatchFolderService.ReadinessRetryAttemptLimit, attempts);
+            Assert.Equal(
+                [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4)],
+                delays
+            );
+            Assert.Single(run.FailedFingerprints);
+            Assert.Same(item, Assert.Single(service.History));
+            Assert.Same(item, Assert.Single(processed));
+            Assert.False(File.Exists(Path.Join(outputPath, "waiting.txt")));
+        }
+        finally
+        {
+            if (service.CurrentRun is not null)
+            {
+                await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            if (run is not null)
+            {
+                await run.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            await service.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ProcessFile_WhenFailureIsNotReadiness_DoesNotRetry()
+    {
+        var watchPath = Path.Join(_tempDir, "ordinary-failure-watch");
+        var outputPath = Path.Join(_tempDir, "ordinary-failure-output");
+        var dataPath = Path.Join(_tempDir, "ordinary-failure-data");
+        Directory.CreateDirectory(watchPath);
+        Directory.CreateDirectory(outputPath);
+        File.WriteAllBytes(Path.Join(watchPath, "broken.wav"), [1, 2, 3]);
+        var completion = new TaskCompletionSource<WatchFolderHistoryItem>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var processed = new ConcurrentQueue<WatchFolderHistoryItem>();
+        var delays = new ConcurrentQueue<TimeSpan>();
+        var attempts = 0;
+        var service = new WatchFolderService(
+            dataPath,
+            readinessRetryDelay: (delay, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                delays.Enqueue(delay);
+                return Task.CompletedTask;
+            }
+        );
+        WatchFolderService.WatchFolderRun? run = null;
+        service.FileProcessed += (_, item) =>
+        {
+            processed.Enqueue(item);
+            completion.TrySetResult(item);
+        };
+
+        try
+        {
+            service.Start(
+                CreateOptions(watchPath, outputPath),
+                (_, ct) =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    Interlocked.Increment(ref attempts);
+                    return Task.FromException<WatchFolderTranscriptionResult>(
+                        new InvalidOperationException("Ordinary transcription failure.")
+                    );
+                }
+            );
+            run = service.CurrentRun;
+            Assert.NotNull(run);
+
+            var item = await completion.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.False(item.Success);
+            Assert.Equal("Ordinary transcription failure.", item.ErrorMessage);
+            Assert.Equal(1, attempts);
+            Assert.Empty(delays);
+            Assert.Single(run.FailedFingerprints);
+            Assert.Same(item, Assert.Single(service.History));
+            Assert.Same(item, Assert.Single(processed));
+        }
+        finally
+        {
+            if (service.CurrentRun is not null)
+            {
+                await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            if (run is not null)
+            {
+                await run.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            await service.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task Restart_AfterTruncatedPrimaryWrite_RecoversBackupAndPublishesCompleteStore()
     {
         var watchPath = Path.Join(_tempDir, "torn-write-watch");

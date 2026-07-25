@@ -808,6 +808,18 @@ public class App : Application
                 },
                 Required: false
             ),
+            new(
+                BootstrapStageNames.WatchFolderAutoStart,
+                [BootstrapStageNames.PluginInitialization],
+                () =>
+                {
+                    services
+                        .GetRequiredService<FileTranscriptionSectionViewModel>()
+                        .TryAutoStartWatchFolder();
+                    return Task.CompletedTask;
+                },
+                Required: false
+            ),
         ];
     }
 
@@ -892,6 +904,7 @@ public class App : Application
         public const string RetentionInitialization = "Retention initialization";
         public const string ModelMigration = "Model migration";
         public const string ModelAutoLoad = "Model auto-load";
+        public const string WatchFolderAutoStart = "Watch-folder auto-start";
     }
 
     internal sealed record BootstrapStage(

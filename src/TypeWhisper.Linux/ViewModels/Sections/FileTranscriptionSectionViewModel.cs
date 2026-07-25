@@ -7,6 +7,7 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.Plugins;
 
 // ReSharper disable UnusedParameterInPartialMethod
 
@@ -18,6 +19,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     private readonly AudioFileService _audioFiles;
 
     private readonly IFileTranscriptionProcessor _processor;
+    private readonly PluginManager _pluginManager;
     private readonly ISettingsService _settings;
 
     // One concurrent transcription at a time — shared between manual queue
@@ -93,13 +95,15 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         IFileTranscriptionProcessor processor,
         ISettingsService settings,
         AudioFileService audioFiles,
-        WatchFolderService watchFolder
+        WatchFolderService watchFolder,
+        PluginManager pluginManager
     )
     {
         _processor = processor;
         _settings = settings;
         _audioFiles = audioFiles;
         _watchFolder = watchFolder;
+        _pluginManager = pluginManager;
 
         Items.CollectionChanged += (_, _) =>
         {
@@ -115,16 +119,6 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         // Item status texts and the queue summary are resolved into stored strings,
         // so re-resolve them when the user switches UI language at runtime.
         Loc.Instance.LanguageChanged += (_, _) => OnLanguageChanged();
-
-        if (WatchFolderAutoStart && HasWatchFolderPath)
-        {
-            // Defer past DI graph construction so a stale/hung watch path
-            // cannot prevent the main window from being created.
-            Dispatcher.UIThread.Post(
-                TryStartWatchFolder,
-                DispatcherPriority.Background
-            );
-        }
     }
 
     public ObservableCollection<FileTranscriptionQueueItemViewModel> Items { get; } = [];
@@ -148,6 +142,14 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     public bool HasWatchFolderOutputPath => !string.IsNullOrWhiteSpace(WatchFolderOutputPath);
     public bool HasWatchFolderHistory => WatchFolderHistory.Count > 0;
     public bool IsWatchFolderStopped => !IsWatchFolderRunning;
+
+    internal void TryAutoStartWatchFolder()
+    {
+        if (WatchFolderAutoStart && HasWatchFolderPath)
+        {
+            TryStartWatchFolder();
+        }
+    }
 
     public string WatchFolderOutputPathDisplay =>
         HasWatchFolderOutputPath
@@ -557,13 +559,16 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         CancellationToken ct
     )
     {
+        var options = BuildWatchFolderProcessOptions();
+        ThrowIfWatchFolderNotReady(options);
+
         await _transcriptionGate.WaitAsync(ct);
         try
         {
             var result = await _processor.ProcessAsync(
                 request.FilePath,
                 _ => { },
-                BuildWatchFolderProcessOptions(),
+                options,
                 ct
             );
 
@@ -580,6 +585,38 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         finally
         {
             _transcriptionGate.Release();
+        }
+    }
+
+    private void ThrowIfWatchFolderNotReady(FileTranscriptionProcessOptions options)
+    {
+        var engines = _pluginManager.TranscriptionEngines;
+        if (engines.Count == 0)
+        {
+            throw new WatchFolderNotReadyException(
+                "Transcription engines are not ready."
+            );
+        }
+
+        if (
+            !string.IsNullOrWhiteSpace(options.EngineId)
+            && engines.All(engine =>
+                !string.Equals(
+                    engine.ProviderId,
+                    options.EngineId,
+                    StringComparison.OrdinalIgnoreCase
+                )
+                && !string.Equals(
+                    engine.PluginId,
+                    options.EngineId,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+        )
+        {
+            throw new WatchFolderNotReadyException(
+                $"Transcription engine '{options.EngineId}' is not ready."
+            );
         }
     }
 
