@@ -129,6 +129,266 @@ public sealed class WatchFolderServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ProviderCancellation_WithLiveRun_RecordsFailureAndContinuesQueue()
+    {
+        var watchPath = Path.Join(_tempDir, "provider-cancellation-watch");
+        var outputPath = Path.Join(_tempDir, "provider-cancellation-output");
+        var dataPath = Path.Join(_tempDir, "provider-cancellation-data");
+        Directory.CreateDirectory(watchPath);
+        Directory.CreateDirectory(outputPath);
+        var timeoutPath = Path.Join(watchPath, "a-timeout.wav");
+        var nextPath = Path.Join(watchPath, "b-next.wav");
+        File.WriteAllBytes(timeoutPath, [1, 2, 3]);
+        File.WriteAllBytes(nextPath, [4, 5, 6]);
+
+        using var privateCancellation = new CancellationTokenSource();
+        var timeoutEntered = new TaskCompletionSource<CancellationToken>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseTimeout = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var twoItemsProcessed = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var calls = new ConcurrentQueue<string>();
+        var processed = new ConcurrentQueue<WatchFolderHistoryItem>();
+        var service = new WatchFolderService(dataPath);
+        WatchFolderService.WatchFolderRun? originalRun = null;
+        service.FileProcessed += (_, item) =>
+        {
+            processed.Enqueue(item);
+            if (processed.Count >= 2)
+            {
+                twoItemsProcessed.TrySetResult(true);
+            }
+        };
+
+        try
+        {
+            service.Start(
+                CreateOptions(watchPath, outputPath),
+                async (request, ct) =>
+                {
+                    var fileName = Path.GetFileName(request.FilePath);
+                    calls.Enqueue(fileName);
+                    if (fileName == "a-timeout.wav")
+                    {
+                        timeoutEntered.TrySetResult(ct);
+                        await releaseTimeout.Task;
+                        // ReSharper disable once AccessToDisposedClosure -- the finally awaits StopAsync/WorkerCompletion, so this callback finishes before the `using var privateCancellation` is disposed at scope end.
+                        throw new OperationCanceledException(
+                            "Provider request timed out.",
+                            privateCancellation.Token
+                        );
+                    }
+
+                    return CreateResult(request);
+                }
+            );
+
+            originalRun = service.CurrentRun;
+            Assert.NotNull(originalRun);
+            var runToken = await timeoutEntered.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.False(runToken.IsCancellationRequested);
+
+            privateCancellation.Cancel();
+            releaseTimeout.TrySetResult(true);
+            await twoItemsProcessed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.Equal(["a-timeout.wav", "b-next.wav"], calls);
+            Assert.Equal(2, service.History.Count);
+            Assert.Equal(2, processed.Count);
+
+            var failedItem = Assert.Single(service.History, item => !item.Success);
+            Assert.Equal("a-timeout.wav", failedItem.FileName);
+            Assert.Empty(failedItem.OutputPath);
+            Assert.False(string.IsNullOrWhiteSpace(failedItem.ErrorMessage));
+            Assert.Contains("timed out", failedItem.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+
+            var failedEvent = Assert.Single(processed, item => !item.Success);
+            Assert.Same(failedItem, failedEvent);
+            var failedFingerprint = Assert.Single(originalRun.FailedFingerprints);
+            Assert.StartsWith(
+                $"{Path.GetFullPath(timeoutPath)}|",
+                failedFingerprint,
+                StringComparison.Ordinal
+            );
+
+            var successfulItem = Assert.Single(service.History, item => item.Success);
+            Assert.Equal("b-next.wav", successfulItem.FileName);
+            Assert.Equal(Path.Join(outputPath, "b-next.txt"), successfulItem.OutputPath);
+            Assert.True(File.Exists(successfulItem.OutputPath));
+            Assert.True(File.Exists(timeoutPath));
+            Assert.False(File.Exists(Path.Join(outputPath, "a-timeout.txt")));
+
+            Assert.True(service.IsRunning);
+            Assert.False(runToken.IsCancellationRequested);
+            Assert.Same(originalRun, service.CurrentRun);
+            Assert.Null(originalRun.WorkerFailure);
+            Assert.False(originalRun.WorkerCompletion.IsFaulted);
+            Assert.False(originalRun.WorkerCompletion.IsCompleted);
+        }
+        finally
+        {
+            privateCancellation.Cancel();
+            releaseTimeout.TrySetResult(true);
+            if (service.CurrentRun is not null)
+            {
+                await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            if (originalRun is not null)
+            {
+                await originalRun.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            await service.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task RunTokenCancellation_StopsQueueWithoutWorkerFailure()
+    {
+        var watchPath = Path.Join(_tempDir, "run-cancellation-watch");
+        var outputPath = Path.Join(_tempDir, "run-cancellation-output");
+        var dataPath = Path.Join(_tempDir, "run-cancellation-data");
+        Directory.CreateDirectory(watchPath);
+        Directory.CreateDirectory(outputPath);
+        var sourcePath = Path.Join(watchPath, "canceled.wav");
+        File.WriteAllBytes(sourcePath, [1, 2, 3]);
+
+        var entered = new TaskCompletionSource<CancellationToken>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var release = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var processed = new ConcurrentQueue<WatchFolderHistoryItem>();
+        var service = new WatchFolderService(dataPath);
+        WatchFolderService.WatchFolderRun? run = null;
+        service.FileProcessed += (_, item) => processed.Enqueue(item);
+
+        try
+        {
+            service.Start(
+                CreateOptions(watchPath, outputPath),
+                async (request, ct) =>
+                {
+                    entered.TrySetResult(ct);
+                    await release.Task.WaitAsync(ct);
+                    return CreateResult(request);
+                }
+            );
+
+            run = service.CurrentRun;
+            Assert.NotNull(run);
+            var handlerToken = await entered.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            run.CancellationSource.Cancel();
+            await run.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.True(handlerToken.IsCancellationRequested);
+            Assert.Empty(service.History);
+            Assert.Empty(processed);
+            Assert.Empty(run.FailedFingerprints);
+            Assert.Null(run.WorkerFailure);
+            Assert.True(run.WorkerCompletion.IsCompletedSuccessfully);
+            Assert.True(File.Exists(sourcePath));
+            Assert.False(File.Exists(Path.Join(outputPath, "canceled.txt")));
+            Assert.False(File.Exists(Path.Join(dataPath, "watch-folder-processed.json")));
+
+            await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        }
+        finally
+        {
+            release.TrySetResult(true);
+            if (service.CurrentRun is not null)
+            {
+                await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            if (run is not null)
+            {
+                await run.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            await service.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task QueueWorkerFault_IsObservedAndMarksCurrentRunUnhealthy()
+    {
+        var watchPath = Path.Join(_tempDir, "worker-fault-watch");
+        var outputPath = Path.Join(_tempDir, "worker-fault-output");
+        var dataPath = Path.Join(_tempDir, "worker-fault-data");
+        Directory.CreateDirectory(watchPath);
+        Directory.CreateDirectory(outputPath);
+
+        var healthTransition = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var processed = new ConcurrentQueue<WatchFolderHistoryItem>();
+        var service = new WatchFolderService(dataPath);
+        WatchFolderService.WatchFolderRun? run = null;
+        service.FileProcessed += (_, item) => processed.Enqueue(item);
+        service.StateChanged += (_, _) =>
+        {
+            // ReSharper disable once AccessToModifiedClosure -- the handler deliberately reads the current `run` (assigned after Start) to correlate the transition with the active run.
+            var observedRun = run;
+            if (
+                observedRun is not null
+                && ReferenceEquals(service.CurrentRun, observedRun)
+                && !service.IsRunning
+            )
+            {
+                healthTransition.TrySetResult(true);
+            }
+        };
+
+        try
+        {
+            service.Start(CreateOptions(watchPath, outputPath), TranscribeAsync);
+            run = service.CurrentRun;
+            Assert.NotNull(run);
+
+            run.PendingFiles.Enqueue("\0");
+            await healthTransition.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            await run.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.Same(run, service.CurrentRun);
+            Assert.False(service.IsRunning);
+            Assert.Null(service.WatchPath);
+            Assert.Null(service.CurrentlyProcessing);
+            Assert.True(run.CancellationSource.IsCancellationRequested);
+            Assert.IsAssignableFrom<ArgumentException>(run.WorkerFailure);
+            Assert.True(run.WorkerCompletion.IsCompletedSuccessfully);
+            Assert.Empty(service.History);
+            Assert.Empty(processed);
+            Assert.Empty(run.FailedFingerprints);
+            Assert.Empty(Directory.EnumerateFiles(outputPath));
+            Assert.False(File.Exists(Path.Join(dataPath, "watch-folder-processed.json")));
+
+            await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Null(service.CurrentRun);
+        }
+        finally
+        {
+            if (service.CurrentRun is not null)
+            {
+                await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            if (run is not null)
+            {
+                await run.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            await service.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task StopAsync_InFlightHandler_AwaitsWorkerBeforeReturning()
     {
         var watchPath = Path.Join(_tempDir, "await-watch");

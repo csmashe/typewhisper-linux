@@ -80,7 +80,16 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
         }
     }
 
-    public bool IsRunning => _currentRun is not null;
+    public bool IsRunning
+    {
+        get
+        {
+            var run = _currentRun;
+            return run is not null
+                   && run.WorkerFailure is null
+                   && !run.CancellationSource.IsCancellationRequested;
+        }
+    }
 
     internal WatchFolderRun? CurrentRun => _currentRun;
 
@@ -212,10 +221,11 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
 
         // ReSharper disable once MethodSupportsCancellation -- the worker observes run.CancellationSource internally; passing the token to Task.Run would leave a Canceled task for StopCoreAsync to await.
         var queueWorker = Task.Run(() => ProcessQueueAsync(run));
+        var observedQueueWorker = ObserveQueueWorkerAsync(run, queueWorker);
         // Periodic rescan catches files missed when the OS event buffer overflows.
         // ReSharper disable once MethodSupportsCancellation -- the worker observes run.CancellationSource internally; passing the token to Task.Run would leave a Canceled task for StopCoreAsync to await.
         var rescanWorker = Task.Run(() => RescanLoopAsync(run));
-        run.SetWorkers(queueWorker, rescanWorker);
+        run.SetWorkers(observedQueueWorker, rescanWorker);
 
         lock (_stateGate)
         {
@@ -451,6 +461,84 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
         }
     }
 
+    private async Task ObserveQueueWorkerAsync(WatchFolderRun run, Task queueWorker)
+    {
+        try
+        {
+            await queueWorker.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"WatchFolder queue worker stopped with an error: {ex}");
+            if (run.CancellationSource.IsCancellationRequested)
+            {
+                return;
+            }
+
+            MarkQueueWorkerFailed(run, ex);
+            return;
+        }
+
+        if (!run.CancellationSource.IsCancellationRequested)
+        {
+            MarkQueueWorkerFailed(
+                run,
+                new InvalidOperationException("Watch-folder queue worker stopped unexpectedly.")
+            );
+        }
+    }
+
+    private void MarkQueueWorkerFailed(WatchFolderRun run, Exception failure)
+    {
+        if (!run.TrySetWorkerFailure(failure))
+        {
+            return;
+        }
+
+        try
+        {
+            run.CancellationSource.Cancel();
+        }
+        catch (AggregateException ex)
+        {
+            Debug.WriteLine($"WatchFolder cancellation callback failed: {ex}");
+        }
+
+        // Release the watcher so a failed run does not leak its inotify handle or keep firing
+        // event callbacks while the service reports itself stopped.
+        try
+        {
+            run.Watcher.EnableRaisingEvents = false;
+        }
+        catch (ObjectDisposedException)
+        {
+            // A concurrent Stop can dispose the watcher while the failure is being recorded.
+        }
+
+        run.Watcher.Dispose();
+
+        var isCurrent = false;
+        lock (_stateGate)
+        {
+            if (ReferenceEquals(_currentRun, run))
+            {
+                _watchPath = null;
+                if (ReferenceEquals(_currentlyProcessingRun, run))
+                {
+                    _currentlyProcessing = null;
+                    _currentlyProcessingRun = null;
+                }
+
+                isCurrent = true;
+            }
+        }
+
+        if (isCurrent && ReferenceEquals(_currentRun, run))
+        {
+            OnStateChanged();
+        }
+    }
+
     private async Task RescanLoopAsync(WatchFolderRun run)
     {
         var ct = run.CancellationSource.Token;
@@ -582,7 +670,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
                 }
             );
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
         }
@@ -1012,6 +1100,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
     internal sealed class WatchFolderRun
     {
         private int _cancellationSourceDisposed;
+        private Exception? _workerFailure;
 
         internal WatchFolderRun(
             CancellationTokenSource cancellationSource,
@@ -1048,6 +1137,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
 
         internal Lock FailedFingerprintsGate { get; } = new();
         internal HashSet<string> FailedFingerprints { get; } = new(StringComparer.OrdinalIgnoreCase);
+        internal Exception? WorkerFailure => Volatile.Read(ref _workerFailure);
         internal Task WorkerCompletion { get; private set; } = Task.CompletedTask;
         internal Task RetiredCleanup { get; private set; } = Task.CompletedTask;
 
@@ -1059,6 +1149,11 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
         internal void SetRetiredCleanup(Task retiredCleanup)
         {
             RetiredCleanup = retiredCleanup;
+        }
+
+        internal bool TrySetWorkerFailure(Exception failure)
+        {
+            return Interlocked.CompareExchange(ref _workerFailure, failure, null) is null;
         }
 
         internal void DisposeCancellationSource()
