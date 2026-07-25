@@ -1,6 +1,7 @@
 // ReSharper disable MethodSupportsCancellation -- every WaitAsync here uses only a test-guard timeout; there is no ambient cancellation token to pass.
 // ReSharper disable MethodHasAsyncOverload -- synchronous File.Read/WriteAllText is deliberate in these test assertions; the async overload would only add await noise with no benefit off the hot path.
 using System.Collections.Concurrent;
+using System.Text.Json;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Tests;
 using Xunit;
@@ -22,6 +23,387 @@ public sealed class WatchFolderServiceTests : IDisposable
         catch
         {
             // Best-effort temp cleanup.
+        }
+    }
+
+    [Fact]
+    public async Task Restart_WhenPrimaryFingerprintStoreIsCorrupt_RecoversBackupAndSkipsRetainedSource()
+    {
+        var watchPath = Path.Join(_tempDir, "recovery-watch");
+        var outputPath = Path.Join(_tempDir, "recovery-output");
+        var dataPath = Path.Join(_tempDir, "recovery-data");
+        Directory.CreateDirectory(watchPath);
+        Directory.CreateDirectory(outputPath);
+        var retainedPath = Path.Join(watchPath, "a-retained.wav");
+        var priorPath = Path.Join(watchPath, "b-prior.wav");
+        File.WriteAllBytes(retainedPath, [1, 2, 3]);
+        File.WriteAllBytes(priorPath, [4, 5, 6]);
+
+        var initialService = new WatchFolderService(dataPath);
+        WatchFolderService.WatchFolderRun? initialRun = null;
+        try
+        {
+            var initialItems = await StartAndWaitForProcessedItemsAsync(
+                initialService,
+                expectedCount: 2,
+                CreateOptions(watchPath, outputPath)
+            );
+            initialRun = initialService.CurrentRun;
+            Assert.NotNull(initialRun);
+            Assert.All(initialItems, item => Assert.True(item.Success, item.ErrorMessage));
+        }
+        finally
+        {
+            if (initialService.CurrentRun is not null)
+            {
+                await initialService.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            if (initialRun is not null)
+            {
+                await initialRun.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            await initialService.DisposeAsync();
+        }
+
+        var primaryPath = Path.Join(dataPath, "watch-folder-processed.json");
+        var backupPath = primaryPath + ".bak";
+        var retainedFingerprint = CreateTestFingerprint(retainedPath);
+        var backupFingerprints = ReadFingerprints(backupPath);
+        Assert.Equal(retainedFingerprint, Assert.Single(backupFingerprints));
+
+        File.WriteAllText(primaryPath, "{ definitely-not-json");
+        File.Delete(priorPath);
+        var freshPath = Path.Join(watchPath, "c-fresh.wav");
+        File.WriteAllBytes(freshPath, [7, 8, 9]);
+
+        var freshProcessed = new TaskCompletionSource<WatchFolderHistoryItem>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var calls = new ConcurrentQueue<string>();
+        var recoveredService = new WatchFolderService(dataPath);
+        WatchFolderService.WatchFolderRun? recoveredRun = null;
+        recoveredService.FileProcessed += (_, item) =>
+        {
+            if (string.Equals(item.FileName, "c-fresh.wav", StringComparison.Ordinal))
+            {
+                freshProcessed.TrySetResult(item);
+            }
+        };
+
+        try
+        {
+            recoveredService.Start(
+                CreateOptions(watchPath, outputPath),
+                (request, ct) =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    calls.Enqueue(Path.GetFileName(request.FilePath));
+                    return Task.FromResult(CreateResult(request));
+                }
+            );
+            recoveredRun = recoveredService.CurrentRun;
+            Assert.NotNull(recoveredRun);
+
+            var item = await freshProcessed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.True(item.Success, item.ErrorMessage);
+            Assert.Equal(["c-fresh.wav"], calls);
+            var persisted = ReadFingerprints(primaryPath);
+            Assert.Equal(2, persisted.Count);
+            Assert.Contains(retainedFingerprint, persisted);
+            Assert.Contains(CreateTestFingerprint(freshPath), persisted);
+            Assert.Equal(retainedFingerprint, Assert.Single(ReadFingerprints(backupPath)));
+        }
+        finally
+        {
+            if (recoveredService.CurrentRun is not null)
+            {
+                await recoveredService.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            if (recoveredRun is not null)
+            {
+                await recoveredRun.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            await recoveredService.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Restart_WhenBothFingerprintGenerationsAreCorrupt_StartsWithEmptySetAndRebuildsStore()
+    {
+        var watchPath = Path.Join(_tempDir, "both-corrupt-watch");
+        var outputPath = Path.Join(_tempDir, "both-corrupt-output");
+        var dataPath = Path.Join(_tempDir, "both-corrupt-data");
+        Directory.CreateDirectory(watchPath);
+        Directory.CreateDirectory(outputPath);
+        Directory.CreateDirectory(dataPath);
+        File.WriteAllBytes(Path.Join(watchPath, "a-first.wav"), [1, 2, 3]);
+        File.WriteAllBytes(Path.Join(watchPath, "b-second.wav"), [4, 5, 6]);
+        var primaryPath = Path.Join(dataPath, "watch-folder-processed.json");
+        var backupPath = primaryPath + ".bak";
+        File.WriteAllText(primaryPath, "{ corrupt-primary");
+        File.WriteAllText(backupPath, "[ corrupt-backup");
+
+        var twoItemsProcessed = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var calls = new ConcurrentQueue<string>();
+        var processed = new ConcurrentQueue<WatchFolderHistoryItem>();
+        var service = new WatchFolderService(dataPath);
+        WatchFolderService.WatchFolderRun? run = null;
+        service.FileProcessed += (_, item) =>
+        {
+            processed.Enqueue(item);
+            if (processed.Count >= 2)
+            {
+                twoItemsProcessed.TrySetResult(true);
+            }
+        };
+
+        try
+        {
+            service.Start(
+                CreateOptions(watchPath, outputPath),
+                (request, ct) =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    calls.Enqueue(Path.GetFileName(request.FilePath));
+                    return Task.FromResult(CreateResult(request));
+                }
+            );
+            run = service.CurrentRun;
+            Assert.NotNull(run);
+
+            await twoItemsProcessed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.True(service.IsRunning);
+            Assert.Equal(["a-first.wav", "b-second.wav"], calls);
+            Assert.All(processed, item => Assert.True(item.Success, item.ErrorMessage));
+            var primaryFingerprints = ReadFingerprints(primaryPath);
+            var backupFingerprints = ReadFingerprints(backupPath);
+            Assert.Equal(2, primaryFingerprints.Count);
+            Assert.Single(backupFingerprints);
+            Assert.All(
+                backupFingerprints,
+                fingerprint => Assert.Contains(fingerprint, primaryFingerprints)
+            );
+        }
+        finally
+        {
+            if (service.CurrentRun is not null)
+            {
+                await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            if (run is not null)
+            {
+                await run.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            await service.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ProcessFile_WhenFingerprintCommitFails_RecordsFailureAndRollsBackInMemoryFingerprint()
+    {
+        var watchPath = Path.Join(_tempDir, "commit-failure-watch");
+        var outputPath = Path.Join(_tempDir, "commit-failure-output");
+        var dataPath = Path.Join(_tempDir, "commit-failure-data");
+        Directory.CreateDirectory(watchPath);
+        Directory.CreateDirectory(outputPath);
+        var sourcePath = Path.Join(watchPath, "retained.wav");
+        File.WriteAllBytes(sourcePath, [1, 2, 3]);
+
+        var firstFailure = new TaskCompletionSource<WatchFolderHistoryItem>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var secondFailure = new TaskCompletionSource<WatchFolderHistoryItem>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var calls = new ConcurrentQueue<string>();
+        var failures = new ConcurrentQueue<WatchFolderHistoryItem>();
+        var service = new WatchFolderService(
+            dataPath,
+            static (workers, timeout) => workers.WaitAsync(timeout),
+            (_, _) => throw new IOException("Simulated fingerprint atomic-write failure.")
+        );
+        WatchFolderService.WatchFolderRun? firstRun = null;
+        WatchFolderService.WatchFolderRun? secondRun = null;
+        service.FileProcessed += (_, item) =>
+        {
+            if (item.Success)
+            {
+                return;
+            }
+
+            failures.Enqueue(item);
+            if (failures.Count == 1)
+            {
+                firstFailure.TrySetResult(item);
+            }
+            else if (failures.Count == 2)
+            {
+                secondFailure.TrySetResult(item);
+            }
+        };
+
+        Task<WatchFolderTranscriptionResult> TranscribeAndCountAsync(
+            WatchFolderTranscriptionRequest request,
+            CancellationToken ct
+        )
+        {
+            ct.ThrowIfCancellationRequested();
+            calls.Enqueue(Path.GetFileName(request.FilePath));
+            return Task.FromResult(CreateResult(request));
+        }
+
+        try
+        {
+            service.Start(
+                CreateOptions(watchPath, outputPath),
+                TranscribeAndCountAsync
+            );
+            firstRun = service.CurrentRun;
+            Assert.NotNull(firstRun);
+
+            var firstItem = await firstFailure.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.False(firstItem.Success);
+            Assert.Contains(
+                "persist watch folder processed fingerprints",
+                firstItem.ErrorMessage,
+                StringComparison.OrdinalIgnoreCase
+            );
+            Assert.Single(firstRun.FailedFingerprints);
+            Assert.False(
+                File.Exists(Path.Join(dataPath, "watch-folder-processed.json"))
+            );
+
+            await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            await firstRun.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+
+            service.Start(
+                CreateOptions(watchPath, outputPath),
+                TranscribeAndCountAsync
+            );
+            secondRun = service.CurrentRun;
+            Assert.NotNull(secondRun);
+
+            var secondItem = await secondFailure.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.False(secondItem.Success);
+            Assert.Equal(["retained.wav", "retained.wav"], calls);
+            Assert.Equal(2, failures.Count);
+            Assert.Single(secondRun.FailedFingerprints);
+            Assert.All(service.History, item => Assert.False(item.Success));
+            Assert.False(
+                File.Exists(Path.Join(dataPath, "watch-folder-processed.json"))
+            );
+        }
+        finally
+        {
+            if (service.CurrentRun is not null)
+            {
+                await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            if (firstRun is not null)
+            {
+                await firstRun.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            if (secondRun is not null)
+            {
+                await secondRun.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            await service.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Restart_AfterTruncatedPrimaryWrite_RecoversBackupAndPublishesCompleteStore()
+    {
+        var watchPath = Path.Join(_tempDir, "torn-write-watch");
+        var outputPath = Path.Join(_tempDir, "torn-write-output");
+        var dataPath = Path.Join(_tempDir, "torn-write-data");
+        Directory.CreateDirectory(watchPath);
+        Directory.CreateDirectory(outputPath);
+        Directory.CreateDirectory(dataPath);
+        var retainedPath = Path.Join(watchPath, "a-retained.wav");
+        var freshPath = Path.Join(watchPath, "z-fresh.wav");
+        File.WriteAllBytes(retainedPath, [1, 2, 3]);
+        File.WriteAllBytes(freshPath, [4, 5, 6]);
+
+        var retainedFingerprint = CreateTestFingerprint(retainedPath);
+        var primaryPath = Path.Join(dataPath, "watch-folder-processed.json");
+        var backupPath = primaryPath + ".bak";
+        File.WriteAllText(
+            backupPath,
+            JsonSerializer.Serialize(new[] { retainedFingerprint })
+        );
+        var completePrimary = JsonSerializer.Serialize(
+            new[] { retainedFingerprint, "newer-generation-fingerprint" }
+        );
+        File.WriteAllText(primaryPath, completePrimary[..(completePrimary.Length / 2)]);
+
+        var freshProcessed = new TaskCompletionSource<WatchFolderHistoryItem>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var calls = new ConcurrentQueue<string>();
+        var service = new WatchFolderService(dataPath);
+        WatchFolderService.WatchFolderRun? run = null;
+        service.FileProcessed += (_, item) =>
+        {
+            if (string.Equals(item.FileName, "z-fresh.wav", StringComparison.Ordinal))
+            {
+                freshProcessed.TrySetResult(item);
+            }
+        };
+
+        try
+        {
+            service.Start(
+                CreateOptions(watchPath, outputPath),
+                (request, ct) =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    calls.Enqueue(Path.GetFileName(request.FilePath));
+                    return Task.FromResult(CreateResult(request));
+                }
+            );
+            run = service.CurrentRun;
+            Assert.NotNull(run);
+
+            var item = await freshProcessed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.True(item.Success, item.ErrorMessage);
+            Assert.Equal(["z-fresh.wav"], calls);
+            var primaryFingerprints = ReadFingerprints(primaryPath);
+            Assert.Equal(2, primaryFingerprints.Count);
+            Assert.Contains(retainedFingerprint, primaryFingerprints);
+            Assert.Contains(CreateTestFingerprint(freshPath), primaryFingerprints);
+            Assert.Equal(retainedFingerprint, Assert.Single(ReadFingerprints(backupPath)));
+            Assert.Empty(Directory.EnumerateFiles(dataPath, "*.tmp"));
+        }
+        finally
+        {
+            if (service.CurrentRun is not null)
+            {
+                await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            if (run is not null)
+            {
+                await run.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            await service.DisposeAsync();
         }
     }
 
@@ -1103,5 +1485,17 @@ public sealed class WatchFolderServiceTests : IDisposable
             "fake",
             "test"
         );
+    }
+
+    private static string CreateTestFingerprint(string path)
+    {
+        var info = new FileInfo(path);
+        return $"{Path.GetFullPath(path)}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
+    }
+
+    private static HashSet<string> ReadFingerprints(string path)
+    {
+        return JsonSerializer.Deserialize<HashSet<string>>(File.ReadAllText(path))
+               ?? throw new JsonException("Fingerprint test fixture contained JSON null.");
     }
 }
