@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using System.Text.Json;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.Gladia;
@@ -13,6 +15,40 @@ public class GladiaPluginTests
     {
         PropertyNameCaseInsensitive = true,
     };
+
+    private const string DoneResponse =
+        """
+        {
+          "id": "job-123",
+          "status": "done",
+          "file": {
+            "audio_duration": 2.25
+          },
+          "result": {
+            "metadata": {
+              "audio_duration": 2.5
+            },
+            "transcription": {
+              "full_transcript": " Hallo Welt ",
+              "languages": ["de"],
+              "utterances": [
+                {
+                  "text": "Hallo",
+                  "start": 0.1,
+                  "end": 1.0,
+                  "language": "de"
+                },
+                {
+                  "text": "Welt",
+                  "start": 1.1,
+                  "end": 2.4,
+                  "language": "de"
+                }
+              ]
+            }
+          }
+        }
+        """;
 
     [Fact]
     public void PluginVersion_MatchesManifestVersion()
@@ -134,21 +170,777 @@ public class GladiaPluginTests
     }
 
     [Fact]
-    public void TranscribeAsync_ThrowsNotSupportedExceptionSynchronously()
+    public async Task TranscribeAsync_UsesUploadInitiateReturnedPollUrlAndDeleteProtocol()
     {
-        using var sut = new GladiaPlugin();
+        var seen = new List<string>();
+        var handler = new AsyncCapturingHandler(async (request, body, cancellationToken) =>
+        {
+            seen.Add($"{request.Method} {request.RequestUri}");
+            AssertApiKey(request);
 
-        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- void local binds Assert.Throws to the Action overload, asserting a synchronous throw (not a faulted Task).
-        void Act() =>
-            _ = sut.TranscribeAsync([], null, false, null, CancellationToken.None);
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.ToString() == "https://api.gladia.io/v2/upload")
+            {
+                var multipart = Assert.IsType<MultipartFormDataContent>(request.Content);
+                Assert.Equal("multipart/form-data", multipart.Headers.ContentType?.MediaType);
+                var audio = Assert.Single(multipart);
+                Assert.Equal("audio", audio.Headers.ContentDisposition?.Name?.Trim('"'));
+                Assert.Equal("audio.wav", audio.Headers.ContentDisposition?.FileName?.Trim('"'));
+                Assert.Equal("audio/wav", audio.Headers.ContentType?.MediaType);
+                Assert.Equal([1, 2, 3, 4], await audio.ReadAsByteArrayAsync(cancellationToken));
+                return JsonResponse(
+                    """{ "audio_url": "https://api.gladia.io/file/upload-456" }"""
+                );
+            }
 
-        var exception = Assert.Throws<NotSupportedException>(Act);
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.ToString() == "https://api.gladia.io/v2/pre-recorded")
+            {
+                Assert.Equal("application/json", request.Content?.Headers.ContentType?.MediaType);
+                using var document = JsonDocument.Parse(
+                    body ?? throw new InvalidOperationException("Missing initiation body.")
+                );
+                var root = document.RootElement;
+                Assert.Equal(
+                    ["audio_url", "language_config"],
+                    root.EnumerateObject().Select(property => property.Name).ToArray()
+                );
+                Assert.Equal(
+                    "https://api.gladia.io/file/upload-456",
+                    root.GetProperty("audio_url").GetString()
+                );
+                Assert.Equal(
+                    ["de"],
+                    root
+                        .GetProperty("language_config")
+                        .GetProperty("languages")
+                        .EnumerateArray()
+                        .Select(item => item.GetString()!)
+                        .ToArray()
+                );
+                Assert.False(root.TryGetProperty("prompt", out _));
+                return JsonResponse(
+                    """
+                    {
+                      "id": "job-123",
+                      "result_url": "https://results.gladia.test/custom/jobs/job-123?token=returned"
+                    }
+                    """,
+                    HttpStatusCode.Created
+                );
+            }
 
+            if (request.Method == HttpMethod.Get
+                && request.RequestUri?.ToString()
+                    == "https://results.gladia.test/custom/jobs/job-123?token=returned")
+            {
+                return JsonResponse(DoneResponse);
+            }
+
+            if (request.Method == HttpMethod.Delete
+                && request.RequestUri?.ToString()
+                    == "https://api.gladia.io/v2/pre-recorded/job-123")
+            {
+                return JsonResponse("{}", HttpStatusCode.Accepted);
+            }
+
+            throw new InvalidOperationException(
+                $"Unexpected request: {request.Method} {request.RequestUri}"
+            );
+        });
+
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var result = await sut.TranscribeAsync(
+            [1, 2, 3, 4],
+            "de",
+            translate: false,
+            prompt: "This has no Gladia mapping.",
+            CancellationToken.None
+        );
+
+        Assert.Equal("Hallo Welt", result.Text);
+        Assert.Equal("de", result.DetectedLanguage);
+        Assert.Equal(2.5, result.DurationSeconds);
+        Assert.Equal(["Hallo", "Welt"], result.Segments.Select(segment => segment.Text).ToArray());
+        Assert.Equal([0.1, 1.1], result.Segments.Select(segment => segment.Start).ToArray());
+        Assert.Equal([1.0, 2.4], result.Segments.Select(segment => segment.End).ToArray());
         Assert.Equal(
-            "Gladia batch transcription is not supported in this build; use live streaming. "
-                + "The batch API requires a multi-stage upload/poll protocol that is not yet implemented.",
+            [
+                "POST https://api.gladia.io/v2/upload",
+                "POST https://api.gladia.io/v2/pre-recorded",
+                "GET https://results.gladia.test/custom/jobs/job-123?token=returned",
+                "DELETE https://api.gladia.io/v2/pre-recorded/job-123",
+            ],
+            seen
+        );
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("auto")]
+    public async Task TranscribeAsync_OmitsLanguageConfigForAutoOrEmpty(string? language)
+    {
+        var handler = new SuccessfulFlowHandler((request, body) =>
+        {
+            if (request.Method != HttpMethod.Post
+                || request.RequestUri?.AbsolutePath != "/v2/pre-recorded")
+            {
+                return;
+            }
+
+            using var document = JsonDocument.Parse(
+                body ?? throw new InvalidOperationException("Missing initiation body.")
+            );
+            Assert.False(document.RootElement.TryGetProperty("language_config", out _));
+        });
+
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var result = await sut.TranscribeAsync(
+            [1, 2, 3],
+            language,
+            translate: false,
+            prompt: null,
+            CancellationToken.None
+        );
+
+        Assert.Equal("Hallo Welt", result.Text);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_MapsExplicitLanguageToLanguageConfig()
+    {
+        var handler = new SuccessfulFlowHandler((request, body) =>
+        {
+            if (request.Method != HttpMethod.Post
+                || request.RequestUri?.AbsolutePath != "/v2/pre-recorded")
+            {
+                return;
+            }
+
+            using var document = JsonDocument.Parse(
+                body ?? throw new InvalidOperationException("Missing initiation body.")
+            );
+            var languageConfig = document.RootElement.GetProperty("language_config");
+            Assert.Equal(
+                ["fr"],
+                languageConfig
+                    .GetProperty("languages")
+                    .EnumerateArray()
+                    .Select(item => item.GetString()!)
+                    .ToArray()
+            );
+        });
+
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        await sut.TranscribeAsync(
+            [1, 2, 3],
+            "fr",
+            translate: false,
+            prompt: null,
+            CancellationToken.None
+        );
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_PollsQueuedAndProcessingUntilDone()
+    {
+        var pollCount = 0;
+        var deleteCount = 0;
+        var handler = new CapturingHandler((request, _) =>
+        {
+            AssertApiKey(request);
+
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/upload")
+            {
+                return JsonResponse("""{ "audio_url": "https://api.gladia.io/file/upload-456" }""");
+            }
+
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/pre-recorded")
+            {
+                return InitiationResponse();
+            }
+
+            if (request.Method == HttpMethod.Get)
+            {
+                pollCount++;
+                return pollCount switch
+                {
+                    1 => JsonResponse("""{ "status": "queued" }"""),
+                    2 => JsonResponse("""{ "status": "processing" }"""),
+                    _ => JsonResponse(DoneResponse),
+                };
+            }
+
+            if (request.Method == HttpMethod.Delete)
+            {
+                deleteCount++;
+                return JsonResponse("{}", HttpStatusCode.Accepted);
+            }
+
+            throw new InvalidOperationException(
+                $"Unexpected request: {request.Method} {request.RequestUri}"
+            );
+        });
+
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var result = await sut.TranscribeAsync(
+            [1, 2, 3],
+            "de",
+            translate: false,
+            prompt: null,
+            CancellationToken.None
+        );
+
+        Assert.Equal("Hallo Welt", result.Text);
+        Assert.Equal(3, pollCount);
+        Assert.Equal(1, deleteCount);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_TerminalErrorIncludesProviderDetailsAndDeletesJob()
+    {
+        var deleteCount = 0;
+        var handler = new CapturingHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/upload")
+            {
+                return JsonResponse("""{ "audio_url": "https://api.gladia.io/file/upload-456" }""");
+            }
+
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/pre-recorded")
+            {
+                return InitiationResponse();
+            }
+
+            if (request.Method == HttpMethod.Get)
+            {
+                return JsonResponse(
+                    """
+                    {
+                      "status": "error",
+                      "error_code": 422,
+                      "error": { "message": "Audio could not be decoded" },
+                      "request_id": "G-request-7"
+                    }
+                    """
+                );
+            }
+
+            if (request.Method == HttpMethod.Delete)
+            {
+                Assert.Equal(
+                    "https://api.gladia.io/v2/pre-recorded/job-123",
+                    request.RequestUri?.ToString()
+                );
+                deleteCount++;
+                return JsonResponse("{}", HttpStatusCode.Accepted);
+            }
+
+            throw new InvalidOperationException(
+                $"Unexpected request: {request.Method} {request.RequestUri}"
+            );
+        });
+
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.TranscribeAsync(
+                [1, 2, 3],
+                "en",
+                translate: false,
+                prompt: null,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Contains("status=error", exception.Message);
+        Assert.Contains("422", exception.Message);
+        Assert.Contains("Audio could not be decoded", exception.Message);
+        Assert.Contains("G-request-7", exception.Message);
+        Assert.Equal(1, deleteCount);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_DoneWithoutFullTranscriptFailsAndDeletesJob()
+    {
+        var deleteCount = 0;
+        var handler = new CapturingHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/upload")
+            {
+                return JsonResponse("""{ "audio_url": "https://api.gladia.io/file/upload-456" }""");
+            }
+
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/pre-recorded")
+            {
+                return InitiationResponse();
+            }
+
+            if (request.Method == HttpMethod.Get)
+            {
+                return JsonResponse(
+                    """
+                    {
+                      "status": "done",
+                      "result": {
+                        "metadata": { "audio_duration": 1.0 },
+                        "transcription": { "languages": ["en"] }
+                      }
+                    }
+                    """
+                );
+            }
+
+            if (request.Method == HttpMethod.Delete)
+            {
+                deleteCount++;
+                return JsonResponse("{}", HttpStatusCode.Accepted);
+            }
+
+            throw new InvalidOperationException(
+                $"Unexpected request: {request.Method} {request.RequestUri}"
+            );
+        });
+
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.TranscribeAsync(
+                [1, 2, 3],
+                "en",
+                translate: false,
+                prompt: null,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Contains("result.transcription.full_transcript", exception.Message);
+        Assert.Equal(1, deleteCount);
+    }
+
+    [Theory]
+    [InlineData("upload")]
+    [InlineData("initiate")]
+    [InlineData("poll")]
+    public async Task TranscribeAsync_HttpErrorAtEachStageFails(string failingStage)
+    {
+        var requestCount = 0;
+        var handler = new CapturingHandler((request, _) =>
+        {
+            requestCount++;
+
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/upload")
+            {
+                return failingStage == "upload"
+                    ? JsonResponse(
+                        """{ "message": "upload rejected" }""",
+                        HttpStatusCode.BadGateway
+                    )
+                    : JsonResponse(
+                        """{ "audio_url": "https://api.gladia.io/file/upload-456" }"""
+                    );
+            }
+
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/pre-recorded")
+            {
+                return failingStage == "initiate"
+                    ? JsonResponse(
+                        """{ "message": "initiation rejected" }""",
+                        HttpStatusCode.BadGateway
+                    )
+                    : InitiationResponse();
+            }
+
+            if (request.Method == HttpMethod.Get)
+            {
+                Assert.Equal("poll", failingStage);
+                return JsonResponse(
+                    """{ "message": "poll rejected" }""",
+                    HttpStatusCode.BadGateway
+                );
+            }
+
+            throw new InvalidOperationException(
+                $"Unexpected request: {request.Method} {request.RequestUri}"
+            );
+        });
+
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var exception = await Assert.ThrowsAsync<HttpRequestException>(
+            () => sut.TranscribeAsync(
+                [1, 2, 3],
+                "en",
+                translate: false,
+                prompt: null,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Contains("502", exception.Message);
+        Assert.Contains(
+            failingStage switch
+            {
+                "upload" => "upload rejected",
+                "initiate" => "initiation rejected",
+                _ => "poll rejected",
+            },
             exception.Message
         );
+        Assert.Equal(
+            failingStage switch
+            {
+                "upload" => 1,
+                "initiate" => 2,
+                _ => 3,
+            },
+            requestCount
+        );
+    }
+
+    [Theory]
+    [InlineData("\"unauthorized\"")]
+    [InlineData("[]")]
+    [InlineData("null")]
+    public async Task TranscribeAsync_NonObjectJsonErrorBodyStillReportsHttpError(string errorBody)
+    {
+        // Non-object error bodies must not derail HttpRequestException (TryGetProperty would throw).
+        var handler = new CapturingHandler((request, _) =>
+            request.Method == HttpMethod.Post
+            && request.RequestUri?.AbsolutePath == "/v2/upload"
+                ? JsonResponse(errorBody, HttpStatusCode.BadGateway)
+                : throw new InvalidOperationException(
+                    $"Unexpected request: {request.Method} {request.RequestUri}"
+                ));
+
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var exception = await Assert.ThrowsAsync<HttpRequestException>(
+            () => sut.TranscribeAsync(
+                [1, 2, 3],
+                "en",
+                translate: false,
+                prompt: null,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Contains("502", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("""{}""")]
+    [InlineData("""{ "status": 17 }""")]
+    [InlineData("""{ "status": "paused" }""")]
+    public async Task TranscribeAsync_MalformedOrUnknownPollStatusFails(string pollResponse)
+    {
+        var handler = new CapturingHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/upload")
+            {
+                return JsonResponse("""{ "audio_url": "https://api.gladia.io/file/upload-456" }""");
+            }
+
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/pre-recorded")
+            {
+                return InitiationResponse();
+            }
+
+            return request.Method == HttpMethod.Get
+                ? JsonResponse(pollResponse)
+                : throw new InvalidOperationException(
+                    $"Unexpected request: {request.Method} {request.RequestUri}"
+                );
+        });
+
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.TranscribeAsync(
+                [1, 2, 3],
+                "en",
+                translate: false,
+                prompt: null,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Contains("status", exception.Message);
+    }
+
+    [Theory]
+    [InlineData(
+        """{ "result_url": "https://results.gladia.test/custom/jobs/job-123" }""",
+        "id"
+    )]
+    [InlineData("""{ "id": "job-123" }""", "result_url")]
+    public async Task TranscribeAsync_InitiationRequiresIdAndResultUrl(
+        string initiationJson,
+        string missingField
+    )
+    {
+        var handler = new CapturingHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/upload")
+            {
+                return JsonResponse("""{ "audio_url": "https://api.gladia.io/file/upload-456" }""");
+            }
+
+            return request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/pre-recorded"
+                ? JsonResponse(initiationJson, HttpStatusCode.Created)
+                : throw new InvalidOperationException(
+                    $"Unexpected request: {request.Method} {request.RequestUri}"
+                );
+        });
+
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.TranscribeAsync(
+                [1, 2, 3],
+                "en",
+                translate: false,
+                prompt: null,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Contains(missingField, exception.Message);
+    }
+
+    [Theory]
+    [InlineData("http://results.gladia.test/custom/jobs/job-123?token=returned")]
+    [InlineData("ftp://results.gladia.test/custom/jobs/job-123")]
+    [InlineData("not-a-url")]
+    public async Task TranscribeAsync_RejectsNonHttpsResultUrl(string resultUrl)
+    {
+        // Non-HTTPS result_url would leak x-gladia-key in plaintext during polling; must be rejected.
+        var handler = new CapturingHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/upload")
+            {
+                return JsonResponse("""{ "audio_url": "https://api.gladia.io/file/upload-456" }""");
+            }
+
+            return request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/pre-recorded"
+                ? JsonResponse(
+                    $$"""{ "id": "job-123", "result_url": "{{resultUrl}}" }""",
+                    HttpStatusCode.Created
+                )
+                : throw new InvalidOperationException(
+                    $"Unexpected request: {request.Method} {request.RequestUri}"
+                );
+        });
+
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.TranscribeAsync(
+                [1, 2, 3],
+                "en",
+                translate: false,
+                prompt: null,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Contains("result_url", exception.Message);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_CancellationDuringPollingIsObserved()
+    {
+        var pollStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var deleteCount = 0;
+        var handler = new AsyncCapturingHandler(async (request, _, cancellationToken) =>
+        {
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/upload")
+            {
+                return JsonResponse("""{ "audio_url": "https://api.gladia.io/file/upload-456" }""");
+            }
+
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/pre-recorded")
+            {
+                return InitiationResponse();
+            }
+
+            if (request.Method == HttpMethod.Get)
+            {
+                pollStarted.TrySetResult(true);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return JsonResponse("""{ "status": "processing" }""");
+            }
+
+            if (request.Method == HttpMethod.Delete)
+            {
+                deleteCount++;
+                return JsonResponse("{}", HttpStatusCode.Accepted);
+            }
+
+            throw new InvalidOperationException(
+                $"Unexpected request: {request.Method} {request.RequestUri}"
+            );
+        });
+
+        using var sut = await CreateConfiguredPluginAsync(handler);
+        using var cts = new CancellationTokenSource();
+
+        var transcription = sut.TranscribeAsync(
+            [1, 2, 3],
+            "en",
+            translate: false,
+            prompt: null,
+            cts.Token
+        );
+        // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; using cts.Token would abort this wait on the cancellation the test triggers next.
+        await pollStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel must trip the token before the assertion; CancelAsync would defer it.
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => transcription);
+        Assert.Equal(0, deleteCount);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_BoundedPollingWindowTimesOut()
+    {
+        var pollCount = 0;
+        var handler = new CapturingHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/upload")
+            {
+                return JsonResponse("""{ "audio_url": "https://api.gladia.io/file/upload-456" }""");
+            }
+
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/pre-recorded")
+            {
+                return InitiationResponse();
+            }
+
+            if (request.Method == HttpMethod.Get)
+            {
+                pollCount++;
+                return JsonResponse("""{ "status": "processing" }""");
+            }
+
+            throw new InvalidOperationException(
+                $"Unexpected request: {request.Method} {request.RequestUri}"
+            );
+        });
+
+        using var sut = await CreateConfiguredPluginAsync(
+            handler,
+            pollDelay: TimeSpan.FromHours(1),
+            pollWindow: TimeSpan.FromMilliseconds(20)
+        );
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(
+            () => sut.TranscribeAsync(
+                [1, 2, 3],
+                "en",
+                translate: false,
+                prompt: null,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Contains("did not complete", exception.Message);
+        Assert.Equal(1, pollCount);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_RejectsTranslationBeforeHttp()
+    {
+        var handler = new CountingHandler();
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.TranscribeAsync(
+                [1, 2, 3],
+                "en",
+                translate: true,
+                prompt: null,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Contains("does not support translation", exception.Message);
+        Assert.Equal(0, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_RequiresConfigurationBeforeHttp()
+    {
+        var handler = new CountingHandler();
+        using var sut = new GladiaPlugin(
+            new HttpClient(handler),
+            pollDelay: TimeSpan.Zero
+        );
+        await sut.ActivateAsync(new TestHost());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.TranscribeAsync(
+                [1, 2, 3],
+                "en",
+                translate: false,
+                prompt: null,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Equal(0, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_DeleteFailureDoesNotAffectCompletedResult()
+    {
+        var deleteCount = 0;
+        var handler = new SuccessfulFlowHandler(
+            inspectRequest: (request, _) =>
+            {
+                if (request.Method == HttpMethod.Delete)
+                    deleteCount++;
+            },
+            deleteStatusCode: HttpStatusCode.InternalServerError
+        );
+
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var result = await sut.TranscribeAsync(
+            [1, 2, 3],
+            "de",
+            translate: false,
+            prompt: null,
+            CancellationToken.None
+        );
+
+        Assert.Equal("Hallo Welt", result.Text);
+        Assert.Equal(1, deleteCount);
     }
 
     [Fact]
@@ -244,6 +1036,163 @@ public class GladiaPluginTests
 
         Assert.Equal("", msg.MessageType);
         Assert.Null(msg.Text);
+    }
+
+    private static async Task<GladiaPlugin> CreateConfiguredPluginAsync(
+        HttpMessageHandler handler,
+        TimeSpan? pollDelay = null,
+        TimeSpan? pollWindow = null
+    )
+    {
+        var sut = new GladiaPlugin(
+            new HttpClient(handler),
+            pollDelay ?? TimeSpan.Zero,
+            pollWindow
+        );
+        await sut.ActivateAsync(
+            new TestHost
+            {
+                Secrets =
+                {
+                    ["api-key"] = "test-key",
+                },
+            }
+        );
+        return sut;
+    }
+
+    private static void AssertApiKey(HttpRequestMessage request)
+    {
+        Assert.True(request.Headers.TryGetValues("x-gladia-key", out var values));
+        Assert.Equal(["test-key"], values.ToArray());
+    }
+
+    private static HttpResponseMessage InitiationResponse() =>
+        JsonResponse(
+            """
+            {
+              "id": "job-123",
+              "result_url": "https://results.gladia.test/custom/jobs/job-123?token=returned"
+            }
+            """,
+            HttpStatusCode.Created
+        );
+
+    private static HttpResponseMessage JsonResponse(
+        string json,
+        HttpStatusCode statusCode = HttpStatusCode.OK
+    ) =>
+        new(statusCode)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+        };
+
+    private sealed class SuccessfulFlowHandler(
+        Action<HttpRequestMessage, byte[]?>? inspectRequest = null,
+        HttpStatusCode deleteStatusCode = HttpStatusCode.Accepted
+    ) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            AssertApiKey(request);
+            var body = request.Content is null
+                ? null
+                : await request.Content.ReadAsByteArrayAsync(cancellationToken);
+            inspectRequest?.Invoke(request, body);
+
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/upload")
+            {
+                return JsonResponse(
+                    """{ "audio_url": "https://api.gladia.io/file/upload-456" }"""
+                );
+            }
+
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/pre-recorded")
+            {
+                return InitiationResponse();
+            }
+
+            if (request.Method == HttpMethod.Get
+                && request.RequestUri?.ToString()
+                    == "https://results.gladia.test/custom/jobs/job-123?token=returned")
+            {
+                return JsonResponse(DoneResponse);
+            }
+
+            if (request.Method == HttpMethod.Delete
+                && request.RequestUri?.ToString()
+                    == "https://api.gladia.io/v2/pre-recorded/job-123")
+            {
+                return JsonResponse(
+                    deleteStatusCode == HttpStatusCode.Accepted
+                        ? "{}"
+                        : """{ "message": "cleanup rejected" }""",
+                    deleteStatusCode
+                );
+            }
+
+            throw new InvalidOperationException(
+                $"Unexpected request: {request.Method} {request.RequestUri}"
+            );
+        }
+    }
+
+    private sealed class CapturingHandler(
+        Func<HttpRequestMessage, byte[]?, HttpResponseMessage> responder
+    ) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            var body = request.Content is null
+                ? null
+                : await request.Content.ReadAsByteArrayAsync(cancellationToken);
+            return responder(request, body);
+        }
+    }
+
+    private sealed class AsyncCapturingHandler(
+        Func<
+            HttpRequestMessage,
+            byte[]?,
+            CancellationToken,
+            Task<HttpResponseMessage>
+        > responder
+    ) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            var body = request.Content is null
+                ? null
+                : await request.Content.ReadAsByteArrayAsync(cancellationToken);
+            return await responder(request, body, cancellationToken);
+        }
+    }
+
+    private sealed class CountingHandler : HttpMessageHandler
+    {
+        public int RequestCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            RequestCount++;
+            throw new InvalidOperationException(
+                $"Unexpected HTTP request: {request.Method} {request.RequestUri}"
+            );
+        }
     }
 
     private sealed class TestHost : IPluginHostServices
