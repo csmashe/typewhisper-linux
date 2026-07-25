@@ -40,6 +40,9 @@ public class App : Application
     /// </summary>
     private static bool ClosePermitted { get; set; }
 
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global -- diagnostic seam, kept for degraded-startup inspection.
+    internal BootstrapReport? LastBootstrapReport { get; private set; }
+
     public override void Initialize()
     {
         BootTrace.Stage("App.Initialize begin");
@@ -673,50 +676,132 @@ public class App : Application
         }
     }
 
-    private static async Task BootstrapAsync(IServiceProvider services)
+    private static Task<BootstrapReport> BootstrapAsync(IServiceProvider services)
     {
         BootTrace.Stage("BootstrapAsync begin");
-        var settings = services.GetRequiredService<ISettingsService>();
+        var stages = CreateBootstrapStages(services);
+        var errorLog = services.GetService<IErrorLogService>();
+        return new BootstrapRunner(stages, errorLog).RunAsync();
+    }
 
-        var history = services.GetRequiredService<IHistoryService>();
-        await history.EnsureLoadedAsync();
-        BootTrace.Stage("history.EnsureLoadedAsync");
-
-        services.GetRequiredService<SessionAudioFileService>().DeleteSessionCaptures();
-
-        var audio = services.GetRequiredService<AudioRecordingService>();
-        ApplyConfiguredMicrophone(audio, settings);
-        BootTrace.Stage("audio configured");
-
-        _ = services.GetRequiredService<BundledPluginDeployer>();
-        BundledPluginDeployer.DeployIfMissing();
-        BootTrace.Stage("BundledPluginDeployer.DeployIfMissing");
-
-        var pluginManager = services.GetRequiredService<PluginManager>();
-        await pluginManager.InitializeAsync();
-        BootTrace.Stage("PluginManager.InitializeAsync");
-
-        // PluginRegistryService targets the upstream Windows registry (Windows-built artifacts);
-        // the Linux fork ships its own plugins via BundledPluginDeployer, so the registry is not used.
-
-        var historyRetention = services.GetRequiredService<HistoryRetentionCoordinator>();
-        historyRetention.Initialize();
-
-        var modelManager = services.GetRequiredService<ModelManagerService>();
-        modelManager.MigrateSettings();
-
-        var selectedModel = settings.Current.SelectedModelId;
-        if (!string.IsNullOrEmpty(selectedModel) && modelManager.IsDownloaded(selectedModel))
-        {
-            try
-            {
-                await modelManager.LoadModelAsync(selectedModel);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[App] Auto-load model failed: {ex.Message}");
-            }
-        }
+    internal static IReadOnlyList<BootstrapStage> CreateBootstrapStages(
+        IServiceProvider services
+    )
+    {
+        return
+        [
+            new(
+                BootstrapStageNames.HistoryLoad,
+                [],
+                async () =>
+                {
+                    var history = services.GetRequiredService<IHistoryService>();
+                    await history.EnsureLoadedAsync();
+                    BootTrace.Stage("history.EnsureLoadedAsync");
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.SessionCleanup,
+                [],
+                () =>
+                {
+                    services
+                        .GetRequiredService<SessionAudioFileService>()
+                        .DeleteSessionCaptures();
+                    return Task.CompletedTask;
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.AudioConfiguration,
+                [],
+                () =>
+                {
+                    var settings = services.GetRequiredService<ISettingsService>();
+                    var audio = services.GetRequiredService<AudioRecordingService>();
+                    ApplyConfiguredMicrophone(audio, settings);
+                    BootTrace.Stage("audio configured");
+                    return Task.CompletedTask;
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.BundledPluginDeployment,
+                [],
+                () =>
+                {
+                    _ = services.GetRequiredService<BundledPluginDeployer>();
+                    BundledPluginDeployer.DeployIfMissing();
+                    BootTrace.Stage("BundledPluginDeployer.DeployIfMissing");
+                    return Task.CompletedTask;
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.PluginInitialization,
+                [BootstrapStageNames.BundledPluginDeployment],
+                async () =>
+                {
+                    var pluginManager = services.GetRequiredService<PluginManager>();
+                    await pluginManager.InitializeAsync();
+                    BootTrace.Stage("PluginManager.InitializeAsync");
+                },
+                Required: false
+            ),
+            // PluginRegistryService targets the upstream Windows registry (Windows-built
+            // artifacts); the Linux fork ships its own plugins via BundledPluginDeployer,
+            // so the registry is not used.
+            new(
+                BootstrapStageNames.RetentionInitialization,
+                [],
+                () =>
+                {
+                    var historyRetention =
+                        services.GetRequiredService<HistoryRetentionCoordinator>();
+                    historyRetention.Initialize();
+                    return Task.CompletedTask;
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.ModelMigration,
+                [],
+                () =>
+                {
+                    var modelManager = services.GetRequiredService<ModelManagerService>();
+                    modelManager.MigrateSettings();
+                    return Task.CompletedTask;
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.ModelAutoLoad,
+                [BootstrapStageNames.ModelMigration],
+                async () =>
+                {
+                    var settings = services.GetRequiredService<ISettingsService>();
+                    var modelManager = services.GetRequiredService<ModelManagerService>();
+                    var selectedModel = settings.Current.SelectedModelId;
+                    if (
+                        !string.IsNullOrEmpty(selectedModel)
+                        && modelManager.IsDownloaded(selectedModel)
+                    )
+                    {
+                        try
+                        {
+                            await modelManager.LoadModelAsync(selectedModel);
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"[App] Auto-load model failed: {ex.Message}");
+                            throw;
+                        }
+                    }
+                },
+                Required: false
+            ),
+        ];
     }
 
     /// <summary>
@@ -739,15 +824,234 @@ public class App : Application
         }
     }
 
-    private static async Task BootstrapDeferredAsync(IServiceProvider services)
+    // Trace.WriteLine can throw (e.g. a broken-stdout ConsoleTraceListener); this runs
+    // inside the never-faulting deferred bootstrap path (see BootstrapDeferredAsync), so
+    // failures here are swallowed rather than propagated.
+    private static void SafeTrace(string message)
     {
         try
         {
-            await BootstrapAsync(services);
+            Trace.WriteLine(message);
+        }
+        catch
+        {
+            // Nowhere left to report to; dropping the diagnostic beats faulting the task.
+        }
+    }
+
+    // Invariant: the returned task never faults. It is awaited inside an async-void UI
+    // handler (main.Opened), where a faulted task would escape into Avalonia's dispatcher
+    // and crash; when onboarding is complete nothing awaits it, so a fault would surface as
+    // an unobserved TaskScheduler exception. Every failure is captured into the report.
+    private async Task<BootstrapReport> BootstrapDeferredAsync(IServiceProvider services)
+    {
+        try
+        {
+            var report = await BootstrapAsync(services);
+            LastBootstrapReport = report;
+            return report;
+        }
+        catch (RequiredBootstrapStageException ex)
+        {
+            LastBootstrapReport = ex.Report;
+            SafeTrace(ex.Message);
+            return ex.Report;
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[App] Deferred bootstrap failed: {ex}");
+            SafeTrace($"[App] Deferred bootstrap failed: {ex}");
+            var report = new BootstrapReport(
+                [
+                    new BootstrapStageOutcome(
+                        "Bootstrap",
+                        Required: false,
+                        BootstrapStageStatus.Failed,
+                        ex
+                    ),
+                ]
+            );
+            LastBootstrapReport = report;
+            return report;
+        }
+    }
+
+    internal static class BootstrapStageNames
+    {
+        public const string HistoryLoad = "History load";
+        public const string SessionCleanup = "Session cleanup";
+        public const string AudioConfiguration = "Audio configuration";
+        public const string BundledPluginDeployment = "Bundled-plugin deployment";
+        public const string PluginInitialization = "Plugin initialization";
+        public const string RetentionInitialization = "Retention initialization";
+        public const string ModelMigration = "Model migration";
+        public const string ModelAutoLoad = "Model auto-load";
+    }
+
+    internal sealed record BootstrapStage(
+        string Name,
+        IReadOnlyList<string> Dependencies,
+        Func<Task> Action,
+        bool Required
+    );
+
+    internal enum BootstrapStageStatus
+    {
+        Succeeded,
+        Failed,
+        Skipped,
+    }
+
+    internal sealed record BootstrapStageOutcome(
+        string Name,
+        bool Required,
+        BootstrapStageStatus Status,
+        Exception? Exception = null,
+        string? SkippedDueTo = null
+    );
+
+    internal sealed class BootstrapReport
+    {
+        public BootstrapReport(IReadOnlyList<BootstrapStageOutcome> outcomes)
+        {
+            Outcomes = outcomes;
+        }
+
+        public IReadOnlyList<BootstrapStageOutcome> Outcomes { get; }
+
+        public bool IsDegraded =>
+            Outcomes.Any(outcome => outcome.Status != BootstrapStageStatus.Succeeded);
+
+        public IReadOnlyList<BootstrapStageOutcome> RequiredFailures =>
+            Outcomes
+                .Where(outcome =>
+                    outcome.Required && outcome.Status != BootstrapStageStatus.Succeeded
+                )
+                .ToArray();
+    }
+
+    internal sealed class RequiredBootstrapStageException : Exception
+    {
+        public RequiredBootstrapStageException(BootstrapReport report)
+            : base(
+                $"Required bootstrap stage(s) failed: {string.Join(
+                    ", ",
+                    report.RequiredFailures.Select(outcome => outcome.Name)
+                )}"
+            )
+        {
+            Report = report;
+        }
+
+        public BootstrapReport Report { get; }
+    }
+
+    internal sealed class BootstrapRunner
+    {
+        private readonly IErrorLogService? _errorLog;
+        private readonly IReadOnlyList<BootstrapStage> _stages;
+
+        public BootstrapRunner(
+            IReadOnlyList<BootstrapStage> stages,
+            IErrorLogService? errorLog = null
+        )
+        {
+            _stages = stages;
+            _errorLog = errorLog;
+        }
+
+        public async Task<BootstrapReport> RunAsync()
+        {
+            var outcomes = new List<BootstrapStageOutcome>(_stages.Count);
+            var outcomesByName = new Dictionary<string, BootstrapStageOutcome>(
+                StringComparer.Ordinal
+            );
+
+            foreach (var stage in _stages)
+            {
+                string? skippedDueTo = null;
+                foreach (var dependency in stage.Dependencies)
+                {
+                    if (
+                        !outcomesByName.TryGetValue(dependency, out var dependencyOutcome)
+                        || dependencyOutcome.Status != BootstrapStageStatus.Succeeded
+                    )
+                    {
+                        skippedDueTo = dependency;
+                        break;
+                    }
+                }
+
+                BootstrapStageOutcome outcome;
+                if (skippedDueTo is not null)
+                {
+                    outcome = new(
+                        stage.Name,
+                        stage.Required,
+                        BootstrapStageStatus.Skipped,
+                        SkippedDueTo: skippedDueTo
+                    );
+                    SafeTrace(
+                        $"[App] Bootstrap stage '{stage.Name}' skipped because dependency "
+                            + $"'{skippedDueTo}' did not succeed."
+                    );
+                }
+                else
+                {
+                    try
+                    {
+                        await stage.Action();
+                        outcome = new(
+                            stage.Name,
+                            stage.Required,
+                            BootstrapStageStatus.Succeeded
+                        );
+                    }
+                    catch (Exception ex)
+                    {
+                        outcome = new(
+                            stage.Name,
+                            stage.Required,
+                            BootstrapStageStatus.Failed,
+                            Exception: ex
+                        );
+                        SafeTrace($"[App] Bootstrap stage '{stage.Name}' failed: {ex}");
+                        TryWriteErrorLog(stage.Name, ex);
+                    }
+                }
+
+                outcomes.Add(outcome);
+                outcomesByName.Add(stage.Name, outcome);
+            }
+
+            var report = new BootstrapReport(outcomes);
+            if (report.RequiredFailures.Count > 0)
+            {
+                throw new RequiredBootstrapStageException(report);
+            }
+
+            return report;
+        }
+
+        private void TryWriteErrorLog(string stageName, Exception exception)
+        {
+            if (_errorLog is null)
+            {
+                return;
+            }
+
+            try
+            {
+                _errorLog.AddEntry(
+                    $"Bootstrap stage '{stageName}' failed: {exception.Message}"
+                );
+            }
+            catch (Exception errorLogException)
+            {
+                SafeTrace(
+                    "[App] Could not write bootstrap failure to the error log: "
+                        + errorLogException
+                );
+            }
         }
     }
 
