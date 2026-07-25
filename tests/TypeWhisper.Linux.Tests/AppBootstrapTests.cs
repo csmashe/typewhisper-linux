@@ -6,44 +6,57 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class AppBootstrapTests
 {
-    public static TheoryData<string, string?> ProductionStageFailures =>
+    public static TheoryData<string, string?, string?> ProductionStageFailures =>
         new()
         {
-            { App.BootstrapStageNames.HistoryLoad, null },
-            { App.BootstrapStageNames.SessionCleanup, null },
-            { App.BootstrapStageNames.AudioConfiguration, null },
+            { App.BootstrapStageNames.HistoryLoad, null, null },
+            { App.BootstrapStageNames.SessionCleanup, null, null },
+            { App.BootstrapStageNames.AudioConfiguration, null, null },
             {
                 App.BootstrapStageNames.BundledPluginDeployment,
-                App.BootstrapStageNames.PluginInitialization
+                App.BootstrapStageNames.PluginInitialization,
+                App.BootstrapStageNames.WatchFolderAutoStart
             },
-            { App.BootstrapStageNames.PluginInitialization, null },
-            { App.BootstrapStageNames.RetentionInitialization, null },
+            {
+                App.BootstrapStageNames.PluginInitialization,
+                App.BootstrapStageNames.WatchFolderAutoStart,
+                null
+            },
+            { App.BootstrapStageNames.RetentionInitialization, null, null },
             {
                 App.BootstrapStageNames.ModelMigration,
-                App.BootstrapStageNames.ModelAutoLoad
+                App.BootstrapStageNames.ModelAutoLoad,
+                null
             },
-            { App.BootstrapStageNames.ModelAutoLoad, null },
+            { App.BootstrapStageNames.ModelAutoLoad, null, null },
+            { App.BootstrapStageNames.WatchFolderAutoStart, null, null },
         };
 
     [Theory]
     [MemberData(nameof(ProductionStageFailures))]
     public async Task RunAsync_WhenEachProductionStageFails_RunsIndependentStagesAndSkipsDependents(
         string failingStage,
-        string? expectedSkippedStage
+        string? firstExpectedSkippedStage,
+        string? secondExpectedSkippedStage
     )
     {
         var attempted = new List<string>();
         var failure = new InvalidOperationException($"Failure in {failingStage}");
         var stages = CreateProductionShapedStages(attempted, failingStage, failure);
+        var expectedSkippedStages = new[]
+        {
+            firstExpectedSkippedStage,
+            secondExpectedSkippedStage,
+        }.OfType<string>().ToArray();
 
         var report = await new App.BootstrapRunner(stages).RunAsync();
 
         var expectedAttempted = stages
             .Select(stage => stage.Name)
-            .Where(name => name != expectedSkippedStage);
+            .Where(name => !expectedSkippedStages.Contains(name, StringComparer.Ordinal));
         Assert.Equal(expectedAttempted, attempted);
         Assert.Equal(
-            expectedSkippedStage is null ? [] : [expectedSkippedStage],
+            expectedSkippedStages,
             report
                 .Outcomes.Where(outcome =>
                     outcome.Status == App.BootstrapStageStatus.Skipped
@@ -56,11 +69,39 @@ public sealed class AppBootstrapTests
             var expectedStatus =
                 outcome.Name == failingStage
                     ? App.BootstrapStageStatus.Failed
-                    : outcome.Name == expectedSkippedStage
+                    : expectedSkippedStages.Contains(
+                        outcome.Name,
+                        StringComparer.Ordinal
+                    )
                         ? App.BootstrapStageStatus.Skipped
                         : App.BootstrapStageStatus.Succeeded;
             Assert.Equal(expectedStatus, outcome.Status);
         }
+    }
+
+    [Fact]
+    public void CreateBootstrapStages_WatchFolderAutoStart_IsAfterModelAutoLoadAndDependsOnlyOnPluginInitialization()
+    {
+        var stages = App.CreateBootstrapStages(new UnusedServiceProvider());
+        var watchFolderAutoStart = Assert.Single(
+            stages,
+            stage => stage.Name == App.BootstrapStageNames.WatchFolderAutoStart
+        );
+
+        Assert.Equal(
+            [App.BootstrapStageNames.PluginInitialization],
+            watchFolderAutoStart.Dependencies
+        );
+        Assert.True(
+            stages.Index()
+                .Single(item => item.Item.Name == App.BootstrapStageNames.ModelAutoLoad)
+                .Index
+            < stages.Index()
+                .Single(item =>
+                    item.Item.Name == App.BootstrapStageNames.WatchFolderAutoStart
+                )
+                .Index
+        );
     }
 
     [Fact]

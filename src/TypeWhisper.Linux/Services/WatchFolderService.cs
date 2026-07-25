@@ -6,9 +6,19 @@ using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Linux.Services;
 
+internal sealed class WatchFolderNotReadyException : Exception
+{
+    public WatchFolderNotReadyException(string message)
+        : base(message)
+    {
+    }
+}
+
 public sealed class WatchFolderService : IDisposable, IAsyncDisposable
 {
     private const int MaxExportPathAttempts = 1000;
+    internal const int ReadinessRetryAttemptLimit = 3;
+    private static readonly TimeSpan s_readinessRetryBaseDelay = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan s_workerDrainDeadline = TimeSpan.FromSeconds(2);
 
     private static readonly JsonSerializerOptions s_jsonOptions = new()
@@ -25,6 +35,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly Action<string, string> _atomicWriteAllText;
     private readonly Lock _persistenceGate = new();
+    private readonly Func<TimeSpan, CancellationToken, Task> _readinessRetryDelay;
     private readonly HashSet<string> _processedFingerprints = new(StringComparer.Ordinal);
     private readonly string _processedFingerprintsBackupPath;
     private readonly string _processedFingerprintsPath;
@@ -45,7 +56,21 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
         : this(
             dataPath,
             static (workers, timeout) => workers.WaitAsync(timeout),
-            AtomicFileWrite.WriteAllText
+            AtomicFileWrite.WriteAllText,
+            static (delay, ct) => Task.Delay(delay, ct)
+        )
+    {
+    }
+
+    internal WatchFolderService(
+        string dataPath,
+        Func<TimeSpan, CancellationToken, Task> readinessRetryDelay
+    )
+        : this(
+            dataPath,
+            static (workers, timeout) => workers.WaitAsync(timeout),
+            AtomicFileWrite.WriteAllText,
+            readinessRetryDelay
         )
     {
     }
@@ -54,7 +79,12 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
         string dataPath,
         Func<Task, TimeSpan, Task> waitForWorkers
     )
-        : this(dataPath, waitForWorkers, AtomicFileWrite.WriteAllText)
+        : this(
+            dataPath,
+            waitForWorkers,
+            AtomicFileWrite.WriteAllText,
+            static (delay, ct) => Task.Delay(delay, ct)
+        )
     {
     }
 
@@ -63,9 +93,25 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
         Func<Task, TimeSpan, Task> waitForWorkers,
         Action<string, string> atomicWriteAllText
     )
+        : this(
+            dataPath,
+            waitForWorkers,
+            atomicWriteAllText,
+            static (delay, ct) => Task.Delay(delay, ct)
+        )
+    {
+    }
+
+    internal WatchFolderService(
+        string dataPath,
+        Func<Task, TimeSpan, Task> waitForWorkers,
+        Action<string, string> atomicWriteAllText,
+        Func<TimeSpan, CancellationToken, Task> readinessRetryDelay
+    )
     {
         _waitForWorkers = waitForWorkers;
         _atomicWriteAllText = atomicWriteAllText;
+        _readinessRetryDelay = readinessRetryDelay;
         Directory.CreateDirectory(dataPath);
         _processedFingerprintsPath = Path.Join(dataPath, "watch-folder-processed.json");
         _processedFingerprintsBackupPath = _processedFingerprintsPath + ".bak";
@@ -609,10 +655,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
                 return;
             }
 
-            var result = await run.TranscribeHandler(
-                new WatchFolderTranscriptionRequest(filePath),
-                ct
-            );
+            var result = await TranscribeWithReadinessRetryAsync(run, filePath, ct);
             ct.ThrowIfCancellationRequested();
             if (!IsRunCurrentAndLive(run))
             {
@@ -725,6 +768,34 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
         {
             _activeFiles.TryRemove(new KeyValuePair<string, WatchFolderRun>(filePath, run));
             ClearCurrentlyProcessing(run);
+        }
+    }
+
+    private async Task<WatchFolderTranscriptionResult> TranscribeWithReadinessRetryAsync(
+        WatchFolderRun run,
+        string filePath,
+        CancellationToken ct
+    )
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await run.TranscribeHandler(
+                    new WatchFolderTranscriptionRequest(filePath),
+                    ct
+                );
+            }
+            catch (WatchFolderNotReadyException)
+                when (attempt < ReadinessRetryAttemptLimit)
+            {
+                var multiplier = 1 << (attempt - 1);
+                var delay = TimeSpan.FromTicks(
+                    s_readinessRetryBaseDelay.Ticks * multiplier
+                );
+                await _readinessRetryDelay(delay, ct);
+                ct.ThrowIfCancellationRequested();
+            }
         }
     }
 
