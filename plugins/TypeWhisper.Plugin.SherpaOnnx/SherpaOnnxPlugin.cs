@@ -170,16 +170,7 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
         _host = host;
 
         // Lazily provisioned on demand; the ?? lets tests inject fakes before activate.
-        _cudaRuntimeInstaller ??= new SherpaCudaRuntimeInstaller(
-            host.PluginAssetDirectory,
-            _httpClient,
-            msg => host.Log(PluginLogLevel.Info, msg)
-        );
-        _cudaProvisioner ??= new CudaRuntimeProvisioner(
-            CudaRuntimeProvisioner.DefaultCacheRoot(),
-            _httpClient,
-            msg => host.Log(PluginLogLevel.Info, msg)
-        );
+        InitializeCudaDependencies(host);
 
         // Register the import resolver now; until CUDA is configured it defers to
         // the default loader, which picks up the CPU runtime from the managed nuget.
@@ -187,6 +178,22 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
 
         MigrateModelFiles();
         return Task.CompletedTask;
+    }
+
+    private void InitializeCudaDependencies(IPluginHostServices host)
+    {
+        _cudaRuntimeInstaller ??= new SherpaCudaRuntimeInstaller(
+            host.PluginAssetDirectory,
+            _httpClient,
+            msg => host.Log(PluginLogLevel.Info, msg)
+        );
+        _cudaProvisioner ??= new CudaRuntimeProvisioner(
+            CudaRuntimeProvisioner.CacheRootForPluginAssetDirectory(
+                host.PluginAssetDirectory
+            ),
+            _httpClient,
+            msg => host.Log(PluginLogLevel.Info, msg)
+        );
     }
 
     public Task DeactivateAsync()
@@ -735,6 +742,16 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
         _cudaProvisioner = provisioner;
         _cudaRuntimeInstaller = installer;
     }
+
+    // Test seam: exercise the same eager construction path as ActivateAsync without
+    // running the legacy model-file migration against a real per-user directory.
+    internal void InitializeCudaDependenciesForTests(IPluginHostServices host) =>
+        InitializeCudaDependencies(host);
+
+    internal string? CudaRuntimeCacheRootForTests =>
+        _cudaProvisioner is null
+            ? null
+            : Directory.GetParent(_cudaProvisioner.CacheDirectory)?.FullName;
 
     // Test seam: inject a throwing recognizer factory so native-load-failure
     // classification can be exercised without a real model, native runtime, or GPU.

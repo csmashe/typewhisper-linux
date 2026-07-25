@@ -37,8 +37,8 @@ public enum CudaRuntimeProfile
 ///     can resolve their symbols.
 ///     <para>
 ///         GPU binaries are never bundled into the app packages — they are
-///         fetched here at first CUDA use and cached under
-///         <c>~/.local/share/TypeWhisper/Runtimes/cuda/&lt;BundleVersion&gt;</c>.
+///         fetched here at first CUDA use and cached under the host-selected
+///         shared runtime root.
 ///     </para>
 /// </summary>
 // Not sealed: tests subclass it with a fake that overrides EnsureReadyAsync (the dlopen
@@ -150,26 +150,41 @@ public class CudaRuntimeProvisioner
     private readonly string _cacheRoot;
     private readonly string _maintenanceLockPath;
     private readonly string _wheelLockDirectory;
+    private readonly string _legacyCacheRoot;
+    private readonly Action<string, string> _moveDirectory;
+    private bool _legacyMigrationAttempted;
 
     public CudaRuntimeProvisioner(string cacheRoot, HttpClient httpClient, Action<string>? log = null)
+        : this(
+            cacheRoot,
+            httpClient,
+            log,
+            DefaultCacheRoot(),
+            Directory.Move
+        ) { }
+
+    internal CudaRuntimeProvisioner(
+        string cacheRoot,
+        HttpClient httpClient,
+        Action<string>? log,
+        string legacyCacheRoot,
+        Action<string, string> moveDirectory
+    )
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _log = log;
-        CacheDirectory = Path.Join(cacheRoot, BundleVersion);
+        _moveDirectory = moveDirectory
+            ?? throw new ArgumentNullException(nameof(moveDirectory));
 
-        var cacheRootDirectory = Directory.GetParent(CacheDirectory)
-            ?? throw new ArgumentException("The CUDA cache root must have a parent directory.", nameof(cacheRoot));
-        var cacheParent = cacheRootDirectory.Parent
-            ?? throw new ArgumentException("The CUDA cache root must not be a filesystem root.", nameof(cacheRoot));
-        _cacheRoot = cacheRootDirectory.FullName;
-        _maintenanceLockPath = Path.Join(
-            cacheParent.FullName,
-            cacheRootDirectory.Name + ".maintenance.lock"
-        );
-        _wheelLockDirectory = Path.Join(
-            cacheParent.FullName,
-            cacheRootDirectory.Name + ".locks"
-        );
+        var cachePaths = ResolveCachePaths(cacheRoot, nameof(cacheRoot));
+        _cacheRoot = cachePaths.CacheRoot;
+        _maintenanceLockPath = cachePaths.MaintenanceLockPath;
+        _wheelLockDirectory = cachePaths.WheelLockDirectory;
+        CacheDirectory = Path.Join(_cacheRoot, BundleVersion);
+        _legacyCacheRoot = ResolveCachePaths(
+            legacyCacheRoot,
+            nameof(legacyCacheRoot)
+        ).CacheRoot;
     }
 
     /// <summary>Directory holding the downloaded CUDA <c>.so</c> files for this bundle version.</summary>
@@ -193,6 +208,26 @@ public class CudaRuntimeProvisioner
             "Runtimes",
             "cuda"
         );
+
+    /// <summary>
+    ///     Resolves the shared CUDA root from a host-provided per-plugin asset
+    ///     directory. Host paths have the shape
+    ///     <c>&lt;asset-root&gt;/PluginData/&lt;plugin-id&gt;</c>, so walking up
+    ///     through the plugin and PluginData directories lets every engine select
+    ///     the same <c>&lt;asset-root&gt;/Runtimes/cuda</c> sibling. Older hosts
+    ///     and tests that provide no asset directory retain the legacy default.
+    /// </summary>
+    internal static string CacheRootForPluginAssetDirectory(string? pluginAssetDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(pluginAssetDirectory))
+            return DefaultCacheRoot();
+
+        var pluginDirectory = new DirectoryInfo(pluginAssetDirectory);
+        var commonAssetRoot = pluginDirectory.Parent?.Parent;
+        return commonAssetRoot is null
+            ? DefaultCacheRoot()
+            : Path.Join(commonAssetRoot.FullName, "Runtimes", "cuda");
+    }
 
     private static CudaWheel[] WheelsFor(CudaRuntimeProfile profile) =>
         profile == CudaRuntimeProfile.WhisperCublas ? s_whisperWheels : s_onnxRuntimeWheels;
@@ -266,6 +301,7 @@ public class CudaRuntimeProvisioner
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            await TryMigrateLegacyCacheAsync(ct).ConfigureAwait(false);
             EnsureExternalLockDirectory();
 
             // A wheel is fetched unless EVERY library it provides is already
@@ -308,6 +344,72 @@ public class CudaRuntimeProvisioner
         {
             _gate.Release();
         }
+    }
+
+    private async Task TryMigrateLegacyCacheAsync(CancellationToken ct)
+    {
+        if (_legacyMigrationAttempted)
+            return;
+
+        if (PathsEqual(_legacyCacheRoot, _cacheRoot)
+            || !Directory.Exists(_legacyCacheRoot)
+            || Directory.Exists(_cacheRoot))
+        {
+            _legacyMigrationAttempted = true;
+            return;
+        }
+
+        var legacyPaths = ResolveCachePaths(_legacyCacheRoot, nameof(_legacyCacheRoot));
+        try
+        {
+            // Protect the destination against another provisioner creating it while
+            // migration waits for the legacy cache. Each maintenance lease owns root
+            // -> every external wheel sentinel, so no active or starting provisioning
+            // batch can overlap the atomic move.
+            await using var destinationLocks = await AcquireMaintenanceLocksAsync(
+                    _maintenanceLockPath,
+                    _wheelLockDirectory,
+                    "migrating the CUDA runtime cache",
+                    ct
+                )
+                .ConfigureAwait(false);
+            await using var legacyLocks = await AcquireMaintenanceLocksAsync(
+                    legacyPaths.MaintenanceLockPath,
+                    legacyPaths.WheelLockDirectory,
+                    "migrating the legacy CUDA runtime cache",
+                    ct
+                )
+                .ConfigureAwait(false);
+
+            // Re-check under both roots' complete maintenance leases: another
+            // process may have migrated or provisioned while these locks were pending.
+            if (!Directory.Exists(_legacyCacheRoot) || Directory.Exists(_cacheRoot))
+            {
+                _legacyMigrationAttempted = true;
+                return;
+            }
+
+            _moveDirectory(_legacyCacheRoot, _cacheRoot);
+            _log?.Invoke(
+                $"CUDA runtime: migrated cache from {_legacyCacheRoot} to {_cacheRoot}."
+            );
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Best effort only. The old cache is never deleted here; a failed move
+            // falls through to normal provisioning at the configured destination.
+            _log?.Invoke(
+                $"CUDA runtime: could not migrate cache from {_legacyCacheRoot} "
+                    + $"to {_cacheRoot}: {ex.Message} Leaving the old cache in place "
+                    + "and provisioning at the configured location."
+            );
+        }
+
+        _legacyMigrationAttempted = true;
     }
 
     private async Task DownloadMissingAsync(
@@ -425,12 +527,25 @@ public class CudaRuntimeProvisioner
         }
     }
 
+    private Task<ExternalLockLease> AcquireMaintenanceLocksAsync(
+        string operation,
+        CancellationToken ct
+    ) =>
+        AcquireMaintenanceLocksAsync(
+            _maintenanceLockPath,
+            _wheelLockDirectory,
+            operation,
+            ct
+        );
+
     private async Task<ExternalLockLease> AcquireMaintenanceLocksAsync(
+        string maintenanceLockPath,
+        string wheelLockDirectory,
         string operation,
         CancellationToken ct
     )
     {
-        EnsureExternalLockDirectory();
+        EnsureExternalLockDirectory(wheelLockDirectory);
         using var timeoutCts = new CancellationTokenSource(MaintenanceLockTimeoutForTests);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
             ct,
@@ -442,7 +557,7 @@ public class CudaRuntimeProvisioner
         {
             acquired.Add(
                 await InterProcessFileLock
-                    .AcquireAsync(_maintenanceLockPath, linkedCts.Token)
+                    .AcquireAsync(maintenanceLockPath, linkedCts.Token)
                     .ConfigureAwait(false)
             );
 
@@ -450,8 +565,8 @@ public class CudaRuntimeProvisioner
             // wheel sentinel after the snapshot. Include the known wheel set plus
             // existing sentinels, for forward compatibility with bundle/package changes.
             var wheelLockPaths = s_onnxRuntimeWheels
-                .Select(WheelLockPath)
-                .Concat(Directory.EnumerateFiles(_wheelLockDirectory, "*.lock"))
+                .Select(wheel => WheelLockPath(wheel, wheelLockDirectory))
+                .Concat(Directory.EnumerateFiles(wheelLockDirectory, "*.lock"))
                 .Distinct(StringComparer.Ordinal)
                 .Order(StringComparer.Ordinal);
             foreach (var lockPath in wheelLockPaths)
@@ -481,10 +596,54 @@ public class CudaRuntimeProvisioner
     }
 
     private string WheelLockPath(CudaWheel wheel) =>
-        Path.Join(_wheelLockDirectory, wheel.Package + ".lock");
+        WheelLockPath(wheel, _wheelLockDirectory);
+
+    private static string WheelLockPath(CudaWheel wheel, string wheelLockDirectory) =>
+        Path.Join(wheelLockDirectory, wheel.Package + ".lock");
 
     private void EnsureExternalLockDirectory() =>
-        Directory.CreateDirectory(_wheelLockDirectory);
+        EnsureExternalLockDirectory(_wheelLockDirectory);
+
+    private static void EnsureExternalLockDirectory(string wheelLockDirectory) =>
+        Directory.CreateDirectory(wheelLockDirectory);
+
+    private static CachePaths ResolveCachePaths(string cacheRoot, string parameterName)
+    {
+        var cacheRootDirectory = Directory.GetParent(Path.Join(cacheRoot, BundleVersion))
+            ?? throw new ArgumentException(
+                "The CUDA cache root must have a parent directory.",
+                parameterName
+            );
+        var cacheParent = cacheRootDirectory.Parent
+            ?? throw new ArgumentException(
+                "The CUDA cache root must not be a filesystem root.",
+                parameterName
+            );
+        return new CachePaths(
+            cacheRootDirectory.FullName,
+            Path.Join(
+                cacheParent.FullName,
+                cacheRootDirectory.Name + ".maintenance.lock"
+            ),
+            Path.Join(
+                cacheParent.FullName,
+                cacheRootDirectory.Name + ".locks"
+            )
+        );
+    }
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(
+            Path.GetFullPath(left).TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar
+            ),
+            Path.GetFullPath(right).TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar
+            ),
+            StringComparison.Ordinal
+        );
 
     private static async ValueTask DisposeLocksAsync(List<FileStream> locks)
     {
@@ -1028,5 +1187,11 @@ public class CudaRuntimeProvisioner
         string Package,
         string Version,
         string[] RequiredSonames
+    );
+
+    private sealed record CachePaths(
+        string CacheRoot,
+        string MaintenanceLockPath,
+        string WheelLockDirectory
     );
 }

@@ -21,6 +21,27 @@ public partial class WhisperCppPluginTests
     private const float TranscriptionNoSpeechThreshold = 0.8f;
 
     [Fact]
+    public void InitializeCudaDependencies_CustomPluginAssetDirectory_UsesSharedConfiguredRoot()
+    {
+        using var temp = new TempAssetDir();
+        var storageRoot = Path.Join(temp.Path, "selected-storage");
+        var pluginAssetDirectory = Path.Join(
+            storageRoot,
+            "PluginData",
+            "com.typewhisper.whisper-cpp"
+        );
+        var host = CreateHostMock(pluginAssetDirectory);
+        using var plugin = new WhisperCppPlugin();
+
+        plugin.InitializeCudaDependenciesForTests(host.Object);
+
+        Assert.Equal(
+            Path.Join(storageRoot, "Runtimes", "cuda"),
+            plugin.CudaRuntimeCacheRootForTests
+        );
+    }
+
+    [Fact]
     public async Task AccumulateSegmentsAsync_SpeechThenTrailingSilence_UsesMinimumProbability()
     {
         var result = await WhisperCppPlugin.AccumulateSegmentsAsync(
@@ -399,6 +420,27 @@ public partial class WhisperCppPluginTests
 
 public partial class SherpaOnnxPluginTests
 {
+    [Fact]
+    public void InitializeCudaDependencies_CustomPluginAssetDirectory_UsesSharedConfiguredRoot()
+    {
+        using var temp = new TempAssetDir();
+        var storageRoot = Path.Join(temp.Path, "selected-storage");
+        var pluginAssetDirectory = Path.Join(
+            storageRoot,
+            "PluginData",
+            "com.typewhisper.sherpa-onnx"
+        );
+        var host = CreateHostMock(pluginAssetDirectory);
+        using var plugin = new SherpaOnnxPlugin();
+
+        plugin.InitializeCudaDependenciesForTests(host.Object);
+
+        Assert.Equal(
+            Path.Join(storageRoot, "Runtimes", "cuda"),
+            plugin.CudaRuntimeCacheRootForTests
+        );
+    }
+
     [Fact]
     public void SupportedAccelerationBackends_IsCpuAndNvidiaCuda()
     {
