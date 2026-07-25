@@ -39,6 +39,30 @@ public sealed class LocalizationResourcesTests
         Assert.Contains("{0}", value, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
+    public void Catalogs_HaveUiOperationFailureStringsWithRequiredPlaceholders(
+        string language
+    )
+    {
+        var catalog = Load(language);
+
+        Assert.True(
+            catalog.TryGetValue("Common.OperationFailed", out var pattern),
+            $"Missing {language} key: Common.OperationFailed"
+        );
+        Assert.Contains("{0}", pattern, StringComparison.Ordinal);
+        Assert.Contains("{1}", pattern, StringComparison.Ordinal);
+        Assert.True(
+            catalog.TryGetValue("Common.OperationFailedTitle", out var title),
+            $"Missing {language} key: Common.OperationFailedTitle"
+        );
+        Assert.False(string.IsNullOrWhiteSpace(title));
+    }
+
     [Fact]
     public void CanonicalCatalog_HasNativeDictationDisclosuresWithoutObsoleteEvdevClaims()
     {
