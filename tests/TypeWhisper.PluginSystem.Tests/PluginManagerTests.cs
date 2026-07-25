@@ -2,6 +2,7 @@ using Moq;
 using System.Reflection;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -181,6 +182,7 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
     private static readonly TimeSpan s_outerTimeout = TimeSpan.FromSeconds(2);
 
     private readonly Mock<IActiveWindowService> _activeWindow = new();
+    private readonly Mock<IErrorLogService> _errorLog = new();
     private readonly PluginEventBus _eventBus = new();
     private readonly Mock<IProfileService> _profiles = new();
     private readonly Mock<ISettingsService> _settings = new();
@@ -247,6 +249,122 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
         await _manager.DisablePluginAsync("com.test.notfound");
 
         Assert.Null(savedSettings);
+    }
+
+    [Fact]
+    public async Task CapabilityIndices_ValidCustomTranscriptionId_RoundTripsWhileColonSiblingIsRejected()
+    {
+        const string validSelectionId = "server.work_1";
+        var invalidProvider = new IdentifiedTranscriptionPlugin(
+            "com.test.invalid-transcription",
+            "server:work"
+        );
+        var validSibling = new IdentifiedTranscriptionPlugin(
+            "com.test.valid-transcription",
+            validSelectionId
+        );
+
+        var manager = await CreateManagerAsync(invalidProvider, validSibling);
+
+        Assert.DoesNotContain(invalidProvider, manager.TranscriptionEngines);
+        Assert.Contains(validSibling, manager.TranscriptionEngines);
+        _errorLog.Verify(
+            log => log.AddEntry(
+                It.Is<string>(message =>
+                    message.Contains("Skipping transcription engine", StringComparison.Ordinal)
+                    && message.Contains("[A-Za-z0-9._-]+", StringComparison.Ordinal)
+                ),
+                ErrorCategory.Transcription
+            ),
+            Times.AtLeastOnce
+        );
+
+        var persistedId = ModelManagerService.GetPluginModelId(
+            validSibling.GetTranscriptionSelectionId(),
+            validSibling.TranscriptionModels[0].Id
+        );
+        var parsedId = ModelManagerService.ParsePluginModelId(persistedId);
+        var resolvedProvider = Assert.Single(manager.TranscriptionEngines, provider =>
+            provider.GetTranscriptionSelectionId() == parsedId.PluginId
+        );
+
+        Assert.Equal(validSelectionId, parsedId.PluginId);
+        Assert.Equal(validSibling.TranscriptionModels[0].Id, parsedId.ModelId);
+        Assert.Same(validSibling, resolvedProvider);
+    }
+
+    [Fact]
+    public async Task CapabilityIndices_PluginIdFallbackLlmRoleRoundTripsWhileColonSiblingIsRejected()
+    {
+        var invalidProvider = new IdentifiedLlmPlugin(
+            "com.test.invalid-llm",
+            "server:work"
+        );
+        var validSibling = new FakeLlmPlugin("com.test.valid-llm");
+
+        var manager = await CreateManagerAsync(invalidProvider, validSibling);
+
+        Assert.DoesNotContain(invalidProvider, manager.LlmProviders);
+        Assert.Contains(validSibling, manager.LlmProviders);
+        Assert.Equal(validSibling.PluginId, validSibling.GetLlmSelectionId());
+        _errorLog.Verify(
+            log => log.AddEntry(
+                It.Is<string>(message =>
+                    message.Contains("Skipping LLM provider", StringComparison.Ordinal)
+                    && message.Contains("[A-Za-z0-9._-]+", StringComparison.Ordinal)
+                ),
+                ErrorCategory.Prompt
+            ),
+            Times.AtLeastOnce
+        );
+
+        var persistedId = ModelManagerService.GetPluginModelId(
+            validSibling.GetLlmSelectionId(),
+            validSibling.SupportedModels[0].Id
+        );
+        var parsedId = ModelManagerService.ParsePluginModelId(persistedId);
+        var resolvedProvider = Assert.Single(manager.LlmProviders, provider =>
+            provider.GetLlmSelectionId() == parsedId.PluginId
+        );
+
+        Assert.Equal(validSibling.PluginId, parsedId.PluginId);
+        Assert.Equal(validSibling.SupportedModels[0].Id, parsedId.ModelId);
+        Assert.Same(validSibling, resolvedProvider);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" \t")]
+    public async Task CapabilityIndices_EmptyOrWhitespaceCustomId_FallsBackThenValidatesPluginId(
+        string customSelectionId
+    )
+    {
+        var invalidFallback = new IdentifiedTranscriptionPlugin(
+            "invalid:fallback",
+            customSelectionId
+        );
+        var validFallback = new IdentifiedTranscriptionPlugin(
+            "com.test.valid_fallback",
+            customSelectionId
+        );
+
+        var manager = await CreateManagerAsync(invalidFallback, validFallback);
+
+        Assert.DoesNotContain(invalidFallback, manager.TranscriptionEngines);
+        Assert.Contains(validFallback, manager.TranscriptionEngines);
+        Assert.Equal(
+            validFallback.PluginId,
+            validFallback.GetTranscriptionSelectionId()
+        );
+        _errorLog.Verify(
+            log => log.AddEntry(
+                It.Is<string>(message =>
+                    message.Contains("Skipping transcription engine", StringComparison.Ordinal)
+                ),
+                ErrorCategory.Transcription
+            ),
+            Times.AtLeastOnce
+        );
     }
 
     [Fact]
@@ -346,6 +464,7 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
             _profiles.Object,
             _settings.Object,
             [],
+            errorLog: _errorLog.Object,
             pluginShutdownTimeout: s_shutdownTimeout
         );
 
@@ -385,6 +504,86 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
                 BindingFlags.Instance | BindingFlags.NonPublic
             ) ?? throw new MissingFieldException(typeof(PluginManager).FullName, "_allPlugins");
         return (List<LoadedPlugin>)field.GetValue(manager)!;
+    }
+
+    private abstract class FakeCapabilityPlugin(string pluginId) : ITypeWhisperPlugin
+    {
+        public string PluginId { get; } = pluginId;
+        public string PluginName => PluginId;
+        public string PluginVersion => "1.0.0";
+
+        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
+
+        public Task DeactivateAsync() => Task.CompletedTask;
+
+        public void Dispose() { }
+    }
+
+    private class FakeTranscriptionPlugin(string pluginId)
+        : FakeCapabilityPlugin(pluginId),
+            ITranscriptionEnginePlugin
+    {
+        public string ProviderId => PluginId;
+        public string ProviderDisplayName => PluginName;
+        public bool IsConfigured => true;
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
+            [new("model:version-1", "Test model")];
+        // ReSharper disable once ReturnTypeCanBeNotNullable -- implements ITranscriptionEnginePlugin.SelectedModelId, whose contract is nullable.
+        public string? SelectedModelId => TranscriptionModels[0].Id;
+        public bool SupportsTranslation => false;
+
+        public void SelectModel(string modelId) { }
+
+        public Task<PluginTranscriptionResult> TranscribeAsync(
+            byte[] wavAudio,
+            string? language,
+            bool translate,
+            string? prompt,
+            CancellationToken ct
+        )
+        {
+            return Task.FromResult(new PluginTranscriptionResult("", null, 0, null));
+        }
+    }
+
+    private sealed class IdentifiedTranscriptionPlugin(
+        string pluginId,
+        string customSelectionId
+    )
+        : FakeTranscriptionPlugin(pluginId),
+            ITranscriptionEngineSelectionIdentity
+    {
+        public string TranscriptionSelectionId { get; } = customSelectionId;
+    }
+
+    private class FakeLlmPlugin(string pluginId)
+        : FakeCapabilityPlugin(pluginId),
+            ILlmProviderPlugin
+    {
+        public string ProviderName => PluginName;
+        public bool IsAvailable => true;
+        public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
+            [new("model:version-1", "Test model")];
+
+        public Task<string> ProcessAsync(
+            string systemPrompt,
+            string userText,
+            string model,
+            CancellationToken ct
+        )
+        {
+            return Task.FromResult("");
+        }
+    }
+
+    private sealed class IdentifiedLlmPlugin(
+        string pluginId,
+        string customSelectionId
+    )
+        : FakeLlmPlugin(pluginId),
+            ILlmProviderSelectionIdentity
+    {
+        public string LlmSelectionId { get; } = customSelectionId;
     }
 
     private sealed class LifecyclePlugin(
