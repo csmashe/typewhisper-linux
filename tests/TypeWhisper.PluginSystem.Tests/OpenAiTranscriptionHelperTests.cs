@@ -1,9 +1,69 @@
+using System.Net;
+using System.Text;
 using TypeWhisper.PluginSDK.Helpers;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
 public class OpenAiTranscriptionHelperTests
 {
+    [Fact]
+    public void ParseTranscriptionResponse_MissingText_ThrowsProtocolFailure()
+    {
+        const string json = """{"language":"en","duration":1.0}""";
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => OpenAiTranscriptionHelper.ParseTranscriptionResponse(json));
+
+        Assert.Contains("'text'", exception.Message);
+        Assert.Contains("Body:", exception.Message);
+        Assert.Contains(json, exception.Message);
+    }
+
+    [Fact]
+    public void ParseTranscriptionResponse_NonStringText_ThrowsProtocolFailure()
+    {
+        const string json = """{"text":42,"language":"en","duration":1.0}""";
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => OpenAiTranscriptionHelper.ParseTranscriptionResponse(json));
+
+        Assert.Contains("'text'", exception.Message);
+        Assert.Contains("Body:", exception.Message);
+        Assert.Contains(json, exception.Message);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_SuccessfulErrorObject_SurfacesProviderMessage()
+    {
+        const string json = """
+                            {
+                                "error": {
+                                    "message": "The audio format is not supported.",
+                                    "type": "invalid_request_error"
+                                }
+                            }
+                            """;
+        using var httpClient = new HttpClient(new JsonResponseHandler(json));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => OpenAiTranscriptionHelper.TranscribeAsync(
+                httpClient,
+                "https://example.test",
+                "test-key",
+                "test-model",
+                [],
+                null,
+                false,
+                "json",
+                CancellationToken.None
+            ));
+
+        Assert.Contains("'text'", exception.Message);
+        Assert.Contains("The audio format is not supported.", exception.Message);
+        Assert.Contains("Body:", exception.Message);
+        Assert.Contains(json.Length > 200 ? json[..200] : json, exception.Message);
+    }
+
     [Fact]
     public void ParseTranscriptionResponse_VerboseJson_ExtractsNoSpeechProb()
     {
@@ -124,5 +184,19 @@ public class OpenAiTranscriptionHelperTests
 
         Assert.NotNull(result.NoSpeechProbability);
         Assert.True(result.NoSpeechProbability < 0.1f);
+    }
+
+    private sealed class JsonResponseHandler(string json) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            });
+        }
     }
 }

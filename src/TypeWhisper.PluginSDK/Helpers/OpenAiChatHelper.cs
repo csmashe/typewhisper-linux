@@ -348,22 +348,72 @@ public static class OpenAiChatHelper
             || choices.ValueKind != JsonValueKind.Array
             || choices.GetArrayLength() == 0)
         {
-            return "";
+            throw CreateInvalidResponseException(
+                json,
+                root,
+                "'choices' must be a non-empty array"
+            );
         }
 
         var firstChoice = choices[0];
-        if (
-            firstChoice.ValueKind != JsonValueKind.Object
+        if (firstChoice.ValueKind != JsonValueKind.Object
             || !firstChoice.TryGetProperty("message", out var message)
-            || message.ValueKind != JsonValueKind.Object
-            || !message.TryGetProperty("content", out var content)
-            || content.ValueKind != JsonValueKind.String
-        )
+            || message.ValueKind != JsonValueKind.Object)
         {
-            return "";
+            throw CreateInvalidResponseException(
+                json,
+                root,
+                "'choices[0].message' must be an object"
+            );
+        }
+
+        if (!message.TryGetProperty("content", out var content)
+            || content.ValueKind != JsonValueKind.String)
+        {
+            throw CreateInvalidResponseException(
+                json,
+                root,
+                "'choices[0].message.content' must be a string"
+            );
         }
 
         return content.GetString()?.Trim() ?? "";
+    }
+
+    private static InvalidOperationException CreateInvalidResponseException(
+        string json,
+        JsonElement root,
+        string requiredField
+    )
+    {
+        var providerError = TryGetProviderErrorMessage(root);
+        var providerErrorDetail = providerError is null
+            ? ""
+            : $" Provider error: {providerError}";
+        return new InvalidOperationException(
+            $"Invalid chat completion response: required field {requiredField}."
+            + $"{providerErrorDetail} Body: {GetBodySnippet(json)}"
+        );
+    }
+
+    private static string? TryGetProviderErrorMessage(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Object
+            && root.TryGetProperty("error", out var error)
+            && error.ValueKind == JsonValueKind.Object
+            && error.TryGetProperty("message", out var message)
+            && message.ValueKind == JsonValueKind.String)
+        {
+            return message.GetString();
+        }
+
+        return null;
+    }
+
+    private static string GetBodySnippet(string json)
+    {
+        const int maxLength = 200;
+        return json.Length > maxLength ? $"{json[..maxLength]}..." : json;
     }
 
     private static Dictionary<string, object?> BuildRequestBody(
