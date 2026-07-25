@@ -35,9 +35,12 @@ public partial class WelcomeWizardViewModel : ObservableObject
 {
     private const string PasteSmokeExpectedText = "typewhisper paste test";
     private readonly AudioRecordingService _audio;
+    private readonly IReadOnlyList<AudioInputDevice>? _availableMics;
     private readonly SystemCommandAvailabilityService _commands;
     private readonly IDictionaryService _dictionary;
     private readonly HotkeyService _hotkey;
+    private readonly CancellationTokenSource _lifetimeCts;
+    private readonly CancellationToken _lifetimeToken;
     private readonly ModelManagerService _models;
     private readonly PropertyChangedEventHandler _modelStateChangedHandler;
     private readonly PluginManager _pluginManager;
@@ -45,7 +48,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private readonly ISettingsService _settings;
     private readonly IReadOnlyList<ISetupTask> _setupTasks;
     private readonly TextInsertionService _textInsertion;
-    private bool _cleanedUp;
+    private int _cleanedUp;
     private AudioRecordingService.AudioCaptureSession? _firstDictationCaptureSession;
 
     [ObservableProperty]
@@ -125,19 +128,63 @@ public partial class WelcomeWizardViewModel : ObservableObject
         IDictionaryService dictionary,
         ISettingsService settings
     )
+        : this(
+            models,
+            pluginManager,
+            hotkey,
+            audio,
+            commands,
+            textInsertion,
+            setupTasks,
+            dictionary,
+            settings,
+            availableMics: null
+        )
     {
+    }
+
+    internal WelcomeWizardViewModel(
+        ModelManagerService models,
+        PluginManager pluginManager,
+        HotkeyService hotkey,
+        AudioRecordingService audio,
+        SystemCommandAvailabilityService commands,
+        TextInsertionService textInsertion,
+        IEnumerable<ISetupTask> setupTasks,
+        IDictionaryService dictionary,
+        ISettingsService settings,
+        IReadOnlyList<AudioInputDevice>? availableMics
+    )
+    {
+        _lifetimeCts = new CancellationTokenSource();
+        _lifetimeToken = _lifetimeCts.Token;
         _models = models;
         _pluginManager = pluginManager;
         _hotkey = hotkey;
         _audio = audio;
+        _availableMics = availableMics;
         _commands = commands;
         _textInsertion = textInsertion;
         _setupTasks = setupTasks.Where(t => t.AppliesToThisMachine()).ToArray();
         _dictionary = dictionary;
         _settings = settings;
 
-        _pluginStateChangedHandler = (_, _) => Dispatcher.UIThread.Post(RefreshPluginState);
-        _modelStateChangedHandler = (_, _) => Dispatcher.UIThread.Post(OnModelStatusChanged);
+        _pluginStateChangedHandler = (_, _) =>
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!IsAbandoned)
+                {
+                    RefreshPluginState();
+                }
+            });
+        _modelStateChangedHandler = (_, _) =>
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!IsAbandoned)
+                {
+                    OnModelStatusChanged();
+                }
+            });
         _pluginManager.PluginStateChanged += _pluginStateChangedHandler;
         _models.PropertyChanged += _modelStateChangedHandler;
         _audio.LevelChanged += OnAudioLevelChanged;
@@ -188,6 +235,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     public async Task<bool> RunPasteSmokeTestAsync()
     {
+        if (IsAbandoned)
+        {
+            return false;
+        }
+
         PasteTestPassed = false;
         PasteSmokeText = "";
         PasteTestStatus = Loc.Instance["Wizard.PasteTestRunning"];
@@ -202,9 +254,19 @@ public partial class WelcomeWizardViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            if (IsAbandoned)
+            {
+                return false;
+            }
+
             PasteSmokeText = ex.Message;
             PasteTestPassed = false;
             PasteTestStatus = Loc.Instance.GetString("Wizard.PasteTestFailed", ex.Message);
+            return false;
+        }
+
+        if (IsAbandoned)
+        {
             return false;
         }
 
@@ -238,6 +300,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     public void CompletePasteSmokeTest(string? actualText)
     {
+        if (IsAbandoned)
+        {
+            return;
+        }
+
         PasteSmokeText = actualText ?? "";
         PasteTestPassed = PasteSmokeText.Contains(
             PasteSmokeExpectedText,
@@ -251,15 +318,26 @@ public partial class WelcomeWizardViewModel : ObservableObject
     // Guards against Avalonia firing Closed more than once on certain backends.
     public void Cleanup()
     {
-        if (_cleanedUp)
+        if (Interlocked.Exchange(ref _cleanedUp, 1) != 0)
         {
             return;
         }
 
-        _cleanedUp = true;
         _pluginManager.PluginStateChanged -= _pluginStateChangedHandler;
         _models.PropertyChanged -= _modelStateChangedHandler;
         _audio.LevelChanged -= OnAudioLevelChanged;
+        try
+        {
+            _lifetimeCts.Cancel();
+        }
+        catch (AggregateException)
+        {
+            // A cancellation callback must not block the rest of close cleanup.
+        }
+        finally
+        {
+            _lifetimeCts.Dispose();
+        }
 
         if (IsMicTestRunning)
         {
@@ -271,6 +349,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         if (firstDictationCaptureSession is not null)
         {
             FireAndLog(
+                // ReSharper disable once MethodSupportsCancellation -- teardown path; the CTS is already cancelled and disposed, so forwarding it would just fault the stop.
                 () => _audio.StopRecordingAsync(firstDictationCaptureSession),
                 "welcome wizard stop recording"
             );
@@ -354,7 +433,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     private void LoadMics()
     {
         Mics.Clear();
-        foreach (var d in AudioRecordingService.GetInputDevices())
+        foreach (var d in _availableMics ?? AudioRecordingService.GetInputDevices())
         {
             Mics.Add(d);
         }
@@ -367,6 +446,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     private void RefreshPluginState()
     {
+        if (IsAbandoned)
+        {
+            return;
+        }
+
         foreach (var existing in ExtensionPlugins)
         {
             var isEnabled = _pluginManager.IsEnabled(existing.Id);
@@ -386,6 +470,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
     // running the heavy probe on each one would saturate the UI thread.
     private void OnModelStatusChanged()
     {
+        if (IsAbandoned)
+        {
+            return;
+        }
+
         UpdateDownloadProgress();
 
         if (!IsModelDownloading)
@@ -452,6 +541,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     partial void OnStepIndexChanged(int value)
     {
+        if (IsAbandoned)
+        {
+            return;
+        }
+
         OnPropertyChanged(nameof(IsFirstStep));
         OnPropertyChanged(nameof(IsLastStep));
         OnPropertyChanged(nameof(NextLabel));
@@ -490,6 +584,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
     [RelayCommand]
     private void Back()
     {
+        if (IsAbandoned)
+        {
+            return;
+        }
+
         if (StepIndex > 0)
         {
             StepIndex--;
@@ -499,6 +598,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
     [RelayCommand]
     private async Task NextAsync()
     {
+        if (IsAbandoned)
+        {
+            return;
+        }
+
         // Step 0: pick model — download/load before advancing
         if (StepIndex == 0)
         {
@@ -523,14 +627,28 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
             try
             {
-                await _models.DownloadAndLoadModelAsync(row.ModelId);
+                await _models.DownloadAndLoadModelAsync(row.ModelId, _lifetimeToken);
+                if (IsAbandoned)
+                {
+                    return;
+                }
+
                 _settings.Save(_settings.Current with { SelectedModelId = row.ModelId });
                 ModelStatus = Loc.Instance.GetString("Wizard.ModelReady", row.DisplayName);
                 IsModelDownloading = false;
                 RefreshModelState();
             }
+            catch (OperationCanceledException) when (_lifetimeToken.IsCancellationRequested)
+            {
+                return;
+            }
             catch (Exception ex)
             {
+                if (IsAbandoned)
+                {
+                    return;
+                }
+
                 IsModelDownloading = false;
                 ModelStatus = Loc.Instance.GetString("Wizard.ModelFailed", ex.Message);
                 return;
@@ -583,6 +701,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
     [RelayCommand]
     private void Skip()
     {
+        if (IsAbandoned)
+        {
+            return;
+        }
+
         FinishOnboardingWithIndustryPreset();
         RequestClose?.Invoke(this, EventArgs.Empty);
     }
@@ -606,6 +729,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
     [RelayCommand]
     private async Task TogglePluginEnabledAsync(PluginRow row)
     {
+        if (IsAbandoned)
+        {
+            return;
+        }
+
         if (row.IsEnabled)
         {
             await _pluginManager.DisablePluginAsync(row.Id);
@@ -622,6 +750,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
     /// </summary>
     private async Task RefreshSetupAsync()
     {
+        if (IsAbandoned)
+        {
+            return;
+        }
+
         if (SetupItems.Count == 0)
         {
             foreach (var task in _setupTasks)
@@ -640,18 +773,40 @@ public partial class WelcomeWizardViewModel : ObservableObject
             SetupTaskState state;
             try
             {
-                state = await Task.Run(() => row.Source.EvaluateAsync(CancellationToken.None))
+                state = await Task.Run(
+                        () => row.Source.EvaluateAsync(_lifetimeToken),
+                        _lifetimeToken
+                    )
                     .ConfigureAwait(true);
+            }
+            catch (OperationCanceledException) when (_lifetimeToken.IsCancellationRequested)
+            {
+                return;
             }
             catch (Exception ex)
             {
+                if (IsAbandoned)
+                {
+                    return;
+                }
+
                 state = new SetupTaskState(
                     SetupTaskStatusKind.Failed,
                     Loc.Instance.GetString("Wizard.SetupCheckFailed", ex.Message)
                 );
             }
 
+            if (IsAbandoned)
+            {
+                return;
+            }
+
             row.Apply(state);
+        }
+
+        if (IsAbandoned)
+        {
+            return;
         }
 
         RefreshSetupGating();
@@ -686,7 +841,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     [RelayCommand]
     private async Task RunSetupActionAsync(SetupTaskRow? row)
     {
-        if (row is null || row.IsBusy)
+        if (IsAbandoned || row is null || row.IsBusy)
         {
             return;
         }
@@ -697,15 +852,32 @@ public partial class WelcomeWizardViewModel : ObservableObject
         SetupActionOutcome outcome;
         try
         {
-            outcome = await Task.Run(() => row.Source.RunActionAsync(CancellationToken.None))
+            outcome = await Task.Run(
+                    () => row.Source.RunActionAsync(_lifetimeToken),
+                    _lifetimeToken
+                )
                 .ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) when (_lifetimeToken.IsCancellationRequested)
+        {
+            return;
         }
         catch (Exception ex)
         {
+            if (IsAbandoned)
+            {
+                return;
+            }
+
             outcome = new SetupActionOutcome(
                 false,
                 Loc.Instance.GetString("Wizard.SetupActionFailed", ex.Message)
             );
+        }
+
+        if (IsAbandoned)
+        {
+            return;
         }
 
         row.EndAction(outcome);
@@ -717,12 +889,22 @@ public partial class WelcomeWizardViewModel : ObservableObject
     [RelayCommand]
     private async Task RecheckSetupAsync()
     {
+        if (IsAbandoned)
+        {
+            return;
+        }
+
         await RefreshSetupAsync().ConfigureAwait(true);
     }
 
     [RelayCommand]
     private void ToggleMicTest()
     {
+        if (IsAbandoned)
+        {
+            return;
+        }
+
         if (IsMicTestRunning)
         {
             _audio.StopPreview();
@@ -753,6 +935,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
     [RelayCommand]
     private async Task ToggleFirstDictationAsync()
     {
+        if (IsAbandoned)
+        {
+            return;
+        }
+
         if (!IsFirstDictationRecording)
         {
             if (IsMicTestRunning)
@@ -804,11 +991,22 @@ public partial class WelcomeWizardViewModel : ObservableObject
         {
             wav = captureSession is null
                 ? []
+                // ReSharper disable once MethodSupportsCancellation -- must run to completion to return the captured audio; intentionally non-cancellable.
                 : await _audio.StopRecordingAsync(captureSession);
         }
         catch (Exception ex)
         {
+            if (IsAbandoned)
+            {
+                return;
+            }
+
             FirstDictationStatus = Loc.Instance.GetString("Wizard.RecordingFailed", ex.Message);
+            return;
+        }
+
+        if (IsAbandoned)
+        {
             return;
         }
 
@@ -823,10 +1021,22 @@ public partial class WelcomeWizardViewModel : ObservableObject
             ModelManagerService.TranscriptionLease lease;
             try
             {
-                lease = await _models.AcquireTranscriptionAsync(SelectedModel?.ModelId);
+                lease = await _models.AcquireTranscriptionAsync(
+                    SelectedModel?.ModelId,
+                    cancellationToken: _lifetimeToken
+                );
+            }
+            catch (OperationCanceledException) when (_lifetimeToken.IsCancellationRequested)
+            {
+                return;
             }
             catch (InvalidOperationException)
             {
+                if (IsAbandoned)
+                {
+                    return;
+                }
+
                 FirstDictationStatus = Loc.Instance["Wizard.ModelLoadFailed"];
                 return;
             }
@@ -834,6 +1044,11 @@ public partial class WelcomeWizardViewModel : ObservableObject
             string transcript;
             await using (lease)
             {
+                if (IsAbandoned)
+                {
+                    return;
+                }
+
                 var plugin = lease.Plugin;
                 FirstDictationStatus = Loc.Instance.GetString(
                     "Wizard.Transcribing",
@@ -844,10 +1059,20 @@ public partial class WelcomeWizardViewModel : ObservableObject
                     null,
                     false,
                     null,
-                    CancellationToken.None
+                    _lifetimeToken
                 );
+                if (IsAbandoned)
+                {
+                    return;
+                }
+
                 // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- Text comes from an external ITranscriptionEnginePlugin; its non-null annotation may not hold, keep the defensive ?.
                 transcript = result.Text?.Trim() ?? "";
+            }
+
+            if (IsAbandoned)
+            {
+                return;
             }
 
             FirstDictationText = transcript;
@@ -855,8 +1080,17 @@ public partial class WelcomeWizardViewModel : ObservableObject
                 ? Loc.Instance["Wizard.NoTextReturned"]
                 : Loc.Instance["Wizard.FirstDictationPassed"];
         }
+        catch (OperationCanceledException) when (_lifetimeToken.IsCancellationRequested)
+        {
+            // Cancellation during teardown is expected; swallow it.
+        }
         catch (Exception ex)
         {
+            if (IsAbandoned)
+            {
+                return;
+            }
+
             FirstDictationStatus = Loc.Instance.GetString("Wizard.TranscriptionFailed", ex.Message);
         }
     }
@@ -864,7 +1098,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
     [RelayCommand]
     private async Task RunCudaBenchmarkAsync()
     {
-        if (IsCudaBenchmarkRunning)
+        if (IsAbandoned || IsCudaBenchmarkRunning)
         {
             return;
         }
@@ -879,24 +1113,41 @@ public partial class WelcomeWizardViewModel : ObservableObject
         CudaBenchmarkStatus = Loc.Instance["Wizard.CudaChecking"];
         try
         {
-            var result = await _commands.RunCudaBenchmarkAsync();
+            var result = await _commands.RunCudaBenchmarkAsync(_lifetimeToken);
+            if (IsAbandoned)
+            {
+                return;
+            }
+
             CudaBenchmarkStatus = result.Message;
+        }
+        catch (OperationCanceledException) when (_lifetimeToken.IsCancellationRequested)
+        {
+            // Cancellation during teardown is expected; swallow it.
         }
         finally
         {
-            IsCudaBenchmarkRunning = false;
+            if (!IsAbandoned)
+            {
+                IsCudaBenchmarkRunning = false;
+            }
         }
     }
 
     private void OnAudioLevelChanged(object? sender, float level)
     {
-        if (!IsMicTestRunning && !IsFirstDictationRecording)
+        if (IsAbandoned || (!IsMicTestRunning && !IsFirstDictationRecording))
         {
             return;
         }
 
         Dispatcher.UIThread.Post(() =>
         {
+            if (IsAbandoned)
+            {
+                return;
+            }
+
             // Raw RMS is typically well below 0.1 for normal speech; ×8 maps it to 0–1 for the meter.
             MicLevel = Math.Clamp(level * 8, 0, 1);
             if (IsMicTestRunning && MicLevel > 0.05)
@@ -929,6 +1180,9 @@ public partial class WelcomeWizardViewModel : ObservableObject
             TaskScheduler.Default
         );
     }
+
+    private bool IsAbandoned =>
+        Volatile.Read(ref _cleanedUp) != 0 || _lifetimeToken.IsCancellationRequested;
 
     private void RefreshStepDots()
     {
