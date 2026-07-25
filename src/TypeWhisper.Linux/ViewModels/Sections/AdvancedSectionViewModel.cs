@@ -1,3 +1,4 @@
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
@@ -12,8 +13,10 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class AdvancedSectionViewModel : ObservableObject
 {
     private readonly PluginManager _pluginManager;
+    private readonly Action<Action> _post;
     private readonly ISettingsService _settings;
     private readonly SpeechFeedbackService _speechFeedback;
+    private long _refreshGeneration;
 
     [ObservableProperty]
     private bool _captureLlmProvenance;
@@ -44,16 +47,43 @@ public partial class AdvancedSectionViewModel : ObservableObject
         SpeechFeedbackService speechFeedback,
         PluginManager pluginManager
     )
+        : this(
+            settings,
+            speechFeedback,
+            pluginManager,
+            action => Dispatcher.UIThread.Post(action)
+        )
+    {
+    }
+
+    internal AdvancedSectionViewModel(
+        ISettingsService settings,
+        SpeechFeedbackService speechFeedback,
+        PluginManager pluginManager,
+        Action<Action> post
+    )
     {
         _settings = settings;
         _speechFeedback = speechFeedback;
         _pluginManager = pluginManager;
-        _speechFeedback.ProvidersChanged += (_, _) => RefreshSpokenFeedbackProviders();
+        _post = post;
+        _speechFeedback.ProvidersChanged += (_, _) => PostPluginStateRefresh();
         Refresh(settings.Current);
         RefreshSpokenFeedbackProviders();
         _settings.SettingsChanged += Refresh;
-        _pluginManager.PluginStateChanged += (_, _) =>
+        _pluginManager.PluginStateChanged += (_, _) => PostPluginStateRefresh();
+    }
+
+    private void PostPluginStateRefresh()
+    {
+        var generation = Interlocked.Increment(ref _refreshGeneration);
+        _post(() =>
         {
+            if (generation != Interlocked.Read(ref _refreshGeneration))
+            {
+                return;
+            }
+
             OnPropertyChanged(nameof(CanUseMemory));
             OnPropertyChanged(nameof(ShowMemoryUnavailableReason));
             OnPropertyChanged(nameof(MemoryHint));
@@ -65,7 +95,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
             {
                 MemoryEnabled = false;
             }
-        };
+        });
     }
 
     public ObservableCollection<TtsProviderOption> SpokenFeedbackProviders { get; } = [];
