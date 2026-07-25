@@ -84,7 +84,14 @@ public static class OpenAiTranscriptionHelper
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        var text = root.TryGetProperty("text", out var textEl) ? textEl.GetString() ?? "" : "";
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("text", out var textEl)
+            || textEl.ValueKind != JsonValueKind.String)
+        {
+            throw CreateInvalidResponseException(json, root);
+        }
+
+        var text = textEl.GetString() ?? "";
         var language = root.TryGetProperty("language", out var langEl) ? langEl.GetString() : null;
         var duration = root.TryGetProperty("duration", out var durEl) ? durEl.GetDouble() : 0;
         var segments = new List<PluginTranscriptionSegment>();
@@ -121,5 +128,40 @@ public static class OpenAiTranscriptionHelper
         }
 
         return new PluginTranscriptionResult(text.Trim(), language, duration, minNoSpeechProb) { Segments = segments };
+    }
+
+    private static InvalidOperationException CreateInvalidResponseException(
+        string json,
+        JsonElement root
+    )
+    {
+        var providerError = TryGetProviderErrorMessage(root);
+        var providerErrorDetail = providerError is null
+            ? ""
+            : $" Provider error: {providerError}";
+        return new InvalidOperationException(
+            "Invalid transcription response: required field 'text' must be a string."
+            + $"{providerErrorDetail} Body: {GetBodySnippet(json)}"
+        );
+    }
+
+    private static string? TryGetProviderErrorMessage(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Object
+            && root.TryGetProperty("error", out var error)
+            && error.ValueKind == JsonValueKind.Object
+            && error.TryGetProperty("message", out var message)
+            && message.ValueKind == JsonValueKind.String)
+        {
+            return message.GetString();
+        }
+
+        return null;
+    }
+
+    private static string GetBodySnippet(string json)
+    {
+        const int maxLength = 200;
+        return json.Length > maxLength ? $"{json[..maxLength]}..." : json;
     }
 }
