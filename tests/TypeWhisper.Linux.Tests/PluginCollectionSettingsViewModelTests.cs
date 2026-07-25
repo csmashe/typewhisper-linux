@@ -4,6 +4,7 @@ using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Models;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
@@ -140,6 +141,61 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         // The fake implements IPluginCollectionSettingsProvider but NOT
         // IPluginSettingsProvider — HasExpandableSettings must still be true.
         Assert.True(row.HasExpandableSettings);
+    }
+
+    [Fact]
+    public void Descriptor_DrivesLocationBadgeAndEveryCategoryGroup()
+    {
+        var plugin = new FakeCollectionPlugin();
+        var loaded = TestPluginManagerFactory.CreateLoadedPlugin(
+            _tempDir,
+            plugin.PluginId,
+            plugin,
+            PluginNetworkAccess.Mixed,
+            [PluginCategory.Tts, PluginCategory.Integration]
+        );
+        var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded]);
+
+        var vm = new PluginsSectionViewModel(manager);
+
+        Assert.Equal(
+            ["Text-to-Speech", "Integrations"],
+            vm.PluginGroups.Select(group => group.Title).ToArray()
+        );
+        var rows = vm.PluginGroups.SelectMany(group => group.Plugins).ToArray();
+        Assert.Equal(2, rows.Length);
+        Assert.Same(rows[0], rows[1]);
+        Assert.Equal(PluginNetworkAccess.Mixed, rows[0].NetworkAccess);
+        Assert.True(
+            rows[0].Categories.SetEquals(
+                [PluginCategory.Tts, PluginCategory.Integration]
+            )
+        );
+        Assert.Equal("Mixed", rows[0].LocationBadge);
+        Assert.False(rows[0].RanLocally);
+    }
+
+    [Fact]
+    public void TtsDescriptor_RendersSupertonicUnderTtsInsteadOfUtility()
+    {
+        var plugin = new FakeSettingsPlugin("com.typewhisper.supertonic-tts");
+        var loaded = TestPluginManagerFactory.CreateLoadedPlugin(
+            _tempDir,
+            plugin.PluginId,
+            plugin,
+            PluginNetworkAccess.Local,
+            [PluginCategory.Tts]
+        );
+        var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded]);
+
+        var vm = new PluginsSectionViewModel(manager);
+
+        var group = Assert.Single(vm.PluginGroups);
+        Assert.Equal("Text-to-Speech", group.Title);
+        var row = Assert.Single(group.Plugins);
+        Assert.Equal("tts", row.CategoryKey);
+        Assert.Equal("Local", row.LocationBadge);
+        Assert.True(row.RanLocally);
     }
 
     [Fact]
@@ -571,8 +627,10 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             "P",
             "1",
             "",
-            "utility",
-            true,
+            new PluginMetadataDescriptor(
+                PluginNetworkAccess.Local,
+                [PluginCategory.Utility]
+            ),
             true,
             true
         );
@@ -999,8 +1057,10 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             "P",
             "1",
             "",
-            "utility",
-            true,
+            new PluginMetadataDescriptor(
+                PluginNetworkAccess.Local,
+                [PluginCategory.Utility]
+            ),
             true,
             true
         );

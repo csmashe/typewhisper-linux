@@ -32,7 +32,7 @@ public class XaiPluginTests
 
         Assert.Equal("com.typewhisper.xai", manifest.GetProperty("id").GetString());
         Assert.Equal("xAI / Grok", manifest.GetProperty("name").GetString());
-        Assert.Equal("transcription", manifest.GetProperty("category").GetString());
+        Assert.Equal(["transcription", "llm", "tts"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
         Assert.Equal(
             "TypeWhisper.Plugin.Xai.dll",
             manifest.GetProperty("assemblyName").GetString()

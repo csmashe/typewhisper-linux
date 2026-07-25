@@ -33,7 +33,7 @@ public class OpenRouterPluginTests
 
         Assert.Equal("com.typewhisper.openrouter", manifest.GetProperty("id").GetString());
         Assert.Equal("OpenRouter", manifest.GetProperty("name").GetString());
-        Assert.Equal("llm", manifest.GetProperty("category").GetString());
+        Assert.Equal(["transcription", "llm"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
         Assert.Equal(
             "TypeWhisper.Plugin.OpenRouter.dll",
             manifest.GetProperty("assemblyName").GetString());

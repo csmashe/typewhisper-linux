@@ -127,7 +127,7 @@ public sealed class MemoryService
 
         var providerId = provider.GetLlmSelectionId();
         var plugin = _pluginManager.GetPlugin(providerId);
-        var ranLocally = plugin is not null && PluginLocalityClassifier.IsLocal(plugin.Manifest);
+        var ranLocally = plugin?.Metadata.RanLocally ?? false;
 
         var provenance = new LlmCallProvenance
         {

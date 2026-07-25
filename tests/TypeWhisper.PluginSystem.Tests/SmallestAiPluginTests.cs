@@ -32,7 +32,7 @@ public class SmallestAiPluginTests
 
         Assert.Equal("com.typewhisper.smallest-ai", manifest.GetProperty("id").GetString());
         Assert.Equal("Smallest AI Pulse", manifest.GetProperty("name").GetString());
-        Assert.Equal("transcription", manifest.GetProperty("category").GetString());
+        Assert.Equal(["transcription"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
         Assert.Equal(
             "TypeWhisper.Plugin.SmallestAi.dll",
             manifest.GetProperty("assemblyName").GetString()

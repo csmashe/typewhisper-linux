@@ -33,7 +33,7 @@ public class OpenAiPluginTests
 
         Assert.Equal("com.typewhisper.openai", manifest.GetProperty("id").GetString());
         Assert.Equal("OpenAI / ChatGPT", manifest.GetProperty("name").GetString());
-        Assert.Equal("transcription", manifest.GetProperty("category").GetString());
+        Assert.Equal(["transcription", "llm", "tts"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
         Assert.Equal(
             "TypeWhisper.Plugin.OpenAi.dll",
             manifest.GetProperty("assemblyName").GetString()

@@ -4,6 +4,8 @@
   "version": "1.0.1",
   "author": "TypeWhisper",
   "description": "Google Gemini LLM provider for prompt actions and translation",
+  "networkAccess": "network",
+  "categories": ["llm"],
   "assemblyName": "TypeWhisper.Plugin.Gemini.dll",
   "pluginClass": "TypeWhisper.Plugin.Gemini.GeminiPlugin"
 }

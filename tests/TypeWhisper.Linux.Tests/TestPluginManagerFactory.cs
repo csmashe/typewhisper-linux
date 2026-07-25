@@ -70,21 +70,27 @@ internal static class TestPluginManagerFactory
     public static LoadedPlugin CreateLoadedPlugin(
         string pluginDir,
         string pluginId,
-        ITypeWhisperPlugin plugin
+        ITypeWhisperPlugin plugin,
+        PluginNetworkAccess networkAccess = PluginNetworkAccess.Network,
+        IReadOnlyList<PluginCategory>? categories = null
     )
     {
+        var manifest = new PluginManifest
+        {
+            Id = pluginId,
+            Name = plugin.PluginName,
+            Version = plugin.PluginVersion,
+            AssemblyName = "fake.dll",
+            PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name,
+            NetworkAccess = networkAccess,
+            Categories = (categories ?? [PluginCategory.Utility]).ToArray(),
+        };
         return new LoadedPlugin(
-            new PluginManifest
-            {
-                Id = pluginId,
-                Name = plugin.PluginName,
-                Version = plugin.PluginVersion,
-                AssemblyName = "fake.dll",
-                PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name,
-            },
+            manifest,
             plugin,
             new PluginAssemblyLoadContext(pluginDir),
-            pluginDir
+            pluginDir,
+            PluginLoader.ResolveMetadata(manifest)
         );
     }
 

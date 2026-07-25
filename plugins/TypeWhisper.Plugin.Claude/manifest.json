@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "author": "TypeWhisper",
   "description": "Anthropic Claude LLM for prompt processing",
+  "networkAccess": "network",
+  "categories": ["llm"],
   "assemblyName": "TypeWhisper.Plugin.Claude.dll",
   "pluginClass": "TypeWhisper.Plugin.Claude.ClaudePlugin"
 }

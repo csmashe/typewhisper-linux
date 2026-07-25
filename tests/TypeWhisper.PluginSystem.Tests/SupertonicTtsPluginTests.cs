@@ -18,8 +18,8 @@ public class SupertonicTtsPluginTests
 
         Assert.Equal("com.typewhisper.supertonic-tts", root.GetProperty("id").GetString());
         Assert.Equal("Supertonic TTS", root.GetProperty("name").GetString());
-        Assert.Equal("tts", root.GetProperty("category").GetString());
-        Assert.True(root.GetProperty("isLocal").GetBoolean());
+        Assert.Equal(["tts"], root.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
+        Assert.Equal("local", root.GetProperty("networkAccess").GetString());
         Assert.Equal("TypeWhisper.Plugin.SupertonicTts.dll", root.GetProperty("assemblyName").GetString());
         Assert.Equal("TypeWhisper.Plugin.SupertonicTts.SupertonicTtsPlugin", root.GetProperty("pluginClass").GetString());
     }

@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "author": "TypeWhisper",
   "description": "Create Linear issues from transcriptions",
+  "networkAccess": "network",
+  "categories": ["action"],
   "assemblyName": "TypeWhisper.Plugin.Linear.dll",
   "pluginClass": "TypeWhisper.Plugin.Linear.LinearPlugin"
 }
