@@ -61,6 +61,186 @@ public sealed class WatchFolderServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Start_WithCaseDistinctFileNames_ProcessesBothFiles()
+    {
+        var watchPath = Path.Join(_tempDir, "case-distinct-watch");
+        var outputPath = Path.Join(_tempDir, "case-distinct-output");
+        var dataPath = Path.Join(_tempDir, "case-distinct-data");
+        Directory.CreateDirectory(watchPath);
+        Directory.CreateDirectory(outputPath);
+        var upperCasePath = Path.Join(watchPath, "Meeting.wav");
+        var lowerCasePath = Path.Join(watchPath, "meeting.wav");
+        File.WriteAllBytes(upperCasePath, [1, 2, 3]);
+        File.WriteAllBytes(lowerCasePath, [4, 5, 6]);
+        File.SetLastWriteTimeUtc(upperCasePath, DateTime.UtcNow.AddMinutes(-1));
+        File.SetLastWriteTimeUtc(lowerCasePath, File.GetLastWriteTimeUtc(upperCasePath));
+
+        var twoItemsProcessed = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var processed = new ConcurrentQueue<WatchFolderHistoryItem>();
+        var service = new WatchFolderService(dataPath);
+        WatchFolderService.WatchFolderRun? run = null;
+        service.FileProcessed += (_, item) =>
+        {
+            processed.Enqueue(item);
+            if (processed.Count >= 2)
+            {
+                twoItemsProcessed.TrySetResult(true);
+            }
+        };
+
+        try
+        {
+            service.Start(CreateOptions(watchPath, outputPath), TranscribeAsync);
+            run = service.CurrentRun;
+            Assert.NotNull(run);
+
+            await twoItemsProcessed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.Equal(2, processed.Count);
+            Assert.Equal(2, service.History.Count);
+            Assert.All(processed, item => Assert.True(item.Success, item.ErrorMessage));
+            Assert.Equal(
+                ["Meeting.wav", "meeting.wav"],
+                service.History.Select(item => item.FileName).Order(StringComparer.Ordinal)
+            );
+            Assert.Equal(
+                [Path.Join(outputPath, "Meeting.txt"), Path.Join(outputPath, "meeting.txt")],
+                processed.Select(item => item.OutputPath).Order(StringComparer.Ordinal)
+            );
+            Assert.Equal(
+                "Transcribed Meeting.wav",
+                File.ReadAllText(Path.Join(outputPath, "Meeting.txt"))
+            );
+            Assert.Equal(
+                "Transcribed meeting.wav",
+                File.ReadAllText(Path.Join(outputPath, "meeting.txt"))
+            );
+        }
+        finally
+        {
+            if (service.CurrentRun is not null)
+            {
+                await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            if (run is not null)
+            {
+                await run.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            await service.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task FailedFingerprint_ForCaseDistinctPath_DoesNotSuppressOtherFile()
+    {
+        var watchPath = Path.Join(_tempDir, "case-distinct-failure-watch");
+        var outputPath = Path.Join(_tempDir, "case-distinct-failure-output");
+        var dataPath = Path.Join(_tempDir, "case-distinct-failure-data");
+        Directory.CreateDirectory(watchPath);
+        Directory.CreateDirectory(outputPath);
+        var upperCasePath = Path.Join(watchPath, "Meeting.wav");
+        var lowerCasePath = Path.Join(watchPath, "meeting.wav");
+        File.WriteAllBytes(upperCasePath, [1, 2, 3]);
+        File.SetLastWriteTimeUtc(upperCasePath, DateTime.UtcNow.AddMinutes(-1));
+
+        var failureRecorded = new TaskCompletionSource<WatchFolderHistoryItem>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var lowerCaseProcessed = new TaskCompletionSource<WatchFolderHistoryItem>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var service = new WatchFolderService(dataPath);
+        WatchFolderService.WatchFolderRun? run = null;
+        service.FileProcessed += (_, item) =>
+        {
+            if (
+                !item.Success
+                && string.Equals(item.FileName, "Meeting.wav", StringComparison.Ordinal)
+            )
+            {
+                failureRecorded.TrySetResult(item);
+            }
+            else if (
+                item.Success
+                && string.Equals(item.FileName, "meeting.wav", StringComparison.Ordinal)
+            )
+            {
+                lowerCaseProcessed.TrySetResult(item);
+            }
+        };
+
+        try
+        {
+            service.Start(
+                CreateOptions(watchPath, outputPath),
+                (request, ct) =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (
+                        string.Equals(
+                            Path.GetFileName(request.FilePath),
+                            "Meeting.wav",
+                            StringComparison.Ordinal
+                        )
+                    )
+                    {
+                        throw new InvalidOperationException("Upper-case path failed.");
+                    }
+
+                    return Task.FromResult(CreateResult(request));
+                }
+            );
+            run = service.CurrentRun;
+            Assert.NotNull(run);
+
+            var failedItem = await failureRecorded.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            var failedFingerprint = Assert.Single(run.FailedFingerprints);
+            Assert.StartsWith(
+                $"{Path.GetFullPath(upperCasePath)}|",
+                failedFingerprint,
+                StringComparison.Ordinal
+            );
+
+            var stagedPath = Path.Join(_tempDir, "meeting-staged.wav");
+            File.WriteAllBytes(stagedPath, [4, 5, 6]);
+            File.SetLastWriteTimeUtc(stagedPath, File.GetLastWriteTimeUtc(upperCasePath));
+            File.Move(stagedPath, lowerCasePath);
+
+            var successfulItem = await lowerCaseProcessed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.False(failedItem.Success);
+            Assert.Equal("Meeting.wav", failedItem.FileName);
+            Assert.True(successfulItem.Success, successfulItem.ErrorMessage);
+            Assert.Equal("meeting.wav", successfulItem.FileName);
+            Assert.Equal(Path.Join(outputPath, "meeting.txt"), successfulItem.OutputPath);
+            Assert.Equal(2, service.History.Count);
+            Assert.Single(service.History, item => !item.Success);
+            Assert.Single(service.History, item => item.Success);
+            Assert.Equal(failedFingerprint, Assert.Single(run.FailedFingerprints));
+            Assert.True(File.Exists(successfulItem.OutputPath));
+            Assert.False(File.Exists(Path.Join(outputPath, "Meeting.txt")));
+        }
+        finally
+        {
+            if (service.CurrentRun is not null)
+            {
+                await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            if (run is not null)
+            {
+                await run.WorkerCompletion.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+
+            await service.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task Start_WhenUserExportsExist_PreservesBytesAndAdvancesSuffix()
     {
         var watchPath = Path.Join(_tempDir, "watch");
