@@ -4,8 +4,8 @@
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
 using System.Net.Http.Headers;
+using System.Text.Json;
 using TypeWhisper.PluginSDK;
-using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Voxtral;
@@ -16,8 +16,18 @@ public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginSettingsP
     private const string ModelId = "voxtral-mini-latest";
     private const string LegacyModelId = "mistral-whisper";
 
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(60) };
+    private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
+
+    public VoxtralPlugin()
+        : this(new HttpClient { Timeout = TimeSpan.FromSeconds(60) })
+    {
+    }
+
+    internal VoxtralPlugin(HttpClient httpClient)
+    {
+        _httpClient = httpClient;
+    }
 
     public string PluginId => "com.typewhisper.voxtral";
     public string PluginName => "Voxtral";
@@ -81,21 +91,149 @@ public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginSettingsP
         CancellationToken ct
     )
     {
+        if (translate)
+        {
+            throw new InvalidOperationException(
+                "Voxtral does not support translation; Mistral only documents the audio transcriptions endpoint."
+            );
+        }
+
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredMistralApiKeyRequired"));
 
-        return await OpenAiTranscriptionHelper.TranscribeAsync(
-            _httpClient,
-            BaseUrl,
-            ApiKey!,
-            ModelId,
-            wavAudio,
-            language,
-            translate,
-            "verbose_json",
-            ct,
-            prompt
+        using var content = new MultipartFormDataContent();
+        using var fileContent = new ByteArrayContent(wavAudio);
+        fileContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
+        content.Add(fileContent, "file", "audio.wav");
+        content.Add(new StringContent(ModelId), "model");
+
+        // Without a requested granularity Mistral returns an empty "segments" array
+        // (its documented response example), so ask for segment timestamps explicitly.
+        content.Add(new StringContent("segment"), "timestamp_granularities");
+
+        // "auto" is TypeWhisper's sentinel; omit it so Mistral detects the language.
+        if (!string.IsNullOrWhiteSpace(language)
+            && !language.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            content.Add(new StringContent(language), "language");
+        }
+
+        // Mistral exposes context_bias as an array; do not guess how a single prompt maps to it.
+        _ = prompt;
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{BaseUrl}/v1/audio/transcriptions"
         );
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
+        request.Content = content;
+
+        using var response = await _httpClient.SendAsync(request, ct);
+        var responseBody = await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException(
+                $"Mistral API error {(int)response.StatusCode}: {responseBody}",
+                inner: null,
+                statusCode: response.StatusCode
+            );
+        }
+
+        return ParseTranscriptionResponse(responseBody);
+    }
+
+    internal static PluginTranscriptionResult ParseTranscriptionResponse(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("text", out var textElement)
+                || textElement.ValueKind != JsonValueKind.String)
+            {
+                throw new InvalidOperationException(
+                    "Invalid Mistral transcription response: required field 'text' must be a string."
+                );
+            }
+
+            var text = textElement.GetString() ?? string.Empty;
+            var detectedLanguage =
+                root.TryGetProperty("language", out var languageElement)
+                && languageElement.ValueKind == JsonValueKind.String
+                    ? languageElement.GetString()
+                    : null;
+
+            var duration = TryGetPromptAudioSeconds(root, out var promptAudioSeconds)
+                ? promptAudioSeconds
+                : 0;
+            var segments = ParseSegments(root, ref duration);
+
+            return new PluginTranscriptionResult(
+                text,
+                detectedLanguage,
+                duration,
+                NoSpeechProbability: null
+            )
+            {
+                Segments = segments,
+            };
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "Invalid Mistral transcription response: the response body is not valid JSON.",
+                ex
+            );
+        }
+    }
+
+    private static List<PluginTranscriptionSegment> ParseSegments(
+        JsonElement root,
+        ref double duration
+    )
+    {
+        var segments = new List<PluginTranscriptionSegment>();
+        if (!root.TryGetProperty("segments", out var segmentsElement)
+            || segmentsElement.ValueKind != JsonValueKind.Array)
+        {
+            return segments;
+        }
+
+        foreach (var segment in segmentsElement.EnumerateArray())
+        {
+            if (segment.ValueKind != JsonValueKind.Object
+                || !segment.TryGetProperty("text", out var textElement)
+                || textElement.ValueKind != JsonValueKind.String
+                || !TryGetDouble(segment, "start", out var start)
+                || !TryGetDouble(segment, "end", out var end))
+            {
+                continue;
+            }
+
+            segments.Add(
+                new PluginTranscriptionSegment(textElement.GetString() ?? string.Empty, start, end)
+            );
+            duration = Math.Max(duration, end);
+        }
+
+        return segments;
+    }
+
+    private static bool TryGetPromptAudioSeconds(JsonElement root, out double duration)
+    {
+        duration = 0;
+        return root.TryGetProperty("usage", out var usage)
+            && usage.ValueKind == JsonValueKind.Object
+            && TryGetDouble(usage, "prompt_audio_seconds", out duration);
+    }
+
+    private static bool TryGetDouble(JsonElement element, string propertyName, out double value)
+    {
+        value = 0;
+        return element.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.Number
+            && property.TryGetDouble(out value);
     }
 
     internal string? ApiKey { get; private set; }
@@ -116,7 +254,7 @@ public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginSettingsP
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         try
         {
-            var response = await _httpClient.SendAsync(request, ct);
+            using var response = await _httpClient.SendAsync(request, ct);
             return response.IsSuccessStatusCode;
         }
         catch
