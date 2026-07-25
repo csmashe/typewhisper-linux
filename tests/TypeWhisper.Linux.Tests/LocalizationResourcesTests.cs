@@ -63,6 +63,46 @@ public sealed class LocalizationResourcesTests
         Assert.False(string.IsNullOrWhiteSpace(title));
     }
 
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
+    public void Catalogs_HaveRecentTranscriptionFeedbackStringsWithRequiredPlaceholders(
+        string language
+    )
+    {
+        var catalog = Load(language);
+        var keysWithoutPlaceholders = new[]
+        {
+            "RecentTranscriptions.CopiedToClipboard",
+            "RecentTranscriptions.InsertionFailed",
+            "RecentTranscriptions.Pasted",
+            "RecentTranscriptions.PasteToolInstallHintWayland",
+            "RecentTranscriptions.PasteToolInstallHintWaylandYdotool",
+            "RecentTranscriptions.PasteToolInstallHintX11",
+            "RecentTranscriptions.Typed",
+        };
+
+        foreach (var key in keysWithoutPlaceholders)
+        {
+            Assert.True(
+                catalog.TryGetValue(key, out var value),
+                $"Missing {language} key: {key}"
+            );
+            Assert.False(
+                string.IsNullOrWhiteSpace(value),
+                $"{language} key is empty: {key}"
+            );
+        }
+
+        Assert.True(
+            catalog.TryGetValue("TextInsertion.ClipboardInstallHint", out var clipboardHint),
+            $"Missing {language} key: TextInsertion.ClipboardInstallHint"
+        );
+        Assert.Contains("{0}", clipboardHint, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void CanonicalCatalog_HasNativeDictationDisclosuresWithoutObsoleteEvdevClaims()
     {

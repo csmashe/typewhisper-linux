@@ -3,6 +3,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
@@ -40,7 +41,10 @@ public sealed class RecentTranscriptionsServiceTests
         Assert.Equal(10, fixture.Delays.Count);
         Assert.DoesNotContain(fixture.InsertionRequests, candidate => candidate.AutoPaste);
         Assert.Equal(
-            ("Copied recent transcription to clipboard.", false),
+            (
+                Loc.Instance["RecentTranscriptions.CopiedToClipboard"],
+                false
+            ),
             Assert.Single(fixture.Feedback)
         );
     }
@@ -129,6 +133,111 @@ public sealed class RecentTranscriptionsServiceTests
         Assert.Empty(fixture.Delays);
     }
 
+    [Fact]
+    public async Task CopyLastWithEmptyHistory_RaisesLocalizedEmptyHistoryFeedback()
+    {
+        var fixture = new Fixture(null);
+
+        await fixture.CopyLastTranscriptionToClipboardAsync();
+
+        Assert.Equal(
+            (Loc.Instance["Overlay.NoRecentTranscriptions"], false),
+            Assert.Single(fixture.Feedback)
+        );
+        Assert.Empty(fixture.InsertionRequests);
+    }
+
+    [Theory]
+    [InlineData(InsertionResult.Typed, "RecentTranscriptions.Typed", false)]
+    [InlineData(InsertionResult.Pasted, "RecentTranscriptions.Pasted", false)]
+    [InlineData(
+        InsertionResult.CopiedToClipboard,
+        "RecentTranscriptions.CopiedToClipboard",
+        false
+    )]
+    [InlineData(InsertionResult.NoText, "Overlay.NoRecentTranscriptions", false)]
+    [InlineData(InsertionResult.Failed, "RecentTranscriptions.InsertionFailed", true)]
+    [InlineData(InsertionResult.ActionHandled, "Recorder.StatusDone", false)]
+    public async Task InsertionFeedback_UsesLocalizedCatalogMessage(
+        InsertionResult insertionResult,
+        string localizationKey,
+        bool isError
+    )
+    {
+        var fixture = new Fixture(null)
+        {
+            InsertionResultOverride = insertionResult,
+        };
+
+        await fixture.CaptureAndInsertAsync();
+
+        Assert.Equal(
+            (Loc.Instance[localizationKey], isError),
+            Assert.Single(fixture.Feedback)
+        );
+    }
+
+    [Fact]
+    public async Task MissingClipboardToolFeedback_UsesLocalizedInstallHint()
+    {
+        var fixture = new Fixture(null)
+        {
+            InsertionResultOverride = InsertionResult.MissingClipboardTool,
+        };
+        var clipboardTool =
+            Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+                ? "wl-clipboard"
+                : "xclip";
+
+        await fixture.CaptureAndInsertAsync();
+
+        Assert.Equal(
+            (
+                Loc.Instance.GetString(
+                    "TextInsertion.ClipboardInstallHint",
+                    clipboardTool
+                ),
+                true
+            ),
+            Assert.Single(fixture.Feedback)
+        );
+    }
+
+    [Theory]
+    [InlineData(
+        (int)RecentTranscriptionPasteToolHint.X11,
+        "RecentTranscriptions.PasteToolInstallHintX11"
+    )]
+    [InlineData(
+        (int)RecentTranscriptionPasteToolHint.Wayland,
+        "RecentTranscriptions.PasteToolInstallHintWayland"
+    )]
+    [InlineData(
+        (int)RecentTranscriptionPasteToolHint.WaylandYdotool,
+        "RecentTranscriptions.PasteToolInstallHintWaylandYdotool"
+    )]
+    public async Task MissingPasteToolFeedback_UsesLocalizedPlatformGuidance(
+        int pasteToolHint,
+        string localizationKey
+    )
+    {
+        var fixture = new Fixture(null)
+        {
+            InsertionResultOverride = InsertionResult.MissingPasteTool,
+            PasteToolHint = (RecentTranscriptionPasteToolHint)pasteToolHint,
+        };
+
+        await fixture.CaptureAndInsertAsync();
+
+        Assert.Equal(
+            (
+                Loc.Instance[localizationKey],
+                true
+            ),
+            Assert.Single(fixture.Feedback)
+        );
+    }
+
     public static TheoryData<string?, bool> NullIdentityCases =>
         new()
         {
@@ -165,23 +274,34 @@ public sealed class RecentTranscriptionsServiceTests
         )
         {
             _snapshots = new Queue<ActiveWindowSnapshot?>(snapshots);
+            var history = new Mock<IHistoryService>();
+            history.SetupGet(service => service.Records).Returns([]);
             _service = new RecentTranscriptionsService(
-                Mock.Of<IHistoryService>(),
+                history.Object,
                 new RecentTranscriptionStore(),
                 () => true,
                 () => targetWindowId,
                 _ => Task.FromResult(NextSnapshot()),
                 InsertAsync,
                 DelayAsync,
+                () => PasteToolHint,
                 isWaylandSession: isWayland
             );
             _service.FeedbackRequested += (message, isError) =>
                 Feedback.Add((message, isError));
         }
 
+        public InsertionResult? InsertionResultOverride { get; init; }
+        public RecentTranscriptionPasteToolHint PasteToolHint { get; init; } =
+            RecentTranscriptionPasteToolHint.X11;
         public List<TextInsertionRequest> InsertionRequests { get; } = [];
         public List<TimeSpan> Delays { get; } = [];
         public List<(string Message, bool IsError)> Feedback { get; } = [];
+
+        public Task CopyLastTranscriptionToClipboardAsync()
+        {
+            return _service.CopyLastTranscriptionToClipboardAsync();
+        }
 
         public async Task<InsertionResult> CaptureAndInsertAsync()
         {
@@ -213,9 +333,12 @@ public sealed class RecentTranscriptionsServiceTests
         {
             InsertionRequests.Add(request);
             return Task.FromResult(
-                request.AutoPaste
-                    ? InsertionResult.Pasted
-                    : InsertionResult.CopiedToClipboard
+                InsertionResultOverride
+                ?? (
+                    request.AutoPaste
+                        ? InsertionResult.Pasted
+                        : InsertionResult.CopiedToClipboard
+                )
             );
         }
 

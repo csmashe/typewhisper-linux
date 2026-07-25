@@ -401,11 +401,12 @@ public class App : Application
 
             var recentTranscriptions = services.GetRequiredService<RecentTranscriptionsService>();
             recentTranscriptions.FeedbackRequested += (message, isError) =>
-            {
-                Debug.WriteLine(
-                    $"[RecentTranscriptions] {(isError ? "Error" : "Info")}: {message}"
+                RouteRecentTranscriptionFeedback(
+                    dictation.TryPublishTransientFeedback,
+                    errorLog,
+                    message,
+                    isError
                 );
-            };
             hotkey.RecentTranscriptionsRequested += (_, _) => recentTranscriptions.TogglePalette();
             hotkey.CopyLastTranscriptionRequested += (_, _) =>
                 _ = recentTranscriptions.CopyLastTranscriptionToClipboardAsync();
@@ -681,6 +682,28 @@ public class App : Application
         {
             Debug.WriteLine($"[App] Audio dispose failed: {ex.Message}");
         }
+    }
+
+    internal static bool RouteRecentTranscriptionFeedback(
+        Func<string, bool, bool> publishFeedback,
+        IErrorLogService errorLog,
+        string message,
+        bool isError
+    )
+    {
+        Debug.WriteLine(
+            $"[RecentTranscriptions] {(isError ? "Error" : "Info")}: {message}"
+        );
+        var published = publishFeedback(message, isError);
+        if (isError)
+        {
+            errorLog.AddEntry(
+                "Recent transcription insertion failed. Install wl-clipboard on Wayland or xclip on X11 for clipboard access. For automatic paste, set up ydotool on GNOME/KDE Wayland, install wtype or ydotool on other Wayland compositors, or install xdotool on X11.",
+                ErrorCategory.Insertion
+            );
+        }
+
+        return published;
     }
 
     private static Task<BootstrapReport> BootstrapAsync(IServiceProvider services)

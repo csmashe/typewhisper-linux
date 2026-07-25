@@ -3560,7 +3560,12 @@ public sealed class DictationOrchestrator : IDisposable
         );
     }
 
-    private void ShowFeedback(string text, bool isError, bool isCanceled = false)
+    private void ShowFeedback(
+        string text,
+        bool isError,
+        bool isCanceled = false,
+        bool playSound = true
+    )
     {
         SetOverlayState(state =>
             state with
@@ -3583,8 +3588,11 @@ public sealed class DictationOrchestrator : IDisposable
         // flows through, so classify off the caller's intent. Cancellation
         // surfaces with isError=false but is neither success nor failure —
         // callers flag it via isCanceled rather than us sniffing the text
-        // (which varies: "Canceled", "Dictation canceled.", …).
-        if (!_settings.Current.SoundFeedbackEnabled)
+        // (which varies: "Canceled", "Dictation canceled.", …). Transient
+        // (non-dictation) feedback passes playSound: false — its cue is
+        // fire-and-forget and would otherwise outlive the ownership check and
+        // bleed into a microphone a dictation opens moments later.
+        if (!playSound || !_settings.Current.SoundFeedbackEnabled)
         {
             return;
         }
@@ -3600,7 +3608,67 @@ public sealed class DictationOrchestrator : IDisposable
     }
 
     /// <summary>
-    ///     <see cref="ShowFeedback(string, bool, bool)" /> variant that no-ops once a newer dictation has
+    ///     Publishes non-dictation feedback through the standard overlay state pipeline,
+    ///     skipped while a dictation owns the overlay so a secondary hotkey can't clobber
+    ///     that state. Ownership is read from four signals:
+    ///     <list type="bullet">
+    ///         <item>the toggle gate, held through the whole start/stop transition —
+    ///         including before the mic opens, when the pre-capture start-up cue plays —
+    ///         so a toast's cue can't bleed into a recording that's just starting;</item>
+    ///         <item>the audio-capture flag, raised by any consumer of the shared recorder
+    ///         (e.g. transform selection) that bypasses this gate, so a toast (and its cue)
+    ///         never lands on a mic owned by another capture;</item>
+    ///         <item>a visible overlay showing status rather than a terminal toast
+    ///         (<c>IsOverlayVisible &amp;&amp; !ShowFeedback</c>) — covers the post-stop
+    ///         pipeline, including "Inserting…", whose awaited insertion runs after the
+    ///         in-flight tracker has already cleared;</item>
+    ///         <item>the in-flight tracker, covering hand-off between back-to-back
+    ///         dictations.</item>
+    ///     </list>
+    /// </summary>
+    internal bool TryPublishTransientFeedback(string text, bool isError)
+    {
+        lock (_overlayStateLock)
+        {
+            // CurrentCount == 0 means a start or stop owns the gate; reading it takes no
+            // lock, so it cannot invert against _overlayStateLock.
+            var toggleInProgress = _toggleGate.CurrentCount == 0;
+            var overlayOwnedByActiveSession =
+                _overlayState is { IsOverlayVisible: true, ShowFeedback: false };
+            var hasActiveCapture =
+                toggleInProgress
+                || _audio.IsRecording
+                || overlayOwnedByActiveSession
+                || HasActiveOverlayOwningDictation();
+            if (!CanPublishTransientFeedback(hasActiveCapture))
+            {
+                return false;
+            }
+
+            ShowFeedback(text, isError, playSound: false);
+            return true;
+        }
+    }
+
+    internal static bool CanPublishTransientFeedback(bool hasActiveDictation)
+    {
+        return !hasActiveDictation;
+    }
+
+    private bool HasActiveOverlayOwningDictation()
+    {
+        lock (_recordingSessionLock)
+        {
+            return _recordingSession > 0
+                   && (
+                       _inFlightTracker.Contains(_recordingSession)
+                       || _inFlightTracker.Contains(_recordingSession - 1)
+                   );
+        }
+    }
+
+    /// <summary>
+    ///     <see cref="ShowFeedback(string, bool, bool, bool)" /> variant that no-ops once a newer dictation has
     ///     taken over the overlay. Prevents the previous recording's terminal
     ///     feedback ("Typed N char(s)", "Transcription failed", "Canceled") from
     ///     hiding the new recording's overlay.

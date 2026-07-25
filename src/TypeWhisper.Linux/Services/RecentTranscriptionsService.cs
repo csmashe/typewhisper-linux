@@ -22,7 +22,7 @@ public sealed class RecentTranscriptionsService
     private readonly IHistoryService _history;
     private readonly Func<TextInsertionRequest, Task<InsertionResult>> _insertTextAsync;
     private readonly bool _isWaylandSession;
-    private readonly Func<string> _pasteToolInstallHintProvider;
+    private readonly Func<RecentTranscriptionPasteToolHint> _pasteToolHintProvider;
     private readonly RecentTranscriptionStore _store;
 
     private bool _paletteOpening;
@@ -44,7 +44,7 @@ public sealed class RecentTranscriptionsService
             activeWindow.GetActiveWindowSnapshotAsync,
             textInsertion.InsertTextAsync,
             Task.Delay,
-            () => commands.GetSnapshot().PasteToolInstallHint,
+            () => PasteToolHintFor(commands.GetSnapshot()),
             Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
         )
     {
@@ -58,7 +58,7 @@ public sealed class RecentTranscriptionsService
         Func<CancellationToken, Task<ActiveWindowSnapshot?>> activeWindowSnapshotProvider,
         Func<TextInsertionRequest, Task<InsertionResult>> insertTextAsync,
         Func<TimeSpan, CancellationToken, Task> delay,
-        Func<string>? pasteToolInstallHintProvider = null,
+        Func<RecentTranscriptionPasteToolHint>? pasteToolHintProvider = null,
         bool isWaylandSession = false
     )
     {
@@ -69,7 +69,8 @@ public sealed class RecentTranscriptionsService
         _activeWindowSnapshotProvider = activeWindowSnapshotProvider;
         _insertTextAsync = insertTextAsync;
         _delay = delay;
-        _pasteToolInstallHintProvider = pasteToolInstallHintProvider ?? (() => "");
+        _pasteToolHintProvider =
+            pasteToolHintProvider ?? (() => RecentTranscriptionPasteToolHint.X11);
         _isWaylandSession = isWaylandSession;
     }
 
@@ -94,7 +95,10 @@ public sealed class RecentTranscriptionsService
         var entry = _store.LatestEntry(_history.Records);
         if (entry is null)
         {
-            FeedbackRequested?.Invoke("No recent transcriptions.", false);
+            FeedbackRequested?.Invoke(
+                Localization.Loc.Instance["Overlay.NoRecentTranscriptions"],
+                false
+            );
             return;
         }
 
@@ -137,7 +141,10 @@ public sealed class RecentTranscriptionsService
         var entries = _store.MergedEntries(_history.Records);
         if (entries.Count == 0)
         {
-            FeedbackRequested?.Invoke("No recent transcriptions.", false);
+            FeedbackRequested?.Invoke(
+                Localization.Loc.Instance["Overlay.NoRecentTranscriptions"],
+                false
+            );
             return;
         }
 
@@ -377,23 +384,66 @@ public sealed class RecentTranscriptionsService
     {
         return result switch
         {
-            InsertionResult.Typed => "Typed recent transcription.",
-            InsertionResult.Pasted => "Pasted recent transcription.",
-            InsertionResult.CopiedToClipboard => "Copied recent transcription to clipboard.",
+            InsertionResult.Typed =>
+                Localization.Loc.Instance["RecentTranscriptions.Typed"],
+            InsertionResult.Pasted =>
+                Localization.Loc.Instance["RecentTranscriptions.Pasted"],
+            InsertionResult.CopiedToClipboard =>
+                Localization.Loc.Instance["RecentTranscriptions.CopiedToClipboard"],
             InsertionResult.NoText => Localization.Loc.Instance["Overlay.NoRecentTranscriptions"],
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
-            InsertionResult.MissingPasteTool => _pasteToolInstallHintProvider(),
-            InsertionResult.Failed => "Text insertion failed.",
-            _ => "Done.",
+            InsertionResult.MissingPasteTool =>
+                Localization.Loc.Instance[PasteToolInstallHintKey(_pasteToolHintProvider())],
+            InsertionResult.Failed =>
+                Localization.Loc.Instance["RecentTranscriptions.InsertionFailed"],
+            _ => Localization.Loc.Instance["Recorder.StatusDone"],
         };
     }
 
     private static string ClipboardToolMissingMessage()
     {
-        return Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
-            ? "Install wl-clipboard to copy recent transcriptions."
-            : "Install xclip to copy recent transcriptions.";
+        var clipboardTool =
+            Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+                ? "wl-clipboard"
+                : "xclip";
+        return Localization.Loc.Instance.GetString(
+            "TextInsertion.ClipboardInstallHint",
+            clipboardTool
+        );
     }
+
+    private static RecentTranscriptionPasteToolHint PasteToolHintFor(
+        LinuxCapabilitySnapshot snapshot
+    )
+    {
+        if (snapshot.SessionType != "Wayland")
+        {
+            return RecentTranscriptionPasteToolHint.X11;
+        }
+
+        return snapshot.CompositorRejectsWtype
+            ? RecentTranscriptionPasteToolHint.WaylandYdotool
+            : RecentTranscriptionPasteToolHint.Wayland;
+    }
+
+    private static string PasteToolInstallHintKey(RecentTranscriptionPasteToolHint hint)
+    {
+        return hint switch
+        {
+            RecentTranscriptionPasteToolHint.Wayland =>
+                "RecentTranscriptions.PasteToolInstallHintWayland",
+            RecentTranscriptionPasteToolHint.WaylandYdotool =>
+                "RecentTranscriptions.PasteToolInstallHintWaylandYdotool",
+            _ => "RecentTranscriptions.PasteToolInstallHintX11",
+        };
+    }
+}
+
+internal enum RecentTranscriptionPasteToolHint
+{
+    X11,
+    Wayland,
+    WaylandYdotool,
 }
 
 internal sealed record RecentTranscriptionInsertionTarget(
