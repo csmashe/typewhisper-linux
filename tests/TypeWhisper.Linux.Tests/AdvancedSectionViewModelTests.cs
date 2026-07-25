@@ -2,6 +2,7 @@ using Moq;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
@@ -378,6 +379,87 @@ public sealed class AdvancedSectionViewModelTests
             service => service.Save(It.IsAny<AppSettings>()),
             Times.Once
         );
+    }
+
+    [Fact]
+    public async Task LanguageChange_RebuildsLocalizedOptions_PreservesSelectionWithoutSaving()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            using var harness = await TestHarness.CreateAsync();
+            harness.ViewModel.SelectedAutoUnloadOption = Assert.Single(
+                harness.ViewModel.AutoUnloadOptions,
+                option => option.Seconds == 300
+            );
+            harness.ViewModel.SelectedHistoryRetention = Assert.Single(
+                harness.ViewModel.HistoryRetentionOptions,
+                option => option.Mode == HistoryRetentionMode.UntilAppCloses
+            );
+            harness.Settings.Invocations.Clear();
+
+            var autoUnloadBefore = harness.ViewModel.SelectedAutoUnloadOption!;
+            var retentionBefore = harness.ViewModel.SelectedHistoryRetention!;
+            var defaultVoiceBefore = Assert.Single(
+                harness.ViewModel.SpokenFeedbackVoices,
+                voice => voice.Id == SpeechFeedbackService.DefaultVoiceOptionId
+            );
+            var selectedVoiceIdBefore = harness.ViewModel.SelectedSpokenFeedbackVoiceId;
+            harness.ViewModel.PropertyChanged += (_, args) =>
+            {
+                if (args.PropertyName == nameof(AdvancedSectionViewModel.AutoUnloadOptions))
+                {
+                    // ReSharper disable once AccessToDisposedClosure -- handler runs synchronously while setting Loc.Instance.CurrentLanguage below, before the using disposes harness at scope end.
+                    harness.ViewModel.SelectedAutoUnloadOption = null;
+                }
+
+                if (args.PropertyName == nameof(AdvancedSectionViewModel.HistoryRetentionOptions))
+                {
+                    // ReSharper disable once AccessToDisposedClosure -- handler runs synchronously while setting Loc.Instance.CurrentLanguage below, before the using disposes harness at scope end.
+                    harness.ViewModel.SelectedHistoryRetention = null;
+                }
+            };
+
+            Loc.Instance.CurrentLanguage = "de";
+
+            Assert.NotEqual(
+                autoUnloadBefore.DisplayName,
+                harness.ViewModel.SelectedAutoUnloadOption?.DisplayName
+            );
+            Assert.NotSame(autoUnloadBefore, harness.ViewModel.SelectedAutoUnloadOption);
+            Assert.Equal(300, harness.ViewModel.SelectedAutoUnloadOption?.Seconds);
+            Assert.NotEqual(
+                retentionBefore.DisplayName,
+                harness.ViewModel.SelectedHistoryRetention?.DisplayName
+            );
+            Assert.NotSame(retentionBefore, harness.ViewModel.SelectedHistoryRetention);
+            Assert.Equal(
+                HistoryRetentionMode.UntilAppCloses,
+                harness.ViewModel.SelectedHistoryRetention?.Mode
+            );
+            Assert.Null(harness.ViewModel.SelectedHistoryRetention?.Minutes);
+
+            var defaultVoiceAfter = Assert.Single(
+                harness.ViewModel.SpokenFeedbackVoices,
+                voice => voice.Id == SpeechFeedbackService.DefaultVoiceOptionId
+            );
+            Assert.NotEqual(defaultVoiceBefore.DisplayName, defaultVoiceAfter.DisplayName);
+            Assert.NotSame(defaultVoiceBefore, defaultVoiceAfter);
+            Assert.Equal(
+                selectedVoiceIdBefore,
+                harness.ViewModel.SelectedSpokenFeedbackVoiceId
+            );
+
+            harness.Settings.Verify(
+                service => service.Save(It.IsAny<AppSettings>()),
+                Times.Never
+            );
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
     }
 
     private static TtsProviderOption GetPluginProvider(AdvancedSectionViewModel viewModel)

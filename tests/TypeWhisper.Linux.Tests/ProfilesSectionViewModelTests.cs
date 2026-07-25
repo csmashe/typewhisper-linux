@@ -3,6 +3,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Tests;
@@ -81,6 +82,88 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         );
 
         activeWindow.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public void LanguageChange_RebuildsLocalizedOptions_PreservesSelectionsWithoutPersisting()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var profiles = new Mock<IProfileService>();
+            profiles.SetupGet(service => service.Profiles).Returns([]);
+            var activeWindow = CreateActiveWindowService();
+            using var pluginManager = CreatePluginManager();
+            var promptActions = new PromptActionService(
+                Path.Join(_tempDir, "localized-prompt-actions.json")
+            );
+            var sut = new ProfilesSectionViewModel(
+                profiles.Object,
+                activeWindow.Object,
+                pluginManager,
+                promptActions,
+                _hotkeys,
+                Mock.Of<IDetectionFailureTracker>(),
+                new GnomeWindowCallsSetupHelper(),
+                new BrowserAccessibilitySetupHelper(),
+                _uiOperations
+            )
+            {
+                EditStylePreset = ProfileStylePreset.Developer,
+                EditHotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
+                EditCleanupLevelOverride = CleanupLevel.High,
+                EditWhisperModeOverride = true,
+                EditDeveloperFormattingOverride = false,
+            };
+
+            var styleBefore = sut.SelectedStylePresetOption!;
+            var hotkeyBefore = sut.SelectedHotkeyBehaviorOption!;
+            var cleanupBefore = sut.SelectedCleanupOverrideOption!;
+            var whisperBefore = sut.SelectedWhisperModeOption!;
+            var modelDefaultBefore = sut.ModelOptions[0];
+            var promptDefaultBefore = sut.PromptActionOptions[0];
+
+            sut.StylePresetOptions.CollectionChanged += (_, _) =>
+                sut.SelectedStylePresetOption = null;
+            sut.HotkeyBehaviorOptions.CollectionChanged += (_, _) =>
+                sut.SelectedHotkeyBehaviorOption = null;
+            sut.CleanupOverrideOptions.CollectionChanged += (_, _) =>
+                sut.SelectedCleanupOverrideOption = null;
+            sut.PropertyChanged += (_, args) =>
+            {
+                if (args.PropertyName == nameof(ProfilesSectionViewModel.WhisperModeOptions))
+                {
+                    sut.SelectedWhisperModeOption = null;
+                    sut.SelectedDeveloperFormattingOverrideOption = null;
+                }
+            };
+
+            Loc.Instance.CurrentLanguage = "de";
+
+            Assert.NotEqual(styleBefore.Label, sut.SelectedStylePresetOption?.Label);
+            Assert.NotSame(styleBefore, sut.SelectedStylePresetOption);
+            Assert.Equal(ProfileStylePreset.Developer, sut.EditStylePreset);
+            Assert.NotEqual(hotkeyBefore.Label, sut.SelectedHotkeyBehaviorOption?.Label);
+            Assert.NotSame(hotkeyBefore, sut.SelectedHotkeyBehaviorOption);
+            Assert.Equal(ProfileHotkeyBehavior.ProcessSelectedText, sut.EditHotkeyBehavior);
+            Assert.NotEqual(cleanupBefore.Label, sut.SelectedCleanupOverrideOption?.Label);
+            Assert.NotSame(cleanupBefore, sut.SelectedCleanupOverrideOption);
+            Assert.Equal(CleanupLevel.High, sut.EditCleanupLevelOverride);
+            Assert.NotEqual(whisperBefore.Label, sut.SelectedWhisperModeOption?.Label);
+            Assert.True(sut.EditWhisperModeOverride);
+            Assert.False(sut.EditDeveloperFormattingOverride);
+            Assert.NotEqual(modelDefaultBefore.Label, sut.ModelOptions[0].Label);
+            Assert.NotEqual(promptDefaultBefore.Label, sut.PromptActionOptions[0].Label);
+            profiles.Verify(
+                service => service.UpdateProfile(It.IsAny<Profile>()),
+                Times.Never
+            );
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
     }
 
     [Fact]

@@ -15,13 +15,17 @@ namespace TypeWhisper.Linux.Services;
 public sealed class TrayIconService : IDisposable
 {
     private readonly IProcessRunner _runner;
+    private NativeMenuItem? _dictationMenuItem;
     private bool _disposed;
+    private NativeMenuItem? _exitMenuItem;
+    private NativeMenuItem? _settingsMenuItem;
     private TrayIcon? _trayIcon;
     private TrayIcons? _trayIcons;
 
     public TrayIconService(IProcessRunner runner)
     {
         _runner = runner;
+        Loc.Instance.LanguageChanged += OnLanguageChanged;
     }
 
     /// <summary>
@@ -38,6 +42,7 @@ public sealed class TrayIconService : IDisposable
         }
 
         _disposed = true;
+        Loc.Instance.LanguageChanged -= OnLanguageChanged;
         if (Application.Current is { } app)
         {
             TrayIcon.SetIcons(app, null);
@@ -45,6 +50,10 @@ public sealed class TrayIconService : IDisposable
 
         _trayIcons?.Clear();
         _trayIcon?.Dispose();
+        _dictationMenuItem = null;
+        _settingsMenuItem = null;
+        _exitMenuItem = null;
+        _trayIcon = null;
     }
 
     public void Initialize()
@@ -124,6 +133,21 @@ public sealed class TrayIconService : IDisposable
     public event EventHandler? ExitRequested;
     public event EventHandler? DictationToggleRequested;
 
+    internal bool IsMenuBuilt =>
+        _dictationMenuItem is not null
+        && _settingsMenuItem is not null
+        && _exitMenuItem is not null;
+
+    internal IReadOnlyList<string> MenuLabels =>
+        IsMenuBuilt
+            ?
+            [
+                _dictationMenuItem!.Header ?? string.Empty,
+                _settingsMenuItem!.Header ?? string.Empty,
+                _exitMenuItem!.Header ?? string.Empty,
+            ]
+            : [];
+
     private static WindowIcon? LoadIcon()
     {
         // 32x32 PNG is preferred; most SNI hosts downscale cleanly from there.
@@ -160,21 +184,35 @@ public sealed class TrayIconService : IDisposable
     {
         var menu = new NativeMenu();
 
-        var dictate = new NativeMenuItem(Loc.Instance["Tray.ToggleDictation"]);
-        dictate.Click += (_, _) => DictationToggleRequested?.Invoke(this, EventArgs.Empty);
+        _dictationMenuItem = new NativeMenuItem(Loc.Instance["Tray.ToggleDictation"]);
+        _dictationMenuItem.Click += (_, _) =>
+            DictationToggleRequested?.Invoke(this, EventArgs.Empty);
 
-        var settings = new NativeMenuItem(Loc.Instance["Tray.Settings"]);
-        settings.Click += (_, _) => ShowSettingsRequested?.Invoke(this, EventArgs.Empty);
+        _settingsMenuItem = new NativeMenuItem(Loc.Instance["Tray.Settings"]);
+        _settingsMenuItem.Click += (_, _) =>
+            ShowSettingsRequested?.Invoke(this, EventArgs.Empty);
 
-        var exit = new NativeMenuItem(Loc.Instance["Tray.Exit"]);
-        exit.Click += (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty);
+        _exitMenuItem = new NativeMenuItem(Loc.Instance["Tray.Exit"]);
+        _exitMenuItem.Click += (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty);
 
-        menu.Add(dictate);
+        menu.Add(_dictationMenuItem);
         menu.Add(new NativeMenuItemSeparator());
-        menu.Add(settings);
+        menu.Add(_settingsMenuItem);
         menu.Add(new NativeMenuItemSeparator());
-        menu.Add(exit);
+        menu.Add(_exitMenuItem);
 
         return menu;
+    }
+
+    private void OnLanguageChanged(object? sender, EventArgs e)
+    {
+        if (!IsMenuBuilt)
+        {
+            return;
+        }
+
+        _dictationMenuItem!.Header = Loc.Instance["Tray.ToggleDictation"];
+        _settingsMenuItem!.Header = Loc.Instance["Tray.Settings"];
+        _exitMenuItem!.Header = Loc.Instance["Tray.Exit"];
     }
 }

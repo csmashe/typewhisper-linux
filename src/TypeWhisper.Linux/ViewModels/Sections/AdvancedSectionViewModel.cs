@@ -79,6 +79,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
         Refresh(settings.Current);
         _settings.SettingsChanged += Refresh;
         _pluginManager.PluginStateChanged += (_, _) => PostPluginStateRefresh();
+        Loc.Instance.LanguageChanged += OnInterfaceLanguageChanged;
     }
 
     private void PostPluginStateRefresh()
@@ -159,24 +160,11 @@ public partial class AdvancedSectionViewModel : ObservableObject
         }
     }
 
-    public IReadOnlyList<AutoUnloadOption> AutoUnloadOptions { get; } =
-    [
-        new(0, Loc.Instance["Advanced.AutoUnloadNever"]),
-        new(30, Loc.Instance["Advanced.AutoUnload30Seconds"]),
-        new(60, Loc.Instance["Advanced.AutoUnload1Minute"]),
-        new(300, Loc.Instance["Advanced.AutoUnload5Minutes"]),
-        new(900, Loc.Instance["Advanced.AutoUnload15Minutes"]),
-    ];
+    public IReadOnlyList<AutoUnloadOption> AutoUnloadOptions { get; private set; } =
+        CreateAutoUnloadOptions();
 
-    public IReadOnlyList<HistoryRetentionOption> HistoryRetentionOptions { get; } =
-    [
-        new(HistoryRetentionMode.Duration, 24 * 60, Loc.Instance["Advanced.Retention1Day"]),
-        new(HistoryRetentionMode.Duration, 7 * 24 * 60, Loc.Instance["Advanced.Retention7Days"]),
-        new(HistoryRetentionMode.Duration, 30 * 24 * 60, Loc.Instance["Advanced.Retention30Days"]),
-        new(HistoryRetentionMode.Duration, 90 * 24 * 60, Loc.Instance["Advanced.Retention90Days"]),
-        new(HistoryRetentionMode.Forever, null, Loc.Instance["Advanced.RetentionForever"]),
-        new(HistoryRetentionMode.UntilAppCloses, null, Loc.Instance["Advanced.RetentionUntilAppCloses"]),
-    ];
+    public IReadOnlyList<HistoryRetentionOption> HistoryRetentionOptions { get; private set; } =
+        CreateHistoryRetentionOptions();
 
     public bool CanUseSpokenFeedback => _speechFeedback.IsAvailable;
     public bool ShowSpokenFeedbackUnavailableReason => !CanUseSpokenFeedback;
@@ -259,7 +247,11 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
     partial void OnSelectedAutoUnloadOptionChanged(AutoUnloadOption? value)
     {
-        if (value is null || _settings.Current.ModelAutoUnloadSeconds == value.Seconds)
+        if (
+            _isProgrammaticRefresh
+            || value is null
+            || _settings.Current.ModelAutoUnloadSeconds == value.Seconds
+        )
         {
             return;
         }
@@ -364,7 +356,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
     partial void OnSelectedHistoryRetentionChanged(HistoryRetentionOption? value)
     {
-        if (value is null)
+        if (_isProgrammaticRefresh || value is null)
         {
             return;
         }
@@ -388,6 +380,58 @@ public partial class AdvancedSectionViewModel : ObservableObject
                 value.Minutes ?? _settings.Current.HistoryRetentionMinutes,
             }
         );
+    }
+
+    private void OnInterfaceLanguageChanged(object? sender, EventArgs e)
+    {
+        var autoUnloadSeconds =
+            SelectedAutoUnloadOption?.Seconds ?? _settings.Current.ModelAutoUnloadSeconds;
+        var retentionMode =
+            SelectedHistoryRetention?.Mode ?? _settings.Current.HistoryRetentionMode;
+        var retentionMinutes =
+            SelectedHistoryRetention?.Minutes ?? _settings.Current.HistoryRetentionMinutes;
+
+        RunProgrammaticRefresh(() =>
+        {
+            AutoUnloadOptions = CreateAutoUnloadOptions();
+            HistoryRetentionOptions = CreateHistoryRetentionOptions();
+            OnPropertyChanged(nameof(AutoUnloadOptions));
+            OnPropertyChanged(nameof(HistoryRetentionOptions));
+
+            SelectedAutoUnloadOption =
+                AutoUnloadOptions.FirstOrDefault(option => option.Seconds == autoUnloadSeconds)
+                ?? AutoUnloadOptions[0];
+            SelectedHistoryRetention = MatchRetention(retentionMode, retentionMinutes);
+
+            // The voices list carries a localized "System default voice" entry, so it
+            // must be rebuilt too or the dropdown stays in the previous language.
+            RefreshSpokenFeedbackVoices();
+        });
+    }
+
+    private static IReadOnlyList<AutoUnloadOption> CreateAutoUnloadOptions()
+    {
+        return
+        [
+            new(0, Loc.Instance["Advanced.AutoUnloadNever"]),
+            new(30, Loc.Instance["Advanced.AutoUnload30Seconds"]),
+            new(60, Loc.Instance["Advanced.AutoUnload1Minute"]),
+            new(300, Loc.Instance["Advanced.AutoUnload5Minutes"]),
+            new(900, Loc.Instance["Advanced.AutoUnload15Minutes"]),
+        ];
+    }
+
+    private static IReadOnlyList<HistoryRetentionOption> CreateHistoryRetentionOptions()
+    {
+        return
+        [
+            new(HistoryRetentionMode.Duration, 24 * 60, Loc.Instance["Advanced.Retention1Day"]),
+            new(HistoryRetentionMode.Duration, 7 * 24 * 60, Loc.Instance["Advanced.Retention7Days"]),
+            new(HistoryRetentionMode.Duration, 30 * 24 * 60, Loc.Instance["Advanced.Retention30Days"]),
+            new(HistoryRetentionMode.Duration, 90 * 24 * 60, Loc.Instance["Advanced.Retention90Days"]),
+            new(HistoryRetentionMode.Forever, null, Loc.Instance["Advanced.RetentionForever"]),
+            new(HistoryRetentionMode.UntilAppCloses, null, Loc.Instance["Advanced.RetentionUntilAppCloses"]),
+        ];
     }
 
     // First try exact match; if the stored minutes value no longer matches any

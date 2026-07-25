@@ -21,6 +21,7 @@ public partial class DictationSectionViewModel : ObservableObject
     // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym (a + 11 letters + y) mirroring the org.a11y.Bus service name; ReSharper's camelCase splitter mis-reads "11y" and wants the non-standard "a11YBus".
     private readonly IAccessibilityBusActivation _a11yBus;
     private readonly AudioRecordingService _audio;
+    private readonly Func<IReadOnlyList<AudioInputDevice>> _getInputDevices;
     private readonly SystemCommandAvailabilityService _commands;
     private readonly DictationOrchestrator _dictation;
     private readonly ModelManagerService _models;
@@ -151,6 +152,7 @@ public partial class DictationSectionViewModel : ObservableObject
     // Set while hydrating from saved settings so OnLocalModelAccelerationChanged doesn't
     // run its CUDA-availability revert guard against a not-yet-loaded engine.
     private bool _suppressAccelerationGuard;
+    private bool _isLocalizedOptionRefresh;
 
     [ObservableProperty]
     private string _modelStatusText = Loc.Instance["Dictation.StatusNotReady"];
@@ -211,10 +213,35 @@ public partial class DictationSectionViewModel : ObservableObject
         // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym mirroring org.a11y.Bus; ReSharper's camelCase splitter mis-reads "11y".
         IAccessibilityBusActivation a11yBus
     )
+        : this(
+            dictation,
+            models,
+            audio,
+            settings,
+            pluginManager,
+            commands,
+            a11yBus,
+            AudioRecordingService.GetInputDevices
+        )
+    {
+    }
+
+    internal DictationSectionViewModel(
+        DictationOrchestrator dictation,
+        ModelManagerService models,
+        AudioRecordingService audio,
+        ISettingsService settings,
+        PluginManager pluginManager,
+        SystemCommandAvailabilityService commands,
+        // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym mirroring org.a11y.Bus; ReSharper's camelCase splitter mis-reads "11y".
+        IAccessibilityBusActivation a11yBus,
+        Func<IReadOnlyList<AudioInputDevice>> getInputDevices
+    )
     {
         _dictation = dictation;
         _models = models;
         _audio = audio;
+        _getInputDevices = getInputDevices;
         _settings = settings;
         _pluginManager = pluginManager;
         _commands = commands;
@@ -268,52 +295,25 @@ public partial class DictationSectionViewModel : ObservableObject
         // Read the current accessibility-bridge flag so the enable/remove button reflects
         // reality on first paint.
         _ = RefreshAccessibilityBridgeStateAsync();
+        Loc.Instance.LanguageChanged += OnInterfaceLanguageChanged;
     }
 
     public ObservableCollection<DictationModelOption> ModelOptions { get; } = [];
     public ObservableCollection<AudioInputDevice> Devices { get; } = [];
 
     public ObservableCollection<AccelerationOption> AccelerationOptions { get; } =
-    [
-        new(AppSettings.LocalModelAccelerationAuto, Loc.Instance["Dictation.AccelerationAuto"]),
-        new(AppSettings.LocalModelAccelerationCpu, Loc.Instance["Dictation.AccelerationCpu"]),
-        new(AppSettings.LocalModelAccelerationNvidiaCuda, Loc.Instance["Dictation.AccelerationNvidiaCuda"]),
-    ];
+        new(CreateAccelerationOptions());
 
     public ObservableCollection<SpokenLanguageOption> LanguageChoices { get; } =
-    [
-        new("auto", Loc.Instance["Dictation.LanguageAutoDetect"]),
-        new("de", "Deutsch"),
-        new("en", "English"),
-        new("fr", "Français"),
-        new("es", "Español"),
-        new("it", "Italiano"),
-        new("pt", "Português"),
-        new("nl", "Nederlands"),
-        new("pl", "Polski"),
-        new("cs", "Čeština"),
-        new("sv", "Svenska"),
-        new("da", "Dansk"),
-        new("fi", "Suomi"),
-    ];
+        new(CreateLanguageChoices());
 
     public ObservableCollection<TranslationTargetOption> TranslationTargetOptions { get; } = [];
 
     public ObservableCollection<CleanupLevelOption> CleanupLevelOptions { get; } =
-    [
-        new(CleanupLevel.None, Loc.Instance["Dictation.CleanupNone"]),
-        new(CleanupLevel.Light, Loc.Instance["Dictation.CleanupLight"]),
-        new(CleanupLevel.Medium, Loc.Instance["Dictation.CleanupMedium"]),
-        new(CleanupLevel.High, Loc.Instance["Dictation.CleanupHigh"]),
-    ];
+        new(CreateCleanupLevelOptions());
 
     public ObservableCollection<InsertionStrategyOption> InsertionStrategyOptions { get; } =
-    [
-        new(TextInsertionStrategy.Auto, Loc.Instance["Dictation.AccelerationAuto"]),
-        new(TextInsertionStrategy.ClipboardPaste, Loc.Instance["Dictation.StrategyClipboardPaste"]),
-        new(TextInsertionStrategy.DirectTyping, Loc.Instance["Dictation.StrategyDirectTyping"]),
-        new(TextInsertionStrategy.CopyOnly, Loc.Instance["Dictation.StrategyCopyOnly"]),
-    ];
+        new(CreateInsertionStrategyOptions());
 
     public ObservableCollection<AppInsertionStrategyRow> AppInsertionStrategies { get; } = [];
 
@@ -635,7 +635,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private void RefreshDevices()
     {
         Devices.Clear();
-        foreach (var d in AudioRecordingService.GetInputDevices())
+        foreach (var d in _getInputDevices())
         {
             Devices.Add(d);
         }
@@ -730,6 +730,108 @@ public partial class DictationSectionViewModel : ObservableObject
         // reload (e.g. backup restore) must re-notify it or the button can go stale.
         OnPropertyChanged(nameof(ShowAccessibilityBridgeRemove));
         RefreshModelState();
+    }
+
+    private void OnInterfaceLanguageChanged(object? sender, EventArgs e)
+    {
+        var acceleration = LocalModelAcceleration;
+        var language = Language;
+        var cleanupLevel = CleanupLevel;
+        var newInsertionStrategy = NewInsertionStrategy;
+        var appInsertionStrategies = AppInsertionStrategies
+            .Select(row => (Row: row, row.Strategy))
+            .ToList();
+
+        _isLocalizedOptionRefresh = true;
+        try
+        {
+            ReplaceCollection(AccelerationOptions, CreateAccelerationOptions());
+            ReplaceCollection(LanguageChoices, CreateLanguageChoices());
+            ReplaceCollection(CleanupLevelOptions, CreateCleanupLevelOptions());
+            ReplaceCollection(InsertionStrategyOptions, CreateInsertionStrategyOptions());
+
+            LocalModelAcceleration = acceleration;
+            Language = language;
+            CleanupLevel = cleanupLevel;
+            NewInsertionStrategy = newInsertionStrategy;
+            foreach (var (row, strategy) in appInsertionStrategies)
+            {
+                row.RestoreStrategySelection(strategy);
+            }
+
+            OnPropertyChanged(nameof(SelectedAccelerationOption));
+            OnPropertyChanged(nameof(SelectedLanguageOption));
+            OnPropertyChanged(nameof(SelectedCleanupLevelOption));
+            OnPropertyChanged(nameof(SelectedNewInsertionStrategyOption));
+        }
+        finally
+        {
+            _isLocalizedOptionRefresh = false;
+        }
+    }
+
+    private static IReadOnlyList<AccelerationOption> CreateAccelerationOptions()
+    {
+        return
+        [
+            new(AppSettings.LocalModelAccelerationAuto, Loc.Instance["Dictation.AccelerationAuto"]),
+            new(AppSettings.LocalModelAccelerationCpu, Loc.Instance["Dictation.AccelerationCpu"]),
+            new(AppSettings.LocalModelAccelerationNvidiaCuda, Loc.Instance["Dictation.AccelerationNvidiaCuda"]),
+        ];
+    }
+
+    private static IReadOnlyList<SpokenLanguageOption> CreateLanguageChoices()
+    {
+        return
+        [
+            new("auto", Loc.Instance["Dictation.LanguageAutoDetect"]),
+            new("de", "Deutsch"),
+            new("en", "English"),
+            new("fr", "Français"),
+            new("es", "Español"),
+            new("it", "Italiano"),
+            new("pt", "Português"),
+            new("nl", "Nederlands"),
+            new("pl", "Polski"),
+            new("cs", "Čeština"),
+            new("sv", "Svenska"),
+            new("da", "Dansk"),
+            new("fi", "Suomi"),
+        ];
+    }
+
+    private static IReadOnlyList<CleanupLevelOption> CreateCleanupLevelOptions()
+    {
+        return
+        [
+            new(CleanupLevel.None, Loc.Instance["Dictation.CleanupNone"]),
+            new(CleanupLevel.Light, Loc.Instance["Dictation.CleanupLight"]),
+            new(CleanupLevel.Medium, Loc.Instance["Dictation.CleanupMedium"]),
+            new(CleanupLevel.High, Loc.Instance["Dictation.CleanupHigh"]),
+        ];
+    }
+
+    private static IReadOnlyList<InsertionStrategyOption> CreateInsertionStrategyOptions()
+    {
+        return
+        [
+            new(TextInsertionStrategy.Auto, Loc.Instance["Dictation.AccelerationAuto"]),
+            new(TextInsertionStrategy.ClipboardPaste, Loc.Instance["Dictation.StrategyClipboardPaste"]),
+            new(TextInsertionStrategy.DirectTyping, Loc.Instance["Dictation.StrategyDirectTyping"]),
+            new(TextInsertionStrategy.CopyOnly, Loc.Instance["Dictation.StrategyCopyOnly"]),
+        ];
+    }
+
+    private static void ReplaceCollection<T>(
+        ObservableCollection<T> target,
+        IEnumerable<T> items
+    )
+    {
+        target.Clear();
+        foreach (var item in items)
+        {
+            target.Add(item);
+        }
     }
 
     private void RefreshAppInsertionStrategies(
@@ -843,6 +945,11 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnLocalModelAccelerationChanged(string value)
     {
+        if (_isLocalizedOptionRefresh)
+        {
+            return;
+        }
+
         // During settings hydration just reflect the saved value — no revert, no persist,
         // no reload (see RefreshFromSettings). The guard below is only for live user edits.
         if (_suppressAccelerationGuard)
@@ -1332,6 +1439,11 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnLanguageChanged(string value)
     {
+        if (_isLocalizedOptionRefresh)
+        {
+            return;
+        }
+
         _settings.Save(_settings.Current with { Language = value });
         OnPropertyChanged(nameof(SelectedLanguageOption));
     }
@@ -1344,6 +1456,11 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnCleanupLevelChanged(CleanupLevel value)
     {
+        if (_isLocalizedOptionRefresh)
+        {
+            return;
+        }
+
         _settings.Save(_settings.Current with { CleanupLevel = value });
         OnPropertyChanged(nameof(SelectedCleanupLevelOption));
     }
@@ -1548,6 +1665,11 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private void SaveAppInsertionStrategies()
     {
+        if (_isLocalizedOptionRefresh)
+        {
+            return;
+        }
+
         var strategies = AppInsertionStrategies
             .Select(row => (ProcessName: NormalizeProcessName(row.ProcessName), row.Strategy))
             .Where(row => !string.IsNullOrWhiteSpace(row.ProcessName))
@@ -1736,5 +1858,16 @@ public sealed class AppInsertionStrategyRow : ObservableObject
 
             Strategy = selected;
         }
+    }
+
+    internal void RestoreStrategySelection(TextInsertionStrategy strategy)
+    {
+        if (_strategy != strategy)
+        {
+            _strategy = strategy;
+            OnPropertyChanged(nameof(Strategy));
+        }
+
+        OnPropertyChanged(nameof(SelectedStrategyOption));
     }
 }
