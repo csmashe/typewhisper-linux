@@ -311,8 +311,18 @@ public sealed class WhisperCppPlugin
         // report a warm cache immediately after a restart (the host gates CUDA selection
         // on it), not only after a download has been attempted. Both are cheap to build;
         // the ?? lets tests inject fakes before activate.
+        InitializeCudaDependencies(host);
+
+        host.Log(PluginLogLevel.Info, "Activated");
+        return Task.CompletedTask;
+    }
+
+    private void InitializeCudaDependencies(IPluginHostServices host)
+    {
         _cudaProvisioner ??= new CudaRuntimeProvisioner(
-            CudaRuntimeProvisioner.DefaultCacheRoot(),
+            CudaRuntimeProvisioner.CacheRootForPluginAssetDirectory(
+                host.PluginAssetDirectory
+            ),
             _httpClient,
             msg => host.Log(PluginLogLevel.Info, msg)
         );
@@ -321,9 +331,6 @@ public sealed class WhisperCppPlugin
             _httpClient,
             msg => host.Log(PluginLogLevel.Info, msg)
         );
-
-        host.Log(PluginLogLevel.Info, "Activated");
-        return Task.CompletedTask;
     }
 
     private static float ReadNoSpeechThreshold(IPluginHostServices host)
@@ -925,7 +932,9 @@ public sealed class WhisperCppPlugin
             );
 
         _cudaProvisioner ??= new CudaRuntimeProvisioner(
-            CudaRuntimeProvisioner.DefaultCacheRoot(),
+            CudaRuntimeProvisioner.CacheRootForPluginAssetDirectory(
+                _host?.PluginAssetDirectory
+            ),
             _httpClient,
             msg => _host?.Log(PluginLogLevel.Info, msg)
         );
@@ -1267,6 +1276,16 @@ public sealed class WhisperCppPlugin
         _cudaProvisioner = provisioner;
         _whisperCudaInstaller = installer;
     }
+
+    // Test seam: exercise the same eager construction path as ActivateAsync without
+    // invoking unrelated activation work.
+    internal void InitializeCudaDependenciesForTests(IPluginHostServices host) =>
+        InitializeCudaDependencies(host);
+
+    internal string? CudaRuntimeCacheRootForTests =>
+        _cudaProvisioner is null
+            ? null
+            : Directory.GetParent(_cudaProvisioner.CacheDirectory)?.FullName;
 
     private static TranscriptionAccelerationStatus CreatePendingAccelerationStatus(
         TranscriptionAccelerationPreference preference

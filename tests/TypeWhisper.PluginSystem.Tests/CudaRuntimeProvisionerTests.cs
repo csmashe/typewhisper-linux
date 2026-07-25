@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
 using System.Security.Cryptography;
@@ -35,10 +36,11 @@ public class CudaRuntimeProvisionerTests
         using var temp = new TempDir();
         var (handler, http) = WhisperCublasFixture();
         using var _ = http;
-        var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
-        {
-            SystemLibraryProbeForTests = _ => false,
-        };
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
 
         await provisioner.DownloadAndExtractAsync(
             CudaRuntimeProfile.WhisperCublas, null, CancellationToken.None);
@@ -71,10 +73,11 @@ public class CudaRuntimeProvisionerTests
         using var temp = new TempDir();
         var (handler, http) = WhisperCublasFixture();
         using var _ = http;
-        var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
-        {
-            SystemLibraryProbeForTests = _ => false,
-        };
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
 
         await provisioner.DownloadAndExtractAsync(
             CudaRuntimeProfile.WhisperCublas, null, CancellationToken.None);
@@ -94,10 +97,11 @@ public class CudaRuntimeProvisionerTests
         using var temp = new TempDir();
         var (handler, http) = WhisperCublasFixture();
         using var _ = http;
-        var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
-        {
-            SystemLibraryProbeForTests = _ => false,
-        };
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
 
         await provisioner.DownloadAndExtractAsync(
             CudaRuntimeProfile.WhisperCublas, null, CancellationToken.None);
@@ -120,11 +124,12 @@ public class CudaRuntimeProvisionerTests
         using var temp = new TempDir();
         var (handler, http) = WhisperCublasFixture();
         using var _ = http;
-        var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
-        {
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
             // Every soname resolvable on the "system" → no wheel is missing.
-            SystemLibraryProbeForTests = _ => true,
-        };
+            systemLibraryProbe: _ => true
+        );
 
         var progress = new RecordingProgress();
         await provisioner.DownloadAndExtractAsync(
@@ -141,7 +146,7 @@ public class CudaRuntimeProvisionerTests
         using var temp = new TempDir();
         var (_, http) = WhisperCublasFixture();
         using var _ = http;
-        var provisioner = new CudaRuntimeProvisioner(temp.Path, http);
+        var provisioner = CreateProvisioner(temp.Path, http);
         Directory.CreateDirectory(provisioner.CacheDirectory);
 
         var zip = BuildWheelZip(
@@ -168,7 +173,7 @@ public class CudaRuntimeProvisionerTests
         using var temp = new TempDir();
         var (_, http) = WhisperCublasFixture();
         using var _ = http;
-        var provisioner = new CudaRuntimeProvisioner(temp.Path, http);
+        var provisioner = CreateProvisioner(temp.Path, http);
 
         // CacheDirectory = <temp>/<BundleVersion>; create it plus a stale sibling.
         Directory.CreateDirectory(provisioner.CacheDirectory);
@@ -198,10 +203,11 @@ public class CudaRuntimeProvisionerTests
         };
         var handler = new FakePyPiHandler(fixtures);
         using var http = new HttpClient(handler);
-        var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
-        {
-            SystemLibraryProbeForTests = _ => false,
-        };
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             provisioner.DownloadAndExtractAsync(
@@ -228,10 +234,11 @@ public class CudaRuntimeProvisionerTests
         };
         var handler = new FakePyPiHandler(fixtures);
         using var http = new HttpClient(handler);
-        var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
-        {
-            SystemLibraryProbeForTests = _ => false,
-        };
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             provisioner.DownloadAndExtractAsync(
@@ -261,10 +268,11 @@ public class CudaRuntimeProvisionerTests
             ]);
         var handler = new FakePyPiHandler([cudart, cublas]);
         using var http = new HttpClient(handler);
-        var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
-        {
-            SystemLibraryProbeForTests = _ => false,
-        };
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
 
         var progress = new RecordingProgress();
         await provisioner.DownloadAndExtractAsync(
@@ -288,10 +296,11 @@ public class CudaRuntimeProvisionerTests
         using var temp = new TempDir();
         var (handler, http) = WhisperCublasFixture();
         using var _ = http;
-        var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
-        {
-            SystemLibraryProbeForTests = _ => false,
-        };
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
 
         var a = provisioner.DownloadAndExtractAsync(
             CudaRuntimeProfile.WhisperCublas, null, CancellationToken.None);
@@ -311,14 +320,16 @@ public class CudaRuntimeProvisionerTests
         using var temp = new TempDir();
         var (handler, http) = WhisperCublasFixture(pauseFirstWheelResponse: true);
         using var _ = http;
-        var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
-        {
-            SystemLibraryProbeForTests = _ => false,
-        };
-        var clearingProvisioner = new CudaRuntimeProvisioner(temp.Path, http)
-        {
-            SystemLibraryProbeForTests = _ => false,
-        };
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
+        var clearingProvisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
 
         var provisioning = provisioner.DownloadAndExtractAsync(
             CudaRuntimeProfile.WhisperCublas,
@@ -360,14 +371,16 @@ public class CudaRuntimeProvisionerTests
         using var temp = new TempDir();
         var (handler, http) = WhisperCublasFixture(pauseFirstWheelResponse: true);
         using var _ = http;
-        var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
-        {
-            SystemLibraryProbeForTests = _ => false,
-        };
-        var pruningProvisioner = new CudaRuntimeProvisioner(temp.Path, http)
-        {
-            SystemLibraryProbeForTests = _ => false,
-        };
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
+        var pruningProvisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
         var staleDir = Path.Join(temp.Path, "cuda12-v0-stale");
         Directory.CreateDirectory(staleDir);
         await File.WriteAllTextAsync(Path.Join(staleDir, "old.so"), "x");
@@ -408,10 +421,12 @@ public class CudaRuntimeProvisionerTests
         var (_, http) = WhisperCublasFixture();
         using var _ = http;
         var logs = new List<string>();
-        var provisioner = new CudaRuntimeProvisioner(temp.Path, http, logs.Add)
-        {
-            MaintenanceLockTimeoutForTests = TimeSpan.FromMilliseconds(100),
-        };
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            logs.Add,
+            maintenanceLockTimeout: TimeSpan.FromMilliseconds(100)
+        );
         Directory.CreateDirectory(provisioner.CacheDirectory);
         var staleDir = Path.Join(temp.Path, "cuda12-v0-stale");
         Directory.CreateDirectory(staleDir);
@@ -436,7 +451,224 @@ public class CudaRuntimeProvisionerTests
         );
     }
 
+    [Fact]
+    public void CacheRootForPluginAssetDirectory_NoDirectory_UsesLegacyDefault()
+    {
+        Assert.Equal(
+            CudaRuntimeProvisioner.DefaultCacheRoot(),
+            CudaRuntimeProvisioner.CacheRootForPluginAssetDirectory(null)
+        );
+    }
+
+    [Fact]
+    public async Task DownloadAndExtract_LegacyCacheAndMissingConfiguredRoot_MovesCacheAtomically()
+    {
+        using var temp = new TempDir();
+        var legacyRoot = Path.Join(temp.Path, "legacy", "cuda");
+        var configuredRoot = Path.Join(temp.Path, "selected", "Runtimes", "cuda");
+        var legacyBundle = Path.Join(
+            legacyRoot,
+            CudaRuntimeProvisioner.BundleVersion
+        );
+        Directory.CreateDirectory(legacyBundle);
+        await File.WriteAllTextAsync(
+            Path.Join(legacyBundle, "migrated-artifact.so"),
+            "legacy"
+        );
+
+        var (_, http) = WhisperCublasFixture();
+        using var _ = http;
+        var logs = new List<string>();
+        var provisioner = CreateProvisioner(
+            configuredRoot,
+            http,
+            logs.Add,
+            systemLibraryProbe: _ => true,
+            legacyCacheRoot: legacyRoot
+        );
+
+        await provisioner.DownloadAndExtractAsync(
+            CudaRuntimeProfile.WhisperCublas,
+            null,
+            CancellationToken.None
+        );
+
+        Assert.False(Directory.Exists(legacyRoot));
+        Assert.Equal(
+            "legacy",
+            await File.ReadAllTextAsync(
+                Path.Join(provisioner.CacheDirectory, "migrated-artifact.so")
+            )
+        );
+        Assert.Contains(
+            logs,
+            message => message.Contains("migrated cache", StringComparison.Ordinal)
+        );
+
+        // Sentinels remain external to the moved cache. The old set stays in place,
+        // while future provisioning uses the independently-created new set.
+        var legacyCacheParent = Directory.GetParent(legacyRoot)!;
+        Assert.True(
+            File.Exists(
+                Path.Join(
+                    legacyCacheParent.FullName,
+                    Path.GetFileName(legacyRoot) + ".maintenance.lock"
+                )
+            )
+        );
+        Assert.True(
+            Directory.Exists(
+                Path.Join(
+                    legacyCacheParent.FullName,
+                    Path.GetFileName(legacyRoot) + ".locks"
+                )
+            )
+        );
+        Assert.True(File.Exists(provisioner.MaintenanceLockPathForTests));
+        Assert.True(Directory.Exists(provisioner.WheelLockDirectoryForTests));
+    }
+
+    [Fact]
+    public async Task DownloadAndExtract_LegacyMoveFails_LeavesOldCacheAndProvisionsConfiguredRoot()
+    {
+        using var temp = new TempDir();
+        var legacyRoot = Path.Join(temp.Path, "legacy", "cuda");
+        var configuredRoot = Path.Join(temp.Path, "selected", "Runtimes", "cuda");
+        var legacyArtifact = Path.Join(
+            legacyRoot,
+            CudaRuntimeProvisioner.BundleVersion,
+            "legacy-artifact.so"
+        );
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyArtifact)!);
+        await File.WriteAllTextAsync(legacyArtifact, "legacy");
+
+        var (_, http) = WhisperCublasFixture();
+        using var _ = http;
+        var logs = new List<string>();
+        var moveAttempts = 0;
+        var provisioner = CreateProvisioner(
+            configuredRoot,
+            http,
+            logs.Add,
+            systemLibraryProbe: _ => true,
+            legacyCacheRoot: legacyRoot,
+            moveDirectory: (_, _) =>
+            {
+                moveAttempts++;
+                throw new IOException("simulated cross-device move failure");
+            }
+        );
+
+        await provisioner.DownloadAndExtractAsync(
+            CudaRuntimeProfile.WhisperCublas,
+            null,
+            CancellationToken.None
+        );
+
+        Assert.Equal(1, moveAttempts);
+        Assert.True(File.Exists(legacyArtifact));
+        Assert.True(Directory.Exists(provisioner.CacheDirectory));
+        Assert.False(
+            File.Exists(Path.Join(provisioner.CacheDirectory, "legacy-artifact.so"))
+        );
+        Assert.Contains(
+            logs,
+            message =>
+                message.Contains("could not migrate cache", StringComparison.Ordinal)
+                && message.Contains(
+                    "Leaving the old cache in place",
+                    StringComparison.Ordinal
+                )
+        );
+    }
+
+    [Fact]
+    public async Task DownloadAndExtract_LegacyMaintenanceLockHeld_BoundsMigrationAndProvisionsConfiguredRoot()
+    {
+        using var temp = new TempDir();
+        var legacyRoot = Path.Join(temp.Path, "legacy", "cuda");
+        var configuredRoot = Path.Join(temp.Path, "selected", "Runtimes", "cuda");
+        var legacyArtifact = Path.Join(
+            legacyRoot,
+            CudaRuntimeProvisioner.BundleVersion,
+            "legacy-artifact.so"
+        );
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyArtifact)!);
+        await File.WriteAllTextAsync(legacyArtifact, "legacy");
+
+        var legacyCacheParent = Directory.GetParent(legacyRoot)!;
+        var legacyMaintenanceLockPath = Path.Join(
+            legacyCacheParent.FullName,
+            Path.GetFileName(legacyRoot) + ".maintenance.lock"
+        );
+        await using var heldMaintenanceLock = new FileStream(
+            legacyMaintenanceLockPath,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None
+        );
+
+        var (_, http) = WhisperCublasFixture();
+        using var _ = http;
+        var logs = new List<string>();
+        var provisioner = CreateProvisioner(
+            configuredRoot,
+            http,
+            logs.Add,
+            systemLibraryProbe: _ => true,
+            legacyCacheRoot: legacyRoot,
+            maintenanceLockTimeout: TimeSpan.FromMilliseconds(100)
+        );
+
+        var stopwatch = Stopwatch.StartNew();
+        await provisioner.DownloadAndExtractAsync(
+            CudaRuntimeProfile.WhisperCublas,
+            null,
+            CancellationToken.None
+        );
+        stopwatch.Stop();
+
+        Assert.InRange(
+            stopwatch.Elapsed,
+            TimeSpan.FromMilliseconds(75),
+            TimeSpan.FromSeconds(5)
+        );
+        Assert.True(File.Exists(legacyArtifact));
+        Assert.True(Directory.Exists(provisioner.CacheDirectory));
+        Assert.Contains(
+            logs,
+            message =>
+                message.Contains(
+                    "Timed out waiting for another CUDA cache operation",
+                    StringComparison.Ordinal
+                )
+        );
+    }
+
     // ---- fixtures / helpers ------------------------------------------------------------
+
+    private static CudaRuntimeProvisioner CreateProvisioner(
+        string cacheRoot,
+        HttpClient http,
+        Action<string>? log = null,
+        Func<string, bool>? systemLibraryProbe = null,
+        string? legacyCacheRoot = null,
+        Action<string, string>? moveDirectory = null,
+        TimeSpan? maintenanceLockTimeout = null
+    ) =>
+        new(
+            cacheRoot,
+            http,
+            log,
+            // Keep every existing unit test isolated from the real per-user default.
+            legacyCacheRoot ?? Path.Join(cacheRoot, ".test-legacy-cuda"),
+            moveDirectory ?? Directory.Move
+        )
+        {
+            SystemLibraryProbeForTests = systemLibraryProbe,
+            MaintenanceLockTimeoutForTests =
+                maintenanceLockTimeout ?? TimeSpan.FromSeconds(30),
+        };
 
     private static (FakePyPiHandler Handler, HttpClient Http) WhisperCublasFixture(
         bool pauseFirstWheelResponse = false
