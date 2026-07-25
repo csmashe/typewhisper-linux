@@ -22,6 +22,7 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
     private readonly IHistoryService _history;
     private readonly IHistoryInsightsService _insights;
     private readonly ISettingsService _settings;
+    private readonly TimeZoneInfo _timeZone;
 
     [ObservableProperty]
     private int _appCount;
@@ -84,10 +85,19 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         ISettingsService settings,
         IHistoryInsightsService insights
     )
+        : this(history, settings, insights, TimeZoneInfo.Local) { }
+
+    internal DashboardSectionViewModel(
+        IHistoryService history,
+        ISettingsService settings,
+        IHistoryInsightsService insights,
+        TimeZoneInfo timeZone
+    )
     {
         _history = history;
         _settings = settings;
         _insights = insights;
+        _timeZone = timeZone;
         // ReadSelectedRange guards against out-of-range ints stored by older
         // versions of the app (DashboardSelectedPeriod is an unvalidated int).
         _selectedRange = ReadSelectedRange(settings.Current.DashboardSelectedPeriod);
@@ -98,7 +108,7 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         _ = InitializeAsync();
     }
 
-    public ObservableCollection<TranscriptionRecord> RecentActivity { get; } = [];
+    public ObservableCollection<DashboardRecentActivityRow> RecentActivity { get; } = [];
     public ObservableCollection<AppUsageInsightRow> TopApps { get; } = [];
     public bool HasTopApps => TopApps.Count > 0;
     public bool HasRecentActivity => RecentActivity.Count > 0;
@@ -211,7 +221,12 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         RecentActivity.Clear();
         foreach (var r in records.OrderByDescending(r => r.Timestamp).Take(10))
         {
-            RecentActivity.Add(r);
+            RecentActivity.Add(
+                new DashboardRecentActivityRow(
+                    r,
+                    PresentationDateTime.ToLocal(r.Timestamp, _timeZone)
+                )
+            );
         }
 
         TopApps.Clear();
@@ -245,6 +260,20 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
     {
         return seconds < 60 ? $"{seconds:0.#}s" : $"{seconds / 60.0:0.#}m";
     }
+}
+
+public sealed class DashboardRecentActivityRow
+{
+    public DashboardRecentActivityRow(TranscriptionRecord record, DateTime localTimestamp)
+    {
+        Record = record;
+        LocalTimestamp = localTimestamp;
+    }
+
+    public TranscriptionRecord Record { get; }
+    public DateTime LocalTimestamp { get; }
+    public string Preview => Record.Preview;
+    public string? AppName => Record.AppName;
 }
 
 public sealed class AppUsageInsightRow

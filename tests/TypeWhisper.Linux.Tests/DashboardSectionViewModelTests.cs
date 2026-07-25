@@ -122,6 +122,33 @@ public sealed class DashboardSectionViewModelTests : IDisposable
         Assert.Equal(5, sut.WordCount);
     }
 
+    [Fact]
+    public void RecentActivity_ExposesLocalPresentationTimestamp()
+    {
+        var timeZone = TimeZoneInfo.CreateCustomTimeZone(
+            "Dashboard tests UTC+13",
+            TimeSpan.FromHours(13),
+            "Dashboard tests UTC+13",
+            "Dashboard tests UTC+13"
+        );
+        var history = new HistoryService(Path.Join(_tempDir, "history.json"));
+        var timestamp = new DateTime(2030, 1, 2, 23, 30, 0, DateTimeKind.Utc);
+        history.AddRecord(CreateRecord("recent words", "code", 2, timestamp));
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        var sut = new DashboardSectionViewModel(
+            history,
+            settings,
+            new HistoryInsightsService(),
+            timeZone
+        );
+
+        sut.SelectedRange = DashboardSectionViewModel.TimeRange.AllTime;
+
+        var activity = Assert.Single(sut.RecentActivity);
+        Assert.Same(history.Records[0], activity.Record);
+        Assert.Equal(new DateTime(2030, 1, 3, 12, 30, 0), activity.LocalTimestamp);
+    }
+
     private static TranscriptionRecord CreateRecord(
         string finalText,
         string appProcessName,
