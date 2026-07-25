@@ -39,6 +39,93 @@ public class CudaRuntimeCacheClearTests
     }
 
     [Fact]
+    public async Task CudaRuntimeProvisioner_ClearCache_LeavesExternalSentinelsInPlace()
+    {
+        var temp = CreateTempDir();
+        try
+        {
+            var cacheRoot = Path.Join(temp, "cuda");
+            using var http = new HttpClient();
+            var provisioner = new Provisioner(cacheRoot, http);
+            Directory.CreateDirectory(provisioner.CacheDirectory);
+            await File.WriteAllTextAsync(
+                Path.Join(provisioner.CacheDirectory, "libcudart.so.12"),
+                "dummy"
+            );
+
+            await provisioner.ClearCacheAsync(CancellationToken.None);
+
+            Assert.False(Directory.Exists(cacheRoot));
+            Assert.Equal(
+                Path.Join(temp, "cuda.maintenance.lock"),
+                provisioner.MaintenanceLockPathForTests
+            );
+            Assert.True(File.Exists(provisioner.MaintenanceLockPathForTests));
+            Assert.Equal(
+                Path.Join(temp, "cuda.locks"),
+                provisioner.WheelLockDirectoryForTests
+            );
+            var wheelSentinels = Directory.GetFiles(
+                provisioner.WheelLockDirectoryForTests,
+                "*.lock"
+            );
+            Assert.NotEmpty(wheelSentinels);
+            Assert.All(wheelSentinels, path => Assert.True(File.Exists(path)));
+        }
+        finally
+        {
+            TryDeleteDir(temp);
+        }
+    }
+
+    [Fact]
+    public async Task CudaRuntimeProvisioner_ClearCache_TimesOutWithoutDeleting()
+    {
+        var temp = CreateTempDir();
+        try
+        {
+            var cacheRoot = Path.Join(temp, "cuda");
+            using var http = new HttpClient();
+            var provisioner = new Provisioner(cacheRoot, http)
+            {
+                MaintenanceLockTimeoutForTests = TimeSpan.FromMilliseconds(100),
+            };
+            Directory.CreateDirectory(provisioner.CacheDirectory);
+            await File.WriteAllTextAsync(
+                Path.Join(provisioner.CacheDirectory, "libcudart.so.12"),
+                "dummy"
+            );
+            Directory.CreateDirectory(
+                Directory.GetParent(provisioner.MaintenanceLockPathForTests)!.FullName
+            );
+            await using var heldMaintenanceLock = new FileStream(
+                provisioner.MaintenanceLockPathForTests,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None
+            );
+
+            var ex = await Assert.ThrowsAsync<TimeoutException>(
+                () => provisioner.ClearCacheAsync(CancellationToken.None)
+            );
+
+            Assert.Contains(
+                "Timed out waiting for another CUDA cache operation before clearing",
+                ex.Message,
+                StringComparison.Ordinal
+            );
+            Assert.True(Directory.Exists(cacheRoot));
+            Assert.True(
+                File.Exists(Path.Join(provisioner.CacheDirectory, "libcudart.so.12"))
+            );
+        }
+        finally
+        {
+            TryDeleteDir(temp);
+        }
+    }
+
+    [Fact]
     public async Task SherpaCudaRuntimeInstaller_ClearCache_RemovesRuntimeTree()
     {
         var temp = CreateTempDir();

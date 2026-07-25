@@ -305,9 +305,142 @@ public class CudaRuntimeProvisionerTests
         Assert.Equal(2, handler.WheelRequests);
     }
 
+    [Fact]
+    public async Task DownloadAndExtract_TwoProvisioners_ClearWaitsForActiveProvisioning()
+    {
+        using var temp = new TempDir();
+        var (handler, http) = WhisperCublasFixture(pauseFirstWheelResponse: true);
+        using var _ = http;
+        var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
+        {
+            SystemLibraryProbeForTests = _ => false,
+        };
+        var clearingProvisioner = new CudaRuntimeProvisioner(temp.Path, http)
+        {
+            SystemLibraryProbeForTests = _ => false,
+        };
+
+        var provisioning = provisioner.DownloadAndExtractAsync(
+            CudaRuntimeProfile.WhisperCublas,
+            null,
+            CancellationToken.None
+        );
+        await handler.FirstWheelRequestStarted.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var cudartSentinel = Path.Join(
+            provisioner.WheelLockDirectoryForTests,
+            CudartPackage + ".lock"
+        );
+        Assert.True(File.Exists(cudartSentinel));
+
+        var clearing = clearingProvisioner.ClearCacheAsync(CancellationToken.None);
+        bool completedWhileProvisioning;
+        try
+        {
+            completedWhileProvisioning =
+                await Task.WhenAny(clearing, Task.Delay(500)) == clearing;
+        }
+        finally
+        {
+            handler.ReleaseFirstWheelResponse();
+        }
+
+        await provisioning;
+        await clearing;
+
+        Assert.False(completedWhileProvisioning);
+        Assert.False(Directory.Exists(temp.Path));
+        Assert.True(File.Exists(provisioner.MaintenanceLockPathForTests));
+        Assert.True(File.Exists(cudartSentinel));
+    }
+
+    [Fact]
+    public async Task PruneStaleBundles_TwoProvisioners_WaitsForActiveProvisioning()
+    {
+        using var temp = new TempDir();
+        var (handler, http) = WhisperCublasFixture(pauseFirstWheelResponse: true);
+        using var _ = http;
+        var provisioner = new CudaRuntimeProvisioner(temp.Path, http)
+        {
+            SystemLibraryProbeForTests = _ => false,
+        };
+        var pruningProvisioner = new CudaRuntimeProvisioner(temp.Path, http)
+        {
+            SystemLibraryProbeForTests = _ => false,
+        };
+        var staleDir = Path.Join(temp.Path, "cuda12-v0-stale");
+        Directory.CreateDirectory(staleDir);
+        await File.WriteAllTextAsync(Path.Join(staleDir, "old.so"), "x");
+
+        var provisioning = provisioner.DownloadAndExtractAsync(
+            CudaRuntimeProfile.WhisperCublas,
+            null,
+            CancellationToken.None
+        );
+        await handler.FirstWheelRequestStarted.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var pruning = Task.Run(pruningProvisioner.PruneStaleBundles);
+        bool completedWhileProvisioning;
+        bool staleSurvivedWhileProvisioning;
+        try
+        {
+            completedWhileProvisioning =
+                await Task.WhenAny(pruning, Task.Delay(500)) == pruning;
+            staleSurvivedWhileProvisioning = Directory.Exists(staleDir);
+        }
+        finally
+        {
+            handler.ReleaseFirstWheelResponse();
+        }
+
+        await provisioning;
+        await pruning;
+
+        Assert.False(completedWhileProvisioning);
+        Assert.True(staleSurvivedWhileProvisioning);
+        Assert.False(Directory.Exists(staleDir));
+    }
+
+    [Fact]
+    public async Task PruneStaleBundles_WhenMaintenanceLockTimesOut_SkipsWithReason()
+    {
+        using var temp = new TempDir();
+        var (_, http) = WhisperCublasFixture();
+        using var _ = http;
+        var logs = new List<string>();
+        var provisioner = new CudaRuntimeProvisioner(temp.Path, http, logs.Add)
+        {
+            MaintenanceLockTimeoutForTests = TimeSpan.FromMilliseconds(100),
+        };
+        Directory.CreateDirectory(provisioner.CacheDirectory);
+        var staleDir = Path.Join(temp.Path, "cuda12-v0-stale");
+        Directory.CreateDirectory(staleDir);
+        await File.WriteAllTextAsync(Path.Join(staleDir, "old.so"), "x");
+        await using var heldMaintenanceLock = new FileStream(
+            provisioner.MaintenanceLockPathForTests,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None
+        );
+
+        provisioner.PruneStaleBundles();
+
+        Assert.True(Directory.Exists(staleDir));
+        Assert.Contains(
+            logs,
+            message =>
+                message.Contains(
+                    "skipped stale-bundle pruning: Timed out waiting",
+                    StringComparison.Ordinal
+                )
+        );
+    }
+
     // ---- fixtures / helpers ------------------------------------------------------------
 
-    private static (FakePyPiHandler Handler, HttpClient Http) WhisperCublasFixture()
+    private static (FakePyPiHandler Handler, HttpClient Http) WhisperCublasFixture(
+        bool pauseFirstWheelResponse = false
+    )
     {
         var fixtures = new[]
         {
@@ -315,10 +448,10 @@ public class CudaRuntimeProvisionerTests
             Wheel(CublasPackage, CublasVersion,
             [
                 ("nvidia/cublas/lib/libcublas.so.12", 16),
-                    ("nvidia/cublas/lib/libcublasLt.so.12", 16),
+                ("nvidia/cublas/lib/libcublasLt.so.12", 16),
             ]),
         };
-        var handler = new FakePyPiHandler(fixtures);
+        var handler = new FakePyPiHandler(fixtures, pauseFirstWheelResponse);
         return (handler, new HttpClient(handler));
     }
 
@@ -394,22 +527,36 @@ public class CudaRuntimeProvisionerTests
     {
         private readonly Dictionary<string, WheelFixture> _byPackage;
         private readonly Dictionary<string, WheelFixture> _byUrl;
+        private readonly bool _pauseFirstWheelResponse;
+        private readonly TaskCompletionSource<bool> _firstWheelRequestStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _releaseFirstWheelResponse =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _json;
         private int _wheel;
 
-        public FakePyPiHandler(IEnumerable<WheelFixture> wheels)
+        public FakePyPiHandler(
+            IEnumerable<WheelFixture> wheels,
+            bool pauseFirstWheelResponse = false
+        )
         {
             var list = wheels.ToList();
             _byPackage = list.ToDictionary(w => w.Package, StringComparer.Ordinal);
             _byUrl = list.ToDictionary(w => w.WheelUrl, StringComparer.Ordinal);
+            _pauseFirstWheelResponse = pauseFirstWheelResponse;
         }
 
         public int JsonRequests => Volatile.Read(ref _json);
         public int WheelRequests => Volatile.Read(ref _wheel);
+        public Task FirstWheelRequestStarted => _firstWheelRequestStarted.Task;
 
-        protected override Task<HttpResponseMessage> SendAsync(
+        public void ReleaseFirstWheelResponse() =>
+            _releaseFirstWheelResponse.TrySetResult(true);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             var uri = request.RequestUri!;
             if (uri.Host == "pypi.org")
@@ -418,21 +565,24 @@ public class CudaRuntimeProvisionerTests
                 // /pypi/{package}/{version}/json
                 var parts = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
                 var package = parts[1];
-                return Task.FromResult(Json(BuildPyPiJson(_byPackage[package])));
+                return Json(BuildPyPiJson(_byPackage[package]));
             }
 
             if (!_byUrl.TryGetValue(uri.ToString(), out var fixture))
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+
+            var wheelRequest = Interlocked.Increment(ref _wheel);
+            if (_pauseFirstWheelResponse && wheelRequest == 1)
             {
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                _firstWheelRequestStarted.TrySetResult(true);
+                await _releaseFirstWheelResponse.Task.WaitAsync(cancellationToken);
             }
 
-            Interlocked.Increment(ref _wheel);
-            return Task.FromResult(
+            return
                 new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new ByteArrayContent(fixture.Zip),
-                });
-
+                };
         }
 
         private static HttpResponseMessage Json(string json) =>
@@ -493,6 +643,25 @@ public class CudaRuntimeProvisionerTests
             {
                 if (Directory.Exists(Path))
                     Directory.Delete(Path, recursive: true);
+
+                var parent = Directory.GetParent(Path);
+                if (parent is null)
+                    return;
+
+                var cacheName = System.IO.Path.GetFileName(Path);
+                var lockDirectory = System.IO.Path.Join(
+                    parent.FullName,
+                    cacheName + ".locks"
+                );
+                if (Directory.Exists(lockDirectory))
+                    Directory.Delete(lockDirectory, recursive: true);
+
+                var maintenanceLock = System.IO.Path.Join(
+                    parent.FullName,
+                    cacheName + ".maintenance.lock"
+                );
+                if (File.Exists(maintenanceLock))
+                    File.Delete(maintenanceLock);
             }
             catch
             {
