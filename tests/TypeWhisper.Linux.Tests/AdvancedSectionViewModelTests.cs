@@ -1,3 +1,5 @@
+using Moq;
+using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
@@ -158,6 +160,226 @@ public sealed class AdvancedSectionViewModelTests
         Assert.Equal("Apply voice", voice.DisplayName);
     }
 
+    [Fact]
+    public async Task StartupBeforePlugins_RetainsConfiguredTtsPreferenceAndRehydratesWithoutSaving()
+    {
+        using var harness = await TestHarness.CreateAsync(enablePluginBeforeViewModel: false);
+
+        Assert.Equal(
+            MutableTtsPlugin.ProviderId,
+            harness.Settings.Object.Current.SpokenFeedbackProviderId
+        );
+        Assert.Equal("before-voice", harness.Settings.Object.Current.SpokenFeedbackVoiceId);
+        Assert.Equal(
+            AppSettings.DefaultSpokenFeedbackProviderId,
+            harness.ViewModel.SelectedSpokenFeedbackProviderId
+        );
+        Assert.Equal(
+            AppSettings.DefaultSpokenFeedbackProviderId,
+            harness.ViewModel.SelectedSpokenFeedbackProviderOption?.Id
+        );
+        harness.Settings.Verify(
+            service => service.Save(It.IsAny<AppSettings>()),
+            Times.Never
+        );
+
+        await harness.PluginManager.EnablePluginAsync(harness.Plugin.PluginId);
+        harness.ApplyPostedActions();
+
+        Assert.Equal(
+            MutableTtsPlugin.ProviderId,
+            harness.ViewModel.SelectedSpokenFeedbackProviderId
+        );
+        Assert.Equal(
+            MutableTtsPlugin.ProviderId,
+            harness.ViewModel.SelectedSpokenFeedbackProviderOption?.Id
+        );
+        Assert.Equal("before-voice", harness.ViewModel.SelectedSpokenFeedbackVoiceId);
+        Assert.Equal("before-voice", harness.ViewModel.SelectedSpokenFeedbackVoiceOption?.Id);
+        Assert.Equal(
+            MutableTtsPlugin.ProviderId,
+            harness.Settings.Object.Current.SpokenFeedbackProviderId
+        );
+        Assert.Equal("before-voice", harness.Settings.Object.Current.SpokenFeedbackVoiceId);
+        harness.Settings.Verify(
+            service => service.Save(It.IsAny<AppSettings>()),
+            Times.Never
+        );
+    }
+
+    [Fact]
+    public async Task MemoryCapabilityChanges_PreserveConfiguredEnabledPreferenceWithoutSaving()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { MemoryEnabled = true }
+        );
+        var plugin = new MutableMemoryLlmPlugin();
+        var pluginDirectory = Path.GetDirectoryName(
+            typeof(AdvancedSectionViewModelTests).Assembly.Location
+        )!;
+        var loadedPlugin = TestPluginManagerFactory.CreateLoadedPlugin(
+            pluginDirectory,
+            plugin.PluginId,
+            plugin
+        );
+        using var pluginManager = TestPluginManagerFactory.Create(
+            loadedPlugins: [loadedPlugin]
+        );
+        var systemProvider = new MutableTtsPlugin(
+            "linux-system",
+            "System provider",
+            "system-voice",
+            "System voice"
+        );
+        using var speechFeedback = new SpeechFeedbackService(
+            settings.Object,
+            pluginManager,
+            systemProvider
+        );
+        var postedActions = new List<Action>();
+        var viewModel = new AdvancedSectionViewModel(
+            settings.Object,
+            speechFeedback,
+            pluginManager,
+            postedActions.Add
+        );
+
+        Assert.False(viewModel.CanUseMemory);
+        Assert.False(viewModel.MemoryEnabled);
+        Assert.True(settings.Object.Current.MemoryEnabled);
+        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+
+        await pluginManager.EnablePluginAsync(plugin.PluginId);
+        ApplyPostedActions(postedActions);
+
+        Assert.True(viewModel.CanUseMemory);
+        Assert.True(viewModel.MemoryEnabled);
+        Assert.True(settings.Object.Current.MemoryEnabled);
+        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+
+        await pluginManager.DisablePluginAsync(plugin.PluginId);
+        ApplyPostedActions(postedActions);
+
+        Assert.False(viewModel.CanUseMemory);
+        Assert.False(viewModel.MemoryEnabled);
+        Assert.True(settings.Object.Current.MemoryEnabled);
+        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task SpokenFeedbackCapabilityChanges_PreserveConfiguredEnabledPreferenceWithoutSaving()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings
+            {
+                SpokenFeedbackEnabled = true,
+                SpokenFeedbackProviderId = "linux-system",
+            }
+        );
+        var auxPlugin = new MutableTtsPlugin(
+            "aux-provider",
+            "Aux provider",
+            "aux-voice",
+            "Aux voice"
+        );
+        var pluginDirectory = Path.GetDirectoryName(
+            typeof(AdvancedSectionViewModelTests).Assembly.Location
+        )!;
+        var loadedPlugin = TestPluginManagerFactory.CreateLoadedPlugin(
+            pluginDirectory,
+            auxPlugin.PluginId,
+            auxPlugin
+        );
+        using var pluginManager = TestPluginManagerFactory.Create(
+            loadedPlugins: [loadedPlugin]
+        );
+        var systemProvider = new MutableTtsPlugin(
+            "linux-system",
+            "System provider",
+            "system-voice",
+            "System voice"
+        );
+        using var speechFeedback = new SpeechFeedbackService(
+            settings.Object,
+            pluginManager,
+            systemProvider
+        );
+        var postedActions = new List<Action>();
+        var viewModel = new AdvancedSectionViewModel(
+            settings.Object,
+            speechFeedback,
+            pluginManager,
+            postedActions.Add
+        );
+
+        Assert.True(viewModel.CanUseSpokenFeedback);
+        Assert.True(viewModel.SpokenFeedbackEnabled);
+        Assert.True(settings.Object.Current.SpokenFeedbackEnabled);
+        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+
+        systemProvider.IsConfigured = false;
+        await pluginManager.EnablePluginAsync(auxPlugin.PluginId);
+        ApplyPostedActions(postedActions);
+
+        Assert.False(viewModel.CanUseSpokenFeedback);
+        Assert.False(viewModel.SpokenFeedbackEnabled);
+        Assert.True(settings.Object.Current.SpokenFeedbackEnabled);
+        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+
+        systemProvider.IsConfigured = true;
+        await pluginManager.DisablePluginAsync(auxPlugin.PluginId);
+        ApplyPostedActions(postedActions);
+
+        Assert.True(viewModel.CanUseSpokenFeedback);
+        Assert.True(viewModel.SpokenFeedbackEnabled);
+        Assert.True(settings.Object.Current.SpokenFeedbackEnabled);
+        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ProgrammaticVoiceFallback_DoesNotSelectOrSave_UserVoiceEditDoes()
+    {
+        using var harness = await TestHarness.CreateAsync();
+        harness.Settings.Invocations.Clear();
+        harness.Plugin.ResetSelectVoiceCalls();
+        harness.Plugin.SetState(
+            "Fallback provider",
+            "available-voice",
+            "Available voice",
+            selectedVoiceId: "missing-voice"
+        );
+
+        harness.Plugin.NotifyCapabilitiesChanged();
+        harness.ApplyPostedActions();
+
+        Assert.Equal(
+            SpeechFeedbackService.DefaultVoiceOptionId,
+            harness.ViewModel.SelectedSpokenFeedbackVoiceId
+        );
+        Assert.Equal(0, harness.Plugin.SelectVoiceCallCount);
+        Assert.Equal("before-voice", harness.Settings.Object.Current.SpokenFeedbackVoiceId);
+        harness.Settings.Verify(
+            service => service.Save(It.IsAny<AppSettings>()),
+            Times.Never
+        );
+
+        harness.ViewModel.SelectedSpokenFeedbackVoiceOption = Assert.Single(
+            harness.ViewModel.SpokenFeedbackVoices,
+            voice => voice.Id == "available-voice"
+        );
+
+        Assert.Equal(1, harness.Plugin.SelectVoiceCallCount);
+        Assert.Equal("available-voice", harness.Plugin.SelectedVoiceId);
+        Assert.Equal(
+            "available-voice",
+            harness.Settings.Object.Current.SpokenFeedbackVoiceId
+        );
+        harness.Settings.Verify(
+            service => service.Save(It.IsAny<AppSettings>()),
+            Times.Once
+        );
+    }
+
     private static TtsProviderOption GetPluginProvider(AdvancedSectionViewModel viewModel)
     {
         return Assert.Single(
@@ -175,9 +397,20 @@ public sealed class AdvancedSectionViewModelTests
         );
     }
 
+    private static void ApplyPostedActions(List<Action> postedActions)
+    {
+        var actions = postedActions.ToList();
+        postedActions.Clear();
+        foreach (var action in actions)
+        {
+            action();
+        }
+    }
+
     private sealed class TestHarness : IDisposable
     {
         private TestHarness(
+            Mock<ISettingsService> settings,
             PluginManager pluginManager,
             SpeechFeedbackService speechFeedback,
             MutableTtsPlugin plugin,
@@ -185,6 +418,7 @@ public sealed class AdvancedSectionViewModelTests
             List<Action> postedActions
         )
         {
+            Settings = settings;
             PluginManager = pluginManager;
             SpeechFeedback = speechFeedback;
             Plugin = plugin;
@@ -192,13 +426,16 @@ public sealed class AdvancedSectionViewModelTests
             PostedActions = postedActions;
         }
 
-        private PluginManager PluginManager { get; }
+        public Mock<ISettingsService> Settings { get; }
+        public PluginManager PluginManager { get; }
         private SpeechFeedbackService SpeechFeedback { get; }
         public MutableTtsPlugin Plugin { get; }
         public AdvancedSectionViewModel ViewModel { get; }
         public List<Action> PostedActions { get; }
 
-        public static async Task<TestHarness> CreateAsync()
+        public static async Task<TestHarness> CreateAsync(
+            bool enablePluginBeforeViewModel = true
+        )
         {
             var settings = TestPluginManagerFactory.CreateSettings(
                 new AppSettings
@@ -222,7 +459,10 @@ public sealed class AdvancedSectionViewModelTests
                 plugin
             );
             var pluginManager = TestPluginManagerFactory.Create(loadedPlugins: [loadedPlugin]);
-            await pluginManager.EnablePluginAsync(plugin.PluginId);
+            if (enablePluginBeforeViewModel)
+            {
+                await pluginManager.EnablePluginAsync(plugin.PluginId);
+            }
 
             var systemProvider = new MutableTtsPlugin(
                 "linux-system",
@@ -243,12 +483,18 @@ public sealed class AdvancedSectionViewModelTests
                 postedActions.Add
             );
             return new TestHarness(
+                settings,
                 pluginManager,
                 speechFeedback,
                 plugin,
                 viewModel,
                 postedActions
             );
+        }
+
+        public void ApplyPostedActions()
+        {
+            AdvancedSectionViewModelTests.ApplyPostedActions(PostedActions);
         }
 
         public void Dispose()
@@ -268,11 +514,12 @@ public sealed class AdvancedSectionViewModelTests
             string providerId,
             string displayName,
             string voiceId,
-            string voiceName
+            string voiceName,
+            string? selectedVoiceId = null
         )
         {
             ProviderIdValue = providerId;
-            SetState(displayName, voiceId, voiceName);
+            SetState(displayName, voiceId, voiceName, selectedVoiceId);
         }
 
         public string PluginId => $"plugin.{ProviderIdValue}";
@@ -281,9 +528,10 @@ public sealed class AdvancedSectionViewModelTests
         private string ProviderIdValue { get; }
         string ITtsProviderPlugin.ProviderId => ProviderIdValue;
         public string ProviderDisplayName { get; private set; } = "";
-        public bool IsConfigured => true;
+        public bool IsConfigured { get; set; } = true;
         public IReadOnlyList<PluginVoiceInfo> AvailableVoices { get; private set; } = [];
         public string? SelectedVoiceId { get; private set; }
+        public int SelectVoiceCallCount { get; private set; }
 
         public Task ActivateAsync(IPluginHostServices host)
         {
@@ -296,11 +544,16 @@ public sealed class AdvancedSectionViewModelTests
             return Task.CompletedTask;
         }
 
-        public void SetState(string displayName, string voiceId, string voiceName)
+        public void SetState(
+            string displayName,
+            string voiceId,
+            string voiceName,
+            string? selectedVoiceId = null
+        )
         {
             ProviderDisplayName = displayName;
             AvailableVoices = [new PluginVoiceInfo(voiceId, voiceName)];
-            SelectedVoiceId = voiceId;
+            SelectedVoiceId = selectedVoiceId ?? voiceId;
         }
 
         public void NotifyCapabilitiesChanged()
@@ -311,7 +564,13 @@ public sealed class AdvancedSectionViewModelTests
 
         public void SelectVoice(string? voiceId)
         {
+            SelectVoiceCallCount++;
             SelectedVoiceId = voiceId;
+        }
+
+        public void ResetSelectVoiceCalls()
+        {
+            SelectVoiceCallCount = 0;
         }
 
         public Task<ITtsPlaybackSession> SpeakAsync(
@@ -320,6 +579,72 @@ public sealed class AdvancedSectionViewModelTests
         )
         {
             return Task.FromResult<ITtsPlaybackSession>(InactivePlaybackSession.Instance);
+        }
+
+        public void Dispose() { }
+    }
+
+    private sealed class MutableMemoryLlmPlugin : IMemoryStoragePlugin, ILlmProviderPlugin
+    {
+        public string PluginId => "plugin.mutable-memory-llm";
+        public string PluginName => "Mutable memory and LLM";
+        public string PluginVersion => "1.0.0";
+        public string ProviderName => "Mutable LLM";
+        public bool IsAvailable => true;
+        public IReadOnlyList<PluginModelInfo> SupportedModels { get; } = [];
+
+        public Task ActivateAsync(IPluginHostServices host)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task DeactivateAsync()
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task<string> ProcessAsync(
+            string systemPrompt,
+            string userText,
+            string model,
+            CancellationToken ct
+        )
+        {
+            return Task.FromResult("");
+        }
+
+        public Task StoreAsync(string content, CancellationToken ct = default)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<string>> SearchAsync(
+            string query,
+            int maxResults = 5,
+            CancellationToken ct = default
+        )
+        {
+            return Task.FromResult<IReadOnlyList<string>>([]);
+        }
+
+        public Task<IReadOnlyList<string>> GetAllAsync(CancellationToken ct = default)
+        {
+            return Task.FromResult<IReadOnlyList<string>>([]);
+        }
+
+        public Task DeleteAsync(string content, CancellationToken ct = default)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task ClearAllAsync(CancellationToken ct = default)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task<int> CountAsync(CancellationToken ct = default)
+        {
+            return Task.FromResult(0);
         }
 
         public void Dispose() { }
