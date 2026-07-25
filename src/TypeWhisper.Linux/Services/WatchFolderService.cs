@@ -17,14 +17,14 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
     };
 
     private readonly ConcurrentDictionary<string, WatchFolderRun> _activeFiles = new(
-        StringComparer.OrdinalIgnoreCase
+        StringComparer.Ordinal
     );
 
     private readonly List<WatchFolderHistoryItem> _history = [];
     private readonly string _historyPath;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly Lock _persistenceGate = new();
-    private readonly HashSet<string> _processedFingerprints = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _processedFingerprints = new(StringComparer.Ordinal);
     private readonly string _processedFingerprintsPath;
     private readonly Lock _stateGate = new();
     private readonly Func<Task, TimeSpan, Task> _waitForWorkers;
@@ -1132,11 +1132,11 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
         internal ConcurrentQueue<string> PendingFiles { get; } = [];
 
         internal ConcurrentDictionary<string, byte> QueuedFiles { get; } = new(
-            StringComparer.OrdinalIgnoreCase
+            StringComparer.Ordinal
         );
 
         internal Lock FailedFingerprintsGate { get; } = new();
-        internal HashSet<string> FailedFingerprints { get; } = new(StringComparer.OrdinalIgnoreCase);
+        internal HashSet<string> FailedFingerprints { get; } = new(StringComparer.Ordinal);
         internal Exception? WorkerFailure => Volatile.Read(ref _workerFailure);
         internal Task WorkerCompletion { get; private set; } = Task.CompletedTask;
         internal Task RetiredCleanup { get; private set; } = Task.CompletedTask;
