@@ -24,10 +24,16 @@ public static class OpenAiTranscriptionHelper
     /// <param name="wavAudio">WAV-encoded audio bytes.</param>
     /// <param name="language">Language hint (ISO code) or null for auto-detection.</param>
     /// <param name="translate">If true, uses the translations endpoint (audio to English).</param>
-    /// <param name="responseFormat">Response format (e.g. "verbose_json", "json", "text").</param>
+    /// <param name="responseFormat">
+    ///     Response format. Supported values are <c>"verbose_json"</c>, <c>"json"</c>,
+    ///     and <c>"text"</c>.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <param name="prompt">Optional text to bias the model toward specific spelling, vocabulary, or style; null to omit.</param>
-    /// <returns>Transcription result with text, detected language, and duration.</returns>
+    /// <returns>
+    ///     Transcription result with text, detected language, and duration. The <c>"text"</c>
+    ///     format supplies only text, so language, duration, and segments use their default values.
+    /// </returns>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedParameter.Global
     public static async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -43,6 +49,17 @@ public static class OpenAiTranscriptionHelper
         string? prompt = null
     )
     {
+        var parseAsPlainText = responseFormat switch
+        {
+            "text" => true,
+            "json" or "verbose_json" => false,
+            _ => throw new ArgumentException(
+                $"Unsupported transcription response format: '{responseFormat}'. "
+                + "Supported formats are 'verbose_json', 'json', and 'text'.",
+                nameof(responseFormat)
+            ),
+        };
+
         var endpoint = translate
             ? $"{baseUrl}/v1/audio/translations"
             : $"{baseUrl}/v1/audio/transcriptions";
@@ -70,8 +87,20 @@ public static class OpenAiTranscriptionHelper
         request.Content = content;
 
         var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(httpClient, request, ct);
-        var json = await response.Content.ReadAsStringAsync(ct);
-        return ParseTranscriptionResponse(json);
+        var responseBody = await response.Content.ReadAsStringAsync(ct);
+        return parseAsPlainText
+            ? ParsePlainTextTranscriptionResponse(responseBody)
+            : ParseTranscriptionResponse(responseBody);
+    }
+
+    private static PluginTranscriptionResult ParsePlainTextTranscriptionResponse(string responseBody)
+    {
+        var text = responseBody.EndsWith("\r\n", StringComparison.Ordinal)
+            ? responseBody[..^2]
+            : responseBody.EndsWith('\n') || responseBody.EndsWith('\r')
+                ? responseBody[..^1]
+                : responseBody;
+        return new PluginTranscriptionResult(text, null, 0, null);
     }
 
     /// <summary>
