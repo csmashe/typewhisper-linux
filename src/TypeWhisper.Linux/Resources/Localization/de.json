@@ -123,6 +123,8 @@
   "Common.On": "An",
   "Common.Yes": "Ja",
   "Common.OpenWizard": "Assistent starten",
+  "Common.OperationFailed": "{0} fehlgeschlagen: {1}",
+  "Common.OperationFailedTitle": "Vorgang fehlgeschlagen",
   "Common.Refresh": "Aktualisieren",
   "Common.Remove": "Entfernen",
   "Common.RemoveIntegration": "Integration entfernen",

@@ -30,6 +30,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private readonly IProfileService _profiles;
     private readonly IPromptActionService _promptActions;
     private readonly HotkeyService _hotkeys;
+    private readonly UiOperationGuard _uiOperations;
     private readonly DispatcherTimer _windowTimer;
     private bool _isWindowUpdateInProgress;
     private int _liveContextActivationCount;
@@ -137,7 +138,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         HotkeyService hotkeys,
         IDetectionFailureTracker failureTracker,
         GnomeWindowCallsSetupHelper gnomeSetup,
-        BrowserAccessibilitySetupHelper browserSetup
+        BrowserAccessibilitySetupHelper browserSetup,
+        UiOperationGuard uiOperations
     )
     {
         _profiles = profiles;
@@ -148,6 +150,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         _failureTracker = failureTracker;
         _gnomeSetup = gnomeSetup;
         _browserSetup = browserSetup;
+        _uiOperations = uiOperations;
         RefreshBrowserAccessibilityStatus();
 
         _profiles.ProfilesChanged += () => Dispatcher.UIThread.Post(RefreshProfiles);
@@ -593,19 +596,28 @@ public partial class ProfilesSectionViewModel : ObservableObject
     [RelayCommand]
     private void AddProfile()
     {
-        var profile = new Profile
-        {
-            Id = Guid.NewGuid().ToString(),
-            Name = "New profile",
-            IsEnabled = true,
-            Priority = 0,
-            ProcessNames = [],
-            UrlPatterns = [],
-        };
+        _uiOperations.Run(
+            "add profile",
+            Loc.Instance["Common.Add"],
+            UiFailureKind.FileSystem,
+            () =>
+            {
+                var profile = new Profile
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    Name = "New profile",
+                    IsEnabled = true,
+                    Priority = 0,
+                    ProcessNames = [],
+                    UrlPatterns = [],
+                };
 
-        _profiles.AddProfile(profile);
-        RefreshProfiles();
-        SelectById(profile.Id);
+                _profiles.AddProfile(profile);
+                RefreshProfiles();
+                SelectById(profile.Id);
+            },
+            ResyncProfilesAfterFailure
+        );
     }
 
     [RelayCommand]
@@ -666,9 +678,18 @@ public partial class ProfilesSectionViewModel : ObservableObject
         };
 
         var selectedId = SelectedProfile.Id;
-        _profiles.UpdateProfile(updated);
-        RefreshProfiles();
-        SelectById(selectedId);
+        _uiOperations.Run(
+            "save profile",
+            Loc.Instance["Common.Save"],
+            UiFailureKind.FileSystem,
+            () =>
+            {
+                _profiles.UpdateProfile(updated);
+                RefreshProfiles();
+                SelectById(selectedId);
+            },
+            ResyncProfilesAfterFailure
+        );
     }
 
     [RelayCommand]
@@ -690,9 +711,18 @@ public partial class ProfilesSectionViewModel : ObservableObject
             UpdatedAt = DateTime.UtcNow,
         };
 
-        _profiles.AddProfile(duplicate);
-        RefreshProfiles();
-        SelectById(duplicate.Id);
+        _uiOperations.Run(
+            "duplicate profile",
+            Loc.Instance["Common.Copy"],
+            UiFailureKind.FileSystem,
+            () =>
+            {
+                _profiles.AddProfile(duplicate);
+                RefreshProfiles();
+                SelectById(duplicate.Id);
+            },
+            ResyncProfilesAfterFailure
+        );
     }
 
     [RelayCommand]
@@ -703,9 +733,19 @@ public partial class ProfilesSectionViewModel : ObservableObject
             return;
         }
 
-        _profiles.DeleteProfile(SelectedProfile.Id);
-        RefreshProfiles();
-        SelectedProfile = null;
+        var selectedId = SelectedProfile.Id;
+        _uiOperations.Run(
+            "delete profile",
+            Loc.Instance["Common.Delete"],
+            UiFailureKind.FileSystem,
+            () =>
+            {
+                _profiles.DeleteProfile(selectedId);
+                RefreshProfiles();
+                SelectedProfile = null;
+            },
+            ResyncProfilesAfterFailure
+        );
     }
 
     [RelayCommand]
@@ -716,8 +756,17 @@ public partial class ProfilesSectionViewModel : ObservableObject
             return;
         }
 
-        _profiles.ToggleProfileEnabled(profile.Id);
-        RefreshProfiles();
+        _uiOperations.Run(
+            "toggle profile",
+            Loc.Instance["Common.Enabled"],
+            UiFailureKind.FileSystem,
+            () =>
+            {
+                _profiles.ToggleProfileEnabled(profile.Id);
+                RefreshProfiles();
+            },
+            ResyncProfilesAfterFailure
+        );
     }
 
     [RelayCommand]
@@ -914,6 +963,31 @@ public partial class ProfilesSectionViewModel : ObservableObject
             SelectedProfile = Profiles[0];
         }
         else
+        {
+            NotifyStateChanged();
+        }
+    }
+
+    private void ResyncProfilesAfterFailure()
+    {
+        var selectedId = SelectedProfile?.Id;
+
+        // Force the editor hooks to reload the service's committed snapshot even
+        // when record value equality would otherwise suppress the assignment.
+        SelectedProfile = null;
+        Profiles.Clear();
+        foreach (var profile in _profiles.Profiles)
+        {
+            Profiles.Add(profile);
+        }
+
+        SelectedProfile =
+            selectedId is null
+                ? Profiles.FirstOrDefault()
+                : Profiles.FirstOrDefault(profile => profile.Id == selectedId)
+                    ?? Profiles.FirstOrDefault();
+
+        if (SelectedProfile is null)
         {
             NotifyStateChanged();
         }

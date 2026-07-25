@@ -123,6 +123,8 @@
   "Common.On": "Вкл",
   "Common.Yes": "Да",
   "Common.OpenWizard": "Открыть мастер",
+  "Common.OperationFailed": "Не удалось выполнить действие «{0}»: {1}",
+  "Common.OperationFailedTitle": "Не удалось выполнить операцию",
   "Common.Refresh": "Обновить",
   "Common.Remove": "Удалить",
   "Common.RemoveIntegration": "Удалить интеграцию",

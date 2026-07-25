@@ -10,6 +10,7 @@ using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
 using TypeWhisper.Linux.Services.Insertion;
 using TypeWhisper.Linux.Services.Ipc;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Services.Setup;
 using TypeWhisper.Linux.ViewModels;
@@ -51,6 +52,21 @@ internal static class ServiceRegistrations
         }
 
         services.AddSingleton<IErrorLogService>(errorLog);
+        services.AddSingleton(sp =>
+            new UiOperationGuard(
+                sp.GetRequiredService<IErrorLogService>(),
+                async message =>
+                {
+                    var dialog = new MessageDialogWindow();
+                    await dialog.ShowMessageAsync(
+                        Loc.Instance["Common.OperationFailedTitle"],
+                        message
+                    );
+                },
+                (operation, reason) =>
+                    Loc.Instance.GetString("Common.OperationFailed", operation, reason)
+            )
+        );
         services.AddSingleton<IHistoryService>(
             new HistoryService(
                 Path.Join(dataPath, "history.json"),

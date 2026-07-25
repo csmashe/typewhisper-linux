@@ -69,6 +69,13 @@ public class App : Application
             Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(settings.Current.UiLanguage);
             BootTrace.Stage("Loc.Initialize");
 
+            var uiOperations = services.GetRequiredService<UiOperationGuard>();
+            Dispatcher.UIThread.UnhandledException += (sender, args) =>
+            {
+                args.Handled = true;
+                _ = uiOperations.ReportDispatcherFailureAsync(args.Exception, "TypeWhisper");
+            };
+
             // Reconcile configured state and verify native ownership before DictationOrchestrator
             // starts HotkeyService. This keeps the first backend snapshot free of a duplicate
             // app-owned dictation route when the current desktop spec is installed.

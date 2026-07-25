@@ -124,6 +124,8 @@
   "Common.On": "On",
   "Common.Yes": "Yes",
   "Common.OpenWizard": "Open Wizard",
+  "Common.OperationFailed": "{0} failed: {1}",
+  "Common.OperationFailedTitle": "Operation failed",
   "Common.Refresh": "Refresh",
   "Common.Remove": "Remove",
   "Common.RemoveIntegration": "Remove integration",

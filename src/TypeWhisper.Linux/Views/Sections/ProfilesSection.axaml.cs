@@ -1,6 +1,9 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Microsoft.Extensions.DependencyInjection;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 
 namespace TypeWhisper.Linux.Views.Sections;
@@ -69,18 +72,27 @@ public partial class ProfilesSection : UserControl
             return;
         }
 
-        var dialog = new MessageDialogWindow();
-        var confirmed = await dialog.ShowConfirmationAsync(
-            "Delete profile",
-            "Delete the selected profile?",
-            "Delete"
+        await UiOperations.RunAsync(
+            "confirm and delete profile",
+            Loc.Instance["Common.Delete"],
+            UiFailureKind.Window,
+            async () =>
+            {
+                var dialog = new MessageDialogWindow();
+                var confirmed = await dialog.ShowConfirmationAsync(
+                    "Delete profile",
+                    "Delete the selected profile?",
+                    "Delete"
+                );
+
+                if (confirmed)
+                {
+                    viewModel.DeleteSelectedProfileCommand.Execute(null);
+                }
+            }
         );
-
-        if (!confirmed)
-        {
-            return;
-        }
-
-        viewModel.DeleteSelectedProfileCommand.Execute(null);
     }
+
+    private static UiOperationGuard UiOperations =>
+        Program.Services.GetRequiredService<UiOperationGuard>();
 }

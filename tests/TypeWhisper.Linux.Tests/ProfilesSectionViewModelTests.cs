@@ -16,6 +16,11 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     private readonly string _tempDir = TestPaths.CreateTempDirectory(
         "TypeWhisper.ProfilesSectionViewModelTests"
     );
+    private readonly UiOperationGuard _uiOperations = new(
+        Mock.Of<IErrorLogService>(),
+        _ => Task.CompletedTask,
+        (operation, reason) => $"{operation} failed: {reason}"
+    );
 
     public void Dispose()
     {
@@ -46,7 +51,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         );
 
         var option = Assert.Single(sut.ModelOptions);
@@ -70,7 +76,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         );
 
         activeWindow.VerifyNoOtherCalls();
@@ -100,7 +107,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         );
 
         sut.ToggleProfileEnabledCommand.Execute(profile);
@@ -108,6 +116,49 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         profiles.Verify(service => service.ToggleProfileEnabled(profile.Id), Times.Once);
         profiles.Verify(service => service.UpdateProfile(It.IsAny<Profile>()), Times.Never);
         Assert.True(Assert.Single(sut.Profiles).IsEnabled);
+    }
+
+    [Fact]
+    public void AddProfile_PersistenceFailure_DoesNotEscapeAndResyncsAndPresents()
+    {
+        var committed = CreateEditableProfile();
+        var profiles = new Mock<IProfileService>();
+        profiles.SetupGet(service => service.Profiles).Returns([committed]);
+        profiles
+            .Setup(service => service.AddProfile(It.IsAny<Profile>()))
+            .Throws(new IOException("disk full"));
+        var presented = new List<string>();
+        var uiOperations = new UiOperationGuard(
+            Mock.Of<IErrorLogService>(),
+            message =>
+            {
+                presented.Add(message);
+                return Task.CompletedTask;
+            },
+            (operation, reason) => $"{operation} failed: {reason}"
+        );
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var sut = new ProfilesSectionViewModel(
+            profiles.Object,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            uiOperations
+        );
+
+        var exception = Record.Exception(() => sut.AddProfileCommand.Execute(null));
+
+        Assert.Null(exception);
+        Assert.Equal(committed, Assert.Single(sut.Profiles));
+        Assert.Equal(committed, sut.SelectedProfile);
+        Assert.Equal(committed.Name, sut.EditName);
+        Assert.Equal(["Add failed: disk full"], presented);
     }
 
     [Fact]
@@ -126,7 +177,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         );
         sut.AddProfileCommand.Execute(null);
 
@@ -167,6 +219,52 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void SaveProfile_PersistenceFailure_DoesNotEscapeAndResyncsAndPresents()
+    {
+        var committed = CreateEditableProfile() with { Name = "Committed" };
+        var profiles = new Mock<IProfileService>();
+        profiles.SetupGet(service => service.Profiles).Returns([committed]);
+        profiles
+            .Setup(service => service.UpdateProfile(It.IsAny<Profile>()))
+            .Throws(new UnauthorizedAccessException("read-only profile store"));
+        var presented = new List<string>();
+        var uiOperations = new UiOperationGuard(
+            Mock.Of<IErrorLogService>(),
+            message =>
+            {
+                presented.Add(message);
+                return Task.CompletedTask;
+            },
+            (operation, reason) => $"{operation} failed: {reason}"
+        );
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var sut = new ProfilesSectionViewModel(
+            profiles.Object,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            uiOperations
+        )
+        {
+            EditName = "Unsaved draft",
+        };
+
+        var exception = Record.Exception(() => sut.SaveProfileCommand.Execute(null));
+
+        Assert.Null(exception);
+        Assert.Equal(committed, Assert.Single(sut.Profiles));
+        Assert.Equal(committed, sut.SelectedProfile);
+        Assert.Equal("Committed", sut.EditName);
+        Assert.Equal(["Save failed: read-only profile store"], presented);
+    }
+
+    [Fact]
     public void SaveProfile_MalformedBindingDoesNotUpdateAndShowsFeedback()
     {
         var existing = CreateEditableProfile(hotkeyData: "Alt+F8");
@@ -182,7 +280,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         )
         {
             EditHotkeyData = "Ctrl+NoSuchKey",
@@ -221,7 +320,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         )
         {
             EditHotkeyData = "Ctrl+Alt+E",
@@ -269,7 +369,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         )
         {
             EditHotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
@@ -311,7 +412,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         )
         {
             EditHotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
@@ -353,7 +455,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         )
         {
             EditHotkeyBehavior = ProfileHotkeyBehavior.StartDictation,
@@ -403,7 +506,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         );
 
         try
@@ -459,7 +563,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         );
 
         sut.ActivateLiveContext();
@@ -510,7 +615,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         );
 
         try
@@ -553,7 +659,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         );
 
         sut.ActivateLiveContext();
@@ -601,7 +708,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         );
 
         // First entry is the "No prompt action" placeholder; the manual-only
@@ -629,7 +737,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             _hotkeys,
             Mock.Of<IDetectionFailureTracker>(),
             new GnomeWindowCallsSetupHelper(),
-            new BrowserAccessibilitySetupHelper()
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
         );
 
         try

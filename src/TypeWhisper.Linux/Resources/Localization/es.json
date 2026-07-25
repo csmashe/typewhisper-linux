@@ -123,6 +123,8 @@
   "Common.On": "Activado",
   "Common.Yes": "Sí",
   "Common.OpenWizard": "Abrir asistente",
+  "Common.OperationFailed": "Error al realizar {0}: {1}",
+  "Common.OperationFailedTitle": "Error en la operación",
   "Common.Refresh": "Actualizar",
   "Common.Remove": "Quitar",
   "Common.RemoveIntegration": "Quitar integración",
