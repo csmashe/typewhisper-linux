@@ -620,6 +620,77 @@ public partial class SherpaOnnxPluginTests
         Assert.Contains("Compute backend changed", ex.Message);
     }
 
+    [Fact]
+    public async Task LoadModelAsync_NativeParseFailure_DeletesArtifactsAndMarksModelFetchable()
+    {
+        using var temp = new TempAssetDir();
+        var host = CreateHostMock(temp.Path);
+        using var plugin = new SherpaOnnxPlugin();
+        plugin.SetHostForTests(host.Object);
+        WriteParakeetModelFiles(temp.Path);
+        plugin.SetParakeetRecognizerFactoryForTests(
+            (_, _) => throw new InvalidOperationException(
+                "Failed to load model because protobuf parsing failed."
+            )
+        );
+
+        Assert.True(plugin.IsModelDownloaded("parakeet-tdt-0.6b"));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => plugin.LoadModelAsync("parakeet-tdt-0.6b", CancellationToken.None)
+        );
+
+        Assert.Contains("protobuf parsing failed", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(plugin.IsModelDownloaded("parakeet-tdt-0.6b"));
+        Assert.Empty(
+            Directory.GetFiles(Path.Join(temp.Path, "Models", "parakeet-tdt-0.6b"))
+        );
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_EnvironmentFailure_PreservesDownloadedArtifacts()
+    {
+        using var temp = new TempAssetDir();
+        var host = CreateHostMock(temp.Path);
+        using var plugin = new SherpaOnnxPlugin();
+        plugin.SetHostForTests(host.Object);
+        WriteParakeetModelFiles(temp.Path);
+        plugin.SetParakeetRecognizerFactoryForTests(
+            (_, _) => throw new InvalidOperationException(
+                "CUDA execution provider failed to initialize because libcudnn was unavailable."
+            )
+        );
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => plugin.LoadModelAsync("parakeet-tdt-0.6b", CancellationToken.None)
+        );
+
+        Assert.Contains("CUDA execution provider", ex.Message);
+        Assert.True(plugin.IsModelDownloaded("parakeet-tdt-0.6b"));
+        Assert.Equal(
+            4,
+            Directory.GetFiles(Path.Join(temp.Path, "Models", "parakeet-tdt-0.6b")).Length
+        );
+    }
+
+    [Fact]
+    public void ArtifactPreflight_CanaryTokensWithoutBlank_AcceptedButStillStructurallyChecked()
+    {
+        using var temp = new TempAssetDir();
+        using var plugin = new SherpaOnnxPlugin();
+        var dir = WriteCanaryModelFiles(temp.Path);
+
+        // Canary (attention encoder-decoder) has no blank token; preflight must accept
+        // it, or a blank requirement would fail every Canary download and delete caches.
+        plugin.RunArtifactPreflightForTests("canary-180m-flash", dir);
+
+        // The blank exemption must not switch off the remaining token checks.
+        File.WriteAllText(Path.Join(dir, "tokens.txt"), "<unk> 0\n<pad> not-an-id\n");
+        Assert.Throws<InvalidDataException>(
+            () => plugin.RunArtifactPreflightForTests("canary-180m-flash", dir)
+        );
+    }
+
     private static Mock<IPluginHostServices> CreateHostMock(string assetDir)
     {
         var host = new Mock<IPluginHostServices>();
@@ -628,15 +699,37 @@ public partial class SherpaOnnxPluginTests
         return host;
     }
 
+    private static string WriteCanaryModelFiles(string assetDir)
+    {
+        var dir = Path.Join(assetDir, "Models", "canary-180m-flash");
+        Directory.CreateDirectory(dir);
+        foreach (var fileName in new[] { "encoder.int8.onnx", "decoder.int8.onnx" })
+            File.WriteAllBytes(Path.Join(dir, fileName), [0x08, 0x09, 0x3a, 0x02, 0x12, 0x00]);
+
+        // Real Canary vocab uses <unk>/<pad>/<|...|> tokens and no transducer blank symbol.
+        File.WriteAllText(Path.Join(dir, "tokens.txt"), "<unk> 0\nfoo 1\n");
+        return dir;
+    }
+
     private static void WriteParakeetModelFiles(string assetDir)
     {
         var dir = Path.Join(assetDir, "Models", "parakeet-tdt-0.6b");
         Directory.CreateDirectory(dir);
-        foreach (var f in new[]
+        foreach (var fileName in new[]
                  {
-                     "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt",
+                     "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx",
                  })
-            File.WriteAllText(Path.Join(dir, f), "dummy");
+        {
+            // Minimal ONNX protobuf framing (ir_version=9, non-empty graph) for the
+            // structural preflight; the injected recognizer factory means these bytes
+            // never reach the native loader.
+            File.WriteAllBytes(
+                Path.Join(dir, fileName),
+                [0x08, 0x09, 0x3a, 0x02, 0x12, 0x00]
+            );
+        }
+
+        File.WriteAllText(Path.Join(dir, "tokens.txt"), "<blk> 0\n");
     }
 
     private sealed class SherpaBlockingProvisioner : SherpaCuda.CudaRuntimeProvisioner
