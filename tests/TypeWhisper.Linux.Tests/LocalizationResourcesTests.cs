@@ -27,6 +27,19 @@ public sealed class LocalizationResourcesTests
     }
 
     [Fact]
+    public void CanonicalCatalog_HasAutostartPreservationMessageWithPathPlaceholder()
+    {
+        var en = Load(CanonicalLanguage);
+
+        Assert.True(
+            en.TryGetValue("General.AutostartEntryPreserved", out var value),
+            "Missing canonical key: General.AutostartEntryPreserved"
+        );
+        Assert.False(string.IsNullOrWhiteSpace(value));
+        Assert.Contains("{0}", value, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CanonicalCatalog_HasNativeDictationDisclosuresWithoutObsoleteEvdevClaims()
     {
         var en = Load(CanonicalLanguage);

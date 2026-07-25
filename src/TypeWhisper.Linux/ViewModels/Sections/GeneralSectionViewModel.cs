@@ -15,6 +15,8 @@ public partial class GeneralSectionViewModel : ObservableObject
     private readonly LinuxPreferencesService _linuxPrefs;
     private readonly ISettingsService _settings;
     private readonly TrayIconService _tray;
+    private bool _updatingStartWithSystem;
+    private bool _autostartStatusIsHint = true;
 
     [ObservableProperty]
     private string _apiBearerToken = "";
@@ -47,6 +49,9 @@ public partial class GeneralSectionViewModel : ObservableObject
     private bool _startWithSystem;
 
     [ObservableProperty]
+    private string _autostartStatusText = Loc.Instance["General.AutostartHint"];
+
+    [ObservableProperty]
     private string? _uiLanguage;
 
     public GeneralSectionViewModel(
@@ -63,9 +68,16 @@ public partial class GeneralSectionViewModel : ObservableObject
         _linuxPrefs = linuxPrefs;
         _tray = tray;
         Refresh(settings.Current);
-        StartWithSystem = StartupService.IsEnabled;
+        _startWithSystem = StartupService.IsEnabled;
         CloseToTray = _linuxPrefs.Current.CloseToTray;
         _settings.SettingsChanged += Refresh;
+        Loc.Instance.LanguageChanged += (_, _) =>
+        {
+            if (_autostartStatusIsHint)
+            {
+                AutostartStatusText = Loc.Instance["General.AutostartHint"];
+            }
+        };
         _api.StateChanged += () => ApiStatusText = _api.StatusText;
         ApiStatusText = _api.StatusText;
         RefreshCliState();
@@ -178,18 +190,29 @@ public partial class GeneralSectionViewModel : ObservableObject
 
     partial void OnStartWithSystemChanged(bool value)
     {
-        if (value == StartupService.IsEnabled)
+        if (_updatingStartWithSystem)
         {
             return;
         }
 
-        if (value)
+        _updatingStartWithSystem = true;
+        try
         {
-            StartupService.Enable();
+            var result = value ? StartupService.Enable() : StartupService.Disable();
+            AutostartStatusText = result.StatusText;
+            _autostartStatusIsHint = result.Success;
+            StartWithSystem = result.IsEnabled;
         }
-        else
+        catch (Exception ex)
+            when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            StartupService.Disable();
+            AutostartStatusText = ex.Message;
+            _autostartStatusIsHint = false;
+            StartWithSystem = StartupService.IsEnabled;
+        }
+        finally
+        {
+            _updatingStartWithSystem = false;
         }
     }
 
