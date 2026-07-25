@@ -18,6 +18,7 @@ public partial class AboutSectionViewModel : ObservableObject
 {
     private readonly IErrorLogService _errorLog;
     private readonly SettingsBackupService _settingsBackup;
+    private readonly TimeZoneInfo _timeZone;
     private readonly UpdateCheckService _updateCheck;
 
     [ObservableProperty]
@@ -51,10 +52,19 @@ public partial class AboutSectionViewModel : ObservableObject
         SettingsBackupService settingsBackup,
         UpdateCheckService updateCheck
     )
+        : this(errorLog, settingsBackup, updateCheck, TimeZoneInfo.Local) { }
+
+    internal AboutSectionViewModel(
+        IErrorLogService errorLog,
+        SettingsBackupService settingsBackup,
+        UpdateCheckService updateCheck,
+        TimeZoneInfo timeZone
+    )
     {
         _errorLog = errorLog;
         _settingsBackup = settingsBackup;
         _updateCheck = updateCheck;
+        _timeZone = timeZone;
         RefreshErrors();
         // EntriesChanged fires synchronously on whichever thread called AddEntry —
         // and producers now log from background threads (transcription, detection,
@@ -98,10 +108,10 @@ public partial class AboutSectionViewModel : ObservableObject
     public bool CanCheckForUpdates => !IsCheckingForUpdates;
 
     // Full, unfiltered backing list; drives HasErrors and the category options.
-    private ObservableCollection<ErrorLogEntry> ErrorEntries { get; } = [];
+    private ObservableCollection<ErrorLogEntryRow> ErrorEntries { get; } = [];
 
     // The entries actually shown — ErrorEntries narrowed by SelectedCategoryFilter.
-    public ObservableCollection<ErrorLogEntry> FilteredErrorEntries { get; } = [];
+    public ObservableCollection<ErrorLogEntryRow> FilteredErrorEntries { get; } = [];
 
     // "All categories" + one option per category currently present in the log.
     public ObservableCollection<CategoryFilterOption> CategoryFilters { get; } = [];
@@ -262,7 +272,12 @@ public partial class AboutSectionViewModel : ObservableObject
         ErrorEntries.Clear();
         foreach (var entry in _errorLog.Entries)
         {
-            ErrorEntries.Add(entry);
+            ErrorEntries.Add(
+                new ErrorLogEntryRow(
+                    entry,
+                    PresentationDateTime.ToLocal(entry.Timestamp, _timeZone)
+                )
+            );
         }
 
         RebuildCategoryFilters();
@@ -348,4 +363,18 @@ public partial class AboutSectionViewModel : ObservableObject
             return Display;
         }
     }
+}
+
+public sealed class ErrorLogEntryRow
+{
+    public ErrorLogEntryRow(ErrorLogEntry record, DateTime localTimestamp)
+    {
+        Record = record;
+        LocalTimestamp = localTimestamp;
+    }
+
+    public ErrorLogEntry Record { get; }
+    public DateTime LocalTimestamp { get; }
+    public string Category => Record.Category;
+    public string Message => Record.Message;
 }

@@ -1,7 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
-             xmlns:models="using:TypeWhisper.Core.Models"
              xmlns:local="using:TypeWhisper.Linux"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.AboutSection"
@@ -155,7 +154,7 @@
                                       IsVisible="{Binding HasVisibleErrors}">
                             <ItemsControl ItemsSource="{Binding FilteredErrorEntries}">
                                 <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="models:ErrorLogEntry">
+                                    <DataTemplate x:DataType="vm:ErrorLogEntryRow">
                                         <Border Padding="16,12"
                                                 BorderBrush="#1AFFFFFF"
                                                 BorderThickness="0,0,0,1">
@@ -165,7 +164,7 @@
                                                     <TextBlock Text="{Binding Category}"
                                                                FontSize="11"
                                                                Foreground="#D6E7FF" />
-                                                    <TextBlock Text="{Binding Timestamp, StringFormat='{}{0:g}'}"
+                                                    <TextBlock Text="{Binding LocalTimestamp, StringFormat='{}{0:g}'}"
                                                                FontSize="11"
                                                                Foreground="#8A9AAE" />
                                                 </StackPanel>
