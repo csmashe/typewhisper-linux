@@ -1,5 +1,6 @@
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
@@ -260,6 +261,68 @@ public sealed class AppBootstrapTests
             exception.Report.RequiredFailures.Select(outcome => outcome.Name)
         );
         Assert.Equal(2, exception.Report.Outcomes.Count);
+    }
+
+    [Fact]
+    public void RouteRecentTranscriptionFeedback_WhenIdle_PublishesThroughFeedbackStatePath()
+    {
+        var publications = new List<(string Message, bool IsError)>();
+        var errorLog = new RecordingErrorLogService();
+
+        var published = App.RouteRecentTranscriptionFeedback(
+            (message, isError) =>
+            {
+                if (!DictationOrchestrator.CanPublishTransientFeedback(false))
+                {
+                    return false;
+                }
+
+                publications.Add((message, isError));
+                return true;
+            },
+            errorLog,
+            "localized success",
+            false
+        );
+
+        Assert.True(published);
+        Assert.Equal([("localized success", false)], publications);
+        Assert.Empty(errorLog.AddedEntries);
+    }
+
+    [Fact]
+    public void RouteRecentTranscriptionFeedback_WhenDictationActive_SkipsPublicationButLogsEnglishError()
+    {
+        var publications = new List<(string Message, bool IsError)>();
+        var errorLog = new RecordingErrorLogService();
+
+        var published = App.RouteRecentTranscriptionFeedback(
+            (message, isError) =>
+            {
+                if (!DictationOrchestrator.CanPublishTransientFeedback(true))
+                {
+                    return false;
+                }
+
+                publications.Add((message, isError));
+                return true;
+            },
+            errorLog,
+            "lokalisierter Fehler",
+            true
+        );
+
+        Assert.False(published);
+        Assert.Empty(publications);
+        Assert.Equal(
+            [
+                (
+                    "Recent transcription insertion failed. Install wl-clipboard on Wayland or xclip on X11 for clipboard access. For automatic paste, set up ydotool on GNOME/KDE Wayland, install wtype or ydotool on other Wayland compositors, or install xdotool on X11.",
+                    ErrorCategory.Insertion
+                ),
+            ],
+            errorLog.AddedEntries
+        );
     }
 
     private static App.BootstrapStage[] CreateProductionShapedStages(
