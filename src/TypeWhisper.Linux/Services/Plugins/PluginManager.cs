@@ -14,6 +14,8 @@ namespace TypeWhisper.Linux.Services.Plugins;
 /// </summary>
 public sealed class PluginManager : IDisposable
 {
+    private static readonly TimeSpan s_defaultPluginShutdownTimeout = TimeSpan.FromSeconds(5);
+
     // Fresh-install defaults: offline transcription engines only, so dictation works
     // out of the box without a key. Cloud providers default off until opted in.
     private static readonly HashSet<string> s_defaultEnabledPluginIds = new(StringComparer.Ordinal)
@@ -33,6 +35,7 @@ public sealed class PluginManager : IDisposable
     private readonly IProfileService _profiles;
     private readonly string[] _searchDirectories;
     private readonly ISettingsService _settings;
+    private readonly TimeSpan _pluginShutdownTimeout;
     private readonly IErrorLogService? _errorLog;
     private List<IActionPlugin> _actionPlugins = [];
 
@@ -72,7 +75,8 @@ public sealed class PluginManager : IDisposable
         IProfileService profiles,
         ISettingsService settings,
         IEnumerable<string> searchDirectories,
-        IErrorLogService? errorLog = null
+        IErrorLogService? errorLog = null,
+        TimeSpan? pluginShutdownTimeout = null
     )
     {
         _loader = loader;
@@ -82,6 +86,15 @@ public sealed class PluginManager : IDisposable
         _settings = settings;
         _searchDirectories = searchDirectories.ToArray();
         _errorLog = errorLog;
+        _pluginShutdownTimeout =
+            pluginShutdownTimeout ?? s_defaultPluginShutdownTimeout;
+        if (_pluginShutdownTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(pluginShutdownTimeout),
+                "The plugin shutdown timeout must be greater than zero."
+            );
+        }
     }
 
     public IReadOnlyList<LoadedPlugin> AllPlugins
@@ -166,20 +179,42 @@ public sealed class PluginManager : IDisposable
 
         foreach (var plugin in plugins)
         {
-            try
-            {
-                if (activated.Contains(plugin.Manifest.Id))
-                {
-                    plugin.Instance.DeactivateAsync().GetAwaiter().GetResult();
-                }
+            // Dispose is synchronous and can't be canceled. A hostile plugin can strand this
+            // worker past the deadline; bounded shutdown accepts that leaked thread.
+            var shutdownTask = Task.Factory.StartNew(
+                () => ShutdownPlugin(plugin, activated.Contains(plugin.Manifest.Id)),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default
+            );
 
-                plugin.Instance.Dispose();
+            var completedTask = Task.WhenAny(
+                    shutdownTask,
+                    Task.Delay(_pluginShutdownTimeout)
+                )
+                .GetAwaiter()
+                .GetResult();
+
+            if (completedTask == shutdownTask)
+            {
+                try
+                {
+                    shutdownTask.GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Error shutting down plugin {plugin.Manifest.Id}: {ex.Message}"
+                    );
+                }
             }
-            catch (Exception ex)
+            else
             {
                 Trace.WriteLine(
-                    $"[PluginManager] Error disposing plugin {plugin.Manifest.Id}: {ex.Message}"
+                    $"[PluginManager] Timed out shutting down plugin {plugin.Manifest.Id} "
+                        + $"after {_pluginShutdownTimeout.TotalSeconds:0.###} seconds"
                 );
+                ObserveLateShutdown(shutdownTask, plugin.Manifest.Id);
             }
 
             try
@@ -205,6 +240,127 @@ public sealed class PluginManager : IDisposable
             _actionPlugins.Clear();
             _ttsProviders.Clear();
         }
+    }
+
+    private void ShutdownPlugin(LoadedPlugin plugin, bool deactivate)
+    {
+        if (deactivate)
+        {
+            try
+            {
+                var deactivationTask = plugin.Instance.DeactivateAsync();
+                var completedTask = Task.WhenAny(
+                        deactivationTask,
+                        Task.Delay(_pluginShutdownTimeout)
+                    )
+                    .GetAwaiter()
+                    .GetResult();
+
+                if (completedTask == deactivationTask)
+                {
+                    deactivationTask.GetAwaiter().GetResult();
+                }
+                else
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Timed out deactivating plugin {plugin.Manifest.Id} "
+                            + $"after {_pluginShutdownTimeout.TotalSeconds:0.###} seconds"
+                    );
+
+                    // Ordering guarantee: deactivate and dispose never run concurrently for the
+                    // same plugin. Disposing now would race the still-running deactivation, so
+                    // Dispose is deferred to a continuation that fires once it completes —
+                    // forfeited entirely if it never does, acceptable since the host is exiting.
+                    ObserveLateDeactivationThenDispose(deactivationTask, plugin);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine(
+                    $"[PluginManager] Error deactivating plugin {plugin.Manifest.Id}: {ex.Message}"
+                );
+            }
+        }
+
+        try
+        {
+            plugin.Instance.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[PluginManager] Error disposing plugin {plugin.Manifest.Id}: {ex.Message}"
+            );
+        }
+    }
+
+    private static void ObserveLateDeactivationThenDispose(Task deactivationTask, LoadedPlugin plugin)
+    {
+        var pluginId = plugin.Manifest.Id;
+        _ = deactivationTask.ContinueWith(
+            completedTask =>
+            {
+                if (completedTask.IsFaulted)
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Deactivation for plugin {pluginId} faulted after timeout: "
+                            + completedTask.Exception!.GetBaseException().Message
+                    );
+                }
+                else if (completedTask.IsCanceled)
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Deactivation for plugin {pluginId} was canceled after timeout"
+                    );
+                }
+                else
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Deactivation for plugin {pluginId} completed after timeout"
+                    );
+                }
+
+                try
+                {
+                    plugin.Instance.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Error disposing plugin {pluginId}: {ex.Message}"
+                    );
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
+    }
+
+    private static void ObserveLateShutdown(Task shutdownTask, string pluginId)
+    {
+        _ = shutdownTask.ContinueWith(
+            completedTask =>
+            {
+                if (completedTask.IsFaulted)
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Shutdown for plugin {pluginId} faulted after timeout: "
+                            + completedTask.Exception!.GetBaseException().Message
+                    );
+                }
+                else
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Shutdown for plugin {pluginId} completed after timeout"
+                    );
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
     }
 
     public IReadOnlyList<T> GetPlugins<T>()
