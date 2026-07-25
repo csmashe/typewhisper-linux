@@ -17,8 +17,9 @@ public partial class DictationOverlayViewModel : ObservableObject
     // ~10 Hz cadence of LevelChanged.
     private const int WaveformSampleCount = 5;
 
-    private readonly AudioRecordingService _audio;
+    private readonly DispatcherTimer _clockTimer;
     private readonly DispatcherTimer _feedbackTimer;
+    private readonly Action<Action> _postToUiThread;
     private readonly DispatcherTimer _recordingTimer;
     private readonly ISettingsService _settings;
     private readonly float[] _waveformLevels = new float[WaveformSampleCount];
@@ -68,12 +69,54 @@ public partial class DictationOverlayViewModel : ObservableObject
         ISettingsService settings,
         IDetectionFailureTracker failureTracker
     )
+        : this(settings, static action => Dispatcher.UIThread.Post(action))
     {
-        _audio = audio;
+        dictation.OverlayStateChanged += (_, state) =>
+            _postToUiThread(() => ApplyState(state));
+
+        transformSelection.OverlayStateChanged += (_, state) =>
+            _postToUiThread(() => ApplyState(state));
+
+        // Raw RMS is typically well below 0.1 for speech, so amplify ×8 to drive a
+        // visible meter — same scaling the recorder and wizard VMs apply.
+        audio.LevelChanged += (_, level) =>
+            _postToUiThread(() => AudioLevel = Math.Clamp(level * 8, 0f, 1f));
+
+        failureTracker.OnFailure += (_, e) =>
+        {
+            if (e.ShouldShowPersistentBanner)
+            {
+                return;
+            }
+
+            _postToUiThread(() =>
+            {
+                FeedbackText = e.Reason;
+                FeedbackIsError = true;
+                ShowFeedback = true;
+                RestartFeedbackTimer();
+            });
+        };
+    }
+
+    // Test seam: production posts service events to Avalonia's UI thread; tests run the same
+    // settings-change path synchronously and drive the timer tick methods below directly.
+    internal DictationOverlayViewModel(
+        ISettingsService settings,
+        Action<Action> postToUiThread
+    )
+    {
         _settings = settings;
+        _postToUiThread = postToUiThread;
 
         _recordingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
-        _recordingTimer.Tick += (_, _) => RefreshRecordingSeconds();
+        _recordingTimer.Tick += (_, _) => RecordingTimerTick();
+
+        // LeftText/RightText render DateTime.Now with minute resolution. Polling once per second
+        // keeps a minute rollover's visible delay below one second without re-arming for wall-clock
+        // alignment; this timer is stopped whenever no clock slot is actually visible.
+        _clockTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _clockTimer.Tick += (_, _) => ClockTimerTick();
 
         // Interval is set per arm so live setting changes take effect on the
         // next event. RestartFeedbackTimer re-arms even when ShowFeedback is
@@ -87,34 +130,7 @@ public partial class DictationOverlayViewModel : ObservableObject
             OnPropertyChanged(nameof(HasVisibleContent));
         };
 
-        dictation.OverlayStateChanged += (_, state) =>
-            Dispatcher.UIThread.Post(() => ApplyState(state));
-
-        transformSelection.OverlayStateChanged += (_, state) =>
-            Dispatcher.UIThread.Post(() => ApplyState(state));
-
-        // Raw RMS is typically well below 0.1 for speech, so amplify ×8 to drive a
-        // visible meter — same scaling the recorder and wizard VMs apply.
-        _audio.LevelChanged += (_, level) =>
-            Dispatcher.UIThread.Post(() => AudioLevel = Math.Clamp(level * 8, 0f, 1f));
-
-        _settings.SettingsChanged += _ => Dispatcher.UIThread.Post(RefreshOverlaySlots);
-
-        failureTracker.OnFailure += (_, e) =>
-        {
-            if (e.ShouldShowPersistentBanner)
-            {
-                return;
-            }
-
-            Dispatcher.UIThread.Post(() =>
-            {
-                FeedbackText = e.Reason;
-                FeedbackIsError = true;
-                ShowFeedback = true;
-                RestartFeedbackTimer();
-            });
-        };
+        _settings.SettingsChanged += _ => _postToUiThread(RefreshOverlaySlots);
     }
 
     public bool HasVisibleContent => IsOverlayVisible || ShowFeedback;
@@ -177,6 +193,7 @@ public partial class DictationOverlayViewModel : ObservableObject
     partial void OnIsOverlayVisibleChanged(bool value)
     {
         OnPropertyChanged(nameof(HasVisibleContent));
+        UpdateClockTimer();
     }
 
     partial void OnShowFeedbackChanged(bool value)
@@ -234,8 +251,6 @@ public partial class DictationOverlayViewModel : ObservableObject
         OnPropertyChanged(nameof(WaveformBar2Height));
         OnPropertyChanged(nameof(WaveformBar3Height));
         OnPropertyChanged(nameof(WaveformBar4Height));
-        OnPropertyChanged(nameof(LeftText));
-        OnPropertyChanged(nameof(RightText));
     }
 
     partial void OnFeedbackIsErrorChanged(bool value)
@@ -289,6 +304,19 @@ public partial class DictationOverlayViewModel : ObservableObject
         RecordingSeconds = Math.Max(0, (DateTime.UtcNow - startedAt).TotalSeconds);
     }
 
+    internal void RecordingTimerTick()
+    {
+        RefreshRecordingSeconds();
+        NotifyTextSlots(OverlayWidget.Timer);
+    }
+
+    internal void ClockTimerTick()
+    {
+        NotifyTextSlots(OverlayWidget.Clock);
+    }
+
+    internal bool IsClockTimerRunning => _clockTimer.IsEnabled;
+
     private void RefreshOverlaySlots()
     {
         OnPropertyChanged(nameof(ShowLeftIndicator));
@@ -299,6 +327,36 @@ public partial class DictationOverlayViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowRightWaveform));
         OnPropertyChanged(nameof(ShowRightText));
         OnPropertyChanged(nameof(RightText));
+        UpdateClockTimer();
+    }
+
+    private void NotifyTextSlots(OverlayWidget widget)
+    {
+        if (_settings.Current.OverlayLeftWidget == widget)
+        {
+            OnPropertyChanged(nameof(LeftText));
+        }
+
+        if (_settings.Current.OverlayRightWidget == widget)
+        {
+            OnPropertyChanged(nameof(RightText));
+        }
+    }
+
+    private void UpdateClockTimer()
+    {
+        var shouldRun = IsOverlayVisible
+                        && (_settings.Current.OverlayLeftWidget == OverlayWidget.Clock
+                            || _settings.Current.OverlayRightWidget == OverlayWidget.Clock);
+
+        if (shouldRun)
+        {
+            _clockTimer.Start();
+        }
+        else
+        {
+            _clockTimer.Stop();
+        }
     }
 
     private static bool IsTextWidget(OverlayWidget widget)
