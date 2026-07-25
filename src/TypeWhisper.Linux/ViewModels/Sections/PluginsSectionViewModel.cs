@@ -2,6 +2,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Localization;
@@ -16,6 +17,9 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class PluginsSectionViewModel : ObservableObject
 {
+    private static readonly TimeSpan s_defaultPluginBoundaryTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan s_defaultPluginValidationTimeout = TimeSpan.FromMinutes(10);
+
     private static readonly HashSet<string> s_transcriptionPluginIds =
     [
         "com.typewhisper.assemblyai",
@@ -66,6 +70,8 @@ public partial class PluginsSectionViewModel : ObservableObject
 
     private readonly IErrorLogService? _errorLog;
     private readonly Dictionary<string, LoadedPlugin> _pluginById = [];
+    private readonly TimeSpan _pluginBoundaryTimeout;
+    private readonly TimeSpan _pluginValidationTimeout;
     private readonly PluginManager _pluginManager;
 
     [ObservableProperty]
@@ -75,9 +81,37 @@ public partial class PluginsSectionViewModel : ObservableObject
     private string _summary = "";
 
     public PluginsSectionViewModel(PluginManager pluginManager, IErrorLogService? errorLog = null)
+        : this(pluginManager, errorLog, s_defaultPluginBoundaryTimeout)
+    {
+    }
+
+    internal PluginsSectionViewModel(
+        PluginManager pluginManager,
+        IErrorLogService? errorLog,
+        TimeSpan pluginBoundaryTimeout,
+        TimeSpan? pluginValidationTimeout = null
+    )
     {
         _pluginManager = pluginManager;
         _errorLog = errorLog;
+        _pluginBoundaryTimeout = pluginBoundaryTimeout;
+        if (_pluginBoundaryTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(pluginBoundaryTimeout),
+                "The plugin boundary timeout must be greater than zero."
+            );
+        }
+
+        _pluginValidationTimeout = pluginValidationTimeout ?? s_defaultPluginValidationTimeout;
+        if (_pluginValidationTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(pluginValidationTimeout),
+                "The plugin validation timeout must be greater than zero."
+            );
+        }
+
         _pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(Refresh);
         Refresh();
     }
@@ -106,30 +140,98 @@ public partial class PluginsSectionViewModel : ObservableObject
         PluginGroups.Clear();
         _pluginById.Clear();
 
-        var plugins = _pluginManager
-            .AllPlugins.Select(p =>
+        var plugins = new List<PluginRow>();
+        foreach (var plugin in _pluginManager.AllPlugins)
+        {
+            _pluginById[plugin.Manifest.Id] = plugin;
+
+            try
             {
-                _pluginById[p.Manifest.Id] = p;
-                var loc = new PluginLocalization(p.PluginDirectory);
-                return new PluginRow(
+                var loc = new PluginLocalization(plugin.PluginDirectory);
+                var hasExpandableSettings = false;
+                var settingsDefinitionFailed = false;
+
+                if (plugin.Instance is IPluginSettingsProvider settingsProvider)
+                {
+                    var definitions = TryInvokePluginBoundary(
+                        plugin,
+                        "read setting definitions",
+                        () => settingsProvider.GetSettingDefinitions().ToList()
+                    );
+                    if (definitions.IsSuccess)
+                    {
+                        hasExpandableSettings = definitions.Value!.Count > 0;
+                    }
+                    else
+                    {
+                        settingsDefinitionFailed = true;
+                    }
+                }
+
+                if (
+                    plugin.Instance
+                    is IPluginCollectionSettingsProvider collectionSettingsProvider
+                )
+                {
+                    var definitions = TryInvokePluginBoundary(
+                        plugin,
+                        "read collection definitions",
+                        () => collectionSettingsProvider.GetCollectionDefinitions().ToList()
+                    );
+                    if (definitions.IsSuccess)
+                    {
+                        hasExpandableSettings |= definitions.Value!.Count > 0;
+                    }
+                    else
+                    {
+                        settingsDefinitionFailed = true;
+                    }
+                }
+
+                var row = new PluginRow(
                     this,
-                    p.Manifest.Id,
-                    LocalizeManifest(loc, "Manifest.Name", p.Manifest.Name),
-                    p.Manifest.Version,
-                    LocalizeManifest(loc, "Manifest.Description", p.Manifest.Description ?? ""),
-                    InferCategory(p.Manifest),
-                    InferIsLocal(p.Manifest),
-                    (
-                        p.Instance is IPluginSettingsProvider sp
-                        && sp.GetSettingDefinitions().Count > 0
-                    )
-                    || (
-                        p.Instance is IPluginCollectionSettingsProvider cp
-                        && cp.GetCollectionDefinitions().Count > 0
+                    plugin.Manifest.Id,
+                    LocalizeManifest(loc, "Manifest.Name", plugin.Manifest.Name),
+                    plugin.Manifest.Version,
+                    LocalizeManifest(
+                        loc,
+                        "Manifest.Description",
+                        plugin.Manifest.Description ?? ""
                     ),
-                    _pluginManager.IsEnabled(p.Manifest.Id)
+                    InferCategory(plugin.Manifest),
+                    InferIsLocal(plugin.Manifest),
+                    hasExpandableSettings || settingsDefinitionFailed,
+                    _pluginManager.IsEnabled(plugin.Manifest.Id)
                 );
-            })
+
+                if (settingsDefinitionFailed)
+                {
+                    MarkSettingsLoadFailed(row);
+                }
+
+                plugins.Add(row);
+            }
+            catch (Exception ex)
+            {
+                ReportPluginBoundaryFailure(plugin, "build settings card", ex);
+                var row = new PluginRow(
+                    this,
+                    plugin.Manifest.Id,
+                    plugin.Manifest.Name,
+                    plugin.Manifest.Version,
+                    plugin.Manifest.Description ?? "",
+                    InferCategory(plugin.Manifest),
+                    InferIsLocal(plugin.Manifest),
+                    plugin.Instance is IPluginSettingsProvider
+                        or IPluginCollectionSettingsProvider,
+                    _pluginManager.IsEnabled(plugin.Manifest.Id)
+                );
+                MarkSettingsLoadFailed(row);
+                plugins.Add(row);
+            }
+        }
+
+        plugins = plugins
             .OrderBy(p => p.CategorySortOrder)
             .ThenBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -174,7 +276,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
 
         expandedPlugin.IsExpanded = true;
-        _ = LoadPluginSettingsAsync(expandedPlugin);
+        BeginObservedSettingsLoad(expandedPlugin);
     }
 
     [RelayCommand]
@@ -238,28 +340,35 @@ public partial class PluginsSectionViewModel : ObservableObject
                     ))
                     .ToList();
 
-                PluginSettingsValidationResult result;
-                try
+                var setResult = await TryInvokePluginBoundaryAsync(
+                    loaded,
+                    $"save collection '{collection.Key}'",
+                    ct => collectionProvider.SetItemsAsync(collection.Key, items, ct)
+                );
+                if (!setResult.IsSuccess || setResult.Value is null)
                 {
-                    result = await collectionProvider.SetItemsAsync(collection.Key, items);
-                }
-                catch (Exception ex)
-                {
-                    _errorLog?.AddEntry(
-                        $"Plugin '{loaded.Manifest.Name}' failed to save collection '{collection.Key}': {ex.Message}",
-                        ErrorCategory.Plugin
-                    );
+                    if (setResult.IsSuccess)
+                    {
+                        ReportPluginBoundaryFailure(
+                            loaded,
+                            $"save collection '{collection.Key}'",
+                            new InvalidOperationException(
+                                "The plugin returned no collection validation result."
+                            )
+                        );
+                    }
+
                     row.Status = Loc.Instance["Plugins.SettingsSaveFailed"];
                     await LoadPluginSettingsAsync(row, true);
                     return;
                 }
 
-                if (result.IsSuccess)
+                if (setResult.Value.IsSuccess)
                 {
                     continue;
                 }
 
-                row.Status = result.Message;
+                row.Status = setResult.Value.Message;
                 return;
             }
         }
@@ -285,8 +394,20 @@ public partial class PluginsSectionViewModel : ObservableObject
             return;
         }
 
-        var result = await provider.ValidateAsync();
-        row.Status = result?.Message ?? Loc.Instance["Plugins.NoValidationAvailable"];
+        var validation = await TryInvokePluginBoundaryAsync(
+            loaded,
+            "validate settings",
+            provider.ValidateAsync,
+            _pluginValidationTimeout
+        );
+        if (!validation.IsSuccess)
+        {
+            row.Status = Loc.Instance["Plugins.UnableToLoadSettings"];
+            return;
+        }
+
+        row.Status =
+            validation.Value?.Message ?? Loc.Instance["Plugins.NoValidationAvailable"];
         await LoadPluginSettingsAsync(row, true);
     }
 
@@ -298,16 +419,18 @@ public partial class PluginsSectionViewModel : ObservableObject
     {
         foreach (var field in row.SettingFields)
         {
-            try
+            var setResult = await TryInvokePluginBoundaryAsync(
+                loaded,
+                $"save setting '{field.Key}'",
+                async ct =>
+                {
+                    await provider.SetSettingValueAsync(field.Key, field.Value, ct)
+                        .ConfigureAwait(false);
+                    return true;
+                }
+            );
+            if (!setResult.IsSuccess)
             {
-                await provider.SetSettingValueAsync(field.Key, field.Value);
-            }
-            catch (Exception ex)
-            {
-                _errorLog?.AddEntry(
-                    $"Plugin '{loaded.Manifest.Name}' failed to save setting '{field.Key}': {ex.Message}",
-                    ErrorCategory.Plugin
-                );
                 row.Status = Loc.Instance["Plugins.SettingsSaveFailed"];
                 await LoadPluginSettingsAsync(row, true);
                 return false;
@@ -341,30 +464,97 @@ public partial class PluginsSectionViewModel : ObservableObject
 
         if (flatProvider is not null)
         {
-            foreach (var definition in flatProvider.GetSettingDefinitions())
+            var definitions = await TryInvokePluginBoundaryAsync(
+                loaded,
+                "read setting definitions",
+                _ => Task.FromResult(flatProvider.GetSettingDefinitions().ToList())
+            );
+            if (!definitions.IsSuccess)
             {
-                var value = await flatProvider.GetSettingValueAsync(definition.Key) ?? string.Empty;
-                row.SettingFields.Add(
-                    new PluginSettingFieldRow(
-                        definition.Key,
-                        definition.Label,
-                        definition.Description ?? string.Empty,
-                        definition.Placeholder ?? string.Empty,
-                        definition.Options ?? [],
-                        definition.IsSecret,
-                        definition.Kind,
-                        value
-                    )
-                );
+                MarkSettingsLoadFailed(row, preserveStatus);
+                return;
+            }
+
+            try
+            {
+                foreach (var definition in definitions.Value!)
+                {
+                    var settingValue = await TryInvokePluginBoundaryAsync(
+                        loaded,
+                        $"read setting '{definition.Key}'",
+                        ct => flatProvider.GetSettingValueAsync(definition.Key, ct)
+                    );
+                    if (!settingValue.IsSuccess)
+                    {
+                        MarkSettingsLoadFailed(row, preserveStatus);
+                        return;
+                    }
+
+                    row.SettingFields.Add(
+                        new PluginSettingFieldRow(
+                            definition.Key,
+                            definition.Label,
+                            definition.Description ?? string.Empty,
+                            definition.Placeholder ?? string.Empty,
+                            definition.Options ?? [],
+                            definition.IsSecret,
+                            definition.Kind,
+                            settingValue.Value ?? string.Empty
+                        )
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                ReportPluginBoundaryFailure(loaded, "read setting definitions", ex);
+                MarkSettingsLoadFailed(row, preserveStatus);
+                return;
             }
         }
 
         if (collectionProvider is not null)
         {
-            foreach (var definition in collectionProvider.GetCollectionDefinitions())
+            var definitions = await TryInvokePluginBoundaryAsync(
+                loaded,
+                "read collection definitions",
+                _ => Task.FromResult(collectionProvider.GetCollectionDefinitions().ToList())
+            );
+            if (!definitions.IsSuccess)
             {
-                var items = await collectionProvider.GetItemsAsync(definition.Key);
-                row.Collections.Add(new PluginCollectionRow(definition, row, items));
+                MarkSettingsLoadFailed(row, preserveStatus);
+                return;
+            }
+
+            try
+            {
+                foreach (var definition in definitions.Value!)
+                {
+                    var collectionItems = await TryInvokePluginBoundaryAsync(
+                        loaded,
+                        $"read collection '{definition.Key}'",
+                        async ct =>
+                            (
+                                await collectionProvider
+                                    .GetItemsAsync(definition.Key, ct)
+                                    .ConfigureAwait(false)
+                            ).ToList()
+                    );
+                    if (!collectionItems.IsSuccess)
+                    {
+                        MarkSettingsLoadFailed(row, preserveStatus);
+                        return;
+                    }
+
+                    row.Collections.Add(
+                        new PluginCollectionRow(definition, row, collectionItems.Value!)
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                ReportPluginBoundaryFailure(loaded, "read collection settings", ex);
+                MarkSettingsLoadFailed(row, preserveStatus);
+                return;
             }
         }
 
@@ -380,6 +570,175 @@ public partial class PluginsSectionViewModel : ObservableObject
                     ? Loc.Instance["Plugins.EditValuesHint"]
                     : Loc.Instance["Plugins.NoEditableFields"];
         }
+    }
+
+    private void BeginObservedSettingsLoad(PluginRow row)
+    {
+        var loadTask = ObserveSettingsLoadAsync(row);
+        _ = loadTask.ContinueWith(
+            completedTask =>
+                Trace.WriteLine(
+                    $"[PluginsSectionViewModel] Failed to handle settings load for plugin "
+                        + $"'{row.Id}': {completedTask.Exception!.GetBaseException().Message}"
+                ),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted
+                | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
+    }
+
+    private async Task ObserveSettingsLoadAsync(PluginRow row)
+    {
+        try
+        {
+            await LoadPluginSettingsAsync(row);
+        }
+        catch (Exception ex)
+        {
+            if (_pluginById.TryGetValue(row.Id, out var loaded))
+            {
+                ReportPluginBoundaryFailure(loaded, "load settings", ex);
+            }
+            else
+            {
+                Trace.WriteLine(
+                    $"[PluginsSectionViewModel] Failed to load settings for plugin "
+                        + $"'{row.Id}': {ex}"
+                );
+            }
+
+            MarkSettingsLoadFailed(row);
+        }
+    }
+
+    private void MarkSettingsLoadFailed(PluginRow row, bool preserveStatus = false)
+    {
+        row.SettingFields.Clear();
+        row.Collections.Clear();
+        row.CanEditSettings = false;
+        row.CanValidateSettings = false;
+
+        if (!preserveStatus)
+        {
+            row.Status = Loc.Instance["Plugins.UnableToLoadSettings"];
+        }
+    }
+
+    private PluginBoundaryResult<T> TryInvokePluginBoundary<T>(
+        LoadedPlugin plugin,
+        string operation,
+        Func<T> boundary
+    )
+    {
+        return TryInvokePluginBoundaryAsync(
+                plugin,
+                operation,
+                _ => Task.FromResult(boundary())
+            )
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private async Task<PluginBoundaryResult<T>> TryInvokePluginBoundaryAsync<T>(
+        LoadedPlugin plugin,
+        string operation,
+        Func<CancellationToken, Task<T>> boundary,
+        TimeSpan? overrideTimeout = null
+    )
+    {
+        var timeoutDuration = overrideTimeout ?? _pluginBoundaryTimeout;
+        var boundaryTask = Task.Run(
+            () => boundary(CancellationToken.None),
+            CancellationToken.None
+        );
+        var completedTask = await Task.WhenAny(
+                boundaryTask,
+                Task.Delay(timeoutDuration)
+            )
+            .ConfigureAwait(false);
+
+        if (completedTask != boundaryTask)
+        {
+            var timeout = new TimeoutException(
+                $"The operation timed out after "
+                    + $"{timeoutDuration.TotalSeconds:0.###} seconds."
+            );
+            ReportPluginBoundaryFailure(plugin, operation, timeout);
+            ObserveLatePluginBoundary(
+                boundaryTask,
+                plugin.Manifest.Id,
+                operation
+            );
+            return PluginBoundaryResult<T>.Failure;
+        }
+
+        try
+        {
+            var value = await boundaryTask.ConfigureAwait(false);
+            return new PluginBoundaryResult<T>(true, value);
+        }
+        catch (Exception ex)
+        {
+            ReportPluginBoundaryFailure(plugin, operation, ex);
+            return PluginBoundaryResult<T>.Failure;
+        }
+    }
+
+    private void ReportPluginBoundaryFailure(
+        LoadedPlugin plugin,
+        string operation,
+        Exception exception
+    )
+    {
+        var failure = exception.GetBaseException();
+        var message =
+            $"Plugin '{plugin.Manifest.Name}' failed to {operation}: {failure.Message}";
+        _errorLog?.AddEntry(message, ErrorCategory.Plugin);
+        Trace.WriteLine($"[PluginsSectionViewModel] {message}");
+    }
+
+    private static void ObserveLatePluginBoundary(
+        Task boundaryTask,
+        string pluginId,
+        string operation
+    )
+    {
+        _ = boundaryTask.ContinueWith(
+            completedTask =>
+            {
+                if (completedTask.IsFaulted)
+                {
+                    Trace.WriteLine(
+                        $"[PluginsSectionViewModel] {operation} for plugin '{pluginId}' "
+                            + $"faulted after timeout: "
+                            + completedTask.Exception!.GetBaseException().Message
+                    );
+                }
+                else if (completedTask.IsCanceled)
+                {
+                    Trace.WriteLine(
+                        $"[PluginsSectionViewModel] {operation} for plugin '{pluginId}' "
+                            + "canceled after timeout"
+                    );
+                }
+                else
+                {
+                    Trace.WriteLine(
+                        $"[PluginsSectionViewModel] {operation} for plugin '{pluginId}' "
+                            + "completed after timeout"
+                    );
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
+    }
+
+    private readonly record struct PluginBoundaryResult<T>(bool IsSuccess, T? Value)
+    {
+        public static PluginBoundaryResult<T> Failure => new(false, default);
     }
 
     // Plugin card name/description come from manifest.json (single-language).

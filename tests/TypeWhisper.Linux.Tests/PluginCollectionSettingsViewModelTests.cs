@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.Reflection;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
 using Xunit;
@@ -97,6 +100,188 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         // The fake implements IPluginCollectionSettingsProvider but NOT
         // IPluginSettingsProvider — HasExpandableSettings must still be true.
         Assert.True(row.HasExpandableSettings);
+    }
+
+    [Fact]
+    public async Task Refresh_DefinitionThrow_MarksOnlyThrowingPluginFailed_AndKeepsOtherPluginFunctional()
+    {
+        var throwing = new FakeSettingsPlugin("com.test.throwing-definitions")
+        {
+            DefinitionFactory = () => throw new InvalidOperationException("definitions exploded"),
+        };
+        var healthy = new FakeCollectionPlugin();
+        var errorLog = new ErrorLogService(_tempDir);
+
+        var vm = CreateSection(
+            [throwing, healthy],
+            TimeSpan.FromMilliseconds(40),
+            errorLog
+        );
+
+        var rows = vm.PluginGroups.SelectMany(group => group.Plugins).ToList();
+        var throwingRow = Assert.Single(rows, row => row.Id == throwing.PluginId);
+        var healthyRow = Assert.Single(rows, row => row.Id == healthy.PluginId);
+        Assert.Equal("Unable to load plugin settings.", throwingRow.Status);
+        Assert.True(throwingRow.HasExpandableSettings);
+
+        await vm.ToggleExpandedCommand.ExecuteAsync(healthyRow);
+
+        Assert.Single(healthyRow.Collections);
+        Assert.True(healthyRow.CanEditSettings);
+        Assert.Contains(
+            errorLog.Entries,
+            entry =>
+                entry.Message.Contains(throwing.PluginName, StringComparison.Ordinal)
+                && entry.Message.Contains("read setting definitions", StringComparison.Ordinal)
+        );
+    }
+
+    [Fact]
+    public async Task Refresh_HungDefinitions_TimesOutAndObservesLateCompletion_WithoutBlockingOtherPlugins()
+    {
+        using var releaseDefinitions = new ManualResetEventSlim();
+        var lateCompletion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var hung = new FakeSettingsPlugin("com.test.hung-definitions")
+        {
+            DefinitionFactory = () =>
+            {
+                // ReSharper disable once AccessToDisposedClosure -- test awaits lateCompletion before the using disposes this event.
+                releaseDefinitions.Wait();
+                lateCompletion.TrySetResult();
+                return [FakeSettingsPlugin.SettingDefinition];
+            },
+        };
+        var healthy = new FakeCollectionPlugin();
+        var errorLog = new ErrorLogService(_tempDir);
+        var releaseTask = Task.Run(async () =>
+        {
+            await Task.Delay(750);
+            // ReSharper disable once AccessToDisposedClosure -- test awaits releaseTask before the using disposes this event.
+            releaseDefinitions.Set();
+        });
+        var stopwatch = Stopwatch.StartNew();
+
+        var vm = CreateSection(
+            [hung, healthy],
+            TimeSpan.FromMilliseconds(40),
+            errorLog
+        );
+
+        stopwatch.Stop();
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromMilliseconds(500),
+            $"Refresh took {stopwatch.Elapsed.TotalMilliseconds:0} ms."
+        );
+        var rows = vm.PluginGroups.SelectMany(group => group.Plugins).ToList();
+        var hungRow = Assert.Single(rows, row => row.Id == hung.PluginId);
+        var healthyRow = Assert.Single(rows, row => row.Id == healthy.PluginId);
+        Assert.Equal("Unable to load plugin settings.", hungRow.Status);
+
+        await vm.ToggleExpandedCommand.ExecuteAsync(healthyRow);
+        Assert.Single(healthyRow.Collections);
+
+        await releaseTask;
+        await lateCompletion.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Contains(
+            errorLog.Entries,
+            entry =>
+                entry.Message.Contains(hung.PluginName, StringComparison.Ordinal)
+                && entry.Message.Contains("timed out", StringComparison.Ordinal)
+        );
+    }
+
+    [Fact]
+    public async Task SaveSettings_SetterAndRecoveryReloadThrow_AreContainedToCard()
+    {
+        var plugin = new FakeSettingsPlugin("com.test.throwing-save");
+        var errorLog = new ErrorLogService(_tempDir);
+        var vm = CreateSection(
+            [plugin],
+            TimeSpan.FromMilliseconds(40),
+            errorLog
+        );
+        var row = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+        plugin.ThrowOnSetValue = true;
+        plugin.ThrowOnGetValue = true;
+
+        var exception = await Record.ExceptionAsync(
+            () => vm.SaveSettingsCommand.ExecuteAsync(row)
+        );
+
+        Assert.Null(exception);
+        Assert.Equal(
+            "Settings could not be saved. See the error log for details.",
+            row.Status
+        );
+        Assert.Empty(row.SettingFields);
+        Assert.False(row.CanEditSettings);
+        Assert.Contains(
+            errorLog.Entries,
+            entry => entry.Message.Contains("save setting", StringComparison.Ordinal)
+        );
+        Assert.Contains(
+            errorLog.Entries,
+            entry => entry.Message.Contains("read setting", StringComparison.Ordinal)
+        );
+    }
+
+    [Fact]
+    public async Task Refresh_ExpandedRestorationThrow_IsObservedAndMarksRestoredCardFailed()
+    {
+        var plugin = new FakeSettingsPlugin("com.test.throwing-restoration");
+        var errorLog = new ErrorLogService(_tempDir);
+        var vm = CreateSection(
+            [plugin],
+            TimeSpan.FromMilliseconds(40),
+            errorLog
+        );
+        var originalRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        await vm.ToggleExpandedCommand.ExecuteAsync(originalRow);
+        plugin.ThrowOnGetValue = true;
+
+        InvokeRefresh(vm);
+
+        var restoredRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        Assert.True(restoredRow.IsExpanded);
+        await WaitForAsync(
+            () => restoredRow.Status == "Unable to load plugin settings.",
+            TimeSpan.FromSeconds(2)
+        );
+        Assert.Equal("Unable to load plugin settings.", restoredRow.Status);
+        Assert.Contains(
+            errorLog.Entries,
+            entry =>
+                entry.Message.Contains(plugin.PluginName, StringComparison.Ordinal)
+                && entry.Message.Contains("read setting", StringComparison.Ordinal)
+        );
+    }
+
+    [Fact]
+    public async Task ValidateSettings_SlowValidateAsync_UsesLongerValidationTimeout()
+    {
+        var plugin = new FakeSettingsPlugin("com.test.slow-validate")
+        {
+            // Validation legitimately runs longer than the short boundary timeout
+            // (e.g. SupertonicTts downloading a model on demand).
+            ValidateDelay = TimeSpan.FromMilliseconds(150),
+            ValidationResult = new PluginSettingsValidationResult(true, "Validated OK."),
+        };
+        var errorLog = new ErrorLogService(_tempDir);
+        var vm = CreateSection(
+            [plugin],
+            TimeSpan.FromMilliseconds(40),
+            errorLog,
+            TimeSpan.FromSeconds(5)
+        );
+        var row = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+
+        await vm.ValidateSettingsCommand.ExecuteAsync(row);
+
+        Assert.Equal("Validated OK.", row.Status);
     }
 
     // ---- PluginSettingFieldRow direct unit tests --------------------------
@@ -357,6 +542,54 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         return (vm, row, plugin);
     }
 
+    private PluginsSectionViewModel CreateSection(
+        IReadOnlyList<ITypeWhisperPlugin> plugins,
+        TimeSpan pluginBoundaryTimeout,
+        ErrorLogService errorLog,
+        TimeSpan? pluginValidationTimeout = null
+    )
+    {
+        var loadedPlugins = plugins
+            .Select(plugin =>
+                TestPluginManagerFactory.CreateLoadedPlugin(
+                    _tempDir,
+                    plugin.PluginId,
+                    plugin
+                )
+            )
+            .ToList();
+        var manager = TestPluginManagerFactory.Create(loadedPlugins: loadedPlugins);
+        return new PluginsSectionViewModel(
+            manager,
+            errorLog,
+            pluginBoundaryTimeout,
+            pluginValidationTimeout
+        );
+    }
+
+    private static void InvokeRefresh(PluginsSectionViewModel vm)
+    {
+        var refresh =
+            typeof(PluginsSectionViewModel).GetMethod(
+                "Refresh",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            )
+            ?? throw new MissingMethodException(
+                typeof(PluginsSectionViewModel).FullName,
+                "Refresh"
+            );
+        refresh.Invoke(vm, null);
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (!condition() && deadline.Elapsed < timeout)
+        {
+            await Task.Delay(10);
+        }
+    }
+
     // ---- PluginCollectionRow / PluginCollectionItemRow direct tests -------
 
     private static PluginCollectionDefinition ThingsDefinition()
@@ -389,6 +622,85 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             true
         );
         return new PluginCollectionRow(ThingsDefinition(), ownerRow, items);
+    }
+
+    private sealed class FakeSettingsPlugin : ITypeWhisperPlugin, IPluginSettingsProvider
+    {
+        public static readonly PluginSettingDefinition SettingDefinition = new(
+            "value",
+            "Value",
+            Kind: PluginSettingKind.Text
+        );
+
+        public FakeSettingsPlugin(string pluginId)
+        {
+            PluginId = pluginId;
+        }
+
+        public Func<IReadOnlyList<PluginSettingDefinition>>? DefinitionFactory { get; init; }
+        public bool ThrowOnGetValue { get; set; }
+        public bool ThrowOnSetValue { get; set; }
+        public TimeSpan ValidateDelay { get; init; }
+        public PluginSettingsValidationResult? ValidationResult { get; init; }
+        public string PluginId { get; }
+        public string PluginName => $"Settings {PluginId}";
+        public string PluginVersion => "1.0.0";
+
+        public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions()
+        {
+            return DefinitionFactory?.Invoke() ?? [SettingDefinition];
+        }
+
+        public Task<string?> GetSettingValueAsync(
+            string key,
+            CancellationToken ct = default
+        )
+        {
+            if (ThrowOnGetValue)
+            {
+                throw new InvalidOperationException("setting getter exploded");
+            }
+
+            return Task.FromResult<string?>("initial");
+        }
+
+        public Task SetSettingValueAsync(
+            string key,
+            string? value,
+            CancellationToken ct = default
+        )
+        {
+            if (ThrowOnSetValue)
+            {
+                throw new InvalidOperationException("setting setter exploded");
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public async Task<PluginSettingsValidationResult?> ValidateAsync(
+            CancellationToken ct = default
+        )
+        {
+            if (ValidateDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(ValidateDelay, ct).ConfigureAwait(false);
+            }
+
+            return ValidationResult;
+        }
+
+        public Task ActivateAsync(IPluginHostServices host)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task DeactivateAsync()
+        {
+            return Task.CompletedTask;
+        }
+
+        public void Dispose() { }
     }
 
     /// <summary>
