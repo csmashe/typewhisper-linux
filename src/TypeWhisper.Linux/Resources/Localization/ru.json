@@ -372,6 +372,7 @@
   "FileTranscription.WatchingForNewFiles": "Наблюдение за новыми файлами",
   "General.ApiExamples": "Примеры API",
   "General.Autostart": "Запускать автоматически при старте системы",
+  "General.AutostartEntryPreserved": "TypeWhisper оставил сторонний или изменённый элемент автозапуска в {0} нетронутым и не будет его перезаписывать или удалять.",
   "General.AutostartHint": "TypeWhisper запускается автоматически при входе в систему.",
   "General.BearerToken": "Bearer-токен",
   "General.CliBundledTarget": "Встроенный: {0}  |  Цель: {1}",

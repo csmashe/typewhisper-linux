@@ -372,6 +372,7 @@
   "FileTranscription.WatchingForNewFiles": "Wartet auf neue Dateien",
   "General.ApiExamples": "API-Beispiele",
   "General.Autostart": "Beim Systemstart automatisch starten",
+  "General.AutostartEntryPreserved": "TypeWhisper hat den fremden oder angepassten Autostart-Eintrag unter {0} unangetastet gelassen und wird ihn weder überschreiben noch löschen.",
   "General.AutostartHint": "TypeWhisper startet automatisch, wenn Sie sich anmelden.",
   "General.BearerToken": "Bearer-Token",
   "General.CliBundledTarget": "Mitgeliefert: {0}  |  Ziel: {1}",

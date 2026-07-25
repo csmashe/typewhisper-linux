@@ -372,6 +372,7 @@
   "FileTranscription.WatchingForNewFiles": "Esperando archivos nuevos",
   "General.ApiExamples": "Ejemplos de API",
   "General.Autostart": "Iniciar automáticamente al arrancar el sistema",
+  "General.AutostartEntryPreserved": "TypeWhisper dejó intacta la entrada de inicio automático ajena o personalizada en {0} y no la sobrescribirá ni la eliminará.",
   "General.AutostartHint": "TypeWhisper se inicia automáticamente cuando inicias sesión.",
   "General.BearerToken": "Token Bearer",
   "General.CliBundledTarget": "Incluido: {0}  |  Destino: {1}",
