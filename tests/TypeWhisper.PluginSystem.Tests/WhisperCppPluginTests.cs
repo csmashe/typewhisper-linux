@@ -19,6 +19,7 @@ namespace TypeWhisper.PluginSystem.Tests;
 public partial class WhisperCppPluginTests
 {
     private const float TranscriptionNoSpeechThreshold = 0.8f;
+    private static readonly TimeSpan s_coordinationTimeout = TimeSpan.FromSeconds(5);
 
     [Fact]
     public void InitializeCudaDependencies_CustomPluginAssetDirectory_UsesSharedConfiguredRoot()
@@ -278,22 +279,39 @@ public partial class WhisperCppPluginTests
         var host = CreateHostMock(temp.Path);
         var provisioner = new BlockingProvisioner();
         var installer = new NoopWhisperInstaller(temp.Path);
+        using var loadCts = new CancellationTokenSource();
+        Task? loadTask = null;
 
-        var plugin = new WhisperCppPlugin();
-        plugin.SetCudaDependenciesForTests(provisioner, installer);
-        await plugin.ActivateAsync(host.Object);
-        WriteDummyModel(temp.Path, "ggml-tiny.bin");
+        try
+        {
+            var plugin = new WhisperCppPlugin();
+            plugin.SetCudaDependenciesForTests(provisioner, installer);
+            await plugin.ActivateAsync(host.Object);
+            WriteDummyModel(temp.Path, "ggml-tiny.bin");
 
-        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
-        var loadTask = plugin.LoadModelAsync("tiny", CancellationToken.None);
+            plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+            var runningLoadTask = plugin.LoadModelAsync("tiny", loadCts.Token);
+            loadTask = runningLoadTask;
 
-        await provisioner.Started;
-        // User switches to CPU while the (blocked) CUDA provision is in flight.
-        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
-        provisioner.Release();
+            // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; wiring loadCts.Token here would make the deadline racy with the finally's teardown cancel instead of fixed.
+            await provisioner.Started.WaitAsync(s_coordinationTimeout);
+            // User switches to CPU while the (blocked) CUDA provision is in flight.
+            plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+            provisioner.Release();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => loadTask);
-        Assert.Contains("Compute backend changed", ex.Message);
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; wiring loadCts.Token here would make the deadline racy with the finally's teardown cancel instead of fixed.
+                () => runningLoadTask.WaitAsync(s_coordinationTimeout)
+            );
+            Assert.Contains("Compute backend changed", ex.Message);
+        }
+        finally
+        {
+            provisioner.Release();
+            // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel is the teardown signal; CancelAsync buys nothing in cleanup.
+            loadCts.Cancel();
+            await CompleteBestEffort(loadTask);
+        }
     }
 
     // Once Whisper.net's one-shot native loader has failed (poisoned static), a subsequent
@@ -344,6 +362,21 @@ public partial class WhisperCppPluginTests
         {
             await Task.Yield();
             yield return segment;
+        }
+    }
+
+    private static async Task CompleteBestEffort(Task? task)
+    {
+        if (task is null)
+            return;
+
+        try
+        {
+            await task.WaitAsync(s_coordinationTimeout);
+        }
+        catch
+        {
+            // Cleanup is observation-only and must remain bounded.
         }
     }
 
@@ -420,6 +453,8 @@ public partial class WhisperCppPluginTests
 
 public partial class SherpaOnnxPluginTests
 {
+    private static readonly TimeSpan s_coordinationTimeout = TimeSpan.FromSeconds(5);
+
     [Fact]
     public void InitializeCudaDependencies_CustomPluginAssetDirectory_UsesSharedConfiguredRoot()
     {
@@ -625,6 +660,21 @@ public partial class SherpaOnnxPluginTests
         return host.Object;
     }
 
+    private static async Task CompleteBestEffort(Task? task)
+    {
+        if (task is null)
+            return;
+
+        try
+        {
+            await task.WaitAsync(s_coordinationTimeout);
+        }
+        catch
+        {
+            // Cleanup is observation-only and must remain bounded.
+        }
+    }
+
     // CI-portable state-machine test mirroring the whisper one: a CUDA load whose backend
     // is switched to CPU mid-provision must abort. The injected provisioner blocks inside
     // EnsureReadyAsync; once the backend is switched to CPU the wiring guard skips
@@ -644,22 +694,42 @@ public partial class SherpaOnnxPluginTests
         var host = CreateHostMock(temp.Path);
         var provisioner = new SherpaBlockingProvisioner();
         var installer = new NoopSherpaInstaller(temp.Path);
+        using var loadCts = new CancellationTokenSource();
+        Task? loadTask = null;
 
-        var plugin = new SherpaOnnxPlugin();
-        plugin.SetCudaDependenciesForTests(provisioner, installer);
-        await plugin.ActivateAsync(host.Object);
-        WriteParakeetModelFiles(temp.Path);
+        try
+        {
+            var plugin = new SherpaOnnxPlugin();
+            plugin.SetCudaDependenciesForTests(provisioner, installer);
+            await plugin.ActivateAsync(host.Object);
+            WriteParakeetModelFiles(temp.Path);
 
-        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
-        var loadTask = plugin.LoadModelAsync("parakeet-tdt-0.6b", CancellationToken.None);
+            plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+            var runningLoadTask = plugin.LoadModelAsync(
+                "parakeet-tdt-0.6b",
+                loadCts.Token
+            );
+            loadTask = runningLoadTask;
 
-        await provisioner.Started;
-        // User switches to CPU while the (blocked) CUDA provision is in flight.
-        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
-        provisioner.Release();
+            // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; wiring loadCts.Token here would make the deadline racy with the finally's teardown cancel instead of fixed.
+            await provisioner.Started.WaitAsync(s_coordinationTimeout);
+            // User switches to CPU while the (blocked) CUDA provision is in flight.
+            plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+            provisioner.Release();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => loadTask);
-        Assert.Contains("Compute backend changed", ex.Message);
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; wiring loadCts.Token here would make the deadline racy with the finally's teardown cancel instead of fixed.
+                () => runningLoadTask.WaitAsync(s_coordinationTimeout)
+            );
+            Assert.Contains("Compute backend changed", ex.Message);
+        }
+        finally
+        {
+            provisioner.Release();
+            // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel is the teardown signal; CancelAsync buys nothing in cleanup.
+            loadCts.Cancel();
+            await CompleteBestEffort(loadTask);
+        }
     }
 
     [Fact]
