@@ -16,9 +16,11 @@
     </ItemGroup>
 
     <ItemGroup>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.AssemblyAi\TypeWhisper.Plugin.AssemblyAi.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Cerebras\TypeWhisper.Plugin.Cerebras.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Claude\TypeWhisper.Plugin.Claude.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Cohere\TypeWhisper.Plugin.Cohere.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Deepgram\TypeWhisper.Plugin.Deepgram.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.ElevenLabs\TypeWhisper.Plugin.ElevenLabs.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.FileMemory\TypeWhisper.Plugin.FileMemory.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Fireworks\TypeWhisper.Plugin.Fireworks.csproj"/>
