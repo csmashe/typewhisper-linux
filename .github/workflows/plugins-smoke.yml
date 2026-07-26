@@ -30,6 +30,31 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Run plugin release transaction regression
+        shell: pwsh
+        run: |
+          $minimumPesterVersion = [version]'5.5.0'
+          $pester = Get-Module -ListAvailable Pester |
+            Where-Object Version -ge $minimumPesterVersion |
+            Sort-Object Version -Descending |
+            Select-Object -First 1
+          if (-not $pester) {
+            Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
+            $pester = Get-Module -ListAvailable Pester |
+              Where-Object Version -ge $minimumPesterVersion |
+              Sort-Object Version -Descending |
+              Select-Object -First 1
+          }
+          Import-Module $pester.Path -Force
+
+          $result = Invoke-Pester `
+            -Path tests/workflows/PublishPluginReleaseTransaction.Tests.ps1 `
+            -Output Detailed `
+            -PassThru
+          if ($result.FailedCount -gt 0) {
+            throw "$($result.FailedCount) plugin release transaction test(s) failed."
+          }
+
       - id: discover
         shell: pwsh
         run: |
