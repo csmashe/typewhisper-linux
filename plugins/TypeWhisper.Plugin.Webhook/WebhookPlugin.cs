@@ -19,7 +19,9 @@ public sealed record WebhookConfig
     public string Name { get; init; } = "";
     public string Url { get; init; } = "";
     public string HttpMethod { get; init; } = "POST";
-    public Dictionary<string, string> Headers { get; init; } = [];
+    public Dictionary<string, string> HeaderSecretReferences { get; init; } = [];
+    [JsonIgnore]
+    internal Dictionary<string, string> LegacyHeaders { get; init; } = [];
     public bool IsEnabled { get; init; } = true;
     // ReSharper disable once TypeWithSuspiciousEqualityIsUsedInRecord.Global -- config record identity is its Id; the collection members are never compared by value.
     public List<string> ProfileFilter { get; init; } = [];
@@ -42,6 +44,42 @@ public sealed record DeliveryLogEntry
 /// </summary>
 internal sealed class WebhookStore
 {
+    // ReSharper disable AutoPropertyCanBeMadeGetOnly.Local -- init accessors are set by System.Text.Json deserialization via reflection, invisible to ReSharper's usage analysis.
+    // ReSharper disable MemberCanBePrivate.Local -- properties must stay public for System.Text.Json to deserialize into them.
+    // ReSharper disable once ClassNeverInstantiated.Local -- instantiated by System.Text.Json deserialization, which ReSharper cannot see.
+    private sealed record StoredWebhookConfig
+    {
+        public Guid Id { get; init; } = Guid.NewGuid();
+        public string Name { get; init; } = "";
+        public string Url { get; init; } = "";
+        public string HttpMethod { get; init; } = "POST";
+        public Dictionary<string, string> HeaderSecretReferences { get; init; } = [];
+        public Dictionary<string, string> Headers { get; init; } = [];
+        public bool IsEnabled { get; init; } = true;
+        public List<string> ProfileFilter { get; init; } = [];
+
+        public WebhookConfig ToConfig() =>
+            new()
+            {
+                Id = Id,
+                Name = Name,
+                Url = Url,
+                HttpMethod = HttpMethod,
+                HeaderSecretReferences = new Dictionary<string, string>(
+                    HeaderSecretReferences,
+                    StringComparer.OrdinalIgnoreCase
+                ),
+                LegacyHeaders = new Dictionary<string, string>(
+                    Headers,
+                    StringComparer.OrdinalIgnoreCase
+                ),
+                IsEnabled = IsEnabled,
+                ProfileFilter = ProfileFilter,
+            };
+    }
+    // ReSharper restore MemberCanBePrivate.Local
+    // ReSharper restore AutoPropertyCanBeMadeGetOnly.Local
+
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         WriteIndented = true,
@@ -60,20 +98,34 @@ internal sealed class WebhookStore
     /// Loads stored configs; returns an empty list only when the file does not
     /// exist. Read or JSON-parse failures propagate so the caller can log them
     /// rather than mistaking a corrupt file for "no webhooks" and overwriting it.
+    /// Legacy plaintext headers deserialize into <see cref="WebhookConfig.LegacyHeaders"/>.
+    /// When <paramref name="protectExistingFile"/> is true, the file is set to
+    /// 0600 before it is read.
     /// </summary>
-    public List<WebhookConfig> Load()
+    public List<WebhookConfig> Load(bool protectExistingFile = false)
     {
         if (!File.Exists(_configPath))
             return [];
 
+        if (protectExistingFile && !OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                _configPath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite
+            );
+        }
+
         var json = File.ReadAllText(_configPath);
-        return JsonSerializer.Deserialize<List<WebhookConfig>>(json, s_jsonOptions) ?? [];
+        return (
+            JsonSerializer.Deserialize<List<StoredWebhookConfig>>(json, s_jsonOptions) ?? []
+        ).Select(config => config.ToConfig()).ToList();
     }
 
     /// <summary>
     /// Persists the supplied configs, creating the data directory if needed.
     /// Writes through a sibling temp file and renames it over the target so a
-    /// crash or kill mid-write can't truncate webhooks.json.
+    /// crash or kill mid-write can't truncate webhooks.json. The temp file is
+    /// created with 0600 permissions before the rename.
     /// </summary>
     public void Save(IEnumerable<WebhookConfig> configs)
     {
@@ -85,7 +137,22 @@ internal sealed class WebhookStore
 
         try
         {
-            File.WriteAllText(tempPath, json);
+            var options = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+            };
+            if (!OperatingSystem.IsWindows())
+            {
+                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            }
+
+            using (var stream = new FileStream(tempPath, options))
+            using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
+            {
+                writer.Write(json);
+            }
 
             if (File.Exists(_configPath))
             {
@@ -125,7 +192,7 @@ public sealed class WebhookService
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    private readonly HttpClient _httpClient = new();
+    private readonly HttpClient _httpClient;
     private readonly IPluginHostServices _host;
     private readonly WebhookStore _store;
     // Guards every mutation and enumeration of Webhooks so the
@@ -146,10 +213,25 @@ public sealed class WebhookService
     public ObservableCollection<DeliveryLogEntry> DeliveryLog { get; } = [];
 
     public WebhookService(IPluginHostServices host, string dataDirectory)
+        : this(host, dataDirectory, new HttpClient()) { }
+
+    internal WebhookService(
+        IPluginHostServices host,
+        string dataDirectory,
+        HttpMessageHandler handler
+    )
+        : this(host, dataDirectory, new HttpClient(handler)) { }
+
+    private WebhookService(
+        IPluginHostServices host,
+        string dataDirectory,
+        HttpClient httpClient
+    )
     {
         _host = host;
         _store = new WebhookStore(dataDirectory);
-        Load();
+        _httpClient = httpClient;
+        Load(protectExistingFile: true);
     }
 
     public void AddWebhook(WebhookConfig config)
@@ -305,10 +387,22 @@ public sealed class WebhookService
                 ? HttpMethod.Put
                 : HttpMethod.Post;
 
+            var resolvedHeaders = new Dictionary<string, string>(
+                StringComparer.OrdinalIgnoreCase
+            );
+            foreach (var header in webhook.HeaderSecretReferences)
+            {
+                resolvedHeaders[header.Key] =
+                    await _host.LoadSecretAsync(header.Value)
+                    ?? throw new InvalidOperationException(
+                        $"Secure value for webhook header '{header.Key}' is unavailable."
+                    );
+            }
+
             using var request = new HttpRequestMessage(method, webhook.Url);
             request.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            foreach (var header in webhook.Headers)
+            foreach (var header in resolvedHeaders)
                 request.Headers.TryAddWithoutValidation(header.Key, header.Value);
 
             using var response = await _httpClient.SendAsync(request);
@@ -373,12 +467,89 @@ public sealed class WebhookService
             DeliveryLog.RemoveAt(DeliveryLog.Count - 1);
     }
 
-    private void Load()
+    internal async Task MigrateLegacyHeadersAsync()
+    {
+        List<WebhookConfig> previous;
+        lock (_webhooksLock)
+            previous = Webhooks.ToList();
+
+        if (previous.All(config => config.LegacyHeaders.Count == 0))
+            return;
+
+        try
+        {
+            var migrated = new List<WebhookConfig>(previous.Count);
+            foreach (var config in previous)
+            {
+                var references = new Dictionary<string, string>(
+                    config.HeaderSecretReferences,
+                    StringComparer.OrdinalIgnoreCase
+                );
+                foreach (var header in config.LegacyHeaders)
+                {
+                    var reference = WebhookPlugin.GetHeaderSecretReference(
+                        config.Id,
+                        header.Key
+                    );
+                    await _host.StoreSecretAsync(reference, header.Value);
+                    references[header.Key] = reference;
+                }
+
+                migrated.Add(
+                    config with
+                    {
+                        HeaderSecretReferences = references,
+                        LegacyHeaders = [],
+                    }
+                );
+            }
+
+            Save(migrated);
+            lock (_webhooksLock)
+            {
+                Webhooks.Clear();
+                foreach (var config in migrated)
+                    Webhooks.Add(config);
+            }
+
+            var obsoleteReferences = previous
+                .SelectMany(config => config.HeaderSecretReferences.Values)
+                .Except(
+                    migrated.SelectMany(config => config.HeaderSecretReferences.Values),
+                    StringComparer.Ordinal
+                )
+                .ToList();
+            foreach (var reference in obsoleteReferences)
+            {
+                try
+                {
+                    await _host.DeleteSecretAsync(reference);
+                }
+                catch (Exception ex)
+                {
+                    _host.Log(
+                        PluginLogLevel.Warning,
+                        $"Failed to delete obsolete webhook header secret: {ex.Message}"
+                    );
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _host.Log(
+                PluginLogLevel.Warning,
+                $"Failed to migrate webhook header secrets: {ex.Message}"
+            );
+            throw;
+        }
+    }
+
+    private void Load(bool protectExistingFile)
     {
         List<WebhookConfig> loaded;
         try
         {
-            loaded = _store.Load();
+            loaded = _store.Load(protectExistingFile);
         }
         catch (Exception ex)
         {
@@ -436,8 +607,11 @@ public sealed class WebhookPlugin
         IPluginDataLocationAware,
         IPluginLocalizationAware
 {
+    internal const string StoredHeaderPlaceholder = "<stored securely>";
+
     private IDisposable? _subscription;
     private string? _dataDirectory;
+    private readonly SemaphoreSlim _settingsSaveLock = new(1, 1);
 
     public string PluginId => "com.typewhisper.webhook";
     public string PluginName => "Webhook";
@@ -445,7 +619,7 @@ public sealed class WebhookPlugin
 
     public WebhookService? Service { get; private set; }
 
-    public Task ActivateAsync(IPluginHostServices host)
+    public async Task ActivateAsync(IPluginHostServices host)
     {
         Host = host;
         // Single canonical data dir: prefer the one set via SetDataDirectory
@@ -455,11 +629,21 @@ public sealed class WebhookPlugin
         // the live service and any on-disk fallback path reading/writing the
         // same webhooks.json.
         _dataDirectory ??= host.PluginDataDirectory;
-        Service = new WebhookService(host, _dataDirectory);
-        _subscription = host.EventBus.Subscribe<TranscriptionCompletedEvent>(
-            OnTranscriptionCompleted
-        );
-        return Task.CompletedTask;
+        var service = new WebhookService(host, _dataDirectory);
+        try
+        {
+            await service.MigrateLegacyHeadersAsync();
+            Service = service;
+            _subscription = host.EventBus.Subscribe<TranscriptionCompletedEvent>(
+                OnTranscriptionCompleted
+            );
+        }
+        catch
+        {
+            service.Dispose();
+            Host = null;
+            throw;
+        }
     }
 
     public Task DeactivateAsync()
@@ -529,6 +713,7 @@ public sealed class WebhookPlugin
                     new PluginSettingDefinition(
                         "headers",
                         Loc.L("Settings.Headers"),
+                        IsSecret: true,
                         Description: Loc.L("Settings.HeadersDescription"),
                         Kind: PluginSettingKind.Multiline
                     ),
@@ -570,7 +755,7 @@ public sealed class WebhookPlugin
         {
             try
             {
-                source = new WebhookStore(ResolveDataDir()).Load();
+                source = new WebhookStore(ResolveDataDir()).Load(protectExistingFile: true);
             }
             catch (Exception ex)
             {
@@ -586,7 +771,7 @@ public sealed class WebhookPlugin
                     ["name"] = c.Name,
                     ["url"] = c.Url,
                     ["method"] = c.HttpMethod,
-                    ["headers"] = SerializeHeaders(c.Headers),
+                    ["headers"] = SerializeStoredHeaders(c),
                     ["profiles"] = SerializeProfiles(c.ProfileFilter),
                     ["enabled"] = c.IsEnabled ? "true" : "false",
                     ["__id"] = c.Id.ToString("D"),
@@ -597,18 +782,19 @@ public sealed class WebhookPlugin
         return Task.FromResult(items);
     }
 
-    public Task<PluginSettingsValidationResult> SetItemsAsync(
+    public async Task<PluginSettingsValidationResult> SetItemsAsync(
         string collectionKey,
         IReadOnlyList<PluginCollectionItem> items,
         CancellationToken ct = default
     )
     {
         if (collectionKey != "webhooks")
-            return Task.FromResult(
-                new PluginSettingsValidationResult(false, Loc.L("Settings.UnknownCollection"))
+            return new PluginSettingsValidationResult(
+                false,
+                Loc.L("Settings.UnknownCollection")
             );
 
-        var configs = new List<WebhookConfig>(items.Count);
+        var parsedItems = new List<ParsedWebhookItem>(items.Count);
 
         foreach (var item in items)
         {
@@ -642,44 +828,164 @@ public sealed class WebhookPlugin
 
             var id = Guid.TryParse(Get(item, "__id"), out var parsedId) ? parsedId : Guid.NewGuid();
 
-            configs.Add(
-                new WebhookConfig
-                {
-                    Id = id,
-                    Name = name,
-                    Url = url,
-                    HttpMethod = method,
-                    Headers = headers,
-                    ProfileFilter = ParseProfiles(Get(item, "profiles") ?? ""),
-                    IsEnabled = enabled,
-                }
-            );
-        }
-
-        try
-        {
-            if (Service is not null)
-                Service.ReplaceAll(configs);
-            else
-                new WebhookStore(ResolveDataDir()).Save(configs);
-        }
-        catch (Exception ex)
-        {
-            return Task.FromResult(
-                new PluginSettingsValidationResult(
-                    false,
-                    Loc.L("Settings.FailedToSaveSettings", ex.Message)
+            parsedItems.Add(
+                new ParsedWebhookItem(
+                    new WebhookConfig
+                    {
+                        Id = id,
+                        Name = name,
+                        Url = url,
+                        HttpMethod = method,
+                        ProfileFilter = ParseProfiles(Get(item, "profiles") ?? ""),
+                        IsEnabled = enabled,
+                    },
+                    headers
                 )
             );
         }
 
-        return Task.FromResult(new PluginSettingsValidationResult(true, Loc.L("Settings.Saved")));
+        await _settingsSaveLock.WaitAsync(ct);
+        try
+        {
+            try
+            {
+                var existing = Service is not null
+                    ? Service.SnapshotWebhooks()
+                    : new WebhookStore(ResolveDataDir()).Load(protectExistingFile: true);
 
-        Task<PluginSettingsValidationResult> Fail(string label, string reason) =>
-            Task.FromResult(
-                new PluginSettingsValidationResult(false, Loc.L("Settings.WebhookLabelReason", label, reason))
+                // Legacy plaintext headers only load into LegacyHeaders and are
+                // never surfaced by GetItems, so an unrelated edit saved before
+                // activation would rewrite the config without them and silently
+                // destroy the headers. Fail closed until the plugin is activated
+                // and MigrateLegacyHeadersAsync moves them into the secret store.
+                if (existing.Any(config => config.LegacyHeaders.Count > 0))
+                {
+                    throw new InvalidOperationException(
+                        "Webhook header values require activated host secret services."
+                    );
+                }
+
+                var existingById = existing
+                    .GroupBy(config => config.Id)
+                    .ToDictionary(group => group.Key, group => group.First());
+
+                var configs = new List<WebhookConfig>(parsedItems.Count);
+                var pendingSecretWrites = new List<(string Reference, string Value)>();
+
+                foreach (var parsedItem in parsedItems)
+                {
+                    existingById.TryGetValue(parsedItem.Config.Id, out var existingConfig);
+                    var references = new Dictionary<string, string>(
+                        StringComparer.OrdinalIgnoreCase
+                    );
+
+                    foreach (var header in parsedItem.HeaderValues)
+                    {
+                        string? existingReference = null;
+                        var hasExistingReference =
+                            existingConfig is not null
+                            && TryGetHeaderSecretReference(
+                                existingConfig.HeaderSecretReferences,
+                                header.Key,
+                                out existingReference
+                            );
+
+                        string reference;
+                        if (
+                            header.Value == StoredHeaderPlaceholder
+                            && hasExistingReference
+                        )
+                        {
+                            reference = existingReference!;
+                        }
+                        else
+                        {
+                            reference = GetHeaderSecretReference(
+                                parsedItem.Config.Id,
+                                header.Key
+                            );
+                            pendingSecretWrites.Add((reference, header.Value));
+                        }
+
+                        references[header.Key] = reference;
+                    }
+
+                    configs.Add(
+                        parsedItem.Config with
+                        {
+                            HeaderSecretReferences = references,
+                        }
+                    );
+                }
+
+                var newReferences = configs
+                    .SelectMany(config => config.HeaderSecretReferences.Values)
+                    .ToHashSet(StringComparer.Ordinal);
+                var obsoleteReferences = existing
+                    .SelectMany(config => config.HeaderSecretReferences.Values)
+                    .Where(reference => !newReferences.Contains(reference))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+
+                if (
+                    Host is null
+                    && (pendingSecretWrites.Count > 0 || obsoleteReferences.Count > 0)
+                )
+                {
+                    throw new InvalidOperationException(
+                        "Webhook header values require activated host secret services."
+                    );
+                }
+
+                foreach (var (reference, value) in pendingSecretWrites)
+                    await Host!.StoreSecretAsync(reference, value);
+
+                if (Service is not null)
+                    Service.ReplaceAll(configs);
+                else
+                    new WebhookStore(ResolveDataDir()).Save(configs);
+
+                foreach (var reference in obsoleteReferences)
+                {
+                    try
+                    {
+                        await Host!.DeleteSecretAsync(reference);
+                    }
+                    catch (Exception ex)
+                    {
+                        Host!.Log(
+                            PluginLogLevel.Warning,
+                            $"Failed to delete obsolete webhook header secret: {ex.Message}"
+                        );
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                return new PluginSettingsValidationResult(
+                    false,
+                    Loc.L("Settings.FailedToSaveSettings", ex.Message)
+                );
+            }
+        }
+        finally
+        {
+            _settingsSaveLock.Release();
+        }
+
+        return new PluginSettingsValidationResult(true, Loc.L("Settings.Saved"));
+
+        PluginSettingsValidationResult Fail(string label, string reason) =>
+            new(
+                false,
+                Loc.L("Settings.WebhookLabelReason", label, reason)
             );
     }
+
+    private sealed record ParsedWebhookItem(
+        WebhookConfig Config,
+        Dictionary<string, string> HeaderValues
+    );
 
     private static string? Get(PluginCollectionItem item, string key) =>
         item.Values.GetValueOrDefault(key);
@@ -693,9 +999,42 @@ public sealed class WebhookPlugin
         return false;
     }
 
-    /// <summary>Serializes headers to one <c>Name: Value</c> line each.</summary>
-    internal static string SerializeHeaders(IReadOnlyDictionary<string, string> headers) =>
-        string.Join("\n", headers.Select(h => $"{h.Key}: {h.Value}"));
+    internal static string GetHeaderSecretReference(Guid webhookId, string headerName) =>
+        $"webhook-header:{webhookId:N}:{NormalizeHeaderName(headerName)}";
+
+    private static string NormalizeHeaderName(string headerName) =>
+        headerName.Trim().ToLowerInvariant();
+
+    private static bool TryGetHeaderSecretReference(
+        IReadOnlyDictionary<string, string> references,
+        string headerName,
+        out string? reference
+    )
+    {
+        var normalizedName = NormalizeHeaderName(headerName);
+        foreach (var candidate in references)
+        {
+            if (NormalizeHeaderName(candidate.Key) == normalizedName)
+            {
+                reference = candidate.Value;
+                return true;
+            }
+        }
+
+        reference = null;
+        return false;
+    }
+
+    /// <summary>Serializes stored header names with a redacted value placeholder.</summary>
+    internal static string SerializeStoredHeaders(WebhookConfig config)
+    {
+        return string.Join(
+            "\n",
+            config.HeaderSecretReferences.Keys.Select(
+                name => $"{name}: {StoredHeaderPlaceholder}"
+            )
+        );
+    }
 
     /// <summary>
     /// Parses multiline header text. Each non-blank line is split on the first
@@ -708,7 +1047,7 @@ public sealed class WebhookPlugin
         IPluginLocalization? loc = null
     )
     {
-        headers = [];
+        headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         error = "";
 
         if (string.IsNullOrWhiteSpace(text))
