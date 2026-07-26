@@ -3,8 +3,11 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -52,12 +55,18 @@ internal sealed record HttpApiOverCapacityResponse(
     string Body
 );
 
+internal readonly record struct BearerTokenProtectionResult(
+    string PlainText,
+    string StoredValue,
+    bool Changed
+);
+
 /// <summary>
 ///     Local HTTP API for dictation/transcription/history. Binds to localhost
 ///     only; CORS is echoed only for the same loopback origin and port so a
 ///     remote page cannot induce a localhost-origin request to leak the API.
 /// </summary>
-public sealed class HttpApiService : IDisposable
+public sealed partial class HttpApiService : IDisposable
 {
     internal const int MaxConcurrentRequests = 2;
     internal const long MaxTranscribeRequestBytes = 100 * 1024 * 1024;
@@ -87,6 +96,7 @@ public sealed class HttpApiService : IDisposable
     private readonly ISettingsService _settings;
     private readonly ITranslationService _translation;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
+    private readonly string _secretProtectionKeyFilePath;
     private CancellationTokenSource? _cts;
     private bool _disposed;
 
@@ -106,7 +116,8 @@ public sealed class HttpApiService : IDisposable
         ITranslationService translation,
         DictationOrchestrator dictation,
         DictationSessionResultStore sessionResults,
-        ApiDiscoveryFile discoveryFile
+        ApiDiscoveryFile discoveryFile,
+        string? secretProtectionKeyFilePath = null
     )
     {
         _models = models;
@@ -121,6 +132,9 @@ public sealed class HttpApiService : IDisposable
         _dictation = dictation;
         _sessionResults = sessionResults;
         _discoveryFile = discoveryFile;
+        _secretProtectionKeyFilePath =
+            secretProtectionKeyFilePath
+            ?? TypeWhisperEnvironment.SecretProtectionKeyFilePath;
     }
 
     public string StatusText { get; private set; } = "Local API is disabled.";
@@ -174,7 +188,10 @@ public sealed class HttpApiService : IDisposable
             _listener.Start();
             _listenTask = Task.Run(() => ListenLoopAsync(_cts.Token));
 
-            var token = ReadBearerToken(_settings.Current);
+            var token = ReadBearerToken(
+                _settings.Current,
+                _secretProtectionKeyFilePath
+            );
             if (!string.IsNullOrWhiteSpace(token))
             {
                 _discoveryFile.Write(port, token);
@@ -200,7 +217,24 @@ public sealed class HttpApiService : IDisposable
         var settings = _settings.Current;
         if (settings.ApiServerEnabled)
         {
-            EnsureBearerToken();
+            try
+            {
+                EnsureBearerToken();
+            }
+            catch (Exception ex) when (
+                ex is CryptographicException
+                    or IOException
+                    or UnauthorizedAccessException
+            )
+            {
+                Trace.WriteLine(
+                    $"[HttpApiService] Bearer token protection unavailable: {ex.Message}"
+                );
+                Stop();
+                SetStatus(Loc.Instance["Security.SecretProtectionUnavailable"]);
+                return;
+            }
+
             Start(_settings.Current.ApiServerPort);
         }
         else
@@ -209,11 +243,21 @@ public sealed class HttpApiService : IDisposable
         }
     }
 
-    internal static string ReadBearerToken(AppSettings settings)
+    internal static string ReadBearerToken(
+        AppSettings settings,
+        string? secretProtectionKeyFilePath = null
+    )
     {
-        return string.IsNullOrWhiteSpace(settings.ApiServerBearerToken)
-            ? ""
-            : ApiKeyProtection.Decrypt(settings.ApiServerBearerToken);
+        if (string.IsNullOrWhiteSpace(settings.ApiServerBearerToken))
+        {
+            return "";
+        }
+
+        var result = ApiKeyProtection.Decrypt(
+            settings.ApiServerBearerToken,
+            secretProtectionKeyFilePath
+        );
+        return result.Succeeded ? result.PlainText ?? "" : "";
     }
 
     internal static object? BuildAccelerationDto(
@@ -1304,31 +1348,80 @@ public sealed class HttpApiService : IDisposable
     private void EnsureBearerToken()
     {
         var current = _settings.Current;
-        var storedToken = current.ApiServerBearerToken;
-        var decryptedToken = ReadBearerToken(current);
-        if (!string.IsNullOrWhiteSpace(decryptedToken))
+        var protectedToken = ProtectBearerToken(
+            current.ApiServerBearerToken,
+            _secretProtectionKeyFilePath
+        );
+        if (protectedToken.Changed)
         {
-            // Token exists. storedToken == decryptedToken only when stored as plaintext
-            // by an older build (Decrypt is a no-op on non-base64 blobs) — re-encrypt
-            // on the way through so the stored value is always at-rest protected.
-            if (!string.Equals(storedToken, decryptedToken, StringComparison.Ordinal))
+            _settings.Save(
+                current with { ApiServerBearerToken = protectedToken.StoredValue }
+            );
+        }
+    }
+
+    internal static BearerTokenProtectionResult ProtectBearerToken(
+        string? storedValue,
+        string? secretProtectionKeyFilePath = null
+    )
+    {
+        if (!string.IsNullOrWhiteSpace(storedValue))
+        {
+            var decrypted = ApiKeyProtection.Decrypt(
+                storedValue,
+                secretProtectionKeyFilePath
+            );
+            if (
+                decrypted.Succeeded
+                && !string.IsNullOrWhiteSpace(decrypted.PlainText)
+            )
             {
-                return;
+                if (decrypted.Format == SecretProtectionFormat.Current)
+                {
+                    return new BearerTokenProtectionResult(
+                        decrypted.PlainText,
+                        storedValue,
+                        false
+                    );
+                }
+
+                return new BearerTokenProtectionResult(
+                    decrypted.PlainText,
+                    ApiKeyProtection.Encrypt(
+                        decrypted.PlainText,
+                        secretProtectionKeyFilePath
+                    ),
+                    true
+                );
             }
 
-            _settings.Save(
-                current with { ApiServerBearerToken = ApiKeyProtection.Encrypt(decryptedToken) }
-            );
-            return;
+            // Pre-encryption builds stored the generated token as plaintext hex. That decodes to
+            // a CBC-shaped envelope that cannot be authenticated, and rotating it would break
+            // external clients already holding the token, so re-protect it instead.
+            if (LegacyPlaintextTokenRegex().IsMatch(storedValue))
+            {
+                return new BearerTokenProtectionResult(
+                    storedValue,
+                    ApiKeyProtection.Encrypt(storedValue, secretProtectionKeyFilePath),
+                    true
+                );
+            }
         }
 
         var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        _settings.Save(current with { ApiServerBearerToken = ApiKeyProtection.Encrypt(token) });
+        return new BearerTokenProtectionResult(
+            token,
+            ApiKeyProtection.Encrypt(token, secretProtectionKeyFilePath),
+            true
+        );
     }
 
     private bool IsAuthorized(HttpListenerRequest request)
     {
-        var expectedToken = ReadBearerToken(_settings.Current);
+        var expectedToken = ReadBearerToken(
+            _settings.Current,
+            _secretProtectionKeyFilePath
+        );
         if (string.IsNullOrWhiteSpace(expectedToken))
         {
             return false;
@@ -1398,6 +1491,9 @@ public sealed class HttpApiService : IDisposable
                || string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase)
                || string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase);
     }
+
+    [GeneratedRegex("^[0-9A-Fa-f]{64}$")]
+    private static partial Regex LegacyPlaintextTokenRegex();
 
     private sealed record TranscriptionRunOptions(
         string? Language,

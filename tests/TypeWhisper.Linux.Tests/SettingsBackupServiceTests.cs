@@ -1,4 +1,6 @@
 using System.IO.Compression;
+using System.Runtime.Versioning;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Moq;
 using TypeWhisper.Core.Interfaces;
@@ -12,6 +14,7 @@ using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
 
+[SupportedOSPlatform("linux")]
 public sealed class SettingsBackupServiceTests : IDisposable
 {
     private static readonly JsonSerializerOptions s_indentedJson = new() { WriteIndented = true };
@@ -91,6 +94,129 @@ public sealed class SettingsBackupServiceTests : IDisposable
         Assert.DoesNotContain("Models/large.bin", entries);
         Assert.DoesNotContain("Audio/capture.wav", entries);
         Assert.DoesNotContain("Logs/app.log", entries);
+        Assert.DoesNotContain("secret-protection.key", entries);
+    }
+
+    [Fact]
+    public void CreateBackup_MigratesPluginSecretBeforeArchivingIt()
+    {
+        var appData = Path.Join(_tempDir, "migration-app-data");
+        var backupPath = Path.Join(_tempDir, "migration-backup.zip");
+        var pluginSettingsPath = Path.Join(
+            appData,
+            "PluginData",
+            "com.test.plugin",
+            "settings.json"
+        );
+        var legacy = ApiKeyProtectionTests.EncryptLegacyGcm("plugin-secret");
+        Write(Path.Join(appData, "settings.json"), "{}");
+        Write(
+            pluginSettingsPath,
+            JsonSerializer.Serialize(
+                new Dictionary<string, string> { ["secret:api-key"] = legacy }
+            )
+        );
+
+        new SettingsBackupService(appData).CreateBackup(backupPath);
+
+        using var archive = ZipFile.OpenRead(backupPath);
+        var entry = Assert.Single(
+            archive.Entries,
+            candidate =>
+                candidate.FullName
+                == "PluginData/com.test.plugin/settings.json"
+        );
+        using var reader = new StreamReader(entry.Open());
+        using var document = JsonDocument.Parse(reader.ReadToEnd());
+        var stored = document.RootElement
+            .GetProperty("secret:api-key")
+            .GetString()!;
+        var envelope = Convert.FromBase64String(stored);
+        var decrypted = ApiKeyProtection.Decrypt(
+            stored,
+            Path.Join(appData, "secret-protection.key")
+        );
+
+        Assert.NotEqual(legacy, stored);
+        Assert.Equal("TWSP"u8.ToArray(), envelope[..4]);
+        Assert.Equal(2, envelope[4]);
+        Assert.Equal(SecretProtectionFormat.Current, decrypted.Format);
+        Assert.Equal("plugin-secret", decrypted.PlainText);
+        Assert.Null(archive.GetEntry("secret-protection.key"));
+    }
+
+    [Fact]
+    public void CreateBackup_UndecryptableRecognizedSecretRefusesArchive()
+    {
+        var appData = Path.Join(_tempDir, "blocked-app-data");
+        var backupPath = Path.Join(_tempDir, "blocked-backup.zip");
+        var tampered = Convert.FromBase64String(
+            ApiKeyProtectionTests.EncryptLegacyGcm("provider-secret")
+        );
+        tampered[^1] ^= 0x10;
+        Write(
+            Path.Join(appData, "settings.json"),
+            JsonSerializer.Serialize(
+                new Dictionary<string, string>
+                {
+                    ["groqApiKey"] = Convert.ToBase64String(tampered),
+                }
+            )
+        );
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            new SettingsBackupService(appData).CreateBackup(backupPath)
+        );
+
+        Assert.Contains("protected secret", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(backupPath));
+        Assert.False(File.Exists(backupPath + ".tmp"));
+    }
+
+    [Fact]
+    public void CreateBackup_UninspectablePluginSettingsRefusesArchive()
+    {
+        var appData = Path.Join(_tempDir, "corrupt-plugin-app-data");
+        var backupPath = Path.Join(_tempDir, "corrupt-plugin-backup.zip");
+        Write(Path.Join(appData, "settings.json"), "{}");
+        Write(
+            Path.Join(
+                appData,
+                "PluginData",
+                "com.test.plugin",
+                "settings.json"
+            ),
+            "{ \"secret:api-key\": "
+        );
+
+        Assert.Throws<InvalidOperationException>(() =>
+            new SettingsBackupService(appData).CreateBackup(backupPath)
+        );
+        Assert.False(File.Exists(backupPath));
+        Assert.False(File.Exists(backupPath + ".tmp"));
+    }
+
+    [Fact]
+    public void StageRestore_RejectsCraftedSecretProtectionKeyEntry()
+    {
+        var targetData = Path.Join(_tempDir, "key-restore-target");
+        var backupPath = Path.Join(_tempDir, "crafted-key-backup.zip");
+        var keyPath = Path.Join(targetData, "secret-protection.key");
+        ApiKeyProtection.Encrypt("local-secret", keyPath);
+        var localKey = File.ReadAllBytes(keyPath);
+        CreateBackupWithEntry(
+            backupPath,
+            "secret-protection.key",
+            Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+        );
+        var service = new SettingsBackupService(targetData);
+
+        Assert.Throws<InvalidDataException>(() => service.StageRestore(backupPath));
+        Assert.False(
+            File.Exists(Path.Join(service.PendingDirectoryPath, "secret-protection.key"))
+        );
+        Assert.Equal(localKey, File.ReadAllBytes(keyPath));
+        Assert.Equal(32, localKey.Length);
     }
 
     [Fact]

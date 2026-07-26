@@ -1,5 +1,8 @@
 // ReSharper disable MethodHasAsyncOverload -- synchronous File.ReadAllBytes is deliberate in these test assertions.
 using Moq;
+using System.Security.Cryptography;
+using System.Runtime.Versioning;
+using System.Text;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -129,6 +132,132 @@ public sealed class PluginHostServicesTests : IDisposable
 
         Assert.Equal("en-US", reader.GetSetting<string>("language"));
         Assert.Equal("secret-value", await reader.LoadSecretAsync("api-key"));
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public async Task StoreSecret_WritesV2EnvelopeUsingOwnerOnlyKeyFile()
+    {
+        var services = CreateServices();
+
+        await services.StoreSecretAsync("api-key", "secret-value");
+
+        var settingsPath = Path.Join(
+            _tempDir,
+            "PluginData",
+            "test-plugin",
+            "settings.json"
+        );
+        using var document = JsonDocument.Parse(File.ReadAllText(settingsPath));
+        var stored = document.RootElement
+            .GetProperty("secret:api-key")
+            .GetString()!;
+        var envelope = Convert.FromBase64String(stored);
+        var keyPath = Path.Join(_tempDir, "secret-protection.key");
+
+        Assert.Equal("TWSP"u8.ToArray(), envelope[..4]);
+        Assert.Equal(2, envelope[4]);
+        Assert.Equal(32, File.ReadAllBytes(keyPath).Length);
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            File.GetUnixFileMode(keyPath)
+        );
+    }
+
+    [Fact]
+    public async Task LoadSecret_LegacyGcmMigratesWholeFileToV2()
+    {
+        var pluginDirectory = Path.Join(_tempDir, "PluginData", "test-plugin");
+        var settingsPath = Path.Join(pluginDirectory, "settings.json");
+        Directory.CreateDirectory(pluginDirectory);
+        var firstLegacy = EncryptLegacyGcm("first-secret");
+        var secondLegacy = EncryptLegacyGcm("second-secret");
+        File.WriteAllText(
+            settingsPath,
+            JsonSerializer.Serialize(
+                new Dictionary<string, string>
+                {
+                    ["secret:first"] = firstLegacy,
+                    ["secret:second"] = secondLegacy,
+                }
+            )
+        );
+
+        var loaded = await CreateServices().LoadSecretAsync("first");
+
+        Assert.Equal("first-secret", loaded);
+        using var document = JsonDocument.Parse(File.ReadAllText(settingsPath));
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            var stored = property.Value.GetString()!;
+            Assert.NotEqual(
+                property.Name == "secret:first" ? firstLegacy : secondLegacy,
+                stored
+            );
+            var envelope = Convert.FromBase64String(stored);
+            Assert.Equal("TWSP"u8.ToArray(), envelope[..4]);
+            Assert.Equal(2, envelope[4]);
+        }
+
+        Assert.Equal(
+            "second-secret",
+            await CreateServices().LoadSecretAsync("second")
+        );
+    }
+
+    [Fact]
+    public async Task LoadSecret_UndecryptableValueReturnsNullAndPreservesCiphertext()
+    {
+        var pluginDirectory = Path.Join(_tempDir, "PluginData", "test-plugin");
+        var settingsPath = Path.Join(pluginDirectory, "settings.json");
+        Directory.CreateDirectory(pluginDirectory);
+        var tampered = Convert.FromBase64String(EncryptLegacyGcm("secret-value"));
+        tampered[^1] ^= 0x04;
+        var stored = Convert.ToBase64String(tampered);
+        File.WriteAllText(
+            settingsPath,
+            JsonSerializer.Serialize(
+                new Dictionary<string, string> { ["secret:api-key"] = stored }
+            )
+        );
+        var before = File.ReadAllBytes(settingsPath);
+
+        var loaded = await CreateServices().LoadSecretAsync("api-key");
+
+        Assert.Null(loaded);
+        Assert.Equal(before, File.ReadAllBytes(settingsPath));
+        using var document = JsonDocument.Parse(File.ReadAllText(settingsPath));
+        Assert.Equal(
+            stored,
+            document.RootElement.GetProperty("secret:api-key").GetString()
+        );
+    }
+
+    [Fact]
+    public async Task LoadSecret_AnotherUndecryptableSecretPreventsPartialLazyMigration()
+    {
+        var pluginDirectory = Path.Join(_tempDir, "PluginData", "test-plugin");
+        var settingsPath = Path.Join(pluginDirectory, "settings.json");
+        Directory.CreateDirectory(pluginDirectory);
+        var valid = EncryptLegacyGcm("valid-secret");
+        var tampered = Convert.FromBase64String(EncryptLegacyGcm("invalid-secret"));
+        tampered[^1] ^= 0x02;
+        File.WriteAllText(
+            settingsPath,
+            JsonSerializer.Serialize(
+                new Dictionary<string, string>
+                {
+                    ["secret:valid"] = valid,
+                    ["secret:invalid"] = Convert.ToBase64String(tampered),
+                }
+            )
+        );
+        var before = File.ReadAllBytes(settingsPath);
+
+        var loaded = await CreateServices().LoadSecretAsync("valid");
+
+        Assert.Null(loaded);
+        Assert.Equal(before, File.ReadAllBytes(settingsPath));
     }
 
     [Fact]
@@ -279,6 +408,42 @@ public sealed class PluginHostServicesTests : IDisposable
         Assert.Equal("secret-value", await CreateServices().LoadSecretAsync("api-key"));
     }
 
+    [Fact]
+    public async Task GetSetting_ReservedSecretKeyThrowsAndNeverReturnsCiphertext()
+    {
+        var services = CreateServices();
+        await services.StoreSecretAsync("api-key", "secret-value");
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => services.GetSetting<string>("secret:api-key")
+        );
+
+        Assert.Contains("reserved", ex.Message, StringComparison.Ordinal);
+        Assert.Equal("secret-value", await services.LoadSecretAsync("api-key"));
+    }
+
+    [Fact]
+    public async Task SetSetting_ReservedSecretKeyThrowsAndLeavesStoredSecretIntact()
+    {
+        var services = CreateServices();
+        await services.StoreSecretAsync("api-key", "secret-value");
+        var settingsPath = Path.Join(
+            _tempDir,
+            "PluginData",
+            "test-plugin",
+            "settings.json"
+        );
+        var before = File.ReadAllBytes(settingsPath);
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => services.SetSetting("secret:api-key", "plaintext-override")
+        );
+
+        Assert.Contains("reserved", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllBytes(settingsPath));
+        Assert.Equal("secret-value", await CreateServices().LoadSecretAsync("api-key"));
+    }
+
     private PluginHostServices CreateServices(
         Action? onCapabilitiesChanged = null,
         ISettingsService? settings = null
@@ -294,5 +459,37 @@ public sealed class PluginHostServicesTests : IDisposable
             onCapabilitiesChanged,
             pluginDataRoot: Path.Join(_tempDir, "PluginData")
         );
+    }
+
+    private static string EncryptLegacyGcm(string plainText)
+    {
+        var material = Encoding.UTF8.GetBytes(
+            $"{Environment.UserName}:{Environment.GetEnvironmentVariable("HOME") ?? "/"}"
+        );
+        var key = Rfc2898DeriveBytes.Pbkdf2(
+            material,
+            "TypeWhisper.ApiKey.v1.linux"u8.ToArray(),
+            10_000,
+            HashAlgorithmName.SHA256,
+            32
+        );
+        var plaintext = Encoding.UTF8.GetBytes(plainText);
+        var nonce = RandomNumberGenerator.GetBytes(12);
+        var tag = new byte[16];
+        var cipher = new byte[plaintext.Length];
+        using var aes = new AesGcm(key, 16);
+        aes.Encrypt(nonce, plaintext, cipher, tag);
+        var combined = new byte[1 + nonce.Length + tag.Length + cipher.Length];
+        combined[0] = 1;
+        Buffer.BlockCopy(nonce, 0, combined, 1, nonce.Length);
+        Buffer.BlockCopy(tag, 0, combined, 1 + nonce.Length, tag.Length);
+        Buffer.BlockCopy(
+            cipher,
+            0,
+            combined,
+            1 + nonce.Length + tag.Length,
+            cipher.Length
+        );
+        return Convert.ToBase64String(combined);
     }
 }

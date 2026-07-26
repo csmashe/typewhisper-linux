@@ -16,6 +16,8 @@ public static class TypeWhisperEnvironment
     public static string AudioPath => Path.Join(BasePath, "Audio");
     public static string PluginDataPath => Path.Join(BasePath, "PluginData");
     public static string SettingsFilePath => Path.Join(BasePath, "settings.json");
+    public static string SecretProtectionKeyFilePath =>
+        Path.Join(BasePath, "secret-protection.key");
 
     private const UnixFileMode DirMode0700 =
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;

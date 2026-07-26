@@ -68,6 +68,59 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    public void Catalogs_HaveSecretProtectionWarningsWithRequiredPlaceholder(
+        string language
+    )
+    {
+        var catalog = Load(language);
+        var keys = new[]
+        {
+            "Security.BackupBlockedByUnresolvedSecrets",
+            "Security.SecretMigrationWarning",
+            "Security.SecretMigrationWarningTitle",
+            "Security.SecretProtectionUnavailable",
+        };
+
+        foreach (var key in keys)
+        {
+            Assert.True(
+                catalog.TryGetValue(key, out var value),
+                $"Missing {language} key: {key}"
+            );
+            Assert.False(
+                string.IsNullOrWhiteSpace(value),
+                $"{language} key is empty: {key}"
+            );
+        }
+
+        Assert.Contains(
+            "{0}",
+            catalog["Security.BackupBlockedByUnresolvedSecrets"],
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "{0}",
+            catalog["Security.SecretMigrationWarning"],
+            StringComparison.Ordinal
+        );
+
+        if (language == CanonicalLanguage)
+        {
+            return;
+        }
+
+        var en = Load(CanonicalLanguage);
+        foreach (var key in keys)
+        {
+            Assert.NotEqual(en[key], catalog[key]);
+        }
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
     public void Catalogs_HaveRecentTranscriptionFeedbackStringsWithRequiredPlaceholders(
         string language
     )
