@@ -139,6 +139,41 @@ public sealed class ClaudePluginTests
         Assert.Equal("Overloaded", ex.Message);
     }
 
+    [Fact]
+    public async Task ProcessStreamingAsync_ThrowsWhenEofPrecedesMessageStop()
+    {
+        var sse = string.Join(
+            "\n",
+            "event: content_block_delta",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}",
+            "");
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-ant-test" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new ClaudePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync(
+                "system", "user", "model", CancellationToken.None))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Equal(["partial"], chunks);
+        Assert.Equal(
+            "Anthropic stream ended before a message_stop event was received.",
+            ex.Message);
+    }
+
     [Theory]
     [InlineData("""{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}""", "hi")]
     [InlineData("""{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{"}}""", null)]

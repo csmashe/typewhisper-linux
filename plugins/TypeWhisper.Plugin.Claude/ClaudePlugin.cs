@@ -168,8 +168,9 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
         using var reader = new StreamReader(stream);
 
         // The Anthropic Messages stream has no [DONE] sentinel; it ends with a
-        // message_stop frame and then EOF, so the loop runs until ReadLineAsync
-        // returns null.
+        // message_stop frame and then EOF. Treat that frame as the semantic
+        // success marker so a truncated stream cannot commit its partial text.
+        var receivedMessageStop = false;
         while (await reader.ReadLineAsync(ct) is { } rawLine)
         {
             var line = rawLine.Trim();
@@ -185,8 +186,33 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
             if (ParseStreamError(payload) is { } error)
                 throw new InvalidOperationException(error);
 
+            if (IsMessageStop(payload))
+                receivedMessageStop = true;
+
             if (ParseStreamDelta(payload) is { Length: > 0 } delta)
                 yield return delta;
+        }
+
+        if (!receivedMessageStop)
+        {
+            throw new InvalidOperationException(
+                "Anthropic stream ended before a message_stop event was received.");
+        }
+    }
+
+    private static bool IsMessageStop(string dataPayload)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(dataPayload);
+            var root = doc.RootElement;
+            return root.TryGetProperty("type", out var type)
+                && type.ValueKind == JsonValueKind.String
+                && type.GetString() == "message_stop";
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 
