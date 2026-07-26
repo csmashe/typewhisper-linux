@@ -1,3 +1,5 @@
+// ReSharper disable ArrangeObjectCreationWhenTypeNotEvident -- target-typed `new(...)` inside collection
+// expressions and record construction is the prevailing style across this codebase.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -69,6 +71,33 @@ public class App : Application
             Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(settings.Current.UiLanguage);
             BootTrace.Stage("Loc.Initialize");
 
+            var secretMigration = services.GetRequiredService<SecretProtectionMigrationService>();
+            var secretMigrationResult = secretMigration.MigrateAll();
+            if (secretMigrationResult.RootSettingsChanged)
+            {
+                settings.Load();
+            }
+
+            string? secretMigrationWarning = null;
+            if (secretMigrationResult.HasUnresolvedSecrets)
+            {
+                secretMigrationWarning = Loc.Instance.GetString(
+                    "Security.SecretMigrationWarning",
+                    secretMigrationResult.UnresolvedSecretCount
+                );
+                var startupErrorLog = services.GetRequiredService<IErrorLogService>();
+                if (
+                    startupErrorLog.Entries.All(
+                        entry => entry.Message != secretMigrationWarning
+                    )
+                )
+                {
+                    startupErrorLog.AddEntry(secretMigrationWarning);
+                }
+            }
+
+            BootTrace.Stage("secret protection migration");
+
             var uiOperations = services.GetRequiredService<UiOperationGuard>();
             Dispatcher.UIThread.UnhandledException += (sender, args) =>
             {
@@ -114,6 +143,25 @@ public class App : Application
             var main = services.GetRequiredService<MainWindow>();
             desktop.MainWindow = main;
             BootTrace.Stage("MainWindow constructed");
+            if (secretMigrationWarning is not null)
+            {
+                var warningShown = false;
+                main.Opened += async (_, _) =>
+                {
+                    if (warningShown)
+                    {
+                        return;
+                    }
+
+                    warningShown = true;
+                    var dialog = new MessageDialogWindow();
+                    await dialog.ShowMessageAsync(
+                        Loc.Instance["Security.SecretMigrationWarningTitle"],
+                        secretMigrationWarning
+                    );
+                };
+            }
+
             main.Opened += (_, _) => BootTrace.Stage("MainWindow.Opened fired");
             // We're up and on screen — end the desktop's "launching" busy
             // cursor. Avalonia never completes the startup-notification
@@ -1014,6 +1062,8 @@ public class App : Application
                 string? skippedDueTo = null;
                 foreach (var dependency in stage.Dependencies)
                 {
+                    // ReSharper disable once InvertIf -- the positive form states the skip condition
+                    // directly; inverting it into a `continue` guard reads worse here.
                     if (
                         !outcomesByName.TryGetValue(dependency, out var dependencyOutcome)
                         || dependencyOutcome.Status != BootstrapStageStatus.Succeeded
@@ -1067,6 +1117,8 @@ public class App : Application
             }
 
             var report = new BootstrapReport(outcomes);
+            // ReSharper disable once ConvertIfStatementToReturnStatement -- the suggested
+            // `return cond ? throw ... : report;` obscures the failure path.
             if (report.RequiredFailures.Count > 0)
             {
                 throw new RequiredBootstrapStageException(report);

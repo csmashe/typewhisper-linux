@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 
 namespace TypeWhisper.Core.Services;
 
@@ -91,6 +92,61 @@ public static partial class AtomicFileWrite
     public static void WriteAllBytesCreateNew(string path, byte[] bytes)
     {
         WriteCore(path, replaceExisting: false, tempPath => File.WriteAllBytes(tempPath, bytes));
+    }
+
+    /// <summary>
+    ///     Atomically creates <paramref name="path" /> with complete byte content and the
+    ///     requested Unix mode already set when the destination becomes visible.
+    /// </summary>
+    public static void WriteAllBytesCreateNew(
+        string path,
+        byte[] bytes,
+        UnixFileMode unixCreateMode
+    )
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException(
+                "An explicit Unix create mode is not supported on Windows."
+            );
+        }
+
+        WriteAllBytesCreateNewUnix(path, bytes, unixCreateMode);
+    }
+
+    [UnsupportedOSPlatform("windows")]
+    private static void WriteAllBytesCreateNewUnix(
+        string path,
+        byte[] bytes,
+        UnixFileMode unixCreateMode
+    )
+    {
+        WriteCore(
+            path,
+            replaceExisting: false,
+            tempPath =>
+            {
+                using var stream = new FileStream(
+                    tempPath,
+                    new FileStreamOptions
+                    {
+                        Mode = FileMode.CreateNew,
+                        Access = FileAccess.Write,
+                        Share = FileShare.None,
+                        UnixCreateMode = unixCreateMode,
+                    }
+                );
+                File.SetUnixFileMode(tempPath, unixCreateMode);
+                if (File.GetUnixFileMode(tempPath) != unixCreateMode)
+                {
+                    throw new IOException(
+                        $"Could not apply Unix mode '{unixCreateMode}' to '{tempPath}'."
+                    );
+                }
+
+                stream.Write(bytes);
+            }
+        );
     }
 
     private static void WriteCore(

@@ -193,7 +193,13 @@ internal static class ServiceRegistrations
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();
         services.AddSingleton<UpdateCheckService>();
-        services.AddSingleton<SettingsBackupService>();
+        services.AddSingleton<SecretProtectionMigrationService>();
+        services.AddSingleton(sp =>
+            new SettingsBackupService(
+                TypeWhisperEnvironment.BasePath,
+                secretMigration: sp.GetRequiredService<SecretProtectionMigrationService>()
+            )
+        );
         services.AddSingleton<ApiDiscoveryFile>();
         services.AddSingleton<DictationSessionResultStore>();
         services.AddSingleton<HttpApiService>();

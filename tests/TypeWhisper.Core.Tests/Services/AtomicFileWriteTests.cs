@@ -1,9 +1,42 @@
+using System.Runtime.Versioning;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Tests;
 
 namespace TypeWhisper.Core.Tests.Services;
 
 public sealed class AtomicFileWriteTests
 {
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void WriteAllBytesCreateNew_WithUnixMode_PublishesCompleteOwnerOnlyFile()
+    {
+        var directory = TestPaths.CreateTempDirectory(
+            "TypeWhisper.AtomicFileWriteModeTests"
+        );
+        var path = Path.Join(directory, "secret-protection.key");
+        var bytes = Enumerable.Range(0, 32).Select(value => (byte)value).ToArray();
+
+        try
+        {
+            AtomicFileWrite.WriteAllBytesCreateNew(
+                path,
+                bytes,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite
+            );
+
+            Assert.Equal(bytes, File.ReadAllBytes(path));
+            Assert.Equal(
+                UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                File.GetUnixFileMode(path)
+            );
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
     [Fact]
     public void WriteAllText_ReplacesDestinationCompletely()
     {

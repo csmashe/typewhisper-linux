@@ -1,7 +1,6 @@
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using TypeWhisper.Core;
 using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services;
@@ -84,21 +83,20 @@ public sealed class SettingsBackupService
     private readonly string _basePath;
     private readonly RestoreCommitObserver? _commitObserver;
     private readonly Action? _cleanupObserver;
-
-    public SettingsBackupService()
-        : this(TypeWhisperEnvironment.BasePath)
-    {
-    }
+    private readonly SecretProtectionMigrationService _secretMigration;
 
     internal SettingsBackupService(
         string basePath,
         RestoreCommitObserver? commitObserver = null,
-        Action? cleanupObserver = null
+        Action? cleanupObserver = null,
+        SecretProtectionMigrationService? secretMigration = null
     )
     {
         _basePath = Path.GetFullPath(basePath);
         _commitObserver = commitObserver;
         _cleanupObserver = cleanupObserver;
+        _secretMigration =
+            secretMigration ?? new SecretProtectionMigrationService(_basePath);
     }
 
     internal string PendingDirectoryPath => Path.Join(_basePath, PendingDirectoryName);
@@ -108,6 +106,17 @@ public sealed class SettingsBackupService
         if (string.IsNullOrWhiteSpace(destinationZipPath))
         {
             throw new ArgumentException("Backup path is required.", nameof(destinationZipPath));
+        }
+
+        var migration = _secretMigration.MigrateAll();
+        if (migration.HasUnresolvedSecrets)
+        {
+            throw new InvalidOperationException(
+                Loc.Instance.GetString(
+                    "Security.BackupBlockedByUnresolvedSecrets",
+                    migration.UnresolvedSecretCount
+                )
+            );
         }
 
         var destinationDirectory = Path.GetDirectoryName(destinationZipPath);

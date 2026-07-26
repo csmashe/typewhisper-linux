@@ -30,6 +30,7 @@ public sealed class PluginManager : IDisposable
     private readonly ISettingsService _settings;
     private readonly TimeSpan _pluginShutdownTimeout;
     private readonly IErrorLogService? _errorLog;
+    private readonly string _secretProtectionKeyFilePath;
     private List<IActionPlugin> _actionPlugins = [];
 
     // Debounce guard for on-demand model re-polls (triggered when a dropdown opens).
@@ -69,7 +70,8 @@ public sealed class PluginManager : IDisposable
         ISettingsService settings,
         IEnumerable<string> searchDirectories,
         IErrorLogService? errorLog = null,
-        TimeSpan? pluginShutdownTimeout = null
+        TimeSpan? pluginShutdownTimeout = null,
+        string? secretProtectionKeyFilePath = null
     )
     {
         _loader = loader;
@@ -79,6 +81,16 @@ public sealed class PluginManager : IDisposable
         _settings = settings;
         _searchDirectories = searchDirectories.ToArray();
         _errorLog = errorLog;
+        _secretProtectionKeyFilePath = secretProtectionKeyFilePath
+            ?? Path.Join(
+                Directory.GetParent(
+                    Path.TrimEndingDirectorySeparator(
+                        Path.GetFullPath(_loader.PluginDataRoot)
+                    )
+                )?.FullName
+                    ?? TypeWhisperEnvironment.BasePath,
+                "secret-protection.key"
+            );
         _pluginShutdownTimeout =
             pluginShutdownTimeout ?? s_defaultPluginShutdownTimeout;
         if (_pluginShutdownTimeout <= TimeSpan.Zero)
@@ -691,7 +703,8 @@ public sealed class PluginManager : IDisposable
                 _errorLog,
                 ResolveErrorCategory(plugin),
                 plugin.Manifest.Name,
-                _loader.PluginDataRoot
+                _loader.PluginDataRoot,
+                _secretProtectionKeyFilePath
             );
 
             await plugin.Instance.ActivateAsync(hostServices);
@@ -1011,13 +1024,22 @@ public sealed class PluginManager : IDisposable
 
         try
         {
-            var decrypted = ApiKeyProtection.Decrypt(encryptedValue);
-            if (string.IsNullOrEmpty(decrypted))
+            var decrypted = ApiKeyProtection.Decrypt(
+                encryptedValue,
+                _secretProtectionKeyFilePath
+            );
+            if (
+                decrypted.Format is not (
+                    SecretProtectionFormat.Current
+                    or SecretProtectionFormat.LegacyGcm
+                )
+                || string.IsNullOrEmpty(decrypted.PlainText)
+            )
             {
                 return false;
             }
 
-            await hostServices.StoreSecretAsync(secretKey, decrypted);
+            await hostServices.StoreSecretAsync(secretKey, decrypted.PlainText);
             Trace.WriteLine($"[PluginManager] Migrated API key to plugin: {pluginId}");
             return true;
         }

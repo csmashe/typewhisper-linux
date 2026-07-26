@@ -36,6 +36,7 @@ public sealed class PluginHostServices : IPluginHostServices
 
     private readonly string _pluginId;
     private readonly IProfileService _profiles;
+    private readonly string _secretProtectionKeyFilePath;
     private readonly string _settingsFilePath;
     private readonly Lock _settingsLock = new();
 
@@ -53,7 +54,8 @@ public sealed class PluginHostServices : IPluginHostServices
         IErrorLogService? errorLog = null,
         string? errorCategory = null,
         string? pluginDisplayName = null,
-        string? pluginDataRoot = null
+        string? pluginDataRoot = null,
+        string? secretProtectionKeyFilePath = null
     )
     {
         _pluginId = pluginId;
@@ -70,6 +72,10 @@ public sealed class PluginHostServices : IPluginHostServices
         _pluginDataRoot = pluginDataRoot ?? TypeWhisperEnvironment.PluginDataPath;
         _pluginDataDirectory = Path.Join(_pluginDataRoot, pluginId);
         _settingsFilePath = Path.Join(_pluginDataDirectory, "settings.json");
+        _secretProtectionKeyFilePath = ResolveSecretProtectionKeyFilePath(
+            _pluginDataRoot,
+            secretProtectionKeyFilePath
+        );
     }
 
     public string PluginDataDirectory
@@ -142,7 +148,7 @@ public sealed class PluginHostServices : IPluginHostServices
 
     public Task StoreSecretAsync(string key, string value)
     {
-        var encrypted = ApiKeyProtection.Encrypt(value);
+        var encrypted = ApiKeyProtection.Encrypt(value, _secretProtectionKeyFilePath);
         lock (_settingsLock)
         {
             var current = LoadSettings();
@@ -159,16 +165,95 @@ public sealed class PluginHostServices : IPluginHostServices
 
     public Task<string?> LoadSecretAsync(string key)
     {
-        string? encrypted;
         lock (_settingsLock)
         {
             var settings = LoadSettings();
-            encrypted = settings.TryGetValue($"{SecretPrefix}{key}", out var element)
-                ? element.Deserialize<string>()
-                : null;
-        }
+            if (!settings.TryGetValue($"{SecretPrefix}{key}", out var element))
+            {
+                return Task.FromResult<string?>(null);
+            }
 
-        return Task.FromResult(encrypted is null ? null : ApiKeyProtection.Decrypt(encrypted));
+            string? encrypted;
+            try
+            {
+                encrypted = element.Deserialize<string>();
+            }
+            catch (JsonException ex)
+            {
+                LogSecretUnavailable(key, ex.Message);
+                return Task.FromResult<string?>(null);
+            }
+
+            if (encrypted is null)
+            {
+                return Task.FromResult<string?>(null);
+            }
+
+            var requested = ApiKeyProtection.Decrypt(
+                encrypted,
+                _secretProtectionKeyFilePath
+            );
+            if (!requested.Succeeded)
+            {
+                LogSecretUnavailable(key, "the protected value could not be authenticated");
+                return Task.FromResult<string?>(null);
+            }
+
+            if (!requested.RequiresMigration)
+            {
+                return Task.FromResult(requested.PlainText);
+            }
+
+            try
+            {
+                var next = new Dictionary<string, JsonElement>(settings);
+                foreach (var property in settings)
+                {
+                    if (!property.Key.StartsWith(SecretPrefix, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var stored = property.Value.Deserialize<string>();
+                    if (stored is null)
+                    {
+                        continue;
+                    }
+
+                    var result = ApiKeyProtection.Decrypt(
+                        stored,
+                        _secretProtectionKeyFilePath
+                    );
+                    if (!result.Succeeded || result.PlainText is null)
+                    {
+                        LogSecretUnavailable(
+                            key,
+                            $"'{property.Key}' could not be authenticated"
+                        );
+                        return Task.FromResult<string?>(null);
+                    }
+
+                    if (result.RequiresMigration)
+                    {
+                        next[property.Key] = JsonSerializer.SerializeToElement(
+                            ApiKeyProtection.Encrypt(
+                                result.PlainText,
+                                _secretProtectionKeyFilePath
+                            )
+                        );
+                    }
+                }
+
+                SaveSettings(next);
+                _settingsCache = next;
+                return Task.FromResult(requested.PlainText);
+            }
+            catch (Exception ex)
+            {
+                LogSecretUnavailable(key, $"migration failed: {ex.Message}");
+                return Task.FromResult<string?>(null);
+            }
+        }
     }
 
     public Task DeleteSecretAsync(string key)
@@ -198,6 +283,7 @@ public sealed class PluginHostServices : IPluginHostServices
 
     public T? GetSetting<T>(string key)
     {
+        ThrowIfReservedSecretKey(key);
         lock (_settingsLock)
         {
             var settings = LoadSettings();
@@ -222,6 +308,7 @@ public sealed class PluginHostServices : IPluginHostServices
 
     public void SetSetting<T>(string key, T value)
     {
+        ThrowIfReservedSecretKey(key);
         lock (_settingsLock)
         {
             var current = LoadSettings();
@@ -231,6 +318,19 @@ public sealed class PluginHostServices : IPluginHostServices
             };
             SaveSettings(next);
             _settingsCache = next;
+        }
+    }
+
+    // The generic accessors share the settings dictionary with the secret store, so they must
+    // not read raw ciphertext back out or write plaintext into it behind the encryption.
+    private static void ThrowIfReservedSecretKey(string key)
+    {
+        if (key.StartsWith(SecretPrefix, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "The 'secret:' key namespace is reserved for StoreSecretAsync/LoadSecretAsync.",
+                nameof(key)
+            );
         }
     }
 
@@ -321,6 +421,34 @@ public sealed class PluginHostServices : IPluginHostServices
             );
             throw;
         }
+    }
+
+    private void LogSecretUnavailable(string key, string reason)
+    {
+        var message =
+            $"Plugin '{_pluginDisplayName}' ({_pluginId}) secret '{key}' is unavailable: {reason}.";
+        Trace.WriteLine($"[Plugin:{_pluginId}] {message}");
+        AddSettingsError(message);
+    }
+
+    private static string ResolveSecretProtectionKeyFilePath(
+        string pluginDataRoot,
+        string? secretProtectionKeyFilePath
+    )
+    {
+        if (!string.IsNullOrWhiteSpace(secretProtectionKeyFilePath))
+        {
+            return Path.GetFullPath(secretProtectionKeyFilePath);
+        }
+
+        var fullPluginDataRoot = Path.GetFullPath(pluginDataRoot);
+        var basePath = Directory.GetParent(
+            Path.TrimEndingDirectorySeparator(fullPluginDataRoot)
+        )?.FullName;
+        return Path.Join(
+            basePath ?? TypeWhisperEnvironment.BasePath,
+            "secret-protection.key"
+        );
     }
 
     [DoesNotReturn]

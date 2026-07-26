@@ -161,6 +161,52 @@ public sealed class PluginManagerTests : IDisposable
         Assert.True(eventFired);
     }
 
+    [Fact]
+    public async Task LegacyRootKey_AuthenticatedAndPersisted_ClearsRootField()
+    {
+        var keyPath = Path.Join(_pluginSearchDir, "secret-protection.key");
+        var protectedValue = ApiKeyProtection.Encrypt("provider-secret", keyPath);
+        var current = new AppSettings { GroqApiKey = protectedValue };
+        _settings.Setup(settings => settings.Current).Returns(() => current);
+        _settings
+            .Setup(settings => settings.Save(It.IsAny<AppSettings>()))
+            .Callback<AppSettings>(saved => current = saved);
+        var manager = CreateManager();
+        AddPluginHost(manager, "com.typewhisper.groq", keyPath);
+
+        await InvokeRootKeyMigration(manager);
+
+        Assert.Equal("", current.GroqApiKey);
+        var host = GetPluginHosts(manager)["com.typewhisper.groq"];
+        Assert.Equal("provider-secret", await host.LoadSecretAsync("api-key"));
+    }
+
+    [Fact]
+    public async Task LegacyRootKey_Undecryptable_DoesNotClearOrPersistCiphertext()
+    {
+        var keyPath = Path.Join(_pluginSearchDir, "secret-protection.key");
+        var protectedValue = ApiKeyProtection.Encrypt("provider-secret", keyPath);
+        var tampered = Convert.FromBase64String(protectedValue);
+        tampered[^1] ^= 0x01;
+        var stored = Convert.ToBase64String(tampered);
+        var current = new AppSettings { GroqApiKey = stored };
+        _settings.Setup(settings => settings.Current).Returns(() => current);
+        _settings
+            .Setup(settings => settings.Save(It.IsAny<AppSettings>()))
+            .Callback<AppSettings>(saved => current = saved);
+        var manager = CreateManager();
+        AddPluginHost(manager, "com.typewhisper.groq", keyPath);
+
+        await InvokeRootKeyMigration(manager);
+
+        Assert.Equal(stored, current.GroqApiKey);
+        Assert.Null(
+            await GetPluginHosts(manager)["com.typewhisper.groq"]
+                .LoadSecretAsync("api-key")
+        );
+        _settings.Verify(settings => settings.Save(It.IsAny<AppSettings>()), Times.Never);
+    }
+
     private PluginManager CreateManager()
     {
         _manager = new PluginManager(
@@ -172,6 +218,53 @@ public sealed class PluginManagerTests : IDisposable
             [_pluginSearchDir]
         );
         return _manager;
+    }
+
+    private void AddPluginHost(
+        PluginManager manager,
+        string pluginId,
+        string keyPath
+    )
+    {
+        GetPluginHosts(manager)[pluginId] = new PluginHostServices(
+            pluginId,
+            _pluginSearchDir,
+            _activeWindow.Object,
+            _eventBus,
+            _profiles.Object,
+            pluginDataRoot: Path.Join(_pluginSearchDir, "PluginData"),
+            secretProtectionKeyFilePath: keyPath
+        );
+    }
+
+    private static Dictionary<string, PluginHostServices> GetPluginHosts(
+        PluginManager manager
+    )
+    {
+        var field =
+            typeof(PluginManager).GetField(
+                "_hostServices",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            )
+            ?? throw new MissingFieldException(
+                typeof(PluginManager).FullName,
+                "_hostServices"
+            );
+        return (Dictionary<string, PluginHostServices>)field.GetValue(manager)!;
+    }
+
+    private static async Task InvokeRootKeyMigration(PluginManager manager)
+    {
+        var method =
+            typeof(PluginManager).GetMethod(
+                "MigrateApiKeysAsync",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            )
+            ?? throw new MissingMethodException(
+                typeof(PluginManager).FullName,
+                "MigrateApiKeysAsync"
+            );
+        await (Task)method.Invoke(manager, null)!;
     }
 }
 
@@ -393,9 +486,8 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
         var parent = new FakeAdditionalRolesPlugin("com.test.additional-owner");
         var manager = await CreateManagerAsync(parent);
 
-        IReadOnlyList<ILlmProviderRole> llmRoles = manager.LlmProviders;
-        IReadOnlyList<ITranscriptionEngineRole> transcriptionRoles =
-            manager.TranscriptionEngines;
+        var llmRoles = manager.LlmProviders;
+        var transcriptionRoles = manager.TranscriptionEngines;
         var llmRole = Assert.Single(llmRoles);
         var transcriptionRole = Assert.Single(transcriptionRoles);
 
