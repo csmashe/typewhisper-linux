@@ -24,6 +24,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     private const double SubtitleSegmentPauseSplitSeconds = 0.75;
 
     private static readonly TimeSpan s_defaultPollDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan s_defaultCleanupBudget = TimeSpan.FromSeconds(5);
 
     private static readonly IReadOnlyList<PluginModelInfo> s_models =
     [
@@ -36,6 +37,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     private readonly HttpClient _httpClient;
     private readonly TimeSpan _pollDelay;
     private readonly int _maxPollAttempts;
+    private readonly TimeSpan _cleanupBudget;
     private readonly SemaphoreSlim _apiKeyWriteLock = new(1, 1);
 
     private IPluginHostServices? _host;
@@ -49,14 +51,20 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     internal SonioxPlugin(
         HttpClient httpClient,
         TimeSpan? pollDelay = null,
-        int maxPollAttempts = DefaultMaxPollAttempts)
+        int maxPollAttempts = DefaultMaxPollAttempts,
+        TimeSpan? cleanupBudget = null)
     {
         if (maxPollAttempts <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxPollAttempts), "Poll attempts must be positive.");
 
+        var resolvedCleanupBudget = cleanupBudget ?? s_defaultCleanupBudget;
+        if (resolvedCleanupBudget <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(cleanupBudget), "Cleanup budget must be positive.");
+
         _httpClient = httpClient;
         _pollDelay = pollDelay ?? s_defaultPollDelay;
         _maxPollAttempts = maxPollAttempts;
+        _cleanupBudget = resolvedCleanupBudget;
     }
 
     // ITypeWhisperPlugin
@@ -363,38 +371,79 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
 
     private async Task CleanupAsync(string? transcriptionId, string? fileId, string apiKey)
     {
-        if (transcriptionId is not null)
-            await DeleteBestEffortAsync($"{BaseUrl}/v1/transcriptions/{transcriptionId}", "transcription", apiKey);
+        using var cleanupCts = new CancellationTokenSource(_cleanupBudget);
+        var cleanupToken = cleanupCts.Token;
 
-        if (fileId is not null)
-            await DeleteBestEffortAsync($"{BaseUrl}/v1/files/{fileId}", "file", apiKey);
+        if (transcriptionId is not null)
+        {
+            var transcriptionDeleted = await DeleteBestEffortAsync(
+                $"{BaseUrl}/v1/transcriptions/{transcriptionId}",
+                "transcription",
+                apiKey,
+                cleanupToken);
+            if (transcriptionDeleted)
+                return;
+        }
+
+        if (fileId is not null && !cleanupToken.IsCancellationRequested)
+        {
+            await DeleteBestEffortAsync(
+                $"{BaseUrl}/v1/files/{fileId}",
+                "file",
+                apiKey,
+                cleanupToken);
+        }
     }
 
-    private async Task DeleteBestEffortAsync(string uri, string resourceName, string apiKey)
+    private async Task<bool> DeleteBestEffortAsync(
+        string uri,
+        string resourceName,
+        string apiKey,
+        CancellationToken cleanupToken)
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         using var request = new HttpRequestMessage(HttpMethod.Delete, uri);
         AddAuthorization(request, apiKey);
 
         try
         {
-            using var response = await _httpClient.SendAsync(request, cts.Token);
-            if (!response.IsSuccessStatusCode)
-            {
-                var json = await response.Content.ReadAsStringAsync(cts.Token);
-                _host?.Log(
-                    PluginLogLevel.Warning,
-                    $"Soniox cleanup could not delete {resourceName}: {(int)response.StatusCode} {ExtractApiError(json)}");
-            }
+            using var response = await _httpClient.SendAsync(request, cleanupToken);
+            if (response.IsSuccessStatusCode)
+                return true;
+
+            var json = await response.Content.ReadAsStringAsync(cleanupToken);
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Soniox cleanup could not delete {resourceName}: {(int)response.StatusCode} {ExtractApiError(json)}");
         }
         catch (HttpRequestException ex)
         {
-            _host?.Log(PluginLogLevel.Warning, $"Soniox cleanup could not delete {resourceName}: {ex.Message}");
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Soniox cleanup could not delete {resourceName} because the HTTP request failed: {ex.Message}");
         }
-        catch (TaskCanceledException ex)
+        catch (TimeoutException ex)
         {
-            _host?.Log(PluginLogLevel.Warning, $"Soniox cleanup could not delete {resourceName}: {ex.Message}");
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Soniox cleanup timed out while deleting {resourceName}: {ex.Message}");
         }
+        catch (OperationCanceledException ex)
+        {
+            var reason = cleanupToken.IsCancellationRequested
+                ? "the cleanup budget expired"
+                : $"the request was canceled: {ex.Message}";
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Soniox cleanup could not delete {resourceName} because {reason}.");
+        }
+        catch (Exception ex)
+        {
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Soniox cleanup could not delete {resourceName} because an unexpected error occurred: {ex.Message}");
+        }
+
+        return false;
     }
 
     internal static PluginTranscriptionResult ParseTranscript(
