@@ -18,12 +18,23 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
 
     private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
+    private readonly HttpClient _httpClient;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private IPluginHostServices? _host;
     private string? _apiKey;
     private string? _filePath;
     private List<VectorMemoryEntry>? _entries;
+
+    // ReSharper disable once UnusedMember.Global -- the host instantiates the plugin through this public parameterless constructor via reflection, which the analyzer cannot see.
+    public OpenAiVectorMemoryPlugin()
+        : this(new HttpClientHandler())
+    {
+    }
+
+    internal OpenAiVectorMemoryPlugin(HttpMessageHandler handler)
+    {
+        _httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
+    }
 
     public string PluginId => "com.typewhisper.openai-vector-memory";
     public string PluginName => "OpenAI Vector Memory";
@@ -118,8 +129,19 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
             }
 
             var embedding = await GetEmbeddingAsync(content, ct);
+            var snapshot = new List<VectorMemoryEntry>(entries);
             entries.Add(new VectorMemoryEntry(content, embedding, DateTime.UtcNow));
-            await SaveEntriesAsync(ct);
+
+            try
+            {
+                await SaveEntriesAsync(ct);
+            }
+            catch
+            {
+                _entries = snapshot;
+                throw;
+            }
+
             _host?.Log(PluginLogLevel.Debug, $"Stored vector memory (total={entries.Count})");
         }
         finally
