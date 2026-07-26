@@ -58,6 +58,9 @@ jobs:
       - name: Test TypeWhisper.Linux
         run: dotnet test tests/TypeWhisper.Linux.Tests/TypeWhisper.Linux.Tests.csproj -c Release --no-build --logger "trx;LogFileName=TypeWhisper.Linux.Tests.trx" --results-directory artifacts/test-results
 
+      - name: Test TypeWhisper.Cli
+        run: dotnet test tests/TypeWhisper.Cli.Tests/TypeWhisper.Cli.Tests.csproj -c Release --no-build --logger "trx;LogFileName=TypeWhisper.Cli.Tests.trx" --results-directory artifacts/test-results
+
       - uses: actions/upload-artifact@v7
         if: always()
         with:
