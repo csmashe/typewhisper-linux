@@ -17,7 +17,7 @@ internal static class LinuxLiveTranscriptionStartupPolicy
 {
     public static LiveTranscriptionMode Select(
         AppSettings settings,
-        ITranscriptionEnginePlugin? plugin)
+        ITranscriptionEngineRole? plugin)
     {
         if (!settings.LiveTranscriptionEnabled || plugin is null)
         {

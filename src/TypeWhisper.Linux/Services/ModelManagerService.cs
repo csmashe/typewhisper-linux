@@ -92,7 +92,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public ITranscriptionEnginePlugin? ActiveTranscriptionPlugin => GetTranscriptionPlugin(_activeModelId);
+    public ITranscriptionEngineRole? ActiveTranscriptionPlugin => GetTranscriptionPlugin(_activeModelId);
 
     /// <summary>
     ///     Resolves the transcription plugin that owns <paramref name="modelId" /> (a
@@ -100,7 +100,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     ///     plugin model or no matching engine is loaded. Lets callers target the engine for
     ///     a specific (e.g. UI-selected) model rather than only the active one.
     /// </summary>
-    public ITranscriptionEnginePlugin? GetTranscriptionPlugin(string? modelId)
+    public ITranscriptionEngineRole? GetTranscriptionPlugin(string? modelId)
     {
         if (modelId is null || !IsPluginModel(modelId))
         {
@@ -1004,7 +1004,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
         internal TranscriptionLease(
             SemaphoreSlim modelLock,
-            ITranscriptionEnginePlugin plugin,
+            ITranscriptionEngineRole plugin,
             ModelManagerService owner,
             bool keepModelWarm
         )
@@ -1016,7 +1016,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
 
         /// <summary>The plugin pinned for the lifetime of this lease.</summary>
-        public ITranscriptionEnginePlugin Plugin { get; }
+        public ITranscriptionEngineRole Plugin { get; }
 
         public ValueTask DisposeAsync()
         {
@@ -1074,9 +1074,9 @@ internal sealed class NoOpTranscriptionEngine : ITranscriptionEngine
 
 internal sealed class PluginTranscriptionEngineAdapter : ITranscriptionEngine
 {
-    private readonly ITranscriptionEnginePlugin _plugin;
+    private readonly ITranscriptionEngineRole _plugin;
 
-    public PluginTranscriptionEngineAdapter(ITranscriptionEnginePlugin plugin)
+    public PluginTranscriptionEngineAdapter(ITranscriptionEngineRole plugin)
     {
         _plugin = plugin;
     }

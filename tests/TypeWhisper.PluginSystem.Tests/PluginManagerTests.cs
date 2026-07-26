@@ -388,6 +388,32 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
     }
 
     [Fact]
+    public async Task CapabilityIndices_AdditionalNonOwningRolesSurfaceAndRemainStableAcrossRebuilds()
+    {
+        var parent = new FakeAdditionalRolesPlugin("com.test.additional-owner");
+        var manager = await CreateManagerAsync(parent);
+
+        IReadOnlyList<ILlmProviderRole> llmRoles = manager.LlmProviders;
+        IReadOnlyList<ITranscriptionEngineRole> transcriptionRoles =
+            manager.TranscriptionEngines;
+        var llmRole = Assert.Single(llmRoles);
+        var transcriptionRole = Assert.Single(transcriptionRoles);
+
+        Assert.Same(parent.Role, llmRole);
+        Assert.Same(parent.Role, transcriptionRole);
+        Assert.False(
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalse -- the static always-false is the invariant under test: a non-owning additional role must never also implement the owning-plugin interface.
+            // ReSharper disable once CanSimplifyIsAssignableFrom -- the runtime reflection form is deliberate so a future type that breaks the ownership contract fails this assertion.
+            typeof(ITypeWhisperPlugin).IsAssignableFrom(parent.Role.GetType())
+        );
+
+        parent.NotifyCapabilitiesChanged();
+
+        Assert.Same(llmRole, Assert.Single(manager.LlmProviders));
+        Assert.Same(transcriptionRole, Assert.Single(manager.TranscriptionEngines));
+    }
+
+    [Fact]
     public async Task Dispose_HangingDeactivation_ReturnsAndShutsDownLaterPlugin()
     {
         var hangingPlugin = new HangingDeactivationPlugin("com.test.hanging");
@@ -547,11 +573,80 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
         public string PluginName => PluginId;
         public string PluginVersion => "1.0.0";
 
-        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
+        public virtual Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
 
         public Task DeactivateAsync() => Task.CompletedTask;
 
         public void Dispose() { }
+    }
+
+    private sealed class FakeAdditionalRolesPlugin(string pluginId)
+        : FakeCapabilityPlugin(pluginId),
+            IAdditionalLlmProvidersProvider,
+            IAdditionalTranscriptionEnginesProvider
+    {
+        private IPluginHostServices? _host;
+
+        public FakeAdditionalRole Role { get; } = new(pluginId);
+        public IReadOnlyList<ILlmProviderRole> AdditionalLlmProviders => [Role];
+        public IReadOnlyList<ITranscriptionEngineRole> AdditionalTranscriptionEngines => [Role];
+
+        public override Task ActivateAsync(IPluginHostServices host)
+        {
+            _host = host;
+            return Task.CompletedTask;
+        }
+
+        public void NotifyCapabilitiesChanged()
+        {
+            _host?.NotifyCapabilitiesChanged();
+        }
+    }
+
+    private sealed class FakeAdditionalRole(string ownerPluginId)
+        : ILlmProviderRole,
+            ITranscriptionEngineRole,
+            ILlmProviderSelectionIdentity,
+            ITranscriptionEngineSelectionIdentity
+    {
+        public string PluginId { get; } = ownerPluginId;
+        public string LlmSelectionId => "additional-llm";
+        public string TranscriptionSelectionId => "additional-transcription";
+        public string ProviderName => "Additional LLM";
+        public bool IsAvailable => true;
+        public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
+            [new("llm-model", "LLM model")];
+        public string ProviderId => TranscriptionSelectionId;
+        public string ProviderDisplayName => "Additional transcription";
+        public bool IsConfigured => true;
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
+            [new("transcription-model", "Transcription model")];
+        // ReSharper disable once ReturnTypeCanBeNotNullable -- implements ITranscriptionEngineRole.SelectedModelId, whose contract is nullable.
+        public string? SelectedModelId => TranscriptionModels[0].Id;
+        public bool SupportsTranslation => false;
+
+        public Task<string> ProcessAsync(
+            string systemPrompt,
+            string userText,
+            string model,
+            CancellationToken ct
+        )
+        {
+            return Task.FromResult("");
+        }
+
+        public void SelectModel(string modelId) { }
+
+        public Task<PluginTranscriptionResult> TranscribeAsync(
+            byte[] wavAudio,
+            string? language,
+            bool translate,
+            string? prompt,
+            CancellationToken ct
+        )
+        {
+            return Task.FromResult(new PluginTranscriptionResult("", null, 0, null));
+        }
     }
 
     private class FakeTranscriptionPlugin(string pluginId)

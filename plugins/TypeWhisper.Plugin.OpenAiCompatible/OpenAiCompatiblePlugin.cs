@@ -37,6 +37,13 @@ public sealed class OpenAiCompatiblePlugin
     private bool _streamResponses = true;
     private readonly List<OpenAiCompatibleProfile> _additionalProfiles = [];
     private readonly Dictionary<string, string?> _additionalApiKeys = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, OpenAiCompatibleProfileRole> _profileRoles =
+        new(StringComparer.Ordinal);
+
+    // Guards _profileRoles: the capability getters populate it lazily (a read that
+    // mutates) while model-selection, catalog refresh, and invalidation remove from it,
+    // and these run on different threads (host capability rebuilds vs. UI/async paths).
+    private readonly Lock _profileRolesLock = new();
 
     public OpenAiCompatiblePlugin()
         : this(new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
@@ -500,6 +507,11 @@ public sealed class OpenAiCompatiblePlugin
                 continue;
 
             profile.FetchedModels = models;
+            lock (_profileRolesLock)
+            {
+                _profileRoles.Remove(profile.Id);
+            }
+
             anyProfileChanged = true;
         }
 
@@ -535,14 +547,14 @@ public sealed class OpenAiCompatiblePlugin
     // endpoints, each surfaced as its own selectable transcription engine / LLM
     // provider via OpenAiCompatibleProfileRole and the selection-identity scheme.
 
-    public IReadOnlyList<ITranscriptionEnginePlugin> AdditionalTranscriptionEngines =>
+    public IReadOnlyList<ITranscriptionEngineRole> AdditionalTranscriptionEngines =>
         _additionalProfiles
-            .Select(ITranscriptionEnginePlugin (p) => new OpenAiCompatibleProfileRole(this, p.Id))
+            .Select(ITranscriptionEngineRole (profile) => GetProfileRole(profile.Id))
             .ToList();
 
-    public IReadOnlyList<ILlmProviderPlugin> AdditionalLlmProviders =>
+    public IReadOnlyList<ILlmProviderRole> AdditionalLlmProviders =>
         _additionalProfiles
-            .Select(ILlmProviderPlugin (p) => new OpenAiCompatibleProfileRole(this, p.Id))
+            .Select(ILlmProviderRole (profile) => GetProfileRole(profile.Id))
             .ToList();
 
     public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions() =>
@@ -701,6 +713,7 @@ public sealed class OpenAiCompatiblePlugin
                 profile.FetchedModels = models;
         }
 
+        InvalidateChangedProfileRoles(previousById, keyUpdates.Keys);
         PersistAdditionalProfiles(notify: true);
 
         return new PluginSettingsValidationResult(true, $"Saved {_additionalProfiles.Count} profile(s).");
@@ -746,7 +759,16 @@ public sealed class OpenAiCompatiblePlugin
         if (profile is null)
             return;
 
-        profile.SelectedModelId = string.IsNullOrWhiteSpace(modelId) ? null : modelId.Trim();
+        var selectedModelId = string.IsNullOrWhiteSpace(modelId) ? null : modelId.Trim();
+        if (string.Equals(profile.SelectedModelId, selectedModelId, StringComparison.Ordinal))
+            return;
+
+        profile.SelectedModelId = selectedModelId;
+        lock (_profileRolesLock)
+        {
+            _profileRoles.Remove(id);
+        }
+
         PersistAdditionalProfiles(notify: false);
     }
 
@@ -848,6 +870,8 @@ public sealed class OpenAiCompatiblePlugin
 
     private async Task LoadAdditionalProfilesAsync(IPluginHostServices host)
     {
+        var previousById = _additionalProfiles.ToDictionary(p => p.Id, StringComparer.Ordinal);
+        var previousApiKeys = new Dictionary<string, string?>(_additionalApiKeys, StringComparer.Ordinal);
         _additionalProfiles.Clear();
         _additionalApiKeys.Clear();
 
@@ -872,6 +896,17 @@ public sealed class OpenAiCompatiblePlugin
             if (!string.IsNullOrEmpty(key))
                 _additionalApiKeys[profile.Id] = key;
         }
+
+        var changedApiKeyIds = previousApiKeys
+            .Keys.Union(_additionalApiKeys.Keys, StringComparer.Ordinal)
+            .Where(id =>
+                !string.Equals(
+                    previousApiKeys.GetValueOrDefault(id),
+                    _additionalApiKeys.GetValueOrDefault(id),
+                    StringComparison.Ordinal
+                )
+            );
+        InvalidateChangedProfileRoles(previousById, changedApiKeyIds);
     }
 
     private void PersistAdditionalProfiles(bool notify)
@@ -933,6 +968,61 @@ public sealed class OpenAiCompatiblePlugin
     private string? GetProfileApiKey(string id) =>
         _additionalApiKeys.GetValueOrDefault(id);
 
+    private OpenAiCompatibleProfileRole GetProfileRole(string id)
+    {
+        lock (_profileRolesLock)
+        {
+            if (!_profileRoles.TryGetValue(id, out var role))
+            {
+                role = new OpenAiCompatibleProfileRole(this, id);
+                _profileRoles.Add(id, role);
+            }
+
+            return role;
+        }
+    }
+
+    private void InvalidateChangedProfileRoles(
+        Dictionary<string, OpenAiCompatibleProfile> previousById,
+        IEnumerable<string> changedSecretIds
+    )
+    {
+        var changedSecrets = changedSecretIds.ToHashSet(StringComparer.Ordinal);
+        var currentById = _additionalProfiles.ToDictionary(p => p.Id, StringComparer.Ordinal);
+
+        lock (_profileRolesLock)
+        {
+            foreach (var id in _profileRoles.Keys.ToList())
+            {
+                if (
+                    !previousById.TryGetValue(id, out var previous)
+                    || !currentById.TryGetValue(id, out var current)
+                    || changedSecrets.Contains(id)
+                    || !ProfilesEqual(previous, current)
+                )
+                {
+                    _profileRoles.Remove(id);
+                }
+            }
+        }
+    }
+
+    private static bool ProfilesEqual(
+        OpenAiCompatibleProfile left,
+        OpenAiCompatibleProfile right
+    )
+    {
+        return string.Equals(left.Name, right.Name, StringComparison.Ordinal)
+            && string.Equals(left.BaseUrl, right.BaseUrl, StringComparison.Ordinal)
+            && string.Equals(left.SelectedModelId, right.SelectedModelId, StringComparison.Ordinal)
+            && string.Equals(
+                left.SelectedLlmModelId,
+                right.SelectedLlmModelId,
+                StringComparison.Ordinal
+            )
+            && left.FetchedModels.SequenceEqual(right.FetchedModels);
+    }
+
     private OpenAiCompatibleProfile? FindAdditional(string id) =>
         _additionalProfiles.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.Ordinal));
 
@@ -983,19 +1073,17 @@ public sealed class OpenAiCompatiblePlugin
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    // Stateless wrapper that presents one additional profile as a standalone
+    // Cached wrapper that presents one additional profile as a standalone
     // transcription engine / LLM provider. Its selection identity is the profile
     // ID; PluginId stays the owner's so host lookups (enable-state, settings)
-    // still resolve to the real plugin.
+    // still resolve to the real plugin. The owner is its only lifetime authority.
     private sealed class OpenAiCompatibleProfileRole(OpenAiCompatiblePlugin owner, string profileId)
-        : ITranscriptionEnginePlugin,
-            ILlmProviderPlugin,
+        : ITranscriptionEngineRole,
+            ILlmProviderRole,
             ITranscriptionEngineSelectionIdentity,
             ILlmProviderSelectionIdentity
     {
         public string PluginId => owner.PluginId;
-        public string PluginName => owner.PluginName;
-        public string PluginVersion => owner.PluginVersion;
         public string TranscriptionSelectionId => profileId;
         public string LlmSelectionId => profileId;
         public string ProviderId => profileId;
@@ -1007,10 +1095,6 @@ public sealed class OpenAiCompatiblePlugin
         public string ProviderName => owner.ProfileDisplayName(profileId);
         public bool IsAvailable => owner.ProfileLlmAvailable(profileId);
         public IReadOnlyList<PluginModelInfo> SupportedModels => owner.ProfileLlmModels(profileId);
-
-        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
-
-        public Task DeactivateAsync() => Task.CompletedTask;
 
         public void SelectModel(string modelId) => owner.SelectProfileModel(profileId, modelId);
 
@@ -1036,7 +1120,6 @@ public sealed class OpenAiCompatiblePlugin
             CancellationToken ct
         ) => owner.ProcessStreamingForProfileAsync(profileId, systemPrompt, userText, model, ct);
 
-        public void Dispose() { }
     }
 }
 

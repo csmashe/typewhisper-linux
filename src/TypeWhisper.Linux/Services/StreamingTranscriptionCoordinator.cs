@@ -7,7 +7,7 @@ namespace TypeWhisper.Linux.Services;
 
 /// <summary>
 ///     Owns the lifetime of a single <see cref="IStreamingSession" />: connects via
-///     <see cref="ITranscriptionEnginePlugin.StartStreamingAsync" />, accepts live PCM
+///     <see cref="ITranscriptionEngineRole.StartStreamingAsync" />, accepts live PCM
 ///     audio frames from the audio tap, drives the session's sender on a single reader
 ///     task, and exposes the joined final-segment text on <see cref="FinalizeAsync" />.
 ///     Mirrors upstream Windows <c>StreamingHandler.cs</c>'s A9/A10 concurrency
@@ -43,7 +43,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     private readonly Action<int, string> _onPartial;
     private readonly Queue<byte[]> _pending = new();
 
-    private readonly ITranscriptionEnginePlugin _plugin;
+    private readonly ITranscriptionEngineRole _plugin;
     private readonly int _sessionVersion;
     private Channel<byte[]>? _channel;
     private CancellationTokenSource? _cts;
@@ -68,7 +68,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     private Action<StreamingTranscriptEvent>? _transcriptHandler;
 
     public StreamingTranscriptionCoordinator(
-        ITranscriptionEnginePlugin plugin,
+        ITranscriptionEngineRole plugin,
         string? language,
         int sessionVersion,
         Action<int, string> onPartial,

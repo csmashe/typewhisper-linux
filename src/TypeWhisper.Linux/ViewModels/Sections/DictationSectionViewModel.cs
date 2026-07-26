@@ -399,7 +399,7 @@ public partial class DictationSectionViewModel : ObservableObject
     // The engine that owns the model selected in the Dictation UI — the one a CUDA download
     // must target. Distinct from ActiveTranscriptionPlugin (the loaded engine), which is null
     // before any model loads (e.g. at startup) and can lag a freshly selected model.
-    private ITranscriptionEnginePlugin? SelectedModelPlugin =>
+    private ITranscriptionEngineRole? SelectedModelPlugin =>
         _models.GetTranscriptionPlugin(SelectedModel?.ModelId);
 
     // Offer the in-app download when there's a GPU but CUDA isn't usable yet and the

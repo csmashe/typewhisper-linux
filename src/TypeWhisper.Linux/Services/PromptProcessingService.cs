@@ -203,7 +203,7 @@ public sealed class PromptProcessingService
     private LlmCallProvenance? RecordProvenance(
         LlmCallCapture? capture,
         string stage,
-        ILlmProviderPlugin provider,
+        ILlmProviderRole provider,
         string modelId,
         string systemPrompt,
         string userPrompt,
@@ -250,12 +250,12 @@ public sealed class PromptProcessingService
                 """;
     }
 
-    private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(PromptAction action)
+    private (ILlmProviderRole? Provider, string ModelId) ResolveProvider(PromptAction action)
     {
         return ResolveProvider(action.ProviderOverride);
     }
 
-    private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(string? providerOverride)
+    private (ILlmProviderRole? Provider, string ModelId) ResolveProvider(string? providerOverride)
     {
         if (!string.IsNullOrWhiteSpace(providerOverride))
         {
@@ -292,7 +292,7 @@ public sealed class PromptProcessingService
         return (null, string.Empty);
     }
 
-    private (ILlmProviderPlugin? Provider, string ModelId) ResolvePluginModelId(
+    private (ILlmProviderRole? Provider, string ModelId) ResolvePluginModelId(
         string pluginModelId
     )
     {

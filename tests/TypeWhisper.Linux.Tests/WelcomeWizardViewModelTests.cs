@@ -276,7 +276,7 @@ public sealed class WelcomeWizardViewModelTests
 
     private static void SetTranscriptionEngines(
         PluginManager pluginManager,
-        IReadOnlyList<ITranscriptionEnginePlugin> plugins
+        IReadOnlyList<ITranscriptionEngineRole> plugins
     )
     {
         var field =

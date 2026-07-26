@@ -471,7 +471,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
     }
 
     private PluginManager CreatePluginManager(
-        IReadOnlyList<ILlmProviderPlugin> llmProviders,
+        IReadOnlyList<ILlmProviderRole> llmProviders,
         IReadOnlyList<LoadedPlugin> loadedPlugins
     )
     {

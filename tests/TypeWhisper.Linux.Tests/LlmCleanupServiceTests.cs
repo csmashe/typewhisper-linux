@@ -117,7 +117,7 @@ public sealed class LlmCleanupServiceTests
         Assert.Equal("Hello", result);
     }
 
-    private static LlmCleanupService CreateService(IReadOnlyList<ILlmProviderPlugin> providers)
+    private static LlmCleanupService CreateService(IReadOnlyList<ILlmProviderRole> providers)
     {
         var pluginManager = TestPluginManagerFactory.Create(providers);
         var settings = new Mock<ISettingsService>();

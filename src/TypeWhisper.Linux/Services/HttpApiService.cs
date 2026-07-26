@@ -217,7 +217,7 @@ public sealed class HttpApiService : IDisposable
     }
 
     internal static object? BuildAccelerationDto(
-        ITranscriptionEnginePlugin? plugin,
+        ITranscriptionEngineRole? plugin,
         AppSettings settings
     )
     {
