@@ -12,7 +12,7 @@ namespace TypeWhisper.Linux.Tests;
 internal static class TestPluginManagerFactory
 {
     public static PluginManager Create(
-        IReadOnlyList<ILlmProviderPlugin>? llmProviders = null,
+        IReadOnlyList<ILlmProviderRole>? llmProviders = null,
         IReadOnlyList<IActionPlugin>? actionPlugins = null,
         IReadOnlyList<ITtsProviderPlugin>? ttsProviders = null,
         IReadOnlyList<LoadedPlugin>? loadedPlugins = null

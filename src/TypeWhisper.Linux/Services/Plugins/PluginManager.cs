@@ -36,9 +36,9 @@ public sealed class PluginManager : IDisposable
     private bool _isRefreshingModels;
     private DateTime _lastModelRefresh = DateTime.MinValue;
 
-    private List<ILlmProviderPlugin> _llmProviders = [];
+    private List<ILlmProviderRole> _llmProviders = [];
     private List<IPostProcessorPlugin> _postProcessors = [];
-    private List<ITranscriptionEnginePlugin> _transcriptionEngines = [];
+    private List<ITranscriptionEngineRole> _transcriptionEngines = [];
     private List<ITtsProviderPlugin> _ttsProviders = [];
 
     public PluginManager(
@@ -101,7 +101,7 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    public IReadOnlyList<ILlmProviderPlugin> LlmProviders
+    public IReadOnlyList<ILlmProviderRole> LlmProviders
     {
         get
         {
@@ -112,7 +112,7 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    public IReadOnlyList<ITranscriptionEnginePlugin> TranscriptionEngines
+    public IReadOnlyList<ITranscriptionEngineRole> TranscriptionEngines
     {
         get
         {
@@ -818,8 +818,8 @@ public sealed class PluginManager : IDisposable
         PluginStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private IEnumerable<(ILlmProviderPlugin Provider, string SelectionId)> ValidLlmProviders(
-        IEnumerable<ILlmProviderPlugin> providers
+    private IEnumerable<(ILlmProviderRole Provider, string SelectionId)> ValidLlmProviders(
+        IEnumerable<ILlmProviderRole> providers
     )
     {
         foreach (var provider in providers)
@@ -845,9 +845,9 @@ public sealed class PluginManager : IDisposable
     }
 
     private IEnumerable<(
-        ITranscriptionEnginePlugin Provider,
+        ITranscriptionEngineRole Provider,
         string SelectionId
-    )> ValidTranscriptionEngines(IEnumerable<ITranscriptionEnginePlugin> providers)
+    )> ValidTranscriptionEngines(IEnumerable<ITranscriptionEngineRole> providers)
     {
         foreach (var provider in providers)
         {
@@ -889,7 +889,7 @@ public sealed class PluginManager : IDisposable
     // capability rebuild: materialize each provider's additional roles inside a
     // try/catch so a throwing getter (or one that throws mid-enumeration) just
     // contributes nothing and is logged. Grouping/dedup downstream is unchanged.
-    private static IEnumerable<ILlmProviderPlugin> SafeAdditionalLlmProviders(
+    private static IEnumerable<ILlmProviderRole> SafeAdditionalLlmProviders(
         IAdditionalLlmProvidersProvider provider
     )
     {
@@ -911,7 +911,7 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    private static IEnumerable<ITranscriptionEnginePlugin> SafeAdditionalTranscriptionEngines(
+    private static IEnumerable<ITranscriptionEngineRole> SafeAdditionalTranscriptionEngines(
         IAdditionalTranscriptionEnginesProvider provider
     )
     {

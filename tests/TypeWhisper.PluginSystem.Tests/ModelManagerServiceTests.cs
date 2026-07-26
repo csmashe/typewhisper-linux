@@ -1127,7 +1127,7 @@ public class ModelManagerServiceTests
     }
 
     private PluginManager CreatePluginManager(
-        params ITranscriptionEnginePlugin[] transcriptionEngines
+        params ITranscriptionEngineRole[] transcriptionEngines
     )
     {
         var pluginManager = new PluginManager(

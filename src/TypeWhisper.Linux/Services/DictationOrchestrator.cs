@@ -3800,7 +3800,7 @@ public sealed class DictationOrchestrator : IDisposable
     }
 
     private void StartStreamingTranscriptionSession(
-        ITranscriptionEnginePlugin plugin,
+        ITranscriptionEngineRole plugin,
         string? language,
         int sessionVersion,
         AudioRecordingService.AudioCaptureSession captureSession
@@ -4149,7 +4149,7 @@ public sealed class DictationOrchestrator : IDisposable
     }
 
     private async Task PollPartialTranscriptOnceAsync(
-        ITranscriptionEnginePlugin plugin,
+        ITranscriptionEngineRole plugin,
         byte[] wav,
         int sessionVersion,
         AudioRecordingService.AudioCaptureSession captureSession,

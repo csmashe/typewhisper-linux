@@ -123,6 +123,68 @@ public sealed class OpenAiCompatiblePluginTests
     }
 
     [Fact]
+    public async Task AdditionalProfileRole_IsStableAcrossRepeatedGettersAndCapabilityRefresh()
+    {
+        var host = new TestPluginHostServices();
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("Local Ollama", "http://localhost:11434", llmModel: "m1")]
+        );
+
+        var firstLlmRole = Assert.Single(sut.AdditionalLlmProviders);
+        var firstTranscriptionRole = Assert.Single(sut.AdditionalTranscriptionEngines);
+        Assert.Same(firstLlmRole, firstTranscriptionRole);
+        Assert.Same(firstLlmRole, Assert.Single(sut.AdditionalLlmProviders));
+
+        var refreshCountBefore = host.CapabilitiesChangedCount;
+        var unchangedItems = await sut.GetItemsAsync("profiles");
+        var result = await sut.SetItemsAsync("profiles", unchangedItems);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(host.CapabilitiesChangedCount > refreshCountBefore);
+        Assert.Same(firstLlmRole, Assert.Single(sut.AdditionalLlmProviders));
+        Assert.Same(
+            firstTranscriptionRole,
+            Assert.Single(sut.AdditionalTranscriptionEngines)
+        );
+    }
+
+    [Fact]
+    public async Task AdditionalProfileRole_ChangedOrRemovedProfileInvalidatesCacheEntry()
+    {
+        var host = new TestPluginHostServices();
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("Original", "http://localhost:11434", llmModel: "m1")]
+        );
+
+        var originalRole = Assert.Single(sut.AdditionalLlmProviders);
+        var profileId = Assert.Single(await sut.GetItemsAsync("profiles")).Values["__id"];
+
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("Changed", "http://localhost:11434", llmModel: "m1", id: profileId)]
+        );
+        var changedRole = Assert.Single(sut.AdditionalLlmProviders);
+        Assert.NotSame(originalRole, changedRole);
+
+        await sut.SetItemsAsync("profiles", []);
+        Assert.Empty(sut.AdditionalLlmProviders);
+
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("Changed", "http://localhost:11434", llmModel: "m1", id: profileId)]
+        );
+        Assert.NotSame(changedRole, Assert.Single(sut.AdditionalLlmProviders));
+    }
+
+    [Fact]
     public async Task GetItemsAsync_DoesNotEchoApiKey()
     {
         var host = new TestPluginHostServices();
@@ -294,6 +356,7 @@ public sealed class OpenAiCompatiblePluginTests
 
         private readonly Dictionary<string, JsonElement> _settings = [];
         private Dictionary<string, string?> Secrets { get; } = [];
+        public int CapabilitiesChangedCount { get; private set; }
 
         public Task StoreSecretAsync(string key, string value)
         {
@@ -322,7 +385,10 @@ public sealed class OpenAiCompatiblePluginTests
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();
         public IReadOnlyList<string> AvailableProfileNames => [];
         public void Log(PluginLogLevel level, string message) { }
-        public void NotifyCapabilitiesChanged() { }
+        public void NotifyCapabilitiesChanged()
+        {
+            CapabilitiesChangedCount++;
+        }
         public IPluginLocalization Localization { get; } = new TestPluginLocalization();
     }
 

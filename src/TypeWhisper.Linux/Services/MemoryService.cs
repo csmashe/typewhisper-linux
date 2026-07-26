@@ -115,7 +115,7 @@ public sealed class MemoryService
     // is disabled).
     private LlmCallProvenance? RecordProvenance(
         LlmCallCapture? capture,
-        ILlmProviderPlugin provider,
+        ILlmProviderRole provider,
         string modelId,
         string userPrompt
     )

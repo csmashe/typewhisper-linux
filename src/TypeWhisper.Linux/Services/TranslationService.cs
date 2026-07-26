@@ -80,7 +80,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         return translated;
     }
 
-    private ILlmProviderPlugin? GetConfiguredTranslationProvider()
+    private ILlmProviderRole? GetConfiguredTranslationProvider()
     {
         return _pluginManager.LlmProviders.FirstOrDefault(provider => provider.IsAvailable);
     }
@@ -90,7 +90,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
     // attach the response (null when capture is disabled).
     private LlmCallProvenance? RecordProvenance(
         LlmCallCapture? capture,
-        ILlmProviderPlugin provider,
+        ILlmProviderRole provider,
         string modelId,
         string userPrompt
     )

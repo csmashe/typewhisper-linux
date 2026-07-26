@@ -27,7 +27,7 @@ public static class PluginSelectionExtensions
     /// </exception>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedParameter.Global
-    public static string GetTranscriptionSelectionId(this ITranscriptionEnginePlugin plugin)
+    public static string GetTranscriptionSelectionId(this ITranscriptionEngineRole plugin)
     {
         var customSelectionId = plugin is ITranscriptionEngineSelectionIdentity identity
             ? identity.TranscriptionSelectionId
@@ -48,7 +48,7 @@ public static class PluginSelectionExtensions
     /// </exception>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedParameter.Global
-    public static string GetLlmSelectionId(this ILlmProviderPlugin plugin)
+    public static string GetLlmSelectionId(this ILlmProviderRole plugin)
     {
         var customSelectionId = plugin is ILlmProviderSelectionIdentity identity
             ? identity.LlmSelectionId
