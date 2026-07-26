@@ -654,7 +654,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
     // Helpers
 
-    private static string FormatGemmaPrompt(string systemPrompt, string userText)
+    internal static string FormatGemmaPrompt(string systemPrompt, string userText)
     {
         // Gemma instruction-tuned chat format with proper system turn
         var sb = new System.Text.StringBuilder();
@@ -664,7 +664,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             sb.Append("<start_of_turn>system\n");
             sb.Append(systemPrompt).Append('\n');
             sb.Append(
-                "IMPORTANT: Respond ONLY in the same language as the user's input. Output ONLY the requested result, nothing else. No explanations, no extra text."
+                "Output ONLY the requested result, nothing else. No explanations, no extra text."
             );
             sb.Append("<end_of_turn>\n");
         }

@@ -149,6 +149,75 @@ public sealed class GemmaLocalPluginTests
         Assert.Equal(1, observation.CallCount);
     }
 
+    [Fact]
+    public void FormatGemmaPrompt_TranslationPrompt_PreservesTargetLanguageAndAppendsOutputHygiene()
+    {
+        const string systemPrompt =
+            "Translate the following text from English to German. Output only the German translation.";
+        const string userText = "Where is the train station?";
+        const string outputHygieneInstruction =
+            "Output ONLY the requested result, nothing else. No explanations, no extra text.";
+        const string expectedSystemTurn =
+            "<start_of_turn>system\n"
+            + systemPrompt
+            + "\n"
+            + outputHygieneInstruction
+            + "<end_of_turn>\n";
+        const string expectedPrompt =
+            expectedSystemTurn
+            + "<start_of_turn>user\n"
+            + userText
+            + "<end_of_turn>\n"
+            + "<start_of_turn>model\n";
+
+        var formattedPrompt = GemmaLocalPlugin.FormatGemmaPrompt(systemPrompt, userText);
+
+        Assert.Equal(expectedPrompt, formattedPrompt);
+        var actualSystemTurn = formattedPrompt[..expectedSystemTurn.Length];
+        Assert.Equal(expectedSystemTurn, actualSystemTurn);
+        Assert.Contains(systemPrompt, actualSystemTurn, StringComparison.Ordinal);
+        Assert.Contains(outputHygieneInstruction, actualSystemTurn, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "IMPORTANT: Respond ONLY in the same language as the user's input.",
+            actualSystemTurn,
+            StringComparison.Ordinal
+        );
+    }
+
+    [Fact]
+    public void FormatGemmaPrompt_PlainSystemPrompt_PreservesCallerPromptAndAppendsOutputHygiene()
+    {
+        const string systemPrompt = "Answer concisely and use complete sentences.";
+        const string userText = "Explain gravity.";
+        const string outputHygieneInstruction =
+            "Output ONLY the requested result, nothing else. No explanations, no extra text.";
+        const string expectedSystemTurn =
+            "<start_of_turn>system\n"
+            + systemPrompt
+            + "\n"
+            + outputHygieneInstruction
+            + "<end_of_turn>\n";
+        const string expectedPrompt =
+            expectedSystemTurn
+            + "<start_of_turn>user\n"
+            + userText
+            + "<end_of_turn>\n"
+            + "<start_of_turn>model\n";
+
+        var formattedPrompt = GemmaLocalPlugin.FormatGemmaPrompt(systemPrompt, userText);
+
+        Assert.Equal(expectedPrompt, formattedPrompt);
+        var actualSystemTurn = formattedPrompt[..expectedSystemTurn.Length];
+        Assert.Equal(expectedSystemTurn, actualSystemTurn);
+        Assert.Contains(systemPrompt, actualSystemTurn, StringComparison.Ordinal);
+        Assert.Contains(outputHygieneInstruction, actualSystemTurn, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "IMPORTANT: Respond ONLY in the same language as the user's input.",
+            actualSystemTurn,
+            StringComparison.Ordinal
+        );
+    }
+
     private static GemmaLocalPlugin CreatePluginWithRoutingProbe(
         RoutingObservation observation
     ) =>
