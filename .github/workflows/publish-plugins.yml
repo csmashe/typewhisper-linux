@@ -81,6 +81,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Test plugin system
+        timeout-minutes: 15
+        run: dotnet test tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj -c Release -p:DeployBundledLinuxPlugins=false --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
+
       - name: Patch manifest version
         shell: pwsh
         run: |

@@ -22,8 +22,18 @@ public sealed class LinearPlugin : IActionPlugin, IPluginSettingsProvider, IPlug
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    private readonly HttpClient _httpClient = new();
+    private readonly HttpClient _httpClient;
     private List<LinearTeam> _cachedTeams = [];
+
+    public LinearPlugin()
+        : this(new HttpClient())
+    {
+    }
+
+    internal LinearPlugin(HttpClient httpClient)
+    {
+        _httpClient = httpClient;
+    }
 
     public string PluginId => "com.typewhisper.linear";
     public string PluginName => "Linear";

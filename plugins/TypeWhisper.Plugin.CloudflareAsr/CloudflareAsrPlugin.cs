@@ -15,10 +15,20 @@ public sealed class CloudflareAsrPlugin
         IPluginSettingsProvider,
         IPluginLocalizationAware
 {
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(120) };
+    private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
     private string? _apiToken;
     private string? _accountId;
+
+    public CloudflareAsrPlugin()
+        : this(new HttpClient { Timeout = TimeSpan.FromSeconds(120) })
+    {
+    }
+
+    internal CloudflareAsrPlugin(HttpClient httpClient)
+    {
+        _httpClient = httpClient;
+    }
 
     private static readonly IReadOnlyList<PluginModelInfo> s_models =
     [
@@ -76,10 +86,13 @@ public sealed class CloudflareAsrPlugin
         CancellationToken ct
     )
     {
-        if (!IsConfigured)
-            throw new InvalidOperationException(
-                "Plugin not configured. Account ID and API token required."
+        if (translate)
+            throw new NotSupportedException(
+                "Translation is not supported by the Cloudflare ASR plugin."
             );
+
+        if (!IsConfigured)
+            throw new InvalidOperationException(Loc.L("Settings.EnterAccountIdAndApiToken"));
 
         var url =
             $"https://api.cloudflare.com/client/v4/accounts/{_accountId}/ai/run/@cf/openai/whisper";
@@ -110,15 +123,20 @@ public sealed class CloudflareAsrPlugin
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        var text = "";
         if (
-            root.TryGetProperty("result", out var result)
-            && result.ValueKind == JsonValueKind.Object
-            && result.TryGetProperty("text", out var textEl)
+            root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("result", out var result)
+            || result.ValueKind != JsonValueKind.Object
+            || !result.TryGetProperty("text", out var textEl)
+            || textEl.ValueKind != JsonValueKind.String
         )
         {
-            text = textEl.GetString() ?? "";
+            throw new InvalidOperationException(
+                "Invalid Cloudflare transcription response: required field 'result.text' must be a string."
+            );
         }
+
+        var text = textEl.GetString() ?? "";
 
         // Language and duration are nested under result.language / result.duration;
         // both fields are optional and absent when Cloudflare can't determine them.

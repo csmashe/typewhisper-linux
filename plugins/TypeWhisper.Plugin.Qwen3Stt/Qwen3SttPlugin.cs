@@ -14,10 +14,20 @@ public sealed class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPluginSettings
     private const string DefaultBaseUrl = "http://localhost:8000";
     private const string DefaultModel = "Qwen/Qwen3-ASR";
 
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(60) };
+    private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
     private string? _apiKey;
     private string? _baseUrl;
+
+    public Qwen3SttPlugin()
+        : this(new HttpClient { Timeout = TimeSpan.FromSeconds(60) })
+    {
+    }
+
+    internal Qwen3SttPlugin(HttpClient httpClient)
+    {
+        _httpClient = httpClient;
+    }
 
     public string PluginId => "com.typewhisper.qwen3-stt";
     public string PluginName => "Qwen3 STT";
