@@ -54,10 +54,8 @@ public sealed class OpenAiPlugin
     private string _selectedResponseFormat = "verbose_json";
     private string? _selectedVoiceId;
     private List<OpenAiFetchedModel> _fetchedLlmModels = [];
-    private string? _oauthAccessToken;
-    private string? _oauthRefreshToken;
-    private string? _oauthAccountId;
-    private DateTimeOffset? _oauthExpiresAt;
+    private readonly SemaphoreSlim _oauthCredentialGate = new(1, 1);
+    private OAuthCredentialSnapshot _oauthCredentials = OAuthCredentialSnapshot.Empty;
     private bool _forgetChatGptLogin;
     private bool _streamResponses = true;
 
@@ -141,17 +139,32 @@ public sealed class OpenAiPlugin
     {
         _host = host;
         ApiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
-        _oauthAccessToken = NormalizeApiKey(await host.LoadSecretAsync(OAuthAccessTokenSecretName));
-        _oauthRefreshToken = NormalizeApiKey(await host.LoadSecretAsync(OAuthRefreshTokenSecretName));
+
+        await _oauthCredentialGate.WaitAsync();
+        try
+        {
+            Volatile.Write(
+                ref _oauthCredentials,
+                new OAuthCredentialSnapshot(
+                    NormalizeApiKey(await host.LoadSecretAsync(OAuthAccessTokenSecretName)),
+                    NormalizeApiKey(await host.LoadSecretAsync(OAuthRefreshTokenSecretName)),
+                    NormalizeApiKey(await host.LoadSecretAsync(OAuthIdTokenSecretName)),
+                    host.GetSetting<string>(OAuthAccountIdSettingName),
+                    host.GetSetting<string>(OAuthPlanTypeSettingName),
+                    LoadExpiresAt(host)
+                ));
+        }
+        finally
+        {
+            _oauthCredentialGate.Release();
+        }
+
         AuthMode = OpenAiAuthModeExtensions.Parse(host.GetSetting<string>(AuthModeSettingName));
         SelectedLlmModelId = host.GetSetting<string>(SelectedLlmModelSettingName);
         _selectedVoiceId = NormalizeVoiceId(host.GetSetting<string>(SelectedVoiceSettingName));
         TtsInstructions = host.GetSetting<string>(TtsInstructionsSettingName) ?? "";
         ReasoningEffort = NormalizeReasoningEffort(host.GetSetting<string>(ReasoningEffortSettingName));
         _fetchedLlmModels = host.GetSetting<List<OpenAiFetchedModel>>(FetchedLlmModelsSettingName) ?? [];
-        _oauthAccountId = host.GetSetting<string>(OAuthAccountIdSettingName);
-        ChatGptPlanType = host.GetSetting<string>(OAuthPlanTypeSettingName);
-        _oauthExpiresAt = LoadExpiresAt(host);
         TemperatureMode = NormalizeTemperatureMode(host.GetSetting<string>(TemperatureModeSettingName));
         TemperatureValue = NormalizeTemperatureValue(host.GetSetting<double?>(TemperatureValueSettingName));
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
@@ -291,8 +304,12 @@ public sealed class OpenAiPlugin
 
         if (AuthMode == OpenAiAuthMode.ChatGpt)
         {
-            var accessToken = await ValidOAuthAccessTokenAsync(ct);
-            var client = new OpenAiChatGptClient(_httpClient, accessToken, _oauthAccountId);
+            var credentials = await ValidOAuthCredentialsAsync(ct);
+            var client = new OpenAiChatGptClient(
+                _httpClient,
+                credentials.AccessToken!,
+                credentials.AccountId
+            );
             return await client.ProcessAsync(
                 systemPrompt,
                 userText,
@@ -429,11 +446,17 @@ public sealed class OpenAiPlugin
 
     internal OpenAiAuthMode AuthMode { get; private set; } = OpenAiAuthMode.ApiKey;
 
-    internal bool HasChatGptCredentials =>
-        !string.IsNullOrWhiteSpace(_oauthRefreshToken)
-        || !string.IsNullOrWhiteSpace(_oauthAccessToken);
+    internal bool HasChatGptCredentials
+    {
+        get
+        {
+            var credentials = Volatile.Read(ref _oauthCredentials);
+            return !string.IsNullOrWhiteSpace(credentials.RefreshToken)
+                || !string.IsNullOrWhiteSpace(credentials.AccessToken);
+        }
+    }
 
-    internal string? ChatGptPlanType { get; private set; }
+    internal string? ChatGptPlanType => Volatile.Read(ref _oauthCredentials).PlanType;
 
     internal string? SelectedLlmModelId { get; private set; }
 
@@ -689,7 +712,7 @@ public sealed class OpenAiPlugin
 
         var code = await server.WaitForCodeAsync(ct);
         var tokens = await OpenAiOAuthClient.ExchangeAuthorizationCodeAsync(_httpClient, code, pkce, ct);
-        await StoreOAuthTokensAsync(tokens, preferredAccountId: null);
+        await StoreOAuthTokensAsync(tokens, preferredAccountId: null, ct: ct);
         SetAuthMode(OpenAiAuthMode.ChatGpt);
     }
 
@@ -718,23 +741,16 @@ public sealed class OpenAiPlugin
         SetAuthMode(OpenAiAuthMode.ChatGpt);
     }
 
-    internal async Task ClearChatGptLoginAsync()
+    internal async Task ClearChatGptLoginAsync(CancellationToken ct = default)
     {
-        _oauthAccessToken = null;
-        _oauthRefreshToken = null;
-        _oauthAccountId = null;
-        ChatGptPlanType = null;
-        _oauthExpiresAt = null;
-
-        if (_host is not null)
+        await _oauthCredentialGate.WaitAsync(ct);
+        try
         {
-            await _host.DeleteSecretAsync(OAuthAccessTokenSecretName);
-            await _host.DeleteSecretAsync(OAuthRefreshTokenSecretName);
-            await _host.DeleteSecretAsync(OAuthIdTokenSecretName);
-            _host.SetSetting<string?>(OAuthAccountIdSettingName, null);
-            _host.SetSetting<string?>(OAuthPlanTypeSettingName, null);
-            _host.SetSetting<DateTimeOffset?>(OAuthExpiresAtSettingName, null);
-            _host.NotifyCapabilitiesChanged();
+            await CommitOAuthCredentialSnapshotUnderGateAsync(OAuthCredentialSnapshot.Empty);
+        }
+        finally
+        {
+            _oauthCredentialGate.Release();
         }
     }
 
@@ -825,55 +841,118 @@ public sealed class OpenAiPlugin
         return request;
     }
 
-    private async Task<string> ValidOAuthAccessTokenAsync(CancellationToken ct)
+    private async Task<OAuthCredentialSnapshot> ValidOAuthCredentialsAsync(CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(_oauthAccessToken)
-            && _oauthExpiresAt is { } expiresAt
-            && expiresAt > DateTimeOffset.UtcNow.AddSeconds(60))
+        var credentials = Volatile.Read(ref _oauthCredentials);
+        if (HasValidOAuthAccessToken(credentials))
+            return credentials;
+
+        await _oauthCredentialGate.WaitAsync(ct);
+        try
         {
-            return _oauthAccessToken;
+            // A preceding waiter may have refreshed and atomically replaced
+            // the credential snapshot while this request waited for the gate.
+            credentials = Volatile.Read(ref _oauthCredentials);
+            if (HasValidOAuthAccessToken(credentials))
+                return credentials;
+
+            if (string.IsNullOrWhiteSpace(credentials.RefreshToken))
+                throw new InvalidOperationException(Loc.L("Settings.ChatGptLoginNotConfigured"));
+
+            var refreshed = await OpenAiOAuthClient.RefreshTokenAsync(
+                _httpClient,
+                credentials.RefreshToken,
+                ct);
+            var refreshedCredentials = CreateOAuthCredentialSnapshot(
+                refreshed,
+                credentials.AccountId,
+                credentials.RefreshToken);
+            await CommitOAuthCredentialSnapshotUnderGateAsync(refreshedCredentials);
+            return refreshedCredentials;
         }
-
-        if (string.IsNullOrWhiteSpace(_oauthRefreshToken))
-            throw new InvalidOperationException(Loc.L("Settings.ChatGptLoginNotConfigured"));
-
-        var refreshed = await OpenAiOAuthClient.RefreshTokenAsync(_httpClient, _oauthRefreshToken, ct);
-        await StoreOAuthTokensAsync(refreshed, _oauthAccountId);
-        return refreshed.AccessToken;
+        finally
+        {
+            _oauthCredentialGate.Release();
+        }
     }
 
-    private async Task StoreOAuthTokensAsync(OpenAiOAuthTokenResponse tokens, string? preferredAccountId)
+    private async Task StoreOAuthTokensAsync(
+        OpenAiOAuthTokenResponse tokens,
+        string? preferredAccountId,
+        CancellationToken ct = default)
+    {
+        await _oauthCredentialGate.WaitAsync(ct);
+        try
+        {
+            var currentCredentials = Volatile.Read(ref _oauthCredentials);
+            var credentials = CreateOAuthCredentialSnapshot(
+                tokens,
+                preferredAccountId,
+                currentCredentials.RefreshToken);
+            await CommitOAuthCredentialSnapshotUnderGateAsync(credentials);
+        }
+        finally
+        {
+            _oauthCredentialGate.Release();
+        }
+    }
+
+    private static OAuthCredentialSnapshot CreateOAuthCredentialSnapshot(
+        OpenAiOAuthTokenResponse tokens,
+        string? preferredAccountId,
+        string? existingRefreshToken)
     {
         var metadata = OpenAiOAuthClient.ExtractMetadata(tokens, preferredAccountId);
-        _oauthAccessToken = tokens.AccessToken;
         // RFC 6749 §6: a refresh response MAY omit `refresh_token`, meaning
         // "keep using the previously issued one". Unconditionally assigning
         // tokens.RefreshToken here would null out the only usable refresh
         // token on the first refresh that doesn't rotate it.
         var effectiveRefreshToken = string.IsNullOrEmpty(tokens.RefreshToken)
-            ? _oauthRefreshToken
+            ? existingRefreshToken
             : tokens.RefreshToken;
-        _oauthRefreshToken = effectiveRefreshToken;
-        _oauthAccountId = metadata.AccountId;
-        ChatGptPlanType = metadata.PlanType;
-        _oauthExpiresAt = metadata.ExpiresAt;
 
-        if (_host is null)
+        return new OAuthCredentialSnapshot(
+            tokens.AccessToken,
+            effectiveRefreshToken,
+            tokens.IdToken,
+            metadata.AccountId,
+            metadata.PlanType,
+            metadata.ExpiresAt
+        );
+    }
+
+    private async Task CommitOAuthCredentialSnapshotUnderGateAsync(
+        OAuthCredentialSnapshot credentials)
+    {
+        Volatile.Write(ref _oauthCredentials, credentials);
+
+        var host = _host;
+        if (host is null)
             return;
 
-        await _host.StoreSecretAsync(OAuthAccessTokenSecretName, tokens.AccessToken);
-        if (!string.IsNullOrEmpty(effectiveRefreshToken))
-            await _host.StoreSecretAsync(OAuthRefreshTokenSecretName, effectiveRefreshToken);
-        if (string.IsNullOrWhiteSpace(tokens.IdToken))
-            await _host.DeleteSecretAsync(OAuthIdTokenSecretName);
+        if (string.IsNullOrWhiteSpace(credentials.AccessToken))
+            await host.DeleteSecretAsync(OAuthAccessTokenSecretName);
         else
-            await _host.StoreSecretAsync(OAuthIdTokenSecretName, tokens.IdToken);
-        _host.SetSetting(OAuthAccountIdSettingName, _oauthAccountId);
-        _host.SetSetting(OAuthPlanTypeSettingName, ChatGptPlanType);
-        _host.SetSetting(OAuthExpiresAtSettingName, _oauthExpiresAt);
+            await host.StoreSecretAsync(OAuthAccessTokenSecretName, credentials.AccessToken);
+        if (string.IsNullOrWhiteSpace(credentials.RefreshToken))
+            await host.DeleteSecretAsync(OAuthRefreshTokenSecretName);
+        else
+            await host.StoreSecretAsync(OAuthRefreshTokenSecretName, credentials.RefreshToken);
+        if (string.IsNullOrWhiteSpace(credentials.IdToken))
+            await host.DeleteSecretAsync(OAuthIdTokenSecretName);
+        else
+            await host.StoreSecretAsync(OAuthIdTokenSecretName, credentials.IdToken);
+        host.SetSetting(OAuthAccountIdSettingName, credentials.AccountId);
+        host.SetSetting(OAuthPlanTypeSettingName, credentials.PlanType);
+        host.SetSetting(OAuthExpiresAtSettingName, credentials.ExpiresAt);
         NormalizeSelectedLlmModel(persist: true);
-        _host.NotifyCapabilitiesChanged();
+        host.NotifyCapabilitiesChanged();
     }
+
+    private static bool HasValidOAuthAccessToken(OAuthCredentialSnapshot credentials) =>
+        !string.IsNullOrWhiteSpace(credentials.AccessToken)
+        && credentials.ExpiresAt is { } expiresAt
+        && expiresAt > DateTimeOffset.UtcNow.AddSeconds(60);
 
     internal double? ResolvedTemperature(string modelId)
     {
@@ -1170,7 +1249,7 @@ public sealed class OpenAiPlugin
     {
         if (_forgetChatGptLogin)
         {
-            await ClearChatGptLoginAsync();
+            await ClearChatGptLoginAsync(ct);
             _forgetChatGptLogin = false;
             return new PluginSettingsValidationResult(true, Loc.L("Settings.ChatGptLoginRemoved"));
         }
@@ -1178,12 +1257,12 @@ public sealed class OpenAiPlugin
         if (HasChatGptCredentials)
         {
             // Stored credentials might have been revoked or expired beyond refresh.
-            // ValidOAuthAccessTokenAsync returns the cached access token if it's
+            // ValidOAuthCredentialsAsync returns the cached credentials if the access token is
             // still valid, otherwise hits the refresh endpoint — either way, a
             // failure means the credentials no longer work.
             try
             {
-                _ = await ValidOAuthAccessTokenAsync(ct);
+                _ = await ValidOAuthCredentialsAsync(ct);
                 return new PluginSettingsValidationResult(true, ChatGptConnectedMessage());
             }
             catch (Exception ex)
@@ -1248,6 +1327,18 @@ public sealed class OpenAiPlugin
 
     private static bool ParseBool(string? value) =>
         string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+
+    private sealed record OAuthCredentialSnapshot(
+        string? AccessToken,
+        string? RefreshToken,
+        string? IdToken,
+        string? AccountId,
+        string? PlanType,
+        DateTimeOffset? ExpiresAt)
+    {
+        public static OAuthCredentialSnapshot Empty { get; } =
+            new(null, null, null, null, null, null);
+    }
 
     private sealed record TranscriptionModelEntry(
         string Id,
