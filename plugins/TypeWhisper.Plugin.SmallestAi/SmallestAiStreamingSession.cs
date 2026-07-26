@@ -8,15 +8,22 @@ namespace TypeWhisper.Plugin.SmallestAi;
 
 internal sealed class SmallestAiStreamingSession : IStreamingSession
 {
-    private readonly ClientWebSocket _ws;
+    private const int TeardownTimeoutMs = 2000;
+
+    private readonly WebSocket _ws;
     private readonly SmallestAiTranscriptCollector _collector;
     private readonly CancellationTokenSource _receiveCts = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly TaskCompletionSource _lastResponseReceived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _operationsDrained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly Lock _disposeGate = new();
+    private readonly Lock _operationGate = new();
     private Task? _receiveTask;
+    private Task? _disposeTask;
+    private int _activeOperations;
     private bool _disposed;
 
-    private SmallestAiStreamingSession(ClientWebSocket ws, SmallestAiTranscriptCollector collector)
+    private SmallestAiStreamingSession(WebSocket ws, SmallestAiTranscriptCollector collector)
     {
         _ws = ws;
         _collector = collector;
@@ -32,6 +39,19 @@ internal sealed class SmallestAiStreamingSession : IStreamingSession
         var ws = CreateConfiguredWebSocket(apiKey);
         await ws.ConnectAsync(BuildStreamingUri(language, wordTimestamps: true), ct);
 
+        return CreateStartedSession(ws);
+    }
+
+    internal static SmallestAiStreamingSession CreateConnectedSessionForTests(WebSocket ws)
+    {
+        if (ws.State != WebSocketState.Open)
+            throw new InvalidOperationException("The test WebSocket must already be open.");
+
+        return CreateStartedSession(ws);
+    }
+
+    private static SmallestAiStreamingSession CreateStartedSession(WebSocket ws)
+    {
         var session = new SmallestAiStreamingSession(ws, new SmallestAiTranscriptCollector());
         session._receiveTask = session.ReceiveLoopAsync(session._receiveCts.Token);
         return session;
@@ -71,42 +91,62 @@ internal sealed class SmallestAiStreamingSession : IStreamingSession
 
     public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
     {
-        if (_disposed || _ws.State != WebSocketState.Open || pcm16Audio.Length == 0)
+        if (!TryBeginOperation())
             return;
 
-        await _sendLock.WaitAsync(ct);
         try
         {
-            if (_ws.State != WebSocketState.Open)
+            if (_ws.State != WebSocketState.Open || pcm16Audio.Length == 0)
                 return;
 
-            await _ws.SendAsync(pcm16Audio, WebSocketMessageType.Binary, true, ct);
+            await _sendLock.WaitAsync(ct);
+            try
+            {
+                if (_ws.State != WebSocketState.Open)
+                    return;
+
+                await _ws.SendAsync(pcm16Audio, WebSocketMessageType.Binary, true, ct);
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
         }
         finally
         {
-            _sendLock.Release();
+            EndOperation();
         }
     }
 
     public async Task FinalizeAsync(CancellationToken ct)
     {
-        if (_disposed || _ws.State != WebSocketState.Open)
+        if (!TryBeginOperation())
             return;
 
-        await _sendLock.WaitAsync(ct);
         try
         {
             if (_ws.State != WebSocketState.Open)
                 return;
 
-            await SendTextAsync("""{"type":"close_stream"}""", ct);
+            await _sendLock.WaitAsync(ct);
+            try
+            {
+                if (_ws.State != WebSocketState.Open)
+                    return;
+
+                await SendTextAsync("""{"type":"close_stream"}""", ct);
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
+
+            await _lastResponseReceived.Task.WaitAsync(ct);
         }
         finally
         {
-            _sendLock.Release();
+            EndOperation();
         }
-
-        await _lastResponseReceived.Task.WaitAsync(ct);
     }
 
     private async Task SendTextAsync(string json, CancellationToken ct)
@@ -172,65 +212,207 @@ internal sealed class SmallestAiStreamingSession : IStreamingSession
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (_disposed)
-            return;
+        Task disposeTask;
+        TaskCompletionSource? disposeCompletion = null;
+        lock (_disposeGate)
+        {
+            if (_disposeTask is null)
+            {
+                disposeCompletion = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                _disposeTask = disposeCompletion.Task;
+            }
 
-        _disposed = true;
-        // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
-        _receiveCts.Cancel();
-        _lastResponseReceived.TrySetResult();
+            disposeTask = _disposeTask;
+        }
 
-        await _sendLock.WaitAsync(CancellationToken.None);
+        if (disposeCompletion is not null)
+            _ = CompleteDisposalAsync(disposeCompletion);
+
+        return new ValueTask(disposeTask);
+    }
+
+    private async Task CompleteDisposalAsync(TaskCompletionSource completion)
+    {
         try
         {
-            if (_ws.State == WebSocketState.Open)
+            await DisposeCoreAsync();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Smallest AI Pulse disposal error: {ex.Message}");
+        }
+        finally
+        {
+            completion.TrySetResult();
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        BeginDisposal();
+        using var teardownCts = new CancellationTokenSource(
+            TimeSpan.FromMilliseconds(TeardownTimeoutMs)
+        );
+        var teardownToken = teardownCts.Token;
+
+        try
+        {
+            // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
+            _receiveCts.Cancel();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Smallest AI Pulse receive cancellation error: {ex.Message}");
+        }
+        _lastResponseReceived.TrySetResult();
+        _ = _lastResponseReceived.Task.Exception;
+
+        var sendLockAcquired = false;
+        var abortInvoked = false;
+        Task? closeTask = null;
+
+        try
+        {
+            try
             {
-                try { await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); }
-                catch (OperationCanceledException ex)
+                await _sendLock.WaitAsync(teardownToken);
+                sendLockAcquired = true;
+            }
+            catch (OperationCanceledException) when (teardownToken.IsCancellationRequested)
+            {
+                AbortSocket(ref abortInvoked);
+            }
+
+            if (sendLockAcquired && _ws.State == WebSocketState.Open)
+            {
+                try
                 {
-                    Debug.WriteLine($"Smallest AI Pulse WebSocket close canceled: {ex.Message}");
+                    closeTask = _ws.CloseAsync(
+                        WebSocketCloseStatus.NormalClosure,
+                        null,
+                        teardownToken
+                    );
+                    await closeTask.WaitAsync(teardownToken);
                 }
-                catch (WebSocketException ex)
+                catch (OperationCanceledException) when (teardownToken.IsCancellationRequested)
+                {
+                    Debug.WriteLine("Smallest AI Pulse WebSocket close timed out.");
+                    AbortSocket(ref abortInvoked);
+                }
+                catch (Exception ex)
                 {
                     Debug.WriteLine($"Smallest AI Pulse WebSocket close error: {ex.Message}");
-                }
-                catch (InvalidOperationException ex)
-                {
-                    Debug.WriteLine($"Smallest AI Pulse WebSocket close skipped: {ex.Message}");
+                    AbortSocket(ref abortInvoked);
                 }
             }
         }
         finally
         {
-            _sendLock.Release();
+            if (sendLockAcquired)
+                _sendLock.Release();
         }
 
-        if (_receiveTask is not null)
+        var cleanupTask = CleanupResourcesAsync(closeTask);
+        try
         {
-            try { await _receiveTask; }
-            catch (OperationCanceledException ex)
-            {
-                Debug.WriteLine($"Smallest AI Pulse receive loop canceled during dispose: {ex.Message}");
-            }
-            catch (WebSocketException ex)
-            {
-                Debug.WriteLine($"Smallest AI Pulse receive loop closed during dispose: {ex.Message}");
-            }
-            catch (JsonException ex)
-            {
-                Debug.WriteLine($"Smallest AI Pulse receive loop parse error during dispose: {ex.Message}");
-            }
-            catch (InvalidOperationException ex)
-            {
-                Debug.WriteLine($"Smallest AI Pulse receive loop stopped during dispose: {ex.Message}");
-            }
+            await cleanupTask.WaitAsync(teardownToken);
         }
+        catch (OperationCanceledException) when (teardownToken.IsCancellationRequested)
+        {
+            AbortSocket(ref abortInvoked);
+            // Cleanup is deliberately detached after the shared deadline. It
+            // observes every operation and owns all resource disposal.
+            _ = cleanupTask;
+        }
+    }
 
-        _sendLock.Dispose();
-        _receiveCts.Dispose();
-        _ws.Dispose();
+    private void BeginDisposal()
+    {
+        lock (_operationGate)
+        {
+            _disposed = true;
+            if (_activeOperations == 0)
+                _operationsDrained.TrySetResult();
+        }
+    }
+
+    private bool TryBeginOperation()
+    {
+        lock (_operationGate)
+        {
+            if (_disposed)
+                return false;
+
+            _activeOperations++;
+            return true;
+        }
+    }
+
+    private void EndOperation()
+    {
+        lock (_operationGate)
+        {
+            _activeOperations--;
+            if (_disposed && _activeOperations == 0)
+                _operationsDrained.TrySetResult();
+        }
+    }
+
+    private void AbortSocket(ref bool abortInvoked)
+    {
+        if (abortInvoked)
+            return;
+
+        abortInvoked = true;
+        try { _ws.Abort(); }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Smallest AI Pulse WebSocket abort error: {ex.Message}");
+        }
+    }
+
+    private async Task CleanupResourcesAsync(Task? closeTask)
+    {
+        var closeObservation = ObserveOperationAsync(closeTask, "close");
+        var sendObservation = ObserveOperationAsync(_operationsDrained.Task, "send");
+        var receiveObservation = ObserveOperationAsync(_receiveTask, "receive");
+        await Task.WhenAll(closeObservation, sendObservation, receiveObservation);
+
+        TryDispose(_sendLock, "send semaphore");
+        TryDispose(_receiveCts, "receive cancellation source");
+        TryDispose(_ws, "WebSocket");
+    }
+
+    private static async Task ObserveOperationAsync(Task? operation, string operationName)
+    {
+        if (operation is null)
+            return;
+
+        try
+        {
+            await operation;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine(
+                $"Smallest AI Pulse {operationName} operation stopped during disposal: {ex.Message}"
+            );
+        }
+    }
+
+    private static void TryDispose(IDisposable resource, string resourceName)
+    {
+        try { resource.Dispose(); }
+        catch (Exception ex)
+        {
+            Debug.WriteLine(
+                $"Smallest AI Pulse {resourceName} disposal error: {ex.Message}"
+            );
+        }
     }
 }
 
