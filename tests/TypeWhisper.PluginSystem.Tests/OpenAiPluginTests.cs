@@ -505,6 +505,260 @@ public class OpenAiPluginTests
     }
 
     [Fact]
+    public async Task ConcurrentChatGptRequests_RefreshOnceAndUseOneCoherentCredentialSnapshot()
+    {
+        const long expiresAtUnixSeconds = 4_102_444_800;
+        var firstAccessToken = CreateJwt("""
+            {
+              "exp": 4102444800
+            }
+            """);
+        var firstIdToken = CreateJwt("""
+            {
+              "chatgpt_account_id": "acct_single_refresh",
+              "chatgpt_plan_type": "pro"
+            }
+            """);
+        var secondAccessToken = CreateJwt("""
+            {
+              "exp": 4102444800,
+              "jti": "duplicate"
+            }
+            """);
+        var secondIdToken = CreateJwt("""
+            {
+              "chatgpt_account_id": "acct_duplicate_refresh",
+              "chatgpt_plan_type": "free"
+            }
+            """);
+        var firstRefreshResponse = JsonSerializer.Serialize(new
+        {
+            access_token = firstAccessToken,
+            refresh_token = "rotated-refresh-token",
+            id_token = firstIdToken,
+            expires_in = 3600,
+        });
+        var duplicateRefreshResponse = JsonSerializer.Serialize(new
+        {
+            access_token = secondAccessToken,
+            refresh_token = "duplicate-rotated-refresh-token",
+            id_token = secondIdToken,
+            expires_in = 3600,
+        });
+        var firstRefreshStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstRefresh = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var downstreamAccessTokens = new List<string?>();
+        var tokenPostCount = 0;
+        var handler = new CapturingHandler(async (request, _) =>
+        {
+            if (request.RequestUri?.AbsoluteUri == "https://auth.openai.com/oauth/token")
+            {
+                // ReSharper disable once AccessToModifiedClosure -- intentional shared counter across handler invocations; Interlocked.Increment coordinates the concurrent-refresh dedup this test asserts.
+                var refreshNumber = Interlocked.Increment(ref tokenPostCount);
+                if (refreshNumber == 1)
+                {
+                    firstRefreshStarted.TrySetResult(true);
+                    await releaseFirstRefresh.Task;
+                    return JsonResponse(firstRefreshResponse);
+                }
+
+                return JsonResponse(duplicateRefreshResponse);
+            }
+
+            lock (downstreamAccessTokens)
+            {
+                downstreamAccessTokens.Add(request.Headers.Authorization?.Parameter);
+            }
+
+            return JsonResponse("""{"output_text":"OK"}""");
+        });
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddMinutes(-5));
+        host.Secrets["oauth-access-token"] = "expired-access-token";
+        host.Secrets["oauth-refresh-token"] = "original-refresh-token";
+
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        await sut.ActivateAsync(host);
+
+        var firstRequest = sut.ProcessAsync(
+            "system",
+            "first",
+            "gpt-5.5",
+            timeoutCts.Token);
+        await firstRefreshStarted.Task.WaitAsync(timeoutCts.Token);
+        var secondRequest = sut.ProcessAsync(
+            "system",
+            "second",
+            "gpt-5.5",
+            timeoutCts.Token);
+
+        releaseFirstRefresh.TrySetResult(true);
+        await Task.WhenAll(firstRequest, secondRequest).WaitAsync(timeoutCts.Token);
+
+        Assert.Equal(1, Volatile.Read(ref tokenPostCount));
+        lock (downstreamAccessTokens)
+        {
+            Assert.Equal(2, downstreamAccessTokens.Count);
+            Assert.All(
+                downstreamAccessTokens,
+                accessToken => Assert.Equal(firstAccessToken, accessToken));
+        }
+        Assert.Equal(firstAccessToken, host.Secrets["oauth-access-token"]);
+        Assert.Equal("rotated-refresh-token", host.Secrets["oauth-refresh-token"]);
+        Assert.Equal(firstIdToken, host.Secrets["oauth-id-token"]);
+        Assert.Equal("acct_single_refresh", host.GetSetting<string>("oauthAccountID"));
+        Assert.Equal("pro", host.GetSetting<string>("oauthPlanType"));
+        Assert.Equal(
+            DateTimeOffset.FromUnixTimeSeconds(expiresAtUnixSeconds),
+            host.GetSetting<DateTimeOffset?>("oauthExpiresAt"));
+    }
+
+    [Fact]
+    public async Task ChatGptRefresh_FailureReleasesCredentialGateForWaitingRequest()
+    {
+        var firstRefreshStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstRefresh = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var tokenPostCount = 0;
+        var handler = new CapturingHandler(async (request, _) =>
+        {
+            if (request.RequestUri?.AbsoluteUri != "https://auth.openai.com/oauth/token")
+                return JsonResponse("""{"output_text":"OK"}""");
+
+            // ReSharper disable once AccessToModifiedClosure -- intentional shared counter across handler invocations; Interlocked.Increment coordinates the concurrent-refresh dedup this test asserts.
+            var refreshNumber = Interlocked.Increment(ref tokenPostCount);
+            if (refreshNumber == 1)
+            {
+                firstRefreshStarted.TrySetResult(true);
+                await releaseFirstRefresh.Task;
+                return new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent(
+                        """{"error":"rejected refresh token"}""",
+                        Encoding.UTF8,
+                        "application/json"),
+                };
+            }
+
+            return JsonResponse(
+                """{"access_token":"recovered-access-token","refresh_token":"recovered-refresh-token","expires_in":3600}""");
+        });
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddMinutes(-5));
+        host.Secrets["oauth-access-token"] = "expired-access-token";
+        host.Secrets["oauth-refresh-token"] = "original-refresh-token";
+
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        await sut.ActivateAsync(host);
+
+        var failingRequest = sut.ProcessAsync(
+            "system",
+            "first",
+            "gpt-5.5",
+            timeoutCts.Token);
+        await firstRefreshStarted.Task.WaitAsync(timeoutCts.Token);
+        var waitingRequest = sut.ProcessAsync(
+            "system",
+            "second",
+            "gpt-5.5",
+            timeoutCts.Token);
+
+        try
+        {
+            for (var i = 0; i < 10; i++)
+                await Task.Yield();
+            Assert.Equal(1, Volatile.Read(ref tokenPostCount));
+
+            releaseFirstRefresh.TrySetResult(true);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => failingRequest);
+            Assert.Equal("OK", await waitingRequest.WaitAsync(timeoutCts.Token));
+            Assert.Equal(2, Volatile.Read(ref tokenPostCount));
+            Assert.Equal("recovered-access-token", host.Secrets["oauth-access-token"]);
+            Assert.Equal("recovered-refresh-token", host.Secrets["oauth-refresh-token"]);
+        }
+        finally
+        {
+            releaseFirstRefresh.TrySetResult(true);
+        }
+    }
+
+    [Fact]
+    public async Task ChatGptRefresh_CancellationReleasesCredentialGateForWaitingRequest()
+    {
+        var firstRefreshStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var tokenPostCount = 0;
+        var handler = new CapturingHandler(async (request, _, cancellationToken) =>
+        {
+            if (request.RequestUri?.AbsoluteUri != "https://auth.openai.com/oauth/token")
+                return JsonResponse("""{"output_text":"OK"}""");
+
+            // ReSharper disable once AccessToModifiedClosure -- intentional shared counter across handler invocations; Interlocked.Increment coordinates the concurrent-refresh dedup this test asserts.
+            var refreshNumber = Interlocked.Increment(ref tokenPostCount);
+            if (refreshNumber == 1)
+            {
+                firstRefreshStarted.TrySetResult(true);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+
+            return JsonResponse(
+                """{"access_token":"recovered-access-token","refresh_token":"recovered-refresh-token","expires_in":3600}""");
+        });
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddMinutes(-5));
+        host.Secrets["oauth-access-token"] = "expired-access-token";
+        host.Secrets["oauth-refresh-token"] = "original-refresh-token";
+
+        using var firstRequestCts = new CancellationTokenSource();
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        await sut.ActivateAsync(host);
+
+        var canceledRequest = sut.ProcessAsync(
+            "system",
+            "first",
+            "gpt-5.5",
+            firstRequestCts.Token);
+        await firstRefreshStarted.Task.WaitAsync(timeoutCts.Token);
+        var waitingRequest = sut.ProcessAsync(
+            "system",
+            "second",
+            "gpt-5.5",
+            timeoutCts.Token);
+
+        try
+        {
+            for (var i = 0; i < 10; i++)
+                await Task.Yield();
+            Assert.Equal(1, Volatile.Read(ref tokenPostCount));
+
+            // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel must trip the token before the assertion; CancelAsync would defer it.
+            firstRequestCts.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceledRequest);
+            Assert.Equal("OK", await waitingRequest.WaitAsync(timeoutCts.Token));
+            Assert.Equal(2, Volatile.Read(ref tokenPostCount));
+            Assert.Equal("recovered-access-token", host.Secrets["oauth-access-token"]);
+            Assert.Equal("recovered-refresh-token", host.Secrets["oauth-refresh-token"]);
+        }
+        finally
+        {
+            // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in this teardown path; CancelAsync() only defers callbacks, with no benefit here.
+            firstRequestCts.Cancel();
+        }
+    }
+
+    [Fact]
     public async Task ImportExistingLogin_LoadsTokensFromCodexAuthFile()
     {
         var tempDir = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -1475,9 +1729,25 @@ public class OpenAiPluginTests
             Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
 
-    private sealed class CapturingHandler(
-        Func<HttpRequestMessage, string?, Task<HttpResponseMessage>> responder) : HttpMessageHandler
+    private static string CreateJwt(string payload)
     {
+        var encodedPayload = Convert.ToBase64String(Encoding.UTF8.GetBytes(payload))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+        return $"e30.{encodedPayload}.signature";
+    }
+
+    private sealed class CapturingHandler(
+        Func<HttpRequestMessage, string?, CancellationToken, Task<HttpResponseMessage>> responder)
+        : HttpMessageHandler
+    {
+        public CapturingHandler(
+            Func<HttpRequestMessage, string?, Task<HttpResponseMessage>> responder)
+            : this((request, body, _) => responder(request, body))
+        {
+        }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -1485,7 +1755,7 @@ public class OpenAiPluginTests
             var body = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            return await responder(request, body);
+            return await responder(request, body, cancellationToken);
         }
     }
 
