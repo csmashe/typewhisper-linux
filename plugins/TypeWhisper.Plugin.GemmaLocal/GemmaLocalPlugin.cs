@@ -4,6 +4,7 @@
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
+using System.Collections.Immutable;
 using System.Diagnostics;
 using LLama;
 using LLama.Common;
@@ -48,6 +49,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromHours(2) };
     private readonly SemaphoreSlim _inferenceLock = new(1, 1);
+    private readonly Action<string, string?> _modelRoutingGuard;
     private IPluginHostServices? _host;
     private LLamaWeights? _weights;
     private LLamaContext? _context;
@@ -58,6 +60,19 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     public string PluginId => "com.typewhisper.gemma-local";
     public string PluginName => "Gemma 4 (Local)";
     public string PluginVersion => "1.0.0";
+
+    public GemmaLocalPlugin()
+        : this(null, EnsureRequestedModelIsActive) { }
+
+    internal GemmaLocalPlugin(
+        string? loadedModelId,
+        Action<string, string?> modelRoutingGuard
+    )
+    {
+        LoadedModelId = loadedModelId;
+        _modelRoutingGuard =
+            modelRoutingGuard ?? throw new ArgumentNullException(nameof(modelRoutingGuard));
+    }
 
     public Task ActivateAsync(IPluginHostServices host)
     {
@@ -275,15 +290,8 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     public string ProviderName => "Gemma 4 (Local)";
     public bool IsAvailable => LoadedModelId is not null;
 
-    public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
-        s_models
-            .Select(m => new PluginModelInfo(m.Id, m.DisplayName)
-            {
-                SizeDescription = m.SizeDescription,
-                EstimatedSizeMB = m.EstimatedSizeMB,
-                IsRecommended = m.IsRecommended,
-            })
-            .ToList();
+    public IReadOnlyList<PluginModelInfo> SupportedModels =>
+        GetSupportedModels(LoadedModelId);
 
     public async Task<string> ProcessAsync(
         string systemPrompt,
@@ -295,6 +303,8 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         await _inferenceLock.WaitAsync(ct);
         try
         {
+            _modelRoutingGuard(model, LoadedModelId);
+
             if (_context is null || _weights is null)
                 throw new InvalidOperationException(
                     "No model loaded. Download and load a model first."
@@ -340,6 +350,8 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         await _inferenceLock.WaitAsync(ct);
         try
         {
+            _modelRoutingGuard(model, LoadedModelId);
+
             if (_context is null || _weights is null)
                 throw new InvalidOperationException(
                     "No model loaded. Download and load a model first."
@@ -385,6 +397,57 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
     // ReSharper disable once ConvertToAutoPropertyWhenPossible -- expression-bodied accessor returning the shared static list; not an auto-property candidate.
     internal static IReadOnlyList<GemmaModelDefinition> ModelDefinitions => s_models;
+
+    internal static IReadOnlyList<PluginModelInfo> GetSupportedModels(string? loadedModelId)
+    {
+        if (loadedModelId is null)
+            return ImmutableArray<PluginModelInfo>.Empty;
+
+        var model = GetModelDefinition(loadedModelId);
+        // ReSharper disable once UseCollectionExpression -- a collection expression targets IReadOnlyList and lowers to a ReadOnlySingleElementList; ImmutableArray.Create keeps the concrete ImmutableArray return type both branches (and the tests) rely on.
+        return ImmutableArray.Create(
+            new PluginModelInfo(model.Id, model.DisplayName)
+            {
+                SizeDescription = model.SizeDescription,
+                EstimatedSizeMB = model.EstimatedSizeMB,
+                IsRecommended = model.IsRecommended,
+            }
+        );
+    }
+
+    internal static void EnsureRequestedModelIsActive(
+        string requestedModelId,
+        string? activeModelId
+    )
+    {
+        if (
+            s_models.All(m =>
+                !string.Equals(m.Id, requestedModelId, StringComparison.Ordinal)
+            )
+        )
+        {
+            throw new InvalidOperationException(
+                $"Requested Gemma model '{requestedModelId}' is unknown; "
+                    + $"the active Gemma model is '{activeModelId ?? "(none)"}'."
+            );
+        }
+
+        if (activeModelId is null)
+        {
+            throw new InvalidOperationException(
+                $"Requested Gemma model '{requestedModelId}' cannot run because "
+                    + "the active Gemma model is '(none)'."
+            );
+        }
+
+        if (!string.Equals(requestedModelId, activeModelId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Requested Gemma model '{requestedModelId}' does not match "
+                    + $"the active Gemma model '{activeModelId}'."
+            );
+        }
+    }
 
     internal void SelectModel(string modelId)
     {
