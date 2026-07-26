@@ -5,16 +5,32 @@
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.Plugins.Shared.Net;
 
 namespace TypeWhisper.Plugin.Obsidian;
 
 public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
+    private const int MaxIndividualNotePathAttempts = 10_000;
+    private const int UnixFileExistsError = 17;
+    private const int WindowsFileExistsError = 80;
+    private const int WindowsAlreadyExistsError = 183;
+
+    private readonly Func<List<ObsidianVaultInfo>> _detectVaults;
     private List<ObsidianVaultInfo> _detectedVaults = [];
+
+    public ObsidianPlugin() : this(DetectVaults) { }
+
+    internal ObsidianPlugin(Func<List<ObsidianVaultInfo>> detectVaults)
+    {
+        ArgumentNullException.ThrowIfNull(detectVaults);
+        _detectVaults = detectVaults;
+    }
 
     public string PluginId => "com.typewhisper.obsidian";
     public string PluginName => "Obsidian";
@@ -40,7 +56,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
     public Task ActivateAsync(IPluginHostServices host)
     {
         Host = host;
-        _detectedVaults = DetectVaults();
+        _detectedVaults = _detectVaults();
         return Task.CompletedTask;
     }
 
@@ -77,8 +93,6 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
 
         string filePath;
         string filename;
-        // ReSharper disable once TooWideLocalVariableScope -- declared with its siblings; both branches assign it before the shared use below.
-        string content;
 
         if (dailyNoteMode)
         {
@@ -86,26 +100,18 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
             filePath = Path.Join(targetDir, filename);
 
             var entry = BuildDailyNoteEntry(input, context, now);
-
-            if (File.Exists(filePath))
-            {
-                await File.AppendAllTextAsync(filePath, entry, Encoding.UTF8, ct);
-            }
-            else
-            {
-                var header = $"# {now:yyyy-MM-dd}\n\n";
-                await File.WriteAllTextAsync(filePath, header + entry, Encoding.UTF8, ct);
-            }
+            var header = $"# {now:yyyy-MM-dd}\n\n";
+            var lockPath = GetDailyNoteLockPath(Host.PluginDataDirectory, filePath);
+            await WriteDailyNoteAsync(filePath, lockPath, header, entry, ct);
         }
         else
         {
             filename = BuildFilename(filenameTemplate, context, now) + ".md";
             filePath = Path.Join(targetDir, filename);
-            filePath = EnsureUniqueFilePath(filePath);
-            filename = Path.GetFileName(filePath);
 
-            content = BuildNoteContent(input, context, now);
-            await File.WriteAllTextAsync(filePath, content, Encoding.UTF8, ct);
+            var content = BuildNoteContent(input, context, now);
+            filePath = await WriteIndividualNoteAsync(filePath, content, ct);
+            filename = Path.GetFileName(filePath);
         }
 
         Host.Log(PluginLogLevel.Info, $"Saved transcription to {filePath}");
@@ -185,24 +191,202 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
         return string.IsNullOrWhiteSpace(result) ? "Transcription" : result;
     }
 
-    private static string EnsureUniqueFilePath(string filePath)
-    {
-        if (!File.Exists(filePath))
-            return filePath;
+    private static Task<string> WriteIndividualNoteAsync(
+        string filePath,
+        string content,
+        CancellationToken ct
+    ) =>
+        WriteIndividualNoteAsync(filePath, content, ct, WriteUtf8TextAsync);
 
+    internal static async Task<string> WriteIndividualNoteAsync(
+        string filePath,
+        string content,
+        CancellationToken ct,
+        Func<FileStream, string, CancellationToken, Task> writeAsync
+    )
+    {
         var dir = Path.GetDirectoryName(filePath)!;
         var nameWithoutExt = Path.GetFileNameWithoutExtension(filePath);
         var ext = Path.GetExtension(filePath);
-        var counter = 2;
 
-        string candidate;
-        do
+        for (var attempt = 0; attempt < MaxIndividualNotePathAttempts; attempt++)
         {
-            candidate = Path.Join(dir, $"{nameWithoutExt} {counter}{ext}");
-            counter++;
-        } while (File.Exists(candidate));
+            var candidate = attempt == 0
+                ? filePath
+                : Path.Join(dir, $"{nameWithoutExt} {attempt + 1}{ext}");
+            FileStream claimedStream;
 
-        return candidate;
+            try
+            {
+                claimedStream = new FileStream(
+                    candidate,
+                    FileMode.CreateNew,
+                    FileAccess.Write,
+                    FileShare.None,
+                    bufferSize: 4096,
+                    FileOptions.Asynchronous
+                );
+            }
+            catch (IOException ex) when (IsCreateNewCollision(ex))
+            {
+                continue;
+            }
+
+            try
+            {
+                await using (claimedStream)
+                {
+                    await writeAsync(claimedStream, content, ct);
+                    await claimedStream.FlushAsync(ct);
+                }
+
+                return candidate;
+            }
+            catch
+            {
+                TryDeleteOwnedFile(candidate);
+                throw;
+            }
+        }
+
+        throw new IOException(
+            $"Could not create a unique Obsidian note after {MaxIndividualNotePathAttempts} attempts."
+        );
+    }
+
+    internal static string GetDailyNoteLockPath(string pluginDataDirectory, string notePath)
+    {
+        var normalizedNotePath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(notePath));
+        if (OperatingSystem.IsWindows())
+            normalizedNotePath = normalizedNotePath.ToUpperInvariant();
+
+        var hash = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(normalizedNotePath))
+        );
+        return Path.Join(pluginDataDirectory, "locks", $"{hash}.lock");
+    }
+
+    private static async Task WriteDailyNoteAsync(
+        string filePath,
+        string lockPath,
+        string header,
+        string entry,
+        CancellationToken ct
+    )
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+
+        await using (await InterProcessFileLock.AcquireAsync(lockPath, ct))
+        {
+            if (File.Exists(filePath))
+            {
+                // The sentinel already serializes TypeWhisper writers, so allow
+                // read sharing: an editor/sync client holding the note open for
+                // reading must not turn this append into a sharing violation.
+                var originalLength = new FileInfo(filePath).Length;
+                try
+                {
+                    await using var appendStream = new FileStream(
+                        filePath,
+                        FileMode.Append,
+                        FileAccess.Write,
+                        FileShare.Read,
+                        bufferSize: 4096,
+                        FileOptions.Asynchronous
+                    );
+                    await WriteUtf8TextAsync(appendStream, entry, ct);
+                    await appendStream.FlushAsync(ct);
+                }
+                catch
+                {
+                    // Roll the note back to its pre-append length so a failed or
+                    // cancelled write leaves no partial entry behind.
+                    TryTruncateFile(filePath, originalLength);
+                    throw;
+                }
+
+                return;
+            }
+
+            FileStream claimedStream = new(
+                filePath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 4096,
+                FileOptions.Asynchronous
+            );
+
+            try
+            {
+                await using (claimedStream)
+                {
+                    await WriteUtf8TextAsync(claimedStream, header + entry, ct);
+                    await claimedStream.FlushAsync(ct);
+                }
+            }
+            catch
+            {
+                TryDeleteOwnedFile(filePath);
+                throw;
+            }
+        }
+    }
+
+    private static async Task WriteUtf8TextAsync(
+        FileStream stream,
+        string content,
+        CancellationToken ct
+    )
+    {
+        await using var writer = new StreamWriter(
+            stream,
+            Encoding.UTF8,
+            bufferSize: 1024,
+            leaveOpen: true
+        );
+        await writer.WriteAsync(content.AsMemory(), ct);
+        await writer.FlushAsync(ct);
+    }
+
+    private static bool IsCreateNewCollision(IOException exception)
+    {
+        var errorCode = exception.HResult & 0xFFFF;
+        return errorCode is
+            UnixFileExistsError
+            or WindowsFileExistsError
+            or WindowsAlreadyExistsError;
+    }
+
+    private static void TryDeleteOwnedFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Preserve the original cancellation/write failure if best-effort cleanup fails.
+        }
+    }
+
+    private static void TryTruncateFile(string path, long length)
+    {
+        try
+        {
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Write,
+                FileShare.None
+            );
+            if (stream.Length > length)
+                stream.SetLength(length);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Preserve the original cancellation/write failure if best-effort cleanup fails.
+        }
     }
 
     // ReSharper disable once UseVerbatimString -- the mixed backslash/quote escapes read no better as a verbatim string.
