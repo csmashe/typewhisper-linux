@@ -378,7 +378,7 @@
   "General.AutostartHint": "TypeWhisper se inicia automáticamente cuando inicias sesión.",
   "General.BearerToken": "Token Bearer",
   "General.CliBundledTarget": "Incluido: {0}  |  Destino: {1}",
-  "General.CliInstallHint": "Instala el lanzador CLI incluido en ~/.local/bin/typewhisper. Usa el token Bearer de arriba a través de TYPEWHISPER_API_TOKEN o --token.",
+  "General.CliInstallHint": "Instala el lanzador CLI incluido en ~/.local/bin/typewhisper-cli. Usa el token Bearer de arriba a través de TYPEWHISPER_API_TOKEN o --token.",
   "General.CliInstallerTarget": "Destino del instalador: {0}",
   "General.CloseToTray": "El botón de cerrar oculta en la bandeja del sistema",
   "General.CloseToTrayHint": "Activado: el botón de cerrar (X) oculta la ventana en el icono de la bandeja del sistema — desaparece del dock y la app sigue ejecutándose, accesible desde el menú de la bandeja. Desactivado: el botón de cerrar sale de TypeWhisper.",

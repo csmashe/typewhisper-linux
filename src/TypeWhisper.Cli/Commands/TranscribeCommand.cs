@@ -26,7 +26,7 @@ internal static class TranscribeCommand
         var file = options.Positionals.FirstOrDefault();
         if (string.IsNullOrWhiteSpace(file))
         {
-            return ConsoleOutput.Error("Usage: typewhisper transcribe <file|->");
+            return ConsoleOutput.Error("Usage: typewhisper-cli transcribe <file|->");
         }
 
         Stream audioStream;

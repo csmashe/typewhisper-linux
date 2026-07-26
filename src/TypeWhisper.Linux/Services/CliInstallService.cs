@@ -21,7 +21,10 @@ public sealed record CliInstallState(
 
 public sealed class CliInstallService
 {
-    private const string CliFileName = "typewhisper";
+    private const string CliFileName = "typewhisper-cli";
+
+    // Old install name, kept only so RemoveLegacyLauncher can find and retire it.
+    private const string LegacyCliFileName = "typewhisper";
     private const string LauncherShebang = "#!/usr/bin/env sh";
     private const string LauncherOwnershipMarker = "# Installed by TypeWhisper";
     private readonly Func<string?> _bundledPathProvider;
@@ -115,6 +118,7 @@ public sealed class CliInstallService
 
         File.WriteAllText(state.LauncherPath, BuildLauncherScript(state.InstallPath));
         MarkExecutable(state.LauncherPath);
+        RemoveLegacyLauncher(launcherDirectory, installDirectory);
 
         return GetState();
     }
@@ -124,11 +128,11 @@ public sealed class CliInstallService
         return
         [
             "export TYPEWHISPER_API_TOKEN=\"paste-token-here\"",
-            "typewhisper --help",
-            $"typewhisper status --port {port}",
-            $"typewhisper models --port {port}",
-            $"typewhisper transcribe recording.wav --port {port}",
-            $"typewhisper transcribe recording.wav --language de --json --port {port}",
+            "typewhisper-cli --help",
+            $"typewhisper-cli status --port {port}",
+            $"typewhisper-cli models --port {port}",
+            $"typewhisper-cli transcribe recording.wav --port {port}",
+            $"typewhisper-cli transcribe recording.wav --language de --json --port {port}",
         ];
     }
 
@@ -147,10 +151,37 @@ public sealed class CliInstallService
 
     private static void CopyCliPayload(string sourceDirectory, string installDirectory)
     {
-        foreach (var file in Directory.EnumerateFiles(sourceDirectory, "typewhisper.*"))
+        foreach (var file in Directory.EnumerateFiles(sourceDirectory, "typewhisper-cli.*"))
         {
             var fileName = Path.GetFileName(file);
             File.Copy(file, Path.Join(installDirectory, fileName), true);
+        }
+    }
+
+    // Earlier versions installed as "typewhisper", shadowing the desktop app's own command.
+    // Renaming leaves that launcher behind, so delete it here — but only when it's provably
+    // ours; e.g. the desktop app's own symlink at this name is foreign and left untouched.
+    private static void RemoveLegacyLauncher(string launcherDirectory, string installDirectory)
+    {
+        var legacyLauncherPath = Path.Join(launcherDirectory, LegacyCliFileName);
+        var legacyInstallPath = Path.Join(installDirectory, LegacyCliFileName);
+        if (
+            ClassifyLauncherEntry(legacyLauncherPath, legacyInstallPath)
+            != LauncherEntryClassification.Owned
+        )
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(legacyLauncherPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Trace.WriteLine(
+                $"[CliInstallService] could not remove legacy launcher {legacyLauncherPath}: {ex.Message}"
+            );
         }
     }
 
@@ -364,7 +395,7 @@ public sealed class CliInstallService
 
         // Use EnumerateFiles + exact name comparison rather than File.Exists
         // to guard against case-insensitive filesystems (FAT32, case-folded
-        // ext4 directories) that would treat "TypeWhisper" == "typewhisper".
+        // ext4 directories) that would treat "TypeWhisper-Cli" == "typewhisper-cli".
         return Directory
             .EnumerateFiles(directory, fileName)
             .Any(candidate =>
