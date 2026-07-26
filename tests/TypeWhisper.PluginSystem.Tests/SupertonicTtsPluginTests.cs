@@ -9,6 +9,8 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class SupertonicTtsPluginTests
 {
+    private static readonly TimeSpan s_coordinationTimeout = TimeSpan.FromSeconds(5);
+
     [Fact]
     public void Manifest_DeclaresLocalTtsPlugin()
     {
@@ -291,20 +293,58 @@ public class SupertonicTtsPluginTests
         var assets = new FakeSupertonicAssets { AreAssetsReadyValue = true };
         var sut = new SupertonicTtsPlugin(assets, _ => synth, (_, _) => new FakeTtsPlaybackSession());
         await sut.ActivateAsync(new TestPluginHostServices());
+        using var speakCts = new CancellationTokenSource();
+        Task<ITtsPlaybackSession>? speak = null;
+        Task? deactivate = null;
 
-        var speak = Task.Run(() => sut.SpeakAsync(new TtsSpeakRequest("Hello", "en"), CancellationToken.None));
-        await synth.Started;
+        try
+        {
+            // ReSharper disable once MethodSupportsCancellation -- Task.Run must schedule unconditionally; speakCts.Token would cancel scheduling, not the synthesis under test.
+            // ReSharper disable once AccessToDisposedClosure -- the task is awaited (speak.WaitAsync / CompleteBestEffort) before the using var speakCts is disposed at scope end.
+            speak = Task.Run(() =>
+                sut.SpeakAsync(new TtsSpeakRequest("Hello", "en"), speakCts.Token));
+            // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; wiring a token here would make the deadline racy with the finally's teardown cancel instead of fixed.
+            await synth.Started.WaitAsync(s_coordinationTimeout);
 
-        var deactivate = sut.DeactivateAsync();
-        await Task.Delay(50);
-        Assert.False(deactivate.IsCompleted);
-        Assert.False(synth.Disposed);
+            deactivate = sut.DeactivateAsync();
+            // ReSharper disable once MethodSupportsCancellation -- fixed settle window proving DeactivateAsync stays pending while synthesis is in flight; a token would defeat the check.
+            await Task.Delay(50);
+            Assert.False(deactivate.IsCompleted);
+            Assert.False(synth.Disposed);
 
-        gate.SetResult();
-        await speak;
-        await deactivate;
+            gate.SetResult();
+            // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; wiring a token here would make the deadline racy with the finally's teardown cancel instead of fixed.
+            await speak.WaitAsync(s_coordinationTimeout);
+            // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; wiring a token here would make the deadline racy with the finally's teardown cancel instead of fixed.
+            await deactivate.WaitAsync(s_coordinationTimeout);
 
-        Assert.True(synth.Disposed);
+            Assert.True(synth.Disposed);
+        }
+        finally
+        {
+            gate.TrySetResult();
+            // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel is the teardown signal; CancelAsync buys nothing in cleanup.
+            speakCts.Cancel();
+            await CompleteBestEffort(speak);
+            deactivate ??= sut.DeactivateAsync();
+            await CompleteBestEffort(deactivate);
+        }
+    }
+
+    private static async Task CompleteBestEffort(params Task?[] tasks)
+    {
+        var activeTasks = tasks.Where(task => task is not null).Cast<Task>().ToArray();
+        if (activeTasks.Length == 0)
+            return;
+
+        try
+        {
+            await Task.WhenAll(activeTasks).WaitAsync(s_coordinationTimeout);
+        }
+        catch
+        {
+            // Best-effort bounded observation after releasing the gate and canceling speech.
+        }
     }
 
     private static string FindRepoFile(params string[] parts)
