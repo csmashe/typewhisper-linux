@@ -270,6 +270,126 @@ public class XaiPluginTests
     }
 
     [Fact]
+    public async Task ProcessStreamingAsync_ThrowsWhenEofPrecedesResponseCompleted()
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
+            "");
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync(
+                "system", "user", "", CancellationToken.None))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Equal(["partial"], chunks);
+        Assert.Equal(
+            "xAI stream ended before response.completed was received.",
+            ex.Message);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ThrowsWhenDonePrecedesResponseCompleted()
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
+            "",
+            "data: [DONE]",
+            "");
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync(
+                "system", "user", "", CancellationToken.None))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Equal(["partial"], chunks);
+        Assert.Equal(
+            "xAI stream ended with [DONE] before response.completed was received.",
+            ex.Message);
+    }
+
+    [Theory]
+    [InlineData(
+        """{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}""",
+        "max_output_tokens")]
+    [InlineData(
+        """{"type":"response.cancelled","response":{"status":"cancelled","error":{"message":"cancelled upstream"}}}""",
+        "cancelled upstream")]
+    [InlineData(
+        """{"type":"response.canceled","response":{"status":"canceled"}}""",
+        "canceled")]
+    [InlineData(
+        """{"type":"response.completed","response":{"status":"cancelled"}}""",
+        "cancelled")]
+    public async Task ProcessStreamingAsync_ThrowsOnIncompleteOrCancelledTerminalFrame(
+        string terminalPayload,
+        string expectedDetail)
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
+            "",
+            $"data: {terminalPayload}",
+            "",
+            "data: [DONE]",
+            "");
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync(
+                "system", "user", "", CancellationToken.None))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Equal(["partial"], chunks);
+        Assert.Contains(expectedDetail, ex.Message);
+    }
+
+    [Fact]
     public void XaiResponsesClient_ParseResponse_ExtractsNestedOutputText()
     {
         var result = XaiResponsesClient.ParseResponse("""

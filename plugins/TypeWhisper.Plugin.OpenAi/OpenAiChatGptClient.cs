@@ -83,13 +83,19 @@ internal sealed class OpenAiChatGptClient
         return body;
     }
 
-    internal static string? ParseResponseText(string body) =>
-        ParseJsonResponseText(body) ?? ParseEventStreamResponseText(body);
+    internal static string? ParseResponseText(string body)
+    {
+        if (TryParseJsonResponseText(body, out var responseText))
+            return responseText;
+
+        return ParseEventStreamResponseText(body);
+    }
 
     private static string? ParseEventStreamResponseText(string body)
     {
         var deltaBuffer = new StringBuilder();
         var completedParts = new List<string>();
+        var receivedDone = false;
 
         foreach (var rawLine in body.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
@@ -99,7 +105,10 @@ internal sealed class OpenAiChatGptClient
 
             var payload = line[6..];
             if (payload == "[DONE]")
-                continue;
+            {
+                receivedDone = true;
+                break;
+            }
 
             JsonDocument doc;
             try
@@ -115,10 +124,13 @@ internal sealed class OpenAiChatGptClient
             using (doc)
             {
                 var root = doc.RootElement;
-                if (!root.TryGetProperty("type", out var typeEl))
+                if (GetString(root, "type") is not { } type)
                     continue;
 
-                switch (typeEl.GetString())
+                if (GetSseFailure(root, type) is { } failure)
+                    throw new InvalidOperationException(failure);
+
+                switch (type)
                 {
                     case "response.output_text.delta":
                         if (GetString(root, "delta") is { } delta)
@@ -139,6 +151,12 @@ internal sealed class OpenAiChatGptClient
             }
         }
 
+        if (!receivedDone)
+        {
+            throw new InvalidOperationException(
+                "ChatGPT SSE stream ended before [DONE] was received.");
+        }
+
         if (deltaBuffer.Length > 0)
             return deltaBuffer.ToString().Trim();
 
@@ -146,7 +164,39 @@ internal sealed class OpenAiChatGptClient
         return string.IsNullOrEmpty(completed) ? null : completed;
     }
 
-    private static string? ParseJsonResponseText(string json)
+    private static string? GetSseFailure(JsonElement root, string type)
+    {
+        var status = root.TryGetProperty("response", out var response)
+            && response.ValueKind == JsonValueKind.Object
+            ? GetString(response, "status")
+            : GetString(root, "status");
+
+        if (type == "response.completed")
+        {
+            if (!string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"ChatGPT SSE event 'response.completed' had non-completed status "
+                    + $"'{status ?? "missing"}'.";
+            }
+
+            return null;
+        }
+
+        if (type is not ("error"
+            or "response.failed"
+            or "response.incomplete"
+            or "response.cancelled"
+            or "response.canceled"))
+        {
+            return null;
+        }
+
+        return status is null
+            ? $"ChatGPT SSE event '{type}' indicated failure."
+            : $"ChatGPT SSE event '{type}' indicated terminal status '{status}'.";
+    }
+
+    private static bool TryParseJsonResponseText(string json, out string? responseText)
     {
         try
         {
@@ -154,7 +204,10 @@ internal sealed class OpenAiChatGptClient
             var root = doc.RootElement;
 
             if (GetString(root, "output_text") is { Length: > 0 } outputText)
-                return outputText.Trim();
+            {
+                responseText = outputText.Trim();
+                return true;
+            }
 
             if (root.TryGetProperty("choices", out var choices)
                 && choices.ValueKind == JsonValueKind.Array
@@ -162,7 +215,8 @@ internal sealed class OpenAiChatGptClient
                 && choices[0].TryGetProperty("message", out var message)
                 && GetString(message, "content") is { Length: > 0 } messageContent)
             {
-                return messageContent.Trim();
+                responseText = messageContent.Trim();
+                return true;
             }
 
             if (root.TryGetProperty("output", out var output)
@@ -184,15 +238,20 @@ internal sealed class OpenAiChatGptClient
 
                 var joined = string.Join("\n", parts).Trim();
                 if (!string.IsNullOrEmpty(joined))
-                    return joined;
+                {
+                    responseText = joined;
+                    return true;
+                }
             }
+
+            responseText = null;
+            return true;
         }
         catch (JsonException)
         {
-            return null;
+            responseText = null;
+            return false;
         }
-
-        return null;
     }
 
     private static string ParseErrorMessage(string body, int statusCode)
