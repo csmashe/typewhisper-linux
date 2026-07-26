@@ -251,26 +251,35 @@ public sealed class OpenAiCompatiblePlugin
         // Helpers append "/v1/..." themselves; pasted URLs often already
         // include "/v1", so strip a trailing "/v1" segment to avoid building
         // "/v1/v1/models" and similar paths.
-        var normalized = url.Trim().TrimEnd('/');
-        if (normalized.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
-            normalized = normalized[..^3];
+        var normalized = NormalizeBaseUrl(url);
+        var changed = !string.Equals(BaseUrl, normalized, StringComparison.Ordinal);
         BaseUrl = normalized;
         _host?.SetSetting("baseUrl", normalized);
-        _host?.NotifyCapabilitiesChanged();
+
+        if (changed)
+            SetFetchedModels([]);
+        else
+            _host?.NotifyCapabilitiesChanged();
     }
 
     internal async Task SetApiKeyAsync(string key)
     {
-        ApiKey = string.IsNullOrWhiteSpace(key) ? null : key;
+        var apiKey = string.IsNullOrWhiteSpace(key) ? null : key;
+        var changed = !string.Equals(ApiKey, apiKey, StringComparison.Ordinal);
+
         if (_host is not null)
         {
-            if (string.IsNullOrWhiteSpace(key))
+            if (apiKey is null)
                 await _host.DeleteSecretAsync("api-key");
             else
-                await _host.StoreSecretAsync("api-key", key);
-
-            _host.NotifyCapabilitiesChanged();
+                await _host.StoreSecretAsync("api-key", apiKey);
         }
+
+        ApiKey = apiKey;
+        if (changed)
+            SetFetchedModels([]);
+        else
+            _host?.NotifyCapabilitiesChanged();
     }
 
     internal void SelectLlmModel(string modelId)
@@ -290,7 +299,13 @@ public sealed class OpenAiCompatiblePlugin
 
     internal void SetFetchedModels(List<FetchedModel> models, bool notifyCapabilitiesChanged = true)
     {
+        var selectedModelId = NormalizeModelSelection(SelectedModelId, models);
+        var selectedLlmModelId = NormalizeModelSelection(SelectedLlmModelId, models);
+
         _fetchedModels = models;
+        SelectedModelId = selectedModelId;
+        SelectedLlmModelId = selectedLlmModelId;
+
         try
         {
             var json = JsonSerializer.Serialize(models);
@@ -299,6 +314,10 @@ public sealed class OpenAiCompatiblePlugin
         catch
         { /* best effort */
         }
+
+        _host?.SetSetting("selectedModel", selectedModelId);
+        _host?.SetSetting("selectedLlmModel", selectedLlmModelId);
+
         if (notifyCapabilitiesChanged)
             _host?.NotifyCapabilitiesChanged();
     }
@@ -441,13 +460,18 @@ public sealed class OpenAiCompatiblePlugin
             case "api-key":
                 await SetApiKeyAsync(value ?? string.Empty);
                 break;
+            // Only honor a selection that exists in the authoritative catalog. On the
+            // host's full-form save, an earlier baseUrl/api-key change clears the catalog
+            // and both selections, but the form still carries the previous selection in
+            // these later fields; restoring it unconditionally would re-pair the new
+            // endpoint with a stale model. A genuine dropdown pick is always in-catalog.
             case "selectedModel":
-                if (!string.IsNullOrWhiteSpace(value))
-                    SelectModel(value);
+                if (IsKnownModel(value))
+                    SelectModel(value!);
                 break;
             case "selectedLlmModel":
-                if (!string.IsNullOrWhiteSpace(value))
-                    SelectLlmModel(value);
+                if (IsKnownModel(value))
+                    SelectLlmModel(value!);
                 break;
             case LlmStreamingSettings.StreamResponsesSettingKey:
                 SetStreamResponses(ParseBool(value));
@@ -455,23 +479,20 @@ public sealed class OpenAiCompatiblePlugin
         }
     }
 
+    private bool IsKnownModel(string? modelId) =>
+        !string.IsNullOrWhiteSpace(modelId)
+        && _fetchedModels.Any(m => string.Equals(m.Id, modelId, StringComparison.Ordinal));
+
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(BaseUrl))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterBaseUrl"));
 
-        var valid = await ValidateConnectionAsync(ct);
-        if (!valid)
+        var models = await FetchModelsAsync(ct);
+        if (models is null)
             return new PluginSettingsValidationResult(false, Loc.L("Settings.CouldNotConnect"));
 
-        var models = await FetchModelsAsync(ct) ?? [];
         SetFetchedModels(models, notifyCapabilitiesChanged: false);
-
-        if (string.IsNullOrWhiteSpace(SelectedModelId) && models.Count > 0)
-            SelectModel(models[0].Id);
-        if (string.IsNullOrWhiteSpace(SelectedLlmModelId) && models.Count > 0)
-            SelectLlmModel(models[0].Id);
-
         _host?.NotifyCapabilitiesChanged();
 
         return new PluginSettingsValidationResult(
@@ -480,48 +501,100 @@ public sealed class OpenAiCompatiblePlugin
         );
     }
 
-    // IModelCatalogProvider: read-only model-list refresh for dropdown-open.
-    // Only the model catalog is touched — no connection-validation message, no
-    // asset downloads, no auto-selecting a model. Keeps the cached list on a
-    // transient failure (FetchModelsAsync returns null) so an unreachable
-    // endpoint doesn't empty the dropdown, but honors a successful empty
-    // response (empty list) so a server that legitimately dropped all its
-    // models clears the cache.
+    // IModelCatalogProvider: model-list refresh for dropdown-open. A successful
+    // response is authoritative for both the catalog and selections; a transient
+    // failure leaves all three untouched.
     public async Task RefreshModelCatalogAsync(CancellationToken ct = default)
     {
         if (!string.IsNullOrEmpty(BaseUrl))
         {
             var models = await FetchModelsAsync(ct);
-            if (models is not null && CatalogChanged(models, _fetchedModels))
+            if (models is not null && DefaultCatalogStateChanged(models))
                 SetFetchedModels(models);
         }
 
         // Refresh additional profiles on the same dropdown-open path so their
         // catalogs don't go stale when a server adds or removes models after the
         // profile was first saved.
-        var anyProfileChanged = false;
+        var changedProfileIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var profile in _additionalProfiles.Where(p => !string.IsNullOrEmpty(p.BaseUrl)))
         {
             var models = await FetchModelsForAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
-            if (models is null || !CatalogChanged(models, profile.FetchedModels))
+            if (models is null || !ProfileCatalogStateChanged(profile, models))
                 continue;
 
-            profile.FetchedModels = models;
-            lock (_profileRolesLock)
-            {
-                _profileRoles.Remove(profile.Id);
-            }
-
-            anyProfileChanged = true;
+            ApplyProfileCatalog(profile, models);
+            changedProfileIds.Add(profile.Id);
         }
 
-        if (anyProfileChanged)
-            PersistAdditionalProfiles(notify: true);
+        if (changedProfileIds.Count > 0)
+        {
+            PersistAdditionalProfiles(notify: false);
+            lock (_profileRolesLock)
+            {
+                foreach (var id in changedProfileIds)
+                    _profileRoles.Remove(id);
+            }
+
+            _host?.NotifyCapabilitiesChanged();
+        }
     }
 
     private static bool CatalogChanged(List<FetchedModel> fetched, List<FetchedModel> current) =>
-        fetched.Count != current.Count
-        || !fetched.Select(m => m.Id).SequenceEqual(current.Select(m => m.Id));
+        !fetched.SequenceEqual(current);
+
+    private bool DefaultCatalogStateChanged(List<FetchedModel> models) =>
+        CatalogChanged(models, _fetchedModels)
+        || !string.Equals(
+            SelectedModelId,
+            NormalizeModelSelection(SelectedModelId, models),
+            StringComparison.Ordinal
+        )
+        || !string.Equals(
+            SelectedLlmModelId,
+            NormalizeModelSelection(SelectedLlmModelId, models),
+            StringComparison.Ordinal
+        );
+
+    private static bool ProfileCatalogStateChanged(
+        OpenAiCompatibleProfile profile,
+        List<FetchedModel> models
+    ) =>
+        CatalogChanged(models, profile.FetchedModels)
+        || !string.Equals(
+            profile.SelectedModelId,
+            NormalizeModelSelection(profile.SelectedModelId, models),
+            StringComparison.Ordinal
+        )
+        || !string.Equals(
+            profile.SelectedLlmModelId,
+            NormalizeModelSelection(profile.SelectedLlmModelId, models),
+            StringComparison.Ordinal
+        );
+
+    private static void ApplyProfileCatalog(
+        OpenAiCompatibleProfile profile,
+        List<FetchedModel> models
+    )
+    {
+        profile.SelectedModelId = NormalizeModelSelection(profile.SelectedModelId, models);
+        profile.SelectedLlmModelId = NormalizeModelSelection(profile.SelectedLlmModelId, models);
+        profile.FetchedModels = models;
+    }
+
+    private static string? NormalizeModelSelection(
+        string? selectedModelId,
+        List<FetchedModel> models
+    )
+    {
+        if (models.Count == 0)
+            return null;
+
+        return !string.IsNullOrWhiteSpace(selectedModelId)
+            && models.Any(m => string.Equals(m.Id, selectedModelId, StringComparison.Ordinal))
+                ? selectedModelId
+                : models[0].Id;
+    }
 
     private List<PluginSettingOption>? BuildModelOptions()
     {
@@ -650,29 +723,35 @@ public sealed class OpenAiCompatiblePlugin
 
             var id = NormalizeProfileId(Get(item, "__id"), seenIds);
 
-            var key = Get(item, "api-key");
-            var keyChanged = !string.IsNullOrWhiteSpace(key);
+            var key = NullIfWhiteSpace(Get(item, "api-key"));
+            var keyChanged = key is not null
+                && !string.Equals(GetProfileApiKey(id), key, StringComparison.Ordinal);
             if (keyChanged)
-                keyUpdates[id] = key!.Trim();
+                keyUpdates[id] = key;
 
-            // Preserve the fetched model catalog only when the endpoint is unchanged.
-            // A changed base URL (or updated credentials) can point at a different
-            // server, so drop the stale catalog and let the refetch below repopulate
-            // it — otherwise the profile would keep advertising the previous server's
-            // model IDs to dictation and prompt selection.
+            // A changed endpoint (base URL or credentials) may point at a different
+            // server, so drop the stale catalog and this save's submitted selections
+            // rather than pair the new endpoint with the previous server's model IDs.
             var hadProfile = previousById.TryGetValue(id, out var prev);
-            var endpointUnchanged = hadProfile
-                && !keyChanged
-                && string.Equals(prev!.BaseUrl, baseUrl, StringComparison.Ordinal);
+            var endpointChanged = hadProfile
+                && (keyChanged
+                    || !string.Equals(prev!.BaseUrl, baseUrl, StringComparison.Ordinal));
+            var preserveCatalog = hadProfile && !endpointChanged;
+            var selectedModelId = endpointChanged
+                ? null
+                : NullIfWhiteSpace(Get(item, "selectedModel"));
+            var selectedLlmModelId = endpointChanged
+                ? null
+                : NullIfWhiteSpace(Get(item, "selectedLlmModel"));
 
             newProfiles.Add(new OpenAiCompatibleProfile
             {
                 Id = id,
                 Name = name.Length == 0 ? "Custom Server" : name,
                 BaseUrl = baseUrl,
-                SelectedModelId = NullIfWhiteSpace(Get(item, "selectedModel")),
-                SelectedLlmModelId = NullIfWhiteSpace(Get(item, "selectedLlmModel")),
-                FetchedModels = endpointUnchanged ? prev!.FetchedModels : [],
+                SelectedModelId = selectedModelId,
+                SelectedLlmModelId = selectedLlmModelId,
+                FetchedModels = preserveCatalog ? prev!.FetchedModels : [],
             });
         }
 
@@ -701,6 +780,7 @@ public sealed class OpenAiCompatiblePlugin
         // State is now persisted; the best-effort model fetch below may fail or be
         // cancelled, but that must not revert the saved profiles.
         PersistAdditionalProfiles(notify: false);
+        InvalidateChangedProfileRoles(previousById, keyUpdates.Keys);
 
         // Best-effort: populate model catalogs so prompts/dictation can list each
         // profile's models. New profiles and profiles whose endpoint changed have an
@@ -710,11 +790,12 @@ public sealed class OpenAiCompatiblePlugin
         {
             var models = await FetchModelsForAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
             if (models is not null)
-                profile.FetchedModels = models;
+                ApplyProfileCatalog(profile, models);
         }
 
+        PersistAdditionalProfiles(notify: false);
         InvalidateChangedProfileRoles(previousById, keyUpdates.Keys);
-        PersistAdditionalProfiles(notify: true);
+        _host?.NotifyCapabilitiesChanged();
 
         return new PluginSettingsValidationResult(true, $"Saved {_additionalProfiles.Count} profile(s).");
     }
