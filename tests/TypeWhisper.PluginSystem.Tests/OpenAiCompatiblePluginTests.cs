@@ -85,15 +85,117 @@ public sealed class OpenAiCompatiblePluginTests
 
     private static PluginCollectionItem ProfileItem(
         string name, string baseUrl, string? apiKey = null,
-        string? llmModel = null, string? id = "") =>
+        string? model = null, string? llmModel = null, string? id = "") =>
         new(new Dictionary<string, string?>
         {
             ["name"] = name,
             ["baseUrl"] = baseUrl,
             ["api-key"] = apiKey,
+            ["selectedModel"] = model,
             ["selectedLlmModel"] = llmModel,
             ["__id"] = id,
         });
+
+    [Fact]
+    public async Task SetBaseUrl_EndpointChange_InvalidatesStateThenRefreshSelectsFirstModel()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "http://localhost:11434");
+        host.SetSetting("selectedModel", "old-model");
+        host.SetSetting("selectedLlmModel", "old-model");
+        host.SetSetting(
+            "fetchedModels",
+            JsonSerializer.Serialize(new List<FetchedModel> { new("old-model", null) })
+        );
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"data":[{"id":"new-model"},{"id":"new-model-2"}]}""",
+                Encoding.UTF8,
+                "application/json"
+            ),
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await sut.SetSettingValueAsync("baseUrl", "http://localhost:9999");
+
+        Assert.Empty(sut.FetchedModels);
+        Assert.Null(sut.SelectedTranscriptionModelId);
+        Assert.Null(sut.SelectedLlmModelId);
+        Assert.Empty(
+            JsonSerializer.Deserialize<List<FetchedModel>>(
+                host.GetSetting<string>("fetchedModels")!
+            )!
+        );
+        Assert.Null(host.GetSetting<string>("selectedModel"));
+        Assert.Null(host.GetSetting<string>("selectedLlmModel"));
+
+        await sut.RefreshModelCatalogAsync();
+
+        Assert.Equal(["new-model", "new-model-2"], sut.FetchedModels.Select(m => m.Id));
+        Assert.Equal("new-model", sut.SelectedTranscriptionModelId);
+        Assert.Equal("new-model", sut.SelectedLlmModelId);
+        Assert.Equal("new-model", host.GetSetting<string>("selectedModel"));
+        Assert.Equal("new-model", host.GetSetting<string>("selectedLlmModel"));
+    }
+
+    [Fact]
+    public async Task SetApiKeyAsync_CredentialChange_InvalidatesDefaultCatalogAndSelections()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "http://localhost:11434");
+        host.SetSetting("selectedModel", "old-model");
+        host.SetSetting("selectedLlmModel", "old-model");
+        host.SetSetting(
+            "fetchedModels",
+            JsonSerializer.Serialize(new List<FetchedModel> { new("old-model", null) })
+        );
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await sut.SetApiKeyAsync("new-key");
+
+        Assert.Empty(sut.FetchedModels);
+        Assert.Null(sut.SelectedTranscriptionModelId);
+        Assert.Null(sut.SelectedLlmModelId);
+        Assert.Null(host.GetSetting<string>("selectedModel"));
+        Assert.Null(host.GetSetting<string>("selectedLlmModel"));
+    }
+
+    [Fact]
+    public async Task FullFormSave_BaseUrlChange_DoesNotRestoreStaleSelectionsFromLaterFields()
+    {
+        // Reproduces the host's full-form save (TrySaveFlatSettingsAsync), which applies
+        // every field in definition order. A base-URL change clears the catalog and both
+        // selections, but the form still carries the old selectedModel/selectedLlmModel in
+        // the later fields; those setters must not re-pair the new endpoint with stale IDs.
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "http://localhost:11434");
+        host.SetSetting("selectedModel", "old-model");
+        host.SetSetting("selectedLlmModel", "old-model");
+        host.SetSetting(
+            "fetchedModels",
+            JsonSerializer.Serialize(new List<FetchedModel> { new("old-model", null) })
+        );
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        // Host save order: baseUrl, api-key, selectedModel, selectedLlmModel.
+        await sut.SetSettingValueAsync("baseUrl", "http://localhost:9999");
+        await sut.SetSettingValueAsync("api-key", "");
+        await sut.SetSettingValueAsync("selectedModel", "old-model");
+        await sut.SetSettingValueAsync("selectedLlmModel", "old-model");
+
+        Assert.Empty(sut.FetchedModels);
+        Assert.Null(sut.SelectedTranscriptionModelId);
+        Assert.Null(sut.SelectedLlmModelId);
+        Assert.Null(host.GetSetting<string>("selectedModel"));
+        Assert.Null(host.GetSetting<string>("selectedLlmModel"));
+    }
 
     [Fact]
     public async Task SetItemsAsync_AddsProfile_ExposesRoleWithProfileSelectionId()
@@ -268,6 +370,55 @@ public sealed class OpenAiCompatiblePluginTests
     }
 
     [Fact]
+    public async Task SetItemsAsync_EndpointChange_NormalizesSelectionsAndInvalidatesRole()
+    {
+        var handler = new CapturingHandler((request, _) =>
+        {
+            var models = request.RequestUri!.Port == 11434
+                ? """{"data":[{"id":"old-model"}]}"""
+                : """{"data":[{"id":"new-model"},{"id":"new-model-2"}]}""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(models, Encoding.UTF8, "application/json"),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices());
+        await sut.SetItemsAsync(
+            "profiles",
+            [
+                ProfileItem(
+                    "P",
+                    "http://localhost:11434",
+                    model: "old-model",
+                    llmModel: "old-model"
+                ),
+            ]
+        );
+        var originalRole = Assert.Single(sut.AdditionalLlmProviders);
+        var id = Assert.Single(await sut.GetItemsAsync("profiles")).Values["__id"];
+
+        await sut.SetItemsAsync(
+            "profiles",
+            [
+                ProfileItem(
+                    "P",
+                    "http://localhost:9999",
+                    model: "old-model",
+                    llmModel: "old-model",
+                    id: id
+                ),
+            ]
+        );
+
+        var item = Assert.Single(await sut.GetItemsAsync("profiles"));
+        Assert.Equal("new-model", item.Values["selectedModel"]);
+        Assert.Equal("new-model", item.Values["selectedLlmModel"]);
+        Assert.NotSame(originalRole, Assert.Single(sut.AdditionalLlmProviders));
+    }
+
+    [Fact]
     public async Task RefreshModelCatalogAsync_UpdatesProfileCatalog()
     {
         var modelsJson = """{"data":[{"id":"m1"}]}""";
@@ -293,6 +444,200 @@ public sealed class OpenAiCompatiblePluginTests
         await sut.RefreshModelCatalogAsync();
 
         Assert.Contains(sut.AdditionalLlmProviders[0].SupportedModels, m => m.Id == "m2");
+    }
+
+    [Fact]
+    public async Task RefreshModelCatalogAsync_RemovedDefaultModel_NormalizesBothSelections()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "http://localhost:11434");
+        host.SetSetting("selectedModel", "m2");
+        host.SetSetting("selectedLlmModel", "m2");
+        host.SetSetting(
+            "fetchedModels",
+            JsonSerializer.Serialize(
+                new List<FetchedModel> { new("m1", null), new("m2", null) }
+            )
+        );
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"data":[{"id":"m1"}]}""",
+                Encoding.UTF8,
+                "application/json"
+            ),
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await sut.RefreshModelCatalogAsync();
+
+        Assert.Equal("m1", sut.SelectedTranscriptionModelId);
+        Assert.Equal("m1", sut.SelectedLlmModelId);
+        Assert.Equal("m1", host.GetSetting<string>("selectedModel"));
+        Assert.Equal("m1", host.GetSetting<string>("selectedLlmModel"));
+    }
+
+    [Fact]
+    public async Task RefreshModelCatalogAsync_RemovedProfileModel_NormalizesBothSelections()
+    {
+        var modelsJson = """{"data":[{"id":"m1"},{"id":"m2"}]}""";
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            // ReSharper disable once AccessToModifiedClosure -- modelsJson is reassigned below before the refresh call, to simulate the server dropping a model.
+            Content = new StringContent(modelsJson, Encoding.UTF8, "application/json"),
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices());
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("P", "http://localhost:11434", model: "m2", llmModel: "m2")]
+        );
+        var originalRole = Assert.Single(sut.AdditionalLlmProviders);
+
+        modelsJson = """{"data":[{"id":"m1"}]}""";
+        await sut.RefreshModelCatalogAsync();
+
+        var item = Assert.Single(await sut.GetItemsAsync("profiles"));
+        Assert.Equal("m1", item.Values["selectedModel"]);
+        Assert.Equal("m1", item.Values["selectedLlmModel"]);
+        Assert.NotSame(originalRole, Assert.Single(sut.AdditionalLlmProviders));
+    }
+
+    [Fact]
+    public async Task RefreshModelCatalogAsync_SuccessfulEmptyCatalog_ClearsBothSelections()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "http://localhost:11434");
+        host.SetSetting("selectedModel", "m1");
+        host.SetSetting("selectedLlmModel", "m1");
+        host.SetSetting(
+            "fetchedModels",
+            JsonSerializer.Serialize(new List<FetchedModel> { new("m1", null) })
+        );
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"data":[]}""",
+                Encoding.UTF8,
+                "application/json"
+            ),
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await sut.RefreshModelCatalogAsync();
+
+        Assert.Empty(sut.FetchedModels);
+        Assert.Null(sut.SelectedTranscriptionModelId);
+        Assert.Null(sut.SelectedLlmModelId);
+        Assert.Null(host.GetSetting<string>("selectedModel"));
+        Assert.Null(host.GetSetting<string>("selectedLlmModel"));
+    }
+
+    [Fact]
+    public async Task RefreshModelCatalogAsync_TransientFailure_LeavesStateUntouched()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "http://localhost:11434");
+        host.SetSetting("selectedModel", "default-m2");
+        host.SetSetting("selectedLlmModel", "default-m1");
+        host.SetSetting(
+            "fetchedModels",
+            JsonSerializer.Serialize(
+                new List<FetchedModel>
+                {
+                    new("default-m1", null),
+                    new("default-m2", null),
+                }
+            )
+        );
+        var failModelRequests = false;
+        // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local -- asserting every request targets /v1/models is the intended verification.
+        var handler = new CapturingHandler((request, _) =>
+        {
+            Assert.EndsWith("/v1/models", request.RequestUri!.AbsolutePath);
+            // ReSharper disable once AccessToModifiedClosure -- failModelRequests is flipped below, after the initial SetItemsAsync call, to simulate a transient failure on the subsequent refresh.
+            if (failModelRequests)
+                return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"data":[{"id":"profile-m1"},{"id":"profile-m2"}]}""",
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+        await sut.SetItemsAsync(
+            "profiles",
+            [
+                ProfileItem(
+                    "P",
+                    "http://localhost:9999",
+                    model: "profile-m2",
+                    llmModel: "profile-m1"
+                ),
+            ]
+        );
+
+        failModelRequests = true;
+        await sut.RefreshModelCatalogAsync();
+
+        Assert.Equal(["default-m1", "default-m2"], sut.FetchedModels.Select(m => m.Id));
+        Assert.Equal("default-m2", sut.SelectedTranscriptionModelId);
+        Assert.Equal("default-m1", sut.SelectedLlmModelId);
+        Assert.Equal("default-m2", host.GetSetting<string>("selectedModel"));
+        Assert.Equal("default-m1", host.GetSetting<string>("selectedLlmModel"));
+
+        var profile = Assert.Single(await sut.GetItemsAsync("profiles"));
+        Assert.Equal("profile-m2", profile.Values["selectedModel"]);
+        Assert.Equal("profile-m1", profile.Values["selectedLlmModel"]);
+        Assert.Equal(
+            ["profile-m1", "profile-m2"],
+            Assert.Single(sut.AdditionalLlmProviders).SupportedModels.Select(m => m.Id)
+        );
+    }
+
+    [Fact]
+    public async Task ValidateAsync_TransientCatalogFailure_LeavesPriorStateUntouched()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "http://localhost:11434");
+        host.SetSetting("selectedModel", "m1");
+        host.SetSetting("selectedLlmModel", "m1");
+        host.SetSetting(
+            "fetchedModels",
+            JsonSerializer.Serialize(new List<FetchedModel> { new("m1", null) })
+        );
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"not-data":[]}""",
+                Encoding.UTF8,
+                "application/json"
+            ),
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(["m1"], sut.FetchedModels.Select(m => m.Id));
+        Assert.Equal("m1", sut.SelectedTranscriptionModelId);
+        Assert.Equal("m1", sut.SelectedLlmModelId);
+        Assert.Equal("m1", host.GetSetting<string>("selectedModel"));
+        Assert.Equal("m1", host.GetSetting<string>("selectedLlmModel"));
     }
 
     [Fact]
