@@ -1,4 +1,5 @@
 // ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
@@ -25,7 +26,16 @@ public sealed class GoogleCloudSttPlugin
         IPluginLocalizationAware
 {
     private const string ApiEndpoint = "https://speech.googleapis.com/v1/speech:recognize";
-    private const int MaxSyncSeconds = 60;
+    private const int SampleRateHertz = 16000;
+    private const int BytesPerSample = sizeof(short);
+    private const int BytesPerSecond = SampleRateHertz * BytesPerSample;
+    private const int MaxChunkSeconds = 55;
+    private const int MaxChunkBytes = MaxChunkSeconds * BytesPerSecond;
+    private const int BoundarySearchSeconds = 5;
+    private const int BoundarySearchBytes = BoundarySearchSeconds * BytesPerSecond;
+    private const int QuietWindowMilliseconds = 20;
+    private const int QuietWindowBytes =
+        SampleRateHertz * BytesPerSample * QuietWindowMilliseconds / 1000;
 
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
@@ -34,9 +44,8 @@ public sealed class GoogleCloudSttPlugin
     public GoogleCloudSttPlugin()
         : this(new HttpClientHandler()) { }
 
-    // Bounds the whole round trip, not the audio length — that is MaxSyncSeconds. Matching the two
-    // left a max-length clip no headroom for its ~2.6 MB base64 upload; 120s matches the other
-    // cloud STT plugins here.
+    // Bounds each request round trip, not the total segmented transcription. A 55s chunk has
+    // ample headroom for its ~2.3 MB base64 upload; 120s matches the other cloud STT plugins here.
     private static readonly TimeSpan s_requestTimeout = TimeSpan.FromSeconds(120);
 
     // Test seam: lets a stub handler answer requests without hitting the network.
@@ -96,18 +105,10 @@ public sealed class GoogleCloudSttPlugin
         // locate the data chunk instead of stripping a fixed 44 bytes.
         var (pcmOffset, pcmByteCount) = LocatePcmData(wavAudio);
 
-        // Google's sync API caps audio at 60s (long-running API is a follow-up).
-        // Ceiling the duration so a just-over-limit clip never displays as "60".
-        var durationSeconds = pcmByteCount / 32000.0;
-        if (durationSeconds > MaxSyncSeconds)
-        {
-            throw new NotSupportedException(
-                $"Google Cloud STT (synchronous API) supports at most {MaxSyncSeconds} seconds of audio; "
-                    + $"this recording is {Math.Ceiling(durationSeconds)} seconds. Use a different engine for long recordings."
+        if (pcmByteCount % BytesPerSample != 0)
+            throw new InvalidOperationException(
+                "Google Cloud STT requires sample-aligned 16-bit PCM audio."
             );
-        }
-
-        var audioBase64 = Convert.ToBase64String(wavAudio, pcmOffset, pcmByteCount);
 
         var langCode = !string.IsNullOrEmpty(language) && language != "auto" ? language : "en-US";
         // Google requires BCP-47; the rest of the app uses ISO-639-1 ("en"),
@@ -115,12 +116,59 @@ public sealed class GoogleCloudSttPlugin
         if (langCode.Length == 2)
             langCode = MapToGoogleLanguageCode(langCode);
 
+        var transcripts = new List<string>();
+        string? detectedLanguage = null;
+        double totalDuration = 0;
+        var chunkOffset = pcmOffset;
+        var pcmEnd = checked(pcmOffset + pcmByteCount);
+
+        // Preserve the existing behavior for an empty payload: it still makes one request.
+        do
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var remaining = pcmEnd - chunkOffset;
+            var chunkByteCount =
+                remaining <= MaxChunkBytes
+                    ? remaining
+                    : FindQuietBoundary(wavAudio, chunkOffset);
+            var chunkResult = await TranscribeChunkAsync(
+                wavAudio,
+                chunkOffset,
+                chunkByteCount,
+                langCode,
+                ct
+            );
+
+            if (!string.IsNullOrEmpty(chunkResult.Text))
+                transcripts.Add(chunkResult.Text);
+            detectedLanguage ??= chunkResult.DetectedLanguage;
+            totalDuration += chunkResult.DurationSeconds;
+            chunkOffset += chunkByteCount;
+        } while (chunkOffset < pcmEnd);
+
+        return new PluginTranscriptionResult(
+            string.Join(' ', transcripts),
+            detectedLanguage ?? langCode,
+            totalDuration
+        );
+    }
+
+    private async Task<ChunkTranscriptionResult> TranscribeChunkAsync(
+        byte[] wavAudio,
+        int pcmOffset,
+        int pcmByteCount,
+        string langCode,
+        CancellationToken ct
+    )
+    {
+        var audioBase64 = Convert.ToBase64String(wavAudio, pcmOffset, pcmByteCount);
         var requestBody = new
         {
             config = new
             {
                 encoding = "LINEAR16",
-                sampleRateHertz = 16000,
+                sampleRateHertz = SampleRateHertz,
                 languageCode = langCode,
                 model = "latest_long",
             },
@@ -128,14 +176,57 @@ public sealed class GoogleCloudSttPlugin
         };
 
         var json = JsonSerializer.Serialize(requestBody);
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiEndpoint}?key={_apiKey}");
-        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        request.Content = content;
 
+        // Default ResponseContentRead keeps HttpClient.Timeout covering the response-body read;
+        // ResponseHeadersRead would end the timeout at the headers and let a stalled body hang
+        // when the caller passes CancellationToken.None.
         using var response = await _httpClient.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
 
         var responseJson = await response.Content.ReadAsStringAsync(ct);
-        return ParseResponse(responseJson, langCode);
+        return ParseResponse(responseJson);
+    }
+
+    private static int FindQuietBoundary(byte[] wavAudio, int chunkOffset)
+    {
+        var nominalEnd = chunkOffset + MaxChunkBytes;
+        var searchStart = nominalEnd - BoundarySearchBytes;
+        var quietestWindowStart = nominalEnd - QuietWindowBytes;
+        var quietestScore = long.MaxValue;
+
+        for (
+            var windowStart = searchStart;
+            windowStart + QuietWindowBytes <= nominalEnd;
+            windowStart += QuietWindowBytes
+        )
+        {
+            long score = 0;
+            for (
+                var sampleOffset = windowStart;
+                sampleOffset < windowStart + QuietWindowBytes;
+                sampleOffset += BytesPerSample
+            )
+            {
+                var sample = BinaryPrimitives.ReadInt16LittleEndian(
+                    wavAudio.AsSpan(sampleOffset, BytesPerSample)
+                );
+                score += Math.Abs((int)sample);
+            }
+
+            // Prefer the later window when scores tie so uniformly quiet audio stays
+            // as close as possible to the nominal 55-second boundary.
+            if (score <= quietestScore)
+            {
+                quietestScore = score;
+                quietestWindowStart = windowStart;
+            }
+        }
+
+        // Splitting at the center leaves 10 ms of the quiet window on both chunks.
+        return quietestWindowStart - chunkOffset + QuietWindowBytes / 2;
     }
 
     // ffmpeg's piped WAV output writes 0xffffffff placeholder chunk sizes (it
@@ -173,34 +264,38 @@ public sealed class GoogleCloudSttPlugin
             totalLength > 44 ? (44, totalLength - 44) : (0, totalLength);
     }
 
-    private static PluginTranscriptionResult ParseResponse(string json, string requestedLanguage)
+    private static ChunkTranscriptionResult ParseResponse(string json)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+            throw InvalidResponse("the root value must be an object");
 
         var sb = new StringBuilder();
 
-        if (
-            root.TryGetProperty("results", out var results)
-            && results.ValueKind == JsonValueKind.Array
-        )
+        if (root.TryGetProperty("results", out var results))
         {
+            if (results.ValueKind != JsonValueKind.Array)
+                throw InvalidResponse("'results' must be an array");
+
             foreach (var result in results.EnumerateArray())
             {
-                if (
-                    !result.TryGetProperty("alternatives", out var alternatives)
-                    || alternatives.ValueKind != JsonValueKind.Array
-                )
-                {
-                    continue;
-                }
+                if (result.ValueKind != JsonValueKind.Object)
+                    throw InvalidResponse("each result must be an object");
+                if (!result.TryGetProperty("alternatives", out var alternatives))
+                    throw InvalidResponse("each result must contain 'alternatives'");
+                if (alternatives.ValueKind != JsonValueKind.Array)
+                    throw InvalidResponse("'alternatives' must be an array");
 
                 foreach (var alt in alternatives.EnumerateArray())
                 {
-                    if (!alt.TryGetProperty("transcript", out var transcript))
-                    {
-                        continue;
-                    }
+                    if (alt.ValueKind != JsonValueKind.Object)
+                        throw InvalidResponse("each alternative must be an object");
+                    if (
+                        !alt.TryGetProperty("transcript", out var transcript)
+                        || transcript.ValueKind != JsonValueKind.String
+                    )
+                        throw InvalidResponse("each alternative must contain a string transcript");
 
                     if (sb.Length > 0)
                         sb.Append(' ');
@@ -214,7 +309,10 @@ public sealed class GoogleCloudSttPlugin
         double duration = 0;
         if (root.TryGetProperty("totalBilledTime", out var billedTime))
         {
-            var billedStr = billedTime.GetString() ?? "";
+            if (billedTime.ValueKind != JsonValueKind.String)
+                throw InvalidResponse("'totalBilledTime' must be a duration string");
+
+            var billedStr = billedTime.GetString() ?? string.Empty;
             if (
                 billedStr.EndsWith('s')
                 && double.TryParse(
@@ -226,6 +324,10 @@ public sealed class GoogleCloudSttPlugin
             )
             {
                 duration = secs;
+            }
+            else
+            {
+                throw InvalidResponse("'totalBilledTime' must be a duration string");
             }
         }
 
@@ -239,15 +341,24 @@ public sealed class GoogleCloudSttPlugin
         {
             var first = resultsForLang[0];
             if (first.TryGetProperty("languageCode", out var lc))
+            {
+                if (lc.ValueKind != JsonValueKind.String)
+                    throw InvalidResponse("'languageCode' must be a string");
                 detectedLang = lc.GetString();
+            }
         }
 
-        return new PluginTranscriptionResult(
-            sb.ToString().Trim(),
-            detectedLang ?? requestedLanguage,
-            duration
-        );
+        return new ChunkTranscriptionResult(sb.ToString().Trim(), detectedLang, duration);
+
+        static InvalidOperationException InvalidResponse(string detail) =>
+            new($"Invalid Google Cloud STT response: {detail}.");
     }
+
+    private sealed record ChunkTranscriptionResult(
+        string Text,
+        string? DetectedLanguage,
+        double DurationSeconds
+    );
 
     private static string MapToGoogleLanguageCode(string iso) =>
         iso.ToLowerInvariant() switch
