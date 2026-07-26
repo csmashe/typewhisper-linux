@@ -19,42 +19,42 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
     internal const int SourceSampleRate = 16_000;
     internal const int TargetSampleRate = 24_000;
 
-    private readonly ClientWebSocket _ws;
+    private readonly WebSocket _ws;
     private readonly OpenAiRealtimeTranscriptCollector _collector;
     private readonly CancellationTokenSource _receiveCts = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private readonly Lock _audioStateLock = new();
+    private readonly Dictionary<string, TaskCompletionSource<bool>> _transcriptionTerminals = [];
     // First non-cancellation fault the receive loop observed. Surfaced from
     // SendAudioAsync / FinalizeAsync so the coordinator's sender or finalize
     // path throws, the orchestrator's finalizeThrew flag flips, and batch
     // fallback fires. Without this, a server error event after one good
     // final segment would ship a truncated transcript as a clean success.
     // Mirrors XaiStreamingSession's _receiveLoopException pattern.
-    //
-    // Note: unlike xAI we do not block FinalizeAsync on a terminal signal.
-    // OpenAI's realtime protocol has no per-session "done" event — the
-    // socket stays open after `input_audio_buffer.commit` and TranscribeWavAsync
-    // would hang on the caller's token. Both downstream waiters handle
-    // tail events themselves: StreamingTranscriptionCoordinator has a
-    // 500 ms grace-window debounce, and TranscribeWavAsync polls
-    // `HasCompletedTranscript` via WaitForCompletedTranscriptAsync.
     private Exception? _receiveLoopException;
-    // Tracks whether any audio has been sent to the server since the last
-    // completed event (server-side commit watermark). FinalizeAsync skips
-    // the explicit `input_audio_buffer.commit` when this is 0 — required
-    // for server-VAD mode, where the server auto-commits per utterance
-    // and emptying the buffer manually after that yields a benign error
-    // event that the fault path would otherwise promote to a stream
-    // fault, forcing unnecessary batch fallback. Batch (manual-commit)
-    // mode always has pending audio at finalize time, so the flag stays
-    // set and commit fires as before.
-    private int _audioPendingCommit;
+    // Successful appends advance this monotonically. Only
+    // input_audio_buffer.committed advances the confirmed committed
+    // boundary; transcription completed/failed events are asynchronous
+    // per-item results and must never mutate either watermark.
+    private long _appendedAudioWatermark;
+    private long _committedAudioWatermark;
+    private PendingExplicitCommit? _pendingExplicitCommit;
+    private string? _lastCommittedItemId;
     private Task? _receiveTask;
     private bool _disposed;
 
-    private OpenAiRealtimeStreamingSession(ClientWebSocket ws, OpenAiRealtimeTranscriptCollector collector)
+    private OpenAiRealtimeStreamingSession(WebSocket ws, OpenAiRealtimeTranscriptCollector collector)
     {
         _ws = ws;
         _collector = collector;
+    }
+
+    private sealed class PendingExplicitCommit(long watermark)
+    {
+        public long Watermark { get; } = watermark;
+
+        public TaskCompletionSource<string?> CommittedItemId { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived;
@@ -70,9 +70,25 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
         await ws.ConnectAsync(BuildRealtimeUri(), ct);
 
         var collector = new OpenAiRealtimeTranscriptCollector();
+        var session = CreateStartedSession(ws, collector);
+        await session.SendTextAsync(CreateSessionUpdatePayload(language, prompt, useServerVad), ct);
+        return session;
+    }
+
+    internal static OpenAiRealtimeStreamingSession CreateConnectedSessionForTests(WebSocket ws)
+    {
+        if (ws.State != WebSocketState.Open)
+            throw new InvalidOperationException("The test WebSocket must already be open.");
+
+        return CreateStartedSession(ws, new OpenAiRealtimeTranscriptCollector());
+    }
+
+    private static OpenAiRealtimeStreamingSession CreateStartedSession(
+        WebSocket ws,
+        OpenAiRealtimeTranscriptCollector collector)
+    {
         var session = new OpenAiRealtimeStreamingSession(ws, collector);
         session._receiveTask = session.ReceiveLoopAsync(session._receiveCts.Token);
-        await session.SendTextAsync(CreateSessionUpdatePayload(language, prompt, useServerVad), ct);
         return session;
     }
 
@@ -202,11 +218,10 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
                 return;
 
             await SendTextAsync(CreateAudioAppendPayload(pcm16Audio.Span), ct);
-            // Mark "has uncommitted audio since the last completion." The
-            // receive loop clears this on each final event, so server-VAD
-            // mode sessions whose last utterance was already auto-committed
-            // skip the explicit commit in FinalizeAsync.
-            Volatile.Write(ref _audioPendingCommit, 1);
+            lock (_audioStateLock)
+            {
+                _appendedAudioWatermark += pcm16Audio.Length;
+            }
         }
         finally
         {
@@ -218,40 +233,97 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
     {
         if (_disposed) return;
 
-        // Send commit only when there's pending uncommitted audio. With
-        // server VAD the server auto-commits per utterance — sending a
-        // redundant commit on an already-empty buffer produces a benign
-        // server error event that the fault path would otherwise promote
-        // into a stream fault and force unnecessary batch fallback. With
-        // manual-commit (batch / non-VAD), the flag is always set by the
-        // SendAudioAsync calls preceding FinalizeAsync, so commit fires.
-        if (_ws.State == WebSocketState.Open
-            && Volatile.Read(ref _audioPendingCommit) != 0)
+        while (true)
         {
+            ThrowIfReceiveLoopFaulted();
+
+            PendingExplicitCommit? pendingCommit = null;
+            Task? committedItemTranscription = null;
+            var sendCommit = false;
+
             await _sendLock.WaitAsync(ct);
             try
             {
-                if (_ws.State == WebSocketState.Open
-                    && Volatile.Read(ref _audioPendingCommit) != 0)
+                ThrowIfReceiveLoopFaulted();
+
+                lock (_audioStateLock)
                 {
-                    await SendTextAsync("""{"type":"input_audio_buffer.commit"}""", ct);
-                    Volatile.Write(ref _audioPendingCommit, 0);
+                    if (_appendedAudioWatermark > _committedAudioWatermark)
+                    {
+                        pendingCommit = _pendingExplicitCommit;
+                        if (pendingCommit is null)
+                        {
+                            pendingCommit = new PendingExplicitCommit(_appendedAudioWatermark);
+                            _pendingExplicitCommit = pendingCommit;
+                            sendCommit = true;
+                        }
+                    }
+                    else if (_lastCommittedItemId is { } itemId)
+                    {
+                        committedItemTranscription = GetTranscriptionTerminalLocked(itemId).Task;
+                    }
+                }
+
+                if (sendCommit)
+                {
+                    if (_ws.State != WebSocketState.Open)
+                    {
+                        var exception = new InvalidOperationException(
+                            "OpenAI realtime session closed before pending audio could be committed.");
+                        AbandonPendingCommit(pendingCommit!, exception);
+                        throw exception;
+                    }
+
+                    try
+                    {
+                        await SendTextAsync("""{"type":"input_audio_buffer.commit"}""", ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        AbandonPendingCommit(pendingCommit!, ex);
+                        throw;
+                    }
                 }
             }
             finally
             {
                 _sendLock.Release();
             }
-        }
 
-        // Re-throw a captured receive-loop fault so the coordinator's
-        // FinalizeAsync rethrows and DictationOrchestrator's finalizeThrew
-        // flag triggers batch fallback. Faults arriving immediately after
-        // commit (race with the receive loop) are caught here; faults that
-        // arrive later during the coordinator's grace window land in
-        // _receiveLoopException but aren't re-surfaced — same gap upstream
-        // has, acceptable given how rare the timing is.
-        ThrowIfReceiveLoopFaulted();
+            if (pendingCommit is not null)
+            {
+                var itemId = await pendingCommit.CommittedItemId.Task.WaitAsync(ct);
+                ThrowIfReceiveLoopFaulted();
+
+                if (!string.IsNullOrWhiteSpace(itemId))
+                {
+                    Task transcriptionTerminal;
+                    lock (_audioStateLock)
+                    {
+                        transcriptionTerminal = GetTranscriptionTerminalLocked(itemId).Task;
+                    }
+
+                    await transcriptionTerminal.WaitAsync(ct);
+                    ThrowIfReceiveLoopFaulted();
+                }
+
+                lock (_audioStateLock)
+                {
+                    if (_appendedAudioWatermark <= _committedAudioWatermark)
+                        return;
+                }
+
+                // Audio was appended after the commit boundary was captured.
+                // Loop and commit that later generation as well.
+                continue;
+            }
+
+            if (committedItemTranscription is not null)
+                await committedItemTranscription.WaitAsync(ct);
+
+            ThrowIfReceiveLoopFaulted();
+            return;
+        }
     }
 
     private void ThrowIfReceiveLoopFaulted()
@@ -266,6 +338,106 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
     {
         var bytes = Encoding.UTF8.GetBytes(json);
         await _ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+    }
+
+    private void AbandonPendingCommit(PendingExplicitCommit pendingCommit, Exception exception)
+    {
+        lock (_audioStateLock)
+        {
+            if (ReferenceEquals(_pendingExplicitCommit, pendingCommit))
+                _pendingExplicitCommit = null;
+        }
+
+        if (exception is OperationCanceledException canceled)
+            pendingCommit.CommittedItemId.TrySetCanceled(canceled.CancellationToken);
+        else
+            pendingCommit.CommittedItemId.TrySetException(exception);
+    }
+
+    private TaskCompletionSource<bool> GetTranscriptionTerminalLocked(string itemId)
+    {
+        if (_transcriptionTerminals.TryGetValue(itemId, out var terminal))
+            return terminal;
+
+        terminal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _transcriptionTerminals[itemId] = terminal;
+        return terminal;
+    }
+
+    private void HandleBufferCommitted(string? itemId)
+    {
+        PendingExplicitCommit? explicitCommit;
+        lock (_audioStateLock)
+        {
+            explicitCommit = _pendingExplicitCommit;
+            var boundary = explicitCommit?.Watermark ?? _appendedAudioWatermark;
+            _committedAudioWatermark = Math.Max(_committedAudioWatermark, boundary);
+            _pendingExplicitCommit = null;
+
+            if (!string.IsNullOrWhiteSpace(itemId))
+            {
+                _lastCommittedItemId = itemId;
+                GetTranscriptionTerminalLocked(itemId);
+            }
+        }
+
+        explicitCommit?.CommittedItemId.TrySetResult(itemId);
+    }
+
+    private void HandleTranscriptionCompleted(string? itemId)
+    {
+        if (string.IsNullOrWhiteSpace(itemId))
+            return;
+
+        lock (_audioStateLock)
+        {
+            GetTranscriptionTerminalLocked(itemId).TrySetResult(true);
+        }
+    }
+
+    private void CaptureReceiveLoopException(Exception exception)
+    {
+        if (Interlocked.CompareExchange(ref _receiveLoopException, exception, null) is not null)
+            return;
+
+        PendingExplicitCommit? pendingCommit;
+        TaskCompletionSource<bool>[] transcriptionTerminals;
+        lock (_audioStateLock)
+        {
+            pendingCommit = _pendingExplicitCommit;
+            transcriptionTerminals = _transcriptionTerminals.Values.ToArray();
+        }
+
+        pendingCommit?.CommittedItemId.TrySetException(exception);
+        foreach (var terminal in transcriptionTerminals)
+            terminal.TrySetException(exception);
+    }
+
+    private void CaptureReceiveLoopClosure(CancellationToken ct)
+    {
+        // Deliberate disposal cancels the receive token — an orderly shutdown,
+        // not a fault. Any other exit strands finalize's commit/transcription
+        // waiters, so publish a terminal fault to release them. Idempotent: a
+        // real earlier fault wins via CaptureReceiveLoopException.
+        if (ct.IsCancellationRequested)
+            return;
+        CaptureReceiveLoopException(new InvalidOperationException(
+            "OpenAI realtime session closed before transcription completed."));
+    }
+
+    private static (string? Type, string? ItemId) GetProtocolEventMetadata(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var type = root.TryGetProperty("type", out var typeElement)
+            && typeElement.ValueKind == JsonValueKind.String
+                ? typeElement.GetString()
+                : null;
+        var itemId = root.TryGetProperty("item_id", out var itemIdElement)
+            && itemIdElement.ValueKind == JsonValueKind.String
+                ? itemIdElement.GetString()
+                : null;
+        return (type, itemId);
     }
 
     private async Task ReceiveLoopAsync(CancellationToken ct)
@@ -283,7 +455,10 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
                 {
                     result = await _ws.ReceiveAsync(buffer, ct);
                     if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        CaptureReceiveLoopClosure(ct);
                         return;
+                    }
                     messageBuffer.Write(buffer, 0, result.Count);
                 } while (!result.EndOfMessage);
 
@@ -291,15 +466,21 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
                     continue;
 
                 var json = Encoding.UTF8.GetString(messageBuffer.GetBuffer(), 0, (int)messageBuffer.Length);
-                if (_collector.ApplyEvent(json, out var transcriptEvent) && transcriptEvent is not null)
+                var (eventType, itemId) = GetProtocolEventMetadata(json);
+                var applied = _collector.ApplyEvent(json, out var transcriptEvent);
+
+                switch (eventType)
                 {
-                    // A final event means the server processed everything up
-                    // to that point — any subsequent FinalizeAsync only needs
-                    // to commit if SendAudioAsync has fired since.
-                    if (transcriptEvent.IsFinal)
-                        Volatile.Write(ref _audioPendingCommit, 0);
-                    TranscriptReceived?.Invoke(transcriptEvent);
+                    case "input_audio_buffer.committed":
+                        HandleBufferCommitted(itemId);
+                        break;
+                    case "conversation.item.input_audio_transcription.completed":
+                        HandleTranscriptionCompleted(itemId);
+                        break;
                 }
+
+                if (applied && transcriptEvent is not null)
+                    TranscriptReceived?.Invoke(transcriptEvent);
 
                 // ApplyEvent sets _collector.Error on `error` and
                 // `conversation.item.input_audio_transcription.failed`
@@ -310,24 +491,27 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
                 // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (_collector.Error is { } providerError)
                 {
-                    Interlocked.CompareExchange(
-                        ref _receiveLoopException,
-                        new InvalidOperationException(providerError),
-                        null);
+                    CaptureReceiveLoopException(new InvalidOperationException(providerError));
                     return;
                 }
             }
+
+            // Loop exited because the socket left the Open state (peer Abort,
+            // CloseSent, etc.) rather than via a close frame, fault, or
+            // deliberate disposal. Fault pending finalize waiters so they
+            // don't hang until the caller's token.
+            CaptureReceiveLoopClosure(ct);
         }
         catch (OperationCanceledException) { }
         catch (WebSocketException ex)
         {
             Debug.WriteLine($"OpenAI realtime WebSocket error: {ex.Message}");
-            Interlocked.CompareExchange(ref _receiveLoopException, ex, null);
+            CaptureReceiveLoopException(ex);
         }
         catch (JsonException ex)
         {
             Debug.WriteLine($"OpenAI realtime parse error: {ex.Message}");
-            Interlocked.CompareExchange(ref _receiveLoopException, ex, null);
+            CaptureReceiveLoopException(ex);
         }
     }
 
