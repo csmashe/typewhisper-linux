@@ -9,7 +9,7 @@ internal static class UsageText
             """
             TypeWhisper CLI - Speech-to-Text from the command line
 
-            Usage: typewhisper <command> [options]
+            Usage: typewhisper-cli <command> [options]
 
             Commands:
               status                    Show TypeWhisper status
@@ -36,12 +36,12 @@ internal static class UsageText
               --await-download          Wait for local model restore/download
 
             Examples:
-              typewhisper status --token "$TYPEWHISPER_API_TOKEN"
-              typewhisper transcribe recording.wav
-              typewhisper transcribe recording.wav --language de --json
-              typewhisper transcribe recording.wav --language-hint de --language-hint en
-              typewhisper transcribe recording.wav --engine groq --model whisper-large-v3-turbo
-              typewhisper transcribe - < audio.wav
+              typewhisper-cli status --token "$TYPEWHISPER_API_TOKEN"
+              typewhisper-cli transcribe recording.wav
+              typewhisper-cli transcribe recording.wav --language de --json
+              typewhisper-cli transcribe recording.wav --language-hint de --language-hint en
+              typewhisper-cli transcribe recording.wav --engine groq --model whisper-large-v3-turbo
+              typewhisper-cli transcribe - < audio.wav
             """
         );
     }

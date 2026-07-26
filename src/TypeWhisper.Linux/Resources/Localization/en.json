@@ -379,7 +379,7 @@
   "General.AutostartHint": "TypeWhisper starts automatically when you log in.",
   "General.BearerToken": "Bearer token",
   "General.CliBundledTarget": "Bundled: {0}  |  Target: {1}",
-  "General.CliInstallHint": "Installs the bundled CLI launcher to ~/.local/bin/typewhisper. Use the bearer token above through TYPEWHISPER_API_TOKEN or --token.",
+  "General.CliInstallHint": "Installs the bundled CLI launcher to ~/.local/bin/typewhisper-cli. Use the bearer token above through TYPEWHISPER_API_TOKEN or --token.",
   "General.CliInstallerTarget": "Installer target: {0}",
   "General.CloseToTray": "Close button hides to tray",
   "General.CloseToTrayHint": "On: the close (X) button hides the window to the tray icon — it leaves the dock and the app keeps running, reachable from the tray menu. Off: the close button quits TypeWhisper.",

@@ -378,7 +378,7 @@
   "General.AutostartHint": "TypeWhisper запускается автоматически при входе в систему.",
   "General.BearerToken": "Bearer-токен",
   "General.CliBundledTarget": "Встроенный: {0}  |  Цель: {1}",
-  "General.CliInstallHint": "Устанавливает встроенный CLI-лаунчер в ~/.local/bin/typewhisper. Используйте bearer-токен выше через TYPEWHISPER_API_TOKEN или --token.",
+  "General.CliInstallHint": "Устанавливает встроенный CLI-лаунчер в ~/.local/bin/typewhisper-cli. Используйте bearer-токен выше через TYPEWHISPER_API_TOKEN или --token.",
   "General.CliInstallerTarget": "Цель установки: {0}",
   "General.CloseToTray": "Кнопка закрытия сворачивает в трей",
   "General.CloseToTrayHint": "Вкл: кнопка закрытия (X) сворачивает окно в значок в трее — окно покидает панель, а приложение продолжает работать и доступно из меню трея. Выкл: кнопка закрытия завершает работу TypeWhisper.",

@@ -6,7 +6,7 @@
         <Nullable>enable</Nullable>
         <LangVersion>latest</LangVersion>
         <RootNamespace>TypeWhisper.Cli</RootNamespace>
-        <AssemblyName>typewhisper</AssemblyName>
+        <AssemblyName>typewhisper-cli</AssemblyName>
     </PropertyGroup>
     <ItemGroup>
         <InternalsVisibleTo Include="TypeWhisper.Cli.Tests"/>
