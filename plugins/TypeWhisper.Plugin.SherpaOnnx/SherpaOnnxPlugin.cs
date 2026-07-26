@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Text.Json;
 using SherpaOnnx;
 using TypeWhisper.Plugins.Shared.Cuda;
 using TypeWhisper.Plugins.Shared.Net;
@@ -383,6 +382,10 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
             {
                 await EnsureCudaRuntimeReadyAsync(progress, ct).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 _host?.Log(
@@ -649,8 +652,10 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
         return Task.Run(
             () =>
             {
+                ct.ThrowIfCancellationRequested();
                 var audioSamples = DecodeWav(wavAudio);
                 var audioDuration = audioSamples.Length / 16000.0;
+                ct.ThrowIfCancellationRequested();
 
                 lock (_sync)
                 {
@@ -664,19 +669,25 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
                     if (model.SupportsTranslation)
                         EnsureCanaryLanguage(language, translate);
 
-                    using var stream = _recognizer.CreateStream();
-                    stream.AcceptWaveform(16000, audioSamples);
-                    _recognizer.Decode(stream);
+                    var coordinator = new SherpaDecodeCoordinator(chunk =>
+                    {
+                        using var stream = _recognizer.CreateStream();
+                        stream.AcceptWaveform(SherpaDecodeCoordinator.SampleRate, chunk);
+                        ct.ThrowIfCancellationRequested();
+                        _recognizer.Decode(stream);
+                        ct.ThrowIfCancellationRequested();
+                        return stream.Result.Text;
+                    });
+                    var decoded = coordinator.Decode(
+                        audioSamples,
+                        model.SupportsTranslation,
+                        ct
+                    );
 
-                    var rawText = stream.Result.Text.Trim();
-
-                    var (text, detectedLanguage) = model.SupportsTranslation
-                        ? ParseCanaryResult(rawText)
-                        : (rawText, (string?)null);
-
+                    ct.ThrowIfCancellationRequested();
                     return new PluginTranscriptionResult(
-                        text,
-                        detectedLanguage,
+                        decoded.Text,
+                        decoded.DetectedLanguage,
                         audioDuration,
                         NoSpeechProbability: null
                     );
@@ -774,6 +785,32 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
     // token/ONNX acceptance (e.g. Canary carries no blank token) is testable in isolation.
     internal void RunArtifactPreflightForTests(string modelId, string modelDir) =>
         VerifyModelArtifacts(GetModelDefinition(modelId), modelDir);
+
+    internal string ComputeBackendForTests
+    {
+        get
+        {
+            lock (_sync)
+                return _computeBackend;
+        }
+    }
+
+    // Test seam: exercise the production lock boundary with a managed delegate, so
+    // cancellation and lock release need no native runtime.
+    internal SherpaDecodeResult RunDecodeTransactionForTests(
+        float[] audioSamples,
+        bool parseCanaryPayload,
+        SherpaDecodeDelegate decode,
+        CancellationToken ct
+    )
+    {
+        lock (_sync)
+            return new SherpaDecodeCoordinator(decode).Decode(
+                audioSamples,
+                parseCanaryPayload,
+                ct
+            );
+    }
 
     private static ModelDefinition GetModelDefinition(string modelId) =>
         s_models.FirstOrDefault(m => m.Id == modelId)
@@ -1182,38 +1219,6 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
             return "en";
         var normalized = language.Trim().ToLowerInvariant();
         return s_canarySupportedLanguages.Contains(normalized) ? normalized : "en";
-    }
-
-    private static (string Text, string? DetectedLanguage) ParseCanaryResult(string rawText)
-    {
-        if (string.IsNullOrWhiteSpace(rawText))
-            return (string.Empty, null);
-
-        try
-        {
-            using var json = JsonDocument.Parse(rawText);
-            if (json.RootElement.ValueKind != JsonValueKind.Object)
-                return (rawText.Trim(), null);
-
-            var text = rawText.Trim();
-            if (json.RootElement.TryGetProperty("text", out var textNode))
-                text = textNode.GetString()?.Trim() ?? string.Empty;
-
-            string? lang = null;
-            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
-            if (json.RootElement.TryGetProperty("lang", out var langNode))
-            {
-                var parsed = langNode.GetString();
-                if (!string.IsNullOrWhiteSpace(parsed))
-                    lang = parsed;
-            }
-
-            return (text, lang);
-        }
-        catch (JsonException)
-        {
-            return (rawText.Trim(), null);
-        }
     }
 
     private static float[] DecodeWav(byte[] wavData)
