@@ -1213,12 +1213,28 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
         _canaryTgtLang = tgtLang;
     }
 
-    private static string NormalizeCanaryLanguage(string? language)
+    internal static string NormalizeCanaryLanguage(string? language)
     {
-        if (string.IsNullOrWhiteSpace(language) || language == "auto")
-            return "en";
-        var normalized = language.Trim().ToLowerInvariant();
-        return s_canarySupportedLanguages.Contains(normalized) ? normalized : "en";
+        var normalized = language?.Trim();
+        if (
+            string.IsNullOrWhiteSpace(normalized)
+            || string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            throw new NotSupportedException(
+                "Sherpa ONNX Canary requires an explicit source language from the supported set: en, de, fr, es."
+            );
+        }
+
+        normalized = normalized.ToLowerInvariant();
+        if (!s_canarySupportedLanguages.Contains(normalized))
+        {
+            throw new NotSupportedException(
+                "Sherpa ONNX Canary requires an explicit source language from the supported set: en, de, fr, es."
+            );
+        }
+
+        return normalized;
     }
 
     private static float[] DecodeWav(byte[] wavData)
