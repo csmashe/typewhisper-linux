@@ -95,7 +95,8 @@ jobs:
   build:
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 30m unit-test cap + 30m package-smoke cap + 30m setup/build/upload allowance.
+    timeout-minutes: 90
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
 
@@ -116,7 +117,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            dpkg-dev rpm wget desktop-file-utils
+            cpio dpkg-dev file rpm wget desktop-file-utils
 
       - name: Run unit tests
         timeout-minutes: 30
@@ -130,6 +131,10 @@ jobs:
 
       - name: Build all Linux packages
         run: bash scripts/build-linux-packages.sh "$VERSION" dist
+
+      - name: Smoke test all Linux packages
+        timeout-minutes: 30
+        run: bash scripts/smoke-test-linux-packages.sh "$VERSION" dist
 
       - uses: actions/upload-artifact@v7
         with:
