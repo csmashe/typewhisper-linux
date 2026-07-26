@@ -32,7 +32,7 @@ public class GoogleCloudSttPluginTests
 
         var result = await sut.TranscribeAsync(
             wavAudio,
-            null,
+            "en",
             translate: false,
             prompt: null,
             CancellationToken.None
@@ -127,7 +127,7 @@ public class GoogleCloudSttPluginTests
         var exception = await Assert.ThrowsAsync<HttpRequestException>(
             () => sut.TranscribeAsync(
                 wavAudio,
-                null,
+                "en",
                 translate: false,
                 prompt: null,
                 CancellationToken.None
@@ -154,7 +154,7 @@ public class GoogleCloudSttPluginTests
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => sut.TranscribeAsync(
                 wavAudio,
-                null,
+                "en",
                 translate: false,
                 prompt: null,
                 CancellationToken.None
@@ -187,7 +187,7 @@ public class GoogleCloudSttPluginTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => sut.TranscribeAsync(
                 wavAudio,
-                null,
+                "en",
                 translate: false,
                 prompt: null,
                 cancellation.Token
@@ -207,7 +207,7 @@ public class GoogleCloudSttPluginTests
 
         await sut.TranscribeAsync(
             wavAudio,
-            null,
+            "en",
             translate: false,
             prompt: null,
             CancellationToken.None
@@ -258,6 +258,38 @@ public class GoogleCloudSttPluginTests
         Assert.Equal("Guten Tag", result.Text);
         Assert.Equal("de-DE", result.DetectedLanguage);
         Assert.Equal(1.5, result.DurationSeconds);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("auto")]
+    [InlineData("AUTO")]
+    [InlineData(" AuTo ")]
+    public async Task TranscribeAsync_AutomaticLanguage_ThrowsBeforeParsingAudioOrSendingRequest(
+        string? language
+    )
+    {
+        var handler = CreateSuccessfulHandler();
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(
+            () =>
+                sut.TranscribeAsync(
+                    [],
+                    language,
+                    translate: false,
+                    prompt: null,
+                    CancellationToken.None
+                )
+        );
+
+        Assert.Equal(
+            "Google Cloud STT requires an explicit language; automatic language detection is not supported.",
+            exception.Message
+        );
+        Assert.Empty(handler.Requests);
     }
 
     private static void AssertRequestWithinProviderLimits(CapturedRequest request)

@@ -97,6 +97,17 @@ public sealed class GoogleCloudSttPlugin
         CancellationToken ct
     )
     {
+        var langCode = language?.Trim();
+        if (
+            string.IsNullOrWhiteSpace(langCode)
+            || string.Equals(langCode, "auto", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            throw new NotSupportedException(
+                "Google Cloud STT requires an explicit language; automatic language detection is not supported."
+            );
+        }
+
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
@@ -110,7 +121,6 @@ public sealed class GoogleCloudSttPlugin
                 "Google Cloud STT requires sample-aligned 16-bit PCM audio."
             );
 
-        var langCode = !string.IsNullOrEmpty(language) && language != "auto" ? language : "en-US";
         // Google requires BCP-47; the rest of the app uses ISO-639-1 ("en"),
         // so expand 2-letter codes to a regional variant before sending.
         if (langCode.Length == 2)
