@@ -1,6 +1,8 @@
 using System.Net;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.OpenAi;
 using TypeWhisper.PluginSDK;
@@ -863,9 +865,9 @@ public class OpenAiPluginTests
 
     // C5 Phase 7 — realtime streaming session
     // ----------------------------------------
-    // Four tests ported verbatim from upstream `8683551` exercise the
-    // session's pure functions; the remaining two cover the fork-specific
-    // model + auth-mode gating in OpenAiPlugin itself.
+    // Pure-function tests exercise the protocol payloads and collector.
+    // Transport-backed tests below cover finalize ordering without network
+    // access, plus the fork-specific model + auth-mode gating.
 
     [Fact]
     public void RealtimeUri_UsesGAEndpointWithoutBetaHeader()
@@ -1164,6 +1166,161 @@ public class OpenAiPluginTests
     }
 
     [Fact]
+    public async Task RealtimeFinalize_AppendAfterEarlierCompletedItem_CommitsAndWaitsForTailItem()
+    {
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var socket = new FakeRealtimeWebSocket();
+        await using var session =
+            OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+
+        await session.SendAudioAsync(new byte[] { 1, 0, 2, 0 }, timeoutCts.Token);
+
+        // Synchronize through a later transcript delta: receive ordering
+        // guarantees committed-A was applied before this callback fires.
+        var firstDelta = WaitForTranscriptAsync(
+            session,
+            new StreamingTranscriptEvent("a", false),
+            timeoutCts.Token);
+        socket.QueueTextMessage(
+            """{"type":"input_audio_buffer.committed","item_id":"item_a"}""");
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.delta","item_id":"item_a","delta":"a"}""");
+        await firstDelta;
+
+        await session.SendAudioAsync(new byte[] { 3, 0, 4, 0 }, timeoutCts.Token);
+
+        var firstCompleted = WaitForTranscriptAsync(
+            session,
+            new StreamingTranscriptEvent("utterance A", true),
+            timeoutCts.Token);
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_a","transcript":"utterance A"}""");
+        await firstCompleted;
+
+        var finalizeTask = session.FinalizeAsync(timeoutCts.Token);
+        await socket.WaitForSentMessageTypeAsync(
+            "input_audio_buffer.commit",
+            timeoutCts.Token);
+
+        Assert.False(finalizeTask.IsCompleted);
+        Assert.Equal(1, socket.CountSentMessages("input_audio_buffer.commit"));
+
+        // The explicit commit must bind finalize to item B. A committed
+        // acknowledgement alone is not enough; its transcription result
+        // is the terminal event finalize is waiting for.
+        var secondDelta = WaitForTranscriptAsync(
+            session,
+            new StreamingTranscriptEvent("b", false),
+            timeoutCts.Token);
+        socket.QueueTextMessage(
+            """{"type":"input_audio_buffer.committed","item_id":"item_b"}""");
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.delta","item_id":"item_b","delta":"b"}""");
+        await secondDelta;
+
+        Assert.False(finalizeTask.IsCompleted);
+
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_b","transcript":"utterance B"}""");
+        await finalizeTask;
+    }
+
+    [Fact]
+    public async Task RealtimeFinalize_AllAudioAlreadyServerCommitted_SendsNoCommitAndWaitsForTranscription()
+    {
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var socket = new FakeRealtimeWebSocket();
+        await using var session =
+            OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+
+        await session.SendAudioAsync(new byte[] { 1, 0, 2, 0 }, timeoutCts.Token);
+
+        var delta = WaitForTranscriptAsync(
+            session,
+            new StreamingTranscriptEvent("ready", false),
+            timeoutCts.Token);
+        socket.QueueTextMessage(
+            """{"type":"input_audio_buffer.committed","item_id":"item_a"}""");
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.delta","item_id":"item_a","delta":"ready"}""");
+        await delta;
+
+        var finalizeTask = session.FinalizeAsync(timeoutCts.Token);
+
+        Assert.Equal(0, socket.CountSentMessages("input_audio_buffer.commit"));
+        Assert.False(finalizeTask.IsCompleted);
+
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_a","transcript":"ready"}""");
+        await finalizeTask;
+
+        Assert.Equal(0, socket.CountSentMessages("input_audio_buffer.commit"));
+    }
+
+    [Fact]
+    public async Task RealtimeFinalize_ManualCommitMode_SendsOneCommitAndWaitsForTranscription()
+    {
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var socket = new FakeRealtimeWebSocket();
+        await using var session =
+            OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+
+        // No server-VAD commit arrives in manual mode. Finalize retains the
+        // existing batch behavior of sending exactly one explicit commit.
+        await session.SendAudioAsync(new byte[] { 1, 0, 2, 0 }, timeoutCts.Token);
+
+        var finalizeTask = session.FinalizeAsync(timeoutCts.Token);
+        await socket.WaitForSentMessageTypeAsync(
+            "input_audio_buffer.commit",
+            timeoutCts.Token);
+
+        Assert.Equal(1, socket.CountSentMessages("input_audio_buffer.commit"));
+        Assert.False(finalizeTask.IsCompleted);
+
+        var delta = WaitForTranscriptAsync(
+            session,
+            new StreamingTranscriptEvent("batch", false),
+            timeoutCts.Token);
+        socket.QueueTextMessage(
+            """{"type":"input_audio_buffer.committed","item_id":"item_batch"}""");
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.delta","item_id":"item_batch","delta":"batch"}""");
+        await delta;
+
+        Assert.False(finalizeTask.IsCompleted);
+
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_batch","transcript":"batch"}""");
+        await finalizeTask;
+
+        Assert.Equal(1, socket.CountSentMessages("input_audio_buffer.commit"));
+    }
+
+    [Fact]
+    public async Task RealtimeFinalize_CancellationWhileWaitingForCommitAcknowledgement_Throws()
+    {
+        using var testTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var finalizeCts = new CancellationTokenSource();
+        var socket = new FakeRealtimeWebSocket();
+        await using var session =
+            OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+
+        await session.SendAudioAsync(new byte[] { 1, 0, 2, 0 }, testTimeoutCts.Token);
+
+        var finalizeTask = session.FinalizeAsync(finalizeCts.Token);
+        await socket.WaitForSentMessageTypeAsync(
+            "input_audio_buffer.commit",
+            testTimeoutCts.Token);
+        Assert.False(finalizeTask.IsCompleted);
+
+        // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel must trip the token before the assertion; CancelAsync would defer it.
+        finalizeCts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () => await finalizeTask);
+    }
+
+    [Fact]
     public async Task SupportsStreaming_RequiresRealtimeModelAndApiKeyMode()
     {
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
@@ -1205,6 +1362,31 @@ public class OpenAiPluginTests
         var authEx = await Assert.ThrowsAsync<InvalidOperationException>(
             () => sut.StartStreamingAsync("en", CancellationToken.None));
         Assert.Contains("API key", authEx.Message);
+    }
+
+    private static async Task WaitForTranscriptAsync(
+        OpenAiRealtimeStreamingSession session,
+        StreamingTranscriptEvent expected,
+        CancellationToken ct)
+    {
+        var received = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void OnTranscript(StreamingTranscriptEvent transcriptEvent)
+        {
+            if (transcriptEvent == expected)
+                received.TrySetResult(true);
+        }
+
+        session.TranscriptReceived += OnTranscript;
+        try
+        {
+            await received.Task.WaitAsync(ct);
+        }
+        finally
+        {
+            session.TranscriptReceived -= OnTranscript;
+        }
     }
 
     private static JsonElement LoadManifest()
@@ -1304,6 +1486,128 @@ public class OpenAiPluginTests
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             return await responder(request, body);
+        }
+    }
+
+    private sealed class FakeRealtimeWebSocket : WebSocket
+    {
+        private readonly Channel<byte[]> _incoming = Channel.CreateUnbounded<byte[]>();
+        private readonly List<string> _sentMessages = [];
+        private readonly SemaphoreSlim _sentSignal = new(0);
+        private readonly Lock _sentLock = new();
+        private int _state = (int)WebSocketState.Open;
+        private WebSocketCloseStatus? _closeStatus;
+        private string? _closeStatusDescription;
+
+        public override WebSocketCloseStatus? CloseStatus => _closeStatus;
+        public override string? CloseStatusDescription => _closeStatusDescription;
+        public override WebSocketState State => (WebSocketState)Volatile.Read(ref _state);
+        public override string? SubProtocol => null;
+
+        public void QueueTextMessage(string json)
+        {
+            if (!_incoming.Writer.TryWrite(Encoding.UTF8.GetBytes(json)))
+                throw new InvalidOperationException("The fake WebSocket receive queue is closed.");
+        }
+
+        public int CountSentMessages(string messageType)
+        {
+            lock (_sentLock)
+            {
+                return _sentMessages.Count(message => GetMessageType(message) == messageType);
+            }
+        }
+
+        public async Task WaitForSentMessageTypeAsync(
+            string messageType,
+            CancellationToken ct)
+        {
+            while (true)
+            {
+                lock (_sentLock)
+                {
+                    if (_sentMessages.Any(message => GetMessageType(message) == messageType))
+                        return;
+                }
+
+                await _sentSignal.WaitAsync(ct);
+            }
+        }
+
+        public override void Abort()
+        {
+            Interlocked.Exchange(ref _state, (int)WebSocketState.Aborted);
+            _incoming.Writer.TryComplete();
+        }
+
+        public override Task CloseAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _closeStatus = closeStatus;
+            _closeStatusDescription = statusDescription;
+            Interlocked.Exchange(ref _state, (int)WebSocketState.Closed);
+            _incoming.Writer.TryComplete();
+            return Task.CompletedTask;
+        }
+
+        public override Task CloseOutputAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken) =>
+            CloseAsync(closeStatus, statusDescription, cancellationToken);
+
+        public override void Dispose()
+        {
+            Interlocked.Exchange(ref _state, (int)WebSocketState.Closed);
+            _incoming.Writer.TryComplete();
+            _sentSignal.Dispose();
+        }
+
+        public override async Task<WebSocketReceiveResult> ReceiveAsync(
+            ArraySegment<byte> buffer,
+            CancellationToken cancellationToken)
+        {
+            var message = await _incoming.Reader.ReadAsync(cancellationToken);
+            if (message.Length > buffer.Count)
+                throw new InvalidOperationException("The fake WebSocket receive buffer is too small.");
+
+            message.CopyTo(buffer.Array!.AsSpan(buffer.Offset, buffer.Count));
+            return new WebSocketReceiveResult(
+                message.Length,
+                WebSocketMessageType.Text,
+                endOfMessage: true);
+        }
+
+        public override Task SendAsync(
+            ArraySegment<byte> buffer,
+            WebSocketMessageType messageType,
+            bool endOfMessage,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (messageType != WebSocketMessageType.Text || !endOfMessage)
+                throw new InvalidOperationException("The fake WebSocket only accepts complete text messages.");
+
+            var message = Encoding.UTF8.GetString(
+                buffer.Array!,
+                buffer.Offset,
+                buffer.Count);
+            lock (_sentLock)
+            {
+                _sentMessages.Add(message);
+            }
+
+            _sentSignal.Release();
+            return Task.CompletedTask;
+        }
+
+        private static string? GetMessageType(string json)
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.GetProperty("type").GetString();
         }
     }
 
