@@ -77,7 +77,12 @@ public partial class RecorderSectionViewModel : ObservableObject
         _recordingDirectory = recordingDirectory;
         _transcribeAsync = transcribeAsync;
         _audio.LevelChanged += (_, level) =>
-            Dispatcher.UIThread.Post(() => AudioLevel = Math.Clamp(level * 8, 0, 1));
+        {
+            if (IsRecording)
+            {
+                AudioLevel = Math.Clamp(level * 8, 0, 1);
+            }
+        };
         LoadExistingRecordings();
     }
 

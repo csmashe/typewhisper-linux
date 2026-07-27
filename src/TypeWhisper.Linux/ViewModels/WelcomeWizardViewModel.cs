@@ -1140,20 +1140,12 @@ public partial class WelcomeWizardViewModel : ObservableObject
             return;
         }
 
-        Dispatcher.UIThread.Post(() =>
+        // Raw RMS is typically well below 0.1 for normal speech; ×8 maps it to 0–1 for the meter.
+        MicLevel = Math.Clamp(level * 8, 0, 1);
+        if (IsMicTestRunning && MicLevel > 0.05)
         {
-            if (IsAbandoned)
-            {
-                return;
-            }
-
-            // Raw RMS is typically well below 0.1 for normal speech; ×8 maps it to 0–1 for the meter.
-            MicLevel = Math.Clamp(level * 8, 0, 1);
-            if (IsMicTestRunning && MicLevel > 0.05)
-            {
-                MicTestStatus = Loc.Instance["Wizard.MicInputDetected"];
-            }
-        });
+            MicTestStatus = Loc.Instance["Wizard.MicInputDetected"];
+        }
     }
 
     private static void FireAndLog(Func<Task> start, string label)

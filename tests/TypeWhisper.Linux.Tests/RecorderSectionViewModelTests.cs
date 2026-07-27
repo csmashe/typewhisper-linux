@@ -205,9 +205,47 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         Assert.True(sut.ToggleRecordingCommand.CanExecute(null));
     }
 
-    private static AudioRecordingService CreateAudioService()
+    [Fact]
+    public async Task AudioLevel_ServiceDeliveryIsDirectAndStoppedRecorderRejectsLaterDelivery()
     {
-        return new AudioRecordingService(_ => { }, () => 0, () => { });
+        var timeProvider = new ManualTimeProvider();
+        var serviceJobs = new List<Action>();
+        using var audio = CreateAudioService(serviceJobs.Add, timeProvider);
+        var sut = CreateViewModel(audio, _tempDir, _ => Task.FromResult<string?>(null));
+        await sut.ToggleRecordingCommand.ExecuteAsync(null);
+        Assert.True(sut.IsRecording);
+
+        audio.ProcessAudioBufferForTest([0.1f]);
+        var serviceDelivery = Assert.Single(serviceJobs);
+
+        serviceDelivery();
+
+        Assert.Equal(0.8, sut.AudioLevel, precision: 5);
+        sut.IsRecording = false;
+        sut.AudioLevel = 0;
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(66));
+        audio.ProcessAudioBufferForTest([0.2f]);
+        serviceJobs[1]();
+
+        Assert.Equal(0, sut.AudioLevel);
+
+        sut.IsRecording = true;
+        await sut.ToggleRecordingCommand.ExecuteAsync(null);
+    }
+
+    private static AudioRecordingService CreateAudioService(
+        Action<Action>? postToUiThread = null,
+        TimeProvider? timeProvider = null
+    )
+    {
+        return new AudioRecordingService(
+            _ => { },
+            () => 0,
+            () => { },
+            timeProvider: timeProvider,
+            postToUiThread: postToUiThread
+        );
     }
 
     private static RecorderSectionViewModel CreateViewModel(
@@ -233,6 +271,21 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         Assert.True(sut.IsRecording);
         Assert.Equal(Loc.Instance["Recorder.Stop"], sut.RecordButtonText);
         audio.ProcessAudioBufferForTest([0.1f, -0.1f, 0.2f, -0.2f]);
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+
+        public override long GetTimestamp()
+        {
+            return _timestamp;
+        }
+
+        public void Advance(TimeSpan elapsed)
+        {
+            _timestamp += (long)(elapsed.TotalSeconds * TimestampFrequency);
+        }
     }
 
     private sealed class FakeSettingsService(AppSettings current) : ISettingsService

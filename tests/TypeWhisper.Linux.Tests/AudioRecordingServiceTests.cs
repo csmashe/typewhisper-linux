@@ -365,6 +365,214 @@ public sealed class AudioRecordingServiceTests
     }
 
     [Fact]
+    public void LevelUpdates_SilenceAndNonzeroShareSixtySixMillisecondWindow()
+    {
+        var timeProvider = new ManualTimeProvider();
+        var queuedJobs = new List<Action>();
+        using var service = CreateLevelTestService(timeProvider, queuedJobs);
+        var delivered = new List<float>();
+        service.LevelChanged += (_, level) => delivered.Add(level);
+        Assert.True(service.StartPreview());
+
+        service.ProcessAudioBufferForTest([0.25f]);
+        service.ProcessAudioBufferForTest([0f]);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(65));
+        service.ProcessAudioBufferForTest([0f]);
+
+        Assert.Single(queuedJobs);
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(1));
+        service.ProcessAudioBufferForTest([0f]);
+        service.ProcessAudioBufferForTest([0.5f]);
+
+        Assert.Equal(2, queuedJobs.Count);
+        RunQueuedJobs(queuedJobs);
+        Assert.Equal(2, delivered.Count);
+        Assert.Equal(0.25f, delivered[0], precision: 5);
+        Assert.Equal(0f, delivered[1]);
+    }
+
+    [Fact]
+    public void LevelUpdate_AdmittedFramePostsOneJobAndInvokesSubscriberOnce()
+    {
+        var queuedJobs = new List<Action>();
+        using var service = CreateLevelTestService(new ManualTimeProvider(), queuedJobs);
+        var subscriberCalls = 0;
+        service.LevelChanged += (_, _) => subscriberCalls++;
+        Assert.True(service.StartPreview());
+
+        service.ProcessAudioBufferForTest([0.125f]);
+
+        var delivery = Assert.Single(queuedJobs);
+        Assert.Equal(0, subscriberCalls);
+
+        delivery();
+
+        Assert.Single(queuedJobs);
+        Assert.Equal(1, subscriberCalls);
+
+        service.StopPreview();
+        queuedJobs[1]();
+        Assert.Equal(2, subscriberCalls);
+        Assert.True(service.StartPreview());
+        service.ProcessAudioBufferForTest([0.25f]);
+
+        Assert.Equal(3, queuedJobs.Count);
+        queuedJobs[2]();
+        Assert.Equal(3, subscriberCalls);
+    }
+
+    [Fact]
+    public void QueuedPreviewLevel_IsDroppedAfterStop()
+    {
+        var queuedJobs = new List<Action>();
+        using var service = CreateLevelTestService(new ManualTimeProvider(), queuedJobs);
+        var delivered = new List<float>();
+        service.LevelChanged += (_, level) => delivered.Add(level);
+        Assert.True(service.StartPreview());
+        service.ProcessAudioBufferForTest([0.25f]);
+
+        service.StopPreview();
+
+        Assert.Equal(2, queuedJobs.Count);
+        RunQueuedJobs(queuedJobs);
+        Assert.Equal([0f], delivered);
+        Assert.Equal(0f, service.CurrentRmsLevel);
+    }
+
+    [Fact]
+    public void QueuedRecordingLevel_IsDroppedAfterSynchronousStop()
+    {
+        var queuedJobs = new List<Action>();
+        using var service = CreateLevelTestService(new ManualTimeProvider(), queuedJobs);
+        var delivered = new List<float>();
+        service.LevelChanged += (_, level) => delivered.Add(level);
+        var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+        service.ProcessAudioBufferForTest([0.25f]);
+
+        // ReSharper disable once MethodHasAsyncOverload -- the synchronous stop boundary is the behavior under test.
+        service.StopRecording(session);
+        RunQueuedJobs(queuedJobs);
+
+        Assert.Empty(delivered);
+        Assert.Equal(0f, service.CurrentRmsLevel);
+    }
+
+    [Fact]
+    public async Task StopRecordingAsync_AcceptanceDropsQueuedAndDrainFrameLevels()
+    {
+        var queuedJobs = new List<Action>();
+        using var service = CreateLevelTestService(new ManualTimeProvider(), queuedJobs);
+        var delivered = new List<float>();
+        service.LevelChanged += (_, level) => delivered.Add(level);
+        var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+        service.ProcessAudioBufferForTest([0.125f]);
+
+        var stopTask = service.StopRecordingAsync(session);
+        service.ProcessAudioBufferForTest([0.5f]);
+
+        Assert.Single(queuedJobs);
+        RunQueuedJobs(queuedJobs);
+        Assert.Empty(delivered);
+        Assert.Equal(0f, service.CurrentRmsLevel);
+        Assert.True((await stopTask).Length > 44);
+    }
+
+    [Fact]
+    public async Task StopPreview_DuringAcceptedRecordingStopDoesNotReopenLevelDelivery()
+    {
+        var timeProvider = new ManualTimeProvider();
+        var queuedJobs = new List<Action>();
+        using var service = CreateLevelTestService(timeProvider, queuedJobs);
+        Assert.True(service.StartPreview());
+        var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+
+        var stopTask = service.StopRecordingAsync(session);
+        service.StopPreview();
+        timeProvider.Advance(TimeSpan.FromMilliseconds(66));
+        service.ProcessAudioBufferForTest([0.5f]);
+
+        Assert.Single(queuedJobs);
+        Assert.Equal(0f, service.CurrentRmsLevel);
+        Assert.True((await stopTask).Length > 44);
+    }
+
+    [Fact]
+    public void QueuedRecordingLevel_IsDroppedAcrossCaptureReplacement()
+    {
+        var queuedJobs = new List<Action>();
+        using var service = CreateLevelTestService(new ManualTimeProvider(), queuedJobs);
+        var delivered = new List<float>();
+        service.LevelChanged += (_, level) => delivered.Add(level);
+        var sessionA = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+        service.ProcessAudioBufferForTest([0.125f]);
+        // ReSharper disable once MethodHasAsyncOverload -- replacement is intentionally immediate.
+        service.StopRecording(sessionA);
+        var sessionB = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+        service.ProcessAudioBufferForTest([0.375f]);
+
+        Assert.Equal(2, queuedJobs.Count);
+        RunQueuedJobs(queuedJobs);
+
+        var deliveredB = Assert.Single(delivered);
+        Assert.Equal(0.375f, deliveredB, precision: 5);
+        Assert.True(service.IsRecordingOwnedBy(sessionB));
+    }
+
+    [Fact]
+    public void StaleCallback_DoesNotAlterReplacementCurrentRmsLevel()
+    {
+        var queuedJobs = new List<Action>();
+        using var service = CreateLevelTestService(new ManualTimeProvider(), queuedJobs);
+        var sessionA = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+        AudioRecordingService.AudioCaptureSession? sessionB = null;
+
+        service.ProcessAudioBufferForTest(
+            [0.75f],
+            () =>
+            {
+                // ReSharper disable AccessToDisposedClosure -- ProcessAudioBufferForTest invokes
+                // this callback synchronously, so the `using var service` is still very much alive.
+                // ReSharper disable once MethodHasAsyncOverload -- creates a deterministic callback/start overlap.
+                service.StopRecording(sessionA);
+                sessionB = service.TryStartRecording(whisperModeEnabled: false);
+                service.ProcessAudioBufferForTest([0.2f]);
+                // ReSharper restore AccessToDisposedClosure
+            }
+        );
+
+        Assert.NotNull(sessionB);
+        Assert.True(service.IsRecordingOwnedBy(sessionB));
+        Assert.Equal(0.2f, service.CurrentRmsLevel, precision: 5);
+        Assert.Single(queuedJobs);
+    }
+
+    [Fact]
+    public void StopPreview_ZeroPassesThroughGenerationThrottle()
+    {
+        var queuedJobs = new List<Action>();
+        using var service = CreateLevelTestService(new ManualTimeProvider(), queuedJobs);
+        Assert.True(service.StartPreview());
+
+        service.StopPreview();
+
+        Assert.True(service.CurrentLevelGenerationHasAdmittedUpdateForTest);
+        Assert.Single(queuedJobs);
+    }
+
+    [Fact]
     public void ApplyConfiguredMicrophone_WhenSavedIdentityIsMissing_UsesDefaultWithoutChangingPreference()
     {
         const int staleIndex = 4;
@@ -779,6 +987,43 @@ public sealed class AudioRecordingServiceTests
         }
 
         return samples;
+    }
+
+    private static AudioRecordingService CreateLevelTestService(
+        TimeProvider timeProvider,
+        List<Action> queuedJobs
+    )
+    {
+        return new AudioRecordingService(
+            _ => { },
+            () => 0,
+            () => { },
+            timeProvider: timeProvider,
+            postToUiThread: queuedJobs.Add
+        );
+    }
+
+    private static void RunQueuedJobs(IEnumerable<Action> queuedJobs)
+    {
+        foreach (var job in queuedJobs.ToArray())
+        {
+            job();
+        }
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+
+        public override long GetTimestamp()
+        {
+            return _timestamp;
+        }
+
+        public void Advance(TimeSpan elapsed)
+        {
+            _timestamp += (long)(elapsed.TotalSeconds * TimestampFrequency);
+        }
     }
 
     private static float[] DownsampleThreeToOneUnfiltered(float[] samples, int outputLength)

@@ -1,5 +1,6 @@
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.ViewModels;
 using Xunit;
 
@@ -113,6 +114,65 @@ public sealed class DictationOverlayViewModelTests
         sut.IsOverlayVisible = false;
 
         Assert.False(sut.IsClockTimerRunning);
+    }
+
+    [Fact]
+    public void AudioLevel_ServiceDeliveryUpdatesBeforeJobReturnsWithoutConsumerPost()
+    {
+        var serviceJobs = new List<Action>();
+        var consumerPostCount = 0;
+        using var audio = new AudioRecordingService(
+            _ => { },
+            () => 0,
+            () => { },
+            postToUiThread: serviceJobs.Add
+        );
+        var sut = new DictationOverlayViewModel(
+            new FakeSettingsService(AppSettings.Default),
+            _ => consumerPostCount++,
+            audio
+        )
+        {
+            IsRecording = true,
+        };
+        Assert.True(audio.StartPreview());
+
+        audio.ProcessAudioBufferForTest([0.1f]);
+        var serviceDelivery = Assert.Single(serviceJobs);
+
+        serviceDelivery();
+
+        Assert.Equal(0, consumerPostCount);
+        Assert.Equal(0.8, sut.AudioLevel, precision: 5);
+    }
+
+    [Fact]
+    public void AudioLevel_StoppedOverlayIgnoresLaterServiceDelivery()
+    {
+        var serviceJobs = new List<Action>();
+        var consumerPostCount = 0;
+        using var audio = new AudioRecordingService(
+            _ => { },
+            () => 0,
+            () => { },
+            postToUiThread: serviceJobs.Add
+        );
+        var sut = new DictationOverlayViewModel(
+            new FakeSettingsService(AppSettings.Default),
+            action =>
+            {
+                consumerPostCount++;
+                action();
+            },
+            audio
+        );
+        Assert.True(audio.StartPreview());
+
+        audio.ProcessAudioBufferForTest([0.1f]);
+        Assert.Single(serviceJobs)();
+
+        Assert.Equal(0, consumerPostCount);
+        Assert.Equal(0, sut.AudioLevel);
     }
 
     private static DictationOverlayViewModel CreateViewModel(FakeSettingsService settings)
