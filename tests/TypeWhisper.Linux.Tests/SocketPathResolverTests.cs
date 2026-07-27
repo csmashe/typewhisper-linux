@@ -20,6 +20,38 @@ public sealed class SocketPathResolverTests
     }
 
     [Fact]
+    public void ResolveApiSocketPath_UsesControlSocketDirectoryWithoutCreatingSocket()
+    {
+        var tempRoot = TestPaths.CreateTempDirectory(
+            nameof(ResolveApiSocketPath_UsesControlSocketDirectoryWithoutCreatingSocket)
+        );
+        var fallbackDirectory = Path.Join(tempRoot, "fallback-runtime");
+        var originalXdgRuntimeDirectory = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", null);
+
+            var controlPath =
+                SocketPathResolver.ResolveControlSocketPath(fallbackDirectory);
+            var apiPath = SocketPathResolver.ResolveApiSocketPath(fallbackDirectory);
+
+            Assert.Equal(Path.GetDirectoryName(controlPath), Path.GetDirectoryName(apiPath));
+            Assert.Equal("control.sock", Path.GetFileName(controlPath));
+            Assert.Equal("api.sock", Path.GetFileName(apiPath));
+            Assert.False(File.Exists(apiPath));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                "XDG_RUNTIME_DIR",
+                originalXdgRuntimeDirectory
+            );
+            TestPaths.DeleteDirectory(tempRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveControlSocketPath_AbsentXdg_ReturnsDeterministicSecureFallback()
     {
         var tempRoot = TestPaths.CreateTempDirectory(

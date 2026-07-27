@@ -196,13 +196,13 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
         string content,
         CancellationToken ct
     ) =>
-        WriteIndividualNoteAsync(filePath, content, ct, WriteUtf8TextAsync);
+        WriteIndividualNoteAsync(filePath, content, WriteUtf8TextAsync, ct);
 
     internal static async Task<string> WriteIndividualNoteAsync(
         string filePath,
         string content,
-        CancellationToken ct,
-        Func<FileStream, string, CancellationToken, Task> writeAsync
+        Func<FileStream, string, CancellationToken, Task> writeAsync,
+        CancellationToken ct
     )
     {
         var dir = Path.GetDirectoryName(filePath)!;

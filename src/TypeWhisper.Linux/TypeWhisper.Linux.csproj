@@ -19,6 +19,10 @@
     </ItemGroup>
 
     <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App"/>
+    </ItemGroup>
+
+    <ItemGroup>
         <InternalsVisibleTo Include="TypeWhisper.Linux.Tests"/>
         <InternalsVisibleTo Include="TypeWhisper.PluginSystem.Tests"/>
     </ItemGroup>
@@ -48,7 +52,6 @@
             <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
         </PackageReference>
         <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0"/>
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.3"/>
         <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.1"/>
         <PackageReference Include="PortAudioSharp2" Version="1.0.1"/>
         <PackageReference Include="SharpHook" Version="5.3.9"/>

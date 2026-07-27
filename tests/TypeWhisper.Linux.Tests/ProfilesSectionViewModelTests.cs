@@ -132,6 +132,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
                 sut.SelectedCleanupOverrideOption = null;
             sut.PropertyChanged += (_, args) =>
             {
+                // ReSharper disable once InvertIf -- the positive form states the property this handler reacts to.
                 if (args.PropertyName == nameof(ProfilesSectionViewModel.WhisperModeOptions))
                 {
                     sut.SelectedWhisperModeOption = null;

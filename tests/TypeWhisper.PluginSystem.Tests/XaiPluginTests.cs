@@ -1078,8 +1078,11 @@ public class XaiPluginTests
         public Task ReceiveExited => _receiveExited.Task;
         public bool AbortCalled { get; private set; }
         public bool DisposeCalled { get; private set; }
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- WebSocket declares these get-only, so an override cannot add a private setter.
         public override WebSocketCloseStatus? CloseStatus => _closeStatus;
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- WebSocket declares these get-only, so an override cannot add a private setter.
         public override string? CloseStatusDescription => _closeDescription;
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- WebSocket declares these get-only, so an override cannot add a private setter.
         public override WebSocketState State => _state;
         public override string? SubProtocol => null;
 

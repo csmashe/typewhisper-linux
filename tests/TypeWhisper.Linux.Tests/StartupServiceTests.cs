@@ -135,7 +135,7 @@ public sealed class StartupServiceTests : IDisposable
                 "name=typewhisper",
                 StringComparison.Ordinal
             ),
-            legacyContent + "\n"
+            legacyContent + "\n",
         };
 
         foreach (var customizedContent in customizedContents)
@@ -245,7 +245,7 @@ public sealed class StartupServiceTests : IDisposable
             $"[Desktop Entry]\n#{ManagedLine}",
             $"[Desktop Entry]\nPrefix-{ManagedLine}",
             $"[Desktop Entry]\n{ManagedLine}-extra",
-            "[Desktop Entry]\nX-TypeWhisper-Managed=false"
+            "[Desktop Entry]\nX-TypeWhisper-Managed=false",
         };
         foreach (var markerLookalike in markerLookalikes)
         {

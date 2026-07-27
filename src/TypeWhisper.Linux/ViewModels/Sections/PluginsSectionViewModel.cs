@@ -416,6 +416,7 @@ public partial class PluginsSectionViewModel : ObservableObject
                     return true;
                 }
             );
+            // ReSharper disable once InvertIf -- guard clause; inverting would bury the failure path.
             if (!setResult.IsSuccess)
             {
                 row.Status = Loc.Instance["Plugins.SettingsSaveFailed"];
@@ -652,7 +653,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
     }
 
-    private void MarkSettingsLoadFailed(PluginRow row, bool preserveStatus = false)
+    private static void MarkSettingsLoadFailed(PluginRow row, bool preserveStatus = false)
     {
         row.SettingFields.Clear();
         row.Collections.Clear();
@@ -940,6 +941,7 @@ public partial class PluginRow : ObservableObject
     private PluginSettingsDraftEntry[] CaptureSettingsDraft()
     {
         var entries = new List<PluginSettingsDraftEntry>();
+        // ReSharper disable once LoopCanBeConvertedToQuery -- the loop index is captured into each entry; a query would need Select((_, i) => ...) and read worse.
         for (var fieldIndex = 0; fieldIndex < SettingFields.Count; fieldIndex++)
         {
             var field = SettingFields[fieldIndex];
@@ -974,6 +976,7 @@ public partial class PluginRow : ObservableObject
             for (var itemIndex = 0; itemIndex < collection.Items.Count; itemIndex++)
             {
                 var item = collection.Items[itemIndex];
+                // ReSharper disable once LoopCanBeConvertedToQuery -- the loop index is captured into each entry; a query would need Select((_, i) => ...) and read worse.
                 for (var fieldIndex = 0; fieldIndex < item.Fields.Count; fieldIndex++)
                 {
                     var field = item.Fields[fieldIndex];

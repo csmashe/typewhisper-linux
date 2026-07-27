@@ -353,6 +353,7 @@ public class PluginEventBusTests
                 received.Add(description);
             }
 
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- independent event checks that each await; a switch would hide that both can run.
             if (
                 pluginEvent
                 is PartialTranscriptionUpdateEvent
@@ -664,6 +665,7 @@ public class PluginEventBusTests
                 received.Add(pluginEvent.AccumulatedText);
             }
 
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- independent event checks that each await; a switch would hide that both can run.
             if (pluginEvent.AccumulatedText == "gate")
             {
                 firstEntered.TrySetResult(true);

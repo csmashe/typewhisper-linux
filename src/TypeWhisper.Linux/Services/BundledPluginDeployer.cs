@@ -22,6 +22,7 @@ public sealed class BundledPluginDeployer
     public static int DeployIfMissing()
     {
         var source = FindBundledPluginsDir();
+        // ReSharper disable once InvertIf -- guard clause; inverting would bury the skip trace.
         if (source is null)
         {
             Trace.WriteLine(
@@ -234,16 +235,18 @@ public sealed class BundledPluginDeployer
             Directory.Delete(abandonedStage, recursive: true);
         }
 
-        if (Directory.Exists(backup))
+        if (!Directory.Exists(backup))
         {
-            if (Directory.Exists(dest))
-            {
-                Directory.Delete(backup, recursive: true);
-            }
-            else
-            {
-                Directory.Move(backup, dest);
-            }
+            return;
+        }
+
+        if (Directory.Exists(dest))
+        {
+            Directory.Delete(backup, recursive: true);
+        }
+        else
+        {
+            Directory.Move(backup, dest);
         }
     }
 

@@ -6,8 +6,8 @@ namespace TypeWhisper.Cli.Services;
 /// <summary>
 ///     Reads the running app's discovery file
 ///     (<c>$XDG_CONFIG_HOME/typewhisper/api-discovery.json</c>, falling back to
-///     <c>~/.config</c>) so the CLI can auto-pick up the port and token when
-///     neither was passed explicitly. Any read/parse failure is treated as
+///     <c>~/.config</c>) so the CLI can auto-pick up the Unix socket and token.
+///     Any read/parse failure is treated as
 ///     "no discovery file" and returns <c>null</c>.
 /// </summary>
 internal static class DiscoveryFileReader
@@ -35,6 +35,7 @@ internal static class DiscoveryFileReader
             var root = doc.RootElement;
             int? port = null;
             string? token = null;
+            string? socketPath = null;
             if (root.TryGetProperty("port", out var portEl)
                 && portEl.ValueKind == JsonValueKind.Number
                 && portEl.TryGetInt32(out var portValue)
@@ -48,7 +49,15 @@ internal static class DiscoveryFileReader
                 token = tokenEl.GetString();
             }
 
-            return port is null ? null : new DiscoveryFile(port.Value, token);
+            if (
+                root.TryGetProperty("socket_path", out var socketPathEl)
+                && socketPathEl.ValueKind == JsonValueKind.String
+            )
+            {
+                socketPath = socketPathEl.GetString();
+            }
+
+            return port is null ? null : new DiscoveryFile(port.Value, token, socketPath);
         }
         catch
         {

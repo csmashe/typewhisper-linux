@@ -789,17 +789,16 @@ public partial class SherpaOnnxPluginTests
     public void ArtifactPreflight_CanaryTokensWithoutBlank_AcceptedButStillStructurallyChecked()
     {
         using var temp = new TempAssetDir();
-        using var plugin = new SherpaOnnxPlugin();
         var dir = WriteCanaryModelFiles(temp.Path);
 
         // Canary (attention encoder-decoder) has no blank token; preflight must accept
         // it, or a blank requirement would fail every Canary download and delete caches.
-        plugin.RunArtifactPreflightForTests("canary-180m-flash", dir);
+        SherpaOnnxPlugin.RunArtifactPreflightForTests("canary-180m-flash", dir);
 
         // The blank exemption must not switch off the remaining token checks.
         File.WriteAllText(Path.Join(dir, "tokens.txt"), "<unk> 0\n<pad> not-an-id\n");
         Assert.Throws<InvalidDataException>(
-            () => plugin.RunArtifactPreflightForTests("canary-180m-flash", dir)
+            () => SherpaOnnxPlugin.RunArtifactPreflightForTests("canary-180m-flash", dir)
         );
     }
 

@@ -417,6 +417,7 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
                         $"ElevenLabs streaming provider error: {error}"
                     );
 
+                // ReSharper disable once InvertIf -- the positive form states the terminal-commit case that ends the receive loop.
                 if (
                     isCommittedTranscript
                     && Volatile.Read(ref _finalCommitPending) != 0

@@ -133,6 +133,7 @@ public class Qwen3SttPluginTests
     }
 
     [Theory]
+    // ReSharper disable once RawStringCanBeSimplified -- kept raw to match the sibling InlineData rows, which need raw strings for their quotes.
     [InlineData("""{}""")]
     [InlineData("""{ "text": null }""")]
     [InlineData("""{ "text": 42 }""")]

@@ -1,6 +1,6 @@
 using System.Collections.Specialized;
-using System.Net;
 using System.Text;
+using Microsoft.AspNetCore.Http;
 using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.Services;
@@ -72,40 +72,46 @@ internal sealed record DictionaryTermDeleteRequest(string Term);
 
 /// <summary>
 ///     Hand-rolled multipart/form-data parser for the local HTTP API. Custom
-///     because HttpListener has no multipart support and System.Net.Http's
-///     parser is server-side only in MultipartReader on netfx-style streams;
-///     pulling in ASP.NET Core just for boundary scanning is overkill for a
-///     single localhost-only endpoint. Body size is capped while streaming so
-///     a malicious / runaway client cannot OOM the dictation host.
+///     so the transport-neutral request shape and exact parsing behavior stay
+///     shared across the TCP and Unix-socket listeners. Body size is capped
+///     while streaming so a malicious / runaway client cannot OOM the
+///     dictation host.
 /// </summary>
 internal static class HttpApiRequestParser
 {
-    public static async Task<HttpApiRequest> FromListenerRequestAsync(
-        HttpListenerRequest request,
+    public static async Task<HttpApiRequest> FromHttpContextAsync(
+        HttpContext context,
         long maxBytes,
         CancellationToken ct
     )
     {
+        var request = context.Request;
         var body = await ReadBodyAsync(
-            request.InputStream,
-            request.ContentLength64,
+            request.Body,
+            request.ContentLength ?? -1,
             maxBytes,
             ct
         );
 
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var key in request.Headers.AllKeys)
+        foreach (var (key, value) in request.Headers)
         {
-            if (key is not null && request.Headers[key] is { } value)
+            headers[key] = value.ToString();
+        }
+
+        var queryString = new NameValueCollection();
+        foreach (var (key, values) in request.Query)
+        {
+            foreach (var value in values)
             {
-                headers[key] = value;
+                queryString.Add(key, value);
             }
         }
 
         return new HttpApiRequest(
-            request.HttpMethod,
-            request.Url?.AbsolutePath ?? "",
-            request.QueryString,
+            request.Method,
+            request.Path.Value ?? "",
+            queryString,
             headers,
             body
         );

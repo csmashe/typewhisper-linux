@@ -354,6 +354,7 @@ public sealed class RecentTranscriptionsService
             }
         }
 
+        // ReSharper disable once InvertIf -- kept symmetrical with the identical AppId block above.
         if (!string.IsNullOrWhiteSpace(target.ProcessName))
         {
             hasAppIdentity = true;

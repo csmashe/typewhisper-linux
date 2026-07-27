@@ -112,6 +112,7 @@ public class CloudflareAsrPluginTests
     }
 
     [Theory]
+    // ReSharper disable once RawStringCanBeSimplified -- kept raw to match the sibling InlineData rows, which need raw strings for their quotes.
     [InlineData("""{}""")]
     [InlineData("""{ "result": null }""")]
     [InlineData("""{ "result": {} }""")]

@@ -30,6 +30,7 @@ public sealed partial class UsageTextTests
             .ToArray();
 
         Assert.Contains("Usage: typewhisper-cli <command> [options]", output);
+        Assert.DoesNotContain("--port", output, StringComparison.Ordinal);
         Assert.NotEmpty(exampleLines);
         Assert.All(
             exampleLines,

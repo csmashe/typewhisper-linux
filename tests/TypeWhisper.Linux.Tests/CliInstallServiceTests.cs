@@ -349,10 +349,23 @@ public sealed class CliInstallServiceTests : IDisposable
             cli,
             command => command.StartsWith("typewhisper ", StringComparison.Ordinal)
         );
+        Assert.DoesNotContain(
+            cli,
+            command => command.Contains("--port", StringComparison.Ordinal)
+        );
         Assert.Contains(
             curl,
             command =>
                 command.Contains(
+                    "Authorization: Bearer $TYPEWHISPER_API_TOKEN",
+                    StringComparison.Ordinal
+                )
+        );
+        Assert.Contains(
+            curl,
+            command =>
+                command.Contains("localhost:9876", StringComparison.Ordinal)
+                && command.Contains(
                     "Authorization: Bearer $TYPEWHISPER_API_TOKEN",
                     StringComparison.Ordinal
                 )

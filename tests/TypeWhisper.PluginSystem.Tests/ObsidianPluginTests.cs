@@ -121,12 +121,12 @@ public sealed class ObsidianPluginTests : IDisposable
             ObsidianPlugin.WriteIndividualNoteAsync(
                 notePath,
                 "complete content",
-                CancellationToken.None,
                 async (stream, _, ct) =>
                 {
                     await stream.WriteAsync("partial"u8.ToArray(), ct);
                     throw new IOException("Injected write failure.");
-                }
+                },
+                CancellationToken.None
             )
         );
 

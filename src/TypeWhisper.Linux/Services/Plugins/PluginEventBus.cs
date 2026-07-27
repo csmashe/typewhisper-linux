@@ -70,7 +70,6 @@ public sealed class PluginEventBus : IPluginEventBus, IDisposable, IAsyncDisposa
         where T : PluginEvent
     {
         var eventType = typeof(T);
-        Task WrappedHandler(object obj) => handler((T)obj);
         var subscription = new Subscription(this, eventType, WrappedHandler);
 
         lock (_lock)
@@ -88,6 +87,8 @@ public sealed class PluginEventBus : IPluginEventBus, IDisposable, IAsyncDisposa
         }
 
         return subscription;
+
+        Task WrappedHandler(object obj) => handler((T)obj);
     }
 
     public void Dispose()

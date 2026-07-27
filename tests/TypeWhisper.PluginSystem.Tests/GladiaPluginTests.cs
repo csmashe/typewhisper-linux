@@ -642,6 +642,7 @@ public class GladiaPluginTests
     }
 
     [Theory]
+    // ReSharper disable once RawStringCanBeSimplified -- kept raw to match the sibling InlineData rows, which need raw strings for their quotes.
     [InlineData("""{}""")]
     [InlineData("""{ "status": 17 }""")]
     [InlineData("""{ "status": "paused" }""")]
