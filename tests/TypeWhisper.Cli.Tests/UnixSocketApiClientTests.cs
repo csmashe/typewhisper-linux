@@ -59,7 +59,7 @@ public sealed class UnixSocketApiClientTests
         {
             // ReSharper disable once UseObjectOrCollectionInitializer -- a nested Http initializer would strip the comment explaining the timeout.
             var api = new ApiClient(stub.SocketPath, "socket-secret");
-            // Proxy negotiation would otherwise stall until the 5-minute default.
+            // Bound the test failure in case proxy bypass regresses.
             api.Http.Timeout = TimeSpan.FromSeconds(3);
 
             using var response = await api.Http.GetAsync($"{api.BaseUrl}/v1/status");

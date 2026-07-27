@@ -7,12 +7,26 @@ namespace TypeWhisper.Cli.Commands;
 /// <summary>Implements <c>typewhisper status</c>: reports engine/model readiness.</summary>
 internal static class StatusCommand
 {
-    public static async Task<int> RunAsync(ApiClient api, bool json)
+    private static readonly TimeSpan s_defaultBudget = TimeSpan.FromSeconds(10);
+
+    public static async Task<int> RunAsync(
+        ApiClient api,
+        bool json,
+        CancellationToken ct,
+        TimeSpan? budget = null
+    )
     {
+        var requestBudget = budget ?? s_defaultBudget;
+        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        requestCts.CancelAfter(requestBudget);
+
         try
         {
-            var response = await api.Http.GetAsync($"{api.BaseUrl}/v1/status");
-            var body = await response.Content.ReadAsStringAsync();
+            using var response = await api.Http.GetAsync(
+                $"{api.BaseUrl}/v1/status",
+                requestCts.Token
+            );
+            var body = await response.Content.ReadAsStringAsync(requestCts.Token);
             if (!response.IsSuccessStatusCode)
             {
                 return ConsoleOutput.Error(
@@ -42,9 +56,28 @@ internal static class StatusCommand
         {
             return ConsoleOutput.Error("TypeWhisper is not running or API server is disabled.");
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return ConsoleOutput.Error("Cancelled.");
+        }
+        catch (OperationCanceledException)
+        {
+            return ConsoleOutput.Error(
+                $"The API did not respond within {FormatBudget(requestBudget)}."
+            );
+        }
         catch (JsonException)
         {
             return ConsoleOutput.Error("Received malformed JSON from the API.");
         }
+    }
+
+    private static string FormatBudget(TimeSpan budget)
+    {
+        var seconds = budget.TotalSeconds.ToString(
+            "0.###",
+            System.Globalization.CultureInfo.InvariantCulture
+        );
+        return seconds == "1" ? "1 second" : $"{seconds} seconds";
     }
 }
