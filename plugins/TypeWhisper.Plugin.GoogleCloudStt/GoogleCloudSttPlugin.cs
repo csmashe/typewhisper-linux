@@ -33,8 +33,9 @@ public sealed partial class GoogleCloudSttPlugin
         : this(new HttpClientHandler()) { }
 
     // Test seam: lets a stub handler answer requests without hitting the network.
+    // Timeout exceeds MaxSyncSeconds because it also covers upload and recognition time.
     internal GoogleCloudSttPlugin(HttpMessageHandler handler) =>
-        _httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(60) };
+        _httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(120) };
 
     public string PluginId => "com.typewhisper.google-cloud-stt";
     public string PluginName => "Google Cloud STT";
