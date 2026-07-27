@@ -85,7 +85,7 @@ public sealed class ProfileServiceTests : IDisposable
         var secondCompletion = new TaskCompletionSource<Profile?>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var firstToggle = Task.Run(() => service.ToggleProfileEnabled(original.Id));
+        var firstToggle = RunOnDedicatedThread(() => service.ToggleProfileEnabled(original.Id));
         Thread? secondThread = null;
         bool secondReachedGateOrWriter;
 
@@ -174,7 +174,7 @@ public sealed class ProfileServiceTests : IDisposable
         var secondCompletion = new TaskCompletionSource<Profile?>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var firstToggle = Task.Run(() => service.ToggleProfileEnabled(profileA.Id));
+        var firstToggle = RunOnDedicatedThread(() => service.ToggleProfileEnabled(profileA.Id));
         Thread? secondThread = null;
         bool secondReachedGateOrWriter;
 
@@ -531,6 +531,34 @@ public sealed class ProfileServiceTests : IDisposable
     private static TaskCompletionSource CreateCompletionSource()
     {
         return new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    // The first toggle blocks inside BlockingAfterCommitWriter while holding the service
+    // gate, so it must not run on a thread-pool thread. On a loaded CI runner the pool adds
+    // threads roughly once per second, so a queued work item can sit unstarted past
+    // s_testGuard and the test times out waiting for a commit that never got a thread to
+    // happen on. A dedicated thread starts regardless of pool pressure, matching how the
+    // second caller already runs.
+    private static Task<Profile?> RunOnDedicatedThread(Func<Profile?> toggle)
+    {
+        var completion = new TaskCompletionSource<Profile?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        new Thread(() =>
+        {
+            try
+            {
+                completion.TrySetResult(toggle());
+            }
+            catch (Exception ex)
+            {
+                completion.TrySetException(ex);
+            }
+        })
+        {
+            IsBackground = true,
+        }.Start();
+        return completion.Task;
     }
 
     private static bool IsWaiting(Thread thread)

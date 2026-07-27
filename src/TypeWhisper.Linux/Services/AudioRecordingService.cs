@@ -49,6 +49,7 @@ public sealed class AudioRecordingService : IDisposable
 
     private static int s_paInitCount;
     private static readonly Lock s_paInitLock = new();
+    private static string? s_nativeAudioUnavailable;
 
     private readonly Lock _captureLock = new();
     private readonly Func<int> _defaultInputDeviceIndexProvider;
@@ -259,9 +260,30 @@ public sealed class AudioRecordingService : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Why the native audio stack could not be loaded, or null while it is fine.
+    ///     Set the first time <see cref="GetInputDevices" /> fails to initialize PortAudio.
+    /// </summary>
+    public static string? NativeAudioUnavailableReason => Volatile.Read(ref s_nativeAudioUnavailable);
+
     public static IReadOnlyList<AudioInputDevice> GetInputDevices()
     {
-        EnsurePortAudioInitialized();
+        // PortAudio is a native library resolved on first use, so this throws when the
+        // audio stack is missing — no libportaudio, or its libjack/libasound dependencies
+        // absent. Enumeration is a query, and its callers run from constructors and UI
+        // commands where an escaping exception unwinds straight out of the app; hand back
+        // an empty table instead. Capture still fails loudly through the recording paths.
+        try
+        {
+            EnsurePortAudioInitialized();
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            Volatile.Write(ref s_nativeAudioUnavailable, ex.Message);
+            Trace.WriteLine($"[AudioRecordingService] PortAudio unavailable: {ex.Message}");
+            return [];
+        }
+
         var result = new List<AudioInputDevice>();
         for (var i = 0; i < PortAudio.DeviceCount; i++)
         {

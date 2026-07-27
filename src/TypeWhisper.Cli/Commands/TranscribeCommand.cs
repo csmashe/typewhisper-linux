@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using TypeWhisper.Cli.Models;
 using TypeWhisper.Cli.Output;
 using TypeWhisper.Cli.Services;
@@ -11,18 +12,13 @@ namespace TypeWhisper.Cli.Commands;
 ///     path (spooling stdin to a private file) to the API and prints the transcript
 ///     or JSON response.
 /// </summary>
-internal static class TranscribeCommand
+internal static partial class TranscribeCommand
 {
     // Longest magic-byte window StdinAudioSniffer.Detect inspects (RIFF/WAVE).
     private const int SniffHeadBytes = 12;
 
     private const UnixFileMode PrivateFileMode =
         UnixFileMode.UserRead | UnixFileMode.UserWrite;
-
-    private static readonly JsonSerializerOptions s_jsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-    };
 
     public static Task<int> RunAsync(ApiClient api, CliOptions options)
     {
@@ -94,7 +90,10 @@ internal static class TranscribeCommand
                 options.AwaitDownload
             );
             using var content = new StringContent(
-                JsonSerializer.Serialize(request, s_jsonOptions),
+                JsonSerializer.Serialize(
+                    request,
+                    TranscribeJsonContext.Default.LocalFileTranscribeRequest
+                ),
                 Encoding.UTF8,
                 "application/json"
             );
@@ -255,4 +254,10 @@ internal static class TranscribeCommand
         bool AwaitDownload
     );
     // ReSharper restore NotAccessedPositionalProperty.Local
+
+    // Source-generated so the published CLI can be trimmed: the reflection-based
+    // serializer roots types the linker can't see and warns (IL2026).
+    [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
+    [JsonSerializable(typeof(LocalFileTranscribeRequest))]
+    private partial class TranscribeJsonContext : JsonSerializerContext;
 }

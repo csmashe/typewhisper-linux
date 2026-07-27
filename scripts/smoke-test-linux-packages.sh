@@ -190,6 +190,9 @@ run_gui_probe() {
 install_ubuntu_runtime() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
+  # libjack/libasound back the bundled libportaudio.so. A desktop gets them via
+  # pipewire-jack; a bare container does not, and without them PortAudio fails to
+  # load and the GUI probe can only ever prove the no-audio path.
   apt-get install -y --no-install-recommends \
     dbus-x11 \
     gzip \
@@ -200,6 +203,8 @@ install_ubuntu_runtime() {
     libgl1 \
     libice6 \
     libicu74 \
+    libjack-jackd2-0 \
+    libasound2t64 \
     libsm6 \
     libx11-6 \
     libx11-xcb1 \
@@ -217,11 +222,14 @@ install_ubuntu_runtime() {
 }
 
 install_fedora_runtime() {
+  # See install_ubuntu_runtime: alsa-lib/jack back the bundled libportaudio.so.
   dnf install -y \
+    alsa-lib \
     dbus-daemon \
     fontconfig \
     freetype \
     gzip \
+    jack-audio-connection-kit \
     libICE \
     libSM \
     libX11 \
