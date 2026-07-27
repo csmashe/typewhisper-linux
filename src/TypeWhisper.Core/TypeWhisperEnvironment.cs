@@ -51,8 +51,29 @@ public static class TypeWhisperEnvironment
         }
         catch (Exception ex)
         {
+            // Not fatal by itself -- the mode check below decides. A mount can reject chmod
+            // while already presenting an owner-only mode.
             Trace.WriteLine(
                 $"[TypeWhisperEnvironment] Could not set 0700 mode on '{path}': {ex.Message}"
+            );
+        }
+
+        // Verify rather than trust the call: FAT and some CIFS mounts accept chmod and ignore
+        // it. Startup must not continue with recordings and settings readable by other accounts,
+        // so fail closed instead of returning as if the directory had been tightened.
+        const UnixFileMode forbidden =
+            UnixFileMode.GroupRead
+            | UnixFileMode.GroupWrite
+            | UnixFileMode.GroupExecute
+            | UnixFileMode.OtherRead
+            | UnixFileMode.OtherWrite
+            | UnixFileMode.OtherExecute;
+
+        var mode = File.GetUnixFileMode(path);
+        if ((mode & forbidden) != 0)
+        {
+            throw new IOException(
+                $"'{path}' must be owner-only (0700) but is {mode}. Fix it with: chmod 700 '{path}'"
             );
         }
     }
