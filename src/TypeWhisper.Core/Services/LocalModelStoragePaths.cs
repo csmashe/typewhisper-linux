@@ -19,7 +19,10 @@ public static class LocalModelStoragePaths
     ) =>
         AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is { } customPath
             ? Path.GetFullPath(customPath)
-            : defaultModelStoragePath ?? TypeWhisperEnvironment.ModelsPath;
+            : ResolveDefaultRoot(
+                defaultModelStoragePath,
+                TypeWhisperEnvironment.ModelsPath,
+                nameof(defaultModelStoragePath));
 
     /// <summary>
     /// Resolves the active plugin asset directory for large model and runtime files.
@@ -47,7 +50,10 @@ public static class LocalModelStoragePaths
             || AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is null)
         {
             return Path.Join(
-                defaultPluginDataPath ?? TypeWhisperEnvironment.PluginDataPath,
+                ResolveDefaultRoot(
+                    defaultPluginDataPath,
+                    TypeWhisperEnvironment.PluginDataPath,
+                    nameof(defaultPluginDataPath)),
                 safePluginId
             );
         }
@@ -56,5 +62,18 @@ public static class LocalModelStoragePaths
             ResolveModelStoragePath(settings),
             PluginDataFolderName,
             safePluginId);
+    }
+
+    // Keep every result absolute; a blank or relative root would otherwise resolve
+    // assets against the process working directory.
+    private static string ResolveDefaultRoot(string? injected, string fallback, string paramName)
+    {
+        if (injected is null)
+        {
+            return fallback;
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(injected, paramName);
+        return Path.GetFullPath(injected);
     }
 }

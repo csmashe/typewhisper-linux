@@ -130,6 +130,11 @@ public sealed class FileTranscriptionProcessor(
                     ? vocabularyBoosting.Apply
                     : null,
                 DictionaryCorrector = dictionary.ApplyCorrections,
+                TranscriptionTask = task,
+                DetectedLanguage = result.DetectedLanguage,
+                ConfiguredLanguage = language,
+                TranscriptionNumberNormalizationEnabled =
+                    currentSettings.TranscriptionNumberNormalizationEnabled,
             },
             cancellationToken
         );

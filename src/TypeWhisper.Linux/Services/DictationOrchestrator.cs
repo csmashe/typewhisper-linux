@@ -2039,8 +2039,15 @@ public sealed class DictationOrchestrator : IDisposable
                     TranslationTarget = string.IsNullOrWhiteSpace(translationTarget)
                         ? null
                         : translationTarget,
+                    RequireTranslationSuccess = !string.IsNullOrWhiteSpace(translationTarget),
                     EffectiveSourceLanguage = postProcessingLanguage,
                     DetectedLanguage = postProcessingLanguage,
+                    TranscriptionTask = translate
+                        ? TranscriptionTask.Translate
+                        : TranscriptionTask.Transcribe,
+                    ConfiguredLanguage = languageHint,
+                    TranscriptionNumberNormalizationEnabled =
+                        _settings.Current.TranscriptionNumberNormalizationEnabled,
                     PluginPostProcessors = pluginProcessors,
                     StatusCallback = status =>
                     {

@@ -630,6 +630,26 @@
                                           HorizontalAlignment="Right" />
                         </Grid>
                     </Border>
+
+                    <Border Grid.Row="23"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="24"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="{loc:Str Dictation.NormalizeNumbers}"
+                                           Classes="row-label" />
+                                <TextBlock Text="{loc:Str Dictation.NormalizeNumbersHint}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding TranscriptionNumberNormalizationEnabled}"
+                                          HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
                 </Grid>
             </Border>
 

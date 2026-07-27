@@ -952,6 +952,12 @@ public sealed partial class HttpApiService : IDisposable
                     ? _vocabularyBoosting.Apply
                     : null,
                 DictionaryCorrector = _dictionary.ApplyCorrections,
+                TranscriptionTask = opts.Task,
+                DetectedLanguage = result.DetectedLanguage,
+                ConfiguredLanguage = language,
+                ConfiguredLanguageCandidates = opts.LanguageHints,
+                TranscriptionNumberNormalizationEnabled =
+                    settings.TranscriptionNumberNormalizationEnabled,
             },
             ct
         );

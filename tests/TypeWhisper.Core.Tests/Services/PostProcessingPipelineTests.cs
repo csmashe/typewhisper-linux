@@ -1,4 +1,5 @@
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
@@ -232,6 +233,84 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
+    public async Task ProcessAsync_RequiredTranslationFailure_RethrowsOriginalException()
+    {
+        var expected = new IOException("translation unavailable");
+        var options = new PipelineOptions
+        {
+            TranslationHandler = (_, _, _, _) => throw expected,
+            TranslationTarget = "fr",
+            DetectedLanguage = "en",
+            RequireTranslationSuccess = true
+        };
+
+        var ex = await Assert.ThrowsAsync<IOException>(() => _sut.ProcessAsync("hello", options));
+
+        // Bare `throw;` must preserve the original exception instance, not wrap or re-create it.
+        Assert.Same(expected, ex);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_RequireTranslationSuccessWithoutHandler_Throws()
+    {
+        var options = new PipelineOptions { RequireTranslationSuccess = true, TranslationTarget = "fr" };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _sut.ProcessAsync("hello", options)
+        );
+        Assert.Equal("Required translation is not configured.", ex.Message);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_TranslationFailureNotRequired_KeepsCurrentText()
+    {
+        var translationAttempted = false;
+        var options = new PipelineOptions
+        {
+            TranslationHandler = (_, _, _, _) =>
+            {
+                translationAttempted = true;
+                throw new IOException("translation unavailable");
+            },
+            TranslationTarget = "fr",
+            DetectedLanguage = "en"
+        };
+
+        var result = await _sut.ProcessAsync("hello", options);
+
+        // Prove the step actually ran and failed, then the failure was swallowed.
+        Assert.True(translationAttempted);
+        Assert.Equal("hello", result.Text);
+        var translationStep = Assert.Single(result.Steps, s => s.Name == PostProcessingStepNames.Translation);
+        Assert.False(translationStep.Succeeded);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_RequireTranslationSuccess_DoesNotRethrowNonTranslationFailure()
+    {
+        var translated = false;
+        var options = new PipelineOptions
+        {
+            // A non-Translation step fails; RequireTranslationSuccess must not turn this into a rethrow.
+            CleanupHandler = (_, _) => throw new IOException("cleanup unavailable"),
+            TranslationHandler = (text, _, _, _) =>
+            {
+                translated = true;
+                return Task.FromResult($"[fr] {text}");
+            },
+            TranslationTarget = "fr",
+            DetectedLanguage = "en",
+            RequireTranslationSuccess = true
+        };
+
+        var result = await _sut.ProcessAsync("hello", options);
+
+        // Cleanup failure was swallowed; Translation still ran and succeeded on the current text.
+        Assert.True(translated);
+        Assert.Equal("[fr] hello", result.Text);
+    }
+
+    [Fact]
     public async Task ProcessAsync_Translation_UsesDetectedLanguageWhenEffectiveLanguageMatchesTarget()
     {
         string? sourceLanguage = null;
@@ -312,6 +391,125 @@ public class PostProcessingPipelineTests
         // Priority order: Plugin(100) → LLM(300) → Snippets(500) → Boosting(550) → Dictionary(600)
         Assert.Equal(["Plugin100", "LLM", "Snippets", "Boosting", "Dictionary"], executionOrder);
         Assert.Equal("start+P100+LLM+SNP+BOOST+DICT", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NumberNormalization_RunsBeforeLaterPostProcessing()
+    {
+        var executionOrder = new List<string>();
+
+        var options = new PipelineOptions
+        {
+            TranscriptionNumberNormalizationEnabled = true,
+            TranscriptionTask = TranscriptionTask.Transcribe,
+            DetectedLanguage = "en",
+            ConfiguredLanguage = "en",
+            AppFormatter = (text, _) =>
+            {
+                executionOrder.Add($"Formatting:{text}");
+                return text + "+FMT";
+            },
+            LlmHandler = (text, _) =>
+            {
+                executionOrder.Add($"LLM:{text}");
+                return Task.FromResult(text + "+LLM");
+            },
+            SnippetExpander = text =>
+            {
+                executionOrder.Add($"Snippets:{text}");
+                return text + "+SNP";
+            },
+            VocabularyBooster = text =>
+            {
+                executionOrder.Add($"Boosting:{text}");
+                return text + "+BOOST";
+            },
+            DictionaryCorrector = text =>
+            {
+                executionOrder.Add($"Dictionary:{text}");
+                return text + "+DICT";
+            },
+            TranslationHandler = (text, _, _, _) =>
+            {
+                executionOrder.Add($"Translation:{text}");
+                return Task.FromResult(text + "+TR");
+            },
+            TranslationTarget = "fr"
+        };
+
+        var result = await _sut.ProcessAsync("twenty three", options);
+
+        Assert.Equal("23+FMT+LLM+SNP+BOOST+DICT+TR", result.Text);
+        Assert.Equal(
+            [
+                "Formatting:23",
+                "LLM:23+FMT",
+                "Snippets:23+FMT+LLM",
+                "Boosting:23+FMT+LLM+SNP",
+                "Dictionary:23+FMT+LLM+SNP+BOOST",
+                "Translation:23+FMT+LLM+SNP+BOOST+DICT"
+            ],
+            executionOrder);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NumberNormalizationGloballyDisabled_PreservesWords()
+    {
+        var options = new PipelineOptions
+        {
+            TranscriptionNumberNormalizationEnabled = false,
+            DetectedLanguage = "en"
+        };
+
+        var result = await _sut.ProcessAsync("twenty three", options);
+
+        Assert.Equal("twenty three", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NumberNormalizationGloballyEnabled_NormalizesWords()
+    {
+        var options = new PipelineOptions
+        {
+            TranscriptionNumberNormalizationEnabled = true,
+            DetectedLanguage = "en"
+        };
+
+        var result = await _sut.ProcessAsync("twenty three", options);
+
+        Assert.Equal("23", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NumberNormalization_UsesLaterConfiguredLanguageCandidate()
+    {
+        var options = new PipelineOptions
+        {
+            TranscriptionNumberNormalizationEnabled = true,
+            DetectedLanguage = "de",
+            ConfiguredLanguage = "de",
+            ConfiguredLanguageCandidates = ["de", "en"]
+        };
+
+        var result = await _sut.ProcessAsync("Set the value to twenty three", options);
+
+        Assert.Equal("Set the value to 23", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NumberNormalization_UsesEnglishForTranslateTask()
+    {
+        var options = new PipelineOptions
+        {
+            TranscriptionNumberNormalizationEnabled = true,
+            TranscriptionTask = TranscriptionTask.Translate,
+            DetectedLanguage = "de",
+            ConfiguredLanguage = "de"
+        };
+
+        var result = await _sut.ProcessAsync("twenty three", options);
+
+        Assert.Equal("23", result.Text);
     }
 
     [Fact]

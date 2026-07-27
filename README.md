@@ -8,7 +8,7 @@ Speech-to-text and AI text processing for the Linux desktop. This repository is 
 
 If the TypeWhisper project releases an official Linux version, or if this port is merged into the main TypeWhisper branch, I plan to use the upstream Linux version instead. Until then, this branch exists as a practical Linux port adapted around Avalonia, Linux desktop services, and Linux-friendly install and startup behavior.
 
-Press a key, talk, and have clean, punctuated text land in whatever app you're in — tuned to feel as close to [Wispr Flow](https://wisprflow.ai/) as possible on Linux. TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary and snippet post-processing, and run prompt-based AI text actions through plugins.
+Press a key, talk, and have clean, punctuated text land in whatever app you're in — tuned to feel as close to [Wispr Flow](https://wisprflow.ai/) as possible on Linux. TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary, snippet, and spoken-number post-processing, and run prompt-based AI text actions through plugins.
 
 ## Documentation
 
@@ -31,7 +31,7 @@ Press a key, talk, and have clean, punctuated text land in whatever app you're i
 - **Voice-native editing** — start a dictation with a keyphrase ("TypeWhisper") and the rest becomes a command that edits your highlighted text or writes new text at the cursor, instead of being typed verbatim. Ships disabled; enable it in [Prompts](https://github.com/csmashe/typewhisper-linux/wiki/Prompts).
 - **File transcription and a recorder** — batch queues, watch folders, subtitle (SRT/VTT) export, and longer WAV captures. See [File Transcription](https://github.com/csmashe/typewhisper-linux/wiki/File-Transcription) and [Recorder](https://github.com/csmashe/typewhisper-linux/wiki/Recorder).
 - **Personalization** — searchable history, a dictionary with term packs, snippets, and app/URL-matched profiles. History also has an opt-in **Inspect** panel that shows exactly what was sent to the LLM for each entry — the raw→final diff, the exact prompt, injected memory context, and the reply, with local-vs-cloud labelling. See [Profiles](https://github.com/csmashe/typewhisper-linux/wiki/Profiles) and [History](https://github.com/csmashe/typewhisper-linux/wiki/History).
-- **Learns from your corrections** in the Wispr-Flow style — when you type over a dictated word in the target app to fix it, TypeWhisper silently learns the correction (via AT-SPI) and auto-applies it to future dictations. Off by default (it reads the focused field); enable it under Dictation settings, and review or remove learned entries in the dictionary.
+- **Learns from your corrections** in the Wispr-Flow style — when you type over a dictated word in the target app to fix it, TypeWhisper silently learns the correction (via AT-SPI) and auto-applies it to future dictations. A brief toast shows what was learned and offers **Undo**. Off by default (it reads the focused field); enable it under [Dictation](https://github.com/csmashe/typewhisper-linux/wiki/Dictation) settings, and review or remove learned entries in the [Dictionary](https://github.com/csmashe/typewhisper-linux/wiki/Dictionary).
 - **A localized interface** — English, German, Spanish, or Russian, switched live (or Auto, to follow your system locale). See [General Settings](https://github.com/csmashe/typewhisper-linux/wiki/General-Settings).
 - **Automation** — a local [HTTP API](https://github.com/csmashe/typewhisper-linux/wiki/HTTP-API) and an installable `typewhisper` [CLI](https://github.com/csmashe/typewhisper-linux/wiki/CLI).
 - **Desktop integration** — tray icon, XDG autostart, single-instance handoff, and a user-level installer. See [Desktop Integration](https://github.com/csmashe/typewhisper-linux/wiki/Desktop-Integration).
@@ -73,7 +73,7 @@ dotnet run --project src/TypeWhisper.Linux
 To install a clickable launcher and icon for the current user (publishes self-contained, bundles the Linux plugins, and registers a `.desktop` entry):
 
 ```bash
-./scripts/install-linux-app.sh      # ./scripts/uninstall-linux-app.sh to remove
+./scripts/install-linux-app.sh      # ./scripts/uninstall-linux-app.sh to remove (keeps your data; add --purge to delete it too)
 ```
 
 ## Project Layout
