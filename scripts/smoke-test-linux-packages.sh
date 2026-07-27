@@ -303,8 +303,18 @@ container_smoke_tarball() {
   assert_removed "$SMOKE_HOME_ROOT/.local/bin/typewhisper"
   assert_removed "$SMOKE_DATA_ROOT/applications/typewhisper.desktop"
   assert_removed "$SMOKE_DATA_ROOT/icons/hicolor/128x128/apps/typewhisper.png"
-  assert_removed "$app_root"
+  # Not assert_removed "$app_root": a plain --uninstall preserves user data, and in
+  # this layout INSTALL_ROOT is also where the app writes it. Plugins/ is on the
+  # installer's KEEP list (it holds user-installed plugins alongside the bundled
+  # ones), so the root legitimately survives. Assert the program payload is gone.
+  assert_removed "$app_root/typewhisper"
+  assert_removed "$app_root/Cli/typewhisper-cli"
   require_file "$SMOKE_DATA_ROOT/TypeWhisper/smoke-sentinel"
+
+  # --purge is the path that must leave nothing behind.
+  echo "==> Purging tarball install from isolated HOME/XDG roots"
+  env "${SMOKE_PROFILE_ENV[@]}" bash "$install_script" --uninstall --purge
+  assert_removed "$app_root"
 }
 
 container_smoke_appimage() {
