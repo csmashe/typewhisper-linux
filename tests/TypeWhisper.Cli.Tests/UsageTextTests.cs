@@ -31,6 +31,7 @@ public sealed partial class UsageTextTests
 
         Assert.Contains("Usage: typewhisper-cli <command> [options]", output);
         Assert.DoesNotContain("--port", output, StringComparison.Ordinal);
+        Assert.Contains("Treat remaining arguments as file operands", output);
         Assert.NotEmpty(exampleLines);
         Assert.All(
             exampleLines,

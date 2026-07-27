@@ -24,9 +24,9 @@ public class HttpApiRequestParserTests
             boundary,
             ("language_hint", null, null, "de"u8.ToArray()),
             ("language_hint", null, null, "en"u8.ToArray()),
-            ("task", null, null, "translate"u8.ToArray()),
+            ("task", null, null, " TRANSLATE "u8.ToArray()),
             ("target_language", null, null, "fr"u8.ToArray()),
-            ("response_format", null, null, "verbose_json"u8.ToArray()),
+            ("response_format", null, null, " Verbose_JSON "u8.ToArray()),
             ("prompt", null, null, "Project names"u8.ToArray()),
             ("engine", null, null, "groq"u8.ToArray()),
             ("model", null, null, "whisper-large-v3"u8.ToArray()),
@@ -78,9 +78,9 @@ public class HttpApiRequestParserTests
             {
                 ["content-type"] = "audio/mpeg",
                 ["x-language-hints"] = "de, en",
-                ["x-task"] = "translate",
+                ["x-task"] = "TRANSLATE",
                 ["x-target-language"] = "es",
-                ["x-response-format"] = "verbose_json",
+                ["x-response-format"] = "Verbose_JSON",
                 ["x-prompt"] = "Names",
                 ["x-engine"] = "openai",
                 ["x-model"] = "gpt-4o-transcribe",
@@ -99,6 +99,117 @@ public class HttpApiRequestParserTests
         Assert.Equal("Names", parsed.Prompt);
         Assert.Equal("openai", parsed.Engine);
         Assert.Equal("gpt-4o-transcribe", parsed.Model);
+    }
+
+    [Theory]
+    [InlineData("task", "transalte", "transcribe", "translate")]
+    [InlineData("response_format", "xml", "json", "verbose_json")]
+    public void ParseTranscribe_RejectsUnknownMultipartEnum(
+        string field,
+        string value,
+        string firstAllowed,
+        string secondAllowed
+    )
+    {
+        const string boundary = "Boundary123";
+        var body = Multipart(
+            boundary,
+            (field, null, null, Encoding.UTF8.GetBytes(value)),
+            ("file", "audio.wav", "audio/wav", [1])
+        );
+        var request = new HttpApiRequest(
+            "POST",
+            "/v1/transcribe",
+            new NameValueCollection(),
+            new Dictionary<string, string>
+            {
+                ["content-type"] = $"multipart/form-data; boundary={boundary}",
+            },
+            body
+        );
+
+        var ex = Assert.Throws<HttpApiRequestException>(() =>
+            HttpApiRequestParser.ParseTranscribe(request)
+        );
+
+        Assert.Equal(400, ex.StatusCode);
+        Assert.Contains(field, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(value, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(firstAllowed, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(secondAllowed, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("x-task", "task", "transalte", "transcribe", "translate")]
+    [InlineData("x-response-format", "response_format", "xml", "json", "verbose_json")]
+    public void ParseTranscribe_RejectsUnknownRawBodyHeaderEnum(
+        string header,
+        string field,
+        string value,
+        string firstAllowed,
+        string secondAllowed
+    )
+    {
+        var request = new HttpApiRequest(
+            "POST",
+            "/v1/transcribe",
+            new NameValueCollection(),
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["content-type"] = "audio/wav",
+                [header] = value,
+            },
+            new byte[] { 1 }
+        );
+
+        var ex = Assert.Throws<HttpApiRequestException>(() =>
+            HttpApiRequestParser.ParseTranscribe(request)
+        );
+
+        Assert.Equal(400, ex.StatusCode);
+        Assert.Contains(field, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(value, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(firstAllowed, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(secondAllowed, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParseTranscribe_MultipartEnumsDefaultWhenAbsent()
+    {
+        const string boundary = "Boundary123";
+        var body = Multipart(boundary, ("file", "audio.wav", "audio/wav", [1]));
+        var request = new HttpApiRequest(
+            "POST",
+            "/v1/transcribe",
+            new NameValueCollection(),
+            new Dictionary<string, string>
+            {
+                ["content-type"] = $"multipart/form-data; boundary={boundary}",
+            },
+            body
+        );
+
+        var parsed = HttpApiRequestParser.ParseTranscribe(request);
+
+        Assert.Equal(TranscriptionTask.Transcribe, parsed.Task);
+        Assert.Equal("json", parsed.ResponseFormat);
+    }
+
+    [Fact]
+    public void ParseTranscribe_RawBodyEnumsDefaultWhenAbsent()
+    {
+        var request = new HttpApiRequest(
+            "POST",
+            "/v1/transcribe",
+            new NameValueCollection(),
+            new Dictionary<string, string> { ["content-type"] = "audio/wav" },
+            new byte[] { 1 }
+        );
+
+        var parsed = HttpApiRequestParser.ParseTranscribe(request);
+
+        Assert.Equal(TranscriptionTask.Transcribe, parsed.Task);
+        Assert.Equal("json", parsed.ResponseFormat);
     }
 
     [Fact]

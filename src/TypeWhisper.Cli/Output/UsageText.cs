@@ -22,6 +22,7 @@ internal static class UsageText
               --json                    Output as JSON
               --version                 Show version
               --help, -h                Show this help
+              --                        Treat remaining arguments as file operands
 
             Transcribe options:
               --language <code>         Source language (e.g. en, de)
