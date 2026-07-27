@@ -1476,7 +1476,7 @@ public partial class DictationSectionViewModel : ObservableObject
                 _settings.Current with
                 {
                     SelectedMicrophoneDevice = null,
-                    SelectedMicrophoneDeviceId = AppSettings.FollowSystemDefaultMicrophoneId
+                    SelectedMicrophoneDeviceId = AppSettings.FollowSystemDefaultMicrophoneId,
                 }
             );
             return;
@@ -1837,10 +1837,10 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private void OnLevelChanged(object? sender, float level)
     {
-        Dispatcher.UIThread.Post(() =>
+        if (_previewAttached && !IsRecording)
         {
             PreviewLevel = Math.Clamp(level * 8, 0, 1);
-        });
+        }
     }
 }
 

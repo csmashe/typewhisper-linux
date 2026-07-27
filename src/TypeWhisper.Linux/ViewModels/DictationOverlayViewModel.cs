@@ -79,8 +79,7 @@ public partial class DictationOverlayViewModel : ObservableObject
 
         // Raw RMS is typically well below 0.1 for speech, so amplify ×8 to drive a
         // visible meter — same scaling the recorder and wizard VMs apply.
-        audio.LevelChanged += (_, level) =>
-            _postToUiThread(() => AudioLevel = Math.Clamp(level * 8, 0f, 1f));
+        SubscribeToAudioLevels(audio);
 
         failureTracker.OnFailure += (_, e) =>
         {
@@ -99,15 +98,20 @@ public partial class DictationOverlayViewModel : ObservableObject
         };
     }
 
-    // Test seam: production posts service events to Avalonia's UI thread; tests run the same
-    // settings-change path synchronously and drive the timer tick methods below directly.
+    // Test seam: production posts non-audio service events to Avalonia's UI thread; tests can
+    // run that path synchronously and optionally exercise the shared direct audio subscription.
     internal DictationOverlayViewModel(
         ISettingsService settings,
-        Action<Action> postToUiThread
+        Action<Action> postToUiThread,
+        AudioRecordingService? audio = null
     )
     {
         _settings = settings;
         _postToUiThread = postToUiThread;
+        if (audio is not null)
+        {
+            SubscribeToAudioLevels(audio);
+        }
 
         _recordingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _recordingTimer.Tick += (_, _) => RecordingTimerTick();
@@ -131,6 +135,17 @@ public partial class DictationOverlayViewModel : ObservableObject
         };
 
         _settings.SettingsChanged += _ => _postToUiThread(RefreshOverlaySlots);
+    }
+
+    private void SubscribeToAudioLevels(AudioRecordingService audio)
+    {
+        audio.LevelChanged += (_, level) =>
+        {
+            if (IsRecording)
+            {
+                AudioLevel = Math.Clamp(level * 8, 0f, 1f);
+            }
+        };
     }
 
     public bool HasVisibleContent => IsOverlayVisible || ShowFeedback;

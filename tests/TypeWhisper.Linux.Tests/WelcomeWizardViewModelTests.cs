@@ -192,6 +192,46 @@ public sealed class WelcomeWizardViewModelTests
         Assert.False(row.RanLocally);
     }
 
+    [Fact]
+    public async Task AudioLevel_DeliveryIsDirectAndActivityCleanupGatesLaterLevels()
+    {
+        var timeProvider = new ManualTimeProvider();
+        var serviceJobs = new List<Action>();
+        using var harness = CreateHarness(
+            audioTimeProvider: timeProvider,
+            audioPostToUiThread: serviceJobs.Add
+        );
+
+        harness.ViewModel.ToggleMicTestCommand.Execute(null);
+        Assert.True(harness.ViewModel.IsMicTestRunning);
+        harness.Audio.ProcessAudioBufferForTest([0.1f]);
+        serviceJobs[0]();
+        Assert.Equal(0.8, harness.ViewModel.MicLevel, precision: 5);
+
+        harness.ViewModel.IsMicTestRunning = false;
+        harness.ViewModel.MicLevel = 0;
+        timeProvider.Advance(TimeSpan.FromMilliseconds(66));
+        harness.Audio.ProcessAudioBufferForTest([0.2f]);
+        serviceJobs[1]();
+        Assert.Equal(0, harness.ViewModel.MicLevel);
+
+        harness.ViewModel.Cleanup();
+        timeProvider.Advance(TimeSpan.FromMilliseconds(66));
+        harness.Audio.ProcessAudioBufferForTest([0.3f]);
+        serviceJobs[2]();
+        Assert.Equal(0, harness.ViewModel.MicLevel);
+
+        var firstDictationJobs = new List<Action>();
+        using var firstDictationHarness = CreateHarness(
+            audioPostToUiThread: firstDictationJobs.Add
+        );
+        await firstDictationHarness.ViewModel.ToggleFirstDictationCommand.ExecuteAsync(null);
+        Assert.True(firstDictationHarness.ViewModel.IsFirstDictationRecording);
+        firstDictationHarness.Audio.ProcessAudioBufferForTest([0.2f]);
+        firstDictationJobs[0]();
+        Assert.Equal(1, firstDictationHarness.ViewModel.MicLevel);
+    }
+
     private static Mock<ISetupTask> CreateSetupTask()
     {
         var setupTask = new Mock<ISetupTask>();
@@ -208,7 +248,9 @@ public sealed class WelcomeWizardViewModelTests
     private static TestHarness CreateHarness(
         FakeTranscriptionPlugin? plugin = null,
         IReadOnlyList<ISetupTask>? setupTasks = null,
-        IReadOnlyList<LoadedPlugin>? loadedPlugins = null
+        IReadOnlyList<LoadedPlugin>? loadedPlugins = null,
+        TimeProvider? audioTimeProvider = null,
+        Action<Action>? audioPostToUiThread = null
     )
     {
         var settings = TestPluginManagerFactory.CreateSettings(AppSettings.Default);
@@ -224,7 +266,13 @@ public sealed class WelcomeWizardViewModelTests
         var hotkey = new HotkeyService(
             new BackendSelector(static () => new TestShortcutBackend())
         );
-        var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
+        var audio = new AudioRecordingService(
+            _ => { },
+            () => 0,
+            () => { },
+            timeProvider: audioTimeProvider,
+            postToUiThread: audioPostToUiThread
+        );
         var commands = CreateCommandsWithoutHostProbes();
         var textInsertion = new TextInsertionService(new NoOpTextInsertionPlatform());
         var dictionary = new Mock<IDictionaryService>();
@@ -301,6 +349,21 @@ public sealed class WelcomeWizardViewModelTests
         return new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+
+        public override long GetTimestamp()
+        {
+            return _timestamp;
+        }
+
+        public void Advance(TimeSpan elapsed)
+        {
+            _timestamp += (long)(elapsed.TotalSeconds * TimestampFrequency);
+        }
+    }
+
     private sealed class TestHarness : IDisposable
     {
         public TestHarness(
@@ -325,7 +388,7 @@ public sealed class WelcomeWizardViewModelTests
         private ModelManagerService Models { get; }
         private PluginManager PluginManager { get; }
         private HotkeyService Hotkey { get; }
-        private AudioRecordingService Audio { get; }
+        public AudioRecordingService Audio { get; }
 
         public void Dispose()
         {
