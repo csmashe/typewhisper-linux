@@ -1,111 +1,144 @@
-using System.Diagnostics;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.Xai;
 
 internal sealed class XaiStreamingSession : IStreamingSession
 {
-    private const int ProviderReadinessTimeoutSeconds = 10;
+    private static readonly TimeSpan s_providerReadinessTimeout =
+        TimeSpan.FromSeconds(10);
 
-    private readonly WebSocket _ws;
-    private readonly XaiTranscriptCollector _collector;
-    private readonly CancellationTokenSource _receiveCts = new();
-    private readonly SemaphoreSlim _sendLock = new(1, 1);
-    private readonly TaskCompletionSource<bool> _readinessSignal =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
-    // Set by the receive loop when transcript.done arrives (or when the loop
-    // exits for any reason via the finally block). FinalizeAsync awaits this
-    // before returning so the coordinator does not tear the session down
-    // while xAI still has tail-end final segments to deliver.
-    private readonly TaskCompletionSource<bool> _terminalSignal =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
-    // Holds the first non-cancellation exception caught by the receive loop
-    // (provider error event, WebSocket fault, JSON parse failure). Surfaced
-    // on the next SendAudioAsync / FinalizeAsync call so the coordinator's
-    // sender task observes the fault and triggers batch fallback — otherwise
-    // a server-side error event would be silently logged and the user would
-    // see an empty or partial transcript.
-    private Exception? _receiveLoopException;
-    private Task? _receiveTask;
-    private bool _disposed;
+    private readonly Task<WebSocketSessionPump> _pumpTask;
+    private readonly Lock _subscriberGate = new();
+    private Action<StreamingTranscriptEvent>? _pendingSubscribers;
+    private bool _subscribersAttached;
 
-    private XaiStreamingSession(WebSocket ws, XaiTranscriptCollector collector)
+    private XaiStreamingSession(Task<WebSocketSessionPump> pumpTask)
     {
-        _ws = ws;
-        _collector = collector;
+        _pumpTask = pumpTask;
+        _ = AttachPendingSubscribersAsync();
     }
 
-    public event Action<StreamingTranscriptEvent>? TranscriptReceived;
+    public event Action<StreamingTranscriptEvent>? TranscriptReceived
+    {
+        add
+        {
+            if (value is null)
+                return;
+            lock (_subscriberGate)
+            {
+                if (_subscribersAttached)
+                    _pumpTask.Result.TranscriptReceived += value;
+                else
+                    _pendingSubscribers += value;
+            }
+        }
+        remove
+        {
+            if (value is null)
+                return;
+            lock (_subscriberGate)
+            {
+                if (_subscribersAttached)
+                    _pumpTask.Result.TranscriptReceived -= value;
+                else
+                    _pendingSubscribers -= value;
+            }
+        }
+    }
 
     public static async Task<XaiStreamingSession> ConnectAsync(
         string apiKey,
         string? language,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
-        var ws = CreateConfiguredWebSocket(apiKey);
+        // The readiness deadline covers only the wait for transcript.created. The
+        // handshake runs on the caller's token so a slow DNS/TLS connect is not
+        // misreported as a missing readiness frame.
+        var adapter = new XaiWebSocketAdapter(apiKey, language);
+        var transport = new ClientWebSocketTransport();
+        var transportOwned = true;
         try
         {
-            await ws.ConnectAsync(BuildStreamingUri(language, interimResults: true), ct);
-        }
-        catch
-        {
-            ws.Dispose();
-            throw;
-        }
+            var connectionOptions = await adapter.GetConnectionOptionsAsync(ct);
+            await transport.ConnectAsync(connectionOptions, ct);
 
-        return await CreateReadySessionAsync(
-            ws,
-            TimeSpan.FromSeconds(ProviderReadinessTimeoutSeconds),
-            ct);
+            using var readinessCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            readinessCts.CancelAfter(s_providerReadinessTimeout);
+            transportOwned = false;
+            var pump = await WebSocketSessionPump.StartConnectedAsync(
+                adapter,
+                transport,
+                readinessCts.Token
+            );
+            return new XaiStreamingSession(Task.FromResult(pump));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException(
+                "xAI did not send transcript.created within 10 seconds."
+            );
+        }
+        finally
+        {
+            if (transportOwned)
+                await transport.DisposeAsync();
+        }
     }
 
     internal static XaiStreamingSession CreateConnectedSessionForTests(WebSocket ws)
     {
-        // ReSharper disable once ConvertIfStatementToReturnStatement -- precondition guard; the suggested ternary-throw buries the throw.
         if (ws.State != WebSocketState.Open)
             throw new InvalidOperationException("The test WebSocket must already be open.");
 
-        return CreateStartedSession(ws);
+        var pumpTask = WebSocketSessionPump.StartConnectedAsync(
+            new XaiWebSocketAdapter("", null),
+            new ClientWebSocketTransport(ws),
+            CancellationToken.None
+        );
+        return new XaiStreamingSession(pumpTask);
     }
 
-    internal static Task<XaiStreamingSession> CreateConnectedSessionForTests(
+    internal static async Task<XaiStreamingSession> CreateConnectedSessionForTests(
         WebSocket ws,
         TimeSpan readinessTimeout,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
-        // ReSharper disable once ConvertIfStatementToReturnStatement -- precondition guard; the suggested ternary-throw buries the throw.
         if (ws.State != WebSocketState.Open)
             throw new InvalidOperationException("The test WebSocket must already be open.");
 
-        return CreateReadySessionAsync(ws, readinessTimeout, ct);
-    }
-
-    private static XaiStreamingSession CreateStartedSession(WebSocket ws)
-    {
-        var session = new XaiStreamingSession(ws, new XaiTranscriptCollector());
-        session._receiveTask = session.ReceiveLoopAsync(session._receiveCts.Token);
-        return session;
-    }
-
-    private static async Task<XaiStreamingSession> CreateReadySessionAsync(
-        WebSocket ws,
-        TimeSpan readinessTimeout,
-        CancellationToken ct)
-    {
-        var session = CreateStartedSession(ws);
+        var transport = new ClientWebSocketTransport(ws);
+        using var readinessCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        readinessCts.CancelAfter(readinessTimeout);
+        var pumpTask = WebSocketSessionPump.StartConnectedAsync(
+            new XaiWebSocketAdapter("", null),
+            transport,
+            readinessCts.Token
+        );
         try
         {
-            await session.WaitForProviderReadinessAsync(readinessTimeout, ct);
-            return session;
+            await pumpTask;
+            return new XaiStreamingSession(pumpTask);
         }
-        catch
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await session.AbortStartupAsync();
-            throw;
+            throw new OperationCanceledException(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException(
+                $"xAI did not send transcript.created within "
+                    + $"{readinessTimeout.TotalSeconds:g} seconds."
+            );
         }
     }
 
@@ -118,8 +151,10 @@ internal sealed class XaiStreamingSession : IStreamingSession
             $"interim_results={(interimResults ? "true" : "false")}",
         };
 
-        if (!string.IsNullOrWhiteSpace(language)
-            && !language.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        if (
+            !string.IsNullOrWhiteSpace(language)
+            && !language.Equals("auto", StringComparison.OrdinalIgnoreCase)
+        )
         {
             query.Add($"language={Uri.EscapeDataString(language)}");
         }
@@ -127,339 +162,160 @@ internal sealed class XaiStreamingSession : IStreamingSession
         return new Uri("wss://api.x.ai/v1/stt?" + string.Join("&", query));
     }
 
-    public static IReadOnlyDictionary<string, string> CreateStreamingHeaders(string apiKey) =>
+    public static IReadOnlyDictionary<string, string> CreateStreamingHeaders(
+        string apiKey
+    ) =>
         new Dictionary<string, string>
         {
             ["Authorization"] = $"Bearer {apiKey}",
         };
 
-    private static ClientWebSocket CreateConfiguredWebSocket(string apiKey)
+    public async Task SendAudioAsync(
+        ReadOnlyMemory<byte> pcm16Audio,
+        CancellationToken ct
+    )
     {
-        var ws = new ClientWebSocket();
-        foreach (var header in CreateStreamingHeaders(apiKey))
-            ws.Options.SetRequestHeader(header.Key, header.Value);
-        return ws;
-    }
-
-    public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
-    {
-        if (_disposed || pcm16Audio.Length == 0)
-            return;
-
-        // ConnectAsync normally returns only after transcript.created, but
-        // keep the protocol invariant here too for test seams and defensive
-        // safety if construction changes in the future.
-        await _readinessSignal.Task.WaitAsync(ct);
-
-        if (_disposed)
-            return;
-
-        // Receive loop saw a protocol/transport error: surface it so the
-        // coordinator's sender task faults and triggers batch fallback.
-        ThrowIfReceiveLoopFaulted();
-
-        if (_ws.State != WebSocketState.Open)
-            return;
-
-        await _sendLock.WaitAsync(ct);
-        try
-        {
-            if (_ws.State != WebSocketState.Open)
-                return;
-
-            await _ws.SendAsync(pcm16Audio, WebSocketMessageType.Binary, true, ct);
-        }
-        finally
-        {
-            _sendLock.Release();
-        }
+        var pump = await _pumpTask.WaitAsync(ct);
+        await pump.SendAudioAsync(pcm16Audio, ct);
     }
 
     public async Task FinalizeAsync(CancellationToken ct)
     {
-        if (_disposed) return;
-
-        // If the socket is still open, send audio.done and wait for the
-        // terminal event (transcript.done or close/error). When the socket
-        // is already in a closing/closed state — for example because the
-        // server sent an error event followed by Close — the receive loop
-        // has already exited; we skip the send/wait but still surface any
-        // captured fault below. The ThrowIfReceiveLoopFaulted call is the
-        // single point where receive-loop failures reach the coordinator
-        // via FinalizeAsync, so it must run regardless of socket state.
-        if (_ws.State == WebSocketState.Open)
-        {
-            await _sendLock.WaitAsync(ct);
-            try
-            {
-                if (_ws.State == WebSocketState.Open)
-                    await SendTextAsync("""{"type":"audio.done"}""", ct);
-            }
-            finally
-            {
-                _sendLock.Release();
-            }
-
-            // Wait for the receive loop to surface transcript.done (or to
-            // exit via close/error/cancel — the receive loop's finally block
-            // sets the signal in all paths). The caller's ct already carries
-            // the coordinator's FinalizeSessionTimeoutMs bound, so this
-            // won't hang beyond that. xAI's protocol has an explicit done
-            // event; using it is strictly better than relying on the
-            // coordinator's universal 500 ms grace window for tail-end finals.
-            try { await _terminalSignal.Task.WaitAsync(ct); }
-            catch (OperationCanceledException) { /* timeout / caller cancel: best effort */ }
-        }
-
-        // Surface a provider-side error so the coordinator's FinalizeAsync
-        // rethrows and DictationOrchestrator's finalizeThrew flag flips,
-        // triggering batch fallback. Without this, a stop-path race where
-        // the server closes before our caller stops recording would leave
-        // a partial transcript looking like a successful streaming result.
-        ThrowIfReceiveLoopFaulted();
-    }
-
-    private void ThrowIfReceiveLoopFaulted()
-    {
-        var ex = Volatile.Read(ref _receiveLoopException);
-        if (ex is null) return;
-        throw new InvalidOperationException(
-            $"xAI streaming session faulted: {ex.Message}", ex);
-    }
-
-    private async Task SendTextAsync(string json, CancellationToken ct)
-    {
-        var bytes = Encoding.UTF8.GetBytes(json);
-        await _ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
-    }
-
-    private async Task WaitForProviderReadinessAsync(
-        TimeSpan readinessTimeout,
-        CancellationToken ct)
-    {
-        var timeoutException = new TimeoutException(
-            $"xAI did not send transcript.created within {readinessTimeout.TotalSeconds:g} seconds.");
-        using var timeoutCts = new CancellationTokenSource(readinessTimeout);
-        await using var callerCancellation = ct.Register(
-            () => _readinessSignal.TrySetCanceled(ct));
-        await using var providerTimeout = timeoutCts.Token.Register(
-            () => _readinessSignal.TrySetException(timeoutException));
-
-        await _readinessSignal.Task;
-    }
-
-    private async Task AbortStartupAsync()
-    {
-        // Startup failures cannot leave a receive blocked on a socket that no
-        // caller owns. Cancel first so teardown-driven receive exits remain
-        // clean cancellation rather than overwriting the readiness failure.
-        // ReSharper disable once MethodHasAsyncOverload -- Cancel() must synchronously release the pending receive before disposal awaits it.
-        _receiveCts.Cancel();
-        try { _ws.Abort(); }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"xAI STT startup abort error: {ex.Message}");
-        }
-
-        try { await DisposeAsync(); }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"xAI STT startup disposal error: {ex.Message}");
-        }
-    }
-
-    private void CaptureReceiveLoopException(Exception exception)
-    {
-        Interlocked.CompareExchange(ref _receiveLoopException, exception, null);
-        _readinessSignal.TrySetException(exception);
-    }
-
-    private void CaptureClosure(
-        WebSocketReceiveResult? closeResult,
-        CancellationToken ct)
-    {
-        if (ct.IsCancellationRequested)
-        {
-            _readinessSignal.TrySetCanceled(ct);
-            return;
-        }
-
-        // A close after transcript.done is the normal end of the stream —
-        // nothing to fault. Before the terminal event the stream was truncated
-        // (whether readiness was reached or not): record the fault so
-        // SendAudioAsync/FinalizeAsync surface it and the coordinator falls
-        // back to the complete-WAV batch path instead of committing a partial
-        // transcript as success. Readiness health is tracked independently:
-        // if transcript.created never arrived, also fault the readiness signal
-        // so ConnectAsync fails.
-        if (_collector.IsTerminal)
-            return;
-
-        var boundary = _collector.IsReady ? "transcript.done" : "transcript.created";
-        var detail = closeResult is null
-            ? ""
-            : $" Status: {closeResult.CloseStatus?.ToString() ?? "unknown"}"
-              + (string.IsNullOrWhiteSpace(closeResult.CloseStatusDescription)
-                  ? "."
-                  : $"; reason: {closeResult.CloseStatusDescription}.");
-        var exception = new InvalidOperationException(
-            $"xAI streaming session ended before {boundary}.{detail}");
-        Interlocked.CompareExchange(ref _receiveLoopException, exception, null);
-        _readinessSignal.TrySetException(exception);
-    }
-
-    private async Task ReceiveLoopAsync(CancellationToken ct)
-    {
-        var buffer = new byte[8192];
-        using var messageBuffer = new MemoryStream();
-
-        try
-        {
-            while (!ct.IsCancellationRequested && _ws.State == WebSocketState.Open)
-            {
-                messageBuffer.SetLength(0);
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await _ws.ReceiveAsync(buffer, ct);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        CaptureClosure(result, ct);
-                        return;
-                    }
-                    messageBuffer.Write(buffer, 0, result.Count);
-                } while (!result.EndOfMessage);
-
-                if (result.MessageType != WebSocketMessageType.Text)
-                    continue;
-
-                var json = Encoding.UTF8.GetString(messageBuffer.GetBuffer(), 0, (int)messageBuffer.Length);
-                var transcriptEvent = _collector.ApplyEvent(json);
-                if (_collector.IsReady)
-                    _readinessSignal.TrySetResult(true);
-                if (transcriptEvent is not null)
-                    TranscriptReceived?.Invoke(transcriptEvent);
-                if (_collector.IsTerminal)
-                    _terminalSignal.TrySetResult(true);
-            }
-        }
-        catch (OperationCanceledException ex) when (ct.IsCancellationRequested)
-        {
-            // Normal teardown — DisposeAsync cancelled _receiveCts. Not a fault.
-            Debug.WriteLine($"xAI STT receive loop canceled: {ex.Message}");
-            _readinessSignal.TrySetCanceled(ct);
-        }
-        catch (Exception ex) when (ct.IsCancellationRequested)
-        {
-            // Abort/Dispose can make a fake or provider transport complete its
-            // receive with a non-cancellation exception. The owning token still
-            // makes this normal teardown, not a provider fault.
-            Debug.WriteLine($"xAI STT receive loop stopped during cancellation: {ex.Message}");
-        }
-        catch (WebSocketException ex)
-        {
-            Debug.WriteLine($"xAI STT WebSocket error: {ex.Message}");
-            CaptureReceiveLoopException(ex);
-        }
-        catch (JsonException ex)
-        {
-            Debug.WriteLine($"xAI STT parse error: {ex.Message}");
-            CaptureReceiveLoopException(ex);
-        }
-        catch (InvalidOperationException ex)
-        {
-            // Raised by XaiTranscriptCollector for "error"-typed events and
-            // malformed payloads — propagate as a session fault.
-            Debug.WriteLine($"xAI STT stream error: {ex.Message}");
-            CaptureReceiveLoopException(ex);
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"xAI STT receive error: {ex.Message}");
-            CaptureReceiveLoopException(ex);
-        }
-        finally
-        {
-            // Records a truncation fault if the loop exited before
-            // transcript.done via any path that didn't already capture one
-            // (and faults the readiness signal if transcript.created never
-            // arrived). No-op after a normal terminal completion, an
-            // already-captured fault, or caller cancellation.
-            CaptureClosure(closeResult: null, ct);
-
-            // "No more events will arrive" is true whether we exited via
-            // transcript.done, a Close frame, cancellation, or any error.
-            // Unblock FinalizeAsync in all paths.
-            _terminalSignal.TrySetResult(true);
-        }
+        var pump = await _pumpTask.WaitAsync(ct);
+        await pump.FinalizeAsync(ct);
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_disposed)
-            return;
-
-        _disposed = true;
-        // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
-        _receiveCts.Cancel();
-        _readinessSignal.TrySetCanceled(_receiveCts.Token);
-
-        await _sendLock.WaitAsync(CancellationToken.None);
         try
         {
-            if (_ws.State == WebSocketState.Open)
-            {
-                // Bound the close handshake. An unresponsive peer would
-                // otherwise hang DisposeAsync indefinitely, blocking the
-                // coordinator's teardown chain (recording stop, app exit).
-                // Mirrors the Deepgram session's close-handshake guard.
-                using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                try { await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, closeCts.Token); }
-                catch (OperationCanceledException ex)
-                {
-                    Debug.WriteLine($"xAI STT WebSocket close timed out: {ex.Message}");
-                    try { _ws.Abort(); } catch { /* best effort */ }
-                }
-                catch (WebSocketException ex)
-                {
-                    Debug.WriteLine($"xAI STT WebSocket close error: {ex.Message}");
-                    try { _ws.Abort(); } catch { /* best effort */ }
-                }
-                catch (InvalidOperationException ex)
-                {
-                    Debug.WriteLine($"xAI STT WebSocket close skipped: {ex.Message}");
-                }
-            }
+            var pump = await _pumpTask;
+            await pump.DisposeAsync();
         }
-        finally
+        catch
         {
-            _sendLock.Release();
+            _ = _pumpTask.Exception;
         }
+    }
 
-        if (_receiveTask is not null)
+    private async Task AttachPendingSubscribersAsync()
+    {
+        try
         {
-            try { await _receiveTask; }
-            catch (OperationCanceledException ex)
+            var pump = await _pumpTask;
+            lock (_subscriberGate)
             {
-                Debug.WriteLine($"xAI STT receive loop canceled during dispose: {ex.Message}");
-            }
-            catch (WebSocketException ex)
-            {
-                Debug.WriteLine($"xAI STT receive loop closed during dispose: {ex.Message}");
-            }
-            catch (JsonException ex)
-            {
-                Debug.WriteLine($"xAI STT receive loop parse error during dispose: {ex.Message}");
-            }
-            catch (InvalidOperationException ex)
-            {
-                Debug.WriteLine($"xAI STT receive loop stopped during dispose: {ex.Message}");
+                if (_pendingSubscribers is not null)
+                    pump.TranscriptReceived += _pendingSubscribers;
+                _pendingSubscribers = null;
+                _subscribersAttached = true;
             }
         }
+        catch
+        {
+            _ = _pumpTask.Exception;
+        }
+    }
+}
 
-        _sendLock.Dispose();
-        _receiveCts.Dispose();
-        _ws.Dispose();
+internal sealed class XaiWebSocketAdapter(
+    string apiKey,
+    string? language
+) : IWebSocketSessionAdapter
+{
+    private readonly XaiTranscriptCollector _collector = new();
+
+    public string ProviderName => "xAI";
+    public WebSocketReadinessPolicy Readiness =>
+        WebSocketReadinessPolicy.Require("transcript.created");
+    public WebSocketTerminalPolicy Terminal =>
+        WebSocketTerminalPolicy.Require("transcript.done");
+    public WebSocketKeepAlivePolicy? KeepAlive => null;
+    public WebSocketClosePolicy ClosePolicy => WebSocketClosePolicy.Default;
+
+    public ValueTask<WebSocketConnectionOptions> GetConnectionOptionsAsync(
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult(
+            new WebSocketConnectionOptions(
+                XaiStreamingSession.BuildStreamingUri(
+                    language,
+                    interimResults: true
+                ),
+                XaiStreamingSession.CreateStreamingHeaders(apiKey)
+            )
+        );
+
+    public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> OnConnectedAsync(
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>([]);
+
+    public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> EncodeAudioAsync(
+        ReadOnlyMemory<byte> pcm16Audio,
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
+            pcm16Audio.Length == 0
+                ? []
+                : [
+                    new WebSocketOutboundMessage(
+                        pcm16Audio.ToArray(),
+                        WebSocketMessageType.Binary
+                    ),
+                ]
+        );
+
+    public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct) =>
+        ValueTask.FromResult(
+            new WebSocketFinalizePlan(
+                [
+                    new WebSocketOutboundMessage(
+                        """{"type":"audio.done"}"""u8.ToArray(),
+                        WebSocketMessageType.Text
+                    ),
+                ]
+            )
+        );
+
+    public WebSocketInboundResult HandleMessage(
+        WebSocketMessageType type,
+        ReadOnlyMemory<byte> completePayload
+    )
+    {
+        if (type != WebSocketMessageType.Text)
+            return WebSocketInboundResult.Empty;
+
+        try
+        {
+            var transcript = _collector.ApplyEvent(
+                System.Text.Encoding.UTF8.GetString(completePayload.Span)
+            );
+            var transcripts =
+                transcript is null
+                    ? (IReadOnlyList<StreamingTranscriptEvent>)[]
+                    : [transcript];
+            var signals = WebSocketSessionSignal.None;
+            if (_collector.IsReady)
+                signals |= WebSocketSessionSignal.Ready;
+            if (_collector.IsTerminal)
+                signals |= WebSocketSessionSignal.Terminal;
+            return new WebSocketInboundResult(transcripts, signals);
+        }
+        catch (JsonException ex)
+        {
+            return new WebSocketInboundResult(
+                [],
+                Fault: new InvalidOperationException(
+                    "xAI sent malformed JSON.",
+                    ex
+                )
+            );
+        }
+        catch (InvalidOperationException ex)
+        {
+            return new WebSocketInboundResult([], Fault: ex);
+        }
     }
 }
 
@@ -470,17 +326,7 @@ internal sealed class XaiTranscriptCollector
     private string? _detectedLanguage;
     private double _duration;
 
-    /// <summary>
-    ///     True once a terminal event (transcript.done) has been applied. The
-    ///     session uses this to unblock <c>FinalizeAsync</c> as soon as xAI
-    ///     declares the stream complete, instead of relying on the
-    ///     coordinator's generic grace window.
-    /// </summary>
     public bool IsTerminal { get; private set; }
-
-    /// <summary>
-    ///     True once xAI has declared the streaming transcript ready for audio.
-    /// </summary>
     public bool IsReady { get; private set; }
 
     public StreamingTranscriptEvent? ApplyEvent(string json)
@@ -488,8 +334,10 @@ internal sealed class XaiTranscriptCollector
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        if (!root.TryGetProperty("type", out var typeEl)
-            || typeEl.ValueKind != JsonValueKind.String)
+        if (
+            !root.TryGetProperty("type", out var typeEl)
+            || typeEl.ValueKind != JsonValueKind.String
+        )
         {
             throw new InvalidOperationException("Invalid xAI STT event.");
         }
@@ -499,7 +347,9 @@ internal sealed class XaiTranscriptCollector
             "transcript.created" => ApplyCreatedEvent(),
             "transcript.partial" => ApplyPartialEvent(root),
             "transcript.done" => ApplyDoneEvent(root),
-            "error" => throw new InvalidOperationException(ExtractErrorMessage(root) ?? "Unknown xAI STT error"),
+            "error" => throw new InvalidOperationException(
+                ExtractErrorMessage(root) ?? "Unknown xAI STT error"
+            ),
             _ => null,
         };
     }
@@ -512,21 +362,18 @@ internal sealed class XaiTranscriptCollector
 
     public PluginTranscriptionResult FinalResult(string? fallbackLanguage)
     {
-        var text = !string.IsNullOrWhiteSpace(_doneText)
-            ? _doneText!
-            : string.Join(" ", _finals).Trim();
+        var text =
+            !string.IsNullOrWhiteSpace(_doneText)
+                ? _doneText!
+                : string.Join(" ", _finals).Trim();
 
-        return new PluginTranscriptionResult(text, _detectedLanguage ?? fallbackLanguage ?? "", _duration);
+        return new PluginTranscriptionResult(
+            text,
+            _detectedLanguage ?? fallbackLanguage ?? "",
+            _duration
+        );
     }
 
-    // StreamingTranscriptionCoordinator treats every IsFinal=true event as a
-    // new immutable segment to append to _finalSegments. We MUST emit per-
-    // segment deltas (not cumulative text) here — otherwise three finals of
-    // "hello", "hello world", "hello world" produce "hello\nhello world\n
-    // hello world" in the coordinator's output. xAI's per-segment partial-
-    // finals carry the segment text directly; the trailing speech_final=true
-    // cumulative-summary and the transcript.done cumulative are suppressed
-    // because the coordinator already has the segments.
     private StreamingTranscriptEvent? ApplyPartialEvent(JsonElement root)
     {
         var text = GetString(root, "text")?.Trim() ?? "";
@@ -534,36 +381,29 @@ internal sealed class XaiTranscriptCollector
         var speechFinal = GetBool(root, "speech_final");
         RememberMetadata(root);
 
-        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
-        if (isFinal)
+        if (!isFinal)
+            return new StreamingTranscriptEvent(text, IsFinal: false);
+
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        if (speechFinal && _finals.Count > 0)
         {
-            if (string.IsNullOrWhiteSpace(text))
-                return null;
-
-            // Cumulative speech-final summary: xAI sometimes emits a final
-            // event with speech_final=true whose text is the entire stream so
-            // far. Re-appending it would duplicate the transcript. Detect by
-            // checking that text starts with the joined-existing-finals AT A
-            // WORD BOUNDARY — bare StartsWith would misclassify utterances
-            // like "I" → "I'm here" (next segment's "I'm" starts with "I" by
-            // coincidence, not as a cumulative summary). We do NOT dedup on
-            // exact-text alone — a user repeating the same word in two
-            // finalized segments (e.g. "yes" twice) is a legitimate repetition.
-            if (speechFinal && _finals.Count > 0)
+            var joined = string.Join(" ", _finals);
+            if (
+                text.StartsWith(joined, StringComparison.Ordinal)
+                && (
+                    text.Length == joined.Length
+                    || text[joined.Length] == ' '
+                )
+            )
             {
-                var joined = string.Join(" ", _finals);
-                if (text.StartsWith(joined, StringComparison.Ordinal)
-                    && (text.Length == joined.Length || text[joined.Length] == ' '))
-                {
-                    return null;
-                }
+                return null;
             }
-
-            _finals.Add(text);
-            return new StreamingTranscriptEvent(text, IsFinal: true);
         }
 
-        return new StreamingTranscriptEvent(text, IsFinal: false);
+        _finals.Add(text);
+        return new StreamingTranscriptEvent(text, IsFinal: true);
     }
 
     private StreamingTranscriptEvent? ApplyDoneEvent(JsonElement root)
@@ -576,25 +416,20 @@ internal sealed class XaiTranscriptCollector
             return null;
 
         _doneText = text;
-
-        // transcript.done's text is the cumulative session transcript. If no
-        // segment finals arrived, surface it as the single final.
         if (_finals.Count == 0)
             return new StreamingTranscriptEvent(text, IsFinal: true);
 
-        // If done text matches what we already emitted, suppress. If it
-        // EXTENDS what we have (e.g. xAI didn't emit a final for the trailing
-        // utterance and only delivered it via the done event), emit just the
-        // suffix as a delta so the coordinator gets the tail without
-        // double-appending the head.
         var joined = string.Join(" ", _finals);
         if (text.Equals(joined, StringComparison.Ordinal))
             return null;
 
-        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
-        if (text.StartsWith(joined, StringComparison.Ordinal)
+        // ReSharper disable once InvertIf -- the positive form names the case being handled
+        // (done text extends the accumulated finals); the De Morgan negation does not.
+        if (
+            text.StartsWith(joined, StringComparison.Ordinal)
             && text.Length > joined.Length
-            && text[joined.Length] == ' ')
+            && text[joined.Length] == ' '
+        )
         {
             var delta = text[(joined.Length + 1)..].Trim();
             if (delta.Length == 0)
@@ -603,20 +438,24 @@ internal sealed class XaiTranscriptCollector
             return new StreamingTranscriptEvent(delta, IsFinal: true);
         }
 
-        // Done text diverges from our finals (a correction or reordering).
-        // Don't try to reconcile — suppress to avoid duplicating text. The
-        // already-emitted finals remain the user's transcript.
         return null;
     }
 
     private void RememberMetadata(JsonElement root)
     {
-        if (GetString(root, "language") is { } language && !string.IsNullOrWhiteSpace(language))
+        if (
+            GetString(root, "language") is { } language
+            && !string.IsNullOrWhiteSpace(language)
+        )
+        {
             _detectedLanguage = language;
+        }
 
-        if (root.TryGetProperty("duration", out var durationEl)
-            && durationEl.ValueKind == JsonValueKind.Number
-            && durationEl.TryGetDouble(out var duration))
+        if (
+            root.TryGetProperty("duration", out var durationElement)
+            && durationElement.ValueKind == JsonValueKind.Number
+            && durationElement.TryGetDouble(out var duration)
+        )
         {
             _duration = duration;
         }
@@ -634,12 +473,21 @@ internal sealed class XaiTranscriptCollector
 
     private static string? ExtractErrorMessage(JsonElement root)
     {
-        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
+        // ReSharper disable once InvertIf -- inverting would duplicate the
+        // GetString(root, "message") fallback on both exits.
         if (root.TryGetProperty("error", out var error))
         {
-            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
-            if (error.ValueKind == JsonValueKind.Object && GetString(error, "message") is { } objectMessage)
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- the Object arm
+            // falls through to the shared fallback when "message" is absent, which a switch
+            // would only re-express with a `when` clause and a bare `break`.
+            if (
+                error.ValueKind == JsonValueKind.Object
+                && GetString(error, "message") is { } objectMessage
+            )
+            {
                 return objectMessage;
+            }
+
             if (error.ValueKind == JsonValueKind.String)
                 return error.GetString();
         }
