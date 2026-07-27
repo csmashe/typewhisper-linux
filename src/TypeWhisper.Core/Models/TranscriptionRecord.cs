@@ -1,3 +1,5 @@
+using System.Globalization;
+
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 namespace TypeWhisper.Core.Models;
 
@@ -51,6 +53,35 @@ public sealed record TranscriptionRecord
     public int WordCount =>
         FinalText.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 
-    public string Preview =>
-        FinalText.Length > 100 ? string.Concat(FinalText.AsSpan(0, 100), "...") : FinalText;
+    public string Preview
+    {
+        get
+        {
+            const int maxLength = 100;
+
+            if (FinalText.Length <= maxLength)
+                return FinalText;
+
+            // Only the code point starting at maxLength can affect a boundary at or
+            // before maxLength — capping the scan there avoids an O(n) walk from many
+            // combining marks.
+            var scanLength = maxLength + 1;
+            if (scanLength < FinalText.Length &&
+                char.IsHighSurrogate(FinalText[maxLength]) &&
+                char.IsLowSurrogate(FinalText[scanLength]))
+                scanLength++;
+
+            // Back off to the start of the last grapheme cluster beginning at or before
+            // maxLength, so truncation never splits a cluster or a surrogate pair.
+            var prefixLength = 0;
+            var cursor = 0;
+            while (cursor <= maxLength)
+            {
+                prefixLength = cursor;
+                cursor += StringInfo.GetNextTextElementLength(FinalText.AsSpan(cursor, scanLength - cursor));
+            }
+
+            return string.Concat(FinalText.AsSpan(0, prefixLength), "...");
+        }
+    }
 }
