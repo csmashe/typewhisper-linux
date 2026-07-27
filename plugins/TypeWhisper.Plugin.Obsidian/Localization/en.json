@@ -4,6 +4,8 @@
   "Settings.VaultPathDetectedDescription": "Detected {0} Obsidian vault(s). Enter a path manually if needed.",
   "Settings.Subfolder": "Subfolder",
   "Settings.SubfolderDescription": "Folder within the vault where notes are saved.",
+  "Settings.SubfolderOutsideVault": "The subfolder must stay within the selected vault.",
+  "Settings.NoteOutsideVault": "The daily note must stay within the selected vault.",
   "Settings.SaveMode": "Save mode",
   "Settings.SaveModeDescription": "Choose whether to append to a daily note or create one note per transcription.",
   "Settings.SaveModeOneNote": "One note per transcription",

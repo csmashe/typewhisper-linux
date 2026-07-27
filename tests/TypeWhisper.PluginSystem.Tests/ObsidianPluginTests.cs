@@ -135,13 +135,233 @@ public sealed class ObsidianPluginTests : IDisposable
         Assert.Empty(Directory.EnumerateFiles(NotesDirectory));
     }
 
+    [Fact]
+    public async Task ExecuteAsync_ParentTraversal_IsRejectedWithoutCreatingEscapedDirectory()
+    {
+        var escapedDirectory = Path.Join(_tempDir, "outside");
+        var (sut, _) = await CreatePluginAsync(
+            dailyNoteMode: true,
+            subfolder: "../outside"
+        );
+
+        var result = await sut.ExecuteAsync(
+            "must-not-be-written",
+            EmptyContext(),
+            CancellationToken.None
+        );
+
+        AssertSubfolderRejected(result);
+        Assert.False(Directory.Exists(escapedDirectory));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RootedSubfolder_IsRejected()
+    {
+        var rootedDirectory = Path.Join(_tempDir, "absolute-target");
+        var (sut, _) = await CreatePluginAsync(
+            dailyNoteMode: false,
+            subfolder: rootedDirectory
+        );
+
+        var result = await sut.ExecuteAsync(
+            "must-not-be-written",
+            EmptyContext(),
+            CancellationToken.None
+        );
+
+        AssertSubfolderRejected(result);
+        Assert.False(Directory.Exists(rootedDirectory));
+        Assert.Empty(Directory.EnumerateFiles(VaultDirectory, "*", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NormalizedTraversal_IsRejectedWithoutCreatingEscapedDirectory()
+    {
+        var escapedDirectory = Path.Join(_tempDir, "outside");
+        var (sut, _) = await CreatePluginAsync(
+            dailyNoteMode: false,
+            subfolder: "notes/../../outside"
+        );
+
+        var result = await sut.ExecuteAsync(
+            "must-not-be-written",
+            EmptyContext(),
+            CancellationToken.None
+        );
+
+        AssertSubfolderRejected(result);
+        Assert.False(Directory.Exists(escapedDirectory));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SiblingWithVaultNamePrefix_IsRejected()
+    {
+        var siblingDirectory = Path.Join(_tempDir, "vault-evil");
+        var (sut, _) = await CreatePluginAsync(
+            dailyNoteMode: false,
+            subfolder: "../vault-evil"
+        );
+
+        var result = await sut.ExecuteAsync(
+            "must-not-be-written",
+            EmptyContext(),
+            CancellationToken.None
+        );
+
+        AssertSubfolderRejected(result);
+        Assert.False(Directory.Exists(siblingDirectory));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_LegitimateNestedSubfolder_WritesInsideVault()
+    {
+        const string input = "nested note content";
+        var nestedDirectory = Path.Join(VaultDirectory, "notes", "sub");
+        var (sut, _) = await CreatePluginAsync(
+            dailyNoteMode: false,
+            subfolder: "notes/sub"
+        );
+
+        var result = await sut.ExecuteAsync(input, EmptyContext(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        var notePath = Assert.Single(Directory.GetFiles(nestedDirectory, "*.md"));
+        Assert.Contains(input, await File.ReadAllTextAsync(notePath));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DefaultSubfolder_PreservesTypeWhisperBehavior()
+    {
+        const string input = "default subfolder content";
+        var defaultDirectory = Path.Join(VaultDirectory, "TypeWhisper");
+        var (sut, _) = await CreatePluginAsync(
+            dailyNoteMode: false,
+            subfolder: null
+        );
+
+        var result = await sut.ExecuteAsync(input, EmptyContext(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        var notePath = Assert.Single(Directory.GetFiles(defaultDirectory, "*.md"));
+        Assert.Contains(input, await File.ReadAllTextAsync(notePath));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SymlinkToDirectoryInsideVault_IsAllowed()
+    {
+        const string input = "inside symlink content";
+        var linkedDirectory = Path.Join(VaultDirectory, "linked-notes");
+        var symlinkDirectory = Path.Join(VaultDirectory, "inside-link");
+        Directory.CreateDirectory(linkedDirectory);
+        Directory.CreateSymbolicLink(symlinkDirectory, linkedDirectory);
+        var (sut, _) = await CreatePluginAsync(
+            dailyNoteMode: false,
+            subfolder: "inside-link"
+        );
+
+        var result = await sut.ExecuteAsync(input, EmptyContext(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        var notePath = Assert.Single(Directory.GetFiles(linkedDirectory, "*.md"));
+        Assert.Contains(input, await File.ReadAllTextAsync(notePath));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SymlinkToDirectoryOutsideVault_IsRejectedWithoutWriting()
+    {
+        var outsideDirectory = Path.Join(_tempDir, "outside-target");
+        var symlinkDirectory = Path.Join(VaultDirectory, "outside-link");
+        Directory.CreateDirectory(outsideDirectory);
+        Directory.CreateSymbolicLink(symlinkDirectory, outsideDirectory);
+        var (sut, _) = await CreatePluginAsync(
+            dailyNoteMode: false,
+            subfolder: "outside-link"
+        );
+
+        var result = await sut.ExecuteAsync(
+            "must-not-be-written",
+            EmptyContext(),
+            CancellationToken.None
+        );
+
+        AssertSubfolderRejected(result);
+        Assert.Empty(Directory.EnumerateFiles(outsideDirectory));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SubfolderTraversingOutsideSymlink_CreatesNoDirectoryOutsideVault()
+    {
+        var outsideDirectory = Path.Join(_tempDir, "outside-traversal-target");
+        var symlinkDirectory = Path.Join(VaultDirectory, "outside-link");
+        Directory.CreateDirectory(outsideDirectory);
+        Directory.CreateSymbolicLink(symlinkDirectory, outsideDirectory);
+        var (sut, _) = await CreatePluginAsync(
+            dailyNoteMode: false,
+            subfolder: "outside-link/nested"
+        );
+
+        var result = await sut.ExecuteAsync(
+            "must-not-be-written",
+            EmptyContext(),
+            CancellationToken.None
+        );
+
+        AssertSubfolderRejected(result);
+        Assert.False(Directory.Exists(Path.Join(outsideDirectory, "nested")));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DailyNoteSymlinkedOutsideVault_IsRejectedWithoutAppending()
+    {
+        const string originalContent = "outside secret\n";
+        var outsideFile = Path.Join(_tempDir, "outside-note.md");
+        await File.WriteAllTextAsync(outsideFile, originalContent, Encoding.UTF8);
+        Directory.CreateDirectory(NotesDirectory);
+        File.CreateSymbolicLink(
+            Path.Join(NotesDirectory, $"{DateTime.Now:yyyy-MM-dd}.md"),
+            outsideFile
+        );
+        var (sut, _) = await CreatePluginAsync(dailyNoteMode: true);
+
+        var result = await sut.ExecuteAsync(
+            "must-not-be-written",
+            EmptyContext(),
+            CancellationToken.None
+        );
+
+        Assert.False(result.Success);
+        Assert.Equal("Settings.NoteOutsideVault", result.Message);
+        Assert.Equal(originalContent, await File.ReadAllTextAsync(outsideFile, Encoding.UTF8));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DailyNoteSymlinkedInsideVault_AppendsToLinkTarget()
+    {
+        const string input = "inside linked daily entry";
+        var linkedNote = Path.Join(VaultDirectory, "linked-daily.md");
+        await File.WriteAllTextAsync(linkedNote, "# Existing\n\n", Encoding.UTF8);
+        Directory.CreateDirectory(NotesDirectory);
+        File.CreateSymbolicLink(
+            Path.Join(NotesDirectory, $"{DateTime.Now:yyyy-MM-dd}.md"),
+            linkedNote
+        );
+        var (sut, _) = await CreatePluginAsync(dailyNoteMode: true);
+
+        var result = await sut.ExecuteAsync(input, EmptyContext(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Contains(input, await File.ReadAllTextAsync(linkedNote, Encoding.UTF8));
+    }
+
     private async Task<(ObsidianPlugin Plugin, TestPluginHostServices Host)> CreatePluginAsync(
-        bool dailyNoteMode
+        bool dailyNoteMode,
+        string? subfolder = NotesSubfolder
     )
     {
         var host = new TestPluginHostServices(PluginDataDirectory);
         host.SetSetting("vault-path", VaultDirectory);
-        host.SetSetting("subfolder", NotesSubfolder);
+        if (subfolder is not null)
+            host.SetSetting("subfolder", subfolder);
         host.SetSetting("daily-note-mode", dailyNoteMode);
         host.SetSetting("filename-template", "Fixed Individual Note");
 
@@ -151,6 +371,12 @@ public sealed class ObsidianPluginTests : IDisposable
     }
 
     private static ActionContext EmptyContext() => new(null, null, null, null, null);
+
+    private static void AssertSubfolderRejected(ActionResult result)
+    {
+        Assert.False(result.Success);
+        Assert.Equal("Settings.SubfolderOutsideVault", result.Message);
+    }
 
     private static async Task<ActionResult[]> RunConcurrentlyAsync(
         string[] inputs,
