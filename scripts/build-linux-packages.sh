@@ -38,6 +38,8 @@ APP_ID="typewhisper"
 APP_NAME="TypeWhisper"
 PROJECT="$ROOT/src/TypeWhisper.Linux/TypeWhisper.Linux.csproj"
 PUBLISH_DIR="$ROOT/src/TypeWhisper.Linux/bin/$CONFIG/net10.0/$RID/publish"
+CLI_PROJECT="$ROOT/src/TypeWhisper.Cli/TypeWhisper.Cli.csproj"
+CLI_PUBLISH_DIR="$ROOT/src/TypeWhisper.Cli/bin/$CONFIG/net10.0/$RID/publish"
 ICON_SRC="$ROOT/src/TypeWhisper.Linux/Resources/typewhisper-128.png"
 
 mkdir -p "$OUTPUT_DIR"
@@ -58,6 +60,23 @@ dotnet publish "$PROJECT" \
   -p:DebugType=None \
   -p:DebugSymbols=false \
   --nologo
+
+echo "==> Publishing TypeWhisper.Cli ($CONFIG, $RID, version $VERSION)"
+dotnet publish "$CLI_PROJECT" \
+  -c "$CONFIG" \
+  -r "$RID" \
+  --self-contained true \
+  -p:Version="$VERSION" \
+  -p:PublishSingleFile=true \
+  -p:IncludeNativeLibrariesForSelfExtract=true \
+  -p:DebugType=None \
+  -p:DebugSymbols=false \
+  --nologo
+
+rm -rf "$PUBLISH_DIR/Cli"
+mkdir -p "$PUBLISH_DIR/Cli"
+cp "$CLI_PUBLISH_DIR/typewhisper-cli" "$PUBLISH_DIR/Cli/typewhisper-cli"
+chmod 0755 "$PUBLISH_DIR/Cli/typewhisper-cli"
 
 echo "==> Bundling Linux plugins"
 # Pass VERSION so PluginSDK and plugins build with the same AssemblyVersion as
@@ -129,7 +148,7 @@ cat > "$TARBALL_STAGE/install.sh" <<'EOF'
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-INSTALL_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/TypeWhisper"
+INSTALL_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/typewhisper-app"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/128x128/apps"
 BIN_DIR="$HOME/.local/bin"
@@ -140,8 +159,8 @@ if [ "${1:-}" = "--uninstall" ]; then
   exit 0
 fi
 
+rm -rf "$INSTALL_ROOT"
 mkdir -p "$INSTALL_ROOT" "$APPS_DIR" "$ICONS_DIR" "$BIN_DIR"
-rm -rf "$INSTALL_ROOT"/*
 cp -R "$HERE"/* "$INSTALL_ROOT/"
 chmod +x "$INSTALL_ROOT/typewhisper"
 cp "$HERE/typewhisper.png" "$ICONS_DIR/typewhisper.png"
@@ -253,6 +272,12 @@ exec /opt/typewhisper/typewhisper "$@"
 EOF
   chmod 0755 "$DEB_STAGE/usr/bin/typewhisper"
 
+  cat > "$DEB_STAGE/usr/bin/typewhisper-cli" <<'EOF'
+#!/usr/bin/env bash
+exec /opt/typewhisper/Cli/typewhisper-cli "$@"
+EOF
+  chmod 0755 "$DEB_STAGE/usr/bin/typewhisper-cli"
+
   cat > "$DEB_STAGE/usr/share/applications/typewhisper.desktop" <<EOF
 [Desktop Entry]
 Type=Application
@@ -327,6 +352,12 @@ exec /opt/typewhisper/typewhisper "$@"
 EOF
   chmod 0755 "$RPM_SRC/usr/bin/typewhisper"
 
+  cat > "$RPM_SRC/usr/bin/typewhisper-cli" <<'EOF'
+#!/usr/bin/env bash
+exec /opt/typewhisper/Cli/typewhisper-cli "$@"
+EOF
+  chmod 0755 "$RPM_SRC/usr/bin/typewhisper-cli"
+
   cat > "$RPM_SRC/usr/share/applications/typewhisper.desktop" <<EOF
 [Desktop Entry]
 Type=Application
@@ -378,6 +409,7 @@ cp -a usr %{buildroot}/
 %files
 /opt/typewhisper
 /usr/bin/typewhisper
+/usr/bin/typewhisper-cli
 /usr/share/applications/typewhisper.desktop
 /usr/share/icons/hicolor/128x128/apps/typewhisper.png
 
