@@ -131,6 +131,17 @@ public record AppSettings
     public bool VocabularyBoostingEnabled { get; init; }
     public bool AutoAddDictionaryCorrections { get; init; }
 
+    // Silently learn corrections when you type over a dictated word in the target app
+    // (Wispr-Flow-style). Default off — opt-in, since it reads other apps' field text.
+    public bool TargetAppCorrectionLearningEnabled { get; init; }
+
+    // True when TypeWhisper itself turned on the session accessibility flag
+    // (org.a11y.Status.IsEnabled) via the Dictation-settings bridge button. Gates the
+    // "Remove accessibility bridge" button across restarts: the flag is session-global
+    // (and persists via gsettings on GNOME), so removal is only ever offered for a state
+    // this app created — never for one a screen reader or other tool may rely on.
+    public bool AccessibilityBridgeEnabledByApp { get; init; }
+
     // Onboarding
     public bool HasCompletedOnboarding { get; init; }
     public string SelectedIndustryPresetId { get; init; } = "general";

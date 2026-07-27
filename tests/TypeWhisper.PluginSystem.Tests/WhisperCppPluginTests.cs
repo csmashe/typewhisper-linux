@@ -18,6 +18,73 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public partial class WhisperCppPluginTests
 {
+    private const float TranscriptionNoSpeechThreshold = 0.8f;
+
+    [Fact]
+    public async Task AccumulateSegmentsAsync_SpeechThenTrailingSilence_UsesMinimumProbability()
+    {
+        var result = await WhisperCppPlugin.AccumulateSegmentsAsync(
+            AsAsyncEnumerable(
+                Segment("  Hello world.  ", 0.05f, language: "en", endSeconds: 1.25),
+                Segment(" Thank you. ", 0.95f, language: "en", endSeconds: 1.5)
+            ),
+            TranscriptionNoSpeechThreshold
+        );
+
+        Assert.Equal("Hello world.", result.Text);
+        Assert.Equal(0.05f, result.NoSpeechProbability);
+        Assert.Equal("en", result.DetectedLanguage);
+        Assert.Equal(1.5, result.DurationSeconds);
+    }
+
+    [Fact]
+    public async Task AccumulateSegmentsAsync_AllSegmentsSilent_ReturnsEmptyTextAndMinimumProbability()
+    {
+        var result = await WhisperCppPlugin.AccumulateSegmentsAsync(
+            AsAsyncEnumerable(Segment("Noise", 0.9f), Segment("Thank you.", 0.95f)),
+            TranscriptionNoSpeechThreshold
+        );
+
+        Assert.Empty(result.Text);
+        Assert.Equal(0.9f, result.NoSpeechProbability);
+    }
+
+    [Fact]
+    public async Task AccumulateSegmentsAsync_NoSegments_ReturnsEmptyTextAndNullProbability()
+    {
+        var result = await WhisperCppPlugin.AccumulateSegmentsAsync(
+            AsAsyncEnumerable(),
+            TranscriptionNoSpeechThreshold
+        );
+
+        Assert.Empty(result.Text);
+        Assert.Null(result.NoSpeechProbability);
+    }
+
+    [Fact]
+    public async Task AccumulateSegmentsAsync_MultipleSpeechSegments_JoinsTextAndUsesMinimumProbability()
+    {
+        var result = await WhisperCppPlugin.AccumulateSegmentsAsync(
+            AsAsyncEnumerable(Segment(" First ", 0.1f), Segment(" second. ", 0.3f)),
+            TranscriptionNoSpeechThreshold
+        );
+
+        Assert.Equal("First second.", result.Text);
+        Assert.Equal(0.1f, result.NoSpeechProbability);
+    }
+
+    [Fact]
+    public async Task AccumulateSegmentsAsync_SilenceThenSpeech_UsesMinimumProbabilityRegardlessOfOrder()
+    {
+        var result = await WhisperCppPlugin.AccumulateSegmentsAsync(
+            AsAsyncEnumerable(Segment("Thank you.", 0.95f), Segment(" Speech ", 0.05f)),
+            TranscriptionNoSpeechThreshold
+        );
+
+        Assert.Equal("Speech", result.Text);
+        Assert.Equal(0.05f, result.NoSpeechProbability);
+    }
+
     [Fact]
     public void SupportedAccelerationBackends_IsCpuAndNvidiaCuda()
     {
@@ -239,6 +306,24 @@ public partial class WhisperCppPluginTests
         var modelsDir = Path.Join(assetDir, "Models");
         Directory.CreateDirectory(modelsDir);
         File.WriteAllText(Path.Join(modelsDir, fileName), "dummy");
+    }
+
+    private static WhisperCppTranscriptionSegment Segment(
+        string text,
+        float noSpeechProbability,
+        string? language = null,
+        double endSeconds = 0
+    ) => new(text, language, TimeSpan.FromSeconds(endSeconds), noSpeechProbability);
+
+    private static async IAsyncEnumerable<WhisperCppTranscriptionSegment> AsAsyncEnumerable(
+        params WhisperCppTranscriptionSegment[] segments
+    )
+    {
+        foreach (var segment in segments)
+        {
+            await Task.Yield();
+            yield return segment;
+        }
     }
 
     // A provisioner that blocks inside EnsureReadyAsync until released, signaling when it

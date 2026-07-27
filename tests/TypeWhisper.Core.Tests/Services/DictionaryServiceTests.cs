@@ -400,6 +400,172 @@ public sealed class DictionaryServiceTests : IDisposable
         Assert.NotNull(_sut.Entries[0].LastCorrectedAt);
     }
 
+    [Theory]
+    [InlineData(DictionaryEntrySource.Manual)]
+    [InlineData(DictionaryEntrySource.Import)]
+    public void LearnCorrection_DoesNotOverwriteUserAuthoredEntry(DictionaryEntrySource source)
+    {
+        // A user-authored or imported mapping must never be silently replaced by one
+        // observed target-app edit.
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "user-rule",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "kubernets",
+                Replacement = "Kubernetes",
+                Source = source
+            }
+        );
+
+        _sut.LearnCorrection("kubernets", "kubernetes cluster");
+
+        var entry = Assert.Single(_sut.Entries);
+        Assert.Equal("Kubernetes", entry.Replacement);
+        Assert.Equal(source, entry.Source);
+    }
+
+    [Fact]
+    public void LearnCorrections_AddsNewCorrectionsAsAutoLearnedAndReturnsIds()
+    {
+        var learned = _sut.LearnCorrections([
+            new CorrectionSuggestion("teh", "the"),
+            new CorrectionSuggestion("recieve", "receive")
+        ]);
+
+        Assert.Equal(2, learned.Count);
+        Assert.Equal(2, _sut.Entries.Count);
+        Assert.All(learned, c => Assert.NotEmpty(c.Id));
+        Assert.All(
+            _sut.Entries,
+            e =>
+            {
+                Assert.Equal(DictionaryEntryType.Correction, e.EntryType);
+                Assert.Equal(DictionaryEntrySource.AutoLearned, e.Source);
+                Assert.Equal(1, e.TimesCorrected);
+                Assert.NotNull(e.LastCorrectedAt);
+            }
+        );
+
+        // Returned ids must be exactly the ids that were persisted.
+        var learnedIds = learned.Select(c => c.Id).ToHashSet();
+        Assert.Equal(learnedIds, _sut.Entries.Select(e => e.Id).ToHashSet());
+    }
+
+    [Theory]
+    [InlineData(DictionaryEntrySource.Manual)]
+    [InlineData(DictionaryEntrySource.Import)]
+    [InlineData(DictionaryEntrySource.CorrectionSuggestion)]
+    [InlineData(DictionaryEntrySource.AutoLearned)]
+    public void LearnCorrections_NeverOverwritesExistingEntryOutsideReplaceableSet(
+        DictionaryEntrySource source
+    )
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "existing",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "teh",
+                Replacement = "the",
+                Source = source
+            }
+        );
+
+        var learned = _sut.LearnCorrections([new CorrectionSuggestion("teh", "different")]);
+
+        Assert.Empty(learned);
+        var entry = Assert.Single(_sut.Entries);
+        Assert.Equal("the", entry.Replacement);
+        Assert.Equal(source, entry.Source);
+    }
+
+    [Fact]
+    public void LearnCorrections_UpdatesEntryWhenIdIsReplaceable()
+    {
+        var learned = _sut.LearnCorrections([new CorrectionSuggestion("teh", "the")]);
+        var id = learned[0].Id;
+
+        var relearned = _sut.LearnCorrections(
+            [new CorrectionSuggestion("teh", "thee")],
+            new HashSet<string> { id }
+        );
+
+        var updated = Assert.Single(relearned);
+        Assert.Equal(id, updated.Id);
+        Assert.Equal("thee", updated.Replacement);
+
+        var entry = Assert.Single(_sut.Entries);
+        Assert.Equal(id, entry.Id);
+        Assert.Equal("thee", entry.Replacement);
+        Assert.Equal(2, entry.TimesCorrected);
+        Assert.Equal(DictionaryEntrySource.AutoLearned, entry.Source);
+    }
+
+    [Theory]
+    [InlineData("foo!")]
+    [InlineData("(bar")]
+    [InlineData("")]
+    public void LearnCorrections_RejectsUnsafeTokens(string original)
+    {
+        var learned = _sut.LearnCorrections([new CorrectionSuggestion(original, "safe")]);
+
+        Assert.Empty(learned);
+        Assert.Empty(_sut.Entries);
+    }
+
+    [Theory]
+    [InlineData("its", "it's")]
+    [InlineData("email", "e-mail")]
+    [InlineData("kubernets", "Kubernetes")]
+    public void LearnCorrections_AcceptsSafeTokens(string original, string replacement)
+    {
+        var learned = _sut.LearnCorrections([new CorrectionSuggestion(original, replacement)]);
+
+        Assert.Single(learned);
+        Assert.Single(_sut.Entries);
+    }
+
+    [Fact]
+    public void LearnCorrections_WithinBatchDuplicateOriginals_FirstWins()
+    {
+        var learned = _sut.LearnCorrections([
+            new CorrectionSuggestion("teh", "the"),
+            new CorrectionSuggestion("TEH", "thee")
+        ]);
+
+        Assert.Single(learned);
+        var entry = Assert.Single(_sut.Entries);
+        Assert.Equal("teh", entry.Original);
+        Assert.Equal("the", entry.Replacement);
+    }
+
+    [Fact]
+    public void UndoLearnedCorrections_RemovesOnlyListedIdsAndLeavesTheRest()
+    {
+        var learned = _sut.LearnCorrections([
+            new CorrectionSuggestion("teh", "the"),
+            new CorrectionSuggestion("recieve", "receive")
+        ]);
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "keep",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "seperate",
+                Replacement = "separate",
+                Source = DictionaryEntrySource.Manual
+            }
+        );
+
+        _sut.UndoLearnedCorrections([learned[0]]);
+
+        Assert.Equal(2, _sut.Entries.Count);
+        Assert.DoesNotContain(_sut.Entries, e => e.Id == learned[0].Id);
+        Assert.Contains(_sut.Entries, e => e.Id == learned[1].Id);
+        Assert.Contains(_sut.Entries, e => e.Id == "keep");
+    }
+
     [Fact]
     public void Entries_LoadLegacyJsonWithMetadataDefaults()
     {

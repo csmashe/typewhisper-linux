@@ -37,6 +37,10 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
     private const string UserJsOwnershipMarker = "// Set by TypeWhisper";
 
+    private const string UserJsPreservedPrefix = "// TypeWhisper preserved: ";
+
+    private const string UserJsOwnedSeparatorSuffix = "; separator newline owned";
+
     private static readonly string[] s_chromiumLauncherNames =
     [
         "google-chrome.desktop",
@@ -128,28 +132,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 var userJsPath = Path.Join(profileDir, "user.js");
                 try
                 {
-                    var existing = File.Exists(userJsPath) ? File.ReadAllText(userJsPath) : "";
-
-                    if (ForceDisabledNegOneMultilineRegex().IsMatch(existing))
-                    {
-                        patched.Add(Path.GetFileName(profileDir));
-                        continue;
-                    }
-
-                    // Replace any other accessibility.force_disabled line so
-                    // we don't leave two contradictory pref entries.
-                    var cleaned = ForceDisabledAnyValueLineRegex().Replace(existing, "");
-
-                    var prefixNewline = cleaned.Length > 0 && !cleaned.EndsWith('\n') ? "\n" : "";
-                    var addition =
-                        prefixNewline
-                        + UserJsOwnershipMarker
-                        + " — required for AT-SPI URL detection on Wayland.\n"
-                        + "user_pref(\"accessibility.force_disabled\", -1);\n";
-
-                    var tmp = userJsPath + ".tmp";
-                    File.WriteAllText(tmp, cleaned + addition);
-                    File.Move(tmp, userJsPath, true);
+                    PatchFirefoxUserJs(userJsPath);
                     patched.Add(Path.GetFileName(profileDir));
                 }
                 catch
@@ -341,8 +324,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
             "• Write user.js in your Firefox profile(s) to force-enable accessibility:\n"
             + string.Join("\n", profiles.Select(p => "    " + p))
             + "\n"
-            + "  Appends user_pref(\"accessibility.force_disabled\", -1); — Firefox reads user.js\n"
-            + "  at every startup as the override file and never writes back to it."
+            + "  Appends user_pref(\"accessibility.force_disabled\", -1); if that preference already\n"
+            + "  exists, its line is commented out and preserved, then restored on removal."
         );
 
         return actions;
@@ -464,7 +447,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
             actions.Add(
                 "• Remove the TypeWhisper accessibility override line from user.js in:\n"
                 + string.Join("\n", profilesWithOwnership.Select(p => "    " + p))
-                + "\n  (delete the file if it becomes empty)"
+                + "\n  (restore any preserved original accessibility.force_disabled line, "
+                + "and delete the file if it becomes empty)"
             );
         }
 
@@ -630,16 +614,105 @@ public sealed partial class BrowserAccessibilitySetupHelper
         try
         {
             var content = File.ReadAllText(userJsPath);
-            // Match the exact owned entry (attribution comment + the pref line we
-            // wrote) using the same regex the removal path strips. Detecting on the
-            // bare marker comment alone would report "installed" for a stale marker
-            // whose pref line no longer matches — something Revert can't remove.
-            return OwnedAccessibilityEntryRegex().IsMatch(content);
+            return OwnedAccessibilityEntryRegex().IsMatch(content)
+                || PreservedAccessibilityEntryRegex().IsMatch(content);
         }
         catch
         {
             return false;
         }
+    }
+
+    /// <summary>
+    ///     Adds TypeWhisper's Firefox accessibility override to one profile's
+    ///     <c>user.js</c>. Foreign entries for the same preference are commented
+    ///     out in place with owned metadata so removal can restore them exactly.
+    /// </summary>
+    /// <returns><see langword="true" /> when the file changed.</returns>
+    internal static bool PatchFirefoxUserJs(string userJsPath)
+    {
+        var existing = File.Exists(userJsPath) ? File.ReadAllText(userJsPath) : "";
+        // Already effective (our owned block or a user-authored -1): leave the file
+        // untouched — a temp+rename rewrite would swap a dotfile-managed symlink
+        // for a regular file.
+        if (ForceDisabledNegOneMultilineRegex().IsMatch(existing))
+        {
+            return false;
+        }
+
+        var preserved = ForceDisabledAnyValueLineRegex().Replace(
+            existing,
+            match => UserJsPreservedPrefix + match.Value
+        );
+        var ownsSeparatorNewline = preserved.Length > 0 && !preserved.EndsWith('\n');
+        var prefixNewline = ownsSeparatorNewline ? "\n" : "";
+        var ownershipMarker =
+            UserJsOwnershipMarker
+            + (ownsSeparatorNewline ? UserJsOwnedSeparatorSuffix : "");
+        var addition =
+            prefixNewline
+            + ownershipMarker
+            + " — required for AT-SPI URL detection on Wayland.\n"
+            + "user_pref(\"accessibility.force_disabled\", -1);\n";
+
+        var tmp = userJsPath + ".tmp";
+        File.WriteAllText(tmp, preserved + addition);
+        File.Move(tmp, userJsPath, true);
+        return true;
+    }
+
+    /// <summary>
+    ///     Removes TypeWhisper's Firefox accessibility override from one
+    ///     <c>user.js</c> and restores every foreign preference line preserved
+    ///     by <see cref="PatchFirefoxUserJs" />.
+    /// </summary>
+    /// <returns><see langword="true" /> when the file changed or was deleted.</returns>
+    internal static bool RevertFirefoxUserJs(string userJsPath)
+    {
+        if (!File.Exists(userJsPath))
+        {
+            return false;
+        }
+
+        var content = File.ReadAllText(userJsPath);
+        var restored = PreservedAccessibilityEntryRegex().Replace(
+            content,
+            match => match.Groups["original"].Value
+        );
+        var stripped = OwnedAccessibilityEntryRegex().Replace(
+            restored,
+            match =>
+            {
+                if (!match.Groups["ownsSeparator"].Success)
+                {
+                    return match.Groups["separator"].Value;
+                }
+
+                // Drop the separator newline we added. The trailing newline is ours
+                // too, but if the user appended content after our block it is the only
+                // thing keeping that content off the preceding line — keep it then.
+                var followedByContent = match.Index + match.Length < restored.Length;
+                return followedByContent ? match.Groups["trailing"].Value : "";
+            }
+        );
+
+        if (stripped == content)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(stripped))
+        {
+            File.Delete(userJsPath);
+        }
+        else
+        {
+            var tmp = userJsPath + ".tmp";
+            File.WriteAllText(tmp, stripped);
+            File.Move(tmp, userJsPath, true);
+        }
+
+        return true;
     }
 
     private static List<string> RemoveOwnedFirefoxAccessibilityEntries()
@@ -648,38 +721,12 @@ public sealed partial class BrowserAccessibilitySetupHelper
         foreach (var profileDir in EnumerateFirefoxProfileDirs())
         {
             var userJsPath = Path.Join(profileDir, "user.js");
-            if (!UserJsHasOwnedAccessibilityEntry(userJsPath))
-            {
-                continue;
-            }
-
             try
             {
-                var content = File.ReadAllText(userJsPath);
-                // Strip the attribution comment plus the following pref line
-                // in a single match. The user's other prefs (if any) stay
-                // untouched, including a manually-added force_disabled that
-                // happens to share the value — we only remove the pair we
-                // wrote ourselves, identified by the comment marker.
-                var stripped = OwnedAccessibilityEntryRegex().Replace(content, "");
-
-                if (stripped == content)
+                if (RevertFirefoxUserJs(userJsPath))
                 {
-                    continue;
+                    cleaned.Add(Path.GetFileName(profileDir));
                 }
-
-                if (string.IsNullOrWhiteSpace(stripped))
-                {
-                    File.Delete(userJsPath);
-                }
-                else
-                {
-                    var tmp = userJsPath + ".tmp";
-                    File.WriteAllText(tmp, stripped);
-                    File.Move(tmp, userJsPath, true);
-                }
-
-                cleaned.Add(Path.GetFileName(profileDir));
             }
             catch
             {
@@ -1081,13 +1128,21 @@ public sealed partial class BrowserAccessibilitySetupHelper
     [GeneratedRegex("""^\s*user_pref\(\s*"accessibility\.force_disabled"\s*,\s*-1\s*\)\s*;""", RegexOptions.Multiline)]
     private static partial Regex ForceDisabledNegOneMultilineRegex();
 
-    // Any accessibility.force_disabled line (any value) so we don't leave contradictory prefs.
-    [GeneratedRegex("""^\s*user_pref\(\s*"accessibility\.force_disabled"\s*,\s*-?\d+\s*\)\s*;\s*\r?\n?""", RegexOptions.Multiline)]
+    // Any live accessibility.force_disabled line, captured verbatim (minus its
+    // newline) so setup can prefix it with the preservation comment. Lines where a
+    // second statement follows the terminator are skipped: commenting the whole
+    // line would disable the neighbor too (our appended -1 wins regardless).
+    [GeneratedRegex("""^[\t ]*user_pref\s*\(\s*(?<quote>["'])accessibility\.force_disabled\k<quote>\s*,[^\r\n;)]*\)\s*;[\t ]*(?://[^\r\n]*)?(?=\r?\n|\z)""", RegexOptions.Multiline)]
     private static partial Regex ForceDisabledAnyValueLineRegex();
 
-    // Our attribution comment plus the following force_disabled=-1 pref line we wrote
-    // ourselves, matched as a single pair across full user.js content (Multiline).
-    [GeneratedRegex("""^//\s*Set by TypeWhisper[^\r\n]*\r?\nuser_pref\(\s*"accessibility\.force_disabled"\s*,\s*-1\s*\)\s*;\s*\r?\n?""", RegexOptions.Multiline)]
+    // A foreign pref line disabled by setup. Removing the prefix restores every byte
+    // of the original line while leaving its original line ending untouched.
+    [GeneratedRegex("""^// TypeWhisper preserved: (?<original>[^\r\n]*)(?=\r?\n|\z)""", RegexOptions.Multiline)]
+    private static partial Regex PreservedAccessibilityEntryRegex();
+
+    // Our attribution comment plus the following force_disabled=-1 pref line. The
+    // optional preceding newline is retained unless its marker says setup added it.
+    [GeneratedRegex("""(?<separator>\r?\n)?^//\s*Set by TypeWhisper(?<ownsSeparator>; separator newline owned)?[^\r\n]*\r?\nuser_pref\(\s*"accessibility\.force_disabled"\s*,\s*-1\s*\)[\t ]*;[\t ]*(?<trailing>\r?\n|\z)""", RegexOptions.Multiline)]
     private static partial Regex OwnedAccessibilityEntryRegex();
 
     public sealed record SetupResult(bool Success, string Message, string? Detail = null);

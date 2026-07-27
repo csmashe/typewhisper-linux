@@ -1,31 +1,21 @@
 using TypeWhisper.Core.Services;
-using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.Tests;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
 
 public sealed class ShortcutsSectionViewModelTests : IDisposable
 {
-    private readonly string _tempDir;
-
-    public ShortcutsSectionViewModelTests()
-    {
-        _tempDir = Path.Join(
-            Path.GetTempPath(),
-            "TypeWhisper.Linux.ShortcutsVmTests_" + Guid.NewGuid().ToString("N")
-        );
-        Directory.CreateDirectory(_tempDir);
-    }
+    private readonly string _tempDir = TestPaths.CreateTempDirectory(
+        "TypeWhisper.Linux.ShortcutsSectionViewModelTests"
+    );
 
     public void Dispose()
     {
         try
         {
-            if (Directory.Exists(_tempDir))
-            {
-                Directory.Delete(_tempDir, true);
-            }
+            TestPaths.DeleteDirectory(_tempDir);
         }
         catch
         {
@@ -38,7 +28,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
-        var hotkey = new HotkeyService();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
         var sut = new ShortcutsSectionViewModel(hotkey, settings) { PromptPaletteHotkeyText = "Ctrl+Shift+P" };
 
         sut.ApplyPromptPaletteHotkeyCommand.Execute(null);
@@ -52,7 +42,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
-        var hotkey = new HotkeyService();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
         hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Shift+P");
         settings.Save(settings.Current with { PromptPaletteHotkey = "Ctrl+Shift+P" });
 
@@ -69,7 +59,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
-        var hotkey = new HotkeyService();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
         var sut = new ShortcutsSectionViewModel(hotkey, settings) { TransformSelectionHotkeyText = "Ctrl+Shift+T" };
 
         sut.ApplyTransformSelectionHotkeyCommand.Execute(null);
@@ -83,7 +73,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
-        var hotkey = new HotkeyService();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
         hotkey.TrySetTransformSelectionHotkeyFromString("Ctrl+Shift+T");
         settings.Save(settings.Current with { TransformSelectionHotkey = "Ctrl+Shift+T" });
 
@@ -103,7 +93,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
-        var hotkey = new HotkeyService();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
         hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Shift+P");
         settings.Save(settings.Current with { PromptPaletteHotkey = "Ctrl+Shift+P" });
 
@@ -123,7 +113,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
-        var hotkey = new HotkeyService();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
         var sut = new ShortcutsSectionViewModel(hotkey, settings);
 
         Assert.True(sut.WaylandEvdevHotkeysEnabled);
@@ -137,11 +127,10 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
-        var hotkey = new HotkeyService();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
         var sut = new ShortcutsSectionViewModel(hotkey, settings);
 
-        // Default backend (SharpHook) supports press/release, so the
-        // mismatch banner stays hidden regardless of mode.
+        // No backend initialized yet, so no capability mismatch to surface.
         Assert.False(sut.ShowCapabilityMismatch);
     }
 
@@ -150,7 +139,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
-        var hotkey = new HotkeyService();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
         var sut = new ShortcutsSectionViewModel(hotkey, settings);
 
         // Initialize hasn't been called → coordinator hasn't resolved a

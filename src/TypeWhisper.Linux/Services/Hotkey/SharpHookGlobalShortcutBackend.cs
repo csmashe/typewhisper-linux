@@ -74,6 +74,14 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
     public event EventHandler? DictationToggleRequested;
     public event EventHandler? DictationStartRequested;
     public event EventHandler? DictationStopRequested;
+
+    // SharpHook has no session gating, so it never discards; satisfy the interface with a no-op.
+    public event EventHandler? DictationDiscardRequested
+    {
+        add { }
+        remove { }
+    }
+
     public event EventHandler? PromptPaletteRequested;
     public event EventHandler? TransformSelectionRequested;
     public event EventHandler? RecentTranscriptionsRequested;

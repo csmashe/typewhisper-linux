@@ -2,6 +2,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Localization;
@@ -313,7 +314,11 @@ public partial class PromptsSectionViewModel : ObservableObject
                 SortOrder = _prompts.Actions.Count
             };
 
-            _prompts.AddAction(action);
+            if (!TryMutate(() => _prompts.AddAction(action), "add a prompt action"))
+            {
+                return;
+            }
+
             RefreshActions();
             SelectById(action.Id);
             return;
@@ -330,18 +335,28 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
-        _prompts.UpdateAction(
-            existing with
-            {
-                Name = EditName.Trim(),
-                SystemPrompt = EditSystemPrompt.Trim(),
-                Icon = EditIcon,
-                ProviderOverride = EditProviderOverride,
-                TargetActionPluginId = EditTargetActionPluginId,
-                HotkeyKey = NormalizeOptionalString(EditHotkeyKey),
-                IsManualOnly = EditIsManualOnly
-            }
-        );
+        if (
+            !TryMutate(
+                () =>
+                    _prompts.UpdateAction(
+                        existing with
+                        {
+                            Name = EditName.Trim(),
+                            SystemPrompt = EditSystemPrompt.Trim(),
+                            Icon = EditIcon,
+                            ProviderOverride = EditProviderOverride,
+                            TargetActionPluginId = EditTargetActionPluginId,
+                            HotkeyKey = NormalizeOptionalString(EditHotkeyKey),
+                            IsManualOnly = EditIsManualOnly
+                        }
+                    ),
+                "update a prompt action"
+            )
+        )
+        {
+            return;
+        }
+
         RefreshActions();
         SelectById(existing.Id);
     }
@@ -365,7 +380,11 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
-        _prompts.DeleteAction(SelectedAction.Id);
+        if (!TryMutate(() => _prompts.DeleteAction(SelectedAction.Id), "delete a prompt action"))
+        {
+            return;
+        }
+
         RefreshActions();
         SelectedAction = null;
         ShowEditor = false;
@@ -379,7 +398,16 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
-        _prompts.UpdateAction(action with { IsEnabled = !action.IsEnabled });
+        if (
+            !TryMutate(
+                () => _prompts.UpdateAction(action with { IsEnabled = !action.IsEnabled }),
+                "toggle a prompt action"
+            )
+        )
+        {
+            return;
+        }
+
         RefreshActions();
     }
 
@@ -402,7 +430,11 @@ public partial class PromptsSectionViewModel : ObservableObject
         }
 
         (orderedIds[index], orderedIds[index - 1]) = (orderedIds[index - 1], orderedIds[index]);
-        _prompts.Reorder(orderedIds);
+        if (!TryMutate(() => _prompts.Reorder(orderedIds), "reorder prompt actions"))
+        {
+            return;
+        }
+
         RefreshActions();
     }
 
@@ -425,14 +457,22 @@ public partial class PromptsSectionViewModel : ObservableObject
         }
 
         (orderedIds[index], orderedIds[index + 1]) = (orderedIds[index + 1], orderedIds[index]);
-        _prompts.Reorder(orderedIds);
+        if (!TryMutate(() => _prompts.Reorder(orderedIds), "reorder prompt actions"))
+        {
+            return;
+        }
+
         RefreshActions();
     }
 
     [RelayCommand]
     private void SeedPresets()
     {
-        _prompts.SeedPresets();
+        if (!TryMutate(_prompts.SeedPresets, "seed prompt presets"))
+        {
+            return;
+        }
+
         RefreshActions();
     }
 
@@ -462,6 +502,21 @@ public partial class PromptsSectionViewModel : ObservableObject
         }
 
         NotifyStateChanged();
+    }
+
+    private bool TryMutate(Action mutation, string operation)
+    {
+        try
+        {
+            mutation();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[PromptsSectionViewModel] Failed to {operation}: {ex}");
+            RefreshActions();
+            return false;
+        }
     }
 
     private void RefreshPluginOptions()

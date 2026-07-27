@@ -1,23 +1,23 @@
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.Tests;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
 
 public sealed class FileTranscriptionSectionViewModelTests : IDisposable
 {
-    private readonly string _tempDir =
-        Path.Join(Path.GetTempPath(), "TypeWhisper.FileQueue.Tests_" + Guid.NewGuid().ToString("N"));
-
-    public FileTranscriptionSectionViewModelTests() => Directory.CreateDirectory(_tempDir);
+    private readonly string _tempDir = TestPaths.CreateTempDirectory(
+        "TypeWhisper.FileTranscriptionSectionViewModelTests"
+    );
 
     public void Dispose()
     {
         try
         {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
+            TestPaths.DeleteDirectory(_tempDir);
         }
         catch
         {
@@ -60,18 +60,99 @@ public sealed class FileTranscriptionSectionViewModelTests : IDisposable
         Assert.False(vm.HasClearableItems);
     }
 
+    [Fact]
+    public void Constructor_WithPoisonedAutoStartPath_DoesNotThrow()
+    {
+        var settings = CreateSettingsWithPoisonedWatchFolder(autoStart: true);
+        FileTranscriptionSectionViewModel? vm = null;
+
+        var exception = Record.Exception(() => vm = CreateViewModel(settings));
+
+        Assert.Null(exception);
+        Assert.NotNull(vm);
+        Assert.False(vm.IsWatchFolderRunning);
+    }
+
+    [Fact]
+    public void StartWatchFolder_WithPoisonedPath_ShowsErrorAndCanRecover()
+    {
+        var settings = CreateSettingsWithPoisonedWatchFolder(autoStart: false);
+        var vm = CreateViewModel(settings);
+
+        var exception = Record.Exception(() => vm.StartWatchFolderCommand.Execute(null));
+
+        Assert.Null(exception);
+        Assert.False(vm.IsWatchFolderRunning);
+        Assert.NotNull(vm.WatchFolderStartError);
+        Assert.Equal(
+            Loc.Instance.GetString(
+                "FileTranscription.WatchFolderStartFailed",
+                vm.WatchFolderStartError
+            ),
+            vm.WatchFolderStatusText
+        );
+
+        var repairedPath = Path.Join(_tempDir, "repaired-watch-folder");
+        Directory.CreateDirectory(repairedPath);
+        vm.SetWatchFolderPath(repairedPath);
+        vm.StartWatchFolderCommand.Execute(null);
+
+        Assert.True(vm.IsWatchFolderRunning);
+        Assert.Null(vm.WatchFolderStartError);
+        Assert.Equal(
+            Loc.Instance["FileTranscription.WatchingForNewFiles"],
+            vm.WatchFolderStatusText
+        );
+
+        vm.StopWatchFolderCommand.Execute(null);
+    }
+
+    [Fact]
+    public void StopWatchFolder_AfterFailedStart_ClearsError()
+    {
+        var settings = CreateSettingsWithPoisonedWatchFolder(autoStart: false);
+        var vm = CreateViewModel(settings);
+        vm.StartWatchFolderCommand.Execute(null);
+
+        Assert.NotNull(vm.WatchFolderStartError);
+
+        vm.StopWatchFolderCommand.Execute(null);
+
+        Assert.False(vm.IsWatchFolderRunning);
+        Assert.Null(vm.WatchFolderStartError);
+        Assert.Equal(Loc.Instance["FileTranscription.Stopped"], vm.WatchFolderStatusText);
+    }
+
     private static void AddItem(
         FileTranscriptionSectionViewModel vm,
         string name,
         FileTranscriptionQueueItemStatus status
     ) => vm.Items.Add(new FileTranscriptionQueueItemViewModel(name, status));
 
-    private FileTranscriptionSectionViewModel CreateViewModel()
+    private SettingsService CreateSettingsWithPoisonedWatchFolder(bool autoStart)
     {
-        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        var poisonedParent = Path.Join(_tempDir, $"poisoned-parent-{Guid.NewGuid():N}");
+        File.WriteAllText(poisonedParent, "not a directory");
+
+        var settings = new SettingsService(Path.Join(_tempDir, $"settings-{Guid.NewGuid():N}.json"));
+        settings.Save(
+            settings.Current with
+            {
+                WatchFolderPath = Path.Join(poisonedParent, "watch-folder"),
+                WatchFolderAutoStart = autoStart
+            }
+        );
+        return settings;
+    }
+
+    private FileTranscriptionSectionViewModel CreateViewModel(SettingsService? settings = null)
+    {
+        settings ??= new SettingsService(Path.Join(_tempDir, "settings.json"));
         var commands = new SystemCommandAvailabilityService();
         var audioFiles = new AudioFileService(commands);
-        var watchFolder = new WatchFolderService();
+        var watchFolder = new WatchFolderService(
+            Path.Join(_tempDir, $"watch-folder-data-{Guid.NewGuid():N}")
+        );
         return new FileTranscriptionSectionViewModel(new StubProcessor(), settings, audioFiles, watchFolder);
     }
 

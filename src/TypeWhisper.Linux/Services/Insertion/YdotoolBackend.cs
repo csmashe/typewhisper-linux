@@ -47,6 +47,16 @@ internal static class YdotoolBackend
         return ["key", "--key-delay", KeyEventDelayMs, $"{LeftCtrlKey}:1", $"{VKey}:1", $"{VKey}:0", $"{LeftCtrlKey}:0"];
     }
 
+    /// <summary>
+    ///     Ctrl+Shift+V — the paste shortcut in terminal emulators, which map plain
+    ///     Ctrl+V to readline quoted-insert. Press ctrl, press shift, tap v, release shift,
+    ///     release ctrl.
+    /// </summary>
+    public static IReadOnlyList<string> TerminalPasteArgs()
+    {
+        return ["key", "--key-delay", KeyEventDelayMs, $"{LeftCtrlKey}:1", $"{LeftShiftKey}:1", $"{VKey}:1", $"{VKey}:0", $"{LeftShiftKey}:0", $"{LeftCtrlKey}:0"];
+    }
+
     public static IReadOnlyList<string> CopyArgs()
     {
         return ["key", "--key-delay", KeyEventDelayMs, $"{LeftCtrlKey}:1", $"{CKey}:1", $"{CKey}:0", $"{LeftCtrlKey}:0"];

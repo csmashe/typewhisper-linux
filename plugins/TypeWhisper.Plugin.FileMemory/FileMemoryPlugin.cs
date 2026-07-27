@@ -12,6 +12,7 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
     private IPluginHostServices? _host;
     private string? _filePath;
     private List<MemoryEntry>? _entries;
+    private bool _loadFailed;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     public string PluginId => "com.typewhisper.file-memory";
@@ -30,6 +31,7 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
     {
         _host = null;
         _entries = null;
+        _loadFailed = false;
         return Task.CompletedTask;
     }
 
@@ -38,17 +40,21 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
         await _lock.WaitAsync(ct);
         try
         {
-            var entries = await LoadEntriesAsync(ct);
+            var current = await LoadEntriesAsync(ct);
 
-            if (entries.Any(e => e.Content == content))
+            if (current.Any(e => e.Content == content))
             {
                 _host?.Log(PluginLogLevel.Debug, "Duplicate memory skipped");
                 return;
             }
 
-            entries.Add(new MemoryEntry(content, DateTime.UtcNow));
-            await SaveEntriesAsync(ct);
-            _host?.Log(PluginLogLevel.Debug, $"Stored memory (total={entries.Count})");
+            var next = new List<MemoryEntry>(current)
+            {
+                new(content, DateTime.UtcNow)
+            };
+            await SaveEntriesAsync(next, ct);
+            _entries = next;
+            _host?.Log(PluginLogLevel.Debug, $"Stored memory (total={next.Count})");
         }
         finally
         {
@@ -99,11 +105,15 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
         await _lock.WaitAsync(ct);
         try
         {
-            var entries = await LoadEntriesAsync(ct);
-            var removed = entries.RemoveAll(e => e.Content == content);
+            var current = await LoadEntriesAsync(ct);
+            var next = new List<MemoryEntry>(current);
+            var removed = next.RemoveAll(e => e.Content == content);
 
-            if (removed > 0)
-                await SaveEntriesAsync(ct);
+            if (removed == 0 && !_loadFailed)
+                return;
+
+            await SaveEntriesAsync(next, ct);
+            _entries = next;
         }
         finally
         {
@@ -116,9 +126,14 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
         await _lock.WaitAsync(ct);
         try
         {
-            var entries = await LoadEntriesAsync(ct);
-            entries.Clear();
-            await SaveEntriesAsync(ct);
+            var current = await LoadEntriesAsync(ct);
+            if (current.Count == 0 && !_loadFailed)
+                return;
+
+            var next = new List<MemoryEntry>(current);
+            next.Clear();
+            await SaveEntriesAsync(next, ct);
+            _entries = next;
             _host?.Log(PluginLogLevel.Info, "All memories cleared");
         }
         finally
@@ -149,38 +164,108 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
         if (_filePath is null)
             throw new InvalidOperationException("Plugin not activated");
 
-        if (File.Exists(_filePath))
+        string json;
+        try
         {
+            json = await File.ReadAllTextAsync(_filePath, ct);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            _loadFailed = false;
+            _entries = [];
+            return _entries;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _loadFailed = true;
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Failed to read memories; saves are disabled to protect the existing file: {ex.Message}"
+            );
+            return [];
+        }
+
+        try
+        {
+            _entries =
+                JsonSerializer.Deserialize<List<MemoryEntry>>(json, JsonOptions)
+                ?? throw new JsonException("The memory file contained null JSON.");
+            _loadFailed = false;
+            return _entries;
+        }
+        catch (JsonException ex)
+        {
+            var brokenPath =
+                $"{_filePath}.broken-{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
             try
             {
-                var json = await File.ReadAllTextAsync(_filePath, ct);
-                _entries = JsonSerializer.Deserialize<List<MemoryEntry>>(json, JsonOptions) ?? [];
-            }
-            catch (Exception ex)
-            {
-                _host?.Log(PluginLogLevel.Warning, $"Failed to load memories: {ex.Message}");
+                File.Move(_filePath, brokenPath);
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    $"Failed to parse memories; the corrupt file was preserved as '{brokenPath}': {ex.Message}"
+                );
+                _loadFailed = false;
                 _entries = [];
+                return _entries;
+            }
+            catch (Exception preserveEx)
+            {
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    $"Failed to preserve corrupt memory file as '{brokenPath}': {preserveEx.Message}"
+                );
+
+                if (File.Exists(_filePath))
+                {
+                    _loadFailed = true;
+                    return [];
+                }
+
+                _loadFailed = false;
+                _entries = [];
+                return _entries;
             }
         }
-        else
-        {
-            _entries = [];
-        }
-
-        return _entries;
     }
 
-    private async Task SaveEntriesAsync(CancellationToken ct)
+    private async Task SaveEntriesAsync(List<MemoryEntry> entries, CancellationToken ct)
     {
-        if (_filePath is null || _entries is null)
-            return;
+        if (_filePath is null)
+            throw new InvalidOperationException("Plugin not activated");
 
-        var dir = Path.GetDirectoryName(_filePath);
-        if (dir is not null && !Directory.Exists(dir))
-            Directory.CreateDirectory(dir);
+        if (_loadFailed)
+        {
+            var message =
+                $"Refusing to overwrite '{_filePath}' because the previous load failed.";
+            _host?.Log(PluginLogLevel.Error, message);
+            throw new IOException(message);
+        }
 
-        var json = JsonSerializer.Serialize(_entries, JsonOptions);
-        await File.WriteAllTextAsync(_filePath, json, ct);
+        var tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            var dir = Path.GetDirectoryName(_filePath);
+            if (dir is not null && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            var json = JsonSerializer.Serialize(entries, JsonOptions);
+            await File.WriteAllTextAsync(tempPath, json, ct);
+            if (File.Exists(_filePath))
+                File.Replace(tempPath, _filePath, destinationBackupFileName: null);
+            else
+                File.Move(tempPath, _filePath);
+        }
+        catch (Exception ex)
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); }
+                catch { /* best effort */ }
+            }
+
+            _host?.Log(PluginLogLevel.Error, $"Failed to save memories: {ex.Message}");
+            throw;
+        }
     }
 
     public void Dispose()

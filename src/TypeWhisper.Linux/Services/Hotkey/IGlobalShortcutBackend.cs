@@ -34,6 +34,10 @@ public interface IGlobalShortcutBackend : IAsyncDisposable
     event EventHandler? DictationToggleRequested;
     event EventHandler? DictationStartRequested;
     event EventHandler? DictationStopRequested;
+
+    // Session-loss teardown (e.g. screen lock): discard any active recording without transcription
+    // or text insertion. Only the evdev backend, which gates on session activity, raises this.
+    event EventHandler? DictationDiscardRequested;
     event EventHandler? PromptPaletteRequested;
     event EventHandler? TransformSelectionRequested;
     event EventHandler? RecentTranscriptionsRequested;

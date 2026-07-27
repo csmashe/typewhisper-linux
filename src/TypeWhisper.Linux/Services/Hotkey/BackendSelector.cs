@@ -17,7 +17,7 @@ public sealed class BackendSelector
     private readonly Func<IGlobalShortcutBackend> _factory;
 
     public BackendSelector()
-        : this(DefaultFactory(null))
+        : this(DefaultFactory(null, null))
     {
     }
 
@@ -29,7 +29,15 @@ public sealed class BackendSelector
     // whose RegisterAsync reports success without actually starting the hook,
     // silently breaking the focused-only fallback until restart.
     public BackendSelector(ISettingsService settings)
-        : this(DefaultFactory(settings))
+        : this(DefaultFactory(settings, null))
+    {
+    }
+
+    public BackendSelector(
+        ISettingsService settings,
+        ISessionActivityMonitor sessionActivityMonitor
+    )
+        : this(DefaultFactory(settings, sessionActivityMonitor))
     {
     }
 
@@ -44,7 +52,10 @@ public sealed class BackendSelector
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of the throwaway portal probe instance; XdgPortalGlobalShortcutsBackend.DisposeAsync is a self-contained async ValueTask and awaiting it inside the synchronous factory is unnecessary.")]
-    private static Func<IGlobalShortcutBackend> DefaultFactory(ISettingsService? settings)
+    private static Func<IGlobalShortcutBackend> DefaultFactory(
+        ISettingsService? settings,
+        ISessionActivityMonitor? sessionActivityMonitor
+    )
     {
         return () =>
         {
@@ -63,7 +74,9 @@ public sealed class BackendSelector
                 Trace.WriteLine(
                     "[BackendSelector] evdev backend active — reading keyboard events to detect your configured shortcut. No keystroke content is logged."
                 );
-                return new EvdevGlobalShortcutBackend();
+                return sessionActivityMonitor is null
+                    ? new EvdevGlobalShortcutBackend()
+                    : new EvdevGlobalShortcutBackend(sessionActivityMonitor);
             }
 
             // Portal is a stub (IsAvailable()==false). Probe via a throwaway instance

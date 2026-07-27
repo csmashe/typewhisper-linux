@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services.Insertion;
 
@@ -34,6 +35,16 @@ public sealed partial class YdotoolSetupHelper
     // deleting it — without this we could nuke a rule a user or distro
     // package installed under the same conventional filename.
     private const string OwnershipMarker = "Installed by TypeWhisper";
+
+    internal const int ModulesLoadConflictExitCode = 73;
+    internal const int UdevRuleConflictExitCode = 74;
+    internal const int ModulesLoadSymlinkExitCode = 75;
+    internal const int UdevRuleSymlinkExitCode = 76;
+
+    private const string ModulesLoadConflictToken = "TYPEWHISPER_MODULES_LOAD_CONFLICT";
+    private const string UdevRuleConflictToken = "TYPEWHISPER_UDEV_RULE_CONFLICT";
+    private const string ModulesLoadSymlinkToken = "TYPEWHISPER_MODULES_LOAD_SYMLINK";
+    private const string UdevRuleSymlinkToken = "TYPEWHISPER_UDEV_RULE_SYMLINK";
 
     private const string UdevRuleContent =
         "# "
@@ -468,7 +479,16 @@ public sealed partial class YdotoolSetupHelper
     {
         try
         {
-            return File.ReadAllText(path).Contains(OwnershipMarker, StringComparison.Ordinal);
+            // Only a first-line "# <marker>" header counts — bare, or followed by
+            // a space (real headers are "# <marker> — ..."). Mid-body mentions,
+            // negations, and longer prefixes ("# Installed by TypeWhisperer") are
+            // foreign and must not be deleted. Mirrors the script's `case` glob.
+            using var reader = new StreamReader(path);
+            var firstLine = reader.ReadLine();
+            const string header = "# " + OwnershipMarker;
+            return firstLine is not null
+                   && (firstLine == header
+                       || firstLine.StartsWith(header + " ", StringComparison.Ordinal));
         }
         catch
         {
@@ -583,7 +603,7 @@ public sealed partial class YdotoolSetupHelper
                );
     }
 
-    private async Task<SetupResult> InstallUdevRuleAsync(CancellationToken ct)
+    internal async Task<SetupResult> InstallUdevRuleAsync(CancellationToken ct)
     {
         // pkexec is only needed on the udev-rule write path; check it
         // here (the actual point of use) rather than at the top of
@@ -618,38 +638,161 @@ public sealed partial class YdotoolSetupHelper
             );
         }
 
-        // Pipe content via here-docs, not command-line args, to avoid shell metadata issues.
-        // Order: write files → reload udev → modprobe uinput. Loading the module AFTER
-        // the reload ensures the add-event fires with the rule already live, applying
-        // the input group + uaccess ACL to the newly created device node.
-        var script =
-            $"set -e\n"
-            + $"cat > {ModulesLoadPath} <<'EOF'\n"
-            + ModulesLoadContent
-            + "EOF\n"
-            + $"cat > {UdevRulePath} <<'EOF'\n"
-            + UdevRuleContent
-            + "EOF\n"
-            + "udevadm control --reload\n"
-            + "modprobe uinput || true\n"
-            + "udevadm trigger --subsystem-match=misc --action=change || true\n";
+        var script = BuildPrivilegedInstallScript();
 
         var run = await _runner
             .RunAsync("pkexec", ["/bin/sh"], standardInput: script, ct: ct)
             .ConfigureAwait(false);
 
-        if (!run.Succeeded)
+        if (run.Succeeded)
         {
-            return new SetupResult(
-                false,
-                "Could not install udev rule (pkexec failed or was canceled).",
-                string.IsNullOrWhiteSpace(run.StandardError)
-                    ? run.StandardOutput
-                    : run.StandardError
+            return new SetupResult(true, "Installed udev rule.");
+        }
+
+        if (
+            MatchesPrivilegedFailure(run, ModulesLoadConflictExitCode, ModulesLoadConflictToken)
+        )
+        {
+            return ForeignConfigRefusal(
+                ModulesLoadPath,
+                "TextInsertion.YdotoolForeignModulesLoadDetail"
             );
         }
 
-        return new SetupResult(true, "Installed udev rule.");
+        if (MatchesPrivilegedFailure(run, UdevRuleConflictExitCode, UdevRuleConflictToken))
+        {
+            return ForeignConfigRefusal(
+                UdevRulePath,
+                "TextInsertion.YdotoolForeignUdevRuleDetail"
+            );
+        }
+
+        if (
+            MatchesPrivilegedFailure(run, ModulesLoadSymlinkExitCode, ModulesLoadSymlinkToken)
+        )
+        {
+            return SymlinkRefusal(ModulesLoadPath);
+        }
+
+        if (MatchesPrivilegedFailure(run, UdevRuleSymlinkExitCode, UdevRuleSymlinkToken))
+        {
+            return SymlinkRefusal(UdevRulePath);
+        }
+
+        return new SetupResult(
+            false,
+            "Could not install udev rule (pkexec failed or was canceled).",
+            string.IsNullOrWhiteSpace(run.StandardError)
+                ? run.StandardOutput
+                : run.StandardError
+        );
+    }
+
+    /// <summary>
+    ///     Builds the root-side installation transaction. Ownership, file-type,
+    ///     and symlink checks deliberately run inside this script so an
+    ///     unprivileged preflight cannot race the privileged writes; both
+    ///     targets are validated BEFORE either is written, so a conflict on the
+    ///     second target never leaves the first target's write behind.
+    /// </summary>
+    private static string BuildPrivilegedInstallScript()
+    {
+        // Pipe content via here-docs, not command-line args, to avoid shell metadata issues.
+        // Order: validate both targets → write both → reload udev → modprobe uinput.
+        // Loading the module AFTER the reload ensures the add-event fires with the
+        // rule already live, applying the input group + uaccess ACL to the new node.
+        //
+        // Marker match is anchored to the start of the first line via `case`
+        // globs: the bare marker, or the marker followed by a space (real
+        // headers are "# Installed by TypeWhisper — ..."), never an arbitrary
+        // continuation — "# Installed by TypeWhisperer" is foreign and must be
+        // preserved, not truncated.
+        return "set -e\n"
+               + $"modules_path='{ModulesLoadPath}'\n"
+               + $"udev_path='{UdevRulePath}'\n"
+               + $"marker='# {OwnershipMarker}'\n"
+               // --- Validate modules-load target (no writes yet).
+               + "modules_action=write\n"
+               + "if [ -L \"$modules_path\" ]; then\n"
+               + $"  echo '{ModulesLoadSymlinkToken}' >&2\n"
+               + $"  exit {ModulesLoadSymlinkExitCode}\n"
+               + "elif [ -e \"$modules_path\" ]; then\n"
+               + "  if [ ! -f \"$modules_path\" ]; then\n"
+               + $"    echo '{ModulesLoadConflictToken}' >&2\n"
+               + $"    exit {ModulesLoadConflictExitCode}\n"
+               + "  elif first=$(head -n 1 \"$modules_path\") && case \"$first\" in \"$marker\"|\"$marker \"*) true;; *) false;; esac; then\n"
+               + "    modules_action=write\n"
+               // Only a bare `uinput` line counts as "already loads it":
+               // modules-load.d does not strip inline comments, so `uinput # boot`
+               // is a module named "uinput # boot" that never loads — such a file
+               // must fall through to the conflict branch.
+               + "  elif grep -Eq '^[[:space:]]*uinput[[:space:]]*$' \"$modules_path\"; then\n"
+               + "    modules_action=skip # Foreign file already loads uinput; preserve it.\n"
+               + "  else\n"
+               + $"    echo '{ModulesLoadConflictToken}' >&2\n"
+               + $"    exit {ModulesLoadConflictExitCode}\n"
+               + "  fi\n"
+               + "fi\n"
+               // --- Validate udev-rule target (no writes yet).
+               + "udev_action=write\n"
+               + "if [ -L \"$udev_path\" ]; then\n"
+               + $"  echo '{UdevRuleSymlinkToken}' >&2\n"
+               + $"  exit {UdevRuleSymlinkExitCode}\n"
+               + "elif [ -e \"$udev_path\" ]; then\n"
+               + "  if [ ! -f \"$udev_path\" ]; then\n"
+               + $"    echo '{UdevRuleConflictToken}' >&2\n"
+               + $"    exit {UdevRuleConflictExitCode}\n"
+               + "  elif first=$(head -n 1 \"$udev_path\") && case \"$first\" in \"$marker\"|\"$marker \"*) true;; *) false;; esac; then\n"
+               + "    udev_action=write\n"
+               + "  elif grep -Fqx 'KERNEL==\"uinput\", TAG+=\"uaccess\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"' \"$udev_path\"; then\n"
+               + "    udev_action=skip # Foreign file already contains the required rule; preserve it.\n"
+               + "  else\n"
+               + $"    echo '{UdevRuleConflictToken}' >&2\n"
+               + $"    exit {UdevRuleConflictExitCode}\n"
+               + "  fi\n"
+               + "fi\n"
+               // --- Both targets validated; apply the recorded decisions.
+               + "if [ \"$modules_action\" = write ]; then\n"
+               + "  cat > \"$modules_path\" <<'EOF'\n"
+               + ModulesLoadContent
+               + "EOF\n"
+               + "fi\n"
+               + "if [ \"$udev_action\" = write ]; then\n"
+               + "  cat > \"$udev_path\" <<'EOF'\n"
+               + UdevRuleContent
+               + "EOF\n"
+               + "fi\n"
+               + "udevadm control --reload\n"
+               + "modprobe uinput || true\n"
+               + "udevadm trigger --subsystem-match=misc --action=change || true\n";
+    }
+
+    private static bool MatchesPrivilegedFailure(
+        ProcessRunResult run,
+        int exitCode,
+        string token
+    )
+    {
+        return run.ExitCode == exitCode
+               && run.StandardError.Contains(token, StringComparison.Ordinal);
+    }
+
+    private static SetupResult ForeignConfigRefusal(string path, string detailKey)
+    {
+        return new SetupResult(
+            false,
+            Loc.Instance.GetString("TextInsertion.YdotoolForeignConfigRefused", path),
+            Loc.Instance[detailKey]
+        );
+    }
+
+    private static SetupResult SymlinkRefusal(string path)
+    {
+        return new SetupResult(
+            false,
+            Loc.Instance.GetString("TextInsertion.YdotoolSymlinkRefused", path),
+            Loc.Instance["TextInsertion.YdotoolSymlinkRefusedDetail"]
+        );
     }
 
     /// <summary>

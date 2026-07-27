@@ -430,4 +430,75 @@ public sealed class SnippetServiceTests : IDisposable
         var freshService = new SnippetService(_filePath);
         Assert.Equal("Neu", freshService.Snippets[0].Tags);
     }
+
+    [Fact]
+    public void AddSnippet_WhenSaveFails_ThrowsWithoutChangingCacheFileOrEvent()
+    {
+        const string originalJson =
+            "[{\"Id\":\"old\",\"Trigger\":\"old\",\"Replacement\":\"Keep this\",\"IsEnabled\":true}]";
+        using var failurePath = new AtomicWriteFailureTestPath(originalJson);
+        var sut = new SnippetService(failurePath.FilePath);
+        var original = Assert.Single(sut.Snippets);
+        var before = File.ReadAllBytes(failurePath.FilePath);
+        var eventFired = false;
+        sut.SnippetsChanged += () => eventFired = true;
+
+        Assert.ThrowsAny<Exception>(() =>
+            sut.AddSnippet(
+                new Snippet
+                {
+                    Id = "new",
+                    Trigger = "new",
+                    Replacement = "Do not persist"
+                }
+            )
+        );
+
+        Assert.Equal(original, Assert.Single(sut.Snippets));
+        Assert.False(eventFired);
+        Assert.Equal(before, File.ReadAllBytes(failurePath.FilePath));
+        Assert.Empty(failurePath.TemporaryFiles);
+    }
+
+    [Fact]
+    public void ImportFromJson_WhenSaveFails_ThrowsWithoutChangingCacheFileOrEvent()
+    {
+        const string originalJson =
+            "[{\"Id\":\"old\",\"Trigger\":\"old\",\"Replacement\":\"Keep this\",\"IsEnabled\":true}]";
+        const string importedJson =
+            "[{\"Id\":\"imported\",\"Trigger\":\"new\",\"Replacement\":\"Do not persist\",\"IsEnabled\":true}]";
+        using var failurePath = new AtomicWriteFailureTestPath(originalJson);
+        var sut = new SnippetService(failurePath.FilePath);
+        var original = Assert.Single(sut.Snippets);
+        var before = File.ReadAllBytes(failurePath.FilePath);
+        var eventFired = false;
+        sut.SnippetsChanged += () => eventFired = true;
+
+        Assert.ThrowsAny<Exception>(() => sut.ImportFromJson(importedJson));
+
+        Assert.Equal(original, Assert.Single(sut.Snippets));
+        Assert.False(eventFired);
+        Assert.Equal(before, File.ReadAllBytes(failurePath.FilePath));
+        Assert.Empty(failurePath.TemporaryFiles);
+    }
+
+    [Fact]
+    public void ApplySnippets_WhenUsageSaveFails_DoesNotThrowAndUpdatesCache()
+    {
+        const string originalJson =
+            "[{\"Id\":\"old\",\"Trigger\":\"old\",\"Replacement\":\"Expanded\",\"IsEnabled\":true}]";
+        using var failurePath = new AtomicWriteFailureTestPath(originalJson);
+        var sut = new SnippetService(failurePath.FilePath);
+        _ = Assert.Single(sut.Snippets);
+        var before = File.ReadAllBytes(failurePath.FilePath);
+
+        var exception = Record.Exception(() => sut.ApplySnippets("old"));
+
+        Assert.Null(exception);
+        var updated = Assert.Single(sut.Snippets);
+        Assert.Equal(1, updated.UsageCount);
+        Assert.NotNull(updated.LastUsedAt);
+        Assert.Equal(before, File.ReadAllBytes(failurePath.FilePath));
+        Assert.Empty(failurePath.TemporaryFiles);
+    }
 }

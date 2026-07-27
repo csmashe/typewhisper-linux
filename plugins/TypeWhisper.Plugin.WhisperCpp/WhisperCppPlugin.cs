@@ -12,6 +12,13 @@ using Whisper.net.LibraryLoader;
 
 namespace TypeWhisper.Plugin.WhisperCpp;
 
+internal sealed record WhisperCppTranscriptionSegment(
+    string Text,
+    string? Language,
+    TimeSpan End,
+    float NoSpeechProbability
+);
+
 public sealed class WhisperCppPlugin
     : ITypeWhisperPlugin,
         ITranscriptionEnginePlugin,
@@ -778,49 +785,74 @@ public sealed class WhisperCppPlugin
             await using var processor = builder.Build();
             await using var audioStream = new MemoryStream(wavAudio, writable: false);
 
-            var text = new StringBuilder();
-            string? detectedLanguage = null;
-            double durationSeconds = 0;
-            float? noSpeechProbability = null;
-
-            await foreach (var segment in processor.ProcessAsync(audioStream, ct))
+            async IAsyncEnumerable<WhisperCppTranscriptionSegment> GetSegmentsAsync()
             {
-                if (
-                    string.IsNullOrWhiteSpace(detectedLanguage)
-                    && !string.IsNullOrWhiteSpace(segment.Language)
-                )
-                    detectedLanguage = segment.Language;
-
-                durationSeconds = Math.Max(durationSeconds, segment.End.TotalSeconds);
-                noSpeechProbability = segment.NoSpeechProbability;
-
-                // whisper.cpp returns every segment, including ones it has
-                // flagged as silence. Skip those so training-bias phrases like
-                // "Thank you." don't leak into the output during silent gaps.
-                if (segment.NoSpeechProbability > threshold)
-                    continue;
-
-                var segmentText = segment.Text.Trim();
-                if (segmentText.Length > 0)
+                await foreach (var segment in processor.ProcessAsync(audioStream, ct))
                 {
-                    if (text.Length > 0)
-                        text.Append(' ');
-
-                    text.Append(segmentText);
+                    yield return new WhisperCppTranscriptionSegment(
+                        segment.Text,
+                        segment.Language,
+                        segment.End,
+                        segment.NoSpeechProbability
+                    );
                 }
             }
 
-            return new PluginTranscriptionResult(
-                text.ToString().Trim(),
-                detectedLanguage,
-                durationSeconds,
-                noSpeechProbability
-            );
+            return await AccumulateSegmentsAsync(GetSegmentsAsync(), threshold);
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    internal static async Task<PluginTranscriptionResult> AccumulateSegmentsAsync(
+        IAsyncEnumerable<WhisperCppTranscriptionSegment> segments,
+        float threshold
+    )
+    {
+        var text = new StringBuilder();
+        string? detectedLanguage = null;
+        double durationSeconds = 0;
+        float? noSpeechProbability = null;
+
+        await foreach (var segment in segments)
+        {
+            if (
+                string.IsNullOrWhiteSpace(detectedLanguage)
+                && !string.IsNullOrWhiteSpace(segment.Language)
+            )
+                detectedLanguage = segment.Language;
+
+            durationSeconds = Math.Max(durationSeconds, segment.End.TotalSeconds);
+
+            // Min, so downstream silence checks trigger only when ALL segments are silent.
+            noSpeechProbability = noSpeechProbability is null
+                ? segment.NoSpeechProbability
+                : Math.Min(noSpeechProbability.Value, segment.NoSpeechProbability);
+
+            // whisper.cpp returns every segment, including ones it has
+            // flagged as silence. Skip those so training-bias phrases like
+            // "Thank you." don't leak into the output during silent gaps.
+            if (segment.NoSpeechProbability > threshold)
+                continue;
+
+            var segmentText = segment.Text.Trim();
+            if (segmentText.Length > 0)
+            {
+                if (text.Length > 0)
+                    text.Append(' ');
+
+                text.Append(segmentText);
+            }
+        }
+
+        return new PluginTranscriptionResult(
+            text.ToString().Trim(),
+            detectedLanguage,
+            durationSeconds,
+            noSpeechProbability
+        );
     }
 
     public async Task UnloadModelAsync()

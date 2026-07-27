@@ -359,36 +359,7 @@ public sealed partial class HistoryService : IHistoryService
         }
 
         var json = JsonSerializer.Serialize(records, s_jsonOptions);
-
-        // Atomic write via temp file so a mid-write crash can't truncate history.
-        var tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            File.WriteAllText(tempPath, json);
-            if (File.Exists(_filePath))
-            {
-                File.Replace(tempPath, _filePath, null);
-            }
-            else
-            {
-                File.Move(tempPath, _filePath);
-            }
-        }
-        catch
-        {
-            if (!File.Exists(tempPath))
-            {
-                throw;
-            }
-
-            try { File.Delete(tempPath); }
-            catch
-            {
-                /* best effort */
-            }
-
-            throw;
-        }
+        AtomicFileWrite.WriteAllText(_filePath, json);
     }
 
     private static void PreserveBrokenFile(string path)

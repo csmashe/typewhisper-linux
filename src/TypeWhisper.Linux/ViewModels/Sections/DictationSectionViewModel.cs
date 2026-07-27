@@ -6,6 +6,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
@@ -17,6 +18,8 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 // ReSharper disable UnusedParameterInPartialMethod
 public partial class DictationSectionViewModel : ObservableObject
 {
+    // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym (a + 11 letters + y) mirroring the org.a11y.Bus service name; ReSharper's camelCase splitter mis-reads "11y" and wants the non-standard "a11YBus".
+    private readonly IAccessibilityBusActivation _a11yBus;
     private readonly AudioRecordingService _audio;
     private readonly SystemCommandAvailabilityService _commands;
     private readonly DictationOrchestrator _dictation;
@@ -55,6 +58,37 @@ public partial class DictationSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _autoAddDictionaryCorrections;
+
+    [ObservableProperty]
+    private bool _targetAppCorrectionLearningEnabled;
+
+    // Reflects org.a11y.Status.IsEnabled on the session bus. Drives which of the
+    // accessibility-bridge buttons (enable vs remove) is shown.
+    [ObservableProperty]
+    private bool _accessibilityBridgeActivated;
+
+    // Set once the flag has been successfully read from the session bus; until then neither
+    // bridge button is offered (a toggle on an unreadable bus could only fail).
+    private bool _accessibilityBridgeStateKnown;
+
+    // Monotonic token for bridge-state refreshes. Async bus reads can complete out of order
+    // (multiple refreshes overlap on startup and around a toggle), so each refresh captures the
+    // generation it started with and applies its result only if newer than the last one applied.
+    private int _accessibilityBridgeRefreshGeneration;
+
+    // Highest refresh generation whose read actually landed. Advanced only when a value is
+    // applied, so a newer read that fails (null) cannot suppress an older read that succeeded.
+    private int _accessibilityBridgeAppliedGeneration;
+
+    [ObservableProperty]
+    private string _accessibilityBridgeStatus = "";
+
+    // Ownership of the bridge flag (did TypeWhisper turn it on?) lives in persisted settings
+    // (AppSettings.AccessibilityBridgeEnabledByApp) so the Remove button survives app
+    // restarts — the flag itself is dconf-backed on GNOME and outlives the session, so a
+    // session-only memory would strand users with no in-app undo. Removal is still never
+    // offered for a flag some other tool (screen reader) enabled: only a flip WE made while
+    // it read as off records ownership.
 
     [ObservableProperty]
     private bool _autoPaste;
@@ -176,7 +210,9 @@ public partial class DictationSectionViewModel : ObservableObject
         AudioRecordingService audio,
         ISettingsService settings,
         PluginManager pluginManager,
-        SystemCommandAvailabilityService commands
+        SystemCommandAvailabilityService commands,
+        // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym mirroring org.a11y.Bus; ReSharper's camelCase splitter mis-reads "11y".
+        IAccessibilityBusActivation a11yBus
     )
     {
         _dictation = dictation;
@@ -185,6 +221,7 @@ public partial class DictationSectionViewModel : ObservableObject
         _settings = settings;
         _pluginManager = pluginManager;
         _commands = commands;
+        _a11yBus = a11yBus;
         // Unload the active local model before moving its files so the source
         // path isn't held open during migration.
         _modelStorage = new LocalModelStorageService(_settings, () => _models.UnloadModel());
@@ -230,6 +267,10 @@ public partial class DictationSectionViewModel : ObservableObject
         RefreshModels();
         RefreshDevices();
         RefreshFromSettings(_settings.Current);
+
+        // Read the current accessibility-bridge flag so the enable/remove button reflects
+        // reality on first paint.
+        _ = RefreshAccessibilityBridgeStateAsync();
     }
 
     public ObservableCollection<DictationModelOption> ModelOptions { get; } = [];
@@ -302,6 +343,21 @@ public partial class DictationSectionViewModel : ObservableObject
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string SoundFeedbackUnavailableReason =>
         Loc.Instance["Dictation.AudioPlayerUnavailable"];
+
+    // Most desktops (GNOME through 50, Hyprland/wlroots) leave the session accessibility
+    // flag off, and Chromium/Electron and Qt apps won't expose their text to correction
+    // learning until it's on. Offer the enable button only when the feature is on, the flag
+    // was positively read as off (never on systems where it can't be read — the click would
+    // just fail), and offer removal only when WE turned it on this session — the flag is
+    // session-global, so a screen reader or other tool may have enabled it and we must never
+    // present a button that disables their accessibility.
+    public bool ShowAccessibilityBridgeSetup =>
+        _accessibilityBridgeStateKnown
+        && TargetAppCorrectionLearningEnabled
+        && !AccessibilityBridgeActivated;
+
+    public bool ShowAccessibilityBridgeRemove =>
+        AccessibilityBridgeActivated && _settings.Current.AccessibilityBridgeEnabledByApp;
 
     public bool CanDeleteSelectedModel =>
         SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId);
@@ -677,6 +733,7 @@ public partial class DictationSectionViewModel : ObservableObject
             AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is not null;
         AutoPaste = settings.AutoPaste;
         AutoAddDictionaryCorrections = settings.AutoAddDictionaryCorrections;
+        TargetAppCorrectionLearningEnabled = settings.TargetAppCorrectionLearningEnabled;
         LiveTranscriptionEnabled = settings.LiveTranscriptionEnabled;
         OnlineAsrBatchLiveTranscriptionEnabled = settings.OnlineAsrBatchLiveTranscriptionEnabled;
         LiveTranscriptionStreamingEnabled = settings.LiveTranscriptionStreamingEnabled;
@@ -705,6 +762,9 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedNewInsertionStrategyOption));
         OnPropertyChanged(nameof(SelectedAccelerationOption));
         OnPropertyChanged(nameof(AccelerationStatusText));
+        // Remove-button visibility reads AccessibilityBridgeEnabledByApp from settings, so a
+        // reload (e.g. backup restore) must re-notify it or the button can go stale.
+        OnPropertyChanged(nameof(ShowAccessibilityBridgeRemove));
         RefreshModelState();
     }
 
@@ -1349,6 +1409,131 @@ public partial class DictationSectionViewModel : ObservableObject
     partial void OnAutoAddDictionaryCorrectionsChanged(bool value)
     {
         _settings.Save(_settings.Current with { AutoAddDictionaryCorrections = value });
+    }
+
+    partial void OnTargetAppCorrectionLearningEnabledChanged(bool value)
+    {
+        _settings.Save(_settings.Current with { TargetAppCorrectionLearningEnabled = value });
+        OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
+        // Re-read the live flag when the feature is switched on so the enable button appears
+        // if the bridge isn't active yet.
+        if (value)
+        {
+            _ = RefreshAccessibilityBridgeStateAsync();
+        }
+    }
+
+    partial void OnAccessibilityBridgeActivatedChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
+        OnPropertyChanged(nameof(ShowAccessibilityBridgeRemove));
+    }
+
+    // Turns the session-bus accessibility bridge on so Electron/Chromium/Qt apps expose their
+    // text to correction learning. An already-running target app must be restarted to pick it
+    // up, which the status message calls out.
+    [RelayCommand]
+    private Task EnableAccessibilityBridge()
+    {
+        return ToggleAccessibilityBridgeAsync(true);
+    }
+
+    [RelayCommand]
+    private Task RemoveAccessibilityBridge()
+    {
+        return ToggleAccessibilityBridgeAsync(false);
+    }
+
+    private async Task ToggleAccessibilityBridgeAsync(bool enable)
+    {
+        bool ok;
+        if (enable)
+        {
+            // Flip the bridge on only when we can confirm it is currently off. AccessibilityBridgeActivated
+            // is read asynchronously and defaults to false, so the Enable button can be showing over a
+            // bridge a screen reader already turned on — blindly re-writing would re-assert persistent
+            // global accessibility flags we won't offer a Remove for, leaving no in-app undo. So we no-op
+            // an already-on bridge, fail an indeterminate read, and claim ownership only on a flip we made.
+            var current = await _a11yBus.IsActivatedAsync();
+            if (current == false)
+            {
+                ok = await _a11yBus.SetActivatedAsync(true);
+                if (ok)
+                {
+                    _settings.Save(
+                        _settings.Current with { AccessibilityBridgeEnabledByApp = true }
+                    );
+                }
+            }
+            else
+            {
+                ok = current == true;
+            }
+        }
+        else
+        {
+            // Ownership only proves TypeWhisper originally enabled the flag — a screen
+            // reader (Orca) may have started SINCE and rely on session accessibility staying
+            // on. Refuse the removal while ScreenReaderEnabled reads true, and fail closed
+            // on an indeterminate read (an unreadable bus would fail the remove write too).
+            if (await _a11yBus.IsScreenReaderActiveAsync() != false)
+            {
+                await RefreshAccessibilityBridgeStateAsync();
+                AccessibilityBridgeStatus = Loc.Instance[
+                    "Dictation.A11yBridgeRemoveBlockedScreenReader"
+                ];
+                return;
+            }
+
+            ok = await _a11yBus.SetActivatedAsync(false);
+            if (ok)
+            {
+                // A successful remove always clears ownership. See ShowAccessibilityBridgeRemove
+                // for why this gates the button.
+                _settings.Save(
+                    _settings.Current with { AccessibilityBridgeEnabledByApp = false }
+                );
+            }
+        }
+
+        await RefreshAccessibilityBridgeStateAsync();
+        OnPropertyChanged(nameof(ShowAccessibilityBridgeRemove));
+        AccessibilityBridgeStatus = ok
+            ? Loc.Instance[
+                enable ? "Dictation.A11yBridgeEnabledStatus" : "Dictation.A11yBridgeRemovedStatus"
+            ]
+            : Loc.Instance["Dictation.A11yBridgeActionFailed"];
+    }
+
+    private async Task RefreshAccessibilityBridgeStateAsync()
+    {
+        var generation = ++_accessibilityBridgeRefreshGeneration;
+        var activated = await _a11yBus.IsActivatedAsync();
+
+        // A null read (bus timeout / transient failure) applies nothing, so it must not
+        // invalidate another refresh's valid result — arbitration is on the newest *applied*
+        // value below, never on the newest *started* request.
+        if (activated is not { } value)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            // Drop this result only if a newer refresh has already applied one; a slower older
+            // read still lands when the newer read failed and posted nothing.
+            if (generation <= _accessibilityBridgeAppliedGeneration)
+            {
+                return;
+            }
+
+            _accessibilityBridgeAppliedGeneration = generation;
+            _accessibilityBridgeStateKnown = true;
+            AccessibilityBridgeActivated = value;
+            // The activated setter only notifies on a change; the state-known flip alone
+            // (false -> false read) must still reveal the setup panel.
+            OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
+        });
     }
 
     partial void OnLiveTranscriptionEnabledChanged(bool value)

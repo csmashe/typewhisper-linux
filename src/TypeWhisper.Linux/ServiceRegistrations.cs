@@ -64,7 +64,7 @@ internal static class ServiceRegistrations
 
         // Plugin subsystem
         services.AddSingleton<PluginEventBus>();
-        services.AddSingleton<PluginLoader>();
+        services.AddSingleton(new PluginLoader(TypeWhisperEnvironment.PluginDataPath));
         services.AddSingleton<PluginManager>();
         services.AddSingleton<PluginRegistryService>();
         services.AddSingleton<ModelManagerService>();
@@ -80,6 +80,21 @@ internal static class ServiceRegistrations
         services.AddSingleton<IActiveWindowProvider, GnomeShellActiveWindowProvider>();
         services.AddSingleton<IActiveWindowProvider, XdotoolActiveWindowProvider>();
         services.AddSingleton<AtSpiUrlExtractor>();
+        // Event-driven AT-SPI client + silent target-app correction learning
+        // (Wispr-Flow-style). The client holds one a11y-bus connection open; the
+        // learning service arms a tracking window after each qualifying insertion.
+        services.AddSingleton<AtSpiEventClient>();
+        services.AddSingleton<IAtSpiEventClient>(sp => sp.GetRequiredService<AtSpiEventClient>());
+        // Event-driven paste confirmation for TextInsertionService's clipboard restore.
+        // Read-only over the AT-SPI client: it never starts the listeners itself, so the
+        // insertion path is unchanged unless correction learning already turned them on.
+        services.AddSingleton<IPasteConfirmationSource, AtSpiPasteConfirmation>();
+        services.AddSingleton<TargetAppCorrectionLearningService>();
+        // Toggles the session-bus accessibility flag (org.a11y.Status.IsEnabled) that
+        // Chromium/Electron/Qt apps gate their accessibility tree on; most desktops leave it
+        // off by default. Surfaced as a button in the Dictation settings when target-app
+        // correction learning is enabled and the flag reads as off.
+        services.AddSingleton<IAccessibilityBusActivation, AccessibilityBusActivationService>();
         services.AddSingleton<ActiveWindowService>();
         services.AddSingleton<IActiveWindowService>(sp =>
             sp.GetRequiredService<ActiveWindowService>()
@@ -100,12 +115,17 @@ internal static class ServiceRegistrations
         services.AddSingleton<AudioFileService>();
         services.AddSingleton<IFileTranscriptionProcessor, FileTranscriptionProcessor>();
         services.AddSingleton<AudioPlaybackService>();
-        services.AddSingleton<SessionAudioFileService>();
+        services.AddSingleton(
+            new SessionAudioFileService(TypeWhisperEnvironment.AudioPath)
+        );
         services.AddSingleton<SoundFeedbackService>();
         services.AddSingleton<SpeechFeedbackService>();
         // The concrete backends are intentionally NOT registered: BackendSelector
         // mints fresh instances per Resolve() (they're disposed on backend switch,
         // so a shared singleton would be reused after disposal).
+        // The logind monitor is process-scoped and each fresh evdev backend owns only
+        // its event subscription; the DI container tears down the shared D-Bus matches.
+        services.AddSingleton<ISessionActivityMonitor, LogindSessionActivityMonitor>();
         services.AddSingleton<BackendSelector>();
         services.AddSingleton<HotkeyService>();
 
@@ -115,7 +135,11 @@ internal static class ServiceRegistrations
         services.AddSingleton<IDeShortcutWriter, HyprlandShortcutWriter>();
         services.AddSingleton<IDeShortcutWriter, SwayShortcutWriter>();
 
-        services.AddSingleton<TextInsertionService>();
+        services.AddSingleton(sp => new TextInsertionService(
+            sp.GetRequiredService<IErrorLogService>(),
+            sp.GetRequiredService<SystemCommandAvailabilityService>(),
+            sp.GetRequiredService<IPasteConfirmationSource>()
+        ));
         services.AddSingleton<YdotoolSetupHelper>();
         services.AddSingleton<InputAccessSetupHelper>();
         services.AddSingleton<BrowserAccessibilitySetupHelper>();
@@ -173,10 +197,17 @@ internal static class ServiceRegistrations
 
         // Tiling WM recording indicator (desktop notification instead of overlay; no-op on DEs).
         services.AddSingleton<RecordingNotificationService>();
+        // Tiling WM learned-corrections feedback: same suppressed-overlay situation as above,
+        // so the "Learned X → Y" toast + Undo is delivered as a desktop notification instead.
+        services.AddSingleton<LearnedCorrectionsNotificationService>();
+        // Desktop-environment learned-corrections feedback: a dedicated toast window placed
+        // beside the corrected element (inert on tiling WMs, which use the notification above).
+        services.AddSingleton<LearnedCorrectionsToastController>();
 
         // Avalonia windows
         services.AddSingleton<MainWindow>();
         services.AddSingleton<DictationOverlayWindow>();
+        services.AddSingleton<LearnedCorrectionToastWindow>();
         services.AddTransient<PromptPaletteWindow>();
         services.AddTransient<RecentTranscriptionsPaletteWindow>();
         services.AddTransient<WelcomeWizard>();

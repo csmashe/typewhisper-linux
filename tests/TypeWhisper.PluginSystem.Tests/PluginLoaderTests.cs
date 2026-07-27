@@ -1,31 +1,28 @@
 using System.Text.Json;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.Tests;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
 public sealed class PluginLoaderTests : IDisposable
 {
-    private readonly PluginLoader _loader = new();
+    private readonly PluginLoader _loader;
     private readonly string _tempDir;
 
     public PluginLoaderTests()
     {
-        _tempDir = Path.Join(
-            Path.GetTempPath(),
-            "TypeWhisperTests_" + Guid.NewGuid().ToString("N")
+        _tempDir = TestPaths.CreateTempDirectory(
+            "TypeWhisper.PluginLoaderTests"
         );
-        Directory.CreateDirectory(_tempDir);
+        _loader = new PluginLoader(Path.Join(_tempDir, "PluginData"));
     }
 
     public void Dispose()
     {
         try
         {
-            if (Directory.Exists(_tempDir))
-            {
-                Directory.Delete(_tempDir, true);
-            }
+            TestPaths.DeleteDirectory(_tempDir);
         }
         catch
         {

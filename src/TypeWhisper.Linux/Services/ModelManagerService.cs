@@ -464,6 +464,20 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             changed = true;
         }
 
+        var migratedFileOverride = MigrateOverrideModelId(current.FileTranscriptionModelOverride);
+        if (migratedFileOverride != current.FileTranscriptionModelOverride)
+        {
+            current = current with { FileTranscriptionModelOverride = migratedFileOverride };
+            changed = true;
+        }
+
+        var migratedWatchOverride = MigrateOverrideModelId(current.WatchFolderModelOverride);
+        if (migratedWatchOverride != current.WatchFolderModelOverride)
+        {
+            current = current with { WatchFolderModelOverride = migratedWatchOverride };
+            changed = true;
+        }
+
         if (changed)
         {
             _settings.Save(current);
@@ -482,6 +496,23 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 "com.typewhisper.sherpa-onnx",
                 "canary-180m-flash"
             ),
+            "plugin:com.typewhisper.voxtral:mistral-whisper" =>
+                GetPluginModelId("com.typewhisper.voxtral", "voxtral-mini-latest"),
+            _ => modelId
+        };
+    }
+
+    /// <summary>
+    ///     Unlike the global selection, overrides are (engine, model) pairs, so only
+    ///     fully-qualified legacy IDs are rewritten: a bare "mistral-whisper" may belong
+    ///     to a different engine (e.g. an OpenAI-compatible custom model).
+    /// </summary>
+    private static string? MigrateOverrideModelId(string? modelId)
+    {
+        return modelId switch
+        {
+            "plugin:com.typewhisper.voxtral:mistral-whisper" =>
+                GetPluginModelId("com.typewhisper.voxtral", "voxtral-mini-latest"),
             _ => modelId
         };
     }

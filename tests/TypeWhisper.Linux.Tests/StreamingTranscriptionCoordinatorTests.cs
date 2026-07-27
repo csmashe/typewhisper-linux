@@ -309,24 +309,251 @@ public sealed class StreamingTranscriptionCoordinatorTests
     }
 
     [Fact]
-    public async Task FinalizeAsync_SessionFinalizeTimeoutIsNotAFault()
+    public async Task FinalizeAsync_SenderDrainTimeout_WithEarlierFinal_ThrowsWithoutConcurrentFinalize()
     {
-        // OperationCanceledException from the FinalizeSessionTimeoutMs bound
-        // is a bounded wait, not a session fault — coordinator must swallow
-        // it and return the snapshot, matching the existing sender-task
-        // timeout behavior.
         var session = new FakeStreamingSession();
-        session.OnFinalize = async ct => await Task.Delay(Timeout.Infinite, ct);
+        var sendEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSend = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        session.OnSendAudio = async _ =>
+        {
+            sendEntered.TrySetResult();
+            await releaseSend.Task;
+        };
+        var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
+
+        var coord = new StreamingTranscriptionCoordinator(
+            plugin,
+            null,
+            1,
+            (_, _) => { },
+            _ => { },
+            finalizeSenderTimeout: TimeSpan.FromMilliseconds(100)
+        );
+
+        // ReSharper disable once RedundantAssignment
+        // Initializer is required for definite assignment: observed is read at the
+        // Assert below (outside the try) but only assigned inside it.
+        Exception? observed = null;
+        try
+        {
+            await coord.StartAsync(CancellationToken.None);
+            session.RaiseFinal("earlier final");
+            coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
+            await sendEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+            observed = await Record.ExceptionAsync(
+                () => coord.FinalizeAsync(CancellationToken.None));
+        }
+        finally
+        {
+            releaseSend.TrySetResult();
+            await coord.DisposeAsync();
+        }
+
+        var timeout = Assert.IsType<TimeoutException>(observed);
+        Assert.Contains("sender-drain deadline", timeout.Message);
+        Assert.True(coord.HasFinalText, "The timeout path must reject even a nonempty snapshot.");
+        Assert.False(coord.Faulted);
+        Assert.Equal(0, session.FinalizeCallCount);
+        Assert.False(session.FinalizeObservedDuringSend);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_StuckSenderAndBlockedDispose_BoundedByDeadline()
+    {
+        // After FinalizeAsync times out a sender that ignores cancellation, the
+        // orchestrator awaits DisposeAsync before the complete-WAV batch fallback.
+        // A never-draining sender AND a blocked provider DisposeAsync must still
+        // let teardown finish within the deadline. Neither blocked task is
+        // released before dispose.
+        var session = new FakeStreamingSession();
+        var sendEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var neverReleased = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        session.OnSendAudio = async _ =>
+        {
+            sendEntered.TrySetResult();
+            await neverReleased.Task;
+        };
+        session.OnDispose = () => neverReleased.Task;
+        var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
+
+        var timeout = TimeSpan.FromMilliseconds(100);
+        var coord = new StreamingTranscriptionCoordinator(
+            plugin,
+            null,
+            1,
+            (_, _) => { },
+            _ => { },
+            finalizeSenderTimeout: timeout,
+            finalizeSessionTimeout: timeout
+        );
+
+        try
+        {
+            await coord.StartAsync(CancellationToken.None);
+            session.RaiseFinal("earlier final");
+            coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
+            await sendEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+            _ = await Record.ExceptionAsync(
+                () => coord.FinalizeAsync(CancellationToken.None));
+
+            // The stuck sender already set _skipSessionFinalize, so DisposeAsync
+            // must neither re-wait the sender for a full deadline nor block on the
+            // provider's non-returning DisposeAsync. The bound absorbs one
+            // dispose-timeout plus scheduling slack, well under a regression's ~4s.
+            var sw = Stopwatch.StartNew();
+            await coord.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+            sw.Stop();
+            Assert.True(sw.ElapsedMilliseconds < 1000,
+                $"DisposeAsync must be bounded when sender and dispose block; took {sw.ElapsedMilliseconds} ms");
+        }
+        finally
+        {
+            neverReleased.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_SenderFaultDuringDrain_UsesExistingFaultSemantics()
+    {
+        var session = new FakeStreamingSession();
+        var sendEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSend = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        session.OnSendAudio = async _ =>
+        {
+            sendEntered.TrySetResult();
+            await releaseSend.Task;
+            throw new HttpRequestException("sender failed while draining");
+        };
+        var faultTcs = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, null, 1, (_, _) => { }, ex => faultTcs.TrySetResult(ex));
 
         await coord.StartAsync(CancellationToken.None);
+        session.RaiseFinal("earlier final");
         coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
+        await sendEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
-        var text = await coord.FinalizeAsync(CancellationToken.None);
-        Assert.Equal(string.Empty, text);
+        var finalizeTask = coord.FinalizeAsync(CancellationToken.None);
+        releaseSend.TrySetResult();
+
+        var text = await finalizeTask;
+        var fault = await faultTcs.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal("earlier final", text);
+        Assert.IsType<HttpRequestException>(fault);
+        Assert.True(coord.Faulted);
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_SessionFinalizeTimeout_WithEarlierFinal_Throws()
+    {
+        var session = new FakeStreamingSession();
+        var releaseFinalize = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        // Deliberately ignore the token: the coordinator's hard wait must still
+        // reject the partial transcript once the session-finalize deadline expires.
+        session.OnFinalize = _ => releaseFinalize.Task;
+        var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
+
+        var coord = new StreamingTranscriptionCoordinator(
+            plugin,
+            null,
+            1,
+            (_, _) => { },
+            _ => { },
+            finalizeSessionTimeout: TimeSpan.FromMilliseconds(100)
+        );
+
+        // ReSharper disable once RedundantAssignment
+        // Initializer is required for definite assignment: observed is read at the
+        // Assert below (outside the try) but only assigned inside it.
+        Exception? observed = null;
+        try
+        {
+            await coord.StartAsync(CancellationToken.None);
+            session.RaiseFinal("earlier final");
+
+            observed = await Record.ExceptionAsync(
+                () => coord.FinalizeAsync(CancellationToken.None));
+        }
+        finally
+        {
+            releaseFinalize.TrySetResult();
+            await coord.DisposeAsync();
+        }
+
+        var timeout = Assert.IsType<TimeoutException>(observed);
+        Assert.Contains("session-finalize deadline", timeout.Message);
+        Assert.True(coord.HasFinalText, "The timeout path must reject even a nonempty snapshot.");
+        Assert.False(coord.Faulted);
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_SessionFinalizeDeadline_CancellationHonoringPlugin_StillThrows()
+    {
+        // Race regression: the bundled provider sessions (Soniox, Speechmatics,
+        // Gladia, xAI) honor the cancellation token and return NORMALLY the instant
+        // the session-finalize deadline cancels them. If the coordinator trusted the
+        // WhenAny winner, that normal completion would look like clean success and
+        // admit a truncated transcript. The deadline must win regardless.
+        var session = new FakeStreamingSession();
+        var deadlineReached = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        session.OnFinalize = async ct =>
+        {
+            try
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                // Swallow like the real provider sessions do: return normally.
+            }
+
+            deadlineReached.TrySetResult();
+        };
+        var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
+
+        var coord = new StreamingTranscriptionCoordinator(
+            plugin,
+            null,
+            1,
+            (_, _) => { },
+            _ => { },
+            finalizeSessionTimeout: TimeSpan.FromMilliseconds(100)
+        );
+
+        // ReSharper disable once RedundantAssignment
+        // Initializer is required for definite assignment: observed is read at the
+        // Assert below (outside the try) but only assigned inside it.
+        Exception? observed = null;
+        try
+        {
+            await coord.StartAsync(CancellationToken.None);
+            session.RaiseFinal("earlier final");
+
+            observed = await Record.ExceptionAsync(
+                () => coord.FinalizeAsync(CancellationToken.None));
+        }
+        finally
+        {
+            await coord.DisposeAsync();
+        }
+
+        var timeout = Assert.IsType<TimeoutException>(observed);
+        Assert.Contains("session-finalize deadline", timeout.Message);
+        Assert.True(coord.HasFinalText, "A deadline-cancelled finalize must not admit the partial snapshot.");
         Assert.False(coord.Faulted);
     }
 
@@ -434,6 +661,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
 
         var result = await coord.FinalizeAsync(CancellationToken.None);
         Assert.Equal("hello\nworld", result);
+        Assert.False(coord.Faulted);
     }
 
     [Fact]
@@ -515,7 +743,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
     }
 
     [Fact]
-    public async Task FinalizeAsync_HonorsCallerCancellation()
+    public async Task FinalizeAsync_CallerCancellationDuringSessionFinalize_ReturnsSnapshotWithoutFault()
     {
         // Regression: caller-supplied ct must collapse each phase's wait — sender
         // drain, session.FinalizeAsync, and the grace window — instead of forcing
@@ -523,24 +751,30 @@ public sealed class StreamingTranscriptionCoordinatorTests
         // aborted shutdown needs to tear down quickly.
         var session = new FakeStreamingSession();
         // session.FinalizeAsync honors ct: blocks until ct fires.
-        session.OnFinalize = ct => Task.Delay(Timeout.Infinite, ct);
+        var finalizeCalls = 0;
+        session.OnFinalize = ct => Interlocked.Increment(ref finalizeCalls) == 1
+            ? Task.Delay(Timeout.Infinite, ct)
+            : Task.CompletedTask;
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
             plugin, null, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
+        session.RaiseFinal("earlier final");
 
         using var cts = new CancellationTokenSource();
         cts.CancelAfter(100);
 
         var sw = Stopwatch.StartNew();
-        await coord.FinalizeAsync(cts.Token);
+        var result = await coord.FinalizeAsync(cts.Token);
         sw.Stop();
 
         // Without ct propagation this would block ~2s (sessionTimeout) + 500ms grace.
         Assert.True(sw.ElapsedMilliseconds < 1000,
             $"FinalizeAsync should honor caller's cancellation; took {sw.ElapsedMilliseconds} ms");
+        Assert.Equal("earlier final", result);
+        Assert.False(coord.Faulted);
     }
 
     [Fact]
@@ -791,7 +1025,15 @@ public sealed class StreamingTranscriptionCoordinatorTests
         private readonly SemaphoreSlim _sendConcurrencyGuard = new(1, 1);
         public Func<byte[], Task>? OnSendAudio;
         public Func<CancellationToken, Task>? OnFinalize;
+        public Func<Task>? OnDispose;
         public bool Disposed;
+        private int _finalizeCallCount;
+        private int _finalizeObservedDuringSend;
+        private int _sendInFlight;
+
+        public int FinalizeCallCount => Volatile.Read(ref _finalizeCallCount);
+        public bool FinalizeObservedDuringSend =>
+            Volatile.Read(ref _finalizeObservedDuringSend) == 1;
 
         public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
         {
@@ -802,18 +1044,28 @@ public sealed class StreamingTranscriptionCoordinatorTests
             }
             try
             {
+                Interlocked.Increment(ref _sendInFlight);
                 var copy = pcm16.ToArray();
                 lock (SentChunks) SentChunks.Add(copy);
                 if (OnSendAudio is not null) await OnSendAudio(copy);
             }
             finally
             {
+                Interlocked.Decrement(ref _sendInFlight);
                 _sendConcurrencyGuard.Release();
             }
         }
 
-        public Task FinalizeAsync(CancellationToken ct) =>
-            OnFinalize?.Invoke(ct) ?? Task.CompletedTask;
+        public Task FinalizeAsync(CancellationToken ct)
+        {
+            Interlocked.Increment(ref _finalizeCallCount);
+            if (Volatile.Read(ref _sendInFlight) > 0)
+            {
+                Volatile.Write(ref _finalizeObservedDuringSend, 1);
+            }
+
+            return OnFinalize?.Invoke(ct) ?? Task.CompletedTask;
+        }
 
         public void RaisePartial(string text) =>
             TranscriptReceived?.Invoke(new StreamingTranscriptEvent(text, false));
@@ -821,10 +1073,10 @@ public sealed class StreamingTranscriptionCoordinatorTests
         public void RaiseFinal(string text) =>
             TranscriptReceived?.Invoke(new StreamingTranscriptEvent(text, true));
 
-        public ValueTask DisposeAsync()
+        public async ValueTask DisposeAsync()
         {
             Disposed = true;
-            return ValueTask.CompletedTask;
+            if (OnDispose is not null) await OnDispose();
         }
     }
 

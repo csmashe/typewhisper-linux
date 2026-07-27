@@ -20,9 +20,11 @@
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Claude\TypeWhisper.Plugin.Claude.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Cohere\TypeWhisper.Plugin.Cohere.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.ElevenLabs\TypeWhisper.Plugin.ElevenLabs.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.FileMemory\TypeWhisper.Plugin.FileMemory.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Fireworks\TypeWhisper.Plugin.Fireworks.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Gemini\TypeWhisper.Plugin.Gemini.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Gladia\TypeWhisper.Plugin.Gladia.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.GoogleCloudStt\TypeWhisper.Plugin.GoogleCloudStt.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Groq\TypeWhisper.Plugin.Groq.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenAi\TypeWhisper.Plugin.OpenAi.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenAiCompatible\TypeWhisper.Plugin.OpenAiCompatible.csproj"/>
@@ -45,9 +47,14 @@
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Speechmatics\TypeWhisper.Plugin.Speechmatics.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.WhisperCpp\TypeWhisper.Plugin.WhisperCpp.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.SupertonicTts\TypeWhisper.Plugin.SupertonicTts.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Voxtral\TypeWhisper.Plugin.Voxtral.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Webhook\TypeWhisper.Plugin.Webhook.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Xai\TypeWhisper.Plugin.Xai.csproj"/>
         <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj"/>
         <ProjectReference Include="..\..\src\TypeWhisper.Linux\TypeWhisper.Linux.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Compile Include="../TestPaths.cs" Link="TestPaths.cs"/>
     </ItemGroup>
 </Project>

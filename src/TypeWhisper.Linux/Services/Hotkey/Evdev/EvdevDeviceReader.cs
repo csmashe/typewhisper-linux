@@ -9,13 +9,11 @@ namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 ///     <see cref="FileShare.ReadWrite" /> so the kernel keeps delivering to
 ///     every other reader on the same node.
 /// </summary>
-internal sealed class EvdevDeviceReader : IAsyncDisposable
+internal sealed class EvdevDeviceReader : IEvdevDeviceReader
 {
-    public delegate void KeyEventHandler(string devicePath, int linuxKeyCode, bool pressed);
-
     private readonly CancellationTokenSource _cts = new();
     private readonly Action<string, Exception> _onFailure;
-    private readonly KeyEventHandler _onKeyEvent;
+    private readonly Action<string, int, bool> _onKeyEvent;
 
     private int _disposed;
     private Task? _readLoop;
@@ -23,7 +21,7 @@ internal sealed class EvdevDeviceReader : IAsyncDisposable
 
     public EvdevDeviceReader(
         string path,
-        KeyEventHandler onKeyEvent,
+        Action<string, int, bool> onKeyEvent,
         Action<string, Exception> onFailure
     )
     {
@@ -41,6 +39,24 @@ internal sealed class EvdevDeviceReader : IAsyncDisposable
             return;
         }
 
+        // Dispose synchronously as a best-effort close before awaiting cancellation. On Unix this
+        // stream has a blocking fd, and an in-flight read holds a SafeFileHandle reference, so the
+        // actual close is deferred until the next device event releases that reference. Lock and
+        // session safety instead comes from EvdevGlobalShortcutBackend.OnKeyEvent: its cached and
+        // live input checks, lifecycle generation, and reader-membership guard drop stale events.
+        // The generation check alone rejects the old reader after the device is reattached on unlock.
+        var stream = Interlocked.Exchange(ref _stream, null);
+        try
+        {
+            // ReSharper disable once MethodHasAsyncOverload -- synchronous Dispose is deliberate:
+            // it closes promptly when no read is in flight; DisposeAsync would defer even that.
+            stream?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[EvdevReader] Dispose stream threw: {ex.Message}");
+        }
+
         try
         {
             await _cts.CancelAsync();
@@ -50,22 +66,13 @@ internal sealed class EvdevDeviceReader : IAsyncDisposable
             /* already disposed */
         }
 
-        try
-        {
-            if (_stream is not null)
-            {
-                await _stream.DisposeAsync().ConfigureAwait(false);
-            }
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[EvdevReader] Dispose stream threw: {ex.Message}");
-        }
-
         if (_readLoop is not null)
         {
             try
             {
+                // A parked blocking read is expected to outlive this best-effort wait. Its next
+                // event is dropped by the backend; cancellation then exits the loop, releasing the
+                // final handle reference so the fd closes.
                 await _readLoop.WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
             }
             catch

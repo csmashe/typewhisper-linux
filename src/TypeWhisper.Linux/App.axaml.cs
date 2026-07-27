@@ -29,9 +29,16 @@ public class App : Application
 
     /// <summary>
     ///     Tray-menu Exit flips this; Close-button handler checks it to decide
-    ///     whether to actually quit or hide to the tray.
+    ///     whether to actually quit or hide to the tray. Access is UI-thread-only.
     /// </summary>
     private static bool ShuttingDown { get; set; }
+
+    /// <summary>
+    ///     While teardown runs, the Closing handler cancels closes (see the race
+    ///     note there); ShutdownAndExitAsync sets this just before its final
+    ///     desktop.Shutdown(). Access is UI-thread-only.
+    /// </summary>
+    private static bool ClosePermitted { get; set; }
 
     public override void Initialize()
     {
@@ -78,10 +85,19 @@ public class App : Application
 
             // Close-button: CloseToTray+tray-available → hide; otherwise quit.
             // Hiding with no tray (stock GNOME) would strand the user with no UI.
-            main.Closing += (_, e) =>
+            main.Closing += (sender, e) =>
             {
                 if (ShuttingDown)
                 {
+                    // Teardown underway: keep canceling closes until ShutdownAndExitAsync
+                    // sets ClosePermitted — on a tiling WM (overlay suppressed) this is the
+                    // last window, so an early close would trip OnLastWindowClose and
+                    // dispose DI while TearDownAsync is still running.
+                    if (!ClosePermitted)
+                    {
+                        e.Cancel = true;
+                    }
+
                     return;
                 }
 
@@ -92,11 +108,9 @@ public class App : Application
                 }
                 else
                 {
+                    e.Cancel = true;
                     ShuttingDown = true;
-                    TearDownAsync(services).GetAwaiter().GetResult();
-                    // Must call Shutdown explicitly: DictationOverlayWindow is always-shown
-                    // (backlog #16 Opacity workaround) so OnLastWindowClose never fires.
-                    desktop.Shutdown();
+                    _ = ShutdownAndExitAsync(services, desktop);
                 }
             };
 
@@ -109,9 +123,13 @@ public class App : Application
             };
             tray.ExitRequested += (_, _) =>
             {
+                if (ShuttingDown)
+                {
+                    return;
+                }
+
                 ShuttingDown = true;
-                TearDownAsync(services).GetAwaiter().GetResult();
-                desktop.Shutdown();
+                _ = ShutdownAndExitAsync(services, desktop);
             };
 
             var dictation = services.GetRequiredService<DictationOrchestrator>();
@@ -133,11 +151,10 @@ public class App : Application
             {
                 Console.Error.WriteLine("TypeWhisper is already running.");
                 ShuttingDown = true;
-                TearDownAsync(services).GetAwaiter().GetResult();
                 // Window never opens on this path, so notify startup complete to clear
                 // the GNOME launch cursor (main.Opened won't fire).
                 LinuxStartupNotification.NotifyComplete();
-                desktop.Shutdown();
+                _ = ShutdownAndExitAsync(services, desktop);
                 return;
             }
             catch (Exception ex)
@@ -151,6 +168,22 @@ public class App : Application
             var overlay = services.GetRequiredService<DictationOverlayWindow>();
             overlay.Initialize();
             BootTrace.Stage("overlay.Initialize");
+
+            // Surface silently-learned target-app corrections with an Undo. On desktop
+            // environments this is a dedicated toast window placed beside the corrected element;
+            // on tiling WMs the overlay/toast is the wrong primitive, so it goes out as a desktop
+            // notification instead — each surface subscribes only in its own environment, so
+            // exactly one owns CorrectionsLearned and it's never double-shown. Both marshal the
+            // background commit event onto the UI thread internally. When the feature is off the
+            // event never fires — neither starts anything on its own.
+            if (DesktopDetector.UsesNotificationRecordingIndicator())
+            {
+                services.GetRequiredService<LearnedCorrectionsNotificationService>().Initialize();
+            }
+            else
+            {
+                services.GetRequiredService<LearnedCorrectionsToastController>().Initialize();
+            }
 
             // On tiling window managers the overlay is suppressed (it's the wrong
             // primitive there); recording is surfaced via a desktop notification
@@ -167,7 +200,19 @@ public class App : Application
             // Seed the disabled auto-cleanup prompt + profile on a first install,
             // before the hotkey snapshots below read them (both are disabled, so
             // their Ctrl+Alt+E binding stays inert until the user enables them).
-            promptActions.SeedFirstRunDefaultsIfMissing();
+            try
+            {
+                promptActions.SeedFirstRunDefaultsIfMissing();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[App] Failed to seed first-run prompt actions: {ex}");
+                services.GetRequiredService<IErrorLogService>().AddEntry(
+                    $"Could not seed first-run prompt actions: {ex.Message}",
+                    ErrorCategory.Prompt
+                );
+            }
+
             hotkey.SetPromptActionHotkeys(
                 HotkeyService.ParsePromptActionHotkeys(promptActions.Actions)
             );
@@ -406,6 +451,27 @@ public class App : Application
             static t => Debug.WriteLine($"[App] Background hotkey action failed: {t.Exception}"),
             TaskContinuationOptions.OnlyOnFaulted);
 
+    private static async Task ShutdownAndExitAsync(
+        IServiceProvider services,
+        IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        try
+        {
+            await TearDownAsync(services);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Teardown failed during shutdown: {ex.Message}");
+        }
+        finally
+        {
+            ClosePermitted = true;
+            // Must call Shutdown explicitly: DictationOverlayWindow is always-shown
+            // (backlog #16 Opacity workaround) so OnLastWindowClose never fires.
+            desktop.Shutdown();
+        }
+    }
+
     /// <summary>
     ///     Best-effort ordered shutdown of services that own native threads.
     ///     Runs before desktop.Shutdown() so the Host isn't left racing
@@ -415,9 +481,7 @@ public class App : Application
     {
         try
         {
-            // Resolve to ensure the service is constructed before clearing its captures.
-            _ = services.GetService<SessionAudioFileService>();
-            SessionAudioFileService.DeleteSessionCaptures();
+            services.GetService<SessionAudioFileService>()?.DeleteSessionCaptures();
         }
         catch (Exception ex)
         {
@@ -469,7 +533,7 @@ public class App : Application
             var models = services.GetService<ModelManagerService>();
             if (models is not null)
             {
-                await models.UnloadModelAsync();
+                await models.UnloadModelAsync().ConfigureAwait(false);
             }
         }
         catch (Exception ex)
@@ -529,10 +593,6 @@ public class App : Application
         {
             Debug.WriteLine($"[App] Dictation session result store dispose failed: {ex.Message}");
         }
-
-        // Placeholder: keeps the method async for future awaitable teardown
-        // steps without forcing callers to change the signature.
-        await Task.CompletedTask;
     }
 
     private static async Task BootstrapAsync(IServiceProvider services)
@@ -544,8 +604,7 @@ public class App : Application
         await history.EnsureLoadedAsync();
         BootTrace.Stage("history.EnsureLoadedAsync");
 
-        _ = services.GetRequiredService<SessionAudioFileService>();
-        SessionAudioFileService.DeleteSessionCaptures();
+        services.GetRequiredService<SessionAudioFileService>().DeleteSessionCaptures();
 
         var audio = services.GetRequiredService<AudioRecordingService>();
         ApplyConfiguredMicrophone(audio, settings);

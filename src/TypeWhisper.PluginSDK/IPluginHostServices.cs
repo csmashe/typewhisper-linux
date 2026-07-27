@@ -41,15 +41,23 @@ public interface IPluginHostServices
     IPluginLocalization Localization { get; }
 
     /// <summary>Stores a secret value using the platform secret store, scoped to the plugin.</summary>
+    /// <remarks>
+    ///     Throws an <see cref="IOException"/> or similar exception if persistence fails; the
+    ///     mutation is not applied when it throws.
+    /// </remarks>
     // ReSharper disable once UnusedMemberInSuper.Global
     Task StoreSecretAsync(string key, string value);
 
     /// <summary>Loads a previously stored secret, or null if not found.</summary>
-    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedMemberInSuper.Global
     Task<string?> LoadSecretAsync(string key);
 
     /// <summary>Deletes a stored secret.</summary>
-    // ReSharper disable once UnusedMember.Global
+    /// <remarks>
+    ///     Throws an <see cref="IOException"/> or similar exception if persistence fails; the
+    ///     mutation is not applied when it throws.
+    /// </remarks>
+    // ReSharper disable once UnusedMemberInSuper.Global
     Task DeleteSecretAsync(string key);
 
     /// <summary>Gets a per-plugin setting value deserialized from JSON, or default if not found.</summary>
@@ -57,6 +65,10 @@ public interface IPluginHostServices
     T? GetSetting<T>(string key);
 
     /// <summary>Sets a per-plugin setting value (serialized to JSON).</summary>
+    /// <remarks>
+    ///     Throws an <see cref="IOException"/> or similar exception if persistence fails; the
+    ///     mutation is not applied when it throws.
+    /// </remarks>
     // ReSharper disable once UnusedMemberInSuper.Global
     void SetSetting<T>(string key, T value);
 

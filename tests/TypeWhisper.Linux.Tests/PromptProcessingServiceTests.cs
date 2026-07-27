@@ -7,31 +7,22 @@ using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.Tests;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
 
 public sealed class PromptProcessingServiceTests : IDisposable
 {
-    private readonly string _tempDir;
-
-    public PromptProcessingServiceTests()
-    {
-        _tempDir = Path.Join(
-            Path.GetTempPath(),
-            "TypeWhisper.Linux.PromptTests_" + Guid.NewGuid().ToString("N")
-        );
-        Directory.CreateDirectory(_tempDir);
-    }
+    private readonly string _tempDir = TestPaths.CreateTempDirectory(
+        "TypeWhisper.PromptProcessingServiceTests"
+    );
 
     public void Dispose()
     {
         try
         {
-            if (Directory.Exists(_tempDir))
-            {
-                Directory.Delete(_tempDir, true);
-            }
+            TestPaths.DeleteDirectory(_tempDir);
         }
         catch
         {
@@ -428,7 +419,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
         return settings;
     }
 
-    private static PluginManager CreatePluginManager(
+    private PluginManager CreatePluginManager(
         IReadOnlyList<ILlmProviderPlugin> llmProviders,
         IReadOnlyList<LoadedPlugin> loadedPlugins
     )
@@ -440,11 +431,12 @@ public sealed class PromptProcessingServiceTests : IDisposable
         profiles.SetupGet(service => service.Profiles).Returns([]);
 
         var pluginManager = new PluginManager(
-            new PluginLoader(),
+            new PluginLoader(Path.Join(_tempDir, "PluginData")),
             new PluginEventBus(),
             activeWindow.Object,
             profiles.Object,
-            settings.Object
+            settings.Object,
+            []
         );
 
         SetPrivateField(pluginManager, "_llmProviders", llmProviders.ToList());

@@ -59,6 +59,10 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     private bool _isWatchFolderRunning;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(WatchFolderStatusText))]
+    private string? _watchFolderStartError;
+
+    [ObservableProperty]
     private string _resultText = "";
 
     [ObservableProperty]
@@ -114,7 +118,12 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
 
         if (WatchFolderAutoStart && HasWatchFolderPath)
         {
-            StartWatchFolder();
+            // Defer past DI graph construction so a stale/hung watch path
+            // cannot prevent the main window from being created.
+            Dispatcher.UIThread.Post(
+                TryStartWatchFolder,
+                DispatcherPriority.Background
+            );
         }
     }
 
@@ -154,6 +163,14 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
                 return Loc.Instance.GetString(
                     "FileTranscription.ProcessingFile",
                     CurrentlyProcessingWatchFile
+                );
+            }
+
+            if (!IsWatchFolderRunning && WatchFolderStartError is not null)
+            {
+                return Loc.Instance.GetString(
+                    "FileTranscription.WatchFolderStartFailed",
+                    WatchFolderStartError
                 );
             }
 
@@ -517,14 +534,14 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
             return;
         }
 
-        _watchFolder.Start(BuildWatchFolderOptions(), TranscribeWatchFolderFileAsync);
-        SyncWatchFolderState();
+        TryStartWatchFolder();
     }
 
     [RelayCommand]
     private void StopWatchFolder()
     {
         _watchFolder.Stop();
+        WatchFolderStartError = null;
         SyncWatchFolderState();
     }
 
@@ -592,6 +609,25 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         );
     }
 
+    private void TryStartWatchFolder()
+    {
+        try
+        {
+            _watchFolder.Start(BuildWatchFolderOptions(), TranscribeWatchFolderFileAsync);
+            WatchFolderStartError = null;
+        }
+        catch (Exception ex)
+        {
+            // Stale mount, revoked access, invalid path, or dir replaced by a file —
+            // leave the watcher stopped and surface a repairable status.
+            WatchFolderStartError = ex.Message;
+        }
+        finally
+        {
+            SyncWatchFolderState();
+        }
+    }
+
     private void RestartWatchFolderIfRunning()
     {
         if (!_watchFolder.IsRunning || string.IsNullOrWhiteSpace(WatchFolderPath))
@@ -599,8 +635,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
             return;
         }
 
-        _watchFolder.Start(BuildWatchFolderOptions(), TranscribeWatchFolderFileAsync);
-        SyncWatchFolderState();
+        TryStartWatchFolder();
     }
 
     private void RefreshFromSettings(AppSettings settings)
@@ -637,6 +672,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
 
     partial void OnWatchFolderPathChanged(string? value)
     {
+        WatchFolderStartError = null;
         OnPropertyChanged(nameof(HasWatchFolderPath));
         SaveWatchFolderSettings(true);
     }

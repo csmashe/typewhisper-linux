@@ -18,6 +18,10 @@
     </ItemGroup>
 
     <ItemGroup>
+        <Compile Include="../TestPaths.cs" Link="TestPaths.cs"/>
+    </ItemGroup>
+
+    <ItemGroup>
         <!--
             Single, unambiguous copy of the shared downloader for its unit tests.
             Core.Tests references only TypeWhisper.Core (no plugin refs), so file-linking

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
@@ -27,6 +28,7 @@ public sealed class PluginHostServices : IPluginHostServices
     private readonly PluginLocalization _localization;
     private readonly Action? _onCapabilitiesChanged;
     private readonly string _pluginDataDirectory;
+    private readonly string _pluginDataRoot;
     private readonly ISettingsService? _settings;
     private readonly IErrorLogService? _errorLog;
     private readonly string _pluginErrorCategory;
@@ -37,6 +39,7 @@ public sealed class PluginHostServices : IPluginHostServices
     private readonly string _settingsFilePath;
     private readonly Lock _settingsLock = new();
 
+    private bool _loadFailed;
     private Dictionary<string, JsonElement>? _settingsCache;
 
     public PluginHostServices(
@@ -49,7 +52,8 @@ public sealed class PluginHostServices : IPluginHostServices
         Action? onCapabilitiesChanged = null,
         IErrorLogService? errorLog = null,
         string? errorCategory = null,
-        string? pluginDisplayName = null
+        string? pluginDisplayName = null,
+        string? pluginDataRoot = null
     )
     {
         _pluginId = pluginId;
@@ -63,7 +67,8 @@ public sealed class PluginHostServices : IPluginHostServices
         _pluginErrorCategory = string.IsNullOrWhiteSpace(errorCategory) ? ErrorCategory.Plugin : errorCategory;
         _pluginDisplayName = string.IsNullOrWhiteSpace(pluginDisplayName) ? pluginId : pluginDisplayName;
         _localization = new PluginLocalization(pluginDirectory);
-        _pluginDataDirectory = Path.Join(TypeWhisperEnvironment.PluginDataPath, pluginId);
+        _pluginDataRoot = pluginDataRoot ?? TypeWhisperEnvironment.PluginDataPath;
+        _pluginDataDirectory = Path.Join(_pluginDataRoot, pluginId);
         _settingsFilePath = Path.Join(_pluginDataDirectory, "settings.json");
     }
 
@@ -85,7 +90,11 @@ public sealed class PluginHostServices : IPluginHostServices
         {
             return _settings is null
                 ? PluginDataDirectory
-                : LocalModelStorageService.ResolveAvailablePluginAssetDirectory(_settings.Current, _pluginId);
+                : LocalModelStorageService.ResolveAvailablePluginAssetDirectory(
+                    _settings.Current,
+                    _pluginId,
+                    _pluginDataRoot
+                );
         }
     }
 
@@ -114,6 +123,9 @@ public sealed class PluginHostServices : IPluginHostServices
 
         try
         {
+            // _errorLog is readonly; _settingsLock guards _settingsCache/_loadFailed, not this,
+            // so reading it unlocked is race-free.
+            // ReSharper disable once InconsistentlySynchronizedField
             _errorLog?.AddEntry($"{_pluginDisplayName}: {message}", _pluginErrorCategory);
         }
         catch
@@ -133,9 +145,13 @@ public sealed class PluginHostServices : IPluginHostServices
         var encrypted = ApiKeyProtection.Encrypt(value);
         lock (_settingsLock)
         {
-            var settings = LoadSettings();
-            settings[$"{SecretPrefix}{key}"] = JsonSerializer.SerializeToElement(encrypted);
-            SaveSettings(settings);
+            var current = LoadSettings();
+            var next = new Dictionary<string, JsonElement>(current)
+            {
+                [$"{SecretPrefix}{key}"] = JsonSerializer.SerializeToElement(encrypted)
+            };
+            SaveSettings(next);
+            _settingsCache = next;
         }
 
         return Task.CompletedTask;
@@ -159,9 +175,22 @@ public sealed class PluginHostServices : IPluginHostServices
     {
         lock (_settingsLock)
         {
-            var settings = LoadSettings();
-            settings.Remove($"{SecretPrefix}{key}");
-            SaveSettings(settings);
+            var current = LoadSettings();
+            var next = new Dictionary<string, JsonElement>(current);
+            if (!next.Remove($"{SecretPrefix}{key}"))
+            {
+                if (_loadFailed)
+                {
+                    // The cache is empty only because the file could not be read; we cannot
+                    // conclude the secret is gone, so refuse rather than report a false success.
+                    ThrowRefusingToSave();
+                }
+
+                return Task.CompletedTask;
+            }
+
+            SaveSettings(next);
+            _settingsCache = next;
         }
 
         return Task.CompletedTask;
@@ -195,15 +224,19 @@ public sealed class PluginHostServices : IPluginHostServices
     {
         lock (_settingsLock)
         {
-            var settings = LoadSettings();
-            settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
-            SaveSettings(settings);
+            var current = LoadSettings();
+            var next = new Dictionary<string, JsonElement>(current)
+            {
+                [key] = JsonSerializer.SerializeToElement(value, s_jsonOptions)
+            };
+            SaveSettings(next);
+            _settingsCache = next;
         }
     }
 
     private Dictionary<string, JsonElement> LoadSettings()
     {
-        // C# Monitor is re-entrant for the same thread, so callers already holding
+        // System.Threading.Lock is re-entrant for the same thread, so callers already holding
         // _settingsLock (GetSetting, SetSetting, etc.) can call LoadSettings safely.
         lock (_settingsLock)
         {
@@ -212,25 +245,54 @@ public sealed class PluginHostServices : IPluginHostServices
                 return _settingsCache;
             }
 
-            if (File.Exists(_settingsFilePath))
+            string json;
+            try
             {
-                try
-                {
-                    var json = File.ReadAllText(_settingsFilePath);
-                    _settingsCache =
-                        JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
-                            json,
-                            s_jsonOptions
-                        ) ?? [];
-                }
-                catch (Exception ex)
-                {
-                    Trace.WriteLine($"[Plugin:{_pluginId}] Failed to load settings: {ex.Message}");
-                    _settingsCache = [];
-                }
+                json = File.ReadAllText(_settingsFilePath);
             }
-            else
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
+                // A genuinely absent file is an empty store, not a load failure.
+                _settingsCache = [];
+                return _settingsCache;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The file may exist but is unreadable (permissions, locked, transient I/O).
+                // Do not treat it as empty, or the next save would wipe the existing data.
+                Trace.WriteLine($"[Plugin:{_pluginId}] Failed to read settings: {ex.Message}");
+                AddSettingsError(
+                    $"Plugin '{_pluginDisplayName}' ({_pluginId}) settings could not be read; saves are disabled to protect the existing file: {ex.Message}"
+                );
+                _loadFailed = true;
+                _settingsCache = [];
+                return _settingsCache;
+            }
+
+            try
+            {
+                _settingsCache =
+                    JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                        json,
+                        s_jsonOptions
+                    ) ?? throw new JsonException("The settings file contained null JSON.");
+            }
+            catch (JsonException ex)
+            {
+                Trace.WriteLine($"[Plugin:{_pluginId}] Failed to parse settings: {ex.Message}");
+                var brokenPath = PreserveBrokenFile(_settingsFilePath);
+                if (brokenPath is null && File.Exists(_settingsFilePath))
+                {
+                    // The corrupt original is still on disk; overwriting it would lose the only
+                    // copy, so disable saves until it is dealt with.
+                    _loadFailed = true;
+                }
+
+                AddSettingsError(
+                    brokenPath is null
+                        ? $"Plugin '{_pluginDisplayName}' ({_pluginId}) settings were corrupt, but the original file could not be preserved: {ex.Message}"
+                        : $"Plugin '{_pluginDisplayName}' ({_pluginId}) settings were corrupt and were preserved as '{brokenPath}': {ex.Message}"
+                );
                 _settingsCache = [];
             }
 
@@ -240,17 +302,76 @@ public sealed class PluginHostServices : IPluginHostServices
 
     private void SaveSettings(Dictionary<string, JsonElement> settings)
     {
+        if (_loadFailed)
+        {
+            ThrowRefusingToSave();
+        }
+
         try
         {
             Directory.CreateDirectory(_pluginDataDirectory);
             var json = JsonSerializer.Serialize(settings, s_jsonOptions);
-            // Non-atomic write — acceptable for small, infrequently written plugin settings;
-            // a future pass could adopt temp-file + rename like the main config.
-            File.WriteAllText(_settingsFilePath, json);
+            AtomicFileWrite.WriteAllText(_settingsFilePath, json);
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"[Plugin:{_pluginId}] Failed to save settings: {ex.Message}");
+            AddSettingsError(
+                $"Plugin '{_pluginDisplayName}' ({_pluginId}) settings could not be saved: {ex.Message}"
+            );
+            throw;
+        }
+    }
+
+    [DoesNotReturn]
+    private void ThrowRefusingToSave()
+    {
+        Trace.WriteLine(
+            $"[Plugin:{_pluginId}] Skipping save to '{_settingsFilePath}': previous load failed and overwriting would discard existing data."
+        );
+        AddSettingsError(
+            $"Plugin '{_pluginDisplayName}' ({_pluginId}) settings were not saved because the existing file could not be read."
+        );
+        throw new IOException(
+            $"Refusing to overwrite '{_settingsFilePath}' because the previous load failed."
+        );
+    }
+
+    private void AddSettingsError(string message)
+    {
+        try
+        {
+            _errorLog?.AddEntry(message, _pluginErrorCategory);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[Plugin:{_pluginId}] Failed to add plugin settings error to the error log: {ex.Message}"
+            );
+        }
+    }
+
+    private static string? PreserveBrokenFile(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            var brokenPath =
+                $"{path}.broken-{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
+            File.Move(path, brokenPath);
+            Trace.WriteLine($"[PluginHostServices] Preserved unreadable file as {brokenPath}");
+            return brokenPath;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[PluginHostServices] Could not preserve unreadable file: {ex.Message}"
+            );
+            return null;
         }
     }
 }

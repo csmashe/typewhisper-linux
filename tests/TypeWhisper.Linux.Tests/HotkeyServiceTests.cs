@@ -11,7 +11,7 @@ public sealed class HotkeyServiceTests
     [Fact]
     public void TrySetHotkeyFromString_ParsesModifiersAndKeys()
     {
-        var hotkey = new HotkeyService();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
 
         var parsed = hotkey.TrySetHotkeyFromString("Ctrl+Shift+Space");
 
@@ -22,7 +22,7 @@ public sealed class HotkeyServiceTests
     [Fact]
     public void TrySetPromptPaletteHotkeyFromString_RejectsInvalidBinding()
     {
-        var hotkey = new HotkeyService();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
         hotkey.SetPromptPaletteHotkey(KeyCode.VcP, ModifierMask.LeftCtrl);
 
         var parsed = hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Nope");
@@ -636,7 +636,7 @@ public sealed class HotkeyServiceTests
         string input
     )
     {
-        var hotkey = new HotkeyService();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
 
         Assert.True(hotkey.TrySetHotkeyFromString(input));
         Assert.Equal(input, hotkey.CurrentHotkeyString);
@@ -649,7 +649,7 @@ public sealed class HotkeyServiceTests
         // single-modifier early-return path (which would silently absorb the
         // side prefix). It falls through to the chord loop, which can't
         // resolve "right alt" as a single token and rejects the input.
-        var hotkey = new HotkeyService();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
         hotkey.SetHotkey(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift);
 
         var parsed = hotkey.TrySetHotkeyFromString("Right Alt+R");
@@ -665,7 +665,7 @@ public sealed class HotkeyServiceTests
         // emitted ONLY when the binding has no other modifier flags. A
         // (VcRightAlt, Shift) chord must format unambiguously (not "Right
         // Alt", which would round-trip to (VcRightAlt, None)).
-        var hotkey = new HotkeyService();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
         hotkey.SetHotkey(KeyCode.VcRightAlt, ModifierMask.LeftShift);
 
         Assert.Equal("Shift+RightAlt", hotkey.CurrentHotkeyString);
@@ -817,160 +817,4 @@ public sealed class HotkeyServiceTests
         Assert.Equal("keeper", kept.ActionId);
     }
 
-    private sealed class TestShortcutBackend : IGlobalShortcutBackend
-    {
-        private readonly TaskCompletionSource _gate = new();
-        private int _pending;
-
-        public GlobalShortcutRegistrationResult NextResult { get; init; } =
-            new(
-                true,
-                "test",
-                null,
-                false,
-                null
-            );
-
-        public int RegisterCount { get; private set; }
-        public GlobalShortcutSet? LastSet { get; private set; }
-        public bool Disposed { get; private set; }
-
-        public string Id => "test";
-        public string DisplayName => "Test";
-        public bool SupportsPressRelease => true;
-        public bool IsGlobalScope => true;
-
-        public bool IsAvailable()
-        {
-            return true;
-        }
-
-        public event EventHandler? DictationToggleRequested
-        {
-            add { }
-            remove { }
-        }
-
-        public event EventHandler? DictationStartRequested
-        {
-            add { }
-            remove { }
-        }
-
-        public event EventHandler? DictationStopRequested
-        {
-            add { }
-            remove { }
-        }
-
-        public event EventHandler? PromptPaletteRequested
-        {
-            add { }
-            remove { }
-        }
-
-        public event EventHandler? TransformSelectionRequested
-        {
-            add { }
-            remove { }
-        }
-
-        public event EventHandler? RecentTranscriptionsRequested
-        {
-            add { }
-            remove { }
-        }
-
-        public event EventHandler? CopyLastTranscriptionRequested
-        {
-            add { }
-            remove { }
-        }
-
-        public event EventHandler? CancelRequested
-        {
-            add { }
-            remove { }
-        }
-
-        public event EventHandler<string>? PromptActionRequested;
-
-        public event EventHandler<string>? ProfileDictationToggleRequested;
-        public event EventHandler<string>? ProfileDictationStartRequested { add { } remove { } }
-
-        public event EventHandler? ProfileDictationStopRequested
-        {
-            add { }
-            remove { }
-        }
-
-        public event EventHandler<string>? ProfileTextProcessingRequested;
-
-        public event EventHandler<string>? Failed
-        {
-            add { }
-            remove { }
-        }
-
-        public void RaisePromptAction(string actionId)
-        {
-            PromptActionRequested?.Invoke(this, actionId);
-        }
-
-        public void RaiseProfileDictationToggle(string profileId)
-        {
-            ProfileDictationToggleRequested?.Invoke(this, profileId);
-        }
-
-        public void RaiseProfileTextProcessing(string profileId)
-        {
-            ProfileTextProcessingRequested?.Invoke(this, profileId);
-        }
-
-        public Task<GlobalShortcutRegistrationResult> RegisterAsync(
-            GlobalShortcutSet shortcuts,
-            CancellationToken ct
-        )
-        {
-            _gate.TrySetResult();
-            Interlocked.Increment(ref _pending);
-            RegisterCount++;
-            LastSet = shortcuts;
-            Interlocked.Decrement(ref _pending);
-            return Task.FromResult(NextResult);
-        }
-
-        public Task UnregisterAsync(CancellationToken ct)
-        {
-            return Task.CompletedTask;
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            Disposed = true;
-            return ValueTask.CompletedTask;
-        }
-
-        public async Task WaitUntilSettledAsync()
-        {
-            // Spin briefly to let the coordinator's chained continuations
-            // drain — they run on the thread-pool scheduler so a yield is
-            // enough in normal cases; a short timeout guards against hangs.
-            await Task.WhenAny(_gate.Task, Task.Delay(TimeSpan.FromSeconds(2)));
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-            while (DateTime.UtcNow < deadline)
-            {
-                if (Volatile.Read(ref _pending) == 0)
-                {
-                    await Task.Delay(20);
-                    if (Volatile.Read(ref _pending) == 0)
-                    {
-                        return;
-                    }
-                }
-
-                await Task.Delay(10);
-            }
-        }
-    }
 }

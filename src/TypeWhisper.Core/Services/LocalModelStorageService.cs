@@ -15,7 +15,7 @@ public sealed class LocalModelStorageService
     private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> s_pluginAssetEntries =
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
         {
-            ["com.typewhisper.whisper-cpp"] = ["Models"],
+            ["com.typewhisper.whisper-cpp"] = ["Models", "Runtimes"],
             ["com.typewhisper.sherpa-onnx"] = ["Models", "Runtimes"],
             ["com.typewhisper.gemma-local"] = ["Models"],
             ["com.typewhisper.supertonic-tts"] = ["Models"],
@@ -31,15 +31,24 @@ public sealed class LocalModelStorageService
 
     private readonly ISettingsService _settings;
     private readonly Action? _unloadActiveModels;
+    // ReSharper disable once ReplaceWithFieldKeyword -- assigned in the constructor, where the `field` keyword is inaccessible.
+    private readonly string _defaultModelStoragePath;
+    private readonly string _defaultPluginDataPath;
 
-    public LocalModelStorageService(ISettingsService settings, Action? unloadActiveModels = null)
+    public LocalModelStorageService(
+        ISettingsService settings,
+        Action? unloadActiveModels = null,
+        string? defaultModelStoragePath = null,
+        string? defaultPluginDataPath = null)
     {
         _settings = settings;
         _unloadActiveModels = unloadActiveModels;
+        _defaultModelStoragePath = defaultModelStoragePath ?? TypeWhisperEnvironment.ModelsPath;
+        _defaultPluginDataPath = defaultPluginDataPath ?? TypeWhisperEnvironment.PluginDataPath;
     }
 
     public string ResolvedModelStoragePath =>
-        LocalModelStoragePaths.ResolveModelStoragePath(_settings.Current);
+        LocalModelStoragePaths.ResolveModelStoragePath(_settings.Current, _defaultModelStoragePath);
 
     /// <summary>
     /// Resolves and validates the active local model storage path.
@@ -59,9 +68,14 @@ public sealed class LocalModelStorageService
     /// <summary>
     /// Resolves and validates the active plugin asset directory.
     /// </summary>
-    public static string ResolveAvailablePluginAssetDirectory(AppSettings? settings, string pluginId)
+    public static string ResolveAvailablePluginAssetDirectory(
+        AppSettings? settings,
+        string pluginId,
+        string? defaultPluginDataPath = null
+    )
     {
-        var directory = LocalModelStoragePaths.ResolvePluginAssetDirectory(settings, pluginId);
+        var directory =
+            LocalModelStoragePaths.ResolvePluginAssetDirectory(settings, pluginId, defaultPluginDataPath);
         if (settings is null
             || AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is null)
         {
@@ -81,11 +95,46 @@ public sealed class LocalModelStorageService
     {
         var targetRoot = PrepareWritableTarget(targetPath);
         var sourceRoot = ResolvedModelStoragePath;
+        var currentIsDefault =
+            AppSettings.NormalizeLocalModelStoragePath(_settings.Current.LocalModelStoragePath) is null;
+        var pluginAssetSourceRoot = currentIsDefault
+            ? _defaultPluginDataPath
+            : Path.Join(sourceRoot, LocalModelStoragePaths.PluginDataFolderName);
 
         if (PathsEqual(sourceRoot, targetRoot))
         {
+            // Even when the target is the current default models root, the sibling default
+            // plugin data must still move under <target>/PluginData — saving the setting alone
+            // would strand it. Once already custom, the asset roots coincide; nothing to move.
+            if (currentIsDefault)
+            {
+                _unloadActiveModels?.Invoke();
+                await Task.Run(() =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    MigratePluginAssets(pluginAssetSourceRoot, targetRoot, ct);
+                }, ct);
+            }
+
             _settings.Save(_settings.Current with { LocalModelStoragePath = targetRoot });
             return;
+        }
+
+        // Equality as well as nesting: the plugin-asset root is a sibling of the default models
+        // root, so selecting it verbatim slips past the source-equality and models-nesting guards
+        // and would migrate assets into a degenerate PluginData/PluginData tree.
+        if (PathsEqual(targetRoot, pluginAssetSourceRoot)
+            || IsNestedUnder(targetRoot, pluginAssetSourceRoot))
+        {
+            throw new LocalModelStorageUnavailableException(
+                LocalModelStorageUnavailableReason.NestedUnderCurrentFolder,
+                targetRoot,
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Target model storage folder '{0}' must not be, or be inside, the current plugin asset folder '{1}'.",
+                    targetRoot,
+                    pluginAssetSourceRoot),
+                currentPath: pluginAssetSourceRoot);
         }
 
         // A target nested under the source would make MigrateModelRootContents copy the
@@ -109,7 +158,7 @@ public sealed class LocalModelStorageService
         {
             ct.ThrowIfCancellationRequested();
             MigrateModelRootContents(sourceRoot, targetRoot, ct);
-            MigratePluginAssets(sourceRoot, targetRoot, ct);
+            MigratePluginAssets(pluginAssetSourceRoot, targetRoot, ct);
         }, ct);
 
         _settings.Save(_settings.Current with { LocalModelStoragePath = targetRoot });
@@ -189,7 +238,7 @@ public sealed class LocalModelStorageService
         }
     }
 
-    private static void MigratePluginAssets(string sourceRoot, string targetRoot, CancellationToken ct)
+    private static void MigratePluginAssets(string assetSourceRoot, string targetRoot, CancellationToken ct)
     {
         var pluginDataFolderName = SafeRelativeName(LocalModelStoragePaths.PluginDataFolderName, nameof(LocalModelStoragePaths.PluginDataFolderName));
 
@@ -197,7 +246,7 @@ public sealed class LocalModelStorageService
         {
             ct.ThrowIfCancellationRequested();
             var pluginFolderName = SafeLeafName(pluginId, nameof(pluginId));
-            var sourcePluginDir = Path.Join(sourceRoot, pluginDataFolderName, pluginFolderName);
+            var sourcePluginDir = Path.Join(assetSourceRoot, pluginFolderName);
             if (!Directory.Exists(sourcePluginDir))
                 continue;
 

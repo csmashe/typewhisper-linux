@@ -63,8 +63,9 @@ public sealed partial class SnippetService : ISnippetService
         EnsureCacheLoaded();
         lock (_gate)
         {
-            _cache.Add(snippet);
-            SaveToDisk();
+            var next = new List<Snippet>(_cache) { snippet };
+            SaveToDisk(next);
+            _cache = next;
         }
 
         SnippetsChanged?.Invoke();
@@ -73,7 +74,6 @@ public sealed partial class SnippetService : ISnippetService
     public void UpdateSnippet(Snippet snippet)
     {
         EnsureCacheLoaded();
-        bool changed;
         lock (_gate)
         {
             var idx = _cache.FindIndex(s => s.Id == snippet.Id);
@@ -82,21 +82,17 @@ public sealed partial class SnippetService : ISnippetService
                 return;
             }
 
-            _cache[idx] = snippet;
-            SaveToDisk();
-            changed = true;
+            var next = new List<Snippet>(_cache) { [idx] = snippet };
+            SaveToDisk(next);
+            _cache = next;
         }
 
-        if (changed)
-        {
-            SnippetsChanged?.Invoke();
-        }
+        SnippetsChanged?.Invoke();
     }
 
     public void DeleteSnippet(string id)
     {
         EnsureCacheLoaded();
-        bool changed;
         lock (_gate)
         {
             var idx = _cache.FindIndex(s => s.Id == id);
@@ -105,15 +101,13 @@ public sealed partial class SnippetService : ISnippetService
                 return;
             }
 
-            _cache.RemoveAt(idx);
-            SaveToDisk();
-            changed = true;
+            var next = new List<Snippet>(_cache);
+            next.RemoveAt(idx);
+            SaveToDisk(next);
+            _cache = next;
         }
 
-        if (changed)
-        {
-            SnippetsChanged?.Invoke();
-        }
+        SnippetsChanged?.Invoke();
     }
 
     public string ApplySnippets(
@@ -195,22 +189,24 @@ public sealed partial class SnippetService : ISnippetService
         var count = 0;
         lock (_gate)
         {
+            var next = new List<Snippet>(_cache);
             // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator
             foreach (var snippet in imported)
             {
-                if (_cache.Any(existing => SnippetIdentityEquals(existing, snippet)))
+                if (next.Any(existing => SnippetIdentityEquals(existing, snippet)))
                 {
                     continue;
                 }
 
                 var newSnippet = snippet with { Id = Guid.NewGuid().ToString() };
-                _cache.Add(newSnippet);
+                next.Add(newSnippet);
                 count++;
             }
 
             if (count > 0)
             {
-                SaveToDisk();
+                SaveToDisk(next);
+                _cache = next;
             }
         }
 
@@ -302,6 +298,7 @@ public sealed partial class SnippetService : ISnippetService
 
         lock (_gate)
         {
+            var next = new List<Snippet>(_cache);
             var changed = false;
             var now = DateTime.UtcNow;
             foreach (var (id, delta) in increments)
@@ -311,19 +308,36 @@ public sealed partial class SnippetService : ISnippetService
                     continue;
                 }
 
-                var idx = _cache.FindIndex(s => s.Id == id);
+                var idx = next.FindIndex(s => s.Id == id);
                 if (idx < 0)
                 {
                     continue;
                 }
 
-                _cache[idx] = _cache[idx] with { UsageCount = _cache[idx].UsageCount + delta, LastUsedAt = now };
+                next[idx] = next[idx] with
+                {
+                    UsageCount = next[idx].UsageCount + delta,
+                    LastUsedAt = now
+                };
                 changed = true;
             }
 
-            if (changed)
+            if (!changed)
             {
-                SaveToDisk();
+                return;
+            }
+
+            _cache = next;
+            try
+            {
+                SaveToDisk(next);
+            }
+            catch (Exception ex)
+            {
+                // Usage stats are best-effort because this runs on the dictation path.
+                Trace.WriteLine(
+                    $"[SnippetService] Could not persist usage counts to {_filePath}: {ex.Message}"
+                );
             }
         }
     }
@@ -365,7 +379,7 @@ public sealed partial class SnippetService : ISnippetService
         }
     }
 
-    private void SaveToDisk()
+    private void SaveToDisk(IReadOnlyList<Snippet> snippets)
     {
         try
         {
@@ -375,14 +389,15 @@ public sealed partial class SnippetService : ISnippetService
                 Directory.CreateDirectory(dir);
             }
 
-            var json = JsonSerializer.Serialize(_cache, SnippetJsonContext.Default.ListSnippet);
-            File.WriteAllText(_filePath, json);
+            var json = JsonSerializer.Serialize(snippets, SnippetJsonContext.Default.ListSnippet);
+            AtomicFileWrite.WriteAllText(_filePath, json);
         }
         catch (Exception ex)
         {
             Trace.WriteLine(
                 $"[SnippetService] Failed to save snippets to {_filePath}: {ex}"
             );
+            throw;
         }
     }
 

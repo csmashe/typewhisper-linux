@@ -150,35 +150,7 @@ public sealed class ErrorLogService : IErrorLogService
                 Directory.CreateDirectory(dir);
             }
 
-            // Atomic temp-file + replace so a crash mid-write can't corrupt error-log.json.
-            var tempPath = _logFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                File.WriteAllText(tempPath, json);
-                if (File.Exists(_logFilePath))
-                {
-                    File.Replace(tempPath, _logFilePath, null);
-                }
-                else
-                {
-                    File.Move(tempPath, _logFilePath);
-                }
-            }
-            catch
-            {
-                if (!File.Exists(tempPath))
-                {
-                    throw;
-                }
-
-                try { File.Delete(tempPath); }
-                catch
-                {
-                    /* best effort */
-                }
-
-                throw;
-            }
+            AtomicFileWrite.WriteAllText(_logFilePath, json);
         }
         catch
         {

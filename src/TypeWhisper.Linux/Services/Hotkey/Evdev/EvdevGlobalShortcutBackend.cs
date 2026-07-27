@@ -22,28 +22,88 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     // 30 s catches a late-plugged USB keyboard without hammering the kernel.
     private static readonly TimeSpan s_rescanInterval = TimeSpan.FromSeconds(30);
 
+    private readonly IEvdevKeyboardEnumerator _deviceEnumerator;
+    private readonly IEvdevDeviceReaderFactory _deviceReaderFactory;
     private readonly ShortcutDispatcher _dispatcher = new();
+    private readonly bool _enableDeviceMonitoring;
     private readonly Lock _lock = new();
-    private readonly Dictionary<string, EvdevDeviceReader> _readers = new();
+    private readonly bool _ownsSessionActivityMonitor;
+    private readonly Dictionary<string, IEvdevDeviceReader> _readers = new();
+    private readonly ISessionActivityMonitor _sessionActivityMonitor;
     private int _disposed;
 
     // Aggregated modifier state across all keyboards. evdev gives individual key
     // transitions; we maintain the mask via Interlocked.Or/And so concurrent
     // reader tasks can update bits without a read-modify-write race.
     private int _liveModifiersBits;
+    private long _lifecycleGeneration;
     private CancellationTokenSource? _rescanCts;
+    private bool _inputAllowed = true;
     private bool _started;
 
     private FileSystemWatcher? _watcher;
 
     public EvdevGlobalShortcutBackend()
+        : this(
+            new LogindSessionActivityMonitor(),
+            new EvdevKeyboardEnumerator(),
+            new EvdevDeviceReaderFactory(),
+            true,
+            true
+        )
     {
+    }
+
+    public EvdevGlobalShortcutBackend(ISessionActivityMonitor sessionActivityMonitor)
+        : this(
+            sessionActivityMonitor,
+            new EvdevKeyboardEnumerator(),
+            new EvdevDeviceReaderFactory(),
+            true,
+            false
+        )
+    {
+    }
+
+    internal EvdevGlobalShortcutBackend(
+        ISessionActivityMonitor sessionActivityMonitor,
+        IEvdevKeyboardEnumerator deviceEnumerator,
+        IEvdevDeviceReaderFactory deviceReaderFactory,
+        bool enableDeviceMonitoring = false
+    )
+        : this(
+            sessionActivityMonitor,
+            deviceEnumerator,
+            deviceReaderFactory,
+            enableDeviceMonitoring,
+            false
+        )
+    {
+    }
+
+    private EvdevGlobalShortcutBackend(
+        ISessionActivityMonitor sessionActivityMonitor,
+        IEvdevKeyboardEnumerator deviceEnumerator,
+        IEvdevDeviceReaderFactory deviceReaderFactory,
+        bool enableDeviceMonitoring,
+        bool ownsSessionActivityMonitor
+    )
+    {
+        _sessionActivityMonitor = sessionActivityMonitor;
+        _deviceEnumerator = deviceEnumerator;
+        _deviceReaderFactory = deviceReaderFactory;
+        _enableDeviceMonitoring = enableDeviceMonitoring;
+        _ownsSessionActivityMonitor = ownsSessionActivityMonitor;
+        _sessionActivityMonitor.InputAllowedChanged += OnInputAllowedChanged;
+
         _dispatcher.DictationToggleRequested += () =>
             DictationToggleRequested?.Invoke(this, EventArgs.Empty);
         _dispatcher.DictationStartRequested += () =>
             DictationStartRequested?.Invoke(this, EventArgs.Empty);
         _dispatcher.DictationStopRequested += () =>
             DictationStopRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.DictationDiscardRequested += () =>
+            DictationDiscardRequested?.Invoke(this, EventArgs.Empty);
         _dispatcher.PromptPaletteRequested += () =>
             PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
         _dispatcher.TransformSelectionRequested += () =>
@@ -73,6 +133,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     public event EventHandler? DictationToggleRequested;
     public event EventHandler? DictationStartRequested;
     public event EventHandler? DictationStopRequested;
+    public event EventHandler? DictationDiscardRequested;
     public event EventHandler? PromptPaletteRequested;
     public event EventHandler? TransformSelectionRequested;
     public event EventHandler? RecentTranscriptionsRequested;
@@ -92,25 +153,35 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         return InputDeviceAccessCheck.HasKeyboardAccess();
     }
 
-    public Task<GlobalShortcutRegistrationResult> RegisterAsync(
+    public async Task<GlobalShortcutRegistrationResult> RegisterAsync(
         GlobalShortcutSet shortcuts,
         CancellationToken ct
     )
     {
+        if (Volatile.Read(ref _disposed) == 1)
+        {
+            return new GlobalShortcutRegistrationResult(
+                false,
+                BackendId,
+                "evdev backend is disposed.",
+                false,
+                null
+            );
+        }
+
         _dispatcher.UpdateShortcuts(shortcuts);
+        await _sessionActivityMonitor.InitializeAsync(ct).ConfigureAwait(false);
 
         lock (_lock)
         {
             if (Volatile.Read(ref _disposed) == 1)
             {
-                return Task.FromResult(
-                    new GlobalShortcutRegistrationResult(
-                        false,
-                        BackendId,
-                        "evdev backend is disposed.",
-                        false,
-                        null
-                    )
+                return new GlobalShortcutRegistrationResult(
+                    false,
+                    BackendId,
+                    "evdev backend is disposed.",
+                    false,
+                    null
                 );
             }
 
@@ -118,34 +189,36 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             // duplicate the trailing success-result construction with no clean early exit.
             if (!_started)
             {
-                AttachAllDevices_NoLock();
+                _inputAllowed = _sessionActivityMonitor.IsInputAllowed;
+                _lifecycleGeneration++;
+                if (_inputAllowed)
+                {
+                    AttachAllDevices_NoLock(_lifecycleGeneration);
+                }
+
                 StartHotPlugWatcher_NoLock();
                 StartPeriodicRescan_NoLock();
                 _started = true;
 
-                if (_readers.Count == 0)
+                if (_inputAllowed && _readers.Count == 0)
                 {
-                    return Task.FromResult(
-                        new GlobalShortcutRegistrationResult(
-                            false,
-                            BackendId,
-                            Loc.Instance["Shortcuts.EvdevNoKeyboardAccess"],
-                            false,
-                            InputAccessSetupHelper.ManualInstallCommand()
-                        )
+                    return new GlobalShortcutRegistrationResult(
+                        false,
+                        BackendId,
+                        Loc.Instance["Shortcuts.EvdevNoKeyboardAccess"],
+                        false,
+                        InputAccessSetupHelper.ManualInstallCommand()
                     );
                 }
             }
         }
 
-        return Task.FromResult(
-            new GlobalShortcutRegistrationResult(
-                true,
-                BackendId,
-                null,
-                false,
-                null
-            )
+        return new GlobalShortcutRegistrationResult(
+            true,
+            BackendId,
+            null,
+            false,
+            null
         );
     }
 
@@ -162,17 +235,22 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             return;
         }
 
+        _sessionActivityMonitor.InputAllowedChanged -= OnInputAllowedChanged;
+
         FileSystemWatcher? watcher;
         CancellationTokenSource? rescan;
-        List<EvdevDeviceReader> readers;
+        List<IEvdevDeviceReader> readers;
         lock (_lock)
         {
+            _lifecycleGeneration++;
+            _inputAllowed = false;
             watcher = _watcher;
             _watcher = null;
             rescan = _rescanCts;
             _rescanCts = null;
             readers = _readers.Values.ToList();
             _readers.Clear();
+            ResetInputState_NoLock();
         }
 
         try
@@ -197,36 +275,50 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             }
         }
 
-        foreach (var r in readers)
+        await DisposeReadersAsync(readers).ConfigureAwait(false);
+
+        if (_ownsSessionActivityMonitor)
         {
             try
             {
-                await r.DisposeAsync().ConfigureAwait(false);
+                await _sessionActivityMonitor.DisposeAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[EvdevBackend] Reader dispose threw: {ex.Message}");
+                Trace.WriteLine(
+                    $"[EvdevBackend] Session activity monitor dispose threw: {ex.Message}"
+                );
             }
         }
     }
 
-    private void AttachAllDevices_NoLock()
+    private void AttachAllDevices_NoLock(long generation)
     {
-        foreach (var path in KeyboardDeviceDiscovery.EnumerateKeyboards())
+        foreach (var path in _deviceEnumerator.EnumerateKeyboards())
         {
-            TryAttach_NoLock(path);
+            TryAttach_NoLock(path, generation);
         }
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of a reader that failed to start; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and awaiting here would needlessly block the attach path.")]
-    private void TryAttach_NoLock(string path)
+    private void TryAttach_NoLock(string path, long generation)
     {
-        if (_readers.ContainsKey(path))
+        if (
+            !_inputAllowed
+            || generation != _lifecycleGeneration
+            || Volatile.Read(ref _disposed) == 1
+            || _readers.ContainsKey(path)
+        )
         {
             return;
         }
 
-        var reader = new EvdevDeviceReader(path, OnKeyEvent, OnReaderFailure);
+        var reader = _deviceReaderFactory.Create(
+            path,
+            (devicePath, linuxKeyCode, pressed) =>
+                OnKeyEvent(generation, devicePath, linuxKeyCode, pressed),
+            (devicePath, exception) => OnReaderFailure(generation, devicePath, exception)
+        );
         if (reader.TryStart())
         {
             _readers[path] = reader;
@@ -240,7 +332,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
 
     private void StartHotPlugWatcher_NoLock()
     {
-        if (_watcher is not null)
+        if (!_enableDeviceMonitoring || _watcher is not null)
         {
             return;
         }
@@ -268,7 +360,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
 
     private void StartPeriodicRescan_NoLock()
     {
-        if (_rescanCts is not null)
+        if (!_enableDeviceMonitoring || _rescanCts is not null)
         {
             return;
         }
@@ -312,12 +404,15 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of a removed reader; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and must not block this FileSystemWatcher callback.")]
     private void OnDeviceDeleted(object? sender, FileSystemEventArgs e)
     {
+        IEvdevDeviceReader? reader;
         lock (_lock)
         {
-            if (_readers.Remove(e.FullPath, out var reader))
-            {
-                _ = reader.DisposeAsync();
-            }
+            _readers.Remove(e.FullPath, out reader);
+        }
+
+        if (reader is not null)
+        {
+            _ = reader.DisposeAsync();
         }
     }
 
@@ -325,19 +420,21 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     private bool Rescan()
     {
         var added = false;
-        List<EvdevDeviceReader>? toDispose = null;
+        List<IEvdevDeviceReader>? toDispose = null;
         lock (_lock)
         {
-            if (Volatile.Read(ref _disposed) == 1)
+            if (Volatile.Read(ref _disposed) == 1 || !_inputAllowed)
             {
                 return false;
             }
+
+            var generation = _lifecycleGeneration;
 
             // Prune readers for paths that vanished — guards against FSW dropping Delete events under load.
             // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- loop mutates _readers and builds toDispose; a LINQ rewrite would obscure the side effects
             foreach (var existing in _readers.Keys.ToList())
             {
-                if (File.Exists(existing))
+                if (_deviceEnumerator.Exists(existing))
                 {
                     continue;
                 }
@@ -351,15 +448,15 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
                 toDispose.Add(stale);
             }
 
-            foreach (var path in KeyboardDeviceDiscovery.EnumerateKeyboards())
+            foreach (var path in _deviceEnumerator.EnumerateKeyboards())
             {
                 if (_readers.ContainsKey(path))
                 {
                     continue;
                 }
 
-                TryAttach_NoLock(path);
-                added = true;
+                TryAttach_NoLock(path, generation);
+                added = _readers.ContainsKey(path) || added;
             }
         }
 
@@ -376,57 +473,234 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         return added;
     }
 
-    private void OnKeyEvent(string devicePath, int linuxKeyCode, bool pressed)
+    private void OnKeyEvent(
+        long generation,
+        string devicePath,
+        int linuxKeyCode,
+        bool pressed
+    )
     {
-        // Update the aggregated modifier mask atomically so concurrent keyboards don't lose bits.
-        var modBit = LinuxKeyMap.ToModifier(linuxKeyCode);
-        if (modBit != ModifierMask.None)
+        KeyCode dispatchKey;
+        ModifierMask dispatchMods;
+        lock (_lock)
         {
-            var bitsInt = (int)modBit;
-            if (pressed)
+            // Reader callbacks can already be queued when a session transition closes the fd.
+            // Serialize the allowed/generation check with that transition so a stale callback
+            // cannot update state or dispatch a shortcut after lock handling has completed. Also
+            // consult the monitor directly: a callback can win this lock before OnInputAllowedChanged
+            // has flipped the cached _inputAllowed, so the cache alone can be stale-open.
+            if (
+                Volatile.Read(ref _disposed) == 1
+                || !_inputAllowed
+                || !_sessionActivityMonitor.IsInputAllowed
+                || generation != _lifecycleGeneration
+                || !_readers.ContainsKey(devicePath)
+            )
             {
-                Interlocked.Or(ref _liveModifiersBits, bitsInt);
+                return;
             }
-            else
+
+            // Deliberately no per-keyboard modifier refcounting; lock transitions reset the
+            // whole aggregate instead (ResetInputState_NoLock).
+            var modBit = LinuxKeyMap.ToModifier(linuxKeyCode);
+            if (modBit != ModifierMask.None)
             {
-                Interlocked.And(ref _liveModifiersBits, ~bitsInt);
+                var bitsInt = (int)modBit;
+                if (pressed)
+                {
+                    Interlocked.Or(ref _liveModifiersBits, bitsInt);
+                }
+                else
+                {
+                    Interlocked.And(ref _liveModifiersBits, ~bitsInt);
+                }
+                // Modifiers can themselves be the trigger key (e.g. RightCtrl bound to dictation),
+                // so fall through to the dispatcher.
             }
-            // Modifiers can themselves be the trigger key (e.g. RightCtrl bound to dictation),
-            // so fall through to the dispatcher.
+
+            var sharpHookKey = LinuxKeyMap.ToSharpHook(linuxKeyCode);
+            if (sharpHookKey is null)
+            {
+                return;
+            }
+
+            var mods = (ModifierMask)Volatile.Read(ref _liveModifiersBits);
+            // If the trigger key is itself a modifier, its bit will be set in mods on press.
+            // Mask it out so a "no other modifiers" binding like RightCtrl still matches.
+            if (modBit != ModifierMask.None)
+            {
+                mods &= ~modBit;
+            }
+
+            dispatchKey = sharpHookKey.Value;
+            dispatchMods = mods;
         }
 
-        var sharpHookKey = LinuxKeyMap.ToSharpHook(linuxKeyCode);
-        if (sharpHookKey is null)
+        // Dispatch OUTSIDE the backend lock. A shortcut handler runs synchronously up to its first
+        // await (e.g. StartAsync touches HotkeyService._lock); holding _lock across that would invert
+        // the lock order against a concurrent settings push (HotkeyService._lock → RegisterAsync →
+        // backend _lock), an AB/BA deadlock. The dispatcher serializes its own state internally.
+        //
+        // Re-check input allowance here: between releasing the lock and dispatching, a lock
+        // transition can advance the generation and reset the dispatcher. Dictation starts are also
+        // gated in the orchestrator, but prompt-action/copy-last/transform-selection shortcuts are
+        // not, so this stops any of them from firing after the session has locked.
+        if (!_sessionActivityMonitor.IsInputAllowed)
         {
             return;
         }
 
-        var mods = (ModifierMask)Volatile.Read(ref _liveModifiersBits);
-        // If the trigger key is itself a modifier, its bit will be set in mods on press.
-        // Mask it out so a "no other modifiers" binding like RightCtrl still matches.
-        if (modBit != ModifierMask.None)
-        {
-            mods &= ~modBit;
-        }
-
-        _dispatcher.Handle(sharpHookKey.Value, mods, pressed);
+        _dispatcher.Handle(dispatchKey, dispatchMods, pressed);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of the failed reader; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and must not block this failure callback.")]
-    private void OnReaderFailure(string path, Exception ex)
+    private void OnReaderFailure(long generation, string path, Exception ex)
     {
         Trace.WriteLine($"[EvdevBackend] Reader {path} failed: {ex.Message}");
+        IEvdevDeviceReader? reader;
         lock (_lock)
         {
-            if (_readers.Remove(path, out var reader))
+            if (generation != _lifecycleGeneration || Volatile.Read(ref _disposed) == 1)
             {
-                _ = reader.DisposeAsync();
+                return;
             }
+
+            _readers.Remove(path, out reader);
+        }
+
+        if (reader is not null)
+        {
+            _ = reader.DisposeAsync();
         }
 
         // Clear modifier mask on disconnect: a held modifier on the lost device would
         // stay "down" forever otherwise. The next press from any remaining keyboard re-asserts.
         Volatile.Write(ref _liveModifiersBits, 0);
         Failed?.Invoke(this, $"Lost keyboard device {path}: {ex.Message}");
+    }
+
+    private void OnInputAllowedChanged(object? sender, EventArgs e)
+    {
+        List<IEvdevDeviceReader>? readers = null;
+        long generation;
+        var reopen = false;
+
+        lock (_lock)
+        {
+            // Read the monitor state under the backend lock: two racing change callbacks could
+            // otherwise apply a stale pre-lock read last and leave the backend gated (or open)
+            // against the monitor's current state.
+            var allowed = _sessionActivityMonitor.IsInputAllowed;
+            if (Volatile.Read(ref _disposed) == 1 || _inputAllowed == allowed)
+            {
+                return;
+            }
+
+            _inputAllowed = allowed;
+            generation = ++_lifecycleGeneration;
+            if (!allowed)
+            {
+                readers = _readers.Values.ToList();
+                _readers.Clear();
+                ResetInputState_NoLock();
+            }
+            else
+            {
+                reopen = _started;
+            }
+        }
+
+        if (readers is not null)
+        {
+            // DisposeAsync on a real reader closes its FileStream synchronously before its first
+            // await. Start every disposal now so one slow read loop cannot delay another fd close.
+            _ = DisposeReadersAsync(readers);
+        }
+
+        if (reopen)
+        {
+            QueueReopen(generation);
+        }
+    }
+
+    private void QueueReopen(long generation)
+    {
+        _ = Task.Run(() =>
+        {
+            List<string> paths;
+            try
+            {
+                paths = _deviceEnumerator.EnumerateKeyboards().ToList();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[EvdevBackend] Re-enumeration failed: {ex.Message}");
+                return;
+            }
+
+            bool readerless;
+            lock (_lock)
+            {
+                if (
+                    Volatile.Read(ref _disposed) == 1
+                    || !_started
+                    || !_inputAllowed
+                    || generation != _lifecycleGeneration
+                )
+                {
+                    return;
+                }
+
+                foreach (var path in paths)
+                {
+                    TryAttach_NoLock(path, generation);
+                }
+
+                readerless = _readers.Count == 0;
+            }
+
+            // Ending an unlock with no readers means evdev keyboard access is gone; surface it
+            // rather than silently advertising a working backend whose shortcuts do nothing.
+            if (readerless)
+            {
+                Failed?.Invoke(this, "evdev keyboard access lost; global shortcuts are inactive.");
+            }
+        });
+    }
+
+    private void ResetInputState_NoLock()
+    {
+        Volatile.Write(ref _liveModifiersBits, 0);
+        _dispatcher.ResetState();
+    }
+
+    private static async Task DisposeReadersAsync(IEnumerable<IEvdevDeviceReader> readers)
+    {
+        var disposals = new List<Task>();
+        foreach (var reader in readers)
+        {
+            try
+            {
+                disposals.Add(reader.DisposeAsync().AsTask());
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[EvdevBackend] Reader dispose threw: {ex.Message}");
+            }
+        }
+
+        if (disposals.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await Task.WhenAll(disposals).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[EvdevBackend] Reader dispose threw: {ex.Message}");
+        }
     }
 }

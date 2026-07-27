@@ -2,11 +2,14 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using TypeWhisper.Core;
+using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Linux.Services;
 
 public sealed class WatchFolderService : IDisposable
 {
+    private const int MaxExportPathAttempts = 1000;
+
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true
@@ -335,16 +338,29 @@ public sealed class WatchFolderService : IDisposable
                 ResolveEngineName(result),
                 DateTime.Now
             );
-            var outputPath = Path.Join(
+            var outputPath = CommitExport(
                 outputFolder,
-                Path.GetFileNameWithoutExtension(filePath) + "." + artifact.FileExtension
+                Path.GetFileNameWithoutExtension(filePath),
+                artifact,
+                ct
             );
 
-            await File.WriteAllTextAsync(outputPath, artifact.Content, ct);
-
+            string? sourceDeletionError = null;
             if (options.DeleteSource)
             {
-                File.Delete(filePath);
+                // The export write ignores the token; re-check so a Stop that lands mid-commit
+                // can't still delete the source.
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    File.Delete(filePath);
+                }
+                catch (Exception ex)
+                {
+                    sourceDeletionError =
+                        $"Transcribed, but the source file could not be deleted: {ex.Message}";
+                    Debug.WriteLine($"WatchFolder source deletion failed: {ex}");
+                }
             }
 
             AddProcessedFingerprint(fingerprint);
@@ -355,7 +371,8 @@ public sealed class WatchFolderService : IDisposable
                     FileName = fileName,
                     ProcessedAtUtc = DateTime.UtcNow,
                     OutputPath = outputPath,
-                    Success = true
+                    Success = true,
+                    ErrorMessage = sourceDeletionError
                 }
             );
         }
@@ -393,6 +410,50 @@ public sealed class WatchFolderService : IDisposable
             CurrentlyProcessing = null;
             OnStateChanged();
         }
+    }
+
+    private static string CommitExport(
+        string outputFolder,
+        string baseName,
+        WatchFolderExportArtifact artifact,
+        CancellationToken ct
+    )
+    {
+        ct.ThrowIfCancellationRequested();
+
+        for (var attempt = 0; attempt < MaxExportPathAttempts; attempt++)
+        {
+            var fileName = attempt == 0
+                ? $"{baseName}.{artifact.FileExtension}"
+                : $"{baseName} ({attempt}).{artifact.FileExtension}";
+            var outputPath = Path.Join(outputFolder, fileName);
+            if (PathIsOccupied(outputPath))
+            {
+                continue;
+            }
+
+            try
+            {
+                AtomicFileWrite.WriteAllTextCreateNew(outputPath, artifact.Content);
+                return outputPath;
+            }
+            catch (IOException) when (PathIsOccupied(outputPath))
+            {
+                // Another actor claimed the candidate after the fast-path check; try the
+                // next suffix.
+            }
+        }
+
+        throw new IOException(
+            $"Could not create a unique watch-folder export for '{baseName}.{artifact.FileExtension}' "
+            + $"after {MaxExportPathAttempts} attempts."
+        );
+    }
+
+    // A directory on the candidate name also blocks the export move, so treat it as taken.
+    private static bool PathIsOccupied(string path)
+    {
+        return File.Exists(path) || Directory.Exists(path);
     }
 
     private static string ResolveEngineName(WatchFolderTranscriptionResult result)

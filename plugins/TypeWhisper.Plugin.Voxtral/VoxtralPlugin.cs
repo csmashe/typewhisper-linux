@@ -9,7 +9,8 @@ namespace TypeWhisper.Plugin.Voxtral;
 public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.mistral.ai";
-    private const string ModelId = "mistral-whisper";
+    private const string ModelId = "voxtral-mini-latest";
+    private const string LegacyModelId = "mistral-whisper";
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(60) };
     private IPluginHostServices? _host;
@@ -24,7 +25,20 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
     {
         _host = host;
         _apiKey = await host.LoadSecretAsync("api-key");
-        _selectedModelId = host.GetSetting<string>("selectedModel") ?? ModelId;
+        var selectedModelId = host.GetSetting<string>("selectedModel");
+        _selectedModelId = selectedModelId == LegacyModelId ? ModelId : selectedModelId ?? ModelId;
+        if (selectedModelId == LegacyModelId)
+        {
+            // A persistence failure must not fail activation; the in-memory migration suffices.
+            try
+            {
+                host.SetSetting("selectedModel", ModelId);
+            }
+            catch (Exception ex)
+            {
+                host.Log(PluginLogLevel.Warning, $"Failed to persist model id migration: {ex.Message}");
+            }
+        }
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -39,13 +53,17 @@ public sealed partial class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginS
     public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-    [new PluginModelInfo(ModelId, "Voxtral (Mistral Whisper)")];
+    [new PluginModelInfo(ModelId, "Voxtral Mini (Mistral)")];
 
     public string? SelectedModelId => _selectedModelId;
-    public bool SupportsTranslation => true;
+    // Mistral documents no OpenAI-style translations endpoint; re-enable only with a documented implementation.
+    public bool SupportsTranslation => false;
 
     public void SelectModel(string modelId)
     {
+        // Persisted host selections may still carry the legacy id; accept it instead of throwing.
+        if (modelId == LegacyModelId)
+            modelId = ModelId;
         if (modelId != ModelId)
             throw new ArgumentException($"Unknown model: {modelId}");
         _selectedModelId = modelId;

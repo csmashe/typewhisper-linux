@@ -56,6 +56,7 @@ public sealed partial class AtSpiUrlExtractor
     };
 
     private static readonly TimeSpan s_cacheTtl = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan s_missBackoff = TimeSpan.FromSeconds(10);
 
     // Diagnostic logging is off by default — flip to true to emit one line per unique
     // walk outcome to the Error Log. Kept as `static readonly` (not `const`) so the
@@ -70,6 +71,9 @@ public sealed partial class AtSpiUrlExtractor
     private string? _cachedUrl;
     private DateTime _cachedUrlAt;
     private string? _lastDiagnosticKey;
+    private DateTime _missAt;
+    private string? _missProcessName;
+    private string? _missTitle;
 
     public AtSpiUrlExtractor()
         : this(null)
@@ -81,7 +85,11 @@ public sealed partial class AtSpiUrlExtractor
         _errorLog = errorLog;
     }
 
-    public string? TryGetBrowserUrl(string? focusedProcessName, string? focusedTitle)
+    public string? TryGetBrowserUrl(
+        string? focusedProcessName,
+        string? focusedTitle,
+        bool honorMissBackoff = false
+    )
     {
         var processHint = !string.IsNullOrWhiteSpace(focusedProcessName)
             ? focusedProcessName
@@ -97,6 +105,8 @@ public sealed partial class AtSpiUrlExtractor
 
         lock (_cacheLock)
         {
+            var now = DateTime.UtcNow;
+
             // Cache key is (process, title): title is the only signal for tab/page change.
             // Keying on process alone would return the previous tab's URL after a tab switch.
             // TTL caps stale trust for SPAs where navigation doesn't change the title.
@@ -108,10 +118,22 @@ public sealed partial class AtSpiUrlExtractor
                     StringComparison.OrdinalIgnoreCase
                 )
                 && string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
-                && DateTime.UtcNow - _cachedUrlAt < s_cacheTtl
+                && now - _cachedUrlAt < s_cacheTtl
             )
             {
                 return _cachedUrl;
+            }
+
+            // Miss backoff throttles high-frequency polling only; dictation passes false
+            // so a poll miss on the same (process, title) never suppresses its own walk.
+            if (
+                honorMissBackoff
+                && string.Equals(_missProcessName, processHint, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(_missTitle, focusedTitle, StringComparison.Ordinal)
+                && now - _missAt < s_missBackoff
+            )
+            {
+                return null;
             }
         }
 
@@ -134,14 +156,24 @@ public sealed partial class AtSpiUrlExtractor
 
         lock (_cacheLock)
         {
-            // Only cache successes — caching null would suppress retries for 10 s,
-            // and updating keys on miss would re-key a still-valid previous URL.
+            // Only cache successes — caching null here would re-key a still-valid previous
+            // URL. Misses are tracked separately so a title change retries immediately.
             if (!string.IsNullOrWhiteSpace(url))
             {
                 _cachedProcessName = processHint;
                 _cachedTitle = focusedTitle;
                 _cachedUrl = url;
                 _cachedUrlAt = DateTime.UtcNow;
+                _missProcessName = null;
+                _missTitle = null;
+                _missAt = default;
+            }
+            else if (honorMissBackoff)
+            {
+                // Dictation misses must not throttle the next poll on this (process, title).
+                _missProcessName = processHint;
+                _missTitle = focusedTitle;
+                _missAt = DateTime.UtcNow;
             }
         }
 

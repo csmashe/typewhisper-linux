@@ -44,6 +44,7 @@ public sealed class HotkeyService : IDisposable
     private EventHandler? _onCopyLastTranscriptionRequested;
     private EventHandler? _onDictationStartRequested;
     private EventHandler? _onDictationStopRequested;
+    private EventHandler? _onDictationDiscardRequested;
     private EventHandler? _onDictationToggleRequested;
     private EventHandler<string>? _onProfileDictationStartRequested;
     private EventHandler? _onProfileDictationStopRequested;
@@ -253,6 +254,8 @@ public sealed class HotkeyService : IDisposable
                 DictationStartRequested?.Invoke(this, EventArgs.Empty);
             _onDictationStopRequested = (_, _) =>
                 DictationStopRequested?.Invoke(this, EventArgs.Empty);
+            _onDictationDiscardRequested = (_, _) =>
+                DictationDiscardRequested?.Invoke(this, EventArgs.Empty);
             _onPromptPaletteRequested = (_, _) =>
                 PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
             _onRecentTranscriptionsRequested = (_, _) =>
@@ -276,6 +279,7 @@ public sealed class HotkeyService : IDisposable
             backend.DictationToggleRequested += _onDictationToggleRequested;
             backend.DictationStartRequested += _onDictationStartRequested;
             backend.DictationStopRequested += _onDictationStopRequested;
+            backend.DictationDiscardRequested += _onDictationDiscardRequested;
             backend.PromptPaletteRequested += _onPromptPaletteRequested;
             backend.RecentTranscriptionsRequested += _onRecentTranscriptionsRequested;
             backend.CopyLastTranscriptionRequested += _onCopyLastTranscriptionRequested;
@@ -665,6 +669,7 @@ public sealed class HotkeyService : IDisposable
     public event EventHandler? DictationToggleRequested;
     public event EventHandler? DictationStartRequested;
     public event EventHandler? DictationStopRequested;
+    public event EventHandler? DictationDiscardRequested;
     public event EventHandler? PromptPaletteRequested;
     public event EventHandler? RecentTranscriptionsRequested;
     public event EventHandler? CopyLastTranscriptionRequested;
@@ -701,6 +706,11 @@ public sealed class HotkeyService : IDisposable
         if (_onDictationStopRequested is not null)
         {
             backend.DictationStopRequested -= _onDictationStopRequested;
+        }
+
+        if (_onDictationDiscardRequested is not null)
+        {
+            backend.DictationDiscardRequested -= _onDictationDiscardRequested;
         }
 
         if (_onPromptPaletteRequested is not null)
@@ -761,6 +771,7 @@ public sealed class HotkeyService : IDisposable
         _onDictationToggleRequested = null;
         _onDictationStartRequested = null;
         _onDictationStopRequested = null;
+        _onDictationDiscardRequested = null;
         _onPromptPaletteRequested = null;
         _onRecentTranscriptionsRequested = null;
         _onCopyLastTranscriptionRequested = null;

@@ -93,6 +93,19 @@ public sealed class CorrectionSuggestionService
             return false;
         }
 
+        // Reject any changed token that straddles a line break. Tokenize only splits on
+        // spaces, so a word adjacent to a newline gloms into one token (e.g. "foo\nbar");
+        // a correction that embeds a line break is never a sensible word-level fix in
+        // either the history or target-app flow.
+        if (
+            originalChanged
+                .Concat(correctedChanged)
+                .Any(token => token.Trimmed.Contains('\n') || token.Trimmed.Contains('\r'))
+        )
+        {
+            return false;
+        }
+
         // Avoid learning apostrophe-only churn from contractions or straight-vs-curly quote changes.
         return !originalChanged
             .Concat(correctedChanged)

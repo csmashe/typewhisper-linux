@@ -1,6 +1,4 @@
 using System.Net.Http;
-using System.Net.Http.Headers;
-using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -8,8 +6,6 @@ namespace TypeWhisper.Plugin.Gladia;
 
 public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
-    private const string BaseUrl = "https://api.gladia.io/v2";
-
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(120) };
     private IPluginHostServices? _host;
     private string? _apiKey;
@@ -70,7 +66,8 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
         _host?.SetSetting("selectedModel", modelId);
     }
 
-    public async Task<PluginTranscriptionResult> TranscribeAsync(
+    // Batch intentionally throws until Gladia's upload/initiate/poll protocol is implemented.
+    public Task<PluginTranscriptionResult> TranscribeAsync(
         byte[] wavAudio,
         string? language,
         bool translate,
@@ -78,78 +75,9 @@ public sealed partial class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSe
         CancellationToken ct
     )
     {
-        if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
-
-        using var content = new MultipartFormDataContent();
-        var fileContent = new ByteArrayContent(wavAudio);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
-        content.Add(fileContent, "audio", "audio.wav");
-
-        if (!string.IsNullOrEmpty(language) && language != "auto")
-            content.Add(new StringContent(language), "language");
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/pre-recorded");
-        request.Headers.Add("x-gladia-key", _apiKey);
-        request.Content = content;
-
-        var response = await _httpClient.SendAsync(request, ct);
-        var json = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException($"Gladia API error {(int)response.StatusCode}: {json}");
-
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-
-        // Require result.transcription.full_transcript: a missing or wrong-typed
-        // value means the response shape isn't what we expect (API drift, status
-        // payload, error body). Surface that as a failure rather than returning a
-        // blank successful transcription. Duration/languages stay optional —
-        // they're metadata that legitimately may be absent.
-        if (
-            !root.TryGetProperty("result", out var result)
-            || result.ValueKind != JsonValueKind.Object
-            || !result.TryGetProperty("transcription", out var transcription)
-            || transcription.ValueKind != JsonValueKind.Object
-            || !transcription.TryGetProperty("full_transcript", out var fullEl)
-            || fullEl.ValueKind != JsonValueKind.String
-        )
-        {
-            // Do not include `json` in the exception — Gladia error/partial
-            // payloads can contain transcript fragments that would then leak
-            // into any logger that records the exception message.
-            throw new InvalidOperationException(
-                "Gladia response missing 'result.transcription.full_transcript' string."
-            );
-        }
-
-        var transcript = fullEl.GetString() ?? "";
-        double duration = 0;
-        string? detectedLanguage = null;
-
-        if (
-            transcription.TryGetProperty("duration", out var durEl)
-            && durEl.ValueKind == JsonValueKind.Number
-            && durEl.TryGetDouble(out var parsedDuration)
-        )
-            duration = parsedDuration;
-
-        if (
-            transcription.TryGetProperty("languages", out var langsEl)
-            && langsEl.ValueKind == JsonValueKind.Array
-            && langsEl.GetArrayLength() > 0
-            && langsEl[0].ValueKind == JsonValueKind.String
-        )
-        {
-            detectedLanguage = langsEl[0].GetString();
-        }
-
-        return new PluginTranscriptionResult(
-            transcript,
-            detectedLanguage,
-            duration,
-            NoSpeechProbability: null
+        throw new NotSupportedException(
+            "Gladia batch transcription is not supported in this build; use live streaming. "
+                + "The batch API requires a multi-stage upload/poll protocol that is not yet implemented."
         );
     }
 
