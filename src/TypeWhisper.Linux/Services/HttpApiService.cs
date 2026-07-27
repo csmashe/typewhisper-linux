@@ -857,16 +857,17 @@ public sealed partial class HttpApiService : IDisposable
             return (400, Serialize(new { error = "Unsupported format" }));
         }
 
-        var task = string.Equals(payload.Task, "translate", StringComparison.OrdinalIgnoreCase)
-            ? TranscriptionTask.Translate
-            : TranscriptionTask.Transcribe;
+        var (task, responseFormat) = HttpApiRequestParser.ParseTranscriptionOptions(
+            payload.Task,
+            payload.ResponseFormat
+        );
         var opts = new TranscriptionRunOptions(
             payload.Language,
             // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- LanguageHints is deserialized from JSON and can be null when the field is omitted
             payload.LanguageHints ?? [],
             task,
             payload.TargetLanguage,
-            string.IsNullOrWhiteSpace(payload.ResponseFormat) ? "json" : payload.ResponseFormat,
+            responseFormat,
             payload.Prompt,
             payload.Engine,
             payload.Model,

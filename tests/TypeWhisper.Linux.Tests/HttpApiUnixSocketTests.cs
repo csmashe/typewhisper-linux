@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting.Internal;
 using Moq;
@@ -213,6 +214,37 @@ public sealed class HttpApiUnixSocketTests
         }
     }
 
+    [Fact]
+    public async Task LocalFileEndpointRejectsUnknownTaskAndFormat()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        var audioPath = fixture.CreateSupportedAudioFile();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+
+        var taskError = await PostLocalFileForErrorAsync(
+            client,
+            $$"""{"path":{{JsonSerializer.Serialize(audioPath)}},"task":"transalte"}"""
+        );
+        var formatError = await PostLocalFileForErrorAsync(
+            client,
+            $$"""{"path":{{JsonSerializer.Serialize(audioPath)}},"response_format":"xml"}"""
+        );
+
+        Assert.Contains("Invalid task", taskError, StringComparison.Ordinal);
+        Assert.Contains("Invalid response_format", formatError, StringComparison.Ordinal);
+    }
+
+    private static async Task<string> PostLocalFileForErrorAsync(HttpClient client, string body)
+    {
+        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return json.RootElement.GetProperty("error").GetString()!;
+    }
+
     private sealed class ApiFixture : IDisposable
     {
         private readonly string? _originalConfigHome =
@@ -295,6 +327,14 @@ public sealed class HttpApiUnixSocketTests
                 Service.StatusText,
                 StringComparison.Ordinal
             );
+        }
+
+        /// <summary>Creates an empty file with a supported audio extension so the handler reaches option validation.</summary>
+        internal string CreateSupportedAudioFile()
+        {
+            var path = Path.Join(_tempDirectory, "clip.wav");
+            File.WriteAllBytes(path, []);
+            return path;
         }
 
         /// <summary>Occupies the discovery directory's path with a file so the write fails.</summary>

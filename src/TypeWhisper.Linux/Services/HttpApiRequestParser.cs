@@ -168,9 +168,9 @@ internal static class HttpApiRequestParser
         string fileExtension;
         string? language;
         var languageHints = new List<string>();
-        TranscriptionTask task;
+        string? taskValue;
         string? targetLanguage;
-        string responseFormat;
+        string? responseFormatValue;
         string? prompt;
         string? engine;
         string? model;
@@ -196,9 +196,9 @@ internal static class HttpApiRequestParser
 
             language = Field(parts, "language");
             languageHints.AddRange(Fields(parts, "language_hint"));
-            task = ParseTask(Field(parts, "task"));
+            taskValue = Field(parts, "task");
             targetLanguage = Field(parts, "target_language");
-            responseFormat = Field(parts, "response_format") ?? "json";
+            responseFormatValue = Field(parts, "response_format");
             prompt = Field(parts, "prompt");
             engine = Field(parts, "engine");
             model = Field(parts, "model");
@@ -216,9 +216,9 @@ internal static class HttpApiRequestParser
                 )
                 .Where(v => !string.IsNullOrWhiteSpace(v))
             );
-            task = ParseTask(Header(request.Headers, "x-task"));
+            taskValue = Header(request.Headers, "x-task");
             targetLanguage = Clean(Header(request.Headers, "x-target-language"));
-            responseFormat = Clean(Header(request.Headers, "x-response-format")) ?? "json";
+            responseFormatValue = Header(request.Headers, "x-response-format");
             prompt = Clean(Header(request.Headers, "x-prompt"));
             engine = Clean(Header(request.Headers, "x-engine"));
             model = Clean(Header(request.Headers, "x-model"));
@@ -227,6 +227,8 @@ internal static class HttpApiRequestParser
         {
             throw new HttpApiRequestException(400, "No audio data provided");
         }
+
+        var (task, responseFormat) = ParseTranscriptionOptions(taskValue, responseFormatValue);
 
         if (audioData.Length == 0)
         {
@@ -477,11 +479,34 @@ internal static class HttpApiRequestParser
         return string.IsNullOrWhiteSpace(cleaned) ? null : cleaned;
     }
 
-    private static TranscriptionTask ParseTask(string? value)
+    internal static (TranscriptionTask Task, string ResponseFormat) ParseTranscriptionOptions(
+        string? task,
+        string? responseFormat
+    )
     {
-        return string.Equals(value?.Trim(), "translate", StringComparison.OrdinalIgnoreCase)
-            ? TranscriptionTask.Translate
-            : TranscriptionTask.Transcribe;
+        var cleanedTask = Clean(task);
+        var parsedTask = cleanedTask?.ToLowerInvariant() switch
+        {
+            null or "transcribe" => TranscriptionTask.Transcribe,
+            "translate" => TranscriptionTask.Translate,
+            _ => throw new HttpApiRequestException(
+                400,
+                $"Invalid task '{cleanedTask}'. Allowed values: transcribe, translate."
+            ),
+        };
+
+        var cleanedResponseFormat = Clean(responseFormat);
+        var parsedResponseFormat = cleanedResponseFormat?.ToLowerInvariant() switch
+        {
+            null or "json" => "json",
+            "verbose_json" => "verbose_json",
+            _ => throw new HttpApiRequestException(
+                400,
+                $"Invalid response_format '{cleanedResponseFormat}'. Allowed values: json, verbose_json."
+            ),
+        };
+
+        return (parsedTask, parsedResponseFormat);
     }
 
     private static string? ExtensionFromFileName(string? fileName)
