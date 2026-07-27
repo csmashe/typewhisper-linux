@@ -90,6 +90,53 @@ run_help_probe() {
     || fail "'$executable --help' did not print the expected usage marker."
 }
 
+run_cli_probe() {
+  local executable="$1"
+  local stdout_file=/tmp/typewhisper-cli-stdout
+  local stderr_file=/tmp/typewhisper-cli-stderr
+  local status actual expected
+
+  echo "==> Executing CLI version probe: $executable"
+  set +e
+  timeout --signal=TERM --kill-after=5s 30s \
+    env "${SMOKE_PROFILE_ENV[@]}" "$executable" --version \
+    >"$stdout_file" 2>"$stderr_file"
+  status=$?
+  set -e
+  cat "$stdout_file"
+  cat "$stderr_file" >&2
+
+  [ "$status" -eq 0 ] || fail "'$executable --version' exited with status $status."
+  # Byte-exact, including the trailing newline. Command substitution strips
+  # trailing newlines, so both sides carry an 'x' sentinel to preserve them;
+  # a bare comparison would accept a missing or duplicated final newline.
+  # Done in-shell rather than with cmp: diffutils is not installed in the
+  # Fedora smoke container.
+  actual="$(cat "$stdout_file"; printf 'x')"
+  expected="$(printf 'typewhisper-cli %s\nx' "$EXPECTED_CLI_VERSION")"
+  [ "$actual" = "$expected" ] \
+    || fail "'$executable --version' did not print the exact expected version."
+  [ ! -s "$stderr_file" ] \
+    || fail "'$executable --version' unexpectedly wrote to stderr."
+
+  echo "==> Executing controlled CLI status failure: $executable"
+  set +e
+  timeout --signal=TERM --kill-after=5s 30s \
+    env "${SMOKE_PROFILE_ENV[@]}" "$executable" status \
+    >"$stdout_file" 2>"$stderr_file"
+  status=$?
+  set -e
+  cat "$stdout_file"
+  cat "$stderr_file" >&2
+
+  # Exact code: a bare "not zero" also accepts timeout kills (124, or 137 once
+  # --kill-after has to SIGKILL a CLI that hung after printing the error).
+  [ "$status" -eq 1 ] \
+    || fail "'$executable status' exited with status $status; expected 1."
+  grep -Fq "TypeWhisper API socket not found" "$stderr_file" \
+    || fail "'$executable status' did not report the expected missing API socket."
+}
+
 run_gui_probe() {
   local executable="$1"
   local display_number=99
@@ -203,7 +250,7 @@ assert_no_system_dotnet() {
 
 container_smoke_tarball() {
   local package="$1"
-  local extracted install_script
+  local app_root extracted install_script
 
   install_ubuntu_runtime
   assert_no_system_dotnet
@@ -216,22 +263,30 @@ container_smoke_tarball() {
   [ "$(printf '%s\n' "$install_script" | sed '/^$/d' | wc -l)" -eq 1 ] \
     || fail "tarball container extraction did not produce exactly one install.sh."
 
+  mkdir -p "$SMOKE_DATA_ROOT/TypeWhisper"
+  printf 'preserve application data\n' >"$SMOKE_DATA_ROOT/TypeWhisper/smoke-sentinel"
+
   echo "==> Installing tarball into isolated HOME/XDG roots"
   env "${SMOKE_PROFILE_ENV[@]}" bash "$install_script"
+  env "${SMOKE_PROFILE_ENV[@]}" bash "$install_script"
+  app_root="$SMOKE_DATA_ROOT/typewhisper-app"
   require_executable "$SMOKE_HOME_ROOT/.local/bin/typewhisper"
+  require_executable "$app_root/Cli/typewhisper-cli"
   require_file "$SMOKE_DATA_ROOT/applications/typewhisper.desktop"
   require_file "$SMOKE_DATA_ROOT/icons/hicolor/128x128/apps/typewhisper.png"
-  [ -d "$SMOKE_DATA_ROOT/TypeWhisper" ] \
+  [ -d "$app_root" ] \
     || fail "tarball application directory was not installed."
+  require_file "$SMOKE_DATA_ROOT/TypeWhisper/smoke-sentinel"
   [ -L "$SMOKE_HOME_ROOT/.local/bin/typewhisper" ] \
     || fail "tarball launcher is not a symlink."
   [ "$(readlink "$SMOKE_HOME_ROOT/.local/bin/typewhisper")" = \
-    "$SMOKE_DATA_ROOT/TypeWhisper/typewhisper" ] \
+    "$app_root/typewhisper" ] \
     || fail "tarball launcher does not target the installed application."
-  grep -Fxq "Exec=$SMOKE_DATA_ROOT/TypeWhisper/typewhisper" \
+  grep -Fxq "Exec=$app_root/typewhisper" \
     "$SMOKE_DATA_ROOT/applications/typewhisper.desktop" \
     || fail "installed tarball desktop entry does not target the installed application."
 
+  run_cli_probe "$app_root/Cli/typewhisper-cli"
   run_help_probe "$SMOKE_HOME_ROOT/.local/bin/typewhisper"
   run_gui_probe "$SMOKE_HOME_ROOT/.local/bin/typewhisper"
 
@@ -240,12 +295,13 @@ container_smoke_tarball() {
   assert_removed "$SMOKE_HOME_ROOT/.local/bin/typewhisper"
   assert_removed "$SMOKE_DATA_ROOT/applications/typewhisper.desktop"
   assert_removed "$SMOKE_DATA_ROOT/icons/hicolor/128x128/apps/typewhisper.png"
-  assert_removed "$SMOKE_DATA_ROOT/TypeWhisper"
+  assert_removed "$app_root"
+  require_file "$SMOKE_DATA_ROOT/TypeWhisper/smoke-sentinel"
 }
 
 container_smoke_appimage() {
   local package="$1"
-  local app_run
+  local app_run cli_executable
 
   install_ubuntu_runtime
   assert_no_system_dotnet
@@ -258,8 +314,11 @@ container_smoke_appimage() {
     "$package" --appimage-extract
   )
   app_run=/tmp/typewhisper-appimage/squashfs-root/AppRun
+  cli_executable=/tmp/typewhisper-appimage/squashfs-root/usr/bin/Cli/typewhisper-cli
   require_executable "$app_run"
+  require_executable "$cli_executable"
 
+  run_cli_probe "$cli_executable"
   run_help_probe "$app_run"
   run_gui_probe "$app_run"
 }
@@ -275,27 +334,35 @@ container_smoke_deb() {
   echo "==> Installing deb in disposable Ubuntu container"
   apt-get install -y --no-install-recommends "$package"
   require_executable /usr/bin/typewhisper
+  require_executable /usr/bin/typewhisper-cli
+  require_executable /opt/typewhisper/Cli/typewhisper-cli
   require_file /usr/share/applications/typewhisper.desktop
   require_file /usr/share/icons/hicolor/128x128/apps/typewhisper.png
   [ -d /opt/typewhisper ] || fail "deb application directory was not installed."
   package_files=$(dpkg-query --listfiles typewhisper)
   for owned_path in \
     /usr/bin/typewhisper \
+    /usr/bin/typewhisper-cli \
     /usr/share/applications/typewhisper.desktop \
     /usr/share/icons/hicolor/128x128/apps/typewhisper.png \
+    /opt/typewhisper/Cli/typewhisper-cli \
     /opt/typewhisper; do
     grep -Fxq "$owned_path" <<<"$package_files" \
       || fail "deb database does not own expected path: $owned_path"
   done
 
+  run_cli_probe /opt/typewhisper/Cli/typewhisper-cli
+  run_cli_probe /usr/bin/typewhisper-cli
   run_help_probe /usr/bin/typewhisper
   run_gui_probe /usr/bin/typewhisper
 
   echo "==> Removing deb"
   apt-get remove -y typewhisper
   assert_removed /usr/bin/typewhisper
+  assert_removed /usr/bin/typewhisper-cli
   assert_removed /usr/share/applications/typewhisper.desktop
   assert_removed /usr/share/icons/hicolor/128x128/apps/typewhisper.png
+  assert_removed /opt/typewhisper/Cli/typewhisper-cli
   assert_removed /opt/typewhisper
 }
 
@@ -310,32 +377,42 @@ container_smoke_rpm() {
   echo "==> Installing rpm in disposable Fedora container"
   dnf install -y "$package"
   require_executable /usr/bin/typewhisper
+  require_executable /usr/bin/typewhisper-cli
+  require_executable /opt/typewhisper/Cli/typewhisper-cli
   require_file /usr/share/applications/typewhisper.desktop
   require_file /usr/share/icons/hicolor/128x128/apps/typewhisper.png
   [ -d /opt/typewhisper ] || fail "rpm application directory was not installed."
   package_files=$(rpm -ql typewhisper)
   for owned_path in \
     /usr/bin/typewhisper \
+    /usr/bin/typewhisper-cli \
     /usr/share/applications/typewhisper.desktop \
     /usr/share/icons/hicolor/128x128/apps/typewhisper.png \
+    /opt/typewhisper/Cli/typewhisper-cli \
     /opt/typewhisper; do
     grep -Fxq "$owned_path" <<<"$package_files" \
       || fail "rpm database does not own expected path: $owned_path"
   done
 
+  run_cli_probe /opt/typewhisper/Cli/typewhisper-cli
+  run_cli_probe /usr/bin/typewhisper-cli
   run_help_probe /usr/bin/typewhisper
   run_gui_probe /usr/bin/typewhisper
 
   echo "==> Removing rpm"
   dnf remove -y typewhisper
   assert_removed /usr/bin/typewhisper
+  assert_removed /usr/bin/typewhisper-cli
   assert_removed /usr/share/applications/typewhisper.desktop
   assert_removed /usr/share/icons/hicolor/128x128/apps/typewhisper.png
+  assert_removed /opt/typewhisper/Cli/typewhisper-cli
   assert_removed /opt/typewhisper
 }
 
 if [ "${1:-}" = "--container" ]; then
-  [ "$#" -eq 3 ] || fail "internal container mode requires a format and package path."
+  [ "$#" -eq 4 ] \
+    || fail "internal container mode requires a format, package path, and CLI version."
+  EXPECTED_CLI_VERSION="$4"
   case "$2" in
     tarball) container_smoke_tarball "$3" ;;
     appimage) container_smoke_appimage "$3" ;;
@@ -376,6 +453,7 @@ done
 PACKAGE_DIR="$(cd "$PACKAGE_DIR" && pwd)"
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 EXPECTED_VERSION="${VERSION#v}"
+EXPECTED_CLI_VERSION="${EXPECTED_VERSION%%+*}"
 RPM_VERSION="${EXPECTED_VERSION//-/\~}"
 
 EXPECTED_TARBALL="$PACKAGE_DIR/typewhisper-linux-x64-${VERSION}.tar.gz"
@@ -478,7 +556,7 @@ validate_payload() {
   local executable="$3"
   local desktop_file="$4"
   local icon_file="$5"
-  local assembly_name native_file plugin_id
+  local assembly_name cli_executable native_file plugin_id
   local plugin_dir
   local plugin_dirs=()
 
@@ -486,6 +564,10 @@ validate_payload() {
   require_executable "$executable"
   file "$executable" | grep -Eq 'ELF 64-bit.*x86-64' \
     || fail "$format app executable is not an x86-64 ELF binary."
+  cli_executable="$app_dir/Cli/typewhisper-cli"
+  require_executable "$cli_executable"
+  file "$cli_executable" | grep -Eq 'ELF 64-bit.*x86-64' \
+    || fail "$format CLI executable is not an x86-64 ELF binary."
   validate_desktop_entry "$desktop_file"
   require_file "$icon_file"
   file "$icon_file" | grep -Fq "PNG image data" \
@@ -554,6 +636,7 @@ validate_payload \
   "$APPIMAGE_ROOT/usr/share/icons/hicolor/128x128/apps/typewhisper.png"
 
 require_executable "$DEB_EXTRACT/usr/bin/typewhisper"
+require_executable "$DEB_EXTRACT/usr/bin/typewhisper-cli"
 validate_payload \
   "deb" \
   "$DEB_EXTRACT/opt/typewhisper" \
@@ -562,6 +645,7 @@ validate_payload \
   "$DEB_EXTRACT/usr/share/icons/hicolor/128x128/apps/typewhisper.png"
 
 require_executable "$RPM_EXTRACT/usr/bin/typewhisper"
+require_executable "$RPM_EXTRACT/usr/bin/typewhisper-cli"
 validate_payload \
   "rpm" \
   "$RPM_EXTRACT/opt/typewhisper" \
@@ -598,7 +682,7 @@ run_container_smoke() {
     --mount "type=bind,src=$PACKAGE_DIR,dst=/packages,readonly" \
     "$image" \
     bash /smoke-test-linux-packages.sh \
-    --container "$format" "/packages/$(basename "$package")"
+    --container "$format" "/packages/$(basename "$package")" "$EXPECTED_CLI_VERSION"
   status=$?
   set -e
 

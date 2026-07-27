@@ -22,6 +22,16 @@ public sealed record CliInstallState(
 public sealed class CliInstallService
 {
     private const string CliFileName = "typewhisper-cli";
+    private const UnixFileMode CliExecutableMode =
+        UnixFileMode.UserRead
+        | UnixFileMode.UserWrite
+        | UnixFileMode.UserExecute
+        | UnixFileMode.GroupRead
+        | UnixFileMode.GroupExecute
+        | UnixFileMode.OtherRead
+        | UnixFileMode.OtherExecute;
+
+    private static readonly TimeSpan s_verificationTimeout = TimeSpan.FromSeconds(10);
 
     // Old install name, kept only so RemoveLegacyLauncher can find and retire it.
     private const string LegacyCliFileName = "typewhisper";
@@ -30,21 +40,33 @@ public sealed class CliInstallService
     private readonly Func<string?> _bundledPathProvider;
     private readonly Func<string> _installDirectoryProvider;
     private readonly Func<string> _launcherDirectoryProvider;
+    private readonly Func<string, UnixFileMode> _unixFileModeReader;
+    private readonly Func<string, CliVerificationResult> _verificationRunner;
 
     public CliInstallService()
-        : this(FindBundledCliPath, DefaultInstallDirectory, DefaultLauncherDirectory)
+        : this(
+            FindBundledCliPath,
+            DefaultInstallDirectory,
+            DefaultLauncherDirectory,
+            RunCliVerification,
+            ReadUnixFileMode
+        )
     {
     }
 
     internal CliInstallService(
         Func<string?> bundledPathProvider,
         Func<string> installDirectoryProvider,
-        Func<string> launcherDirectoryProvider
+        Func<string> launcherDirectoryProvider,
+        Func<string, CliVerificationResult>? verificationRunner = null,
+        Func<string, UnixFileMode>? unixFileModeReader = null
     )
     {
         _bundledPathProvider = bundledPathProvider;
         _installDirectoryProvider = installDirectoryProvider;
         _launcherDirectoryProvider = launcherDirectoryProvider;
+        _verificationRunner = verificationRunner ?? RunCliVerification;
+        _unixFileModeReader = unixFileModeReader ?? ReadUnixFileMode;
     }
 
     public CliInstallState GetState()
@@ -90,9 +112,6 @@ public sealed class CliInstallService
             );
         }
 
-        var sourceDirectory =
-            Path.GetDirectoryName(state.BundledPath)
-            ?? throw new InvalidOperationException("Missing CLI bundle directory.");
         var installDirectory =
             Path.GetDirectoryName(state.InstallPath)
             ?? throw new InvalidOperationException("Missing CLI install directory.");
@@ -100,9 +119,16 @@ public sealed class CliInstallService
         Directory.CreateDirectory(installDirectory);
         Directory.CreateDirectory(launcherDirectory);
 
-        File.Copy(state.BundledPath, state.InstallPath, true);
-        CopyCliPayload(sourceDirectory, installDirectory);
-        MarkExecutable(state.InstallPath);
+        if (
+            !string.Equals(
+                Path.GetFullPath(state.BundledPath),
+                Path.GetFullPath(state.InstallPath),
+                StringComparison.Ordinal
+            )
+        )
+        {
+            InstallBundledCli(state.BundledPath, state.InstallPath, installDirectory);
+        }
 
         launcherEntry = ClassifyLauncherEntry(state.LauncherPath, state.InstallPath);
         if (launcherEntry == LauncherEntryClassification.Foreign)
@@ -150,12 +176,116 @@ public sealed class CliInstallService
         ];
     }
 
-    private static void CopyCliPayload(string sourceDirectory, string installDirectory)
+    private void InstallBundledCli(
+        string bundledPath,
+        string installPath,
+        string installDirectory
+    )
     {
-        foreach (var file in Directory.EnumerateFiles(sourceDirectory, "typewhisper-cli.*"))
+        var tempPath = Path.Join(
+            installDirectory,
+            $".{CliFileName}.{Guid.NewGuid():N}.tmp"
+        );
+        try
         {
-            var fileName = Path.GetFileName(file);
-            File.Copy(file, Path.Join(installDirectory, fileName), true);
+            File.Copy(bundledPath, tempPath);
+            SetExecutableAndVerify(tempPath);
+            VerifyCliIdentityAndVersion(tempPath);
+            File.Move(tempPath, installPath, true);
+        }
+        finally
+        {
+            TryDeleteTemporaryFile(tempPath);
+        }
+    }
+
+    private static void TryDeleteTemporaryFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Cleanup must never replace the copy/chmod/verify failure that got us here.
+            Trace.WriteLine($"[CliInstallService] could not remove {path}: {ex.Message}");
+        }
+    }
+
+    private void VerifyCliIdentityAndVersion(string path)
+    {
+        var result = _verificationRunner(path);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"CLI verification failed with exit code {result.ExitCode}: {result.StandardError.Trim()}"
+            );
+        }
+
+        var expected = $"{CliFileName} {AppVersion.Display}";
+        var actual = result.StandardOutput.TrimEnd('\r', '\n');
+        if (!string.Equals(actual, expected, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"CLI verification returned '{actual}'; expected '{expected}'."
+            );
+        }
+    }
+
+    private static CliVerificationResult RunCliVerification(string path)
+    {
+        return RunCliVerification(path, s_verificationTimeout);
+    }
+
+    // Parameterized so tests can use a short deadline instead of the production one.
+    internal static CliVerificationResult RunCliVerification(string path, TimeSpan timeout)
+    {
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo(path)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        process.StartInfo.ArgumentList.Add("--version");
+        if (!process.Start())
+        {
+            throw new InvalidOperationException("Could not start CLI verification.");
+        }
+
+        // One deadline covering process exit *and* both reads. WaitForExit(int) does
+        // not drain redirected pipes, so a grandchild inheriting them keeps ReadToEnd
+        // blocked forever even after the CLI itself has exited.
+        using var deadline = new CancellationTokenSource(timeout);
+        var standardOutput = process.StandardOutput.ReadToEndAsync(deadline.Token);
+        var standardError = process.StandardError.ReadToEndAsync(deadline.Token);
+        try
+        {
+            process.WaitForExitAsync(deadline.Token).GetAwaiter().GetResult();
+            return new CliVerificationResult(
+                process.ExitCode,
+                standardOutput.GetAwaiter().GetResult(),
+                standardError.GetAwaiter().GetResult()
+            );
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                process.Kill(true);
+                // Bounded: the parameterless overload also waits for pipe EOF, which is
+                // the very thing that may be stuck.
+                process.WaitForExit(5_000);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                Trace.WriteLine($"[CliInstallService] could not stop CLI verification: {ex.Message}");
+            }
+
+            throw new TimeoutException(
+                $"CLI verification did not complete within {timeout.TotalSeconds:0} seconds."
+            );
         }
     }
 
@@ -439,13 +569,7 @@ public sealed class CliInstallService
         {
             File.SetUnixFileMode(
                 path,
-                UnixFileMode.UserRead
-                | UnixFileMode.UserWrite
-                | UnixFileMode.UserExecute
-                | UnixFileMode.GroupRead
-                | UnixFileMode.GroupExecute
-                | UnixFileMode.OtherRead
-                | UnixFileMode.OtherExecute
+                CliExecutableMode
             );
         }
         catch (Exception ex)
@@ -454,6 +578,46 @@ public sealed class CliInstallService
             Trace.WriteLine($"[CliInstallService] chmod failed for {path}: {ex.Message}");
         }
     }
+
+    private void SetExecutableAndVerify(string path)
+    {
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+        {
+            File.SetUnixFileMode(path, CliExecutableMode);
+        }
+        else
+        {
+            throw new PlatformNotSupportedException(
+                "CLI executable permissions can only be verified on Unix."
+            );
+        }
+
+        var actualMode = _unixFileModeReader(path);
+        if (actualMode != CliExecutableMode)
+        {
+            throw new InvalidOperationException(
+                $"CLI executable mode verification failed for {path}: expected {CliExecutableMode}, found {actualMode}."
+            );
+        }
+    }
+
+    private static UnixFileMode ReadUnixFileMode(string path)
+    {
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+        {
+            return File.GetUnixFileMode(path);
+        }
+
+        throw new PlatformNotSupportedException(
+            "CLI executable permissions can only be verified on Unix."
+        );
+    }
+
+    internal readonly record struct CliVerificationResult(
+        int ExitCode,
+        string StandardOutput,
+        string StandardError
+    );
 
     internal enum LauncherEntryClassification
     {
