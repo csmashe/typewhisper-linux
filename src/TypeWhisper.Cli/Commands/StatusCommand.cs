@@ -34,21 +34,24 @@ internal static class StatusCommand
                 );
             }
 
+            var validation = ApiResponseValidator.ValidateStatus(body);
+            if (validation.Error is not null)
+            {
+                return ApiResponseValidator.ProtocolError(validation.Error);
+            }
+
             if (json)
             {
                 Console.WriteLine(JsonFormatting.PrettyJson(body));
                 return 0;
             }
 
-            using var doc = JsonDocument.Parse(body);
-            var root = doc.RootElement;
-            var status = JsonFormatting.Prop(root, "status") == "ready" ? "Ready" : "No model loaded";
-            var engine = JsonFormatting.Prop(root, "engine");
-            var model = JsonFormatting.Prop(root, "model");
+            var result = validation.Value!;
+            var status = result.Status == "ready" ? "Ready" : "No model loaded";
             Console.WriteLine(
-                string.IsNullOrEmpty(model)
-                    ? $"{status} - {engine}"
-                    : $"{status} - {engine} ({model})"
+                string.IsNullOrEmpty(result.Model)
+                    ? $"{status} - {result.Engine}"
+                    : $"{status} - {result.Engine} ({result.Model})"
             );
             return 0;
         }

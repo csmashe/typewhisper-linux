@@ -36,6 +36,7 @@ public sealed class DiscoveryFileReaderTests : IDisposable
         var discovery = DiscoveryFileReader.TryRead();
 
         Assert.NotNull(discovery);
+        Assert.Equal(2, discovery.Version);
         Assert.Equal(9876, discovery.Port);
         Assert.Equal("secret", discovery.Token);
         Assert.Equal("/run/user/1000/typewhisper/api.sock", discovery.SocketPath);
@@ -49,6 +50,7 @@ public sealed class DiscoveryFileReaderTests : IDisposable
         var discovery = DiscoveryFileReader.TryRead();
 
         Assert.NotNull(discovery);
+        Assert.Equal(2, discovery.Version);
         Assert.Null(discovery.SocketPath);
     }
 
@@ -60,9 +62,42 @@ public sealed class DiscoveryFileReaderTests : IDisposable
         var discovery = DiscoveryFileReader.TryRead();
 
         Assert.NotNull(discovery);
+        Assert.Equal(1, discovery.Version);
         Assert.Equal(9876, discovery.Port);
         Assert.Equal("legacy", discovery.Token);
         Assert.Null(discovery.SocketPath);
+    }
+
+    [Fact]
+    public void FileWithoutVersion_RemainsLenient()
+    {
+        WriteDiscovery(
+            """{"port":9876,"token":"legacy","socket_path":"/tmp/typewhisper.sock"}"""
+        );
+
+        var discovery = DiscoveryFileReader.TryRead();
+
+        Assert.NotNull(discovery);
+        Assert.Null(discovery.Version);
+        Assert.Equal(9876, discovery.Port);
+        Assert.Equal("legacy", discovery.Token);
+        Assert.Equal("/tmp/typewhisper.sock", discovery.SocketPath);
+    }
+
+    [Fact]
+    public void FileWithNonNumericVersion_RemainsLenient()
+    {
+        WriteDiscovery(
+            """{"version":"2","port":9876,"token":"secret","socket_path":"/tmp/typewhisper.sock"}"""
+        );
+
+        var discovery = DiscoveryFileReader.TryRead();
+
+        Assert.NotNull(discovery);
+        Assert.Null(discovery.Version);
+        Assert.Equal(9876, discovery.Port);
+        Assert.Equal("secret", discovery.Token);
+        Assert.Equal("/tmp/typewhisper.sock", discovery.SocketPath);
     }
 
     [Fact]
