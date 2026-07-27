@@ -3,34 +3,12 @@ using System.Text.Json;
 namespace TypeWhisper.Cli.Output;
 
 /// <summary>
-///     JSON helpers for rendering API responses: scalar property extraction for
-///     the human-readable tables, pretty-printing for <c>--json</c> output, and
-///     error-message extraction from the API's error envelope.
+///     JSON helpers for rendering API responses: pretty-printing for <c>--json</c>
+///     output, and error-message extraction from the API's error envelope.
 /// </summary>
 internal static class JsonFormatting
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
-
-    /// <summary>
-    ///     Returns the scalar value of property <paramref name="name" /> as a string,
-    ///     or <c>""</c> when the property is absent or not a string/number/bool.
-    /// </summary>
-    public static string Prop(JsonElement el, string name)
-    {
-        if (!el.TryGetProperty(name, out var value))
-        {
-            return "";
-        }
-
-        return value.ValueKind switch
-        {
-            JsonValueKind.String => value.GetString() ?? "",
-            JsonValueKind.Number => value.ToString(),
-            JsonValueKind.True => "true",
-            JsonValueKind.False => "false",
-            _ => "",
-        };
-    }
 
     /// <summary>Re-serializes <paramref name="json" /> indented, returning the input unchanged if it isn't valid JSON.</summary>
     public static string PrettyJson(string json)

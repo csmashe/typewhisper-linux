@@ -130,14 +130,19 @@ internal static class TranscribeCommand
                 );
             }
 
+            var validation = ApiResponseValidator.ValidateTranscribe(body);
+            if (validation.Error is not null)
+            {
+                return ApiResponseValidator.ProtocolError(validation.Error);
+            }
+
             if (options.Json)
             {
                 Console.WriteLine(JsonFormatting.PrettyJson(body));
                 return 0;
             }
 
-            using var doc = JsonDocument.Parse(body);
-            Console.WriteLine(JsonFormatting.Prop(doc.RootElement, "text"));
+            Console.WriteLine(validation.Value!.Text);
             return 0;
         }
         catch (HttpRequestException)

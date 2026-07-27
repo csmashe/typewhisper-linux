@@ -34,8 +34,18 @@ internal static class DiscoveryFileReader
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             var root = doc.RootElement;
             int? port = null;
+            int? version = null;
             string? token = null;
             string? socketPath = null;
+            if (
+                root.TryGetProperty("version", out var versionEl)
+                && versionEl.ValueKind == JsonValueKind.Number
+                && versionEl.TryGetInt32(out var versionValue)
+            )
+            {
+                version = versionValue;
+            }
+
             if (root.TryGetProperty("port", out var portEl)
                 && portEl.ValueKind == JsonValueKind.Number
                 && portEl.TryGetInt32(out var portValue)
@@ -57,7 +67,9 @@ internal static class DiscoveryFileReader
                 socketPath = socketPathEl.GetString();
             }
 
-            return port is null ? null : new DiscoveryFile(port.Value, token, socketPath);
+            return port is null
+                ? null
+                : new DiscoveryFile(port.Value, token, socketPath, version);
         }
         catch
         {

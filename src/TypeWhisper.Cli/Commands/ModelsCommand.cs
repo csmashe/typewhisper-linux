@@ -34,31 +34,28 @@ internal static class ModelsCommand
                 );
             }
 
+            var validation = ApiResponseValidator.ValidateModels(body);
+            if (validation.Error is not null)
+            {
+                return ApiResponseValidator.ProtocolError(validation.Error);
+            }
+
             if (json)
             {
                 Console.WriteLine(JsonFormatting.PrettyJson(body));
                 return 0;
             }
 
-            using var doc = JsonDocument.Parse(body);
-            if (!doc.RootElement.TryGetProperty("models", out var models))
-            {
-                await Console.Error.WriteLineAsync(
-                    "Warning: response is missing the 'models' field; the API contract may have changed."
-                );
-                return 0;
-            }
-
-            var rows = models.EnumerateArray().ToList();
+            var rows = validation.Value!.Models;
             if (rows.Count == 0)
             {
                 Console.WriteLine("No models available.");
                 return 0;
             }
 
-            var idWidth = Math.Max(2, rows.Max(m => JsonFormatting.Prop(m, "id").Length));
-            var engineWidth = Math.Max(6, rows.Max(m => JsonFormatting.Prop(m, "engine").Length));
-            var nameWidth = Math.Max(4, rows.Max(m => JsonFormatting.Prop(m, "name").Length));
+            var idWidth = Math.Max(2, rows.Max(m => m.Id.Length));
+            var engineWidth = Math.Max(6, rows.Max(m => m.Engine.Length));
+            var nameWidth = Math.Max(4, rows.Max(m => m.Name.Length));
 
             Console.WriteLine(
                 $"{ConsoleOutput.Pad("ID", idWidth)}  {ConsoleOutput.Pad("ENGINE", engineWidth)}  {ConsoleOutput.Pad("NAME", nameWidth)}  STATUS"
@@ -67,10 +64,9 @@ internal static class ModelsCommand
 
             foreach (var m in rows)
             {
-                var selected =
-                    m.TryGetProperty("selected", out var sel) && sel.GetBoolean() ? " *" : "";
+                var selected = m.Selected ? " *" : "";
                 Console.WriteLine(
-                    $"{ConsoleOutput.Pad(JsonFormatting.Prop(m, "id"), idWidth)}  {ConsoleOutput.Pad(JsonFormatting.Prop(m, "engine"), engineWidth)}  {ConsoleOutput.Pad(JsonFormatting.Prop(m, "name"), nameWidth)}  {JsonFormatting.Prop(m, "status")}{selected}"
+                    $"{ConsoleOutput.Pad(m.Id, idWidth)}  {ConsoleOutput.Pad(m.Engine, engineWidth)}  {ConsoleOutput.Pad(m.Name, nameWidth)}  {m.Status}{selected}"
                 );
             }
 

@@ -92,6 +92,13 @@ public static class Program
         async Task<int> WithApiAsync(Func<ApiClient, Task<int>> run)
         {
             var discovered = DiscoveryFileReader.TryRead();
+            if (discovered?.Version is { } version && version != 2)
+            {
+                return ConsoleOutput.Error(
+                    $"The TypeWhisper app wrote discovery protocol version {version}, but this CLI speaks version 2 — app and CLI versions are out of sync."
+                );
+            }
+
             var socketPath = discovered?.SocketPath;
             if (string.IsNullOrWhiteSpace(socketPath))
             {
