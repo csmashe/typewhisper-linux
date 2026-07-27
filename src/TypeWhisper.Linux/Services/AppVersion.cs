@@ -211,6 +211,7 @@ public static class AppVersion
             return core;
         }
 
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- independent pre-release guard chain over two operands; no single value to switch on.
         if (a.PreRelease.Count == 0 && b.PreRelease.Count == 0)
         {
             return 0;
@@ -268,6 +269,7 @@ public static class AppVersion
             return false;
         }
 
+        // ReSharper disable once LoopCanBeConvertedToQuery -- the reject condition is a multi-line boolean; an All(...) lambda would read worse.
         foreach (var identifier in value.Split('.'))
         {
             if (

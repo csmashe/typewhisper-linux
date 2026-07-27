@@ -1053,6 +1053,7 @@ public sealed class OpenAiCompatiblePlugin
     {
         lock (_profileRolesLock)
         {
+            // ReSharper disable once InvertIf -- standard get-or-add shape; inverting would duplicate the return.
             if (!_profileRoles.TryGetValue(id, out var role))
             {
                 role = new OpenAiCompatibleProfileRole(this, id);

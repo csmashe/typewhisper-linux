@@ -65,7 +65,7 @@ public sealed class UiOperationGuardTests
     }
 
     [Theory]
-    [MemberData(nameof(ExpectedFailures))]
+    [MemberData(nameof(ExpectedFailures), DisableDiscoveryEnumeration = true)]
     public async Task RunAsync_ExpectedFailure_RollsBackThenPresentsAndLogs(
         UiFailureKind failureKind,
         Exception failure

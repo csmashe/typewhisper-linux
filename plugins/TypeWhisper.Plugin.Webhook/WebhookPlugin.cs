@@ -847,126 +847,123 @@ public sealed class WebhookPlugin
         await _settingsSaveLock.WaitAsync(ct);
         try
         {
-            try
+            var existing = Service is not null
+                ? Service.SnapshotWebhooks()
+                : new WebhookStore(ResolveDataDir()).Load(protectExistingFile: true);
+
+            // Legacy plaintext headers only load into LegacyHeaders and are
+            // never surfaced by GetItems, so an unrelated edit saved before
+            // activation would rewrite the config without them and silently
+            // destroy the headers. Fail closed until the plugin is activated
+            // and MigrateLegacyHeadersAsync moves them into the secret store.
+            if (existing.Any(config => config.LegacyHeaders.Count > 0))
             {
-                var existing = Service is not null
-                    ? Service.SnapshotWebhooks()
-                    : new WebhookStore(ResolveDataDir()).Load(protectExistingFile: true);
-
-                // Legacy plaintext headers only load into LegacyHeaders and are
-                // never surfaced by GetItems, so an unrelated edit saved before
-                // activation would rewrite the config without them and silently
-                // destroy the headers. Fail closed until the plugin is activated
-                // and MigrateLegacyHeadersAsync moves them into the secret store.
-                if (existing.Any(config => config.LegacyHeaders.Count > 0))
-                {
-                    throw new InvalidOperationException(
-                        "Webhook header values require activated host secret services."
-                    );
-                }
-
-                var existingById = existing
-                    .GroupBy(config => config.Id)
-                    .ToDictionary(group => group.Key, group => group.First());
-
-                var configs = new List<WebhookConfig>(parsedItems.Count);
-                var pendingSecretWrites = new List<(string Reference, string Value)>();
-
-                foreach (var parsedItem in parsedItems)
-                {
-                    existingById.TryGetValue(parsedItem.Config.Id, out var existingConfig);
-                    var references = new Dictionary<string, string>(
-                        StringComparer.OrdinalIgnoreCase
-                    );
-
-                    foreach (var header in parsedItem.HeaderValues)
-                    {
-                        string? existingReference = null;
-                        var hasExistingReference =
-                            existingConfig is not null
-                            && TryGetHeaderSecretReference(
-                                existingConfig.HeaderSecretReferences,
-                                header.Key,
-                                out existingReference
-                            );
-
-                        string reference;
-                        if (
-                            header.Value == StoredHeaderPlaceholder
-                            && hasExistingReference
-                        )
-                        {
-                            reference = existingReference!;
-                        }
-                        else
-                        {
-                            reference = GetHeaderSecretReference(
-                                parsedItem.Config.Id,
-                                header.Key
-                            );
-                            pendingSecretWrites.Add((reference, header.Value));
-                        }
-
-                        references[header.Key] = reference;
-                    }
-
-                    configs.Add(
-                        parsedItem.Config with
-                        {
-                            HeaderSecretReferences = references,
-                        }
-                    );
-                }
-
-                var newReferences = configs
-                    .SelectMany(config => config.HeaderSecretReferences.Values)
-                    .ToHashSet(StringComparer.Ordinal);
-                var obsoleteReferences = existing
-                    .SelectMany(config => config.HeaderSecretReferences.Values)
-                    .Where(reference => !newReferences.Contains(reference))
-                    .Distinct(StringComparer.Ordinal)
-                    .ToList();
-
-                if (
-                    Host is null
-                    && (pendingSecretWrites.Count > 0 || obsoleteReferences.Count > 0)
-                )
-                {
-                    throw new InvalidOperationException(
-                        "Webhook header values require activated host secret services."
-                    );
-                }
-
-                foreach (var (reference, value) in pendingSecretWrites)
-                    await Host!.StoreSecretAsync(reference, value);
-
-                if (Service is not null)
-                    Service.ReplaceAll(configs);
-                else
-                    new WebhookStore(ResolveDataDir()).Save(configs);
-
-                foreach (var reference in obsoleteReferences)
-                {
-                    try
-                    {
-                        await Host!.DeleteSecretAsync(reference);
-                    }
-                    catch (Exception ex)
-                    {
-                        Host!.Log(
-                            PluginLogLevel.Warning,
-                            $"Failed to delete obsolete webhook header secret: {ex.Message}"
-                        );
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                return new PluginSettingsValidationResult(
-                    false,
-                    Loc.L("Settings.FailedToSaveSettings", ex.Message)
+                throw new InvalidOperationException(
+                    "Webhook header values require activated host secret services."
                 );
             }
+
+            var existingById = existing
+                .GroupBy(config => config.Id)
+                .ToDictionary(group => group.Key, group => group.First());
+
+            var configs = new List<WebhookConfig>(parsedItems.Count);
+            var pendingSecretWrites = new List<(string Reference, string Value)>();
+
+            foreach (var parsedItem in parsedItems)
+            {
+                existingById.TryGetValue(parsedItem.Config.Id, out var existingConfig);
+                var references = new Dictionary<string, string>(
+                    StringComparer.OrdinalIgnoreCase
+                );
+
+                foreach (var header in parsedItem.HeaderValues)
+                {
+                    string? existingReference = null;
+                    var hasExistingReference =
+                        existingConfig is not null
+                        && TryGetHeaderSecretReference(
+                            existingConfig.HeaderSecretReferences,
+                            header.Key,
+                            out existingReference
+                        );
+
+                    string reference;
+                    if (
+                        header.Value == StoredHeaderPlaceholder
+                        && hasExistingReference
+                    )
+                    {
+                        reference = existingReference!;
+                    }
+                    else
+                    {
+                        reference = GetHeaderSecretReference(
+                            parsedItem.Config.Id,
+                            header.Key
+                        );
+                        pendingSecretWrites.Add((reference, header.Value));
+                    }
+
+                    references[header.Key] = reference;
+                }
+
+                configs.Add(
+                    parsedItem.Config with
+                    {
+                        HeaderSecretReferences = references,
+                    }
+                );
+            }
+
+            var newReferences = configs
+                .SelectMany(config => config.HeaderSecretReferences.Values)
+                .ToHashSet(StringComparer.Ordinal);
+            var obsoleteReferences = existing
+                .SelectMany(config => config.HeaderSecretReferences.Values)
+                .Where(reference => !newReferences.Contains(reference))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+            if (
+                Host is null
+                && (pendingSecretWrites.Count > 0 || obsoleteReferences.Count > 0)
+            )
+            {
+                throw new InvalidOperationException(
+                    "Webhook header values require activated host secret services."
+                );
+            }
+
+            foreach (var (reference, value) in pendingSecretWrites)
+                await Host!.StoreSecretAsync(reference, value);
+
+            if (Service is not null)
+                Service.ReplaceAll(configs);
+            else
+                new WebhookStore(ResolveDataDir()).Save(configs);
+
+            foreach (var reference in obsoleteReferences)
+            {
+                try
+                {
+                    await Host!.DeleteSecretAsync(reference);
+                }
+                catch (Exception ex)
+                {
+                    Host!.Log(
+                        PluginLogLevel.Warning,
+                        $"Failed to delete obsolete webhook header secret: {ex.Message}"
+                    );
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            return new PluginSettingsValidationResult(
+                false,
+                Loc.L("Settings.FailedToSaveSettings", ex.Message)
+            );
         }
         finally
         {
@@ -1014,6 +1011,7 @@ public sealed class WebhookPlugin
         var normalizedName = NormalizeHeaderName(headerName);
         foreach (var candidate in references)
         {
+            // ReSharper disable once InvertIf -- the positive form states the header match that ends the search.
             if (NormalizeHeaderName(candidate.Key) == normalizedName)
             {
                 reference = candidate.Value;

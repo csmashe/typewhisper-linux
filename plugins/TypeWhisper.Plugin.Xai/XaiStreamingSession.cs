@@ -65,6 +65,7 @@ internal sealed class XaiStreamingSession : IStreamingSession
 
     internal static XaiStreamingSession CreateConnectedSessionForTests(WebSocket ws)
     {
+        // ReSharper disable once ConvertIfStatementToReturnStatement -- precondition guard; the suggested ternary-throw buries the throw.
         if (ws.State != WebSocketState.Open)
             throw new InvalidOperationException("The test WebSocket must already be open.");
 
@@ -76,6 +77,7 @@ internal sealed class XaiStreamingSession : IStreamingSession
         TimeSpan readinessTimeout,
         CancellationToken ct)
     {
+        // ReSharper disable once ConvertIfStatementToReturnStatement -- precondition guard; the suggested ternary-throw buries the throw.
         if (ws.State != WebSocketState.Open)
             throw new InvalidOperationException("The test WebSocket must already be open.");
 

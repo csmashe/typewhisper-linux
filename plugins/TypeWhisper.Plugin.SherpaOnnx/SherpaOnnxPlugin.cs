@@ -783,7 +783,7 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
 
     // Test seam: run the structural preflight without the native loader, so per-model
     // token/ONNX acceptance (e.g. Canary carries no blank token) is testable in isolation.
-    internal void RunArtifactPreflightForTests(string modelId, string modelDir) =>
+    internal static void RunArtifactPreflightForTests(string modelId, string modelDir) =>
         VerifyModelArtifacts(GetModelDefinition(modelId), modelDir);
 
     internal string ComputeBackendForTests
@@ -859,6 +859,7 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
             return;
         }
 
+        // ReSharper disable once InvertIf -- matches the shape of the preceding per-artifact dispatch block.
         if (string.Equals(fileName, "tokens.txt", StringComparison.OrdinalIgnoreCase))
         {
             VerifyTokensFile(path, fileName, requireBlankToken);
@@ -980,7 +981,7 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
 
             while (reader.ReadLine() is { } line)
             {
-                if (line.IndexOf('\0') >= 0)
+                if (line.Contains('\0'))
                     throw new InvalidDataException(
                         $"Model artifact '{fileName}' contains a null character."
                     );
@@ -1032,8 +1033,10 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
 
     private static bool IsArtifactInvalidLoadFailure(Exception exception)
     {
+        // ReSharper disable once SuggestVarOrType_SimpleTypes -- var would infer non-nullable Exception, so assigning InnerException in the iterator would warn.
         for (Exception? current = exception; current is not null; current = current.InnerException)
         {
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- two independent type guards in a walk-the-chain loop; a switch would hide that both just return true.
             if (current is InvalidDataException)
                 return true;
 

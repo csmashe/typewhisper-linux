@@ -219,6 +219,7 @@ public sealed class AppBootstrapTests
         Assert.Equal("A", Outcome("B").SkippedDueTo);
         Assert.Equal(App.BootstrapStageStatus.Skipped, Outcome("C").Status);
         Assert.Equal("B", Outcome("C").SkippedDueTo);
+        return;
 
         App.BootstrapStageOutcome Outcome(string name)
         {

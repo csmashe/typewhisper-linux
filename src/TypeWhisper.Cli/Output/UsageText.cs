@@ -17,7 +17,6 @@ internal static class UsageText
               transcribe <file|->       Transcribe an audio file, or - for stdin
 
             Global options:
-              --port <N>                API server port (default: 9876, or auto-discovered)
               --token <token>           API bearer token, or TYPEWHISPER_API_TOKEN
               --api-token <token>       Alias of --token (Mac CLI parity)
               --json                    Output as JSON

@@ -16,7 +16,8 @@ namespace TypeWhisper.Linux.Services.Ipc;
 /// </remarks>
 internal static partial class SocketPathResolver
 {
-    private const string SocketFileName = "control.sock";
+    private const string ControlSocketFileName = "control.sock";
+    private const string ApiSocketFileName = "api.sock";
 
     internal static string DefaultFallbackDirectory =>
         Path.Join(TypeWhisperEnvironment.BasePath, "Runtime");
@@ -43,6 +44,25 @@ internal static partial class SocketPathResolver
 
     internal static string ResolveControlSocketPath(string fallbackDirectory)
     {
+        return ResolveSocketPath(fallbackDirectory, ControlSocketFileName);
+    }
+
+    /// <summary>
+    ///     Resolves the API-socket path in the same private runtime directory
+    ///     as the control socket without creating the socket file.
+    /// </summary>
+    public static string ResolveApiSocketPath()
+    {
+        return ResolveApiSocketPath(DefaultFallbackDirectory);
+    }
+
+    internal static string ResolveApiSocketPath(string fallbackDirectory)
+    {
+        return ResolveSocketPath(fallbackDirectory, ApiSocketFileName);
+    }
+
+    private static string ResolveSocketPath(string fallbackDirectory, string socketFileName)
+    {
         var uid = (int)geteuid();
         var xdg = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
         if (!string.IsNullOrEmpty(xdg) && Directory.Exists(xdg))
@@ -51,7 +71,7 @@ internal static partial class SocketPathResolver
             try
             {
                 PreparePrivateDirectory(dir, uid);
-                return Path.Join(dir, SocketFileName);
+                return Path.Join(dir, socketFileName);
             }
             catch (Exception ex)
             {
@@ -65,7 +85,7 @@ internal static partial class SocketPathResolver
         Trace.WriteLine(
             $"[SocketPathResolver] Using user-data socket directory {fallbackDirectory}."
         );
-        return Path.Join(fallbackDirectory, SocketFileName);
+        return Path.Join(fallbackDirectory, socketFileName);
     }
 
     /// <summary>Best-effort <c>chmod</c>; logs on failure but never throws.</summary>

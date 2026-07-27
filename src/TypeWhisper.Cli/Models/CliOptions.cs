@@ -10,12 +10,8 @@ namespace TypeWhisper.Cli.Models;
 /// </summary>
 internal sealed record CliOptions
 {
-    private const int DefaultPort = 9876;
-
     public string? Command { get; init; }
     public List<string> Positionals { get; init; } = [];
-    public int Port { get; init; } = DefaultPort;
-    public bool PortWasExplicit { get; init; }
     public string? Token { get; init; }
     public bool TokenWasExplicit { get; init; }
     public bool Json { get; init; }
@@ -47,8 +43,6 @@ internal sealed record CliOptions
         string? model = null;
         var token = Environment.GetEnvironmentVariable("TYPEWHISPER_API_TOKEN");
         var tokenWasExplicit = false;
-        var port = DefaultPort;
-        var portWasExplicit = false;
         var json = false;
         var awaitDownload = false;
 
@@ -67,19 +61,6 @@ internal sealed record CliOptions
                     break;
                 case "--await-download":
                     awaitDownload = true;
-                    break;
-                case "--port":
-                    if (
-                        !TryReadValue(args, ref i, out var portValue)
-                        || !int.TryParse(portValue, out port)
-                        || port < 1
-                        || port > 65535
-                    )
-                    {
-                        return options with { ErrorMessage = "--port requires a number between 1 and 65535." };
-                    }
-
-                    portWasExplicit = true;
                     break;
                 case "--token":
                 case "--api-token":
@@ -170,8 +151,6 @@ internal sealed record CliOptions
         {
             Command = command,
             Positionals = positionals,
-            Port = port,
-            PortWasExplicit = portWasExplicit,
             Token = token,
             TokenWasExplicit = tokenWasExplicit,
             Json = json,
@@ -195,7 +174,7 @@ internal sealed record CliOptions
             return false;
         }
 
-        // Reject flag-looking tokens (e.g. "--json" after "--port") so a missing
+        // Reject flag-looking tokens (e.g. "--json" after "--token") so a missing
         // value fails fast. A bare "-" is allowed for stdin-style positionals.
         var candidate = args[index + 1];
         if (candidate.Length > 1 && candidate.StartsWith('-'))

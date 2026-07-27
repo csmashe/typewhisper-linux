@@ -125,14 +125,15 @@ public sealed class CliInstallService
 
     public static IReadOnlyList<string> BuildCliExamples(int port)
     {
+        _ = port;
         return
         [
             "export TYPEWHISPER_API_TOKEN=\"paste-token-here\"",
             "typewhisper-cli --help",
-            $"typewhisper-cli status --port {port}",
-            $"typewhisper-cli models --port {port}",
-            $"typewhisper-cli transcribe recording.wav --port {port}",
-            $"typewhisper-cli transcribe recording.wav --language de --json --port {port}",
+            "typewhisper-cli status",
+            "typewhisper-cli models",
+            "typewhisper-cli transcribe recording.wav",
+            "typewhisper-cli transcribe recording.wav --language de --json",
         ];
     }
 

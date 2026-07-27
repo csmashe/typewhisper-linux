@@ -6,11 +6,12 @@ namespace TypeWhisper.Cli.Tests;
 public class CommandLineParserTests
 {
     [Fact]
-    public void Port_OutOfRange_Errors()
+    public void Port_IsAnUnknownOption()
     {
-        var options = CliOptions.Parse(["--port", "70000", "status"]);
+        var options = CliOptions.Parse(["--port", "8080", "status"]);
+
         Assert.NotNull(options.ErrorMessage);
-        Assert.Contains("1 and 65535", options.ErrorMessage);
+        Assert.Equal("Unknown option '--port'.", options.ErrorMessage);
     }
 
     [Fact]
@@ -31,19 +32,4 @@ public class CommandLineParserTests
         Assert.Equal("status", options.Command);
     }
 
-    [Fact]
-    public void ExplicitPort_SetsExplicitFlag()
-    {
-        var options = CliOptions.Parse(["--port", "8080", "status"]);
-        Assert.Equal(8080, options.Port);
-        Assert.True(options.PortWasExplicit);
-    }
-
-    [Fact]
-    public void NoExplicitPort_DefaultsAndUnflagged()
-    {
-        var options = CliOptions.Parse(["status"]);
-        Assert.Equal(9876, options.Port);
-        Assert.False(options.PortWasExplicit);
-    }
 }

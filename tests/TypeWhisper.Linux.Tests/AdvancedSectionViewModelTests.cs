@@ -408,6 +408,7 @@ public sealed class AdvancedSectionViewModelTests
             var selectedVoiceIdBefore = harness.ViewModel.SelectedSpokenFeedbackVoiceId;
             harness.ViewModel.PropertyChanged += (_, args) =>
             {
+                // ReSharper disable once ConvertIfStatementToSwitchStatement -- independent property-name checks, each with its own suppression comment.
                 if (args.PropertyName == nameof(AdvancedSectionViewModel.AutoUnloadOptions))
                 {
                     // ReSharper disable once AccessToDisposedClosure -- handler runs synchronously while setting Loc.Instance.CurrentLanguage below, before the using disposes harness at scope end.

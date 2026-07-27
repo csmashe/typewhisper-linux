@@ -50,6 +50,7 @@ internal sealed class Reson8StreamingSession : IStreamingSession
 
     internal static Reson8StreamingSession CreateConnectedSessionForTests(WebSocket ws)
     {
+        // ReSharper disable once ConvertIfStatementToReturnStatement -- precondition guard; the suggested ternary-throw buries the throw.
         if (ws.State != WebSocketState.Open)
             throw new InvalidOperationException("The test WebSocket must already be open.");
 

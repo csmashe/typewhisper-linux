@@ -1,4 +1,4 @@
 namespace TypeWhisper.Cli.Models;
 
-/// <summary>Port and optional token read from the app's <c>api-discovery.json</c>.</summary>
-internal sealed record DiscoveryFile(int Port, string? Token);
+/// <summary>TCP port, optional token, and Unix socket read from <c>api-discovery.json</c>.</summary>
+internal sealed record DiscoveryFile(int Port, string? Token, string? SocketPath);

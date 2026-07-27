@@ -7,7 +7,7 @@ namespace TypeWhisper.Linux.Services;
 
 /// <summary>
 ///     Writes ~/.config/typewhisper/api-discovery.json (XDG_CONFIG_HOME-aware)
-///     so CLI clients can discover the running app's port and bearer token.
+///     so clients can discover the running app's TCP port, Unix socket, and bearer token.
 ///     File is created at API start and deleted at stop. Mode 0600 is set via
 ///     <c>open(2)</c> (not chmod-after-write) to avoid a race exposing the token;
 ///     the parent directory is tightened to 0700 to hide even the file's existence.
@@ -44,10 +44,15 @@ public sealed class ApiDiscoveryFile
 
     private static string FilePath => Path.Join(DirectoryPath, FileName);
 
+    /// <summary>
+    ///     Publishes the discovery file. Returns <c>false</c> when it could not be
+    ///     written — the CLI has no other way to reach the API, so callers must
+    ///     surface the failure rather than report a healthy API.
+    /// </summary>
     // kept instance: injected as a DI/test seam by callers
     [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
     // ReSharper disable once MemberCanBeMadeStatic.Global
-    public void Write(int port, string token)
+    public bool Write(int port, string token, string socketPath)
     {
         try
         {
@@ -57,7 +62,7 @@ public sealed class ApiDiscoveryFile
             var final = FilePath;
             var tmp = final + ".tmp";
             var json = JsonSerializer.Serialize(
-                new { version = 1, port, token },
+                new { version = 2, port, token, socket_path = socketPath },
                 s_jsonOptions
             );
 
@@ -97,10 +102,12 @@ public sealed class ApiDiscoveryFile
             // Atomic rename: a CLI client mid-read never sees a partial JSON file.
             // The renamed inode keeps its 0600 perms — no re-chmod needed.
             File.Move(tmp, final, true);
+            return true;
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"[ApiDiscoveryFile] Write failed: {ex.Message}");
+            return false;
         }
     }
 

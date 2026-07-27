@@ -312,6 +312,7 @@ public sealed class PluginLoader
         }
 
         var categories = manifest.Categories;
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- independent guard clauses with unrelated outcomes (throw vs legacy inference); a switch would obscure that.
         if (categories is { Length: 0 })
         {
             throw new InvalidDataException(
@@ -319,26 +320,26 @@ public sealed class PluginLoader
             );
         }
 
-        if (categories is not null)
+        if (categories is null)
         {
-            if (
-                categories.Any(category =>
-                    !Enum.IsDefined(category) || category == PluginCategory.Unknown
-                )
-            )
-            {
-                throw new InvalidDataException(
-                    $"Plugin '{manifest.Id}' declares an invalid category."
-                );
-            }
-
-            return new PluginMetadataDescriptor(networkAccess.Value, categories);
+            return new PluginMetadataDescriptor(
+                networkAccess.Value,
+                [InferLegacyCategory(manifest)]
+            );
         }
 
-        return new PluginMetadataDescriptor(
-            networkAccess.Value,
-            [InferLegacyCategory(manifest)]
-        );
+        if (
+            categories.Any(category =>
+                !Enum.IsDefined(category) || category == PluginCategory.Unknown
+            )
+        )
+        {
+            throw new InvalidDataException(
+                $"Plugin '{manifest.Id}' declares an invalid category."
+            );
+        }
+
+        return new PluginMetadataDescriptor(networkAccess.Value, categories);
     }
 
     private static PluginCategory InferLegacyCategory(PluginManifest manifest)

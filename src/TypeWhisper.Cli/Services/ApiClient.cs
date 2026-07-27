@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using System.Net.Http.Headers;
 
 namespace TypeWhisper.Cli.Services;
@@ -12,9 +13,22 @@ namespace TypeWhisper.Cli.Services;
 /// </summary>
 internal sealed class ApiClient
 {
-    public ApiClient(string baseUrl, string? token)
+    private readonly Func<Socket, bool> _validateServer;
+
+    public ApiClient(
+        string socketPath,
+        string? token,
+        Func<Socket, bool>? validateServer = null
+    )
     {
-        BaseUrl = baseUrl;
+        ArgumentException.ThrowIfNullOrWhiteSpace(socketPath);
+        _validateServer = validateServer ?? UnixPeerCredentials.IsOwnedByEffectiveUser;
+        BaseUrl = "http://localhost";
+        Http = new HttpClient(CreateHandler(socketPath)) { Timeout = TimeSpan.FromMinutes(5) };
+        TranscribeHttp = new HttpClient(CreateHandler(socketPath))
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
 
         if (string.IsNullOrWhiteSpace(token))
         {
@@ -27,7 +41,47 @@ internal sealed class ApiClient
     }
 
     public string BaseUrl { get; }
-    public HttpClient Http { get; } = new() { Timeout = TimeSpan.FromMinutes(5) };
+    public HttpClient Http { get; }
 
-    public HttpClient TranscribeHttp { get; } = new() { Timeout = Timeout.InfiniteTimeSpan };
+    public HttpClient TranscribeHttp { get; }
+
+    private SocketsHttpHandler CreateHandler(string socketPath)
+    {
+        return new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            // ConnectCallback always dials the Unix socket directly, so an ambient
+            // HTTP_PROXY/ALL_PROXY would just make the client speak proxy/SOCKS
+            // negotiation at Kestrel — never useful for a local socket.
+            UseProxy = false,
+            ConnectCallback = async (_, ct) =>
+            {
+                var socket = new Socket(
+                    AddressFamily.Unix,
+                    SocketType.Stream,
+                    ProtocolType.Unspecified
+                );
+                try
+                {
+                    await socket.ConnectAsync(
+                        new UnixDomainSocketEndPoint(socketPath),
+                        ct
+                    );
+                    if (!_validateServer(socket))
+                    {
+                        throw new UnauthorizedAccessException(
+                            "TypeWhisper API socket is owned by a different user."
+                        );
+                    }
+
+                    return new NetworkStream(socket, ownsSocket: true);
+                }
+                catch
+                {
+                    socket.Dispose();
+                    throw;
+                }
+            },
+        };
+    }
 }

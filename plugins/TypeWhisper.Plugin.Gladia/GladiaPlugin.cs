@@ -390,6 +390,7 @@ public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
             return null;
         }
 
+        // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- LINQ would box JsonElement's struct enumerator.
         foreach (var language in languages.EnumerateArray())
         {
             if (language.ValueKind == JsonValueKind.String
