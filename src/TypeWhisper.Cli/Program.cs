@@ -48,11 +48,42 @@ public static class Program
 
         return options.Command switch
         {
-            "status" => await WithApiAsync(api => StatusCommand.RunAsync(api, options.Json)),
-            "models" => await WithApiAsync(api => ModelsCommand.RunAsync(api, options.Json)),
+            "status" => await WithQuickApiAsync(
+                (api, ct) => StatusCommand.RunAsync(api, options.Json, ct)
+            ),
+            "models" => await WithQuickApiAsync(
+                (api, ct) => ModelsCommand.RunAsync(api, options.Json, ct)
+            ),
             "transcribe" => await WithApiAsync(api => TranscribeCommand.RunAsync(api, options)),
             _ => ConsoleOutput.Error($"Unknown command: {options.Command}"),
         };
+
+        // Ctrl+C is intercepted only once the API call is in flight. Installing the
+        // handler around discovery would suppress the default terminate while
+        // DiscoveryFileReader.TryRead is blocked, and that read is synchronous and
+        // uncancellable, so the CLI would stop responding to Ctrl+C entirely.
+        Task<int> WithQuickApiAsync(Func<ApiClient, CancellationToken, Task<int>> run)
+        {
+            return WithApiAsync(async api =>
+            {
+                using var cts = new CancellationTokenSource();
+                ConsoleCancelEventHandler handler = (_, e) =>
+                {
+                    e.Cancel = true;
+                    // ReSharper disable once AccessToDisposedClosure -- the finally below unsubscribes the handler before the using disposes cts.
+                    cts.Cancel();
+                };
+                Console.CancelKeyPress += handler;
+                try
+                {
+                    return await run(api, cts.Token);
+                }
+                finally
+                {
+                    Console.CancelKeyPress -= handler;
+                }
+            });
+        }
 
         // Resolved per command so an unknown command still reports itself when the
         // app is stopped. The CLI never falls back to TCP: the socket path

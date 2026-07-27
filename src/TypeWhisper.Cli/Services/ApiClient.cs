@@ -24,7 +24,7 @@ internal sealed class ApiClient
         ArgumentException.ThrowIfNullOrWhiteSpace(socketPath);
         _validateServer = validateServer ?? UnixPeerCredentials.IsOwnedByEffectiveUser;
         BaseUrl = "http://localhost";
-        Http = new HttpClient(CreateHandler(socketPath)) { Timeout = TimeSpan.FromMinutes(5) };
+        Http = new HttpClient(CreateHandler(socketPath)) { Timeout = Timeout.InfiniteTimeSpan };
         TranscribeHttp = new HttpClient(CreateHandler(socketPath))
         {
             Timeout = Timeout.InfiniteTimeSpan,
