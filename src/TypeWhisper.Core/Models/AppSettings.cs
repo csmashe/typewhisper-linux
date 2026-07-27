@@ -32,9 +32,6 @@ public record AppSettings
     public const int MaxPreviewBubbleAutoHideMilliseconds = 5000;
 
     public string ToggleHotkey { get; init; } = "Ctrl+Shift+F9";
-    public string PushToTalkHotkey { get; init; } = "Ctrl+Shift";
-    public string ToggleOnlyHotkey { get; init; } = "";
-    public string HoldOnlyHotkey { get; init; } = "";
     public string RecentTranscriptionsHotkey { get; init; } = "";
     public string CopyLastTranscriptionHotkey { get; init; } = "";
     public string TransformSelectionHotkey { get; init; } = "";
