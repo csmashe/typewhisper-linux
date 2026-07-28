@@ -9,21 +9,15 @@ public sealed partial class DictionaryService
 {
     public string ExportToCsv()
     {
-        EnsureCacheLoaded();
-
         var sb = new StringBuilder();
         sb.AppendLine(
             "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source"
         );
 
-        List<DictionaryEntry> entries;
-        lock (_gate)
-        {
-            entries = _cache
-                .OrderBy(e => e.EntryType)
-                .ThenBy(e => e.Original, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
+        var entries = _store.Current
+            .OrderBy(e => e.EntryType)
+            .ThenBy(e => e.Original, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         foreach (var entry in entries)
         {
@@ -50,7 +44,6 @@ public sealed partial class DictionaryService
 
     public int ImportFromCsv(string csv)
     {
-        EnsureCacheLoaded();
         if (string.IsNullOrWhiteSpace(csv))
         {
             return 0;
@@ -64,9 +57,9 @@ public sealed partial class DictionaryService
 
         var imported = 0;
 
-        lock (_gate)
+        Commit(newCache =>
         {
-            var newCache = new List<DictionaryEntry>(_cache);
+            imported = 0;
             var startIndex = LooksLikeHeader(rows[0]) ? 1 : 0;
             var existingKeys = newCache
                 .Where(entry => entry.EntryType != DictionaryEntryType.Correction)
@@ -178,17 +171,8 @@ public sealed partial class DictionaryService
                 imported++;
             }
 
-            if (imported > 0)
-            {
-                SaveToDisk(newCache);
-                _cache = newCache;
-            }
-        }
-
-        if (imported > 0)
-        {
-            EntriesChanged?.Invoke();
-        }
+            return imported > 0;
+        });
 
         return imported;
     }

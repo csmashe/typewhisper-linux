@@ -92,4 +92,19 @@ public interface IPluginHostServices
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedParameter.Global
     void SetStreamingDisplayActive(bool active) { }
+
+    /// <summary>Opens a host-managed transactional JSON state file for this plugin.</summary>
+    /// <remarks>
+    ///     Older hosts fail clearly when a plugin requires this capability.
+    /// </remarks>
+    // ReSharper disable once UnusedMemberInSuper.Global
+    IPluginStateStore<T> OpenStateStore<T>(
+        string fileName,
+        Func<T> createDefault,
+        PluginStateStoreOptions? options = null
+    )
+        where T : notnull =>
+        throw new NotSupportedException(
+            "This plugin host does not provide transactional state stores."
+        );
 }

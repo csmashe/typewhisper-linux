@@ -1,5 +1,5 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
@@ -23,6 +23,7 @@ public sealed class PluginHostServices : IPluginHostServices
     {
         WriteIndented = true, PropertyNameCaseInsensitive = true,
     };
+    private static readonly PluginStateStoreOptions s_defaultStateStoreOptions = new();
 
     private readonly IActiveWindowService _activeWindow;
     private readonly PluginLocalization _localization;
@@ -37,11 +38,15 @@ public sealed class PluginHostServices : IPluginHostServices
     private readonly string _pluginId;
     private readonly IProfileService _profiles;
     private readonly string _secretProtectionKeyFilePath;
-    private readonly string _settingsFilePath;
-    private readonly Lock _settingsLock = new();
+    private readonly AtomicJsonStore<ImmutableDictionary<string, JsonElement>> _settingsStore;
+    private readonly Lock _stateStoresLock = new();
+    private readonly Dictionary<string, StateStoreRegistration> _stateStores =
+        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
-    private bool _loadFailed;
-    private Dictionary<string, JsonElement>? _settingsCache;
+    // Backup files a store will generate. Tracked alongside primaries so one store's backup
+    // cannot land on another store's primary.
+    private readonly HashSet<string> _reservedBackupPaths =
+        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
     public PluginHostServices(
         string pluginId,
@@ -71,10 +76,21 @@ public sealed class PluginHostServices : IPluginHostServices
         _localization = new PluginLocalization(pluginDirectory);
         _pluginDataRoot = pluginDataRoot ?? TypeWhisperEnvironment.PluginDataPath;
         _pluginDataDirectory = Path.Join(_pluginDataRoot, pluginId);
-        _settingsFilePath = Path.Join(_pluginDataDirectory, "settings.json");
+        var settingsFilePath = Path.Join(_pluginDataDirectory, "settings.json");
         _secretProtectionKeyFilePath = ResolveSecretProtectionKeyFilePath(
             _pluginDataRoot,
             secretProtectionKeyFilePath
+        );
+        _settingsStore = new AtomicJsonStore<ImmutableDictionary<string, JsonElement>>(
+            settingsFilePath,
+            static () => ImmutableDictionary<string, JsonElement>.Empty,
+            new AtomicJsonStoreOptions<ImmutableDictionary<string, JsonElement>>
+            {
+                JsonOptions = s_jsonOptions,
+                CorruptFilePolicy = AtomicJsonCorruptFilePolicy.PreserveAndReset,
+                Deserialize = DeserializeSettings,
+                Diagnostic = ReportSettingsDiagnostic,
+            }
         );
     }
 
@@ -129,9 +145,6 @@ public sealed class PluginHostServices : IPluginHostServices
 
         try
         {
-            // _errorLog is readonly; _settingsLock guards _settingsCache/_loadFailed, not this,
-            // so reading it unlocked is race-free.
-            // ReSharper disable once InconsistentlySynchronizedField
             _errorLog?.AddEntry($"{_pluginDisplayName}: {message}", _pluginErrorCategory);
         }
         catch
@@ -149,175 +162,260 @@ public sealed class PluginHostServices : IPluginHostServices
     public Task StoreSecretAsync(string key, string value)
     {
         var encrypted = ApiKeyProtection.Encrypt(value, _secretProtectionKeyFilePath);
-        lock (_settingsLock)
-        {
-            var current = LoadSettings();
-            var next = new Dictionary<string, JsonElement>(current)
-            {
-                [$"{SecretPrefix}{key}"] = JsonSerializer.SerializeToElement(encrypted),
-            };
-            SaveSettings(next);
-            _settingsCache = next;
-        }
-
+        SaveSettings(
+            current =>
+                current.SetItem(
+                    $"{SecretPrefix}{key}",
+                    JsonSerializer.SerializeToElement(encrypted)
+                )
+        );
         return Task.CompletedTask;
     }
 
     public Task<string?> LoadSecretAsync(string key)
     {
-        lock (_settingsLock)
+        var settings = LoadSettings();
+        if (!settings.TryGetValue($"{SecretPrefix}{key}", out var element))
         {
-            var settings = LoadSettings();
-            if (!settings.TryGetValue($"{SecretPrefix}{key}", out var element))
-            {
-                return Task.FromResult<string?>(null);
-            }
+            return Task.FromResult<string?>(null);
+        }
 
-            string? encrypted;
-            try
-            {
-                encrypted = element.Deserialize<string>();
-            }
-            catch (JsonException ex)
-            {
-                LogSecretUnavailable(key, ex.Message);
-                return Task.FromResult<string?>(null);
-            }
+        string? encrypted;
+        try
+        {
+            encrypted = element.Deserialize<string>();
+        }
+        catch (JsonException ex)
+        {
+            LogSecretUnavailable(key, ex.Message);
+            return Task.FromResult<string?>(null);
+        }
 
-            if (encrypted is null)
-            {
-                return Task.FromResult<string?>(null);
-            }
+        if (encrypted is null)
+        {
+            return Task.FromResult<string?>(null);
+        }
 
-            var requested = ApiKeyProtection.Decrypt(
-                encrypted,
-                _secretProtectionKeyFilePath
-            );
-            if (!requested.Succeeded)
-            {
-                LogSecretUnavailable(key, "the protected value could not be authenticated");
-                return Task.FromResult<string?>(null);
-            }
+        var requested = ApiKeyProtection.Decrypt(
+            encrypted,
+            _secretProtectionKeyFilePath
+        );
+        if (!requested.Succeeded)
+        {
+            LogSecretUnavailable(key, "the protected value could not be authenticated");
+            return Task.FromResult<string?>(null);
+        }
 
-            if (!requested.RequiresMigration)
-            {
-                return Task.FromResult(requested.PlainText);
-            }
+        if (!requested.RequiresMigration)
+        {
+            return Task.FromResult(requested.PlainText);
+        }
 
-            try
-            {
-                var next = new Dictionary<string, JsonElement>(settings);
-                foreach (var property in settings)
+        try
+        {
+            SaveSettings(
+                current =>
                 {
-                    if (!property.Key.StartsWith(SecretPrefix, StringComparison.Ordinal))
+                    var next = current;
+                    foreach (var property in current)
                     {
-                        continue;
-                    }
+                        if (!property.Key.StartsWith(SecretPrefix, StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
 
-                    var stored = property.Value.Deserialize<string>();
-                    if (stored is null)
-                    {
-                        continue;
-                    }
+                        var stored = property.Value.Deserialize<string>();
+                        if (stored is null)
+                        {
+                            continue;
+                        }
 
-                    var result = ApiKeyProtection.Decrypt(
-                        stored,
-                        _secretProtectionKeyFilePath
-                    );
-                    if (!result.Succeeded || result.PlainText is null)
-                    {
-                        LogSecretUnavailable(
-                            key,
-                            $"'{property.Key}' could not be authenticated"
+                        var result = ApiKeyProtection.Decrypt(
+                            stored,
+                            _secretProtectionKeyFilePath
                         );
-                        return Task.FromResult<string?>(null);
+                        if (!result.Succeeded || result.PlainText is null)
+                        {
+                            throw new InvalidDataException(
+                                $"'{property.Key}' could not be authenticated"
+                            );
+                        }
+
+                        if (result.RequiresMigration)
+                        {
+                            next = next.SetItem(
+                                property.Key,
+                                JsonSerializer.SerializeToElement(
+                                    ApiKeyProtection.Encrypt(
+                                        result.PlainText,
+                                        _secretProtectionKeyFilePath
+                                    )
+                                )
+                            );
+                        }
                     }
 
-                    if (result.RequiresMigration)
-                    {
-                        next[property.Key] = JsonSerializer.SerializeToElement(
-                            ApiKeyProtection.Encrypt(
-                                result.PlainText,
-                                _secretProtectionKeyFilePath
-                            )
-                        );
-                    }
+                    return next;
                 }
-
-                SaveSettings(next);
-                _settingsCache = next;
-                return Task.FromResult(requested.PlainText);
-            }
-            catch (Exception ex)
-            {
-                LogSecretUnavailable(key, $"migration failed: {ex.Message}");
-                return Task.FromResult<string?>(null);
-            }
+            );
+            return Task.FromResult(requested.PlainText);
+        }
+        catch (Exception ex)
+        {
+            LogSecretUnavailable(key, $"migration failed: {ex.Message}");
+            return Task.FromResult<string?>(null);
         }
     }
 
     public Task DeleteSecretAsync(string key)
     {
-        lock (_settingsLock)
-        {
-            var current = LoadSettings();
-            var next = new Dictionary<string, JsonElement>(current);
-            if (!next.Remove($"{SecretPrefix}{key}"))
-            {
-                if (_loadFailed)
-                {
-                    // The cache is empty only because the file could not be read; we cannot
-                    // conclude the secret is gone, so refuse rather than report a false success.
-                    ThrowRefusingToSave();
-                }
-
-                return Task.CompletedTask;
-            }
-
-            SaveSettings(next);
-            _settingsCache = next;
-        }
-
+        SaveSettings(current => current.Remove($"{SecretPrefix}{key}"));
         return Task.CompletedTask;
     }
 
     public T? GetSetting<T>(string key)
     {
         ThrowIfReservedSecretKey(key);
-        lock (_settingsLock)
+        var settings = LoadSettings();
+        if (!settings.TryGetValue(key, out var element))
         {
-            var settings = LoadSettings();
-            if (!settings.TryGetValue(key, out var element))
-            {
-                return default;
-            }
+            return default;
+        }
 
-            try
-            {
-                return element.Deserialize<T>(s_jsonOptions);
-            }
-            catch (JsonException ex)
-            {
-                Trace.WriteLine(
-                    $"[Plugin:{_pluginId}] Failed to deserialize setting '{key}': {ex.Message}"
-                );
-                return default;
-            }
+        try
+        {
+            return element.Deserialize<T>(s_jsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            Trace.WriteLine(
+                $"[Plugin:{_pluginId}] Failed to deserialize setting '{key}': {ex.Message}"
+            );
+            return default;
         }
     }
 
     public void SetSetting<T>(string key, T value)
     {
         ThrowIfReservedSecretKey(key);
-        lock (_settingsLock)
+        SaveSettings(
+            current =>
+                current.SetItem(key, JsonSerializer.SerializeToElement(value, s_jsonOptions))
+        );
+    }
+
+    public IPluginStateStore<T> OpenStateStore<T>(
+        string fileName,
+        Func<T> createDefault,
+        PluginStateStoreOptions? options = null
+    )
+        where T : notnull
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+        ArgumentNullException.ThrowIfNull(createDefault);
+        if (
+            Path.IsPathRooted(fileName)
+            || fileName.Contains('/')
+            || fileName.Contains('\\')
+            || !string.Equals(Path.GetFileName(fileName), fileName, StringComparison.Ordinal)
+        )
         {
-            var current = LoadSettings();
-            var next = new Dictionary<string, JsonElement>(current)
+            throw new ArgumentException(
+                "Plugin state file names must be leaf file names.",
+                nameof(fileName)
+            );
+        }
+
+        if (
+            string.Equals(fileName, "settings.json", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(
+                fileName,
+                "secret-protection.key",
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+        {
+            throw new ArgumentException(
+                $"'{fileName}' is reserved for host-managed plugin state.",
+                nameof(fileName)
+            );
+        }
+
+        var path = Path.GetFullPath(Path.Join(_pluginDataDirectory, fileName));
+        var normalizedRoot = Path.GetFullPath(_pluginDataDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var parent = Path.GetDirectoryName(path)
+            ?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!string.Equals(parent, normalizedRoot, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Plugin state file names must be leaf file names.",
+                nameof(fileName)
+            );
+        }
+
+        var normalizedOptions = options ?? s_defaultStateStoreOptions;
+        lock (_stateStoresLock)
+        {
+            if (_stateStores.TryGetValue(path, out var existing))
             {
-                [key] = JsonSerializer.SerializeToElement(value, s_jsonOptions),
+                if (
+                    existing.StateType != typeof(T)
+                    || !OptionsMatch(existing.Options, normalizedOptions)
+                )
+                {
+                    throw new InvalidOperationException(
+                        $"Plugin state path '{path}' was already opened with a conflicting "
+                        + "state type or options."
+                    );
+                }
+
+                return (IPluginStateStore<T>)existing.Store;
+            }
+
+            var backupPath = normalizedOptions.KeepLastKnownGoodBackup ? path + ".bak" : null;
+            if (_reservedBackupPaths.Contains(path))
+            {
+                throw new InvalidOperationException(
+                    $"Plugin state path '{path}' is already reserved as the backup file of "
+                    + "another state store."
+                );
+            }
+
+            if (backupPath is not null && _stateStores.ContainsKey(backupPath))
+            {
+                throw new InvalidOperationException(
+                    $"Plugin state path '{path}' would back up onto '{backupPath}', which is "
+                    + "already open as a state store."
+                );
+            }
+
+            var coreOptions = new AtomicJsonStoreOptions<T>
+            {
+                JsonOptions = normalizedOptions.JsonOptions,
+                BackupMode = normalizedOptions.KeepLastKnownGoodBackup
+                    ? AtomicJsonBackupMode.LastKnownGood
+                    : AtomicJsonBackupMode.None,
+                CorruptFilePolicy =
+                    normalizedOptions.CorruptFilePolicy
+                    == PluginStateCorruptFilePolicy.PreserveAndReset
+                        ? AtomicJsonCorruptFilePolicy.PreserveAndReset
+                        : AtomicJsonCorruptFilePolicy.Throw,
+                Diagnostic = ReportStateStoreDiagnostic,
             };
-            SaveSettings(next);
-            _settingsCache = next;
+            var adapter = new PluginStateStoreAdapter<T>(
+                new AtomicJsonStore<T>(path, createDefault, coreOptions)
+            );
+            _stateStores.Add(
+                path,
+                new StateStoreRegistration(typeof(T), normalizedOptions, adapter)
+            );
+            if (backupPath is not null)
+            {
+                _reservedBackupPaths.Add(backupPath);
+            }
+
+            return adapter;
         }
     }
 
@@ -334,84 +432,21 @@ public sealed class PluginHostServices : IPluginHostServices
         }
     }
 
-    private Dictionary<string, JsonElement> LoadSettings()
+    private ImmutableDictionary<string, JsonElement> LoadSettings()
     {
-        // System.Threading.Lock is re-entrant for the same thread, so callers already holding
-        // _settingsLock (GetSetting, SetSetting, etc.) can call LoadSettings safely.
-        lock (_settingsLock)
-        {
-            if (_settingsCache is not null)
-            {
-                return _settingsCache;
-            }
-
-            string json;
-            try
-            {
-                json = File.ReadAllText(_settingsFilePath);
-            }
-            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-            {
-                // A genuinely absent file is an empty store, not a load failure.
-                _settingsCache = [];
-                return _settingsCache;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // The file may exist but is unreadable (permissions, locked, transient I/O).
-                // Do not treat it as empty, or the next save would wipe the existing data.
-                Trace.WriteLine($"[Plugin:{_pluginId}] Failed to read settings: {ex.Message}");
-                AddSettingsError(
-                    $"Plugin '{_pluginDisplayName}' ({_pluginId}) settings could not be read; saves are disabled to protect the existing file: {ex.Message}"
-                );
-                _loadFailed = true;
-                _settingsCache = [];
-                return _settingsCache;
-            }
-
-            try
-            {
-                _settingsCache =
-                    JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
-                        json,
-                        s_jsonOptions
-                    ) ?? throw new JsonException("The settings file contained null JSON.");
-            }
-            catch (JsonException ex)
-            {
-                Trace.WriteLine($"[Plugin:{_pluginId}] Failed to parse settings: {ex.Message}");
-                var brokenPath = PreserveBrokenFile(_settingsFilePath);
-                if (brokenPath is null && File.Exists(_settingsFilePath))
-                {
-                    // The corrupt original is still on disk; overwriting it would lose the only
-                    // copy, so disable saves until it is dealt with.
-                    _loadFailed = true;
-                }
-
-                AddSettingsError(
-                    brokenPath is null
-                        ? $"Plugin '{_pluginDisplayName}' ({_pluginId}) settings were corrupt, but the original file could not be preserved: {ex.Message}"
-                        : $"Plugin '{_pluginDisplayName}' ({_pluginId}) settings were corrupt and were preserved as '{brokenPath}': {ex.Message}"
-                );
-                _settingsCache = [];
-            }
-
-            return _settingsCache;
-        }
+        return _settingsStore.Current;
     }
 
-    private void SaveSettings(Dictionary<string, JsonElement> settings)
+    private void SaveSettings(
+        Func<
+            ImmutableDictionary<string, JsonElement>,
+            ImmutableDictionary<string, JsonElement>
+        > update
+    )
     {
-        if (_loadFailed)
-        {
-            ThrowRefusingToSave();
-        }
-
         try
         {
-            Directory.CreateDirectory(_pluginDataDirectory);
-            var json = JsonSerializer.Serialize(settings, s_jsonOptions);
-            AtomicFileWrite.WriteAllText(_settingsFilePath, json);
+            _settingsStore.Update(update);
         }
         catch (Exception ex)
         {
@@ -421,6 +456,58 @@ public sealed class PluginHostServices : IPluginHostServices
             );
             throw;
         }
+    }
+
+    private static ImmutableDictionary<string, JsonElement> DeserializeSettings(
+        string json
+    )
+    {
+        return JsonSerializer.Deserialize<ImmutableDictionary<string, JsonElement>>(
+                json,
+                s_jsonOptions
+            )
+            ?? throw new JsonException("The settings file contained null JSON.");
+    }
+
+    private void ReportStateStoreDiagnostic(AtomicJsonStoreDiagnostic diagnostic)
+    {
+        Trace.WriteLine(
+            $"[Plugin:{_pluginId}] State store {diagnostic.Kind} at '{diagnostic.Path}'."
+        );
+        if (diagnostic.Kind != AtomicJsonStoreDiagnosticKind.CorruptFilePreserved)
+        {
+            return;
+        }
+
+        AddSettingsError(
+            $"Plugin '{_pluginDisplayName}' ({_pluginId}) state file '{diagnostic.Path}' was "
+            + $"corrupt and was preserved as '{diagnostic.PreservedPath}': "
+            + (diagnostic.Exception?.Message ?? "invalid JSON")
+        );
+    }
+
+    private void ReportSettingsDiagnostic(AtomicJsonStoreDiagnostic diagnostic)
+    {
+        if (diagnostic.Kind != AtomicJsonStoreDiagnosticKind.CorruptFilePreserved)
+        {
+            return;
+        }
+
+        AddSettingsError(
+            $"Plugin '{_pluginDisplayName}' ({_pluginId}) settings were corrupt and "
+            + $"were preserved as '{diagnostic.PreservedPath}': "
+            + (diagnostic.Exception?.Message ?? "invalid JSON")
+        );
+    }
+
+    private static bool OptionsMatch(
+        PluginStateStoreOptions left,
+        PluginStateStoreOptions right
+    )
+    {
+        return ReferenceEquals(left.JsonOptions, right.JsonOptions)
+            && left.KeepLastKnownGoodBackup == right.KeepLastKnownGoodBackup
+            && left.CorruptFilePolicy == right.CorruptFilePolicy;
     }
 
     private void LogSecretUnavailable(string key, string reason)
@@ -451,20 +538,6 @@ public sealed class PluginHostServices : IPluginHostServices
         );
     }
 
-    [DoesNotReturn]
-    private void ThrowRefusingToSave()
-    {
-        Trace.WriteLine(
-            $"[Plugin:{_pluginId}] Skipping save to '{_settingsFilePath}': previous load failed and overwriting would discard existing data."
-        );
-        AddSettingsError(
-            $"Plugin '{_pluginDisplayName}' ({_pluginId}) settings were not saved because the existing file could not be read."
-        );
-        throw new IOException(
-            $"Refusing to overwrite '{_settingsFilePath}' because the previous load failed."
-        );
-    }
-
     private void AddSettingsError(string message)
     {
         try
@@ -479,27 +552,39 @@ public sealed class PluginHostServices : IPluginHostServices
         }
     }
 
-    private static string? PreserveBrokenFile(string path)
-    {
-        try
-        {
-            if (!File.Exists(path))
-            {
-                return null;
-            }
+    private sealed record StateStoreRegistration(
+        Type StateType,
+        PluginStateStoreOptions Options,
+        object Store
+    );
 
-            var brokenPath =
-                $"{path}.broken-{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
-            File.Move(path, brokenPath);
-            Trace.WriteLine($"[PluginHostServices] Preserved unreadable file as {brokenPath}");
-            return brokenPath;
-        }
-        catch (Exception ex)
+    private sealed class PluginStateStoreAdapter<T>(AtomicJsonStore<T> store)
+        : IPluginStateStore<T>
+        where T : notnull
+    {
+        public ValueTask<T> ReadAsync(CancellationToken cancellationToken = default)
         {
-            Trace.WriteLine(
-                $"[PluginHostServices] Could not preserve unreadable file: {ex.Message}"
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(store.Current);
+        }
+
+        public ValueTask<T> UpdateAsync(
+            Func<T, T> update,
+            CancellationToken cancellationToken = default
+        )
+        {
+            ArgumentNullException.ThrowIfNull(update);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Rechecked inside the transaction: this call may have waited for another one to
+            // finish, and cancellation during that wait must not still commit.
+            return ValueTask.FromResult(
+                store.Update(current =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return update(current);
+                })
             );
-            return null;
         }
     }
 }

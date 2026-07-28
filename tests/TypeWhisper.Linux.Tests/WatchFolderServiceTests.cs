@@ -27,6 +27,37 @@ public sealed class WatchFolderServiceTests : IDisposable
     }
 
     [Fact]
+    public void Construction_WhenHistoryIsUnreadable_DegradesToEmptyWithoutClobberingIt()
+    {
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        {
+            return;
+        }
+
+        var dataPath = Path.Join(_tempDir, "unreadable-history-data");
+        Directory.CreateDirectory(dataPath);
+        var historyPath = Path.Join(dataPath, "watch-folder-history.json");
+        File.WriteAllText(historyPath, "[]");
+        var originalMode = File.GetUnixFileMode(historyPath);
+        try
+        {
+            File.SetUnixFileMode(historyPath, UnixFileMode.None);
+
+            // History is not essential: an unreadable file must not stop the whole
+            // file-transcription section from being constructed.
+            var service = new WatchFolderService(dataPath);
+
+            Assert.Empty(service.History);
+            service.Dispose();
+        }
+        finally
+        {
+            File.SetUnixFileMode(historyPath, originalMode);
+            Assert.Equal("[]", File.ReadAllText(historyPath));
+        }
+    }
+
+    [Fact]
     public async Task Restart_WhenPrimaryFingerprintStoreIsCorrupt_RecoversBackupAndSkipsRetainedSource()
     {
         var watchPath = Path.Join(_tempDir, "recovery-watch");
