@@ -30,6 +30,46 @@ public sealed class RecorderFileNamerTests : IDisposable
     }
 
     [Fact]
+    public async Task CommitRecording_InParallelAtSameTimestamp_CreatesUniqueMatchingFiles()
+    {
+        byte[][] recordings = [[1, 2, 3], [4, 5, 6]];
+        using var start = new Barrier(recordings.Length);
+        var commits = recordings
+            .Select(
+                wav =>
+                    Task.Run(() =>
+                    {
+                        // ReSharper disable once AccessToDisposedClosure -- Task.WhenAll below
+                        // awaits every task before `using var start` is disposed at scope end.
+                        start.SignalAndWait();
+                        return RecorderFileNamer.CommitRecording(
+                            _tempDir,
+                            s_timestamp,
+                            wav
+                        );
+                    })
+            )
+            .ToArray();
+
+        var committedPaths = await Task.WhenAll(commits);
+
+        Assert.Equal(recordings.Length, committedPaths.Distinct().Count());
+        Assert.Equal(
+            [
+                Path.Join(_tempDir, "recording-2026-07-15-134207 (1).wav"),
+                Path.Join(_tempDir, "recording-2026-07-15-134207.wav"),
+            ],
+            committedPaths.Order().ToArray()
+        );
+        for (var index = 0; index < recordings.Length; index++)
+        {
+            Assert.Equal(recordings[index], await File.ReadAllBytesAsync(committedPaths[index]));
+        }
+
+        Assert.Empty(Directory.EnumerateFiles(_tempDir, "*.tmp"));
+    }
+
+    [Fact]
     public void CommitRecording_WhenBaseWavExists_AdvancesToNextSuffix()
     {
         var existingPath = Path.Join(_tempDir, "recording-2026-07-15-134207.wav");

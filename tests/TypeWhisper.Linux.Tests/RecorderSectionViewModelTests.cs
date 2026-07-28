@@ -153,6 +153,42 @@ public sealed class RecorderSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task ToggleRecordingCommand_WhenTranscriptPathIsClaimedAfterWavCommit_PreservesForeignFile()
+    {
+        const string expectedTranscript = "Keep this transcript in the recording list.";
+        byte[] foreignBytes = [0, 1, 2, 255, 3, 4];
+        using var audio = CreateAudioService();
+        var sut = CreateViewModel(
+            audio,
+            _tempDir,
+            _ =>
+            {
+                var wavPath = Directory.GetFiles(_tempDir, "recording-*.wav").Single();
+                File.WriteAllBytes(Path.ChangeExtension(wavPath, ".txt"), foreignBytes);
+                return Task.FromResult<string?>(expectedTranscript);
+            }
+        );
+        await StartRecordingWithFramesAsync(sut, audio);
+
+        await sut.ToggleRecordingCommand.ExecuteAsync(null);
+
+        var recording = Assert.Single(sut.Recordings);
+        var transcriptPath = Path.ChangeExtension(recording.FilePath, ".txt");
+        Assert.True(File.Exists(recording.FilePath));
+        Assert.Equal(expectedTranscript, recording.Transcript);
+        Assert.Equal(foreignBytes, await File.ReadAllBytesAsync(transcriptPath));
+        Assert.Equal(
+            Loc.Instance["Recorder.StatusTranscriptSaveFailed"],
+            sut.StatusText
+        );
+        Assert.False(sut.IsRecording);
+        Assert.False(sut.IsTranscribing);
+        Assert.Equal("0:00", sut.DurationText);
+        Assert.False(sut.ToggleRecordingCommand.IsRunning);
+        Assert.True(sut.ToggleRecordingCommand.CanExecute(null));
+    }
+
+    [Fact]
     public async Task ToggleRecordingCommand_DoneRequiresDurableTranscript()
     {
         const string expectedTranscript = "The full durable transcript.\nSecond line.";

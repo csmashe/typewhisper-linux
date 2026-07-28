@@ -197,7 +197,10 @@ public partial class RecorderSectionViewModel : ObservableObject
         {
             try
             {
-                AtomicFileWrite.WriteAllText(Path.ChangeExtension(filePath, ".txt"), transcript);
+                AtomicFileWrite.WriteAllTextCreateNew(
+                    Path.ChangeExtension(filePath, ".txt"),
+                    transcript
+                );
                 transcriptPersisted = true;
             }
             catch
