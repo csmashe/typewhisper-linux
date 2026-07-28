@@ -723,11 +723,26 @@ public sealed class OpenAiCompatiblePlugin
 
             var id = NormalizeProfileId(Get(item, "__id"), seenIds);
 
-            var key = NullIfWhiteSpace(Get(item, "api-key"));
-            var keyChanged = key is not null
-                && !string.Equals(GetProfileApiKey(id), key, StringComparison.Ordinal);
-            if (keyChanged)
-                keyUpdates[id] = key;
+            var submittedKey = Get(item, "api-key");
+            var key = NullIfWhiteSpace(submittedKey);
+            var storedKey = GetProfileApiKey(id);
+            var keyChanged = false;
+            if (submittedKey is not null)
+            {
+                if (key is null)
+                {
+                    if (storedKey is not null)
+                    {
+                        keyUpdates[id] = null;
+                        keyChanged = true;
+                    }
+                }
+                else if (!string.Equals(storedKey, key, StringComparison.Ordinal))
+                {
+                    keyUpdates[id] = key;
+                    keyChanged = true;
+                }
+            }
 
             // A changed endpoint (base URL or credentials) may point at a different
             // server, so drop the stale catalog and this save's submitted selections
@@ -769,8 +784,16 @@ public sealed class OpenAiCompatiblePlugin
 
             foreach (var (id, key) in keyUpdates)
             {
-                await _host.StoreSecretAsync(SecretKeyFor(id), key!);
-                _additionalApiKeys[id] = key;
+                if (key is null)
+                {
+                    await _host.DeleteSecretAsync(SecretKeyFor(id));
+                    _additionalApiKeys.Remove(id);
+                }
+                else
+                {
+                    await _host.StoreSecretAsync(SecretKeyFor(id), key);
+                    _additionalApiKeys[id] = key;
+                }
             }
         }
 

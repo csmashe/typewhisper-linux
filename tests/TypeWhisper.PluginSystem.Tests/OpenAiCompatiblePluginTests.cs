@@ -305,6 +305,172 @@ public sealed class OpenAiCompatiblePluginTests
     }
 
     [Fact]
+    public async Task SetItemsAsync_NullApiKey_KeepsStoredKeyAcrossUnrelatedSave()
+    {
+        // Pre-fix host behavior never delivered this null sentinel: it submitted
+        // "" for both untouched and cleared fields, which the plugin kept. The
+        // plugin's null behavior itself already kept the key; this pins the now
+        // reachable untouched-secret contract.
+        var host = new TestPluginHostServices();
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("Original", "http://localhost:11434", apiKey: "stored-key")]
+        );
+        var id = Assert.Single(await sut.GetItemsAsync("profiles")).Values["__id"];
+        var secretReference = $"api-key.{id}";
+
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("Renamed", "http://localhost:11434", apiKey: null, id: id)]
+        );
+
+        Assert.Equal("stored-key", host.Secrets[secretReference]);
+        Assert.Single(host.StoredSecrets);
+        Assert.Empty(host.DeletedSecretKeys);
+    }
+
+    [Fact]
+    public async Task SetItemsAsync_BlankApiKeyWithStoredKey_DeletesSecretAndDropsCatalog()
+    {
+        // Pre-fix, NullIfWhiteSpace mapped "" to the keep sentinel, so no delete
+        // occurred and the credential-bound catalog survived unchanged.
+        var requestedApiKeys = new List<string?>();
+        var handler = new CapturingHandler((request, _) =>
+        {
+            var apiKey = request.Headers.Authorization?.Parameter;
+            requestedApiKeys.Add(apiKey);
+            var model = apiKey is null ? "public-model" : "secured-model";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    $$"""{"data":[{"id":"{{model}}"}]}""",
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
+        });
+        var host = new TestPluginHostServices();
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("P", "http://localhost:11434", apiKey: "stored-key")]
+        );
+        var id = Assert.Single(await sut.GetItemsAsync("profiles")).Values["__id"];
+        var secretReference = $"api-key.{id}";
+        Assert.Contains(
+            Assert.Single(sut.AdditionalLlmProviders).SupportedModels,
+            model => model.Id == "secured-model"
+        );
+
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("P", "http://localhost:11434", apiKey: "", id: id)]
+        );
+
+        Assert.DoesNotContain(secretReference, host.Secrets.Keys);
+        Assert.Contains(secretReference, host.DeletedSecretKeys);
+        Assert.Equal(["stored-key", null], requestedApiKeys);
+        var models = Assert.Single(sut.AdditionalLlmProviders).SupportedModels;
+        Assert.Contains(models, model => model.Id == "public-model");
+        Assert.DoesNotContain(models, model => model.Id == "secured-model");
+    }
+
+    [Fact]
+    public async Task SetItemsAsync_BlankApiKeyWithoutStoredKey_IsNoOp()
+    {
+        // Pre-fix behavior was also a no-op for this keyless case; this is the
+        // compatibility guard that ensures the new clear signal does not emit a
+        // needless delete or discard an unrelated catalog.
+        var modelRequests = 0;
+        var handler = new CapturingHandler((_, _) =>
+        {
+            modelRequests++;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"data":[{"id":"m1"}]}""",
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
+        });
+        var host = new TestPluginHostServices();
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("P", "http://localhost:11434")]
+        );
+        var id = Assert.Single(await sut.GetItemsAsync("profiles")).Values["__id"];
+
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("P", "http://localhost:11434", apiKey: "", id: id)]
+        );
+
+        Assert.Empty(host.Secrets);
+        Assert.Empty(host.StoredSecrets);
+        Assert.Empty(host.DeletedSecretKeys);
+        Assert.Equal(1, modelRequests);
+        Assert.Contains(
+            Assert.Single(sut.AdditionalLlmProviders).SupportedModels,
+            model => model.Id == "m1"
+        );
+    }
+
+    [Fact]
+    public async Task SetItemsAsync_NonBlankApiKey_ReplacesStoredKey()
+    {
+        // Pre-fix replacement already worked. This regression guard proves the
+        // new null/blank split leaves the existing non-blank path intact.
+        var handler = new CapturingHandler((request, _) =>
+        {
+            var model = request.Headers.Authorization?.Parameter == "new-key"
+                ? "new-key-model"
+                : "old-key-model";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    $$"""{"data":[{"id":"{{model}}"}]}""",
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
+        });
+        var host = new TestPluginHostServices();
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("P", "http://localhost:11434", apiKey: "old-key")]
+        );
+        var id = Assert.Single(await sut.GetItemsAsync("profiles")).Values["__id"];
+        var secretReference = $"api-key.{id}";
+
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("P", "http://localhost:11434", apiKey: "new-key", id: id)]
+        );
+
+        Assert.Equal("new-key", host.Secrets[secretReference]);
+        Assert.Equal(
+            [(secretReference, "old-key"), (secretReference, "new-key")],
+            host.StoredSecrets
+        );
+        Assert.Empty(host.DeletedSecretKeys);
+        var models = Assert.Single(sut.AdditionalLlmProviders).SupportedModels;
+        Assert.Contains(models, model => model.Id == "new-key-model");
+        Assert.DoesNotContain(models, model => model.Id == "old-key-model");
+    }
+
+    [Fact]
     public async Task AdditionalProfiles_PersistAndReloadWithSecret()
     {
         var host = new TestPluginHostServices();
@@ -700,11 +866,14 @@ public sealed class OpenAiCompatiblePluginTests
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];
-        private Dictionary<string, string?> Secrets { get; } = [];
+        public Dictionary<string, string?> Secrets { get; } = [];
+        public List<(string Key, string Value)> StoredSecrets { get; } = [];
+        public List<string> DeletedSecretKeys { get; } = [];
         public int CapabilitiesChangedCount { get; private set; }
 
         public Task StoreSecretAsync(string key, string value)
         {
+            StoredSecrets.Add((key, value));
             Secrets[key] = value;
             return Task.CompletedTask;
         }
@@ -714,6 +883,7 @@ public sealed class OpenAiCompatiblePluginTests
 
         public Task DeleteSecretAsync(string key)
         {
+            DeletedSecretKeys.Add(key);
             Secrets.Remove(key);
             return Task.CompletedTask;
         }

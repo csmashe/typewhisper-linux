@@ -322,7 +322,13 @@ public partial class PluginsSectionViewModel : ObservableObject
             {
                 var items = collection
                     .Items.Select(item => new PluginCollectionItem(
-                        item.Fields.ToDictionary(field => field.Key, string? (field) => field.Value)
+                        item.Fields.ToDictionary(
+                            field => field.Key,
+                            string? (field) =>
+                                field is { IsSecretKind: true, IsUserModified: false }
+                                    ? null
+                                    : field.Value
+                        )
                     ))
                     .ToList();
 
@@ -953,7 +959,8 @@ public partial class PluginRow : ObservableObject
                     fieldIndex,
                     field.Key,
                     field.Value,
-                    field.SelectedOption
+                    field.SelectedOption,
+                    field is { IsSecretKind: true, IsUserModified: true }
                 )
             );
         }
@@ -969,7 +976,8 @@ public partial class PluginRow : ObservableObject
                     -1,
                     collection.Key,
                     null,
-                    null
+                    null,
+                    false
                 )
             );
 
@@ -988,7 +996,8 @@ public partial class PluginRow : ObservableObject
                             fieldIndex,
                             field.Key,
                             field.Value,
-                            field.SelectedOption
+                            field.SelectedOption,
+                            field is { IsSecretKind: true, IsUserModified: true }
                         )
                     );
                 }
@@ -1025,7 +1034,10 @@ public partial class PluginRow : ObservableObject
         int FieldIndex,
         string Key,
         string? Value,
-        PluginSettingOption? SelectedOption
+        PluginSettingOption? SelectedOption,
+        // A secret edited back to its baseline text still differs from an
+        // untouched one, and only the draft carries that distinction until save.
+        bool SecretModified
     );
 }
 
@@ -1161,6 +1173,10 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
 
     partial void OnValueChanged(string value)
     {
+        // Only edits routed through the bound setter reach here; initial population
+        // assigns the backing field directly and then resets this flag.
+        IsUserModified = true;
+
         if (Kind == PluginSettingKind.Dropdown && !_syncingOptionValue)
         {
             _syncingOptionValue = true;
