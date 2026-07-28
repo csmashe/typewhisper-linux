@@ -61,7 +61,7 @@ public sealed class ProfileServiceTests : IDisposable
         Assert.Null(result);
         Assert.Equal(0, writes);
         Assert.Equal(0, notifications);
-        Assert.Same(initialProfiles, service.Profiles);
+        Assert.Equal(initialProfiles, service.Profiles);
         Assert.False(Assert.Single(service.Profiles).IsEnabled);
         Assert.Equal(initialJson, File.ReadAllText(_filePath));
     }

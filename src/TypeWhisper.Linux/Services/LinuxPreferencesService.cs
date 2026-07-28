@@ -57,9 +57,7 @@ public sealed class LinuxPreferencesService
         WriteIndented = true, PropertyNameCaseInsensitive = true,
     };
 
-    private readonly Action<string, string> _atomicWrite;
-    private readonly Lock _gate = new();
-    private readonly string _path;
+    private readonly AtomicJsonStore<LinuxPreferences> _store;
 
     public LinuxPreferencesService()
         : this(Path.Join(TypeWhisperEnvironment.BasePath, "linux-preferences.json")) { }
@@ -69,70 +67,62 @@ public sealed class LinuxPreferencesService
         Action<string, string>? atomicWrite = null
     )
     {
-        _path = path;
-        _atomicWrite = atomicWrite ?? AtomicFileWrite.WriteAllText;
-        Load();
+        var options = new AtomicJsonStoreOptions<LinuxPreferences>
+        {
+            JsonOptions = s_jsonOptions,
+            CorruptFilePolicy = AtomicJsonCorruptFilePolicy.PreserveAndReset,
+            Diagnostic = diagnostic =>
+                Debug.WriteLine(
+                    $"[LinuxPreferencesService] {diagnostic.Kind} at "
+                    + $"'{diagnostic.Path}': {diagnostic.Exception?.Message}"
+                ),
+        };
+        _store = new AtomicJsonStore<LinuxPreferences>(
+            path,
+            () => LinuxPreferences.Default,
+            options,
+            atomicWrite ?? AtomicFileWrite.WriteAllText
+        );
+        _ = _store.Current;
     }
 
-    public LinuxPreferences Current { get; private set; } = LinuxPreferences.Default;
+    public LinuxPreferences Current => _store.Current;
 
     // ReSharper disable once UnusedMethodReturnValue.Global -- returns Current so callers that reload on demand get the fresh value.
-    // ReSharper disable once MemberCanBePrivate.Global -- public reload entry point mirroring ISettingsService.Load(); only the constructor calls it in-tree.
+    // ReSharper disable once MemberCanBePrivate.Global -- public reload entry point mirroring ISettingsService.Load().
+    // ReSharper disable once UnusedMember.Global -- the constructor primes the store via Current instead, so nothing calls this in-tree today.
     public LinuxPreferences Load()
     {
-        if (!File.Exists(_path))
-        {
-            return Current;
-        }
-
-        try
-        {
-            var json = File.ReadAllText(_path);
-            // ReSharper disable once InconsistentlySynchronizedField -- s_jsonOptions is an immutable static readonly options instance; reads require no synchronization.
-            Current =
-                JsonSerializer.Deserialize<LinuxPreferences>(json, s_jsonOptions)
-                ?? LinuxPreferences.Default;
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[LinuxPreferencesService] Load failed: {ex.Message}");
-            Current = LinuxPreferences.Default;
-        }
-
-        return Current;
+        return _store.Reload();
     }
 
     public void Save(LinuxPreferences next)
     {
-        lock (_gate)
-        {
-            SaveLocked(next);
-        }
+        Commit(_ => next);
     }
 
     public LinuxPreferences Update(Func<LinuxPreferences, LinuxPreferences> mutate)
     {
         ArgumentNullException.ThrowIfNull(mutate);
-        lock (_gate)
-        {
-            var updated = mutate(Current);
-            SaveLocked(updated);
-            return updated;
-        }
+        return Commit(mutate);
     }
 
-    private void SaveLocked(LinuxPreferences next)
+    private LinuxPreferences Commit(
+        Func<LinuxPreferences, LinuxPreferences> update
+    )
     {
+        var changed = false;
+        LinuxPreferences committed;
         try
         {
-            var directory = Path.GetDirectoryName(_path);
-            if (!string.IsNullOrEmpty(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            var json = JsonSerializer.Serialize(next, s_jsonOptions);
-            _atomicWrite(_path, json);
+            committed = _store.Update(
+                current =>
+                {
+                    var next = update(current);
+                    changed = !EqualityComparer<LinuxPreferences>.Default.Equals(next, current);
+                    return next;
+                }
+            );
         }
         catch (Exception ex)
         {
@@ -140,8 +130,12 @@ public sealed class LinuxPreferencesService
             throw;
         }
 
-        Current = next;
-        Changed?.Invoke(next);
+        if (changed)
+        {
+            Changed?.Invoke(committed);
+        }
+
+        return committed;
     }
 
     // ReSharper disable once EventNeverSubscribedTo.Global -- public API; raised on preference changes for external/future subscribers.

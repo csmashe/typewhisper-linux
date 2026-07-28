@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text.Json;
 using TypeWhisper.Core;
@@ -30,15 +31,10 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
         StringComparer.Ordinal
     );
 
-    private readonly List<WatchFolderHistoryItem> _history = [];
-    private readonly string _historyPath;
+    private readonly AtomicJsonStore<ImmutableArray<WatchFolderHistoryItem>> _historyStore;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
-    private readonly Action<string, string> _atomicWriteAllText;
-    private readonly Lock _persistenceGate = new();
     private readonly Func<TimeSpan, CancellationToken, Task> _readinessRetryDelay;
-    private readonly HashSet<string> _processedFingerprints = new(StringComparer.Ordinal);
-    private readonly string _processedFingerprintsBackupPath;
-    private readonly string _processedFingerprintsPath;
+    private readonly AtomicJsonStore<ImmutableHashSet<string>> _processedFingerprintsStore;
     private readonly Lock _stateGate = new();
     private readonly Func<Task, TimeSpan, Task> _waitForWorkers;
     private volatile WatchFolderRun? _currentRun;
@@ -110,14 +106,61 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
     )
     {
         _waitForWorkers = waitForWorkers;
-        _atomicWriteAllText = atomicWriteAllText;
         _readinessRetryDelay = readinessRetryDelay;
         Directory.CreateDirectory(dataPath);
-        _processedFingerprintsPath = Path.Join(dataPath, "watch-folder-processed.json");
-        _processedFingerprintsBackupPath = _processedFingerprintsPath + ".bak";
-        _historyPath = Path.Join(dataPath, "watch-folder-history.json");
-        LoadProcessedFingerprints();
-        LoadHistory();
+        var processedFingerprintsPath = Path.Join(
+            dataPath,
+            "watch-folder-processed.json"
+        );
+        _processedFingerprintsStore = new AtomicJsonStore<ImmutableHashSet<string>>(
+            processedFingerprintsPath,
+            static () => ImmutableHashSet.Create<string>(StringComparer.Ordinal),
+            new AtomicJsonStoreOptions<ImmutableHashSet<string>>
+            {
+                JsonOptions = s_jsonOptions,
+                BackupMode = AtomicJsonBackupMode.LastKnownGood,
+                CorruptFilePolicy = AtomicJsonCorruptFilePolicy.PreserveAndReset,
+                Deserialize = json =>
+                    (
+                        JsonSerializer.Deserialize<HashSet<string>>(json, s_jsonOptions)
+                        ?? throw new JsonException(
+                            "Watch folder fingerprint generation contained JSON null."
+                        )
+                    ).ToImmutableHashSet(StringComparer.Ordinal),
+                Diagnostic = diagnostic =>
+                    Debug.WriteLine(
+                        $"Watch folder fingerprints {diagnostic.Kind} at "
+                        + $"'{diagnostic.Path}'."
+                    ),
+            },
+            atomicWriteAllText
+        );
+        _historyStore = new AtomicJsonStore<ImmutableArray<WatchFolderHistoryItem>>(
+            Path.Join(dataPath, "watch-folder-history.json"),
+            static () => [],
+            new AtomicJsonStoreOptions<ImmutableArray<WatchFolderHistoryItem>>
+            {
+                JsonOptions = s_jsonOptions,
+                CorruptFilePolicy = AtomicJsonCorruptFilePolicy.PreserveAndReset,
+                Deserialize = json =>
+                {
+                    var history =
+                        JsonSerializer.Deserialize<
+                            ImmutableArray<WatchFolderHistoryItem>
+                        >(json, s_jsonOptions);
+                    return history.IsDefault
+                        ? throw new JsonException(
+                            "Watch folder history contained JSON null."
+                        )
+                        : [.. history.Take(100)];
+                },
+            },
+            AtomicFileWrite.WriteAllText
+        );
+        // Settle corrupt-file recovery now, but neither file is essential: the pre-store loaders
+        // both degraded to empty rather than failing construction.
+        _ = ReadProcessedFingerprints();
+        _ = ReadHistory();
     }
 
     // ReSharper disable once UnusedAutoPropertyAccessor.Global  public service-state accessor exposing the active watch path (parallels CurrentlyProcessing/IsRunning)
@@ -156,16 +199,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
 
     internal WatchFolderRun? CurrentRun => _currentRun;
 
-    public IReadOnlyList<WatchFolderHistoryItem> History
-    {
-        get
-        {
-            lock (_stateGate)
-            {
-                return _history.ToList();
-            }
-        }
-    }
+    public IReadOnlyList<WatchFolderHistoryItem> History => ReadHistory().ToArray();
 
     public void Dispose()
     {
@@ -231,13 +265,27 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
 
     public void ClearHistory()
     {
-        lock (_stateGate)
+        var changed = false;
+        try
         {
-            _history.Clear();
+            _historyStore.Update(
+                current =>
+                {
+                    changed = !current.IsEmpty;
+                    return changed ? [] : current;
+                }
+            );
+        }
+        catch (Exception ex) when (IsExpectedPersistenceException(ex))
+        {
+            Debug.WriteLine($"Failed to clear watch folder history: {ex}");
+            return;
         }
 
-        SaveHistory();
-        OnStateChanged();
+        if (changed)
+        {
+            OnStateChanged();
+        }
     }
 
     public event EventHandler? StateChanged;
@@ -909,14 +957,42 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
                && ReferenceEquals(owner, run);
     }
 
+    /// <summary>
+    ///     Reading either file is best effort, matching the loaders these stores replaced: an
+    ///     unreadable one degrades to empty. Safe — an update still reloads through the store,
+    ///     which refuses to overwrite a primary it could not read.
+    /// </summary>
+    private ImmutableArray<WatchFolderHistoryItem> ReadHistory()
+    {
+        try
+        {
+            return _historyStore.Current;
+        }
+        catch (Exception ex) when (IsExpectedPersistenceException(ex))
+        {
+            Debug.WriteLine($"Failed to load watch folder history: {ex}");
+            return [];
+        }
+    }
+
+    private ImmutableHashSet<string> ReadProcessedFingerprints()
+    {
+        try
+        {
+            return _processedFingerprintsStore.Current;
+        }
+        catch (Exception ex) when (IsExpectedPersistenceException(ex))
+        {
+            Debug.WriteLine($"Failed to load watch folder processed fingerprints: {ex}");
+            return ImmutableHashSet<string>.Empty;
+        }
+    }
+
     private bool IsKnownFingerprint(WatchFolderRun run, string fingerprint)
     {
-        lock (_persistenceGate)
+        if (ReadProcessedFingerprints().Contains(fingerprint))
         {
-            if (_processedFingerprints.Contains(fingerprint))
-            {
-                return true;
-            }
+            return true;
         }
 
         lock (run.FailedFingerprintsGate)
@@ -932,29 +1008,33 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
             return;
         }
 
-        lock (_persistenceGate)
+        var added = false;
+        try
         {
-            if (!IsRunCurrentAndLive(run))
-            {
-                return;
-            }
+            _processedFingerprintsStore.Update(
+                current =>
+                {
+                    if (!IsRunCurrentAndLive(run) || current.Contains(fingerprint))
+                    {
+                        return current;
+                    }
 
-            if (!_processedFingerprints.Add(fingerprint))
-            {
-                return;
-            }
+                    added = true;
+                    return current.Add(fingerprint);
+                }
+            );
+        }
+        catch (Exception ex) when (IsExpectedPersistenceException(ex))
+        {
+            throw new IOException(
+                $"Failed to persist watch folder processed fingerprints: {ex.Message}",
+                ex
+            );
+        }
 
-            try
-            {
-                SaveProcessedFingerprintsCore();
-            }
-            catch
-            {
-                // Roll back so the live set matches disk; the caller surfaces this via the
-                // normal per-file failure path, and the run's failed set blocks a hot retry.
-                _processedFingerprints.Remove(fingerprint);
-                throw;
-            }
+        if (!added)
+        {
+            return;
         }
 
         lock (run.FailedFingerprintsGate)
@@ -973,21 +1053,39 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
 
     private void AddHistory(WatchFolderRun run, WatchFolderHistoryItem item)
     {
-        lock (_stateGate)
+        var added = false;
+        try
         {
-            if (!ReferenceEquals(_currentRun, run) || run.CancellationSource.IsCancellationRequested)
-            {
-                return;
-            }
+            _historyStore.Update(
+                current =>
+                {
+                    if (
+                        !ReferenceEquals(_currentRun, run)
+                        || run.CancellationSource.IsCancellationRequested
+                    )
+                    {
+                        return current;
+                    }
 
-            _history.Insert(0, item);
-            if (_history.Count > 100)
-            {
-                _history.RemoveRange(100, _history.Count - 100);
-            }
+                    added = true;
+                    var next = current.Insert(0, item);
+                    return next.Length > 100
+                        ? next.RemoveRange(100, next.Length - 100)
+                        : next;
+                }
+            );
+        }
+        catch (Exception ex) when (IsExpectedPersistenceException(ex))
+        {
+            Debug.WriteLine($"Failed to save watch folder history: {ex}");
+            return;
         }
 
-        SaveHistory();
+        if (!added)
+        {
+            return;
+        }
+
         if (IsRunCurrentAndLive(run))
         {
             FileProcessed?.Invoke(this, item);
@@ -1074,189 +1172,6 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
             when (ex is IOException or UnauthorizedAccessException or FileNotFoundException)
         {
             return null;
-        }
-    }
-
-    private void LoadProcessedFingerprints()
-    {
-        var primaryExists = File.Exists(_processedFingerprintsPath);
-        var backupExists = File.Exists(_processedFingerprintsBackupPath);
-        if (!primaryExists && !backupExists)
-        {
-            return;
-        }
-
-        if (
-            TryLoadProcessedFingerprints(
-                _processedFingerprintsPath,
-                out var loaded,
-                out var primaryFailure
-            )
-        )
-        {
-            AddProcessedFingerprints(loaded);
-            return;
-        }
-
-        Debug.WriteLine(
-            $"Failed to load primary watch folder fingerprints "
-            + $"'{_processedFingerprintsPath}': {primaryFailure}"
-        );
-        if (
-            TryLoadProcessedFingerprints(
-                _processedFingerprintsBackupPath,
-                out loaded,
-                out var backupFailure
-            )
-        )
-        {
-            AddProcessedFingerprints(loaded);
-            Debug.WriteLine(
-                $"Recovered watch folder fingerprints from "
-                + $"'{_processedFingerprintsBackupPath}'."
-            );
-            return;
-        }
-
-        Debug.WriteLine(
-            $"Failed to load both watch folder fingerprint generations; "
-            + $"starting with an empty set. Primary: {primaryFailure} Backup: {backupFailure}"
-        );
-    }
-
-    private static bool TryLoadProcessedFingerprints(
-        string path,
-        out HashSet<string> loaded,
-        out Exception? failure
-    )
-    {
-        try
-        {
-            if (!File.Exists(path))
-            {
-                throw new FileNotFoundException(
-                    "Watch folder fingerprint generation does not exist.",
-                    path
-                );
-            }
-
-            loaded = DeserializeProcessedFingerprints(File.ReadAllText(path));
-            failure = null;
-            return true;
-        }
-        catch (Exception ex) when (IsExpectedPersistenceException(ex))
-        {
-            loaded = new HashSet<string>(StringComparer.Ordinal);
-            failure = ex;
-            return false;
-        }
-    }
-
-    private void AddProcessedFingerprints(IEnumerable<string> fingerprints)
-    {
-        foreach (var fingerprint in fingerprints)
-        {
-            // ReSharper disable once InconsistentlySynchronizedField -- only called during construction, before the instance is published; concurrent access is guarded elsewhere by _persistenceGate.
-            _processedFingerprints.Add(fingerprint);
-        }
-    }
-
-    private static HashSet<string> DeserializeProcessedFingerprints(string json)
-    {
-        return JsonSerializer.Deserialize<HashSet<string>>(json, s_jsonOptions)
-               ?? throw new JsonException(
-                   "Watch folder fingerprint generation contained JSON null."
-               );
-    }
-
-    private void SaveProcessedFingerprintsCore()
-    {
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(_processedFingerprintsPath)!);
-            var json = JsonSerializer.Serialize(_processedFingerprints, s_jsonOptions);
-
-            if (File.Exists(_processedFingerprintsPath))
-            {
-                string? currentJson = null;
-                try
-                {
-                    var candidate = File.ReadAllText(_processedFingerprintsPath);
-                    DeserializeProcessedFingerprints(candidate);
-                    currentJson = candidate;
-                }
-                catch (Exception ex) when (IsExpectedPersistenceException(ex))
-                {
-                    // Skip the backup write rather than overwrite a good backup with this
-                    // corrupt read; the new primary is still published atomically below.
-                    Debug.WriteLine(
-                        $"Skipped backup of unreadable watch folder fingerprints: {ex}"
-                    );
-                }
-
-                if (currentJson is not null)
-                {
-                    _atomicWriteAllText(_processedFingerprintsBackupPath, currentJson);
-                }
-            }
-
-            _atomicWriteAllText(_processedFingerprintsPath, json);
-        }
-        catch (Exception ex) when (IsExpectedPersistenceException(ex))
-        {
-            Debug.WriteLine($"Failed to save watch folder fingerprints: {ex}");
-            throw new IOException(
-                $"Failed to persist watch folder processed fingerprints: {ex.Message}",
-                ex
-            );
-        }
-    }
-
-    private void LoadHistory()
-    {
-        try
-        {
-            if (!File.Exists(_historyPath))
-            {
-                return;
-            }
-
-            var json = File.ReadAllText(_historyPath);
-            var loaded = JsonSerializer.Deserialize<List<WatchFolderHistoryItem>>(
-                json,
-                s_jsonOptions
-            );
-            if (loaded is null)
-            {
-                return;
-            }
-
-            _history.Clear();
-            _history.AddRange(loaded.Take(100));
-        }
-        catch (Exception ex) when (IsExpectedPersistenceException(ex))
-        {
-            Debug.WriteLine($"Failed to load watch folder history: {ex}");
-        }
-    }
-
-    private void SaveHistory()
-    {
-        try
-        {
-            List<WatchFolderHistoryItem> snapshot;
-            lock (_stateGate)
-            {
-                snapshot = _history.Take(100).ToList();
-            }
-
-            Directory.CreateDirectory(Path.GetDirectoryName(_historyPath)!);
-            var json = JsonSerializer.Serialize(snapshot, s_jsonOptions);
-            File.WriteAllText(_historyPath, json);
-        }
-        catch (Exception ex) when (IsExpectedPersistenceException(ex))
-        {
-            Debug.WriteLine($"Failed to save watch folder history: {ex}");
         }
     }
 

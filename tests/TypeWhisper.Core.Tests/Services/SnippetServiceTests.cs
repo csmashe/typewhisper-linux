@@ -483,7 +483,7 @@ public sealed class SnippetServiceTests : IDisposable
     }
 
     [Fact]
-    public void ApplySnippets_WhenUsageSaveFails_DoesNotThrowAndUpdatesCache()
+    public void ApplySnippets_WhenUsageSaveFails_DoesNotThrowAndRollsBackCache()
     {
         const string originalJson =
             "[{\"Id\":\"old\",\"Trigger\":\"old\",\"Replacement\":\"Expanded\",\"IsEnabled\":true}]";
@@ -496,8 +496,8 @@ public sealed class SnippetServiceTests : IDisposable
 
         Assert.Null(exception);
         var updated = Assert.Single(sut.Snippets);
-        Assert.Equal(1, updated.UsageCount);
-        Assert.NotNull(updated.LastUsedAt);
+        Assert.Equal(0, updated.UsageCount);
+        Assert.Null(updated.LastUsedAt);
         Assert.Equal(before, File.ReadAllBytes(failurePath.FilePath));
         Assert.Empty(failurePath.TemporaryFiles);
     }

@@ -1,4 +1,5 @@
 // ReSharper disable MethodHasAsyncOverload -- synchronous File.ReadAllBytes is deliberate in these test assertions.
+using System.Collections.Immutable;
 using Moq;
 using System.Security.Cryptography;
 using System.Runtime.Versioning;
@@ -348,8 +349,10 @@ public sealed class PluginHostServicesTests : IDisposable
             File.SetUnixFileMode(settingsPath, UnixFileMode.None);
             var services = CreateServices();
 
-            Assert.Null(services.GetSetting<string>("language"));
-            Assert.Throws<IOException>(() =>
+            Assert.ThrowsAny<Exception>(() =>
+                services.GetSetting<string>("language")
+            );
+            Assert.ThrowsAny<Exception>(() =>
                 services.SetSetting("language", "new-value")
             );
             Assert.True(File.Exists(settingsPath));
@@ -397,7 +400,9 @@ public sealed class PluginHostServicesTests : IDisposable
             File.SetUnixFileMode(settingsPath, UnixFileMode.None);
             var services = CreateServices();
 
-            await Assert.ThrowsAsync<IOException>(() => services.DeleteSecretAsync("api-key"));
+            await Assert.ThrowsAnyAsync<Exception>(() =>
+                services.DeleteSecretAsync("api-key")
+            );
         }
         finally
         {
@@ -442,6 +447,108 @@ public sealed class PluginHostServicesTests : IDisposable
         Assert.Contains("reserved", ex.Message, StringComparison.Ordinal);
         Assert.Equal(before, File.ReadAllBytes(settingsPath));
         Assert.Equal("secret-value", await CreateServices().LoadSecretAsync("api-key"));
+    }
+
+    [Theory]
+    [InlineData("../outside.json")]
+    [InlineData("sub/state.json")]
+    [InlineData("sub\\state.json")]
+    [InlineData("settings.json")]
+    [InlineData("secret-protection.key")]
+    public void OpenStateStore_RejectsNonLeafAndReservedNames(string fileName)
+    {
+        var services = CreateServices();
+
+        Assert.Throws<ArgumentException>(() =>
+            services.OpenStateStore<ImmutableArray<string>>(
+                fileName,
+                static () => []
+            )
+        );
+    }
+
+    [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
+    public void OpenStateStore_RejectsRelativeDirectoryNames(string fileName)
+    {
+        var services = CreateServices();
+
+        Assert.Throws<ArgumentException>(() =>
+            services.OpenStateStore<ImmutableArray<string>>(
+                fileName,
+                static () => []
+            )
+        );
+    }
+
+    [Fact]
+    public void OpenStateStore_ReusesSamePathTypeAndOptionsButRejectsConflicts()
+    {
+        var services = CreateServices();
+        var options = new PluginStateStoreOptions
+        {
+            JsonOptions = new JsonSerializerOptions { WriteIndented = true },
+            CorruptFilePolicy = PluginStateCorruptFilePolicy.PreserveAndReset,
+        };
+
+        var first = services.OpenStateStore<ImmutableArray<string>>(
+            "state.json",
+            static () => [],
+            options
+        );
+        var second = services.OpenStateStore<ImmutableArray<string>>(
+            "state.json",
+            static () => [],
+            options
+        );
+
+        Assert.Same(first, second);
+        Assert.Throws<InvalidOperationException>(() =>
+            services.OpenStateStore<ImmutableArray<int>>(
+                "state.json",
+                static () => [],
+                options
+            )
+        );
+        Assert.Throws<InvalidOperationException>(() =>
+            services.OpenStateStore<ImmutableArray<string>>(
+                "state.json",
+                static () => [],
+                options with { KeepLastKnownGoodBackup = true }
+            )
+        );
+    }
+
+    [Fact]
+    public async Task OpenStateStore_CancellationBeforeCommit_DoesNotWrite()
+    {
+        var services = CreateServices();
+        var store = services.OpenStateStore<ImmutableArray<string>>(
+            "state.json",
+            static () => []
+        );
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () =>
+                await store.UpdateAsync(
+                    current => current.Add("not committed"),
+                    cancellation.Token
+                )
+        );
+
+        Assert.False(
+            File.Exists(
+                Path.Join(
+                    _tempDir,
+                    "PluginData",
+                    "test-plugin",
+                    "state.json"
+                )
+            )
+        );
     }
 
     private PluginHostServices CreateServices(

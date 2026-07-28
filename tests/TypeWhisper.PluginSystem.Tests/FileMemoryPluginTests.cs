@@ -1,4 +1,5 @@
 using System.Text.Json;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Plugin.FileMemory;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -128,7 +129,7 @@ public sealed class FileMemoryPluginTests : IDisposable
     }
 
     [Fact]
-    public async Task UnreadableFile_ReturnsEmptyAndRefusesToOverwrite()
+    public async Task UnreadableFile_SurfacesAndRefusesToOverwrite()
     {
         if (!OperatingSystem.IsLinux() || Environment.UserName == "root")
         {
@@ -146,8 +147,8 @@ public sealed class FileMemoryPluginTests : IDisposable
             File.SetUnixFileMode(MemoryPath, UnixFileMode.None);
             using var plugin = await CreatePluginAsync();
 
-            Assert.Empty(await plugin.GetAllAsync());
-            await Assert.ThrowsAsync<IOException>(() => plugin.StoreAsync("New memory"));
+            await Assert.ThrowsAnyAsync<Exception>(() => plugin.GetAllAsync());
+            await Assert.ThrowsAnyAsync<Exception>(() => plugin.StoreAsync("New memory"));
             Assert.True(File.Exists(MemoryPath));
         }
         finally
@@ -182,6 +183,18 @@ public sealed class FileMemoryPluginTests : IDisposable
         public void SetSetting<T>(string key, T value) { }
         public void Log(PluginLogLevel level, string message) { }
         public void NotifyCapabilitiesChanged() { }
+
+        public IPluginStateStore<T> OpenStateStore<T>(
+            string fileName,
+            Func<T> createDefault,
+            PluginStateStoreOptions? options = null
+        )
+            where T : notnull =>
+            new TestFilePluginStateStore<T>(
+                Path.Join(PluginDataDirectory, fileName),
+                createDefault,
+                options
+            );
     }
 
     private sealed class TestPluginLocalization : IPluginLocalization
@@ -203,5 +216,51 @@ public sealed class FileMemoryPluginTests : IDisposable
     private sealed class NoOpDisposable : IDisposable
     {
         public void Dispose() { }
+    }
+}
+
+internal sealed class TestFilePluginStateStore<T> : IPluginStateStore<T>
+    where T : notnull
+{
+    private readonly AtomicJsonStore<T> _store;
+
+    public TestFilePluginStateStore(
+        string path,
+        Func<T> createDefault,
+        PluginStateStoreOptions? options
+    )
+    {
+        options ??= new PluginStateStoreOptions();
+        _store = new AtomicJsonStore<T>(
+            path,
+            createDefault,
+            new AtomicJsonStoreOptions<T>
+            {
+                JsonOptions = options.JsonOptions,
+                BackupMode = options.KeepLastKnownGoodBackup
+                    ? AtomicJsonBackupMode.LastKnownGood
+                    : AtomicJsonBackupMode.None,
+                CorruptFilePolicy =
+                    options.CorruptFilePolicy
+                    == PluginStateCorruptFilePolicy.PreserveAndReset
+                        ? AtomicJsonCorruptFilePolicy.PreserveAndReset
+                        : AtomicJsonCorruptFilePolicy.Throw,
+            }
+        );
+    }
+
+    public ValueTask<T> ReadAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(_store.Current);
+    }
+
+    public ValueTask<T> UpdateAsync(
+        Func<T, T> update,
+        CancellationToken cancellationToken = default
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(_store.Update(update));
     }
 }

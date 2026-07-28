@@ -11,7 +11,9 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <!-- Exposes internal AvailableModels to the translation-target guard test. -->
+        <!-- Test hooks and Linux's injected persistence writers use internal constructors. -->
         <InternalsVisibleTo Include="TypeWhisper.Core.Tests"/>
+        <InternalsVisibleTo Include="TypeWhisper.PluginSystem.Tests"/>
+        <InternalsVisibleTo Include="typewhisper"/>
     </ItemGroup>
 </Project>

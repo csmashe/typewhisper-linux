@@ -77,6 +77,43 @@ public sealed class AtomicFileWriteTests
     }
 
     [Fact]
+    public void WriteAllText_WhenStagedObserverFails_LeavesDestinationUntouchedAndCleansSibling()
+    {
+        var directory = TestPaths.CreateTempDirectory(
+            "TypeWhisper.AtomicFileWriteObserverTests"
+        );
+        var path = Path.Join(directory, "state.json");
+        File.WriteAllText(path, "old");
+        string? stagedPath = null;
+
+        try
+        {
+            Assert.Throws<InjectedStagedWriteException>(() =>
+                AtomicFileWrite.WriteAllText(
+                    path,
+                    "new",
+                    candidate =>
+                    {
+                        stagedPath = candidate;
+                        Assert.Equal("new", File.ReadAllText(candidate));
+                        Assert.Equal(directory, Path.GetDirectoryName(candidate));
+                        throw new InjectedStagedWriteException();
+                    }
+                )
+            );
+
+            Assert.Equal("old", File.ReadAllText(path));
+            Assert.NotNull(stagedPath);
+            Assert.False(File.Exists(stagedPath));
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
     public void WriteAllTextCreateNew_CreatesCompleteDestinationWithoutTempFile()
     {
         var directory = Path.Join(
@@ -217,6 +254,8 @@ public sealed class AtomicFileWriteTests
         }
     }
 }
+
+internal sealed class InjectedStagedWriteException : Exception;
 
 internal sealed class AtomicWriteFailureTestPath : IDisposable
 {

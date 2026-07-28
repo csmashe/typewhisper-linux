@@ -68,7 +68,25 @@ public static partial class AtomicFileWrite
 
     public static void WriteAllText(string path, string contents)
     {
-        WriteCore(path, replaceExisting: true, tempPath => File.WriteAllText(tempPath, contents));
+        WriteAllText(path, contents, stagedWriteObserver: null);
+    }
+
+    /// <summary>
+    ///     Test-only overload whose observer runs after the unique sibling is complete and has
+    ///     inherited the destination mode, but before it is published.
+    /// </summary>
+    internal static void WriteAllText(
+        string path,
+        string contents,
+        Action<string>? stagedWriteObserver
+    )
+    {
+        WriteCore(
+            path,
+            replaceExisting: true,
+            tempPath => File.WriteAllText(tempPath, contents),
+            stagedWriteObserver
+        );
     }
 
     /// <summary>
@@ -152,7 +170,8 @@ public static partial class AtomicFileWrite
     private static void WriteCore(
         string path,
         bool replaceExisting,
-        Action<string> writeTemporaryFile
+        Action<string> writeTemporaryFile,
+        Action<string>? stagedWriteObserver = null
     )
     {
         var tempPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -198,10 +217,12 @@ public static partial class AtomicFileWrite
                     File.SetUnixFileMode(tempPath, File.GetUnixFileMode(path));
                 }
 
+                stagedWriteObserver?.Invoke(tempPath);
                 File.Replace(tempPath, path, null);
             }
             else
             {
+                stagedWriteObserver?.Invoke(tempPath);
                 PublishCreateNew(tempPath, path);
             }
         }

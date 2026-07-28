@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -14,45 +15,49 @@ namespace TypeWhisper.Core.Services;
 public sealed partial class SnippetService : ISnippetService
 {
     private readonly string _filePath;
-    private readonly Lock _gate = new();
-    private List<Snippet> _cache = [];
-    private bool _cacheLoaded;
+    private readonly AtomicJsonStore<ImmutableArray<Snippet>> _store;
 
     public SnippetService(string filePath)
     {
-        _filePath = filePath;
+        _filePath = Path.GetFullPath(filePath);
+        _store = new AtomicJsonStore<ImmutableArray<Snippet>>(
+            _filePath,
+            static () => [],
+            new AtomicJsonStoreOptions<ImmutableArray<Snippet>>
+            {
+                CorruptFilePolicy = AtomicJsonCorruptFilePolicy.PreserveAndReset,
+                Deserialize = json =>
+                    [
+                        .. JsonSerializer.Deserialize(
+                            json,
+                            SnippetJsonContext.Default.ListSnippet
+                        ) ?? throw new JsonException("Snippet JSON deserialized to null."),
+                    ],
+                Serialize = snippets =>
+                    JsonSerializer.Serialize(
+                        snippets.ToList(),
+                        SnippetJsonContext.Default.ListSnippet
+                    ),
+            }
+        );
     }
 
-    public IReadOnlyList<Snippet> Snippets
-    {
-        get
-        {
-            EnsureCacheLoaded();
-            lock (_gate)
-            {
-                return _cache.ToList();
-            }
-        }
-    }
+    public IReadOnlyList<Snippet> Snippets => _store.Current.ToArray();
 
     public IReadOnlyList<string> AllTags
     {
         get
         {
-            EnsureCacheLoaded();
-            lock (_gate)
-            {
-                return _cache
-                    .SelectMany(s =>
-                        s.Tags.Split(
-                            ',',
-                            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
-                        )
+            return _store.Current
+                .SelectMany(s =>
+                    s.Tags.Split(
+                        ',',
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
                     )
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Order(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-            }
+                )
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
     }
 
@@ -60,54 +65,41 @@ public sealed partial class SnippetService : ISnippetService
 
     public void AddSnippet(Snippet snippet)
     {
-        EnsureCacheLoaded();
-        lock (_gate)
+        Commit(snippets =>
         {
-            var next = new List<Snippet>(_cache) { snippet };
-            SaveToDisk(next);
-            _cache = next;
-        }
-
-        SnippetsChanged?.Invoke();
+            snippets.Add(snippet);
+            return true;
+        });
     }
 
     public void UpdateSnippet(Snippet snippet)
     {
-        EnsureCacheLoaded();
-        lock (_gate)
+        Commit(snippets =>
         {
-            var idx = _cache.FindIndex(s => s.Id == snippet.Id);
-            if (idx < 0 || _cache[idx] == snippet)
+            var idx = snippets.FindIndex(s => s.Id == snippet.Id);
+            if (idx < 0 || snippets[idx] == snippet)
             {
-                return;
+                return false;
             }
 
-            var next = new List<Snippet>(_cache) { [idx] = snippet };
-            SaveToDisk(next);
-            _cache = next;
-        }
-
-        SnippetsChanged?.Invoke();
+            snippets[idx] = snippet;
+            return true;
+        });
     }
 
     public void DeleteSnippet(string id)
     {
-        EnsureCacheLoaded();
-        lock (_gate)
+        Commit(snippets =>
         {
-            var idx = _cache.FindIndex(s => s.Id == id);
+            var idx = snippets.FindIndex(s => s.Id == id);
             if (idx < 0)
             {
-                return;
+                return false;
             }
 
-            var next = new List<Snippet>(_cache);
-            next.RemoveAt(idx);
-            SaveToDisk(next);
-            _cache = next;
-        }
-
-        SnippetsChanged?.Invoke();
+            snippets.RemoveAt(idx);
+            return true;
+        });
     }
 
     public string ApplySnippets(
@@ -116,15 +108,10 @@ public sealed partial class SnippetService : ISnippetService
         string? profileId = null
     )
     {
-        EnsureCacheLoaded();
-        List<Snippet> activeSnippets;
-        lock (_gate)
-        {
-            activeSnippets = _cache
+        var activeSnippets = _store.Current
                 .Where(s => s.IsEnabled && AppliesToProfile(s, profileId))
                 .OrderByDescending(s => s.Trigger.Length)
                 .ToList();
-        }
 
         var usageIncrements = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var snippet in activeSnippets)
@@ -165,11 +152,10 @@ public sealed partial class SnippetService : ISnippetService
 
     public string ExportToJson()
     {
-        EnsureCacheLoaded();
-        lock (_gate)
-        {
-            return JsonSerializer.Serialize(_cache, SnippetJsonContext.Default.ListSnippet);
-        }
+        return JsonSerializer.Serialize(
+            _store.Current.ToList(),
+            SnippetJsonContext.Default.ListSnippet
+        );
     }
 
     public int ImportFromJson(string json)
@@ -185,11 +171,10 @@ public sealed partial class SnippetService : ISnippetService
             return 0;
         }
 
-        EnsureCacheLoaded();
         var count = 0;
-        lock (_gate)
+        Commit(next =>
         {
-            var next = new List<Snippet>(_cache);
+            count = 0;
             // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator
             foreach (var snippet in imported)
             {
@@ -203,17 +188,8 @@ public sealed partial class SnippetService : ISnippetService
                 count++;
             }
 
-            if (count > 0)
-            {
-                SaveToDisk(next);
-                _cache = next;
-            }
-        }
-
-        if (count > 0)
-        {
-            SnippetsChanged?.Invoke();
-        }
+            return count > 0;
+        });
 
         return count;
     }
@@ -296,101 +272,65 @@ public sealed partial class SnippetService : ISnippetService
             return;
         }
 
-        lock (_gate)
-        {
-            var next = new List<Snippet>(_cache);
-            var changed = false;
-            var now = DateTime.UtcNow;
-            foreach (var (id, delta) in increments)
-            {
-                if (delta <= 0)
-                {
-                    continue;
-                }
-
-                var idx = next.FindIndex(s => s.Id == id);
-                if (idx < 0)
-                {
-                    continue;
-                }
-
-                next[idx] = next[idx] with
-                {
-                    UsageCount = next[idx].UsageCount + delta,
-                    LastUsedAt = now,
-                };
-                changed = true;
-            }
-
-            if (!changed)
-            {
-                return;
-            }
-
-            _cache = next;
-            try
-            {
-                SaveToDisk(next);
-            }
-            catch (Exception ex)
-            {
-                // Usage stats are best-effort because this runs on the dictation path.
-                Trace.WriteLine(
-                    $"[SnippetService] Could not persist usage counts to {_filePath}: {ex.Message}"
-                );
-            }
-        }
-    }
-
-    private void EnsureCacheLoaded()
-    {
-        // Volatile.Read for the fast-path check avoids acquiring the lock on every call after load.
-        // Volatile.Write inside the lock ensures the write is visible to all threads before they
-        // exit the lock (double-checked locking pattern).
-        if (Volatile.Read(ref _cacheLoaded))
-        {
-            return;
-        }
-
-        lock (_gate)
-        {
-            if (Volatile.Read(ref _cacheLoaded))
-            {
-                return;
-            }
-
-            try
-            {
-                if (File.Exists(_filePath))
-                {
-                    var json = File.ReadAllText(_filePath);
-                    _cache =
-                        JsonSerializer.Deserialize(json, SnippetJsonContext.Default.ListSnippet)
-                        ?? [];
-                }
-            }
-            catch
-            {
-                PreserveBrokenFile(_filePath);
-                _cache = [];
-            }
-
-            Volatile.Write(ref _cacheLoaded, true);
-        }
-    }
-
-    private void SaveToDisk(IReadOnlyList<Snippet> snippets)
-    {
         try
         {
-            var dir = Path.GetDirectoryName(_filePath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
+            Commit(
+                snippets =>
+                {
+                    var changed = false;
+                    var now = DateTime.UtcNow;
+                    foreach (var (id, delta) in increments)
+                    {
+                        if (delta <= 0)
+                        {
+                            continue;
+                        }
 
-            var json = JsonSerializer.Serialize(snippets, SnippetJsonContext.Default.ListSnippet);
-            AtomicFileWrite.WriteAllText(_filePath, json);
+                        var idx = snippets.FindIndex(s => s.Id == id);
+                        if (idx < 0)
+                        {
+                            continue;
+                        }
+
+                        snippets[idx] = snippets[idx] with
+                        {
+                            UsageCount = snippets[idx].UsageCount + delta,
+                            LastUsedAt = now,
+                        };
+                        changed = true;
+                    }
+
+                    return changed;
+                },
+                raiseEvent: false
+            );
+        }
+        catch (Exception ex)
+        {
+            // Usage stats are best-effort because this runs on the dictation path. The store
+            // retains the prior snapshot when persistence fails.
+            Trace.WriteLine(
+                $"[SnippetService] Could not persist usage counts to {_filePath}: {ex.Message}"
+            );
+        }
+    }
+
+    private void Commit(
+        Func<List<Snippet>, bool> update,
+        bool raiseEvent = true
+    )
+    {
+        var changed = false;
+        try
+        {
+            _store.Update(
+                current =>
+                {
+                    var next = current.ToList();
+                    changed = update(next);
+                    return changed ? [.. next] : current;
+                }
+            );
         }
         catch (Exception ex)
         {
@@ -399,28 +339,10 @@ public sealed partial class SnippetService : ISnippetService
             );
             throw;
         }
-    }
 
-    private static void PreserveBrokenFile(string path)
-    {
-        try
+        if (changed && raiseEvent)
         {
-            if (!File.Exists(path))
-            {
-                return;
-            }
-
-            var brokenPath = $"{path}.broken-{DateTime.UtcNow:yyyyMMddHHmmss}";
-            File.Move(path, brokenPath);
-            Trace.WriteLine(
-                $"[SnippetService] Preserved unreadable file as {brokenPath}"
-            );
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine(
-                $"[SnippetService] Could not preserve unreadable file: {ex.Message}"
-            );
+            SnippetsChanged?.Invoke();
         }
     }
 }
