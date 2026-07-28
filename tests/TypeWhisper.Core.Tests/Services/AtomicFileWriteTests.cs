@@ -165,6 +165,178 @@ public sealed class AtomicFileWriteTests
     }
 
     [Fact]
+    public async Task WriteAllBytesCreateNew_ConcurrentlyToSamePath_OneWinnerPreservesItsBytes()
+    {
+        var directory = TestPaths.CreateTempDirectory(
+            "TypeWhisper.AtomicFileWriteConcurrentCreateNewTests"
+        );
+        var path = Path.Join(directory, "audio.wav");
+        byte[][] candidates = [[0, 1, 2, 255], [255, 2, 1, 0], [7, 7, 7, 7], [3, 1, 4, 1]];
+        using var start = new Barrier(candidates.Length);
+
+        try
+        {
+            var writes = candidates
+                .Select(
+                    bytes =>
+                        Task.Run(() =>
+                        {
+                            // ReSharper disable once AccessToDisposedClosure -- Task.WhenAll below
+                            // awaits every task before `using var start` is disposed at scope end.
+                            start.SignalAndWait();
+                            try
+                            {
+                                AtomicFileWrite.WriteAllBytesCreateNew(
+                                    path,
+                                    bytes,
+                                    attemptHardLink: false
+                                );
+                                // ReSharper disable once RedundantCast -- not redundant: the cast
+                                // is what infers the tuple's Error element as nullable. Dropping
+                                // it infers `Exception` and the compiler reports CS8619.
+                                return (Bytes: bytes, Error: (Exception?)null);
+                            }
+                            catch (Exception ex)
+                            {
+                                return (Bytes: bytes, Error: ex);
+                            }
+                        })
+                )
+                .ToArray();
+
+            var results = await Task.WhenAll(writes);
+
+            var winner = Assert.Single(results, result => result.Error is null);
+            var losers = results.Where(result => result.Error is not null).ToArray();
+            Assert.NotEmpty(losers);
+            foreach (var loser in losers)
+            {
+                Assert.IsType<IOException>(loser.Error);
+                Assert.Contains("already exists", loser.Error!.Message, StringComparison.Ordinal);
+            }
+
+            Assert.Equal(winner.Bytes, await File.ReadAllBytesAsync(path));
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void WriteAllBytesCreateNew_FallbackNeverReplacesPreExistingDestination()
+    {
+        var directory = TestPaths.CreateTempDirectory(
+            "TypeWhisper.AtomicFileWriteFallbackTests"
+        );
+        var path = Path.Join(directory, "data.json");
+        byte[] foreignBytes = [0, 1, 2, 255];
+
+        try
+        {
+            File.WriteAllBytes(path, foreignBytes);
+
+            var error = Assert.Throws<IOException>(() =>
+                AtomicFileWrite.WriteAllBytesCreateNew(
+                    path,
+                    [255, 2, 1, 0],
+                    attemptHardLink: false
+                )
+            );
+
+            Assert.Contains("already exists", error.Message, StringComparison.Ordinal);
+            Assert.Equal(foreignBytes, File.ReadAllBytes(path));
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void WriteAllBytesCreateNew_FallbackNeverReplacesDestinationRacedInAfterStaging()
+    {
+        var directory = TestPaths.CreateTempDirectory(
+            "TypeWhisper.AtomicFileWriteFallbackRaceTests"
+        );
+        var path = Path.Join(directory, "data.json");
+        byte[] foreignBytes = [0, 1, 2, 255];
+        var observed = false;
+
+        try
+        {
+            var error = Assert.Throws<IOException>(() =>
+                AtomicFileWrite.WriteAllBytesCreateNew(
+                    path,
+                    [255, 2, 1, 0],
+                    attemptHardLink: false,
+                    staged =>
+                    {
+                        observed = true;
+                        Assert.False(File.Exists(path));
+                        Assert.Equal(directory, Path.GetDirectoryName(staged));
+                        File.WriteAllBytes(path, foreignBytes);
+                    }
+                )
+            );
+
+            Assert.True(observed);
+            Assert.Contains("already exists", error.Message, StringComparison.Ordinal);
+            Assert.Equal(foreignBytes, File.ReadAllBytes(path));
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    /// <summary>
+    ///     Deleting the staged sibling via the observer is the only way to force a
+    ///     non-<c>EEXIST</c> renameat2 failure, exercising the fail-closed path below.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void WriteAllBytesCreateNew_WhenAtomicPublishFailsWithoutCollision_FailsClosed()
+    {
+        var directory = TestPaths.CreateTempDirectory(
+            "TypeWhisper.AtomicFileWriteFallbackFailClosedTests"
+        );
+        var path = Path.Join(directory, "data.json");
+        byte[] foreignBytes = [0, 1, 2, 255];
+
+        try
+        {
+            File.WriteAllBytes(path, foreignBytes);
+
+            var error = Assert.Throws<IOException>(() =>
+                AtomicFileWrite.WriteAllBytesCreateNew(
+                    path,
+                    [255, 2, 1, 0],
+                    attemptHardLink: false,
+                    File.Delete
+                )
+            );
+
+            Assert.Contains(
+                "without replacing an existing file",
+                error.Message,
+                StringComparison.Ordinal
+            );
+            Assert.Equal(foreignBytes, File.ReadAllBytes(path));
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
     public void WriteAllBytes_ReplacesDestinationCompletely()
     {
         var directory = Path.Join(
