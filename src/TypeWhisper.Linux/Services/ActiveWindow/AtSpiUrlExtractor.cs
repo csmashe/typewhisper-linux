@@ -8,8 +8,8 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 
 /// <summary>
 ///     Focused AT-SPI walker that pulls the active URL from a browser's address bar.
-///     1. Gate on focused process name (AT-SPI walks cost 50–200 ms each).
-///     2. Cache by <c>(processName, title)</c> — the URL changes when the title does; cache hits skip the walk.
+///     1. Resolve the focused browser descriptor (AT-SPI walks cost 50–200 ms each).
+///     2. Cache by <c>(descriptor ID, title)</c> — the URL changes when the title does; cache hits skip the walk.
 ///     3. Narrow to the matching AT-SPI app and walk only its tree.
 ///     4. Score showing/visible entries for likely URL candidates; return the best match.
 ///     Total walk budget: 2.5 s (the orchestrator's deferred-URL timeout is 4 s).
@@ -30,25 +30,6 @@ public sealed partial class AtSpiUrlExtractor
     // the walker descends into unseen subtrees — 2.5 s gives headroom while remaining
     // strictly inside the orchestrator's 4 s deferred-URL timeout.
     private static readonly TimeSpan s_walkBudget = TimeSpan.FromMilliseconds(2500);
-    private static readonly HashSet<string> s_supportedBrowserProcessNames = new(
-        StringComparer.OrdinalIgnoreCase
-    )
-    {
-        "firefox",
-        "librewolf",
-        "waterfox",
-        "chrome",
-        "chromium",
-        "brave",
-        "edge",
-        "msedge",
-        "vivaldi",
-        "opera",
-        "zen",
-        "zen-browser",
-        "zen-bin",
-    };
-
     private static readonly TimeSpan s_cacheTtl = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan s_missBackoff = TimeSpan.FromSeconds(10);
 
@@ -63,13 +44,13 @@ public sealed partial class AtSpiUrlExtractor
     private readonly bool _isBusctlAvailable;
     private readonly bool _isGdbusAvailable;
     private readonly IProcessRunner _processRunner;
-    private string? _cachedProcessName;
+    private string? _cachedDescriptorId;
     private string? _cachedTitle;
     private string? _cachedUrl;
     private DateTime _cachedUrlAt;
     private string? _lastDiagnosticKey;
     private DateTime _missAt;
-    private string? _missProcessName;
+    private string? _missDescriptorId;
     private string? _missTitle;
 
     public AtSpiUrlExtractor()
@@ -101,14 +82,28 @@ public sealed partial class AtSpiUrlExtractor
         bool honorMissBackoff = false
     )
     {
-        var processHint = !string.IsNullOrWhiteSpace(focusedProcessName)
-            ? focusedProcessName
-            : ActiveWindowService.TryInferBrowserProcessNameFromTitle(focusedTitle);
+        return TryGetBrowserUrl(
+            focusedProcessName,
+            null,
+            focusedTitle,
+            honorMissBackoff
+        );
+    }
 
-        if (
-            string.IsNullOrWhiteSpace(processHint)
-            || !s_supportedBrowserProcessNames.Contains(processHint)
-        )
+    internal string? TryGetBrowserUrl(
+        string? focusedProcessName,
+        string? focusedAppId,
+        string? focusedTitle,
+        bool honorMissBackoff = false
+    )
+    {
+        var browser = ResolveBrowserDescriptor(
+            focusedProcessName,
+            focusedAppId,
+            focusedTitle
+        );
+
+        if (browser is null)
         {
             return null;
         }
@@ -117,14 +112,14 @@ public sealed partial class AtSpiUrlExtractor
         {
             var now = DateTime.UtcNow;
 
-            // Cache key is (process, title): title is the only signal for tab/page change.
+            // Cache key is (descriptor ID, title): title is the only signal for tab/page change.
             // Keying on process alone would return the previous tab's URL after a tab switch.
             // TTL caps stale trust for SPAs where navigation doesn't change the title.
             if (
                 _cachedUrl is not null
                 && string.Equals(
-                    _cachedProcessName,
-                    processHint,
+                    _cachedDescriptorId,
+                    browser.Id,
                     StringComparison.OrdinalIgnoreCase
                 )
                 && string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
@@ -135,10 +130,10 @@ public sealed partial class AtSpiUrlExtractor
             }
 
             // Miss backoff throttles high-frequency polling only; dictation passes false
-            // so a poll miss on the same (process, title) never suppresses its own walk.
+            // so a poll miss on the same (descriptor, title) never suppresses its own walk.
             if (
                 honorMissBackoff
-                && string.Equals(_missProcessName, processHint, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(_missDescriptorId, browser.Id, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(_missTitle, focusedTitle, StringComparison.Ordinal)
                 && now - _missAt < s_missBackoff
             )
@@ -162,7 +157,7 @@ public sealed partial class AtSpiUrlExtractor
 
         using var cts = new CancellationTokenSource(s_walkBudget);
         var stats = new WalkStats();
-        var url = WalkForUrl(address, processHint, stats, cts.Token);
+        var url = WalkForUrl(address, browser, stats, cts.Token);
 
         lock (_cacheLock)
         {
@@ -170,25 +165,31 @@ public sealed partial class AtSpiUrlExtractor
             // URL. Misses are tracked separately so a title change retries immediately.
             if (!string.IsNullOrWhiteSpace(url))
             {
-                _cachedProcessName = processHint;
+                _cachedDescriptorId = browser.Id;
                 _cachedTitle = focusedTitle;
                 _cachedUrl = url;
                 _cachedUrlAt = DateTime.UtcNow;
-                _missProcessName = null;
+                _missDescriptorId = null;
                 _missTitle = null;
                 _missAt = default;
             }
             else if (honorMissBackoff)
             {
-                // Dictation misses must not throttle the next poll on this (process, title).
-                _missProcessName = processHint;
+                // Dictation misses must not throttle the next poll on this (descriptor, title).
+                _missDescriptorId = browser.Id;
                 _missTitle = focusedTitle;
                 _missAt = DateTime.UtcNow;
             }
         }
 
         LogOnce(
-            BuildDiagnosticLine(processHint, focusedTitle, stats, url, cts.IsCancellationRequested)
+            BuildDiagnosticLine(
+                browser.CanonicalProcessName,
+                focusedTitle,
+                stats,
+                url,
+                cts.IsCancellationRequested
+            )
         );
         return url;
     }
@@ -278,7 +279,7 @@ public sealed partial class AtSpiUrlExtractor
 
     private string? WalkForUrl(
         string address,
-        string processHint,
+        BrowserDescriptor focusedBrowser,
         WalkStats stats,
         CancellationToken ct
     )
@@ -301,7 +302,7 @@ public sealed partial class AtSpiUrlExtractor
                 stats.AppsSeen.Add(appName);
             }
 
-            if (!IsMatchingApp(appName, processHint))
+            if (!IsMatchingApp(appName, focusedBrowser))
             {
                 continue;
             }
@@ -326,65 +327,27 @@ public sealed partial class AtSpiUrlExtractor
         return null;
     }
 
-    private static bool IsMatchingApp(string? identity, string processHint)
+    internal static BrowserDescriptor? ResolveBrowserDescriptor(
+        string? focusedProcessName,
+        string? focusedAppId,
+        string? focusedTitle
+    )
     {
-        if (string.IsNullOrWhiteSpace(identity))
-        {
-            return false;
-        }
-
-        if (string.Equals(identity, processHint, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        // AT-SPI app Name often differs from the process name ("Firefox" vs "firefox",
-        // "Google Chrome" vs "chrome"). Match within the same browser family so the walker
-        // can bridge that gap without accepting a different browser's URL. Without the
-        // family gate, when Firefox and Chrome are both on the bus the walker could return
-        // Chrome's URL when Firefox is the focused window.
-        var identityFamily = ClassifyBrowserFamily(identity);
-        var hintFamily = ClassifyBrowserFamily(processHint);
-        return identityFamily is not null && hintFamily is not null && identityFamily == hintFamily;
+        return BrowserDescriptorCatalog.Resolve(
+            focusedProcessName,
+            focusedAppId,
+            focusedTitle,
+            BrowserCapabilities.AtSpiExtraction
+        );
     }
 
-    /// <summary>
-    ///     Maps a browser identity or process name to its engine family ("firefox" or "chromium").
-    ///     Forks sharing an engine share a family (Firefox/Zen/LibreWolf/Waterfox → "firefox";
-    ///     Chrome/Chromium/Brave/Edge/Vivaldi/Opera → "chromium"). Returns null for unknown identities.
-    /// </summary>
-    private static string? ClassifyBrowserFamily(string? value)
+    internal static bool IsMatchingApp(string? identity, BrowserDescriptor focusedBrowser)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        var lower = value.ToLowerInvariant();
-
-        if (
-            lower.Contains("firefox")
-            || lower.Contains("zen")
-            || lower.Contains("librewolf")
-            || lower.Contains("waterfox")
-        )
-        {
-            return "firefox";
-        }
-
-        if (
-            lower.Contains("chrome")
-            || lower.Contains("chromium")
-            || lower.Contains("brave")
-            || lower.Contains("edge")
-            || lower.Contains("vivaldi")
-            || lower.Contains("opera")
-        )
-        {
-            return "chromium";
-        }
-
-        return null;
+        var applicationBrowser = BrowserDescriptorCatalog.ResolveWindowIdentity(
+            identity,
+            BrowserCapabilities.AtSpiExtraction
+        );
+        return applicationBrowser?.Id == focusedBrowser.Id;
     }
 
     private AccessibleRef? FindActiveBrowserWindow(

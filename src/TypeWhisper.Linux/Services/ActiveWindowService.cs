@@ -22,39 +22,6 @@ public sealed class ActiveWindowService : IActiveWindowService
     private const int AtSpiRoleEntry = 79;
     private static readonly TimeSpan s_providerSyncBudget = TimeSpan.FromMilliseconds(150);
 
-    private static readonly HashSet<string> s_browserProcessNames = new(
-        StringComparer.OrdinalIgnoreCase
-    )
-    {
-        "chrome",
-        "msedge",
-        "brave",
-        "opera",
-        "vivaldi",
-        "chromium",
-        "firefox",
-        "waterfox",
-        "zen",
-        "zen-browser",
-        "zen-bin",
-    };
-
-    private static readonly string[] s_browserAppNameHints =
-    [
-        "google chrome",
-        "chrome",
-        "microsoft edge",
-        "edge",
-        "brave",
-        "opera",
-        "vivaldi",
-        "chromium",
-        "firefox",
-        "waterfox",
-        "zen browser",
-        "zen",
-    ];
-
     private readonly AtSpiUrlExtractor _atSpiUrlExtractor;
     private readonly bool _isXclipAvailable;
     private readonly bool _isXdotoolAvailable;
@@ -78,12 +45,31 @@ public sealed class ActiveWindowService : IActiveWindowService
     public string? GetActiveWindowProcessName()
     {
         var snapshot = GetActiveWindowSnapshotSync();
-        if (snapshot?.ProcessName is { Length: > 0 } name)
+        if (snapshot?.ProcessName is not { Length: > 0 } name)
+        {
+            return BrowserDescriptorCatalog
+                .ResolveSnapshot(snapshot, BrowserCapabilities.ActiveWindowDetection)
+                ?.CanonicalProcessName;
+        }
+
+        if (
+            BrowserDescriptorCatalog.ResolveProcessAlias(
+                name,
+                BrowserCapabilities.ActiveWindowDetection
+            ) is not null
+        )
         {
             return name;
         }
 
-        return TryInferBrowserProcessNameFromTitle(snapshot?.Title);
+        // Only an exact app ID may canonicalize an observed process name (Flatpak wrappers
+        // report their own). Never a title: overwriting a real identity would let a
+        // non-browser window impersonate a browser to plugins and focus-change checks.
+        var browserFromAppId = BrowserDescriptorCatalog.ResolveWindowIdentity(
+            snapshot.AppId,
+            BrowserCapabilities.ActiveWindowDetection
+        );
+        return browserFromAppId?.CanonicalProcessName ?? name;
     }
 
     public string? GetActiveWindowTitle()
@@ -100,16 +86,11 @@ public sealed class ActiveWindowService : IActiveWindowService
             return nonInteractiveUrl;
         }
 
-        var title = snapshot?.Title;
-        var processName = snapshot?.ProcessName is { Length: > 0 } name
-            ? name
-            : TryInferBrowserProcessNameFromTitle(title);
-
         if (
             !allowInteractiveCapture
             || !_isXclipAvailable
             || !_isXdotoolAvailable
-            || !IsSupportedBrowserWindow(processName, title)
+            || !IsSupportedBrowserWindow(snapshot)
         )
         {
             return null;
@@ -131,13 +112,13 @@ public sealed class ActiveWindowService : IActiveWindowService
         bool honorMissBackoff = false
     )
     {
-        var title = snapshot?.Title;
-        var processName = snapshot?.ProcessName is { Length: > 0 } name
-            ? name
-            : TryInferBrowserProcessNameFromTitle(title);
-
-        var atSpiUrl = _atSpiUrlExtractor.TryGetBrowserUrl(processName, title, honorMissBackoff);
-        return atSpiUrl ?? TryInferBrowserUrlFromTitle(title);
+        var atSpiUrl = _atSpiUrlExtractor.TryGetBrowserUrl(
+            snapshot?.ProcessName,
+            snapshot?.AppId,
+            snapshot?.Title,
+            honorMissBackoff
+        );
+        return atSpiUrl ?? TryInferBrowserUrlFromTitle(snapshot?.Title);
     }
 
     public IReadOnlyList<string> GetRunningAppProcessNames()
@@ -239,23 +220,46 @@ public sealed class ActiveWindowService : IActiveWindowService
 
     internal static bool IsSupportedBrowserProcess(string? processName)
     {
-        return !string.IsNullOrWhiteSpace(processName) && s_browserProcessNames.Contains(processName);
+        return BrowserDescriptorCatalog.ResolveProcessAlias(
+            processName,
+            BrowserCapabilities.ActiveWindowDetection
+        ) is not null;
+    }
+
+    internal static BrowserDescriptor? ResolveBrowserDescriptor(
+        ActiveWindowSnapshot? snapshot
+    )
+    {
+        return BrowserDescriptorCatalog.ResolveSnapshot(
+            snapshot,
+            BrowserCapabilities.ActiveWindowDetection
+        );
     }
 
     internal static bool IsSupportedBrowserWindow(string? processName, string? title)
     {
-        return IsSupportedBrowserProcess(processName)
-               || TryInferBrowserProcessNameFromTitle(title) is not null;
+        return BrowserDescriptorCatalog.Resolve(
+            processName,
+            null,
+            title,
+            BrowserCapabilities.InteractiveX11Capture
+        ) is not null;
+    }
+
+    internal static bool IsSupportedBrowserWindow(ActiveWindowSnapshot? snapshot)
+    {
+        return BrowserDescriptorCatalog.ResolveSnapshot(
+            snapshot,
+            BrowserCapabilities.InteractiveX11Capture
+        ) is not null;
     }
 
     internal static string? TryInferBrowserProcessNameFromTitle(string? title)
     {
-        if (string.IsNullOrWhiteSpace(title))
-        {
-            return null;
-        }
-
-        return title.Contains("Zen Browser", StringComparison.OrdinalIgnoreCase) ? "zen" : null;
+        return BrowserDescriptorCatalog.ResolveTitle(
+            title,
+            BrowserCapabilities.ActiveWindowDetection
+        )?.CanonicalProcessName;
     }
 
     internal static string? TryInferBrowserUrlFromTitle(string? title)
@@ -268,9 +272,13 @@ public sealed class ActiveWindowService : IActiveWindowService
         // Zen/Firefox Flatpak builds often report no process name (XWayland surface
         // runs under a sandboxed PID). Title-matching avoids needing to focus the
         // address bar, which would be visible and disruptive.
+        var browser = BrowserDescriptorCatalog.ResolveTitle(
+            title,
+            BrowserCapabilities.ActiveWindowDetection
+        );
         if (
-            title.Contains(" Mail", StringComparison.OrdinalIgnoreCase)
-            && title.Contains("Zen Browser", StringComparison.OrdinalIgnoreCase)
+            browser?.Id == "zen"
+            && title.Contains(" Mail", StringComparison.OrdinalIgnoreCase)
         )
         {
             return "https://mail.google.com";
@@ -286,14 +294,18 @@ public sealed class ActiveWindowService : IActiveWindowService
             return false;
         }
 
-        if (IsSupportedBrowserProcess(identity))
-        {
-            return true;
-        }
-
-        return s_browserAppNameHints.Any(hint =>
-            identity.Contains(hint, StringComparison.OrdinalIgnoreCase)
-        );
+        return BrowserDescriptorCatalog.ResolveProcessAlias(
+                   identity,
+                   BrowserCapabilities.ActiveWindowDetection
+               ) is not null
+               || BrowserDescriptorCatalog.ResolveWindowIdentity(
+                   identity,
+                   BrowserCapabilities.ActiveWindowDetection
+               ) is not null
+               || BrowserDescriptorCatalog.ResolveTitle(
+                   identity,
+                   BrowserCapabilities.ActiveWindowDetection
+               ) is not null;
     }
 
     internal static string? SanitizeCapturedBrowserUrl(string? value)
