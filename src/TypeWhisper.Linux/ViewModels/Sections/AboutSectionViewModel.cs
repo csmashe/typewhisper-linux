@@ -20,6 +20,7 @@ public partial class AboutSectionViewModel : ObservableObject
     private readonly SettingsBackupService _settingsBackup;
     private readonly TimeZoneInfo _timeZone;
     private readonly UpdateCheckService _updateCheck;
+    private readonly UrlLauncher _urlLauncher;
 
     [ObservableProperty]
     private string _backupStatusText = Loc.Instance["About.BackupStatusDefault"];
@@ -50,9 +51,10 @@ public partial class AboutSectionViewModel : ObservableObject
     public AboutSectionViewModel(
         IErrorLogService errorLog,
         SettingsBackupService settingsBackup,
-        UpdateCheckService updateCheck
+        UpdateCheckService updateCheck,
+        UrlLauncher urlLauncher
     )
-        : this(errorLog, settingsBackup, updateCheck, TimeZoneInfo.Local) { }
+        : this(errorLog, settingsBackup, updateCheck, urlLauncher, TimeZoneInfo.Local) { }
 
     internal AboutSectionViewModel(
         IErrorLogService errorLog,
@@ -60,10 +62,26 @@ public partial class AboutSectionViewModel : ObservableObject
         UpdateCheckService updateCheck,
         TimeZoneInfo timeZone
     )
+        : this(
+            errorLog,
+            settingsBackup,
+            updateCheck,
+            new UrlLauncher(new ProcessRunner()),
+            timeZone
+        ) { }
+
+    internal AboutSectionViewModel(
+        IErrorLogService errorLog,
+        SettingsBackupService settingsBackup,
+        UpdateCheckService updateCheck,
+        UrlLauncher urlLauncher,
+        TimeZoneInfo timeZone
+    )
     {
         _errorLog = errorLog;
         _settingsBackup = settingsBackup;
         _updateCheck = updateCheck;
+        _urlLauncher = urlLauncher;
         _timeZone = timeZone;
         RefreshErrors();
         // EntriesChanged fires synchronously on whichever thread called AddEntry —
@@ -195,7 +213,7 @@ public partial class AboutSectionViewModel : ObservableObject
     [RelayCommand]
     private void OpenReleasePage()
     {
-        UrlLauncher.Open(LatestReleaseUrl);
+        _urlLauncher.Open(LatestReleaseUrl);
     }
 
     private void OnUpdateResultChanged(UpdateCheckResult result)

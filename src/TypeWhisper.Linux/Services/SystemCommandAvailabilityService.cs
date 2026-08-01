@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -50,7 +51,14 @@ public sealed partial class SystemCommandAvailabilityService
         StringComparer.Ordinal
     );
 
-    private LinuxCapabilitySnapshot _snapshot = BuildSnapshot();
+    private readonly IProcessRunner _processRunner;
+    private LinuxCapabilitySnapshot _snapshot;
+
+    public SystemCommandAvailabilityService(IProcessRunner? processRunner = null)
+    {
+        _processRunner = processRunner ?? new ProcessRunner();
+        _snapshot = BuildSnapshot();
+    }
 
     // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool IsWaylandSession
@@ -233,7 +241,11 @@ public sealed partial class SystemCommandAvailabilityService
 
     public static bool TryPreloadCuda12RuntimeLibraries(out string message)
     {
-        if (IsLibraryAvailable("libcudart.so.12") && IsLibraryAvailable("libcublas.so.12"))
+        var processRunner = new ProcessRunner();
+        if (
+            IsLibraryAvailable("libcudart.so.12", processRunner)
+            && IsLibraryAvailable("libcublas.so.12", processRunner)
+        )
         {
             message = "CUDA 12 runtime libraries are already visible.";
             return true;
@@ -340,42 +352,26 @@ public sealed partial class SystemCommandAvailabilityService
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            using var process = Process.Start(
-                new ProcessStartInfo(
+            var result = await _processRunner.RunOneShotAsync(
+                new ProcessCommand(
                     "nvidia-smi",
-                    "--query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits"
-                )
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                }
+                    [
+                        "--query-gpu=name,memory.total,driver_version",
+                        "--format=csv,noheader,nounits",
+                    ]
+                ),
+                new ProcessOneShotOptions(Timeout: TimeSpan.FromSeconds(3)),
+                cancellationToken
             );
-
-            if (process is null)
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- chain continues
+            // into ExitCode checks below; a switch would only cover part of it.
+            if (result.Status == ProcessRunStatus.StartFailed)
             {
                 return new CudaBenchmarkResult(false, "Could not start nvidia-smi.", null);
             }
 
-            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-            var waitTask = process.WaitForExitAsync(cancellationToken);
-            var timeoutTask = Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
-            var completed = await Task.WhenAny(waitTask, timeoutTask);
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (!ReferenceEquals(completed, waitTask) && !process.HasExited)
+            if (result.Status == ProcessRunStatus.TimedOut)
             {
-                try
-                {
-                    process.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
                 return new CudaBenchmarkResult(
                     false,
                     "nvidia-smi did not respond within 3 seconds.",
@@ -383,12 +379,10 @@ public sealed partial class SystemCommandAvailabilityService
                 );
             }
 
-            await waitTask;
-
             stopwatch.Stop();
-            var output = (await outputTask).Trim();
-            var error = (await errorTask).Trim();
-            if (process.ExitCode != 0)
+            var output = result.StandardOutputText.Trim();
+            var error = result.StandardErrorText.Trim();
+            if (result.ExitCode != 0)
             {
                 return new CudaBenchmarkResult(
                     false,
@@ -483,6 +477,11 @@ public sealed partial class SystemCommandAvailabilityService
     /// </summary>
     internal static string? ResolveYdotoolSocketPath()
     {
+        return ResolveYdotoolSocketPath(new ProcessRunner());
+    }
+
+    private static string? ResolveYdotoolSocketPath(IProcessRunner processRunner)
+    {
         var candidates = new List<string?> { Environment.GetEnvironmentVariable("YDOTOOL_SOCKET") };
 
         var runtimeDir = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
@@ -493,7 +492,7 @@ public sealed partial class SystemCommandAvailabilityService
 
         candidates.Add("/tmp/.ydotool_socket");
 
-        var uid = TryReadUserId();
+        var uid = TryReadUserId(processRunner);
         if (uid is not null)
         {
             candidates.Add($"/run/user/{uid}/.ydotool_socket");
@@ -545,7 +544,7 @@ public sealed partial class SystemCommandAvailabilityService
     /// </summary>
     public event EventHandler<LinuxCapabilitySnapshot>? SnapshotChanged;
 
-    private static LinuxCapabilitySnapshot BuildSnapshot()
+    private LinuxCapabilitySnapshot BuildSnapshot()
     {
         var isWayland = WaylandSessionDetector.IsWaylandSession();
         var isX11 = Environment.GetEnvironmentVariable("DISPLAY") is { Length: > 0 };
@@ -561,7 +560,7 @@ public sealed partial class SystemCommandAvailabilityService
                              || IsCommandAvailable("paplay")
                              || IsCommandAvailable("aplay");
         var hasYdotool = IsCommandAvailable("ydotool");
-        var ydotoolSocket = ResolveYdotoolSocketPath();
+        var ydotoolSocket = ResolveYdotoolSocketPath(_processRunner);
 
         return new LinuxCapabilitySnapshot(
             isWayland ? "Wayland"
@@ -579,7 +578,8 @@ public sealed partial class SystemCommandAvailabilityService
             hasAudioPlayer,
             IsCommandAvailable("nvidia-smi") || File.Exists("/dev/nvidiactl"),
             (
-                IsLibraryAvailable("libcudart.so.12") && IsLibraryAvailable("libcublas.so.12")
+                IsLibraryAvailable("libcudart.so.12", _processRunner)
+                && IsLibraryAvailable("libcublas.so.12", _processRunner)
             ) || FindCuda12RuntimeDirectory() is not null,
             DesktopDetector.DetectId(),
             hasYdotool,
@@ -588,43 +588,23 @@ public sealed partial class SystemCommandAvailabilityService
         );
     }
 
-    private static string? TryReadUserId()
+    private static string? TryReadUserId(IProcessRunner processRunner)
     {
         try
         {
-            using var p = Process.Start(
-                new ProcessStartInfo("id", "-u")
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                }
+            var result = processRunner.RunProbe(
+                new ProcessCommand("id", ["-u"]),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromMilliseconds(500),
+                    StandardError: ProcessCaptureMode.Discard
+                )
             );
-            if (p is null)
+            if (!result.Succeeded)
             {
                 return null;
             }
 
-            // Drain stdout asynchronously so a wedged child can't block past the
-            // timeout. ReadToEnd() blocks until stdout closes, which would defeat
-            // the WaitForExit(500) bound if `id` ever hung.
-            var outputTask = p.StandardOutput.ReadToEndAsync();
-            if (!p.WaitForExit(500))
-            {
-                try
-                {
-                    p.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
-                return null;
-            }
-
-            var output = outputTask.GetAwaiter().GetResult().Trim();
+            var output = result.StandardOutputText.Trim();
             return string.IsNullOrWhiteSpace(output) ? null : output;
         }
         catch
@@ -648,9 +628,12 @@ public sealed partial class SystemCommandAvailabilityService
         return IsCommandAvailable("spd-say") ? "spd-say" : null;
     }
 
-    private static bool IsLibraryAvailable(string libraryName)
+    private static bool IsLibraryAvailable(
+        string libraryName,
+        IProcessRunner processRunner
+    )
     {
-        if (FindInLdCache(libraryName))
+        if (FindInLdCache(libraryName, processRunner))
         {
             return true;
         }
@@ -711,47 +694,25 @@ public sealed partial class SystemCommandAvailabilityService
         return false;
     }
 
-    private static bool FindInLdCache(string libraryName)
+    private static bool FindInLdCache(
+        string libraryName,
+        IProcessRunner processRunner
+    )
     {
         try
         {
-            using var process = Process.Start(
-                new ProcessStartInfo("ldconfig", "-p")
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                }
+            var result = processRunner.RunProbe(
+                new ProcessCommand("ldconfig", ["-p"]),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardError: ProcessCaptureMode.Discard
+                )
             );
-
-            if (process is null)
-            {
-                return false;
-            }
-
-            // Drain stderr concurrently: 4 kB kernel buffer can block ldconfig
-            // if we read only stdout.
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
-
-            if (!process.WaitForExit(1000))
-            {
-                try
-                {
-                    process.Kill(true);
-                }
-                catch
-                {
-                    // Ignore failures while cleaning up a timed-out probe.
-                }
-
-                return false;
-            }
-
-            var output = outputTask.GetAwaiter().GetResult();
-            errorTask.GetAwaiter().GetResult();
-            return output.Contains(libraryName, StringComparison.Ordinal);
+            return result.Succeeded
+                   && result.StandardOutputText.Contains(
+                       libraryName,
+                       StringComparison.Ordinal
+                   );
         }
         catch
         {

@@ -4,7 +4,6 @@
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Globalization;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
@@ -47,7 +46,7 @@ public sealed class OpenAiPlugin
         new() { PropertyNameCaseInsensitive = true };
 
     private readonly HttpClient _httpClient;
-    private readonly Func<byte[], ITtsPlaybackSession> _ttsPlaybackFactory;
+    private readonly Func<byte[], ITtsPlaybackSession>? _ttsPlaybackFactory;
     private readonly Func<bool> _ttsPlaybackAvailableProbe;
     private IPluginHostServices? _host;
     private string? _selectedApiModelName;
@@ -123,8 +122,7 @@ public sealed class OpenAiPlugin
         Func<bool>? ttsPlaybackAvailableProbe = null)
     {
         _httpClient = httpClient;
-        _ttsPlaybackFactory = ttsPlaybackFactory
-            ?? (pcm => OpenAiPcmTtsPlaybackSession.Create(pcm, OpenAiTtsConfiguration.SampleRate));
+        _ttsPlaybackFactory = ttsPlaybackFactory;
         _ttsPlaybackAvailableProbe = ttsPlaybackAvailableProbe
             ?? OpenAiPcmTtsPlaybackSession.IsPlaybackAvailable;
     }
@@ -439,7 +437,17 @@ public sealed class OpenAiPlugin
         using var httpRequest = CreateTtsRequest(text);
         var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, httpRequest, ct);
         var pcm = await response.Content.ReadAsByteArrayAsync(ct);
-        return _ttsPlaybackFactory(pcm);
+        return _ttsPlaybackFactory?.Invoke(pcm)
+               ?? OpenAiPcmTtsPlaybackSession.Create(
+                   pcm,
+                   OpenAiTtsConfiguration.SampleRate,
+                   (
+                       _host
+                       ?? throw new InvalidOperationException(
+                           "OpenAI plugin is not activated."
+                       )
+                   ).Processes
+               );
     }
 
     // LLM model catalog
@@ -704,11 +712,18 @@ public sealed class OpenAiPlugin
         server.Start();
 
         var authUri = OpenAiOAuthClient.BuildAuthorizeUri(state, pkce);
-        Process.Start(new ProcessStartInfo
+        var launch = (
+            _host
+            ?? throw new InvalidOperationException("OpenAI plugin is not activated.")
+        ).Processes.LaunchUri(authUri);
+        if (!launch.Started)
         {
-            FileName = authUri.ToString(),
-            UseShellExecute = true,
-        });
+            // LaunchUri reports failure instead of throwing; re-raise as Win32Exception
+            // so existing catch sites still match.
+            throw new Win32Exception(
+                launch.StartError ?? "Could not open the authorization page."
+            );
+        }
 
         var code = await server.WaitForCodeAsync(ct);
         var tokens = await OpenAiOAuthClient.ExchangeAuthorizationCodeAsync(_httpClient, code, pkce, ct);
@@ -1305,10 +1320,9 @@ public sealed class OpenAiPlugin
         }
         catch (Win32Exception ex)
         {
-            // Process.Start(UseShellExecute=true) launches the browser via
-            // xdg-open on Linux. On headless boxes or minimal installs with no
-            // default browser registered, that call throws Win32Exception and
-            // would otherwise fault the settings-validation command.
+            // The process supervisor launches the browser via xdg-open. On headless or
+            // minimal installs with no default browser, that handoff fails here instead
+            // of faulting the settings-validation command.
             return new PluginSettingsValidationResult(
                 false,
                 Loc.L("Settings.ChatGptLoginNoBrowser", ex.Message));

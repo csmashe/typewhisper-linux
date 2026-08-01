@@ -60,6 +60,7 @@
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Xai\TypeWhisper.Plugin.Xai.csproj"/>
         <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj"/>
         <ProjectReference Include="..\..\src\TypeWhisper.Linux\TypeWhisper.Linux.csproj"/>
+        <ProjectReference Include="..\TypeWhisper.ProcessTestChild\TypeWhisper.ProcessTestChild.csproj"/>
     </ItemGroup>
 
     <ItemGroup>

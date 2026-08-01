@@ -7,6 +7,7 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services.Plugins;
 
@@ -60,7 +61,8 @@ public sealed class PluginHostServices : IPluginHostServices
         string? errorCategory = null,
         string? pluginDisplayName = null,
         string? pluginDataRoot = null,
-        string? secretProtectionKeyFilePath = null
+        string? secretProtectionKeyFilePath = null,
+        IPluginProcessSupervisor? processes = null
     )
     {
         _pluginId = pluginId;
@@ -76,6 +78,11 @@ public sealed class PluginHostServices : IPluginHostServices
         _localization = new PluginLocalization(pluginDirectory);
         _pluginDataRoot = pluginDataRoot ?? TypeWhisperEnvironment.PluginDataPath;
         _pluginDataDirectory = Path.Join(_pluginDataRoot, pluginId);
+        Processes = processes
+                    ?? new PluginProcessSupervisorScope(
+                        pluginId,
+                        new ProcessRunner()
+                    );
         var settingsFilePath = Path.Join(_pluginDataDirectory, "settings.json");
         _secretProtectionKeyFilePath = ResolveSecretProtectionKeyFilePath(
             _pluginDataRoot,
@@ -124,6 +131,10 @@ public sealed class PluginHostServices : IPluginHostServices
     public string? ActiveAppName => _activeWindow.GetActiveWindowTitle();
 
     public IPluginEventBus EventBus { get; }
+    public IPluginProcessSupervisor Processes { get; }
+
+    internal PluginProcessSupervisorScope? ProcessScope =>
+        Processes as PluginProcessSupervisorScope;
 
     public IPluginLocalization Localization => _localization;
 

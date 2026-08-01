@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Plugin.Xai;
 
@@ -57,22 +57,23 @@ internal static class XaiTtsConfiguration
 /// </summary>
 internal sealed class XaiPcmTtsPlaybackSession : ITtsPlaybackSession, IDisposable
 {
-    private readonly Process _process;
+    private readonly IPluginProcessSession _session;
     private readonly string _wavFilePath;
     private int _completed;
+    private int _stopRequested;
 
-    private XaiPcmTtsPlaybackSession(Process process, string wavFilePath)
+    private XaiPcmTtsPlaybackSession(
+        IPluginProcessSession session,
+        string wavFilePath
+    )
     {
-        _process = process;
+        _session = session;
         _wavFilePath = wavFilePath;
-        _process.EnableRaisingEvents = true;
-        _process.Exited += OnExited;
-
-        if (_process.HasExited)
-            Finish();
+        _ = ObserveCompletionAsync();
     }
 
-    public bool IsActive => Volatile.Read(ref _completed) == 0 && !_process.HasExited;
+    public bool IsActive =>
+        Volatile.Read(ref _completed) == 0 && _session.IsRunning;
 
     public event EventHandler? Completed;
 
@@ -87,12 +88,26 @@ internal sealed class XaiPcmTtsPlaybackSession : ITtsPlaybackSession, IDisposabl
     ///     Builds a playback session for the given PCM16 audio, or returns the
     ///     inactive sentinel when no audio player is available on PATH.
     /// </summary>
-    public static ITtsPlaybackSession Create(byte[] pcm16Audio, int sampleRate)
+    public static ITtsPlaybackSession Create(
+        byte[] pcm16Audio,
+        int sampleRate,
+        IPluginProcessSupervisor processes
+    )
     {
         var player = ResolvePlayer();
         if (player is null)
             return XaiInactiveTtsPlaybackSession.Instance;
 
+        return Create(pcm16Audio, sampleRate, processes, player);
+    }
+
+    internal static ITtsPlaybackSession Create(
+        byte[] pcm16Audio,
+        int sampleRate,
+        IPluginProcessSupervisor processes,
+        string player
+    )
+    {
         string wavFilePath;
         try
         {
@@ -107,65 +122,64 @@ internal sealed class XaiPcmTtsPlaybackSession : ITtsPlaybackSession, IDisposabl
             return XaiInactiveTtsPlaybackSession.Instance;
         }
 
-        var startInfo = new ProcessStartInfo(player)
+        var started = processes.StartSession(
+            new ProcessCommand(player, [wavFilePath]),
+            new ProcessSessionOptions()
+        );
+        // ReSharper disable once InvertIf -- already the guard-clause form; inverting would nest the success path.
+        if (started.Session is not { } session)
         {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        startInfo.ArgumentList.Add(wavFilePath);
-
-        Process? process;
-        try
-        {
-            process = Process.Start(startInfo);
-        }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
-        {
-            Trace.TraceWarning($"xAI TTS playback failed to start {player}: {ex.Message}");
-            process = null;
-        }
-
-        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
-        if (process is null)
-        {
+            Trace.TraceWarning(
+                $"xAI TTS playback failed to start {player}: {started.StartError}"
+            );
             TryDeleteFile(wavFilePath);
             return XaiInactiveTtsPlaybackSession.Instance;
         }
 
-        return new XaiPcmTtsPlaybackSession(process, wavFilePath);
+        return new XaiPcmTtsPlaybackSession(session, wavFilePath);
     }
 
     public void Stop()
     {
-        if (Volatile.Read(ref _completed) != 0)
+        if (
+            Volatile.Read(ref _completed) != 0
+            || Interlocked.Exchange(ref _stopRequested, 1) != 0
+        )
             return;
 
         try
         {
-            if (!_process.HasExited)
-                _process.Kill(true);
+            _session.Terminate();
         }
-        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+        catch (Exception ex)
         {
             Trace.TraceWarning($"xAI TTS playback stop failed: {ex.Message}");
         }
-
-        Finish();
     }
 
     public void Dispose() => Stop();
 
-    private void OnExited(object? sender, EventArgs e) => Finish();
+    private async Task ObserveCompletionAsync()
+    {
+        try
+        {
+            await _session.Completion.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceWarning($"xAI TTS playback completion failed: {ex.Message}");
+        }
+        finally
+        {
+            Finish();
+        }
+    }
 
     private void Finish()
     {
         if (Interlocked.Exchange(ref _completed, 1) != 0)
             return;
 
-        _process.Exited -= OnExited;
-        _process.Dispose();
         TryDeleteFile(_wavFilePath);
         Completed?.Invoke(this, EventArgs.Empty);
     }

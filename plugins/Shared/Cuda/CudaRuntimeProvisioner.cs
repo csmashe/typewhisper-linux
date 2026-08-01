@@ -6,6 +6,7 @@
 
 using System.IO.Compression;
 using System.Runtime.InteropServices;
+using TypeWhisper.PluginSDK.Processes;
 using System.Text.Json;
 using TypeWhisper.Plugins.Shared.Net;
 
@@ -152,15 +153,22 @@ public class CudaRuntimeProvisioner
     private readonly string _wheelLockDirectory;
     private readonly string _legacyCacheRoot;
     private readonly Action<string, string> _moveDirectory;
+    private readonly Func<IPluginProcessSupervisor>? _processSupervisor;
     private bool _legacyMigrationAttempted;
 
-    public CudaRuntimeProvisioner(string cacheRoot, HttpClient httpClient, Action<string>? log = null)
+    public CudaRuntimeProvisioner(
+        string cacheRoot,
+        HttpClient httpClient,
+        Action<string>? log = null,
+        Func<IPluginProcessSupervisor>? processSupervisor = null
+    )
         : this(
             cacheRoot,
             httpClient,
             log,
             DefaultCacheRoot(),
-            Directory.Move
+            Directory.Move,
+            processSupervisor
         ) { }
 
     internal CudaRuntimeProvisioner(
@@ -168,13 +176,15 @@ public class CudaRuntimeProvisioner
         HttpClient httpClient,
         Action<string>? log,
         string legacyCacheRoot,
-        Action<string, string> moveDirectory
+        Action<string, string> moveDirectory,
+        Func<IPluginProcessSupervisor>? processSupervisor = null
     )
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _log = log;
         _moveDirectory = moveDirectory
             ?? throw new ArgumentNullException(nameof(moveDirectory));
+        _processSupervisor = processSupervisor;
 
         var cachePaths = ResolveCachePaths(cacheRoot, nameof(cacheRoot));
         _cacheRoot = cachePaths.CacheRoot;
@@ -982,34 +992,26 @@ public class CudaRuntimeProvisioner
             yield return dir;
     }
 
-    private static bool LdConfigContains(string soname)
+    private bool LdConfigContains(string soname)
     {
         try
         {
-            using var process = System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo("ldconfig", "-p")
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                }
+            var supervisor = _processSupervisor?.Invoke();
+            if (supervisor is null)
+                return false;
+
+            var result = supervisor.RunProbe(
+                new ProcessCommand("ldconfig", ["-p"]),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardError: ProcessCaptureMode.Discard
+                )
             );
-
-            if (process is null)
-                return false;
-
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(1000))
-            {
-                try { process.Kill(true); } catch { /* best effort */ }
-                return false;
-            }
-
-            var output = outputTask.GetAwaiter().GetResult();
-            errorTask.GetAwaiter().GetResult();
-            return output.Contains(soname, StringComparison.Ordinal);
+            return result.Succeeded
+                   && result.StandardOutputText.Contains(
+                       soname,
+                       StringComparison.Ordinal
+                   );
         }
         catch
         {

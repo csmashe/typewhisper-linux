@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using TypeWhisper.Core;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -43,12 +44,12 @@ public sealed class CliInstallService
     private readonly Func<string, UnixFileMode> _unixFileModeReader;
     private readonly Func<string, CliVerificationResult> _verificationRunner;
 
-    public CliInstallService()
+    public CliInstallService(IProcessRunner processRunner)
         : this(
             FindBundledCliPath,
             DefaultInstallDirectory,
             DefaultLauncherDirectory,
-            RunCliVerification,
+            path => RunCliVerification(processRunner, path, s_verificationTimeout),
             ReadUnixFileMode
         )
     {
@@ -234,59 +235,48 @@ public sealed class CliInstallService
 
     private static CliVerificationResult RunCliVerification(string path)
     {
-        return RunCliVerification(path, s_verificationTimeout);
+        return RunCliVerification(new ProcessRunner(), path, s_verificationTimeout);
     }
 
     // Parameterized so tests can use a short deadline instead of the production one.
     internal static CliVerificationResult RunCliVerification(string path, TimeSpan timeout)
     {
-        using var process = new Process();
-        process.StartInfo = new ProcessStartInfo(path)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        process.StartInfo.ArgumentList.Add("--version");
-        if (!process.Start())
-        {
-            throw new InvalidOperationException("Could not start CLI verification.");
-        }
+        return RunCliVerification(new ProcessRunner(), path, timeout);
+    }
 
-        // One deadline covering process exit *and* both reads. WaitForExit(int) does
-        // not drain redirected pipes, so a grandchild inheriting them keeps ReadToEnd
-        // blocked forever even after the CLI itself has exited.
-        using var deadline = new CancellationTokenSource(timeout);
-        var standardOutput = process.StandardOutput.ReadToEndAsync(deadline.Token);
-        var standardError = process.StandardError.ReadToEndAsync(deadline.Token);
-        try
+    private static CliVerificationResult RunCliVerification(
+        IProcessRunner processRunner,
+        string path,
+        TimeSpan timeout
+    )
+    {
+        // One deadline covering process exit and both reads: a grandchild inheriting the
+        // redirected pipes would otherwise keep the drain blocked long after the CLI exited.
+        var result = processRunner.RunProbe(
+            new ProcessCommand(path, ["--version"]),
+            new ProcessOneShotOptions(Timeout: timeout)
+        );
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- guard chain reads
+        // better than a switch here.
+        if (result.Status == ProcessRunStatus.StartFailed)
         {
-            process.WaitForExitAsync(deadline.Token).GetAwaiter().GetResult();
-            return new CliVerificationResult(
-                process.ExitCode,
-                standardOutput.GetAwaiter().GetResult(),
-                standardError.GetAwaiter().GetResult()
+            throw new InvalidOperationException(
+                result.StartError ?? "Could not start CLI verification."
             );
         }
-        catch (OperationCanceledException)
-        {
-            try
-            {
-                process.Kill(true);
-                // Bounded: the parameterless overload also waits for pipe EOF, which is
-                // the very thing that may be stuck.
-                process.WaitForExit(5_000);
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
-            {
-                Trace.WriteLine($"[CliInstallService] could not stop CLI verification: {ex.Message}");
-            }
 
+        if (result.Status == ProcessRunStatus.TimedOut)
+        {
             throw new TimeoutException(
                 $"CLI verification did not complete within {timeout.TotalSeconds:0} seconds."
             );
         }
+
+        return new CliVerificationResult(
+            result.ExitCode ?? -1,
+            result.StandardOutputText,
+            result.StandardErrorText
+        );
     }
 
     // Earlier versions installed as "typewhisper", shadowing the desktop app's own command.

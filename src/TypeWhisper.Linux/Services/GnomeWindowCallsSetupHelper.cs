@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -10,6 +10,16 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed class GnomeWindowCallsSetupHelper
 {
+    private readonly IProcessRunner _processRunner;
+
+    public GnomeWindowCallsSetupHelper()
+        : this(new ProcessRunner()) { }
+
+    public GnomeWindowCallsSetupHelper(IProcessRunner processRunner)
+    {
+        _processRunner = processRunner;
+    }
+
     private const string ExtensionInstallUrl =
         "https://extensions.gnome.org/extension/4974/window-calls/";
 
@@ -53,41 +63,29 @@ public sealed class GnomeWindowCallsSetupHelper
         // object/method exits non-zero. Try each known endpoint.
         foreach (var (path, iface) in s_endpoints)
         {
-            try
+            var result = _processRunner.RunProbe(
+                new ProcessCommand(
+                    "gdbus",
+                    [
+                        "call",
+                        "--session",
+                        "--dest",
+                        DBusDest,
+                        "--object-path",
+                        path,
+                        "--method",
+                        $"{iface}.List",
+                    ]
+                ),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardOutput: ProcessCaptureMode.Discard,
+                    StandardError: ProcessCaptureMode.Discard
+                )
+            );
+            if (result is { Status: ProcessRunStatus.Exited, ExitCode: 0 })
             {
-                using var p = Process.Start(
-                    new ProcessStartInfo(
-                        "gdbus",
-                        $"call --session --dest {DBusDest} --object-path {path} --method {iface}.List"
-                    ) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false }
-                );
-                if (p is null)
-                {
-                    continue;
-                }
-
-                if (!p.WaitForExit(1000))
-                {
-                    try
-                    {
-                        p.Kill(true);
-                    }
-                    catch
-                    {
-                        /* best effort */
-                    }
-
-                    continue;
-                }
-
-                if (p.ExitCode == 0)
-                {
-                    return true;
-                }
-            }
-            catch
-            {
-                // Try the next endpoint.
+                return true;
             }
         }
 
@@ -99,19 +97,6 @@ public sealed class GnomeWindowCallsSetupHelper
     // ReSharper disable once MemberCanBeMadeStatic.Global
     public bool TryOpenInstallPage()
     {
-        try
-        {
-            using var p = Process.Start(
-                new ProcessStartInfo("xdg-open", ExtensionInstallUrl)
-                {
-                    UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true,
-                }
-            );
-            return p is not null;
-        }
-        catch
-        {
-            return false;
-        }
+        return _processRunner.LaunchUri(new Uri(ExtensionInstallUrl)).Started;
     }
 }

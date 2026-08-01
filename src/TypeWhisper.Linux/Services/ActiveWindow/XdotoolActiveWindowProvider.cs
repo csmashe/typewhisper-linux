@@ -14,6 +14,16 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 /// </summary>
 public sealed class XdotoolActiveWindowProvider : IActiveWindowProvider
 {
+    private readonly ProviderProcessRunner _processRunner;
+
+    public XdotoolActiveWindowProvider()
+        : this(new ProcessRunner()) { }
+
+    public XdotoolActiveWindowProvider(IProcessRunner processRunner)
+    {
+        _processRunner = new ProviderProcessRunner(processRunner);
+    }
+
     public string Name => "xdotool";
 
     public bool IsApplicable()
@@ -25,15 +35,22 @@ public sealed class XdotoolActiveWindowProvider : IActiveWindowProvider
     {
         try
         {
-            var windowId = await RunXdotoolAsync("getactivewindow", ct).ConfigureAwait(false);
+            var windowId = await RunXdotoolAsync(["getactivewindow"], ct)
+                .ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(windowId))
             {
                 return null;
             }
 
-            var title = await RunXdotoolAsync("getactivewindow getwindowname", ct)
+            var title = await RunXdotoolAsync(
+                    ["getactivewindow", "getwindowname"],
+                    ct
+                )
                 .ConfigureAwait(false);
-            var pidText = await RunXdotoolAsync("getactivewindow getwindowpid", ct)
+            var pidText = await RunXdotoolAsync(
+                    ["getactivewindow", "getwindowpid"],
+                    ct
+                )
                 .ConfigureAwait(false);
 
             string? processName = null;
@@ -66,9 +83,12 @@ public sealed class XdotoolActiveWindowProvider : IActiveWindowProvider
         }
     }
 
-    private static async Task<string?> RunXdotoolAsync(string args, CancellationToken ct)
+    private async Task<string?> RunXdotoolAsync(
+        IReadOnlyList<string> args,
+        CancellationToken ct
+    )
     {
-        var (exitCode, output) = await ProviderProcessRunner
+        var (exitCode, output) = await _processRunner
             .RunAsync("xdotool", args, ct)
             .ConfigureAwait(false);
         return exitCode == 0 ? output?.Trim() : null;

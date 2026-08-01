@@ -324,7 +324,13 @@ public sealed class WhisperCppPlugin
                 host.PluginAssetDirectory
             ),
             _httpClient,
-            msg => host.Log(PluginLogLevel.Info, msg)
+            msg => host.Log(PluginLogLevel.Info, msg),
+            // Resolved per call, not captured: the provisioner outlives a disable/re-enable
+            // cycle, and the first activation's process scope is retired by then.
+            () => _host?.Processes
+                  ?? throw new NotSupportedException(
+                      "The plugin host does not provide process supervision."
+                  )
         );
         _whisperCudaInstaller ??= new WhisperCudaRuntimeInstaller(
             host.PluginAssetDirectory,
@@ -936,7 +942,11 @@ public sealed class WhisperCppPlugin
                 _host?.PluginAssetDirectory
             ),
             _httpClient,
-            msg => _host?.Log(PluginLogLevel.Info, msg)
+            msg => _host?.Log(PluginLogLevel.Info, msg),
+            () => _host?.Processes
+                  ?? throw new NotSupportedException(
+                      "The plugin host does not provide process supervision."
+                  )
         );
         _whisperCudaInstaller ??= new WhisperCudaRuntimeInstaller(
             _host?.PluginAssetDirectory ?? ".",
@@ -1279,8 +1289,11 @@ public sealed class WhisperCppPlugin
 
     // Test seam: exercise the same eager construction path as ActivateAsync without
     // invoking unrelated activation work.
-    internal void InitializeCudaDependenciesForTests(IPluginHostServices host) =>
+    internal void InitializeCudaDependenciesForTests(IPluginHostServices host)
+    {
+        _host = host;
         InitializeCudaDependencies(host);
+    }
 
     internal string? CudaRuntimeCacheRootForTests =>
         _cudaProvisioner is null

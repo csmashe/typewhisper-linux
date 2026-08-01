@@ -1,4 +1,5 @@
 using TypeWhisper.Linux.Services;
+using TypeWhisper.PluginSDK.Processes;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
@@ -179,6 +180,43 @@ public sealed class PactlDefaultDeviceRelevanceTests
 public sealed class DefaultDeviceWatcherFallbackTests
 {
     [Fact]
+    public void PactlWatcher_starts_and_stops_supervised_line_session()
+    {
+        var session = new ControlledSession();
+        var runner = new FakeProcessRunner
+        {
+            SessionFactory = (_, _) => new ProcessSessionStartOutcome(
+                session,
+                null
+            ),
+        };
+        var commands = new SystemCommandAvailabilityService(runner);
+        commands.RaiseSnapshotChangedForTests(
+            commands.GetSnapshot() with { HasPactl = true }
+        );
+        runner.SessionInvocations.Clear();
+        using var watcher = new PactlDefaultDeviceWatcher(commands, runner);
+
+        watcher.Start(() => { });
+
+        var invocation = Assert.Single(runner.SessionInvocations);
+        Assert.Equal("pactl", invocation.Command.FileName);
+        Assert.Equal(["subscribe"], invocation.Command.Arguments);
+        Assert.Equal("C", invocation.Command.Environment!["LC_ALL"]);
+        Assert.Equal(
+            ProcessSessionOutputMode.Lines,
+            invocation.Options.StandardOutput
+        );
+        Assert.Equal(
+            ProcessSessionOutputMode.Discard,
+            invocation.Options.StandardError
+        );
+
+        watcher.Stop();
+        Assert.True(session.Terminated);
+    }
+
+    [Fact]
     public void FollowDefault_WithFakeWatcher_StartsExactlyOnce_AndIsIdempotent()
     {
         var watcher = new FakeDefaultDeviceChangeWatcher();
@@ -317,6 +355,54 @@ public sealed class DefaultDeviceWatcherFallbackTests
         }
 
         Assert.True(condition(), "Condition was not met within the timeout.");
+    }
+
+    private sealed class ControlledSession : IPluginProcessSession
+    {
+        private readonly TaskCompletionSource<ProcessExitOutcome> _completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool Terminated { get; private set; }
+        public int ProcessId => 123;
+        public bool IsRunning => !_completion.Task.IsCompleted;
+        public Task<ProcessExitOutcome> Completion => _completion.Task;
+
+        public async IAsyncEnumerable<ProcessOutputLine> ReadOutputAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation]
+            CancellationToken cancellationToken = default
+        )
+        {
+            await Completion.WaitAsync(cancellationToken);
+            yield break;
+        }
+
+        public ValueTask WriteStandardInputAsync(
+            ReadOnlyMemory<byte> data,
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
+
+        public ValueTask CompleteStandardInputAsync(
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
+
+        public void Terminate()
+        {
+            Terminated = true;
+            _completion.TrySetResult(
+                new ProcessExitOutcome(ProcessExitReason.Terminated, null)
+            );
+        }
+
+        public void Dispose()
+        {
+            Terminate();
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Dispose();
+            return ValueTask.CompletedTask;
+        }
     }
 }
 
