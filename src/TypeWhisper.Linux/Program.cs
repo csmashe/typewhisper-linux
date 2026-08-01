@@ -42,7 +42,7 @@ public static class Program
 
         // GNOME launches menu apps at nice 6 / ionice idle, which throttles cold start ~60×
         // for a CPU+IO-heavy .NET app. Restore defaults so menu launch matches terminal launch.
-        var priorityResult = ProcessPriority.ResetToDefaults();
+        var priorityResult = ProcessPriority.ResetToDefaults(new ProcessRunner());
         BootTrace.Stage($"ProcessPriority reset ({priorityResult})");
 
         var action = CommandLineParser.Parse(args);

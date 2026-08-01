@@ -6,6 +6,7 @@ using System.Threading.Channels;
 using TypeWhisper.Plugin.Xai;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.Processes;
 
 // The CapturingHandler lambdas assert on the outgoing 'request' (method, URI,
 // headers) and return a canned response. ReSharper reads xUnit asserts as
@@ -18,6 +19,36 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class XaiPluginTests
 {
+    [Fact]
+    public async Task Playback_stop_terminates_then_cleans_temp_file_once()
+    {
+        var supervisor = new RecordingPluginProcessSupervisor();
+        var processSession = new ControlledPluginProcessSession();
+        supervisor.NextSession = processSession;
+        var playback = XaiPcmTtsPlaybackSession.Create(
+            [0, 1, 2, 3],
+            XaiTtsConfiguration.SampleRate,
+            supervisor,
+            "fake-player"
+        );
+        var completed = 0;
+        playback.Completed += (_, _) => completed++;
+        var wavPath = Assert.Single(
+            Assert.Single(supervisor.Sessions).Command.Arguments
+        );
+
+        playback.Stop();
+        playback.Stop();
+        Assert.Equal(1, processSession.TerminateCount);
+        Assert.True(File.Exists(wavPath));
+        processSession.Complete(
+            new ProcessExitOutcome(ProcessExitReason.Terminated, null)
+        );
+        await ProcessTestWait.UntilAsync(() => completed == 1);
+
+        Assert.False(File.Exists(wavPath));
+    }
+
     [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {

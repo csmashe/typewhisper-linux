@@ -1,8 +1,8 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services.ActiveWindow;
 
@@ -30,12 +30,6 @@ public sealed partial class AtSpiUrlExtractor
     // the walker descends into unseen subtrees — 2.5 s gives headroom while remaining
     // strictly inside the orchestrator's 4 s deferred-URL timeout.
     private static readonly TimeSpan s_walkBudget = TimeSpan.FromMilliseconds(2500);
-    private static readonly bool s_isBusctlAvailable = CheckCommandAvailable("busctl", "--version");
-
-    // gdbus has no --version flag (exits 1 with "Unknown command"). Probe
-    // with `help`, which exits 0 and proves the binary is runnable.
-    private static readonly bool s_isGdbusAvailable = CheckCommandAvailable("gdbus", "help");
-
     private static readonly HashSet<string> s_supportedBrowserProcessNames = new(
         StringComparer.OrdinalIgnoreCase
     )
@@ -66,6 +60,9 @@ public sealed partial class AtSpiUrlExtractor
 
     private readonly Lock _cacheLock = new();
     private readonly IErrorLogService? _errorLog;
+    private readonly bool _isBusctlAvailable;
+    private readonly bool _isGdbusAvailable;
+    private readonly IProcessRunner _processRunner;
     private string? _cachedProcessName;
     private string? _cachedTitle;
     private string? _cachedUrl;
@@ -76,13 +73,26 @@ public sealed partial class AtSpiUrlExtractor
     private string? _missTitle;
 
     public AtSpiUrlExtractor()
-        : this(null)
+        : this(new ProcessRunner())
     {
     }
 
     public AtSpiUrlExtractor(IErrorLogService? errorLog)
+        : this(new ProcessRunner(), errorLog)
     {
+    }
+
+    public AtSpiUrlExtractor(
+        IProcessRunner processRunner,
+        IErrorLogService? errorLog = null
+    )
+    {
+        _processRunner = processRunner;
         _errorLog = errorLog;
+        _isBusctlAvailable = CheckCommandAvailable("busctl", ["--version"]);
+        // gdbus has no --version flag (exits 1 with "Unknown command"). Probe
+        // with `help`, which exits 0 and proves the binary is runnable.
+        _isGdbusAvailable = CheckCommandAvailable("gdbus", ["help"]);
     }
 
     public string? TryGetBrowserUrl(
@@ -137,7 +147,7 @@ public sealed partial class AtSpiUrlExtractor
             }
         }
 
-        if (!s_isBusctlAvailable || !s_isGdbusAvailable)
+        if (!_isBusctlAvailable || !_isGdbusAvailable)
         {
             LogOnce("AT-SPI URL walk skipped: busctl/gdbus not on PATH.");
             return null;
@@ -266,7 +276,7 @@ public sealed partial class AtSpiUrlExtractor
         return sb.ToString();
     }
 
-    private static string? WalkForUrl(
+    private string? WalkForUrl(
         string address,
         string processHint,
         WalkStats stats,
@@ -377,7 +387,7 @@ public sealed partial class AtSpiUrlExtractor
         return null;
     }
 
-    private static AccessibleRef? FindActiveBrowserWindow(
+    private AccessibleRef? FindActiveBrowserWindow(
         string address,
         AccessibleRef app,
         CancellationToken ct
@@ -418,7 +428,7 @@ public sealed partial class AtSpiUrlExtractor
         return null;
     }
 
-    private static string? FindLikelyBrowserUrlInSubtree(
+    private string? FindLikelyBrowserUrlInSubtree(
         string address,
         AccessibleRef root,
         WalkStats stats,
@@ -488,11 +498,20 @@ public sealed partial class AtSpiUrlExtractor
         return bestUrl;
     }
 
-    private static string? GetAtSpiBusAddress()
+    private string? GetAtSpiBusAddress()
     {
         var exitCode = RunProcess(
             "gdbus",
-            "call --session --dest org.a11y.Bus --object-path /org/a11y/bus --method org.a11y.Bus.GetAddress",
+            [
+                "call",
+                "--session",
+                "--dest",
+                "org.a11y.Bus",
+                "--object-path",
+                "/org/a11y/bus",
+                "--method",
+                "org.a11y.Bus.GetAddress",
+            ],
             out var output
         );
 
@@ -505,7 +524,7 @@ public sealed partial class AtSpiUrlExtractor
         return match.Success ? match.Groups["value"].Value : null;
     }
 
-    private static string? TryGetAccessibleText(
+    private string? TryGetAccessibleText(
         string address,
         AccessibleRef node,
         IReadOnlyList<string> interfaces
@@ -557,7 +576,7 @@ public sealed partial class AtSpiUrlExtractor
         return ParseFirstQuotedString(output);
     }
 
-    private static List<AccessibleRef> GetAccessibleChildren(
+    private List<AccessibleRef> GetAccessibleChildren(
         string address,
         AccessibleRef node
     )
@@ -584,7 +603,7 @@ public sealed partial class AtSpiUrlExtractor
         return children;
     }
 
-    private static List<string> GetAccessibleInterfaces(string address, AccessibleRef node)
+    private List<string> GetAccessibleInterfaces(string address, AccessibleRef node)
     {
         var output = RunBusctlCall(
             address,
@@ -596,7 +615,7 @@ public sealed partial class AtSpiUrlExtractor
         return string.IsNullOrWhiteSpace(output) ? [] : ParseQuotedStrings(output);
     }
 
-    private static string? GetAccessibleName(string address, AccessibleRef node)
+    private string? GetAccessibleName(string address, AccessibleRef node)
     {
         return GetBusctlStringProperty(
             address,
@@ -607,7 +626,7 @@ public sealed partial class AtSpiUrlExtractor
         );
     }
 
-    private static int GetAccessibleRole(string address, AccessibleRef node)
+    private int GetAccessibleRole(string address, AccessibleRef node)
     {
         var output = RunBusctlCall(
             address,
@@ -619,7 +638,7 @@ public sealed partial class AtSpiUrlExtractor
         return ParseLastInt(output);
     }
 
-    private static IReadOnlyList<uint> GetAccessibleState(string address, AccessibleRef node)
+    private IReadOnlyList<uint> GetAccessibleState(string address, AccessibleRef node)
     {
         var output = RunBusctlCall(
             address,
@@ -645,7 +664,7 @@ public sealed partial class AtSpiUrlExtractor
         return ints.Count > 1 ? ints[1..] : [];
     }
 
-    private static string? GetBusctlStringProperty(
+    private string? GetBusctlStringProperty(
         string address,
         string destination,
         string path,
@@ -657,7 +676,7 @@ public sealed partial class AtSpiUrlExtractor
         return ParseFirstQuotedString(output);
     }
 
-    private static int GetBusctlUInt32Property(
+    private int GetBusctlUInt32Property(
         string address,
         string destination,
         string path,
@@ -669,7 +688,7 @@ public sealed partial class AtSpiUrlExtractor
         return ParseLastInt(output);
     }
 
-    private static string? RunBusctlCall(
+    private string? RunBusctlCall(
         string address,
         string destination,
         string path,
@@ -693,7 +712,7 @@ public sealed partial class AtSpiUrlExtractor
         return exitCode == 0 ? output?.Trim() : null;
     }
 
-    private static string? RunBusctlGetProperty(
+    private string? RunBusctlGetProperty(
         string address,
         string destination,
         string path,
@@ -709,18 +728,22 @@ public sealed partial class AtSpiUrlExtractor
         return exitCode == 0 ? output?.Trim() : null;
     }
 
-    private static bool CheckCommandAvailable(string command, string args)
+    private bool CheckCommandAvailable(
+        string command,
+        IReadOnlyList<string> args
+    )
     {
         try
         {
-            using var p = Process.Start(
-                new ProcessStartInfo(command, args)
-                {
-                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
-                }
+            var result = _processRunner.RunProbe(
+                new ProcessCommand(command, args),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardOutput: ProcessCaptureMode.Discard,
+                    StandardError: ProcessCaptureMode.Discard
+                )
             );
-            p?.WaitForExit(1000);
-            return p?.ExitCode == 0;
+            return result.Succeeded;
         }
         catch
         {
@@ -728,89 +751,29 @@ public sealed partial class AtSpiUrlExtractor
         }
     }
 
-    private static int RunProcess(string fileName, string args, out string? output)
+    private int RunProcess(
+        string fileName,
+        IReadOnlyList<string> args,
+        out string? output
+    )
     {
         output = null;
 
         try
         {
-            using var p = Process.Start(
-                new ProcessStartInfo(fileName, args)
-                {
-                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
-                }
+            var result = _processRunner.RunProbe(
+                new ProcessCommand(fileName, args),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardError: ProcessCaptureMode.Discard
+                )
             );
-            if (p is null)
-            {
-                return -1;
-            }
-
-            var stdoutTask = p.StandardOutput.ReadToEndAsync();
-            var stderrTask = p.StandardError.ReadToEndAsync();
-            if (!p.WaitForExit(1000))
-            {
-                try
-                {
-                    p.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
-                return -1;
-            }
-
-            output = stdoutTask.GetAwaiter().GetResult();
-            stderrTask.GetAwaiter().GetResult();
-            return p.ExitCode;
-        }
-        catch
-        {
-            return -1;
-        }
-    }
-
-    private static int RunProcess(string fileName, IReadOnlyList<string> args, out string? output)
-    {
-        output = null;
-
-        try
-        {
-            var startInfo = new ProcessStartInfo(fileName)
-            {
-                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
-            };
-            foreach (var arg in args)
-            {
-                startInfo.ArgumentList.Add(arg);
-            }
-
-            using var p = Process.Start(startInfo);
-            if (p is null)
-            {
-                return -1;
-            }
-
-            var stdoutTask = p.StandardOutput.ReadToEndAsync();
-            var stderrTask = p.StandardError.ReadToEndAsync();
-            if (!p.WaitForExit(1000))
-            {
-                try
-                {
-                    p.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
-                return -1;
-            }
-
-            output = stdoutTask.GetAwaiter().GetResult();
-            stderrTask.GetAwaiter().GetResult();
-            return p.ExitCode;
+            output = result.Status == ProcessRunStatus.Exited
+                ? result.StandardOutputText
+                : null;
+            return result.Status == ProcessRunStatus.Exited
+                ? result.ExitCode ?? -1
+                : -1;
         }
         catch
         {

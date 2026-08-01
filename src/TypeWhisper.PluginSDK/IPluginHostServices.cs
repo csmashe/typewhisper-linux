@@ -2,6 +2,7 @@
 // ReSharper/Qodana cannot see used from this project (they are consumed by external plugins/
 // the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.PluginSDK;
 
@@ -39,6 +40,14 @@ public interface IPluginHostServices
 
     /// <summary>Localization service; loads strings from the plugin's Localization/ subdirectory (e.g. en.json).</summary>
     IPluginLocalization Localization { get; }
+
+    /// <summary>Host-owned child-process supervision scoped to this plugin.</summary>
+    /// <remarks>Older hosts fail clearly when a plugin requires this capability.</remarks>
+    // ReSharper disable once UnusedMemberInSuper.Global
+    IPluginProcessSupervisor Processes =>
+        throw new NotSupportedException(
+            "This plugin host does not provide process supervision."
+        );
 
     /// <summary>Stores a secret value using the platform secret store, scoped to the plugin.</summary>
     /// <remarks>

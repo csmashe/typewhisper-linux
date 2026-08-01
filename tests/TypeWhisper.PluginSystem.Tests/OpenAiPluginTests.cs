@@ -7,6 +7,7 @@ using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.OpenAi;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.Processes;
 
 // The CapturingHandler lambdas assert on the outgoing request (method, URI,
 // headers, body) and return a canned response. ReSharper reads xUnit asserts
@@ -19,6 +20,33 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class OpenAiPluginTests
 {
+    [Fact]
+    public async Task Playback_natural_completion_cleans_temp_file_once()
+    {
+        var supervisor = new RecordingPluginProcessSupervisor();
+        var processSession = new ControlledPluginProcessSession();
+        supervisor.NextSession = processSession;
+        var playback = OpenAiPcmTtsPlaybackSession.Create(
+            [0, 1, 2, 3],
+            OpenAiTtsConfiguration.SampleRate,
+            supervisor,
+            "fake-player"
+        );
+        var completed = 0;
+        playback.Completed += (_, _) => completed++;
+        var command = Assert.Single(supervisor.Sessions).Command;
+        var wavPath = Assert.Single(command.Arguments);
+        Assert.True(File.Exists(wavPath));
+
+        processSession.Complete(
+            new ProcessExitOutcome(ProcessExitReason.Exited, 0)
+        );
+        await ProcessTestWait.UntilAsync(() => completed == 1);
+
+        Assert.False(File.Exists(wavPath));
+        Assert.False(playback.IsActive);
+    }
+
     [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {

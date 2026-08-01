@@ -2,6 +2,7 @@ using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Insertion;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -109,9 +110,14 @@ public sealed class TextInsertionService
     public TextInsertionService(
         IErrorLogService errorLog,
         SystemCommandAvailabilityService commands,
-        IPasteConfirmationSource? pasteConfirmation = null
+        IPasteConfirmationSource? pasteConfirmation = null,
+        IProcessRunner? processRunner = null
     )
-        : this(new LinuxTextInsertionPlatform(commands), errorLog, pasteConfirmation)
+        : this(
+            new LinuxTextInsertionPlatform(commands, processRunner),
+            errorLog,
+            pasteConfirmation
+        )
     {
     }
 
@@ -1260,7 +1266,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             return null;
         }
 
-        var output = RunXdotoolSync("getactivewindow");
+        var output = RunXdotoolSync(["getactivewindow"]);
         return string.IsNullOrWhiteSpace(output) ? null : output;
     }
 
@@ -1612,39 +1618,15 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         return SystemCommandAvailabilityService.IsCommandAvailable(command);
     }
 
-    private static string? RunXdotoolSync(string arguments)
+    private string? RunXdotoolSync(IReadOnlyList<string> arguments)
     {
         try
         {
-            var psi = new ProcessStartInfo("xdotool", arguments)
-            {
-                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
-            };
-            using var p = Process.Start(psi);
-            if (p is null)
-            {
-                return null;
-            }
-
-            var stdoutTask = p.StandardOutput.ReadToEndAsync();
-            var stderrTask = p.StandardError.ReadToEndAsync();
-            if (!p.WaitForExit(1000))
-            {
-                try
-                {
-                    p.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
-                return null;
-            }
-
-            var output = stdoutTask.GetAwaiter().GetResult();
-            stderrTask.GetAwaiter().GetResult();
-            return p.ExitCode == 0 ? output.Trim() : null;
+            var result = _ioRunner.RunProbe(
+                new ProcessCommand("xdotool", arguments),
+                new ProcessOneShotOptions(Timeout: TimeSpan.FromSeconds(1))
+            );
+            return result.Succeeded ? result.StandardOutputText.Trim() : null;
         }
         catch (Exception ex)
         {

@@ -4,12 +4,11 @@
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
 using System.Collections.ObjectModel;
-using System.Diagnostics;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Plugin.Script;
 
@@ -204,7 +203,9 @@ public sealed class ScriptService
         return current;
     }
 
-    private static (string FileName, string Arguments) ResolveShell(ScriptEntry script)
+    private static (string FileName, IReadOnlyList<string> Arguments) ResolveShell(
+        ScriptEntry script
+    )
     {
         var shell = string.IsNullOrWhiteSpace(script.Shell)
             ? "bash"
@@ -212,10 +213,13 @@ public sealed class ScriptService
 
         return shell switch
         {
-            "pwsh" or "powershell" => ("pwsh", $"-NoProfile -Command {script.Command}"),
-            "sh" => ("sh", $"-c \"{script.Command.Replace("\"", "\\\"")}\""),
+            "pwsh" or "powershell" => (
+                "pwsh",
+                ["-NoProfile", "-Command", script.Command]
+            ),
+            "sh" => ("sh", ["-c", script.Command]),
             // bash + any legacy/unknown value (e.g. an old "cmd" entry).
-            _ => ("bash", $"-c \"{script.Command.Replace("\"", "\\\"")}\""),
+            _ => ("bash", ["-c", script.Command]),
         };
     }
 
@@ -228,90 +232,64 @@ public sealed class ScriptService
     {
         var (fileName, arguments) = ResolveShell(script);
 
-        // ReSharper disable once UseObjectOrCollectionInitializer -- the Environment entries are set after the core initializer for readability.
-        var psi = new ProcessStartInfo
+        var environment = new Dictionary<string, string>
         {
-            FileName = fileName,
-            Arguments = arguments,
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-            StandardInputEncoding = Encoding.UTF8,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
+            ["TYPEWHISPER_APP_NAME"] = context.ActiveAppName ?? "",
+            ["TYPEWHISPER_LANGUAGE"] = context.SourceLanguage ?? "",
+            ["TYPEWHISPER_PROFILE"] = context.ProfileName ?? "",
         };
-
-        psi.Environment["TYPEWHISPER_APP_NAME"] = context.ActiveAppName ?? "";
-        psi.Environment["TYPEWHISPER_LANGUAGE"] = context.SourceLanguage ?? "";
-        psi.Environment["TYPEWHISPER_PROFILE"] = context.ProfileName ?? "";
-
-        using var process = new Process();
-        process.StartInfo = psi;
-        process.Start();
 
         // Create the 5s watchdog BEFORE the stdin write so a wedged child
         // (e.g. one that never drains its stdin) can't block WriteAsync
         // indefinitely. The same token also bounds the concurrent reads.
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
-
         // Read stdout and stderr concurrently to avoid deadlocks. Starting
         // the reads before stdin is written keeps a chatty script that prints
         // a prologue before reading from wedging our WriteAsync on a full
         // output pipe buffer.
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-        var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
-
-        string stdout;
-        string stderr;
+        ProcessRunOutcome result;
         try
         {
             // Inside the watchdog try block: a child that wedges on stdin
             // (or never exits) must trigger kill, not propagate OCE while
             // the process keeps running and pipes stay open.
-            await process.StandardInput.WriteAsync(text.AsMemory(), timeoutCts.Token);
-            process.StandardInput.Close();
-
-            await process.WaitForExitAsync(timeoutCts.Token);
-
-            stdout = await stdoutTask;
-            stderr = await stderrTask;
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            // Timeout — kill the process and return original text
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            { /* best effort */
-            }
-            _host.Log(PluginLogLevel.Warning, $"Script '{script.Name}' timed out after 5 seconds");
-            return text;
+            result = await _host.Processes.RunOneShotAsync(
+                new ProcessCommand(fileName, arguments, environment),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(5),
+                    StandardInput: new Utf8ProcessInput(text)
+                ),
+                ct
+            );
         }
         catch (OperationCanceledException)
         {
             // Caller cancelled (ct) — kill the child so it doesn't outlive the
             // dictation flow as a leaked process, then propagate the cancellation.
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            { /* best effort */
-            }
             _host.Log(PluginLogLevel.Info, $"Script '{script.Name}' cancelled by caller.");
             throw;
         }
 
-        if (process.ExitCode != 0)
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- part of a guard chain; a switch would only cover this branch.
+        if (result.Status == ProcessRunStatus.TimedOut)
+        {
+            _host.Log(PluginLogLevel.Warning, $"Script '{script.Name}' timed out after 5 seconds");
+            return text;
+        }
+
+        if (result.Status == ProcessRunStatus.StartFailed)
+        {
+            throw new InvalidOperationException(
+                result.StartError ?? $"Could not start {fileName}."
+            );
+        }
+
+        var stdout = result.StandardOutputText;
+        var stderr = result.StandardErrorText;
+        if (result.ExitCode != 0)
         {
             _host.Log(
                 PluginLogLevel.Warning,
-                $"Script '{script.Name}' exited with code {process.ExitCode}: {stderr}"
+                $"Script '{script.Name}' exited with code {result.ExitCode}: {stderr}"
             );
             return text;
         }

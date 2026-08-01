@@ -191,7 +191,13 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
                 host.PluginAssetDirectory
             ),
             _httpClient,
-            msg => host.Log(PluginLogLevel.Info, msg)
+            msg => host.Log(PluginLogLevel.Info, msg),
+            // Resolved per call, not captured: the provisioner outlives a disable/re-enable
+            // cycle, and the first activation's process scope is retired by then.
+            () => _host?.Processes
+                  ?? throw new NotSupportedException(
+                      "The plugin host does not provide process supervision."
+                  )
         );
     }
 
@@ -756,8 +762,11 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
 
     // Test seam: exercise the same eager construction path as ActivateAsync without
     // running the legacy model-file migration against a real per-user directory.
-    internal void InitializeCudaDependenciesForTests(IPluginHostServices host) =>
+    internal void InitializeCudaDependenciesForTests(IPluginHostServices host)
+    {
+        _host = host;
         InitializeCudaDependencies(host);
+    }
 
     internal string? CudaRuntimeCacheRootForTests =>
         _cudaProvisioner is null

@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.ActiveWindow;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -20,9 +21,6 @@ public sealed class ActiveWindowService : IActiveWindowService
     private const int AtSpiRoleEditBar = 77;
     private const int AtSpiRoleEntry = 79;
     private static readonly TimeSpan s_providerSyncBudget = TimeSpan.FromMilliseconds(150);
-
-    private static readonly bool s_isXdotoolAvailable = CheckXdotoolAvailable();
-    private static readonly bool s_isXclipAvailable = CheckCommandAvailable("xclip", "-version");
 
     private static readonly HashSet<string> s_browserProcessNames = new(
         StringComparer.OrdinalIgnoreCase
@@ -58,16 +56,23 @@ public sealed class ActiveWindowService : IActiveWindowService
     ];
 
     private readonly AtSpiUrlExtractor _atSpiUrlExtractor;
+    private readonly bool _isXclipAvailable;
+    private readonly bool _isXdotoolAvailable;
+    private readonly IProcessRunner _processRunner;
 
     private readonly IReadOnlyList<IActiveWindowProvider> _providers;
 
     public ActiveWindowService(
         IEnumerable<IActiveWindowProvider> providers,
-        AtSpiUrlExtractor atSpiUrlExtractor
+        AtSpiUrlExtractor atSpiUrlExtractor,
+        IProcessRunner? processRunner = null
     )
     {
         _providers = providers.ToList();
         _atSpiUrlExtractor = atSpiUrlExtractor;
+        _processRunner = processRunner ?? new ProcessRunner();
+        _isXdotoolAvailable = CheckXdotoolAvailable();
+        _isXclipAvailable = CheckCommandAvailable("xclip", ["-version"]);
     }
 
     public string? GetActiveWindowProcessName()
@@ -102,8 +107,8 @@ public sealed class ActiveWindowService : IActiveWindowService
 
         if (
             !allowInteractiveCapture
-            || !s_isXclipAvailable
-            || !s_isXdotoolAvailable
+            || !_isXclipAvailable
+            || !_isXdotoolAvailable
             || !IsSupportedBrowserWindow(processName, title)
         )
         {
@@ -115,7 +120,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         var windowId = snapshot?.Source == "xdotool" ? snapshot.WindowId : null;
         if (string.IsNullOrWhiteSpace(windowId))
         {
-            windowId = RunXdotool("getactivewindow");
+            windowId = RunXdotool(["getactivewindow"]);
         }
 
         return string.IsNullOrWhiteSpace(windowId) ? null : TryCaptureBrowserUrl(windowId);
@@ -207,24 +212,28 @@ public sealed class ActiveWindowService : IActiveWindowService
     // ReSharper disable once MemberCanBeMadeStatic.Global
     public string? GetActiveWindowId()
     {
-        if (!s_isXdotoolAvailable)
+        if (!_isXdotoolAvailable)
         {
             return null;
         }
 
-        var windowId = RunXdotool("getactivewindow");
+        var windowId = RunXdotool(["getactivewindow"]);
         return string.IsNullOrWhiteSpace(windowId) ? null : windowId;
     }
 
     // ReSharper disable once UnusedMember.Global  public API surface (window-activation helper paired with GetActiveWindowId); not currently called in-tree
-    public static bool TryActivateWindow(string? windowId)
+    public bool TryActivateWindow(string? windowId)
     {
-        if (string.IsNullOrWhiteSpace(windowId) || !s_isXdotoolAvailable)
+        if (string.IsNullOrWhiteSpace(windowId) || !_isXdotoolAvailable)
         {
             return false;
         }
 
-        var exitCode = RunProcess("xdotool", $"windowactivate --sync {windowId}", out _);
+        var exitCode = RunProcess(
+            "xdotool",
+            ["windowactivate", "--sync", windowId],
+            out _
+        );
         return exitCode == 0;
     }
 
@@ -438,7 +447,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         return null;
     }
 
-    private static string? TryCaptureBrowserUrl(string windowId)
+    private string? TryCaptureBrowserUrl(string windowId)
     {
         string? previousClipboard = null;
 
@@ -469,63 +478,80 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
     }
 
-    private static bool SendBrowserAddressBarCaptureKeys(string windowId)
+    private bool SendBrowserAddressBarCaptureKeys(string windowId)
     {
         // X11 last-resort: synthesize Ctrl+L (focus address bar) + Ctrl+C,
         // read the clipboard, then Escape to restore caret position.
-        if (!RunXdotoolKey(windowId, "key --clearmodifiers ctrl+l"))
+        if (!RunXdotoolKey(windowId, ["key", "--clearmodifiers", "ctrl+l"]))
         {
             return false;
         }
 
         Thread.Sleep(60);
 
-        if (!RunXdotoolKey(windowId, "key --clearmodifiers ctrl+c"))
+        if (!RunXdotoolKey(windowId, ["key", "--clearmodifiers", "ctrl+c"]))
         {
             return false;
         }
 
         Thread.Sleep(80);
 
-        RunXdotoolKey(windowId, "key Escape");
+        RunXdotoolKey(windowId, ["key", "Escape"]);
         return true;
     }
 
-    private static bool RunXdotoolKey(string windowId, string args)
+    private bool RunXdotoolKey(
+        string windowId,
+        IReadOnlyList<string> arguments
+    )
     {
-        var exitCode = RunProcess("xdotool", $"windowactivate --sync {windowId} {args}", out _);
+        var args = new List<string> { "windowactivate", "--sync", windowId };
+        args.AddRange(arguments);
+        var exitCode = RunProcess("xdotool", args, out _);
         return exitCode == 0;
     }
 
-    private static string? TryReadClipboardText()
+    private string? TryReadClipboardText()
     {
-        var exitCode = RunProcess("xclip", "-selection clipboard -o", out var output);
+        var exitCode = RunProcess(
+            "xclip",
+            ["-selection", "clipboard", "-o"],
+            out var output
+        );
         return exitCode == 0 ? output : null;
     }
 
-    private static bool TryWriteClipboardText(string text)
+    private bool TryWriteClipboardText(string text)
     {
-        var exitCode = RunProcessWithInput("xclip", "-selection clipboard", text);
+        var exitCode = RunProcessWithInput(
+            "xclip",
+            ["-selection", "clipboard"],
+            text
+        );
         return exitCode == 0;
     }
 
-    private static bool CheckXdotoolAvailable()
+    private bool CheckXdotoolAvailable()
     {
-        return CheckCommandAvailable("xdotool", "--version");
+        return CheckCommandAvailable("xdotool", ["--version"]);
     }
 
-    private static bool CheckCommandAvailable(string command, string args)
+    private bool CheckCommandAvailable(
+        string command,
+        IReadOnlyList<string> args
+    )
     {
         try
         {
-            using var p = Process.Start(
-                new ProcessStartInfo(command, args)
-                {
-                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
-                }
+            var result = _processRunner.RunProbe(
+                new ProcessCommand(command, args),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardOutput: ProcessCaptureMode.Discard,
+                    StandardError: ProcessCaptureMode.Discard
+                )
             );
-            p?.WaitForExit(1000);
-            return p?.ExitCode == 0;
+            return result.Succeeded;
         }
         catch
         {
@@ -533,50 +559,35 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
     }
 
-    private static string? RunXdotool(string args)
+    private string? RunXdotool(IReadOnlyList<string> args)
     {
         var exitCode = RunProcess("xdotool", args, out var output);
         return exitCode == 0 ? output?.Trim() : null;
     }
 
-    private static int RunProcess(string fileName, string args, out string? output)
+    private int RunProcess(
+        string fileName,
+        IReadOnlyList<string> args,
+        out string? output
+    )
     {
         output = null;
 
         try
         {
-            using var p = Process.Start(
-                new ProcessStartInfo(fileName, args)
-                {
-                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
-                }
+            var result = _processRunner.RunProbe(
+                new ProcessCommand(fileName, args),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardError: ProcessCaptureMode.Discard
+                )
             );
-            if (p is null)
-            {
-                return -1;
-            }
-
-            // Drain stdout and stderr concurrently to avoid the classic deadlock
-            // where a full stderr pipe blocks the child while we wait for exit.
-            var stdoutTask = p.StandardOutput.ReadToEndAsync();
-            var stderrTask = p.StandardError.ReadToEndAsync();
-            if (!p.WaitForExit(1000))
-            {
-                try
-                {
-                    p.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
-                return -1;
-            }
-
-            output = stdoutTask.GetAwaiter().GetResult();
-            stderrTask.GetAwaiter().GetResult();
-            return p.ExitCode;
+            output = result.Status == ProcessRunStatus.Exited
+                ? result.StandardOutputText
+                : null;
+            return result.Status == ProcessRunStatus.Exited
+                ? result.ExitCode ?? -1
+                : -1;
         }
         catch
         {
@@ -584,28 +595,29 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
     }
 
-    private static int RunProcessWithInput(string fileName, string args, string input)
+    private int RunProcessWithInput(
+        string fileName,
+        IReadOnlyList<string> args,
+        string input
+    )
     {
         try
         {
-            using var p = Process.Start(
-                new ProcessStartInfo(fileName, args)
-                {
-                    RedirectStandardInput = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                }
+            var result = _processRunner.RunProbe(
+                new ProcessCommand(fileName, args),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardInput: new Utf8ProcessInput(input),
+                    StandardOutput: ProcessCaptureMode.Discard,
+                    StandardError: ProcessCaptureMode.Discard,
+                    // xclip leaves a selection-serving daemon holding our pipes; waiting for EOF
+                    // would burn the whole timeout and report every clipboard write as failed.
+                    PostExitPipePolicy: ProcessPostExitPipePolicy.AbandonAfterGrace
+                )
             );
-            if (p is null)
-            {
-                return -1;
-            }
-
-            p.StandardInput.Write(input);
-            p.StandardInput.Close();
-            p.WaitForExit(1000);
-            return p.ExitCode;
+            return result.Status == ProcessRunStatus.Exited
+                ? result.ExitCode ?? -1
+                : -1;
         }
         catch
         {

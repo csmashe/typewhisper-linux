@@ -8,13 +8,130 @@ using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Processes;
 using TypeWhisper.Tests;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
 public sealed class PluginHostServicesTests : IDisposable
 {
+    [Fact]
+    public async Task ProcessScope_tracks_completion_and_terminates_remaining_sessions()
+    {
+        var runner = new RecordingPluginProcessSupervisor();
+        var first = new ControlledPluginProcessSession();
+        runner.NextSession = first;
+        var scope = new PluginProcessSupervisorScope("test-plugin", runner);
+
+        var started = scope.StartSession(
+            new ProcessCommand("player", ["one.wav"]),
+            new ProcessSessionOptions()
+        );
+
+        Assert.True(started.Started);
+        Assert.Equal(1, scope.SessionCount);
+        first.Complete(new ProcessExitOutcome(ProcessExitReason.Exited, 0));
+        await ProcessTestWait.UntilAsync(() => scope.SessionCount == 0);
+
+        var second = new ControlledPluginProcessSession();
+        runner.NextSession = second;
+        scope.StartSession(
+            new ProcessCommand("player", ["two.wav"]),
+            new ProcessSessionOptions()
+        );
+
+        scope.TerminateAll();
+
+        Assert.Equal(1, second.TerminateCount);
+        second.Complete(
+            new ProcessExitOutcome(ProcessExitReason.Terminated, null)
+        );
+        await ProcessTestWait.UntilAsync(() => scope.SessionCount == 0);
+    }
+
+    [Fact]
+    public async Task ProcessScope_retire_closes_the_scope_while_terminate_leaves_it_usable()
+    {
+        var runner = new RecordingPluginProcessSupervisor();
+        var scope = new PluginProcessSupervisorScope("test-plugin", runner);
+
+        // A failed deactivation leaves the plugin registered, so a plain terminate must
+        // stop current work without stranding it on a permanently cancelled scope.
+        scope.TerminateAll();
+
+        var afterTerminate = await scope.RunOneShotAsync(
+            new ProcessCommand("probe", []),
+            new ProcessOneShotOptions()
+        );
+        Assert.Equal(ProcessRunStatus.Exited, afterTerminate.Status);
+
+        runner.NextSession = new ControlledPluginProcessSession();
+        Assert.True(
+            scope.StartSession(
+                new ProcessCommand("player", ["one.wav"]),
+                new ProcessSessionOptions()
+            ).Started
+        );
+
+        // Retiring is terminal: work crossing the teardown boundary is refused and stopped.
+        scope.Retire();
+
+        var startsBeforeRefusal = runner.Sessions.Count;
+        var late = new ControlledPluginProcessSession();
+        runner.NextSession = late;
+        var refused = scope.StartSession(
+            new ProcessCommand("player", ["two.wav"]),
+            new ProcessSessionOptions()
+        );
+
+        Assert.False(refused.Started);
+        // Refused before the handoff, so the command never ran at all.
+        Assert.Equal(startsBeforeRefusal, runner.Sessions.Count);
+        Assert.Equal(0, late.TerminateCount);
+        Assert.False(scope.LaunchDetached(new ProcessCommand("tool", [])).Started);
+        Assert.False(scope.LaunchUri(new Uri("https://example.test/")).Started);
+        Assert.Empty(runner.Uris);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => scope.RunOneShotAsync(
+                new ProcessCommand("probe", []),
+                new ProcessOneShotOptions()
+            )
+        );
+
+        // A terminate arriving after retirement must not hand the scope back its lifetime.
+        scope.TerminateAll();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => scope.RunOneShotAsync(
+                new ProcessCommand("probe", []),
+                new ProcessOneShotOptions()
+            )
+        );
+    }
+
+    [Fact]
+    public void ProcessScope_terminates_a_session_that_crosses_a_stop_sweep()
+    {
+        var runner = new RecordingPluginProcessSupervisor();
+        var scope = new PluginProcessSupervisorScope("test-plugin", runner);
+        var crossing = new ControlledPluginProcessSession();
+
+        // The sweep runs while the launch is in flight, so this session was never in the
+        // snapshot TerminateAll took and must be stopped as it tries to register.
+        runner.OnStartSession = scope.TerminateAll;
+        runner.NextSession = crossing;
+
+        var started = scope.StartSession(
+            new ProcessCommand("player", ["one.wav"]),
+            new ProcessSessionOptions()
+        );
+
+        Assert.False(started.Started);
+        Assert.Equal(1, crossing.TerminateCount);
+        Assert.Equal(0, scope.SessionCount);
+    }
+
     private readonly Mock<IActiveWindowService> _activeWindow = new();
     private readonly Mock<IPluginEventBus> _eventBus = new();
     private readonly Mock<IProfileService> _profiles = new();
@@ -598,5 +715,141 @@ public sealed class PluginHostServicesTests : IDisposable
             cipher.Length
         );
         return Convert.ToBase64String(combined);
+    }
+}
+
+internal sealed class RecordingPluginProcessSupervisor : IProcessRunner
+{
+    public ControlledPluginProcessSession? NextSession { get; set; }
+    public List<(ProcessCommand Command, ProcessSessionOptions Options)> Sessions { get; } = [];
+    public List<Uri> Uris { get; } = [];
+    // ReSharper disable once MemberCanBePrivate.Global
+    // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global -- settable knob on the fake, mirroring NextSession; narrowing it would make it unsettable
+    public ProcessRunOutcome OneShotOutcome { get; set; } = new(
+        ProcessRunStatus.Exited,
+        0,
+        [],
+        [],
+        ProcessOutputStatus.Complete,
+        null
+    );
+
+    // Honours the token like the real runner, so scope-lifetime cancellation is observable.
+    public ProcessRunOutcome RunProbe(
+        ProcessCommand command,
+        ProcessOneShotOptions options,
+        CancellationToken cancellationToken = default
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return OneShotOutcome;
+    }
+
+    public Task<ProcessRunOutcome> RunOneShotAsync(
+        ProcessCommand command,
+        ProcessOneShotOptions options,
+        CancellationToken cancellationToken = default
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(OneShotOutcome);
+    }
+
+    /// <summary>Fires mid-launch so tests can interleave a scope stop with registration.</summary>
+    public Action? OnStartSession { get; set; }
+
+    public ProcessSessionStartOutcome StartSession(
+        ProcessCommand command,
+        ProcessSessionOptions options
+    )
+    {
+        Sessions.Add((command, options));
+        OnStartSession?.Invoke();
+        return NextSession is { } session
+            ? new ProcessSessionStartOutcome(session, null)
+            : new ProcessSessionStartOutcome(null, "fake start failure");
+    }
+
+    public DetachedLaunchOutcome LaunchDetached(ProcessCommand command) =>
+        new(true, null);
+
+    public DetachedLaunchOutcome LaunchUri(Uri uri)
+    {
+        Uris.Add(uri);
+        return new DetachedLaunchOutcome(true, null);
+    }
+
+    public Task<ProcessRunResult> RunAsync(
+        string fileName,
+        IReadOnlyList<string> args,
+        IReadOnlyDictionary<string, string>? environment = null,
+        string? standardInput = null,
+        TimeSpan? timeout = null,
+        bool detachAfterExit = false,
+        CancellationToken ct = default
+    ) => throw new NotSupportedException();
+}
+
+internal sealed class ControlledPluginProcessSession : IPluginProcessSession
+{
+    private readonly TaskCompletionSource<ProcessExitOutcome> _completion =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public int TerminateCount { get; private set; }
+    public int ProcessId => 1234;
+    public bool IsRunning => !_completion.Task.IsCompleted;
+    public Task<ProcessExitOutcome> Completion => _completion.Task;
+
+    public async IAsyncEnumerable<ProcessOutputLine> ReadOutputAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation]
+        CancellationToken cancellationToken = default
+    )
+    {
+        await Completion.WaitAsync(cancellationToken);
+        yield break;
+    }
+
+    public ValueTask WriteStandardInputAsync(
+        ReadOnlyMemory<byte> data,
+        CancellationToken cancellationToken = default
+    ) => throw new NotSupportedException();
+
+    public ValueTask CompleteStandardInputAsync(
+        CancellationToken cancellationToken = default
+    ) => throw new NotSupportedException();
+
+    public void Terminate()
+    {
+        TerminateCount++;
+    }
+
+    public void Dispose()
+    {
+        Terminate();
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
+        return ValueTask.CompletedTask;
+    }
+
+    public void Complete(ProcessExitOutcome outcome)
+    {
+        _completion.TrySetResult(outcome);
+    }
+}
+
+internal static class ProcessTestWait
+{
+    public static async Task UntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.True(condition(), "Condition was not met before the deadline.");
     }
 }

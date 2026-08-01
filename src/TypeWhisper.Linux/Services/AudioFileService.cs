@@ -1,4 +1,4 @@
-using System.Diagnostics;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -22,10 +22,15 @@ public sealed class AudioFileService
     };
 
     private readonly SystemCommandAvailabilityService _commands;
+    private readonly IProcessRunner _processRunner;
 
-    public AudioFileService(SystemCommandAvailabilityService commands)
+    public AudioFileService(
+        SystemCommandAvailabilityService commands,
+        IProcessRunner? processRunner = null
+    )
     {
         _commands = commands;
+        _processRunner = processRunner ?? new ProcessRunner();
     }
 
     public bool IsImporterAvailable => _commands.HasFfmpeg;
@@ -59,27 +64,42 @@ public sealed class AudioFileService
         // Transcode to mono 16 kHz PCM WAV on stdout: -vn drops any video
         // stream, -ac 1 and -ar 16000 normalize to the format whisper.cpp /
         // SherpaOnnx expects, and pipe:1 avoids a temp file on disk.
-        using var process = new Process();
-        process.StartInfo = new ProcessStartInfo(
-            "ffmpeg",
-            $"-v error -i \"{filePath}\" -vn -ac 1 -ar 16000 -f wav pipe:1"
-        )
+        var result = await _processRunner.RunOneShotAsync(
+            new ProcessCommand(
+                "ffmpeg",
+                [
+                    "-v",
+                    "error",
+                    "-i",
+                    filePath,
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "16000",
+                    "-f",
+                    "wav",
+                    "pipe:1",
+                ]
+            ),
+            new ProcessOneShotOptions(
+                StandardOutput: ProcessCaptureMode.Binary,
+                StandardError: ProcessCaptureMode.Utf8Text
+            ),
+            cancellationToken
+        );
+
+        if (result.Status == ProcessRunStatus.StartFailed)
         {
-            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
-        };
+            throw new InvalidOperationException(
+                result.StartError ?? "ffmpeg failed to start."
+            );
+        }
 
-        process.Start();
-
-        await using var output = new MemoryStream();
-        var copyTask = process.StandardOutput.BaseStream.CopyToAsync(output, cancellationToken);
-        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-
-        await copyTask;
-        await process.WaitForExitAsync(cancellationToken);
-        var stderr = await errorTask;
-
-        if (process.ExitCode != 0)
+        // ReSharper disable once InvertIf -- guard clause; inverting would nest the success path.
+        if (!result.Succeeded)
         {
+            var stderr = result.StandardErrorText;
             throw new InvalidOperationException(
                 string.IsNullOrWhiteSpace(stderr)
                     ? "ffmpeg failed to load the file."
@@ -87,6 +107,6 @@ public sealed class AudioFileService
             );
         }
 
-        return output.ToArray();
+        return result.StandardOutput;
     }
 }

@@ -13,6 +13,16 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 /// </summary>
 public sealed class KWinActiveWindowProvider : IActiveWindowProvider
 {
+    private readonly ProviderProcessRunner _processRunner;
+
+    public KWinActiveWindowProvider()
+        : this(new ProcessRunner()) { }
+
+    public KWinActiveWindowProvider(IProcessRunner processRunner)
+    {
+        _processRunner = new ProviderProcessRunner(processRunner);
+    }
+
     public string Name => "kwin";
 
     public bool IsApplicable()
@@ -36,8 +46,8 @@ public sealed class KWinActiveWindowProvider : IActiveWindowProvider
     {
         try
         {
-            var (idExit, idOutput) = await ProviderProcessRunner
-                .RunAsync("kdotool", "getactivewindow", ct)
+            var (idExit, idOutput) = await _processRunner
+                .RunAsync("kdotool", ["getactivewindow"], ct)
                 .ConfigureAwait(false);
             var windowId = idExit == 0 ? idOutput?.Trim() : null;
             if (string.IsNullOrWhiteSpace(windowId))
@@ -45,12 +55,12 @@ public sealed class KWinActiveWindowProvider : IActiveWindowProvider
                 return null;
             }
 
-            var (classExit, classOutput) = await ProviderProcessRunner
+            var (classExit, classOutput) = await _processRunner
                 .RunAsync("kdotool", ["getwindowclassname", windowId], ct)
                 .ConfigureAwait(false);
             var klass = classExit == 0 ? classOutput?.Trim() : null;
 
-            var (nameExit, nameOutput) = await ProviderProcessRunner
+            var (nameExit, nameOutput) = await _processRunner
                 .RunAsync("kdotool", ["getwindowname", windowId], ct)
                 .ConfigureAwait(false);
             var title = nameExit == 0 ? nameOutput?.Trim() : null;

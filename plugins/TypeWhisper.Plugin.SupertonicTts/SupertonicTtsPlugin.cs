@@ -39,7 +39,7 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
 
     private readonly ISupertonicAssetManager? _injectedAssetManager;
     private readonly Func<string, ISupertonicSynthesizer> _synthesizerFactory;
-    private readonly Func<float[], int, ITtsPlaybackSession> _playbackFactory;
+    private readonly Func<float[], int, ITtsPlaybackSession>? _playbackFactory;
     private readonly SemaphoreSlim _synthesisLock = new(1, 1);
     private readonly SemaphoreSlim _downloadLock = new(1, 1);
     private ISupertonicAssetManager? _assetManager;
@@ -58,7 +58,7 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
         : this(
             assetManager: null,
             synthesizerFactory: assetRoot => new SupertonicOnnxSynthesizer(assetRoot),
-            playbackFactory: SupertonicTtsPlaybackSession.Create,
+            playbackFactory: null,
             useNullableAssetManagerOverload: true)
     {
     }
@@ -81,7 +81,7 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
         _injectedAssetManager = assetManager;
         _assetManager = assetManager;
         _synthesizerFactory = synthesizerFactory;
-        _playbackFactory = playbackFactory ?? SupertonicTtsPlaybackSession.Create;
+        _playbackFactory = playbackFactory;
     }
 
     public string PluginId => "com.typewhisper.supertonic-tts";
@@ -186,7 +186,20 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
 
             return synthesis.Samples.Length == 0
                 ? SupertonicInactiveTtsPlaybackSession.Instance
-                : _playbackFactory(synthesis.Samples, synthesis.SampleRate);
+                : _playbackFactory?.Invoke(
+                    synthesis.Samples,
+                    synthesis.SampleRate
+                )
+                  ?? SupertonicTtsPlaybackSession.Create(
+                      synthesis.Samples,
+                      synthesis.SampleRate,
+                      (
+                          _host
+                          ?? throw new InvalidOperationException(
+                              "Supertonic plugin is not activated."
+                          )
+                      ).Processes
+                  );
         }
         finally
         {

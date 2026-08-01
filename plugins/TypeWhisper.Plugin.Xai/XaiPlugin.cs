@@ -51,7 +51,7 @@ public sealed class XaiPlugin
     ];
 
     private readonly HttpClient _httpClient;
-    private readonly Func<byte[], ITtsPlaybackSession> _ttsPlaybackFactory;
+    private readonly Func<byte[], ITtsPlaybackSession>? _ttsPlaybackFactory;
     private readonly Func<bool> _ttsPlaybackAvailableProbe;
     private IPluginHostServices? _host;
     private List<XaiFetchedModel> _fetchedLlmModels = [];
@@ -70,8 +70,7 @@ public sealed class XaiPlugin
         Func<bool>? ttsPlaybackAvailableProbe = null)
     {
         _httpClient = httpClient;
-        _ttsPlaybackFactory = ttsPlaybackFactory
-            ?? (pcm => XaiPcmTtsPlaybackSession.Create(pcm, XaiTtsConfiguration.SampleRate));
+        _ttsPlaybackFactory = ttsPlaybackFactory;
         _ttsPlaybackAvailableProbe = ttsPlaybackAvailableProbe
             ?? XaiPcmTtsPlaybackSession.IsPlaybackAvailable;
     }
@@ -281,7 +280,17 @@ public sealed class XaiPlugin
 
         var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, httpRequest, ct);
         var pcm = await response.Content.ReadAsByteArrayAsync(ct);
-        return _ttsPlaybackFactory(pcm);
+        return _ttsPlaybackFactory?.Invoke(pcm)
+               ?? XaiPcmTtsPlaybackSession.Create(
+                   pcm,
+                   XaiTtsConfiguration.SampleRate,
+                   (
+                       _host
+                       ?? throw new InvalidOperationException(
+                           "xAI plugin is not activated."
+                       )
+                   ).Processes
+               );
     }
 
     // Settings support

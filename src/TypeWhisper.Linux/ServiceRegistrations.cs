@@ -138,6 +138,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<IMediaPauseService, MediaPauseService>();
         services.AddSingleton<SystemCommandAvailabilityService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
+        services.AddSingleton<UrlLauncher>();
         // Reactive OS-default capture-device watcher (pactl subscribe); AudioRecordingService
         // starts/stops it as follow-default mode toggles and disposes it on teardown.
         services.AddSingleton<IDefaultDeviceChangeWatcher, PactlDefaultDeviceWatcher>();
@@ -173,7 +174,8 @@ internal static class ServiceRegistrations
         services.AddSingleton(sp => new TextInsertionService(
             sp.GetRequiredService<IErrorLogService>(),
             sp.GetRequiredService<SystemCommandAvailabilityService>(),
-            sp.GetRequiredService<IPasteConfirmationSource>()
+            sp.GetRequiredService<IPasteConfirmationSource>(),
+            sp.GetRequiredService<IProcessRunner>()
         ));
         services.AddSingleton<YdotoolSetupHelper>();
         services.AddSingleton<InputAccessSetupHelper>();

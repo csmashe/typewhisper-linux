@@ -31,6 +31,7 @@ public sealed class PluginManager : IDisposable
     private readonly TimeSpan _pluginShutdownTimeout;
     private readonly IErrorLogService? _errorLog;
     private readonly string _secretProtectionKeyFilePath;
+    private readonly IProcessRunner _processRunner;
     private List<IActionPlugin> _actionPlugins = [];
 
     // Debounce guard for on-demand model re-polls (triggered when a dropdown opens).
@@ -48,7 +49,8 @@ public sealed class PluginManager : IDisposable
         IActiveWindowService activeWindow,
         IProfileService profiles,
         ISettingsService settings,
-        IErrorLogService? errorLog = null
+        IErrorLogService? errorLog = null,
+        IProcessRunner? processRunner = null
     )
         : this(
             loader,
@@ -57,7 +59,8 @@ public sealed class PluginManager : IDisposable
             profiles,
             settings,
             [TypeWhisperEnvironment.PluginsPath],
-            errorLog
+            errorLog,
+            processRunner: processRunner
         )
     {
     }
@@ -71,7 +74,8 @@ public sealed class PluginManager : IDisposable
         IEnumerable<string> searchDirectories,
         IErrorLogService? errorLog = null,
         TimeSpan? pluginShutdownTimeout = null,
-        string? secretProtectionKeyFilePath = null
+        string? secretProtectionKeyFilePath = null,
+        IProcessRunner? processRunner = null
     )
     {
         _loader = loader;
@@ -81,6 +85,7 @@ public sealed class PluginManager : IDisposable
         _settings = settings;
         _searchDirectories = searchDirectories.ToArray();
         _errorLog = errorLog;
+        _processRunner = processRunner ?? new ProcessRunner();
         _secretProtectionKeyFilePath = secretProtectionKeyFilePath
             ?? Path.Join(
                 Directory.GetParent(
@@ -219,6 +224,10 @@ public sealed class PluginManager : IDisposable
                     $"[PluginManager] Timed out shutting down plugin {plugin.Manifest.Id} "
                         + $"after {_pluginShutdownTimeout.TotalSeconds:0.###} seconds"
                 );
+
+                // The stranded worker still owns ShutdownPlugin's cleanup, so retire the
+                // scope here too — otherwise the plugin's children outlive the host.
+                RetirePluginProcesses(plugin.Manifest.Id);
                 ObserveLateShutdown(shutdownTask, plugin.Manifest.Id);
             }
 
@@ -249,43 +258,50 @@ public sealed class PluginManager : IDisposable
 
     private void ShutdownPlugin(LoadedPlugin plugin, bool deactivate)
     {
-        if (deactivate)
+        try
         {
-            try
+            if (deactivate)
             {
-                var deactivationTask = plugin.Instance.DeactivateAsync();
-                var completedTask = Task.WhenAny(
-                        deactivationTask,
-                        Task.Delay(_pluginShutdownTimeout)
-                    )
-                    .GetAwaiter()
-                    .GetResult();
-
-                if (completedTask == deactivationTask)
+                try
                 {
-                    deactivationTask.GetAwaiter().GetResult();
+                    var deactivationTask = plugin.Instance.DeactivateAsync();
+                    var completedTask = Task.WhenAny(
+                            deactivationTask,
+                            Task.Delay(_pluginShutdownTimeout)
+                        )
+                        .GetAwaiter()
+                        .GetResult();
+
+                    if (completedTask == deactivationTask)
+                    {
+                        deactivationTask.GetAwaiter().GetResult();
+                    }
+                    else
+                    {
+                        Trace.WriteLine(
+                            $"[PluginManager] Timed out deactivating plugin {plugin.Manifest.Id} "
+                                + $"after {_pluginShutdownTimeout.TotalSeconds:0.###} seconds"
+                        );
+
+                        // Ordering guarantee: deactivate and dispose never run concurrently for the
+                        // same plugin. Disposing now would race the still-running deactivation, so
+                        // Dispose is deferred to a continuation that fires once it completes —
+                        // forfeited entirely if it never does, acceptable since the host is exiting.
+                        ObserveLateDeactivationThenDispose(deactivationTask, plugin);
+                        return;
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
                     Trace.WriteLine(
-                        $"[PluginManager] Timed out deactivating plugin {plugin.Manifest.Id} "
-                            + $"after {_pluginShutdownTimeout.TotalSeconds:0.###} seconds"
+                        $"[PluginManager] Error deactivating plugin {plugin.Manifest.Id}: {ex.Message}"
                     );
-
-                    // Ordering guarantee: deactivate and dispose never run concurrently for the
-                    // same plugin. Disposing now would race the still-running deactivation, so
-                    // Dispose is deferred to a continuation that fires once it completes —
-                    // forfeited entirely if it never does, acceptable since the host is exiting.
-                    ObserveLateDeactivationThenDispose(deactivationTask, plugin);
-                    return;
                 }
             }
-            catch (Exception ex)
-            {
-                Trace.WriteLine(
-                    $"[PluginManager] Error deactivating plugin {plugin.Manifest.Id}: {ex.Message}"
-                );
-            }
+        }
+        finally
+        {
+            RetirePluginProcesses(plugin.Manifest.Id);
         }
 
         try
@@ -537,6 +553,15 @@ public sealed class PluginManager : IDisposable
             await DeactivatePluginAsync(plugin);
         }
 
+        // Unload is authoritative even when a plugin's deactivation failed: release
+        // host-owned process/session state before dropping the collectible context.
+        RetirePluginProcesses(pluginId);
+        lock (_lock)
+        {
+            _hostServices.Remove(pluginId);
+            _activatedPlugins.Remove(pluginId);
+        }
+
         // Always unload even if Dispose throws — otherwise the collectible ALC stays rooted
         // and native deps aren't freed.
         try
@@ -690,9 +715,14 @@ public sealed class PluginManager : IDisposable
 
     private async Task<bool> ActivatePluginAsync(LoadedPlugin plugin)
     {
+        PluginHostServices? hostServices = null;
         try
         {
-            var hostServices = new PluginHostServices(
+            var processScope = new PluginProcessSupervisorScope(
+                plugin.Manifest.Id,
+                _processRunner
+            );
+            hostServices = new PluginHostServices(
                 plugin.Manifest.Id,
                 plugin.PluginDirectory,
                 _activeWindow,
@@ -704,7 +734,8 @@ public sealed class PluginManager : IDisposable
                 ResolveErrorCategory(plugin),
                 plugin.Manifest.Name,
                 _loader.PluginDataRoot,
-                _secretProtectionKeyFilePath
+                _secretProtectionKeyFilePath,
+                processScope
             );
 
             await plugin.Instance.ActivateAsync(hostServices);
@@ -720,6 +751,7 @@ public sealed class PluginManager : IDisposable
         }
         catch (Exception ex)
         {
+            hostServices?.ProcessScope?.Retire();
             Trace.WriteLine(
                 $"[PluginManager] Failed to activate plugin {plugin.Manifest.Id}: {ex.Message}"
             );
@@ -756,6 +788,13 @@ public sealed class PluginManager : IDisposable
 
     private async Task<bool> DeactivatePluginAsync(LoadedPlugin plugin)
     {
+        PluginHostServices? hostServices;
+        lock (_lock)
+        {
+            _hostServices.TryGetValue(plugin.Manifest.Id, out hostServices);
+        }
+
+        var deactivated = false;
         try
         {
             await plugin.Instance.DeactivateAsync();
@@ -766,6 +805,7 @@ public sealed class PluginManager : IDisposable
                 _activatedPlugins.Remove(plugin.Manifest.Id);
             }
 
+            deactivated = true;
             Trace.WriteLine($"[PluginManager] Deactivated plugin: {plugin.Manifest.Id}");
             return true;
         }
@@ -776,6 +816,33 @@ public sealed class PluginManager : IDisposable
             );
             return false;
         }
+        finally
+        {
+            // Success drops the host-services entry, so unload can no longer reach this scope:
+            // retire it here. A failed deactivation leaves the plugin registered and usable,
+            // so its work is merely stopped.
+            if (deactivated)
+            {
+                hostServices?.ProcessScope?.Retire();
+            }
+            else
+            {
+                hostServices?.ProcessScope?.TerminateAll();
+            }
+        }
+    }
+
+    // Unload and host shutdown are terminal for the scope, so it is retired rather than
+    // merely stopped: nothing the plugin starts from here on may survive it.
+    private void RetirePluginProcesses(string pluginId)
+    {
+        PluginHostServices? hostServices;
+        lock (_lock)
+        {
+            _hostServices.TryGetValue(pluginId, out hostServices);
+        }
+
+        hostServices?.ProcessScope?.Retire();
     }
 
     private void RebuildCapabilityIndices()

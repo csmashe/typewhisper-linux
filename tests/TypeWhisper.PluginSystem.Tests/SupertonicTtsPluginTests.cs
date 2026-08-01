@@ -12,6 +12,25 @@ public class SupertonicTtsPluginTests
     private static readonly TimeSpan s_coordinationTimeout = TimeSpan.FromSeconds(5);
 
     [Fact]
+    public void Playback_start_failure_removes_temp_file()
+    {
+        var supervisor = new RecordingPluginProcessSupervisor();
+
+        var playback = SupertonicTtsPlaybackSession.Create(
+            [0.1f, -0.1f],
+            24_000,
+            supervisor,
+            "fake-player"
+        );
+
+        Assert.False(playback.IsActive);
+        var wavPath = Assert.Single(
+            Assert.Single(supervisor.Sessions).Command.Arguments
+        );
+        Assert.False(File.Exists(wavPath));
+    }
+
+    [Fact]
     public void Manifest_DeclaresLocalTtsPlugin()
     {
         var manifestPath = FindRepoFile("plugins", "TypeWhisper.Plugin.SupertonicTts", "manifest.json");

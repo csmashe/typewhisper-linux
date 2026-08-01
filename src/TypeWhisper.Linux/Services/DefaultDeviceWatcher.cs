@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -234,16 +236,28 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
     private object? _runToken;
     private int _disposed;
 
-    public PactlDefaultDeviceWatcher(SystemCommandAvailabilityService commands)
-        : this(() => commands.HasPactl)
+    public PactlDefaultDeviceWatcher(
+        SystemCommandAvailabilityService commands,
+        IProcessRunner processRunner
+    )
+        : this(
+            () => commands.HasPactl,
+            () => LaunchPactlSubscribe(processRunner)
+        )
     {
     }
+
+    public PactlDefaultDeviceWatcher(SystemCommandAvailabilityService commands)
+        : this(commands, new ProcessRunner()) { }
 
     // Availability-probe seam: tests inject a probe that reports pactl absent so the
     // graceful-fallback path (Start does nothing, never throws) is verifiable without
     // a real pactl on PATH.
     internal PactlDefaultDeviceWatcher(Func<bool> isPactlAvailable)
-        : this(isPactlAvailable, LaunchPactlSubscribe)
+        : this(
+            isPactlAvailable,
+            () => LaunchPactlSubscribe(new ProcessRunner())
+        )
     {
     }
 
@@ -394,25 +408,26 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
         }
     }
 
-    private static PactlSubscription LaunchPactlSubscribe()
+    private static PactlSubscription LaunchPactlSubscribe(
+        IProcessRunner processRunner
+    )
     {
-        var psi = new ProcessStartInfo("pactl")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        psi.ArgumentList.Add("subscribe");
-        // Force a stable, parseable locale for the event lines.
-        psi.Environment["LC_ALL"] = "C";
-
-        var process = Process.Start(psi)
-                      ?? throw new InvalidOperationException(
-                          "Process.Start returned null for pactl."
-                      );
-
-        return PactlSubscription.FromProcess(process);
+        var started = processRunner.StartSession(
+            new ProcessCommand(
+                "pactl",
+                ["subscribe"],
+                new Dictionary<string, string> { ["LC_ALL"] = "C" }
+            ),
+            new ProcessSessionOptions(
+                StandardOutput: ProcessSessionOutputMode.Lines,
+                StandardError: ProcessSessionOutputMode.Discard
+            )
+        );
+        return started.Session is { } session
+            ? PactlSubscription.FromSession(session)
+            : throw new InvalidOperationException(
+                started.StartError ?? "Could not start pactl subscribe."
+            );
     }
 
     // Thin, untested shell: read subscribe stdout line by line and forward relevant
@@ -427,21 +442,18 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
     {
         try
         {
-            var reader = subscription.Output;
-            while (!ct.IsCancellationRequested)
+            await foreach (
+                var line in subscription.Output
+                    .WithCancellation(ct)
+                    .ConfigureAwait(false)
+            )
             {
-                var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
-                if (line is null)
-                {
-                    // EOF: pactl exited (server restart, session teardown). Stop quietly.
-                    break;
-                }
-
                 if (IsDefaultDeviceRelevant(line))
                 {
                     dispatcher.Signal();
                 }
             }
+            // EOF: pactl exited (server restart, session teardown). Stop quietly.
         }
         catch (OperationCanceledException)
         {
@@ -588,7 +600,7 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
 ///     A single live <c>pactl subscribe</c> session for
 ///     <see cref="PactlDefaultDeviceWatcher" />: the event stream to read from
 ///     (<see cref="Output" />), a best-effort terminate (<see cref="Kill" />), and
-///     cleanup (<see cref="Dispose" />). Abstracted from <see cref="Process" /> so the
+///     cleanup (<see cref="Dispose" />). Abstracted from the supervised session so the
 ///     watcher's read-loop lifecycle (including restart after the loop exits) can be
 ///     unit-tested with a fake in-memory reader and no spawned process.
 /// </summary>
@@ -597,7 +609,11 @@ internal sealed class PactlSubscription : IDisposable
     private readonly Action _kill;
     private readonly Action _dispose;
 
-    private PactlSubscription(TextReader output, Action kill, Action dispose)
+    private PactlSubscription(
+        IAsyncEnumerable<string> output,
+        Action kill,
+        Action dispose
+    )
     {
         Output = output;
         _kill = kill;
@@ -605,19 +621,13 @@ internal sealed class PactlSubscription : IDisposable
     }
 
     /// <summary>Line-oriented event stream (pactl stdout, or a fake in tests).</summary>
-    public TextReader Output { get; }
+    public IAsyncEnumerable<string> Output { get; }
 
-    public static PactlSubscription FromProcess(Process process) =>
+    public static PactlSubscription FromSession(IPluginProcessSession session) =>
         new(
-            process.StandardOutput,
-            kill: () =>
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(true);
-                }
-            },
-            dispose: process.Dispose
+            ReadStandardOutputAsync(session),
+            kill: session.Terminate,
+            dispose: session.Dispose
         );
 
     // Test seam: a fake subscription backed by an arbitrary reader. onKill/onDispose
@@ -626,10 +636,45 @@ internal sealed class PactlSubscription : IDisposable
         TextReader output,
         Action? onKill = null,
         Action? onDispose = null
-    ) => new(output, onKill ?? (() => { }), onDispose ?? (() => { }));
+    ) => new(
+        ReadTextReaderAsync(output),
+        onKill ?? (() => { }),
+        onDispose ?? (() => { })
+    );
 
     /// <summary>Best-effort terminate of the underlying event source.</summary>
     public void Kill() => _kill();
 
     public void Dispose() => _dispose();
+
+    private static async IAsyncEnumerable<string> ReadStandardOutputAsync(
+        IPluginProcessSession session,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default
+    )
+    {
+        await foreach (
+            var line in session.ReadOutputAsync(cancellationToken)
+                .ConfigureAwait(false)
+        )
+        {
+            if (line.Stream == ProcessStream.StandardOutput)
+            {
+                yield return line.Text;
+            }
+        }
+    }
+
+    private static async IAsyncEnumerable<string> ReadTextReaderAsync(
+        TextReader reader,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default
+    )
+    {
+        while (
+            await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false)
+            is { } line
+        )
+        {
+            yield return line;
+        }
+    }
 }
