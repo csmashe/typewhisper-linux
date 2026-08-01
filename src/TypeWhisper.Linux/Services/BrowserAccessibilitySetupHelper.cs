@@ -41,29 +41,6 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
     private const string UserJsOwnedSeparatorSuffix = "; separator newline owned";
 
-    private static readonly string[] s_chromiumLauncherNames =
-    [
-        "google-chrome.desktop",
-        "chromium.desktop",
-        "chromium-browser.desktop",
-        "microsoft-edge.desktop",
-        "brave-browser.desktop",
-        "vivaldi-stable.desktop",
-        "opera.desktop",
-    ];
-
-    private static readonly string[] s_firefoxLauncherNames =
-    [
-        "firefox.desktop",
-        "org.mozilla.firefox.desktop",
-        "firefox-esr.desktop",
-        "librewolf.desktop",
-        "io.gitlab.librewolf-community.desktop",
-        "zen.desktop",
-        "app.zen_browser.zen.desktop",
-        "io.github.zen_browser.zen.desktop",
-    ];
-
     private static readonly string[] s_systemLauncherDirectories =
     [
         "/usr/share/applications",
@@ -83,16 +60,34 @@ public sealed partial class BrowserAccessibilitySetupHelper
         return string.Equals(sessionType, "wayland", StringComparison.OrdinalIgnoreCase);
     }
 
+    internal static IReadOnlyList<string> GetLauncherNames(
+        BrowserLauncherPatchMode patchMode
+    )
+    {
+        return BrowserDescriptorCatalog.GetDesktopIds(patchMode);
+    }
+
+    internal static IReadOnlyList<string> GetFirefoxProfileRoots()
+    {
+        return BrowserDescriptorCatalog.GetExpandedProfileRoots();
+    }
+
     public static Status IsCurrentlyConfigured()
     {
         var envFilePresent = File.Exists(EnvFilePath());
         // "LauncherPresent" means every installed launcher in this family is patched, not just
         // one — a newly-installed browser (e.g. Brave after Chrome was already patched) must not
         // silently count as configured while its own launcher still lacks the flag.
-        var firefoxLauncherPresent = AllInstalledLaunchersOwned(s_firefoxLauncherNames);
-        var chromiumLauncherPresent = AllInstalledLaunchersOwned(s_chromiumLauncherNames);
-        var firefoxInstalled = HasInstalledLauncher(s_firefoxLauncherNames);
-        var chromiumInstalled = HasInstalledLauncher(s_chromiumLauncherNames);
+        var firefoxLauncherNames = GetLauncherNames(
+            BrowserLauncherPatchMode.FirefoxEnvironment
+        );
+        var chromiumLauncherNames = GetLauncherNames(
+            BrowserLauncherPatchMode.ChromiumRendererAccessibility
+        );
+        var firefoxLauncherPresent = AllInstalledLaunchersOwned(firefoxLauncherNames);
+        var chromiumLauncherPresent = AllInstalledLaunchersOwned(chromiumLauncherNames);
+        var firefoxInstalled = HasInstalledLauncher(firefoxLauncherNames);
+        var chromiumInstalled = HasInstalledLauncher(chromiumLauncherNames);
         var firefoxProfiles = EnumerateFirefoxProfileDirs().ToList();
         var firefoxProfileFound = firefoxProfiles.Count > 0;
         // ALL profiles need the override — setup writes to every profile, so detection
@@ -198,10 +193,13 @@ public sealed partial class BrowserAccessibilitySetupHelper
         {
             WriteEnvFile();
             var chromiumPatched = PatchLaunchers(
-                s_chromiumLauncherNames,
+                GetLauncherNames(BrowserLauncherPatchMode.ChromiumRendererAccessibility),
                 AddAccessibilityFlagToExecLines
             );
-            var firefoxPatched = PatchLaunchers(s_firefoxLauncherNames, PrependEnvWrapperToExecLines);
+            var firefoxPatched = PatchLaunchers(
+                GetLauncherNames(BrowserLauncherPatchMode.FirefoxEnvironment),
+                PrependEnvWrapperToExecLines
+            );
             var firefoxPrefResult = ForceEnableFirefoxAccessibility();
 
             var detail = new StringBuilder();
@@ -392,12 +390,20 @@ public sealed partial class BrowserAccessibilitySetupHelper
             return true;
         }
 
-        if (HasOwnedLauncher(s_firefoxLauncherNames))
+        if (
+            HasOwnedLauncher(
+                GetLauncherNames(BrowserLauncherPatchMode.FirefoxEnvironment)
+            )
+        )
         {
             return true;
         }
 
-        if (HasOwnedLauncher(s_chromiumLauncherNames))
+        if (
+            HasOwnedLauncher(
+                GetLauncherNames(BrowserLauncherPatchMode.ChromiumRendererAccessibility)
+            )
+        )
         {
             return true;
         }
@@ -548,22 +554,13 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
     private static IEnumerable<string> EnumerateFirefoxProfileDirs()
     {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         // Cover all Firefox-family profile locations: ~/.mozilla/firefox (legacy),
         // ~/.config/mozilla (Fedora XDG), ~/snap/... (Snap), ~/.var/app/... (Flatpak),
-        // and ~/.zen / ~/.librewolf (native forks). Missing any means setup claims
+        // and native/Flatpak fork roots. Missing any means setup claims
         // success while user.js never reaches the browser's actual profile.
-        var roots = new[]
-        {
-            Path.Join(home, ".mozilla", "firefox"), Path.Join(home, ".config", "mozilla", "firefox"),
-            Path.Join(home, "snap", "firefox", "common", ".mozilla", "firefox"),
-            Path.Join(home, ".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"),
-            Path.Join(home, ".var", "app", "app.zen_browser.zen", ".zen"),
-            Path.Join(home, ".var", "app", "io.github.zen_browser.zen", ".zen"), Path.Join(home, ".zen"),
-            Path.Join(home, ".var", "app", "io.gitlab.librewolf-community", ".librewolf"),
-            Path.Join(home, ".librewolf"),
-        };
-        foreach (var root in roots)
+        // ReSharper disable once LoopCanBeConvertedToQuery -- the nested form keeps the
+        // root-coverage and profile-marker rationale anchored to the code each one explains.
+        foreach (var root in GetFirefoxProfileRoots())
         {
             if (!Directory.Exists(root))
             {
@@ -594,7 +591,13 @@ public sealed partial class BrowserAccessibilitySetupHelper
             yield break;
         }
 
-        foreach (var name in s_firefoxLauncherNames.Concat(s_chromiumLauncherNames))
+        var launcherNames = GetLauncherNames(BrowserLauncherPatchMode.FirefoxEnvironment)
+            .Concat(
+                GetLauncherNames(
+                    BrowserLauncherPatchMode.ChromiumRendererAccessibility
+                )
+            );
+        foreach (var name in launcherNames)
         {
             var path = Path.Join(dir, name);
             if (File.Exists(path) && FileStartsWithOwnershipMarker(path))
