@@ -292,6 +292,7 @@ public class GroqPluginTests
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
             "",
             "data: [DONE]",
+            "",
             ""
         );
         var handler = new CapturingHandler((request, body) =>

@@ -21,6 +21,9 @@ namespace TypeWhisper.PluginSDK.Helpers;
 // ReSharper disable once UnusedType.Global
 public static class OpenAiChatHelper
 {
+    private static readonly ISseEventPolicy<string> s_streamPolicy =
+        new ChatCompletionSsePolicy();
+
     /// <summary>
     ///     Convenience overload that sends a chat completion using the default token cap
     ///     (2048 via <c>max_tokens</c>), no reasoning-effort hint, and temperature 0.1.
@@ -175,55 +178,9 @@ public static class OpenAiChatHelper
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
-        var receivedTerminalSignal = false;
 
-        while (await reader.ReadLineAsync(ct) is { } rawLine)
-        {
-            var line = rawLine.Trim();
-            if (!line.StartsWith("data:", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            // SSE spec makes the space after "data:" optional; strip at most one
-            // so "data:{...}" frames aren't silently skipped.
-            var payload = line[5..];
-            if (payload.StartsWith(' '))
-            {
-                payload = payload[1..];
-            }
-
-            if (payload == "[DONE]")
-            {
-                yield break;
-            }
-
-            // Providers can fail mid-stream via a top-level `error` frame after a 200.
-            // Throw so LlmStreamPump faults and the caller falls back to batch,
-            // rather than committing partial deltas as a successful result.
-            if (ParseChatCompletionStreamError(payload) is { } error)
-            {
-                throw new InvalidOperationException(error);
-            }
-
-            var delta = ParseChatCompletionStreamDelta(payload, out var hasFinishReason);
-            // Some compatible providers close cleanly after a non-null finish_reason
-            // instead of sending [DONE]. Do not stop here: usage or [DONE] may follow.
-            receivedTerminalSignal |= hasFinishReason;
-
-            if (delta is { Length: > 0 })
-            {
-                yield return delta;
-            }
-        }
-
-        if (!receivedTerminalSignal)
-        {
-            throw new InvalidOperationException(
-                "Incomplete chat completion stream: connection closed without a terminal "
-                + "frame ([DONE] or a non-null finish_reason)."
-            );
-        }
+        await foreach (var delta in SseEventDecoder.ReadValidatedAsync(reader, s_streamPolicy, ct))
+            yield return delta;
     }
 
     /// <summary>
@@ -332,6 +289,36 @@ public static class OpenAiChatHelper
             }
 
             return "Streaming error.";
+        }
+    }
+
+    private sealed class ChatCompletionSsePolicy : ISseEventPolicy<string>
+    {
+        public string StreamName => "chat completion stream";
+        public string ExpectedTerminal => "[DONE] or a non-empty finish_reason";
+
+        public SsePolicyDecision<string> Evaluate(SseEvent sseEvent)
+        {
+            if (sseEvent.Data == "[DONE]")
+            {
+                return new SsePolicyDecision<string>(
+                    AcceptTerminal: true,
+                    EndStream: true);
+            }
+
+            if (ParseChatCompletionStreamError(sseEvent.Data) is { } error)
+            {
+                return new SsePolicyDecision<string>(
+                    Error: new InvalidOperationException(error));
+            }
+
+            var delta = ParseChatCompletionStreamDelta(
+                sseEvent.Data,
+                out var hasFinishReason);
+            return new SsePolicyDecision<string>(
+                HasDelta: delta is { Length: > 0 },
+                Delta: delta,
+                AcceptTerminal: hasFinishReason);
         }
     }
 

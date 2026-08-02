@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using TypeWhisper.Plugin.Claude;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 // The CapturingHandler lambdas assert on the outgoing request (method, URI,
@@ -42,6 +43,7 @@ public sealed class ClaudePluginTests
             "",
             "event: message_stop",
             "data: {\"type\":\"message_stop\"}",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -113,6 +115,7 @@ public sealed class ClaudePluginTests
             "",
             "event: error",
             "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}",
+            "",
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -146,6 +149,7 @@ public sealed class ClaudePluginTests
             "\n",
             "event: content_block_delta",
             "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}",
+            "",
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -159,7 +163,7 @@ public sealed class ClaudePluginTests
         await sut.ActivateAsync(host);
 
         var chunks = new List<string>();
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(async () =>
         {
             await foreach (var chunk in sut.ProcessStreamingAsync(
                 "system", "user", "model", CancellationToken.None))
@@ -169,9 +173,8 @@ public sealed class ClaudePluginTests
         });
 
         Assert.Equal(["partial"], chunks);
-        Assert.Equal(
-            "Anthropic stream ended before a message_stop event was received.",
-            ex.Message);
+        Assert.Equal("Anthropic stream", ex.StreamName);
+        Assert.Equal("a message_stop event", ex.ExpectedTerminal);
     }
 
     [Theory]

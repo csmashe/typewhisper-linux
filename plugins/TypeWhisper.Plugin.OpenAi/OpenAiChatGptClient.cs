@@ -5,6 +5,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using TypeWhisper.PluginSDK.Helpers;
 
 namespace TypeWhisper.Plugin.OpenAi;
 
@@ -44,7 +45,7 @@ internal sealed class OpenAiChatGptClient
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException(ParseErrorMessage(body, (int)response.StatusCode));
 
-        return ParseResponseText(body)
+        return await ParseResponseTextAsync(body, ct)
             ?? throw new InvalidOperationException("The ChatGPT response could not be parsed.");
     }
 
@@ -83,77 +84,33 @@ internal sealed class OpenAiChatGptClient
         return body;
     }
 
-    internal static string? ParseResponseText(string body)
+    internal static async Task<string?> ParseResponseTextAsync(
+        string body,
+        CancellationToken cancellationToken = default)
     {
-        return TryParseJsonResponseText(body, out var responseText)
-            ? responseText
-            : ParseEventStreamResponseText(body);
+        if (TryParseJsonResponseText(body, out var responseText))
+            return responseText;
+
+        using var reader = new StringReader(body);
+        return await ParseEventStreamResponseTextAsync(reader, cancellationToken);
     }
 
-    private static string? ParseEventStreamResponseText(string body)
+    private static async Task<string?> ParseEventStreamResponseTextAsync(
+        TextReader reader,
+        CancellationToken cancellationToken)
     {
         var deltaBuffer = new StringBuilder();
         var completedParts = new List<string>();
-        var receivedDone = false;
 
-        foreach (var rawLine in body.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        await foreach (var part in SseEventDecoder.ReadValidatedAsync(
+                           reader,
+                           ChatGptSsePolicy.Instance,
+                           cancellationToken))
         {
-            var line = rawLine.Trim();
-            if (!line.StartsWith("data: ", StringComparison.Ordinal))
-                continue;
-
-            var payload = line[6..];
-            if (payload == "[DONE]")
-            {
-                receivedDone = true;
-                break;
-            }
-
-            JsonDocument doc;
-            try
-            {
-                doc = JsonDocument.Parse(payload);
-            }
-            catch (JsonException)
-            {
-                // SSE streams may contain comments, heartbeats, or malformed
-                // frames; skipping them keeps parsing of valid frames alive.
-                continue;
-            }
-            using (doc)
-            {
-                var root = doc.RootElement;
-                if (GetString(root, "type") is not { } type)
-                    continue;
-
-                if (GetSseFailure(root, type) is { } failure)
-                    throw new InvalidOperationException(failure);
-
-                switch (type)
-                {
-                    case "response.output_text.delta":
-                        if (GetString(root, "delta") is { } delta)
-                            deltaBuffer.Append(delta);
-                        break;
-                    case "response.output_text.done":
-                        if (GetString(root, "text") is { Length: > 0 } text)
-                            completedParts.Add(text);
-                        break;
-                    case "response.content_part.done":
-                        if (root.TryGetProperty("part", out var part)
-                            && GetString(part, "text") is { Length: > 0 } partText)
-                        {
-                            completedParts.Add(partText);
-                        }
-                        break;
-                }
-            }
-        }
-
-        if (!receivedDone)
-        {
-            throw new InvalidOperationException(
-                "ChatGPT SSE stream ended before [DONE] was received.");
+            if (part.IsIncremental)
+                deltaBuffer.Append(part.Text);
+            else
+                completedParts.Add(part.Text);
         }
 
         if (deltaBuffer.Length > 0)
@@ -161,6 +118,83 @@ internal sealed class OpenAiChatGptClient
 
         var completed = string.Join("\n", completedParts).Trim();
         return string.IsNullOrEmpty(completed) ? null : completed;
+    }
+
+    private readonly record struct ChatGptTextPart(string Text, bool IsIncremental);
+
+    private sealed class ChatGptSsePolicy : ISseEventPolicy<ChatGptTextPart>
+    {
+        public static ChatGptSsePolicy Instance { get; } = new();
+
+        public string StreamName => "ChatGPT SSE stream";
+        public string ExpectedTerminal => "[DONE]";
+
+        public SsePolicyDecision<ChatGptTextPart> Evaluate(SseEvent sseEvent)
+        {
+            if (sseEvent.Data == "[DONE]")
+            {
+                return new SsePolicyDecision<ChatGptTextPart>(
+                    AcceptTerminal: true,
+                    EndStream: true);
+            }
+
+            JsonDocument doc;
+            try
+            {
+                doc = JsonDocument.Parse(sseEvent.Data);
+            }
+            catch (JsonException)
+            {
+                return default;
+            }
+
+            using (doc)
+            {
+                var root = doc.RootElement;
+                if (GetString(root, "type") is not { } type)
+                    return default;
+
+                if (GetSseFailure(root, type) is { } failure)
+                {
+                    return new SsePolicyDecision<ChatGptTextPart>(
+                        Error: new InvalidOperationException(failure));
+                }
+
+                switch (type)
+                {
+                    case "response.output_text.delta":
+                        if (GetString(root, "delta") is { } delta)
+                        {
+                            return new SsePolicyDecision<ChatGptTextPart>(
+                                HasDelta: true,
+                                Delta: new ChatGptTextPart(delta, true));
+                        }
+
+                        break;
+                    case "response.output_text.done":
+                        if (GetString(root, "text") is { Length: > 0 } text)
+                        {
+                            return new SsePolicyDecision<ChatGptTextPart>(
+                                HasDelta: true,
+                                Delta: new ChatGptTextPart(text, false));
+                        }
+
+                        break;
+                    case "response.content_part.done":
+                        if (root.TryGetProperty("part", out var part)
+                            && GetString(part, "text") is { Length: > 0 } partText)
+                        {
+                            return new SsePolicyDecision<ChatGptTextPart>(
+                                HasDelta: true,
+                                Delta: new ChatGptTextPart(partText, false));
+                        }
+
+                        break;
+                }
+            }
+
+            return default;
+        }
     }
 
     private static string? GetSseFailure(JsonElement root, string type)

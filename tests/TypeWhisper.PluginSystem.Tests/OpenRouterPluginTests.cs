@@ -533,6 +533,7 @@ public class OpenRouterPluginTests
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -574,7 +575,7 @@ public class OpenRouterPluginTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n",
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n\n",
                     Encoding.UTF8, "text/event-stream"),
             };
         });

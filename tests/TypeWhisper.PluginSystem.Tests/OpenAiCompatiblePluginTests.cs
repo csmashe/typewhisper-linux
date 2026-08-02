@@ -20,6 +20,7 @@ public sealed class OpenAiCompatiblePluginTests
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -1528,6 +1529,7 @@ public sealed class OpenAiCompatiblePluginTests
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, _) =>
         {
