@@ -264,6 +264,8 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
             );
         }
 
+        // ReSharper disable once InvertIf -- inverting would duplicate the ordered return (and the
+        // comment explaining it) into both branches.
         if (
             options.TranslationHandler is not null
             && !string.IsNullOrEmpty(options.TranslationTarget)

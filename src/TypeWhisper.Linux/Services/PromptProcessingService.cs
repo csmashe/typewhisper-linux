@@ -159,10 +159,7 @@ public sealed class PromptProcessingService
         finally
         {
             // responseBuilder is non-null whenever provenance is (same capture gate)
-            if (provenance is not null)
-            {
-                provenance.ResponseReceived = responseBuilder!.ToString();
-            }
+            provenance?.ResponseReceived = responseBuilder!.ToString();
         }
     }
 

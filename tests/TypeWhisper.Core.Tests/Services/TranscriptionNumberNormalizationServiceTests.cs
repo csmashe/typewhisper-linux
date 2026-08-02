@@ -68,7 +68,7 @@ public class TranscriptionNumberNormalizationServiceTests
             DetectedLanguage = "en",
             Duration = 1.25,
             ProcessingTime = 0.2,
-            Segments = [new TranscriptionSegment("two", 0, 1.25)]
+            Segments = [new TranscriptionSegment("two", 0, 1.25)],
         };
 
         var result = TranscriptionNumberNormalizationService.NormalizeResult(

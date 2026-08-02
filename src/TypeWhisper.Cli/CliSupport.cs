@@ -1,3 +1,13 @@
+// Documented public helper surface for the CLI (connection resolution and request building).
+// The shipped commands now go through Services/DiscoveryFileReader, Services/ApiClient and
+// Services/StdinAudioSniffer, so nothing in-tree calls these any more and every member reads as
+// unused or privatisable. Kept public as the documented helper API rather than trimmed.
+// ReSharper disable UnusedType.Global
+// ReSharper disable UnusedMember.Global
+// ReSharper disable ClassNeverInstantiated.Global
+// ReSharper disable NotAccessedPositionalProperty.Global
+// ReSharper disable MemberCanBePrivate.Global
+
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -52,6 +62,9 @@ public static class CliConnectionResolver
 {
     private const int DefaultPort = 8978;
 
+    private static readonly JsonSerializerOptions s_discoveryJsonOptions =
+        new() { PropertyNameCaseInsensitive = true };
+
     /// <summary>
     /// Resolves the supplied input to a configured value.
     /// </summary>
@@ -89,7 +102,7 @@ public static class CliConnectionResolver
 
             var discovery = JsonSerializer.Deserialize<ApiDiscovery>(
                 File.ReadAllText(path),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                s_discoveryJsonOptions);
 
             return discovery;
         }
@@ -121,7 +134,7 @@ public static class CliConnectionResolver
         values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
 
     private static int? ValidatePort(int? port) =>
-        port is int value && IsPortInRange(value) ? value : null;
+        port is { } value && IsPortInRange(value) ? value : null;
 
     private sealed record ApiDiscovery
     {
@@ -177,7 +190,7 @@ public static class CliRequestBuilder
             ["task"] = request.Task,
             ["target_language"] = request.TargetLanguage,
             ["engine"] = request.Engine,
-            ["model"] = request.Model
+            ["model"] = request.Model,
         }
         .Where(pair => pair.Value is not null)
         .ToDictionary(pair => pair.Key, pair => pair.Value);

@@ -125,6 +125,86 @@ public sealed class PromptPaletteServiceTests
         );
     }
 
+    [Fact]
+    public void ProviderCancellationWithLiveTokens_IsDependencyFault()
+    {
+        Assert.Equal(
+            PromptPaletteCancellationOrigin.DependencyFault,
+            PromptPaletteService.ClassifyCancellationOrigin(
+                new OperationCanceledException("provider canceled"),
+                CancellationToken.None,
+                CancellationToken.None
+            )
+        );
+    }
+
+    [Fact]
+    public void PrivateStreamDeadline_IsTimeoutSoCallerCanFallBackToBatch()
+    {
+        using var deadlineCts = new CancellationTokenSource();
+        deadlineCts.Cancel();
+
+        Assert.Equal(
+            PromptPaletteCancellationOrigin.PrivateDeadline,
+            PromptPaletteService.ClassifyCancellationOrigin(
+                new OperationCanceledException(deadlineCts.Token),
+                CancellationToken.None,
+                deadlineCts.Token
+            )
+        );
+    }
+
+    [Theory]
+    [InlineData("batch")]
+    [InlineData("action")]
+    public void PrivateBatchOrActionDeadline_IsQuietBoundedTimeout(string boundary)
+    {
+        using var deadlineCts = new CancellationTokenSource();
+        deadlineCts.Cancel();
+
+        var origin = PromptPaletteService.ClassifyCancellationOrigin(
+            new OperationCanceledException($"{boundary} deadline"),
+            CancellationToken.None,
+            deadlineCts.Token
+        );
+
+        Assert.Equal(PromptPaletteCancellationOrigin.PrivateDeadline, origin);
+    }
+
+    [Fact]
+    public void GenuineUserAbort_Wins()
+    {
+        using var userCts = new CancellationTokenSource();
+        userCts.Cancel();
+
+        Assert.Equal(
+            PromptPaletteCancellationOrigin.UserCancellation,
+            PromptPaletteService.ClassifyCancellationOrigin(
+                new OperationCanceledException(userCts.Token),
+                userCts.Token,
+                CancellationToken.None
+            )
+        );
+    }
+
+    [Fact]
+    public void UserAbortAndPrivateDeadlineRace_UserWins()
+    {
+        using var userCts = new CancellationTokenSource();
+        using var deadlineCts = new CancellationTokenSource();
+        userCts.Cancel();
+        deadlineCts.Cancel();
+
+        Assert.Equal(
+            PromptPaletteCancellationOrigin.UserCancellation,
+            PromptPaletteService.ClassifyCancellationOrigin(
+                new TimeoutException("both fired"),
+                userCts.Token,
+                deadlineCts.Token
+            )
+        );
+    }
+
     private static ActionPluginExecutionHost CreateHost(PluginEventBus eventBus)
     {
         var settings = new Mock<ISettingsService>();
