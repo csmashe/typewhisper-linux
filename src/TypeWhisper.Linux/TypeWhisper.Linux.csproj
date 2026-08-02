@@ -23,6 +23,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <InternalsVisibleTo Include="TypeWhisper.Integration.Tests"/>
         <InternalsVisibleTo Include="TypeWhisper.Linux.Tests"/>
         <InternalsVisibleTo Include="TypeWhisper.PluginSystem.Tests"/>
     </ItemGroup>
