@@ -1,5 +1,6 @@
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -19,6 +20,7 @@ public partial class DictationOverlayViewModel : ObservableObject
 
     private readonly DispatcherTimer _clockTimer;
     private readonly DispatcherTimer _feedbackTimer;
+    private readonly Func<string?, bool> _openUrl;
     private readonly Action<Action> _postToUiThread;
     private readonly DispatcherTimer _recordingTimer;
     private readonly ISettingsService _settings;
@@ -37,7 +39,13 @@ public partial class DictationOverlayViewModel : ObservableObject
     private bool _feedbackIsError;
 
     [ObservableProperty]
+    private int? _feedbackDurationMilliseconds;
+
+    [ObservableProperty]
     private string? _feedbackText;
+
+    [ObservableProperty]
+    private string? _actionResultUrl;
 
     [ObservableProperty]
     private bool _isOverlayVisible;
@@ -67,9 +75,14 @@ public partial class DictationOverlayViewModel : ObservableObject
         TransformSelectionService transformSelection,
         AudioRecordingService audio,
         ISettingsService settings,
-        IDetectionFailureTracker failureTracker
+        IDetectionFailureTracker failureTracker,
+        UrlLauncher urlLauncher
     )
-        : this(settings, static action => Dispatcher.UIThread.Post(action))
+        : this(
+            settings,
+            static action => Dispatcher.UIThread.Post(action),
+            openUrl: urlLauncher.Open
+        )
     {
         dictation.OverlayStateChanged += (_, state) =>
             _postToUiThread(() => ApplyState(state));
@@ -90,6 +103,8 @@ public partial class DictationOverlayViewModel : ObservableObject
 
             _postToUiThread(() =>
             {
+                ActionResultUrl = null;
+                FeedbackDurationMilliseconds = null;
                 FeedbackText = e.Reason;
                 FeedbackIsError = true;
                 ShowFeedback = true;
@@ -103,11 +118,13 @@ public partial class DictationOverlayViewModel : ObservableObject
     internal DictationOverlayViewModel(
         ISettingsService settings,
         Action<Action> postToUiThread,
-        AudioRecordingService? audio = null
+        AudioRecordingService? audio = null,
+        Func<string?, bool>? openUrl = null
     )
     {
         _settings = settings;
         _postToUiThread = postToUiThread;
+        _openUrl = openUrl ?? (_ => false);
         if (audio is not null)
         {
             SubscribeToAudioLevels(audio);
@@ -131,6 +148,8 @@ public partial class DictationOverlayViewModel : ObservableObject
             _feedbackTimer.Stop();
             ShowFeedback = false;
             FeedbackText = null;
+            ActionResultUrl = null;
+            FeedbackDurationMilliseconds = null;
             OnPropertyChanged(nameof(HasVisibleContent));
         };
 
@@ -149,6 +168,8 @@ public partial class DictationOverlayViewModel : ObservableObject
     }
 
     public bool HasVisibleContent => IsOverlayVisible || ShowFeedback;
+
+    public bool HasActionResultUrl => !string.IsNullOrWhiteSpace(ActionResultUrl);
 
     public string RecordingTimerText
     {
@@ -230,14 +251,21 @@ public partial class DictationOverlayViewModel : ObservableObject
 
     private void ArmFeedbackAutoHideTimer()
     {
-        var milliseconds = AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+        var globalMilliseconds = AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
             _settings.Current.PreviewBubbleAutoHideMilliseconds);
+        var milliseconds = globalMilliseconds == 0
+            ? 0
+            : AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+                FeedbackDurationMilliseconds ?? globalMilliseconds
+            );
 
         if (milliseconds <= 0)
         {
             _feedbackTimer.Stop();
             ShowFeedback = false;
             FeedbackText = null;
+            ActionResultUrl = null;
+            FeedbackDurationMilliseconds = null;
             OnPropertyChanged(nameof(HasVisibleContent));
             return;
         }
@@ -273,11 +301,36 @@ public partial class DictationOverlayViewModel : ObservableObject
         OnPropertyChanged(nameof(FeedbackForeground));
     }
 
-    private void ApplyState(DictationOverlayState state)
+    partial void OnActionResultUrlChanged(string? value)
     {
+        OnPropertyChanged(nameof(HasActionResultUrl));
+    }
+
+    [RelayCommand]
+    private void OpenActionResult()
+    {
+        var url = ActionResultUrl;
+        if (string.IsNullOrWhiteSpace(url) || _openUrl(url))
+        {
+            return;
+        }
+
+        ActionResultUrl = null;
+        FeedbackDurationMilliseconds = null;
+        FeedbackText = Loc.Instance["ActionResult.OpenFailed"];
+        FeedbackIsError = true;
+        ShowFeedback = true;
+        RestartFeedbackTimer();
+    }
+
+    internal void ApplyState(DictationOverlayState state)
+    {
+        var wasShowingFeedback = ShowFeedback;
         IsOverlayVisible = state.IsOverlayVisible;
         FeedbackIsError = state.FeedbackIsError;
+        FeedbackDurationMilliseconds = state.FeedbackDurationMilliseconds;
         FeedbackText = state.FeedbackText;
+        ActionResultUrl = state.ActionResultUrl;
         StatusText = state.StatusText;
         PartialText = state.PartialText;
         LlmResponseText = state.LlmResponseText;
@@ -286,6 +339,10 @@ public partial class DictationOverlayViewModel : ObservableObject
         _sessionStartedAtUtc = state.SessionStartedAtUtc;
         IsRecording = state.IsRecording;
         ShowFeedback = state.ShowFeedback;
+        if (wasShowingFeedback && state.ShowFeedback)
+        {
+            RestartFeedbackTimer();
+        }
 
         if (IsRecording && _sessionStartedAtUtc is not null)
         {
@@ -331,6 +388,8 @@ public partial class DictationOverlayViewModel : ObservableObject
     }
 
     internal bool IsClockTimerRunning => _clockTimer.IsEnabled;
+
+    internal TimeSpan FeedbackTimerInterval => _feedbackTimer.Interval;
 
     private void RefreshOverlaySlots()
     {

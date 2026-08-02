@@ -139,6 +139,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<SystemCommandAvailabilityService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddSingleton<UrlLauncher>();
+        services.AddSingleton<ActionPluginExecutionHost>();
         // Reactive OS-default capture-device watcher (pactl subscribe); AudioRecordingService
         // starts/stops it as follow-default mode toggles and disposes it on teardown.
         services.AddSingleton<IDefaultDeviceChangeWatcher, PactlDefaultDeviceWatcher>();

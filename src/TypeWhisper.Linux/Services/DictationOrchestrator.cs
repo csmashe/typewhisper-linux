@@ -55,6 +55,7 @@ public sealed class DictationOrchestrator : IDisposable
     private static readonly TimeSpan s_sessionLossGateTimeout = TimeSpan.FromSeconds(5);
 
     private readonly ActiveWindowService _activeWindow;
+    private readonly ActionPluginExecutionHost _actionPluginExecutionHost;
     private readonly AudioRecordingService _audio;
     private readonly IAudioDuckingService _audioDucking;
     private readonly LlmCleanupService _cleanup;
@@ -174,7 +175,8 @@ public sealed class DictationOrchestrator : IDisposable
         TargetAppCorrectionLearningService targetAppLearning,
         IDetectionFailureTracker failureTracker,
         IErrorLogService errorLog,
-        ISessionActivityMonitor sessionActivityMonitor
+        ISessionActivityMonitor sessionActivityMonitor,
+        ActionPluginExecutionHost actionPluginExecutionHost
     )
     {
         _hotkey = hotkey;
@@ -206,6 +208,7 @@ public sealed class DictationOrchestrator : IDisposable
         _failureTracker = failureTracker;
         _errorLog = errorLog;
         _sessionActivityMonitor = sessionActivityMonitor;
+        _actionPluginExecutionHost = actionPluginExecutionHost;
     }
 
     public bool IsRecording => _audio.IsRecordingOwnedBy(_audioCaptureSession);
@@ -636,6 +639,9 @@ public sealed class DictationOrchestrator : IDisposable
                     ShowFeedback = false,
                     FeedbackIsError = false,
                     FeedbackText = null,
+                    ActionResultUrl = null,
+                    NotificationIconName = null,
+                    FeedbackDurationMilliseconds = null,
                     PartialText = null,
                     LlmResponseText = null,
                     IsRecording = true,
@@ -1288,6 +1294,9 @@ public sealed class DictationOrchestrator : IDisposable
                                 ShowFeedback = true,
                                 FeedbackText = Localization.Loc.Instance["Overlay.Canceled"],
                                 FeedbackIsError = false,
+                                ActionResultUrl = null,
+                                NotificationIconName = null,
+                                FeedbackDurationMilliseconds = null,
                                 IsRecording = false,
                                 StatusText = Localization.Loc.Instance["Overlay.Canceled"],
                                 PartialText = null,
@@ -1320,6 +1329,9 @@ public sealed class DictationOrchestrator : IDisposable
                             ShowFeedback = false,
                             FeedbackText = null,
                             FeedbackIsError = false,
+                            ActionResultUrl = null,
+                            NotificationIconName = null,
+                            FeedbackDurationMilliseconds = null,
                             IsRecording = false,
                             StatusText = Localization.Loc.Instance["Overlay.Processing"],
                             SessionStartedAtUtc = null,
@@ -2149,6 +2161,7 @@ public sealed class DictationOrchestrator : IDisposable
             var insertionText = DictationInsertionTextFormatter.TextForInsertion(finalText);
 
             InsertionResult insertion;
+            ActionPluginExecutionResult? actionExecutionResult = null;
             var insertionThrew = false;
             try
             {
@@ -2173,31 +2186,42 @@ public sealed class DictationOrchestrator : IDisposable
                     return;
                 }
 
-                insertion =
-                    commandResult.CancelInsertion
-                        ? InsertionResult.NoText
-                        : actionPluginUnavailable
-                            ? InsertionResult.ActionUnavailable
-                            : actionPlugin is null
-                                ? await _textInsertion.InsertTextAsync(
-                                    new TextInsertionRequest(
-                                        insertionText,
-                                        _settings.Current.AutoPaste,
-                                        context.WindowId,
-                                        context.AppProcess,
-                                        context.AppTitle,
-                                        commandResult.AutoEnter,
-                                        ResolveInsertionStrategy(context.AppProcess)
-                                    )
-                                )
-                                : await ExecuteActionPluginAsync(
-                                    actionPlugin,
-                                    context,
-                                    finalText,
-                                    rawText,
-                                    result?.DetectedLanguage,
-                                    cancelToken
-                                );
+                if (commandResult.CancelInsertion)
+                {
+                    insertion = InsertionResult.NoText;
+                }
+                else if (actionPluginUnavailable)
+                {
+                    insertion = InsertionResult.ActionUnavailable;
+                }
+                else if (actionPlugin is not null)
+                {
+                    actionExecutionResult = await ExecuteActionPluginAsync(
+                        actionPlugin,
+                        context,
+                        finalText,
+                        rawText,
+                        result?.DetectedLanguage,
+                        cancelToken
+                    );
+                    insertion = actionExecutionResult.Success
+                        ? InsertionResult.ActionHandled
+                        : InsertionResult.ActionFailed;
+                }
+                else
+                {
+                    insertion = await _textInsertion.InsertTextAsync(
+                        new TextInsertionRequest(
+                            insertionText,
+                            _settings.Current.AutoPaste,
+                            context.WindowId,
+                            context.AppProcess,
+                            context.AppTitle,
+                            commandResult.AutoEnter,
+                            ResolveInsertionStrategy(context.AppProcess)
+                        )
+                    );
+                }
             }
             catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
             {
@@ -2230,7 +2254,7 @@ public sealed class DictationOrchestrator : IDisposable
 
             if (!insertionThrew)
             {
-                var completionMessage = insertion switch
+                var completionMessage = actionExecutionResult?.Message ?? insertion switch
                 {
                     InsertionResult.Pasted when commandResult.AutoEnter && finalText.Length == 0 =>
                         "Pressed Enter.",
@@ -2262,7 +2286,14 @@ public sealed class DictationOrchestrator : IDisposable
                 var isCanceled =
                     insertion is InsertionResult.NoText && commandResult.CancelInsertion;
                 ReportStatus(context, completionMessage);
-                ShowFeedback(context, completionMessage, isError, isCanceled);
+                if (actionExecutionResult is not null)
+                {
+                    ShowActionFeedback(context, actionExecutionResult);
+                }
+                else
+                {
+                    ShowFeedback(context, completionMessage, isError, isCanceled);
+                }
 
                 if (
                     insertion
@@ -2652,6 +2683,9 @@ public sealed class DictationOrchestrator : IDisposable
                             IsOverlayVisible = false,
                             ShowFeedback = false,
                             FeedbackText = null,
+                            ActionResultUrl = null,
+                            NotificationIconName = null,
+                            FeedbackDurationMilliseconds = null,
                             LlmResponseText = null,
                             PartialText = null,
                         }
@@ -3180,7 +3214,7 @@ public sealed class DictationOrchestrator : IDisposable
         );
     }
 
-    private async Task<InsertionResult> ExecuteActionPluginAsync(
+    private Task<ActionPluginExecutionResult> ExecuteActionPluginAsync(
         IActionPlugin actionPlugin,
         RecordingContext context,
         string inputText,
@@ -3189,7 +3223,8 @@ public sealed class DictationOrchestrator : IDisposable
         CancellationToken cancelToken
     )
     {
-        var result = await actionPlugin.ExecuteAsync(
+        return _actionPluginExecutionHost.ExecuteAsync(
+            actionPlugin,
             inputText,
             new ActionContext(
                 context.AppTitle,
@@ -3198,25 +3233,9 @@ public sealed class DictationOrchestrator : IDisposable
                 detectedLanguage,
                 rawText
             ),
+            context.AppTitle,
             cancelToken
         );
-
-        _models.PluginManager.EventBus.Publish(
-            new ActionCompletedEvent
-            {
-                ActionId = actionPlugin.ActionId,
-                Success = result.Success,
-                Message = result.Message,
-                AppName = context.AppTitle,
-            }
-        );
-
-        if (!string.IsNullOrWhiteSpace(result.Message))
-        {
-            ReportStatus(context, result.Message);
-        }
-
-        return result.Success ? InsertionResult.ActionHandled : InsertionResult.ActionFailed;
     }
 
     /// <summary>
@@ -3516,7 +3535,16 @@ public sealed class DictationOrchestrator : IDisposable
     {
         StatusMessage?.Invoke(this, message);
         SetOverlayState(state =>
-            state with { IsOverlayVisible = true, StatusText = message, ShowFeedback = false, FeedbackText = null }
+            state with
+            {
+                IsOverlayVisible = true,
+                StatusText = message,
+                ShowFeedback = false,
+                FeedbackText = null,
+                ActionResultUrl = null,
+                NotificationIconName = null,
+                FeedbackDurationMilliseconds = null,
+            }
         );
     }
 
@@ -3563,7 +3591,16 @@ public sealed class DictationOrchestrator : IDisposable
         }
 
         SetOverlayState(state =>
-            state with { IsOverlayVisible = true, StatusText = message, ShowFeedback = false, FeedbackText = null }
+            state with
+            {
+                IsOverlayVisible = true,
+                StatusText = message,
+                ShowFeedback = false,
+                FeedbackText = null,
+                ActionResultUrl = null,
+                NotificationIconName = null,
+                FeedbackDurationMilliseconds = null,
+            }
         );
     }
 
@@ -3571,24 +3608,11 @@ public sealed class DictationOrchestrator : IDisposable
         string text,
         bool isError,
         bool isCanceled = false,
-        bool playSound = true
+        bool playSound = true,
+        ActionPluginExecutionResult? actionResult = null
     )
     {
-        SetOverlayState(state =>
-            state with
-            {
-                IsOverlayVisible = false,
-                ShowFeedback = true,
-                FeedbackIsError = isError,
-                FeedbackText = text,
-                PartialText = null,
-                LlmResponseText = null,
-                IsRecording = false,
-                ActiveProfileName = null,
-                ActiveAppName = null,
-                SessionStartedAtUtc = null,
-            }
-        );
+        SetOverlayState(state => FeedbackState(state, text, isError, actionResult));
 
         // Terminal-outcome cue, matching the Windows build's success/error
         // sounds. ShowFeedback is the single chokepoint every terminal toast
@@ -3614,10 +3638,34 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
+    internal static DictationOverlayState FeedbackState(
+        DictationOverlayState state,
+        string text,
+        bool isError,
+        ActionPluginExecutionResult? actionResult = null
+    )
+    {
+        return state with
+        {
+            IsOverlayVisible = false,
+            ShowFeedback = true,
+            FeedbackIsError = isError,
+            FeedbackText = text,
+            ActionResultUrl = actionResult?.Url,
+            NotificationIconName = actionResult?.Icon,
+            FeedbackDurationMilliseconds = actionResult?.DisplayDurationMilliseconds,
+            PartialText = null,
+            LlmResponseText = null,
+            IsRecording = false,
+            ActiveProfileName = null,
+            ActiveAppName = null,
+            SessionStartedAtUtc = null,
+        };
+    }
+
     /// <summary>
-    ///     Publishes non-dictation feedback through the standard overlay state pipeline,
-    ///     skipped while a dictation owns the overlay so a secondary hotkey can't clobber
-    ///     that state. Ownership is read from four signals:
+    ///     True while a dictation owns the overlay, so non-dictation feedback must not
+    ///     clobber that state. Ownership is read from four signals:
     ///     <list type="bullet">
     ///         <item>the toggle gate, held through the whole start/stop transition —
     ///         including before the mic opens, when the pre-capture start-up cue plays —
@@ -3632,27 +3680,59 @@ public sealed class DictationOrchestrator : IDisposable
     ///         <item>the in-flight tracker, covering hand-off between back-to-back
     ///         dictations.</item>
     ///     </list>
+    ///     One copy of the gate: every publisher below reads it, so the signals can't
+    ///     drift apart. Callers must hold <c>_overlayStateLock</c>.
+    /// </summary>
+    private bool HasDictationOwningOverlayLocked()
+    {
+        // CurrentCount == 0 means a start or stop owns the gate; reading it takes no
+        // lock, so it cannot invert against _overlayStateLock.
+        var toggleInProgress = _toggleGate.CurrentCount == 0;
+        var overlayOwnedByActiveSession =
+            _overlayState is { IsOverlayVisible: true, ShowFeedback: false };
+        return toggleInProgress
+               || _audio.IsRecording
+               || overlayOwnedByActiveSession
+               || HasActiveOverlayOwningDictation();
+    }
+
+    /// <summary>
+    ///     Publishes non-dictation feedback through the standard overlay state pipeline,
+    ///     skipped while a dictation owns the overlay so a secondary hotkey can't clobber
+    ///     that state — see <see cref="HasDictationOwningOverlayLocked" />.
     /// </summary>
     internal bool TryPublishTransientFeedback(string text, bool isError)
     {
         lock (_overlayStateLock)
         {
-            // CurrentCount == 0 means a start or stop owns the gate; reading it takes no
-            // lock, so it cannot invert against _overlayStateLock.
-            var toggleInProgress = _toggleGate.CurrentCount == 0;
-            var overlayOwnedByActiveSession =
-                _overlayState is { IsOverlayVisible: true, ShowFeedback: false };
-            var hasActiveCapture =
-                toggleInProgress
-                || _audio.IsRecording
-                || overlayOwnedByActiveSession
-                || HasActiveOverlayOwningDictation();
-            if (!CanPublishTransientFeedback(hasActiveCapture))
+            if (!CanPublishTransientFeedback(HasDictationOwningOverlayLocked()))
             {
                 return false;
             }
 
             ShowFeedback(text, isError, playSound: false);
+            return true;
+        }
+    }
+
+    /// <summary>
+    ///     Presents a Prompt Palette action result unless an active dictation owns the overlay.
+    /// </summary>
+    internal bool TryPublishActionFeedback(ActionPluginExecutionResult result)
+    {
+        lock (_overlayStateLock)
+        {
+            if (!CanPublishTransientFeedback(HasDictationOwningOverlayLocked()))
+            {
+                return false;
+            }
+
+            ShowFeedback(
+                result.Message,
+                !result.Success,
+                playSound: false,
+                actionResult: result
+            );
             return true;
         }
     }
@@ -3675,7 +3755,7 @@ public sealed class DictationOrchestrator : IDisposable
     }
 
     /// <summary>
-    ///     <see cref="ShowFeedback(string, bool, bool, bool)" /> variant that no-ops once a newer dictation has
+    ///     <see cref="ShowFeedback(string, bool, bool, bool, ActionPluginExecutionResult)" /> variant that no-ops once a newer dictation has
     ///     taken over the overlay. Prevents the previous recording's terminal
     ///     feedback ("Typed N char(s)", "Transcription failed", "Canceled") from
     ///     hiding the new recording's overlay.
@@ -3693,6 +3773,23 @@ public sealed class DictationOrchestrator : IDisposable
         }
 
         ShowFeedback(text, isError, isCanceled);
+    }
+
+    private void ShowActionFeedback(
+        RecordingContext context,
+        ActionPluginExecutionResult result
+    )
+    {
+        if (!IsContextStillOwningOverlay(context))
+        {
+            return;
+        }
+
+        ShowFeedback(
+            result.Message,
+            !result.Success,
+            actionResult: result
+        );
     }
 
     /// <summary>
@@ -3764,6 +3861,9 @@ public sealed class DictationOrchestrator : IDisposable
                 ShowFeedback = false,
                 FeedbackIsError = false,
                 FeedbackText = null,
+                ActionResultUrl = null,
+                NotificationIconName = null,
+                FeedbackDurationMilliseconds = null,
                 PartialText = null,
                 LlmResponseText = null,
                 IsRecording = false,

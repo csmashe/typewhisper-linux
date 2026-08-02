@@ -375,7 +375,7 @@ public partial class DictationOverlayWindow : Window
 
     private void OnUserPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (_settings is null)
+        if (_settings is null || ActionResultButton?.IsPointerOver == true)
         {
             return;
         }

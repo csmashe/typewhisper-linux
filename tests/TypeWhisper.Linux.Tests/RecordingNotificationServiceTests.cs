@@ -120,6 +120,67 @@ public sealed class RecordingNotificationServiceTests
     }
 
     [Fact]
+    public async Task Action_result_uses_url_body_icon_and_plugin_duration()
+    {
+        var (source, runner, service) = CreateSut(
+            AppSettings.Default with { PreviewBubbleAutoHideMilliseconds = 1200 }
+        );
+        service.Initialize();
+
+        source.Raise(
+            new DictationOverlayState
+            {
+                ShowFeedback = true,
+                FeedbackText = "Issue created",
+                ActionResultUrl = "https://example.com/issues/42",
+                NotificationIconName = "task-due",
+                FeedbackDurationMilliseconds = 5000,
+            }
+        );
+        await service.WaitForIdleAsync().WaitAsync(s_testGuard);
+
+        var call = Assert.Single(AssertNotifyCalls(runner, 1));
+        AssertNotify(
+            call,
+            replacesId: 0,
+            "Issue created",
+            "https://example.com/issues/42",
+            expireTimeout: 5000
+        );
+        Assert.Equal("task-due", call.Args[11]);
+        Assert.Equal("[]", call.Args[14]);
+    }
+
+    /// <summary>
+    ///     A plugin message or icon beginning with "-" is a positional argument gdbus would
+    ///     otherwise parse as an option, aborting the call with a usage error and dropping the
+    ///     whole result notification. The "--" separator must keep them positional.
+    /// </summary>
+    [Fact]
+    public async Task Leading_dash_action_result_text_stays_positional()
+    {
+        var (source, runner, service) = CreateSut(AppSettings.Default);
+        service.Initialize();
+
+        source.Raise(
+            new DictationOverlayState
+            {
+                ShowFeedback = true,
+                FeedbackText = "--session note created",
+                ActionResultUrl = "https://example.com/n/1",
+                NotificationIconName = "-x-plugin-icon",
+                FeedbackDurationMilliseconds = 2000,
+            }
+        );
+        await service.WaitForIdleAsync().WaitAsync(s_testGuard);
+
+        var call = Assert.Single(AssertNotifyCalls(runner, 1));
+        Assert.Equal("--", call.Args[8]);
+        Assert.Equal("-x-plugin-icon", call.Args[11]);
+        Assert.Equal("--session note created", call.Args[12]);
+    }
+
+    [Fact]
     public async Task Non_presentation_changes_are_deduplicated_while_recording_and_processing()
     {
         var (source, runner, service) = CreateSut(AppSettings.Default);
@@ -164,8 +225,8 @@ public sealed class RecordingNotificationServiceTests
         await service.WaitForIdleAsync().WaitAsync(s_testGuard);
 
         var calls = AssertNotifyCalls(runner, 2);
-        Assert.Equal(Loc.Instance["Appearance.NotificationRecordingTitle"], calls[0].Args[11]);
-        Assert.Equal(Loc.Instance["Overlay.Processing"], calls[1].Args[11]);
+        Assert.Equal(Loc.Instance["Appearance.NotificationRecordingTitle"], calls[0].Args[12]);
+        Assert.Equal(Loc.Instance["Overlay.Processing"], calls[1].Args[12]);
     }
 
     [Fact]
@@ -407,13 +468,15 @@ public sealed class RecordingNotificationServiceTests
     {
         Assert.Equal("gdbus", fileName);
         Assert.Equal("org.freedesktop.Notifications.Notify", args[7]);
-        Assert.Equal("TypeWhisper", args[8]);
-        Assert.Equal(replacesId.ToString(), args[9]);
-        Assert.Equal(summary, args[11]);
-        Assert.Equal(body, args[12]);
-        Assert.Equal("[]", args[13]);
-        Assert.Equal("{}", args[14]);
-        Assert.Equal(expireTimeout.ToString(), args[15]);
+        // "--" must precede every positional argument; plugin-supplied text follows it.
+        Assert.Equal("--", args[8]);
+        Assert.Equal("TypeWhisper", args[9]);
+        Assert.Equal(replacesId.ToString(), args[10]);
+        Assert.Equal(summary, args[12]);
+        Assert.Equal(body, args[13]);
+        Assert.Equal("[]", args[14]);
+        Assert.Equal("{}", args[15]);
+        Assert.Equal(expireTimeout.ToString(), args[16]);
         Assert.Equal(TimeSpan.FromSeconds(3), timeout);
     }
 
