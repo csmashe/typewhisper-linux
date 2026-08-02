@@ -480,18 +480,21 @@ public class OpenAiPluginTests
     }
 
     [Fact]
-    public void ChatGptResponseParser_ExtractsServerSentEventText()
+    public async Task ChatGptResponseParser_ExtractsServerSentEventText()
     {
-        const string stream = """
-                              event: response.output_text.delta
-                              data: {"type":"response.output_text.delta","delta":"Hello"}
-                              event: response.output_text.delta
-                              data: {"type":"response.output_text.delta","delta":" world"}
-                              data: [DONE]
+        var stream = string.Join(
+            "\n",
+            "event: response.output_text.delta",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\"}",
+            "",
+            "event: response.output_text.delta",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}",
+            "",
+            "data: [DONE]",
+            "",
+            "");
 
-                              """;
-
-        Assert.Equal("Hello world", OpenAiChatGptClient.ParseResponseText(stream));
+        Assert.Equal("Hello world", await OpenAiChatGptClient.ParseResponseTextAsync(stream));
     }
 
     [Fact]
@@ -1710,6 +1713,7 @@ public class OpenAiPluginTests
             "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {

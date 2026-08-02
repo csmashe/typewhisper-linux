@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using TypeWhisper.Plugin.Xai;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 using TypeWhisper.PluginSDK.Processes;
 
@@ -197,6 +198,7 @@ public class XaiPluginTests
             "data: {\"type\":\"response.completed\"}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -308,6 +310,7 @@ public class XaiPluginTests
         var sse = string.Join(
             "\n",
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
+            "",
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -321,7 +324,7 @@ public class XaiPluginTests
         await sut.ActivateAsync(host);
 
         var chunks = new List<string>();
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(async () =>
         {
             await foreach (var chunk in sut.ProcessStreamingAsync(
                 "system", "user", "", CancellationToken.None))
@@ -331,9 +334,8 @@ public class XaiPluginTests
         });
 
         Assert.Equal(["partial"], chunks);
-        Assert.Equal(
-            "xAI stream ended before response.completed was received.",
-            ex.Message);
+        Assert.Equal("xAI stream", ex.StreamName);
+        Assert.Equal("response.completed", ex.ExpectedTerminal);
     }
 
     [Fact]
@@ -344,6 +346,7 @@ public class XaiPluginTests
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -357,7 +360,7 @@ public class XaiPluginTests
         await sut.ActivateAsync(host);
 
         var chunks = new List<string>();
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(async () =>
         {
             await foreach (var chunk in sut.ProcessStreamingAsync(
                 "system", "user", "", CancellationToken.None))
@@ -367,9 +370,8 @@ public class XaiPluginTests
         });
 
         Assert.Equal(["partial"], chunks);
-        Assert.Equal(
-            "xAI stream ended with [DONE] before response.completed was received.",
-            ex.Message);
+        Assert.Equal("xAI stream", ex.StreamName);
+        Assert.Equal("response.completed", ex.ExpectedTerminal);
     }
 
     [Theory]
@@ -396,6 +398,7 @@ public class XaiPluginTests
             $"data: {terminalPayload}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {

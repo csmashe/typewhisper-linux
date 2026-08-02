@@ -1,23 +1,24 @@
 using TypeWhisper.Plugin.OpenAi;
+using TypeWhisper.PluginSDK.Helpers;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
 public sealed class OpenAiChatGptClientTests
 {
     [Fact]
-    public void ParseResponseText_SseDeltaThenEof_Throws()
+    public async Task ParseResponseText_SseDeltaThenEof_Throws()
     {
-        const string stream = """
-                              data: {"type":"response.output_text.delta","delta":"partial-secret"}
+        var stream = string.Join(
+            "\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial-secret\"}",
+            "",
+            "");
 
-                              """;
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(() =>
+            OpenAiChatGptClient.ParseResponseTextAsync(stream));
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
-            OpenAiChatGptClient.ParseResponseText(stream));
-
-        Assert.Equal(
-            "ChatGPT SSE stream ended before [DONE] was received.",
-            ex.Message);
+        Assert.Equal("ChatGPT SSE stream", ex.StreamName);
+        Assert.Equal("[DONE]", ex.ExpectedTerminal);
         Assert.DoesNotContain("partial-secret", ex.Message);
     }
 
@@ -42,7 +43,7 @@ public sealed class OpenAiChatGptClientTests
         """{"type":"response.canceled","response":{"status":"canceled"}}""",
         "response.canceled",
         "canceled")]
-    public void ParseResponseText_SseFailureEventAfterDelta_Throws(
+    public async Task ParseResponseText_SseFailureEventAfterDelta_Throws(
         string failurePayload,
         string eventType,
         string? status)
@@ -54,10 +55,11 @@ public sealed class OpenAiChatGptClientTests
             $"data: {failurePayload}",
             "",
             "data: [DONE]",
+            "",
             "");
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
-            OpenAiChatGptClient.ParseResponseText(stream));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            OpenAiChatGptClient.ParseResponseTextAsync(stream));
 
         Assert.Contains(eventType, ex.Message);
         if (status is not null)
@@ -67,24 +69,25 @@ public sealed class OpenAiChatGptClientTests
     }
 
     [Fact]
-    public void ParseResponseText_SseDoneTerminatedStream_ReturnsText()
+    public async Task ParseResponseText_SseDoneTerminatedStream_ReturnsText()
     {
-        const string stream = """
-                              data: {"type":"response.output_text.delta","delta":"Hello"}
+        var stream = string.Join(
+            "\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\"}",
+            "",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}",
+            "",
+            "data: [DONE]",
+            "",
+            "");
 
-                              data: {"type":"response.output_text.delta","delta":" world"}
-
-                              data: [DONE]
-
-                              """;
-
-        var result = OpenAiChatGptClient.ParseResponseText(stream);
+        var result = await OpenAiChatGptClient.ParseResponseTextAsync(stream);
 
         Assert.Equal("Hello world", result);
     }
 
     [Fact]
-    public void ParseResponseText_SseResponseCompletedWithNonCompletedNestedStatus_Throws()
+    public async Task ParseResponseText_SseResponseCompletedWithNonCompletedNestedStatus_Throws()
     {
         const string stream = """
                               data: {"type":"response.output_text.delta","delta":"partial-secret"}
@@ -95,8 +98,8 @@ public sealed class OpenAiChatGptClientTests
 
                               """;
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
-            OpenAiChatGptClient.ParseResponseText(stream));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            OpenAiChatGptClient.ParseResponseTextAsync(stream));
 
         Assert.Contains("response.completed", ex.Message);
         Assert.Contains("incomplete", ex.Message);
