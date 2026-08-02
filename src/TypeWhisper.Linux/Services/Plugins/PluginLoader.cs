@@ -89,7 +89,8 @@ public sealed class PluginAssemblyLoadContext : AssemblyLoadContext
 }
 
 /// <summary>
-///     Discovers and loads plugins from subdirectories containing a manifest.json.
+///     Discovers and loads plugins from subdirectories containing the
+///     <see cref="PluginManifest.FileName" /> file.
 ///     The Windows "Mark of the Web" unblocking step is a no-op on Linux
 ///     (no NTFS alternate data streams or SmartScreen).
 /// </summary>
@@ -153,10 +154,12 @@ public sealed class PluginLoader
 
     internal LoadedPlugin? LoadPlugin(string pluginDir)
     {
-        var manifestPath = Path.Join(pluginDir, "manifest.json");
+        var manifestPath = Path.Join(pluginDir, PluginManifest.FileName);
         if (!File.Exists(manifestPath))
         {
-            Trace.WriteLine($"[PluginLoader] No manifest.json in {pluginDir}, skipping");
+            Trace.WriteLine(
+                $"[PluginLoader] No {PluginManifest.FileName} in {pluginDir}, skipping"
+            );
             return null;
         }
 
@@ -168,7 +171,10 @@ public sealed class PluginLoader
         if (manifest is null)
         {
             _lastLoadFailures.Add(
-                new PluginLoadFailure(pluginDir, "Failed to deserialize manifest.json.")
+                new PluginLoadFailure(
+                    pluginDir,
+                    $"Failed to deserialize {PluginManifest.FileName}."
+                )
             );
             Trace.WriteLine($"[PluginLoader] Failed to deserialize manifest in {pluginDir}");
             return null;

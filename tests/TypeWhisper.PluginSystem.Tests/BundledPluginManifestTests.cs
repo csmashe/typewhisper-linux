@@ -12,6 +12,25 @@ public sealed class BundledPluginManifestTests
     };
 
     [Fact]
+    public void PluginManifest_FileName_IsManifestJson()
+    {
+        Assert.Equal("manifest.json", PluginManifest.FileName);
+    }
+
+    [Fact]
+    public void AllBundledPluginDirectories_ShipContractManifestFile()
+    {
+        var pluginDirectories = BundledPluginDirectories();
+
+        Assert.Equal(32, pluginDirectories.Length);
+        foreach (var directory in pluginDirectories)
+        {
+            var manifestPath = Path.Join(directory, PluginManifest.FileName);
+            Assert.True(File.Exists(manifestPath), $"{manifestPath} does not exist.");
+        }
+    }
+
+    [Fact]
     public void AllBundledManifests_DeclareCompleteNormalizedMetadata()
     {
         var manifestPaths = ManifestPaths();
@@ -84,7 +103,7 @@ public sealed class BundledPluginManifestTests
             ManifestPaths(),
             candidate =>
                 candidate.EndsWith(
-                    Path.Join("TypeWhisper.Plugin.Webhook", "manifest.json"),
+                    Path.Join("TypeWhisper.Plugin.Webhook", PluginManifest.FileName),
                     StringComparison.Ordinal
                 )
         );
@@ -103,14 +122,22 @@ public sealed class BundledPluginManifestTests
         [CallerFilePath] string thisFile = ""
     )
     {
+        return BundledPluginDirectories(thisFile)
+            .Select(directory => Path.Join(directory, PluginManifest.FileName))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static string[] BundledPluginDirectories(
+        [CallerFilePath] string thisFile = ""
+    )
+    {
         var testDirectory = Path.GetDirectoryName(thisFile)!;
         var pluginsDirectory = Path.GetFullPath(
             Path.Join(testDirectory, "..", "..", "plugins")
         );
         return Directory
             .EnumerateDirectories(pluginsDirectory, "TypeWhisper.Plugin.*")
-            .Select(directory => Path.Join(directory, "manifest.json"))
-            .Where(File.Exists)
             .Order(StringComparer.Ordinal)
             .ToArray();
     }
