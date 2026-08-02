@@ -97,6 +97,719 @@ public sealed class OpenAiCompatiblePluginTests
         });
 
     [Fact]
+    public async Task ActivateAsync_WhitespaceLegacyProfileId_PersistsStableRepairAndSelections()
+    {
+        // Pre-fix, each activation generated a different in-memory ID because the
+        // repaired ID was never saved, invalidating profile selection identities.
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            new List<OpenAiCompatibleProfile>
+            {
+                new()
+                {
+                    Id = "   ",
+                    Name = "Legacy",
+                    BaseUrl = "http://localhost:11434",
+                    SelectedModelId = "stt-model",
+                    SelectedLlmModelId = "llm-model",
+                    FetchedModels =
+                    [
+                        new FetchedModel("stt-model", null),
+                        new FetchedModel("llm-model", null),
+                    ],
+                },
+            }
+        );
+        host.SettingWrites.Clear();
+        using var httpClient = ModelsClient();
+
+        var first = new OpenAiCompatiblePlugin(httpClient);
+        await first.ActivateAsync(host);
+        var firstItem = Assert.Single(await first.GetItemsAsync("profiles"));
+        var repairedId = Assert.IsType<string>(firstItem.Values["__id"]);
+
+        Assert.StartsWith("openai-compatible-", repairedId);
+        Assert.Equal("stt-model", firstItem.Values["selectedModel"]);
+        Assert.Equal("llm-model", firstItem.Values["selectedLlmModel"]);
+        Assert.Equal(
+            repairedId,
+            Assert.Single(first.AdditionalTranscriptionEngines).GetTranscriptionSelectionId()
+        );
+
+        var persisted = Assert.Single(
+            host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!
+        );
+        Assert.Equal(repairedId, persisted.Id);
+
+        var second = new OpenAiCompatiblePlugin(httpClient);
+        await second.ActivateAsync(host);
+        var secondItem = Assert.Single(await second.GetItemsAsync("profiles"));
+
+        Assert.Equal(repairedId, secondItem.Values["__id"]);
+        Assert.Equal("stt-model", secondItem.Values["selectedModel"]);
+        Assert.Equal("llm-model", secondItem.Values["selectedLlmModel"]);
+        Assert.Equal(
+            repairedId,
+            Assert.Single(second.AdditionalTranscriptionEngines).GetTranscriptionSelectionId()
+        );
+        Assert.Equal(
+            1,
+            host.SettingWrites.Count(key => key == "additionalProfiles")
+        );
+    }
+
+    [Fact]
+    public async Task ActivateAsync_DuplicateProfileId_RepairsLoserWithoutMovingKeeperSecret()
+    {
+        // Pre-fix, the duplicate loser received a transient ID that was regenerated
+        // on every activation because the repaired profile list was not persisted.
+        const string sharedId = "openai-compatible-shared";
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            new List<OpenAiCompatibleProfile>
+            {
+                new()
+                {
+                    Id = sharedId,
+                    Name = "Keeper",
+                    BaseUrl = "http://localhost:11434",
+                },
+                new()
+                {
+                    Id = sharedId,
+                    Name = "Duplicate",
+                    BaseUrl = "http://localhost:11435",
+                },
+            }
+        );
+        host.Secrets[$"api-key.{sharedId}"] = "keeper-secret";
+        host.SettingWrites.Clear();
+        var authorizationHeaders = new List<string?>();
+        var handler = new CapturingHandler((request, _) =>
+        {
+            authorizationHeaders.Add(request.Headers.Authorization?.ToString());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"choices":[{"message":{"content":"ok"}}]}""",
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+
+        await sut.ActivateAsync(host);
+
+        var items = await sut.GetItemsAsync("profiles");
+        Assert.Equal(2, items.Count);
+        var keeperId = Assert.IsType<string>(items[0].Values["__id"]);
+        var repairedLoserId = Assert.IsType<string>(items[1].Values["__id"]);
+        Assert.Equal(sharedId, keeperId);
+        Assert.NotEqual(sharedId, repairedLoserId);
+        Assert.StartsWith("openai-compatible-", repairedLoserId);
+
+        var persisted = host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!;
+        Assert.Equal([keeperId, repairedLoserId], persisted.Select(profile => profile.Id));
+        Assert.Equal("keeper-secret", host.Secrets[$"api-key.{sharedId}"]);
+        Assert.Empty(host.StoredSecrets);
+        Assert.Empty(host.DeletedSecretKeys);
+
+        await sut.ProcessForProfileAsync(keeperId, "system", "user", "m1", CancellationToken.None);
+        await sut.ProcessForProfileAsync(
+            repairedLoserId,
+            "system",
+            "user",
+            "m1",
+            CancellationToken.None
+        );
+        Assert.Equal(["Bearer keeper-secret", "Bearer"], authorizationHeaders);
+        Assert.Equal(
+            1,
+            host.SettingWrites.Count(key => key == "additionalProfiles")
+        );
+    }
+
+    [Fact]
+    public async Task ActivateAsync_InvalidLegacyProfileId_MigratesSecretAndUsesIt()
+    {
+        // Pre-fix, activation looked only under the generated ID, leaving the legacy
+        // secret orphaned and profile requests unauthenticated.
+        const string oldId = "legacy:server";
+        const string oldSecretKey = "api-key.legacy:server";
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            new List<OpenAiCompatibleProfile>
+            {
+                new()
+                {
+                    Id = oldId,
+                    Name = "Legacy",
+                    BaseUrl = "http://localhost:11434",
+                },
+            }
+        );
+        host.Secrets[oldSecretKey] = "legacy-secret";
+        host.SettingWrites.Clear();
+        string? authorizationHeader = null;
+        var handler = new CapturingHandler((request, _) =>
+        {
+            authorizationHeader = request.Headers.Authorization?.ToString();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"choices":[{"message":{"content":"ok"}}]}""",
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+
+        await sut.ActivateAsync(host);
+
+        var item = Assert.Single(await sut.GetItemsAsync("profiles"));
+        var repairedId = Assert.IsType<string>(item.Values["__id"]);
+        var newSecretKey = $"api-key.{repairedId}";
+        Assert.Equal("legacy-secret", host.Secrets[newSecretKey]);
+        Assert.False(host.Secrets.ContainsKey(oldSecretKey));
+        Assert.Equal(
+            [("store", newSecretKey), ("delete", oldSecretKey)],
+            host.SecretOperations
+        );
+
+        var result = await sut.ProcessForProfileAsync(
+            repairedId,
+            "system",
+            "user",
+            "m1",
+            CancellationToken.None
+        );
+        Assert.Equal("ok", result);
+        Assert.Equal("Bearer legacy-secret", authorizationHeader);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_DuplicateInvalidLegacyProfileIds_MigratesSecretToFirstProfileOnly()
+    {
+        // One legacy secret cannot belong to two servers: copying it to both repaired
+        // profiles would disclose the credential to the second profile's base URL.
+        const string oldId = "legacy:server";
+        const string oldSecretKey = "api-key.legacy:server";
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            new List<OpenAiCompatibleProfile>
+            {
+                new()
+                {
+                    Id = oldId,
+                    Name = "First",
+                    BaseUrl = "http://localhost:11434",
+                },
+                new()
+                {
+                    Id = oldId,
+                    Name = "Second",
+                    BaseUrl = "http://evil.example.com",
+                },
+            }
+        );
+        host.Secrets[oldSecretKey] = "legacy-secret";
+        host.SettingWrites.Clear();
+        var authorizationHeaders = new List<string?>();
+        var handler = new CapturingHandler((request, _) =>
+        {
+            authorizationHeaders.Add(request.Headers.Authorization?.ToString());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"choices":[{"message":{"content":"ok"}}]}""",
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+
+        await sut.ActivateAsync(host);
+
+        var items = await sut.GetItemsAsync("profiles");
+        Assert.Equal(2, items.Count);
+        var firstId = Assert.IsType<string>(items[0].Values["__id"]);
+        var secondId = Assert.IsType<string>(items[1].Values["__id"]);
+        Assert.NotEqual(firstId, secondId);
+
+        Assert.Equal(
+            [("store", $"api-key.{firstId}"), ("delete", oldSecretKey)],
+            host.SecretOperations
+        );
+        Assert.Equal("legacy-secret", host.Secrets[$"api-key.{firstId}"]);
+        Assert.False(host.Secrets.ContainsKey($"api-key.{secondId}"));
+
+        await sut.ProcessForProfileAsync(firstId, "system", "user", "m1", CancellationToken.None);
+        await sut.ProcessForProfileAsync(secondId, "system", "user", "m1", CancellationToken.None);
+        Assert.Equal(["Bearer legacy-secret", "Bearer"], authorizationHeaders);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_PaddedDuplicateProfileId_MigratesItsOwnDistinctSecret()
+    {
+        // The padded duplicate stores its secret under its own raw key, so suppressing
+        // the migration would orphan a credential the keeper never owned.
+        const string keeperId = "openai-compatible-a";
+        const string paddedSecretKey = "api-key.  openai-compatible-a  ";
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            new List<OpenAiCompatibleProfile>
+            {
+                new()
+                {
+                    Id = keeperId,
+                    Name = "Keeper",
+                    BaseUrl = "http://localhost:11434",
+                },
+                new()
+                {
+                    Id = "  openai-compatible-a  ",
+                    Name = "Padded",
+                    BaseUrl = "http://localhost:11435",
+                },
+            }
+        );
+        host.Secrets[$"api-key.{keeperId}"] = "keeper-secret";
+        host.Secrets[paddedSecretKey] = "padded-secret";
+        host.SettingWrites.Clear();
+        var authorizationHeaders = new List<string?>();
+        var handler = new CapturingHandler((request, _) =>
+        {
+            authorizationHeaders.Add(request.Headers.Authorization?.ToString());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"choices":[{"message":{"content":"ok"}}]}""",
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+
+        await sut.ActivateAsync(host);
+
+        var items = await sut.GetItemsAsync("profiles");
+        Assert.Equal(2, items.Count);
+        Assert.Equal(keeperId, items[0].Values["__id"]);
+        var repairedId = Assert.IsType<string>(items[1].Values["__id"]);
+        Assert.NotEqual(keeperId, repairedId);
+
+        Assert.Equal("keeper-secret", host.Secrets[$"api-key.{keeperId}"]);
+        Assert.Equal("padded-secret", host.Secrets[$"api-key.{repairedId}"]);
+        Assert.False(host.Secrets.ContainsKey(paddedSecretKey));
+        Assert.Equal(
+            [("store", $"api-key.{repairedId}"), ("delete", paddedSecretKey)],
+            host.SecretOperations
+        );
+
+        await sut.ProcessForProfileAsync(keeperId, "system", "user", "m1", CancellationToken.None);
+        await sut.ProcessForProfileAsync(repairedId, "system", "user", "m1", CancellationToken.None);
+        Assert.Equal(["Bearer keeper-secret", "Bearer padded-secret"], authorizationHeaders);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_PaddedIdBeforeExactHolder_LeavesExactSecretWithItsOwner()
+    {
+        // The padded entry comes first but must not normalize onto an ID a later
+        // profile stores exactly: that would send the exact profile's credential to
+        // the padded profile's base URL and persist the mix-up.
+        const string exactId = "openai-compatible-a";
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            new List<OpenAiCompatibleProfile>
+            {
+                new()
+                {
+                    Id = "  openai-compatible-a  ",
+                    Name = "Padded",
+                    BaseUrl = "http://padded.example.com",
+                },
+                new()
+                {
+                    Id = exactId,
+                    Name = "Exact",
+                    BaseUrl = "http://exact.example.com",
+                },
+            }
+        );
+        host.Secrets[$"api-key.{exactId}"] = "exact-secret";
+        host.SettingWrites.Clear();
+        var requests = new List<(string? Host, string? Authorization)>();
+        var handler = new CapturingHandler((request, _) =>
+        {
+            requests.Add((request.RequestUri?.Host, request.Headers.Authorization?.ToString()));
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"choices":[{"message":{"content":"ok"}}]}""",
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+
+        await sut.ActivateAsync(host);
+
+        var items = await sut.GetItemsAsync("profiles");
+        Assert.Equal(2, items.Count);
+        var paddedId = Assert.IsType<string>(items[0].Values["__id"]);
+        Assert.NotEqual(exactId, paddedId);
+        Assert.Equal(exactId, items[1].Values["__id"]);
+        Assert.Equal("exact-secret", host.Secrets[$"api-key.{exactId}"]);
+
+        await sut.ProcessForProfileAsync(paddedId, "system", "user", "m1", CancellationToken.None);
+        await sut.ProcessForProfileAsync(exactId, "system", "user", "m1", CancellationToken.None);
+        Assert.Equal(
+            [("padded.example.com", "Bearer"), ("exact.example.com", "Bearer exact-secret")],
+            requests
+        );
+    }
+
+    [Fact]
+    public async Task ActivateAsync_NullLegacyProfileId_MigratesItsSecret()
+    {
+        // A missing ID in persisted JSON addresses "api-key." exactly as an empty ID
+        // does, so it has to migrate on the same terms.
+        const string nullIdSecretKey = "api-key.";
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            new List<OpenAiCompatibleProfile>
+            {
+                new()
+                {
+                    Id = null!,
+                    Name = "No Id",
+                    BaseUrl = "http://localhost:11434",
+                },
+            }
+        );
+        host.Secrets[nullIdSecretKey] = "orphan-secret";
+        host.Secrets["api-key"] = "default-endpoint-secret";
+        host.SettingWrites.Clear();
+        string? authorizationHeader = null;
+        var handler = new CapturingHandler((request, _) =>
+        {
+            authorizationHeader = request.Headers.Authorization?.ToString();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"choices":[{"message":{"content":"ok"}}]}""",
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+
+        await sut.ActivateAsync(host);
+
+        var item = Assert.Single(await sut.GetItemsAsync("profiles"));
+        var repairedId = Assert.IsType<string>(item.Values["__id"]);
+        Assert.Equal("orphan-secret", host.Secrets[$"api-key.{repairedId}"]);
+        Assert.False(host.Secrets.ContainsKey(nullIdSecretKey));
+        Assert.Equal("default-endpoint-secret", host.Secrets["api-key"]);
+
+        await sut.ProcessForProfileAsync(repairedId, "system", "user", "m1", CancellationToken.None);
+        Assert.Equal("Bearer orphan-secret", authorizationHeader);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_BlankLegacyProfileId_MigratesItsSecret()
+    {
+        // A blank ID still addresses a secret key of its own; the repair renames the
+        // profile, so the credential has to move with it.
+        const string blankSecretKey = "api-key.   ";
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            new List<OpenAiCompatibleProfile>
+            {
+                new()
+                {
+                    Id = "   ",
+                    Name = "Blank",
+                    BaseUrl = "http://localhost:11434",
+                },
+            }
+        );
+        host.Secrets[blankSecretKey] = "blank-secret";
+        host.Secrets["api-key"] = "default-endpoint-secret";
+        host.SettingWrites.Clear();
+        string? authorizationHeader = null;
+        var handler = new CapturingHandler((request, _) =>
+        {
+            authorizationHeader = request.Headers.Authorization?.ToString();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"choices":[{"message":{"content":"ok"}}]}""",
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+
+        await sut.ActivateAsync(host);
+
+        var item = Assert.Single(await sut.GetItemsAsync("profiles"));
+        var repairedId = Assert.IsType<string>(item.Values["__id"]);
+        Assert.Equal("blank-secret", host.Secrets[$"api-key.{repairedId}"]);
+        Assert.False(host.Secrets.ContainsKey(blankSecretKey));
+
+        // The default endpoint's own secret lives at "api-key" and must be untouched.
+        Assert.Equal("default-endpoint-secret", host.Secrets["api-key"]);
+        Assert.DoesNotContain("api-key", host.DeletedSecretKeys);
+
+        await sut.ProcessForProfileAsync(repairedId, "system", "user", "m1", CancellationToken.None);
+        Assert.Equal("Bearer blank-secret", authorizationHeader);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_PaddedLegacyProfileId_KeepsExistingDestinationSecret()
+    {
+        // The canonical key already holds the credential this profile has been using;
+        // the padded legacy entry is the stale copy and must not overwrite it.
+        const string canonicalId = "openai-compatible-a";
+        const string paddedSecretKey = "api-key.  openai-compatible-a  ";
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            new List<OpenAiCompatibleProfile>
+            {
+                new()
+                {
+                    Id = "  openai-compatible-a  ",
+                    Name = "Padded",
+                    BaseUrl = "http://localhost:11434",
+                },
+            }
+        );
+        host.Secrets[$"api-key.{canonicalId}"] = "live-secret";
+        host.Secrets[paddedSecretKey] = "stale-secret";
+        host.SettingWrites.Clear();
+        string? authorizationHeader = null;
+        var handler = new CapturingHandler((request, _) =>
+        {
+            authorizationHeader = request.Headers.Authorization?.ToString();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"choices":[{"message":{"content":"ok"}}]}""",
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+
+        await sut.ActivateAsync(host);
+
+        var item = Assert.Single(await sut.GetItemsAsync("profiles"));
+        Assert.Equal(canonicalId, item.Values["__id"]);
+        Assert.Equal("live-secret", host.Secrets[$"api-key.{canonicalId}"]);
+        Assert.Equal("stale-secret", host.Secrets[paddedSecretKey]);
+        Assert.Empty(host.SecretOperations);
+
+        await sut.ProcessForProfileAsync(
+            canonicalId,
+            "system",
+            "user",
+            "m1",
+            CancellationToken.None
+        );
+        Assert.Equal("Bearer live-secret", authorizationHeader);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_LegacySecretDeleteFailure_StillActivatesWithMigratedSecret()
+    {
+        // Retiring the old key is cleanup after the migration is already durable, so
+        // a delete failure must not fail activation or strand the repaired profile.
+        const string oldSecretKey = "api-key.legacy:server";
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            new List<OpenAiCompatibleProfile>
+            {
+                new()
+                {
+                    Id = "legacy:server",
+                    Name = "Legacy",
+                    BaseUrl = "http://localhost:11434",
+                },
+            }
+        );
+        host.Secrets[oldSecretKey] = "legacy-secret";
+        host.SettingWrites.Clear();
+        host.FailDeleteSecretWrites = true;
+        string? authorizationHeader = null;
+        var handler = new CapturingHandler((request, _) =>
+        {
+            authorizationHeader = request.Headers.Authorization?.ToString();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"choices":[{"message":{"content":"ok"}}]}""",
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+
+        await sut.ActivateAsync(host);
+
+        var item = Assert.Single(await sut.GetItemsAsync("profiles"));
+        var repairedId = Assert.IsType<string>(item.Values["__id"]);
+        Assert.Equal("legacy-secret", host.Secrets[$"api-key.{repairedId}"]);
+        Assert.Equal("legacy-secret", host.Secrets[oldSecretKey]);
+        Assert.Equal(
+            repairedId,
+            Assert.Single(host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!).Id
+        );
+
+        await sut.ProcessForProfileAsync(repairedId, "system", "user", "m1", CancellationToken.None);
+        Assert.Equal("Bearer legacy-secret", authorizationHeader);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_MigrationStoreFailureAfterEarlierMigration_KeepsEveryLegacySecret()
+    {
+        // A mid-migration failure must not retire any legacy key: the still-persisted
+        // legacy IDs stay the addressable copies, so the next activation can retry.
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            new List<OpenAiCompatibleProfile>
+            {
+                new()
+                {
+                    Id = "legacy:a",
+                    Name = "A",
+                    BaseUrl = "http://localhost:11434",
+                },
+                new()
+                {
+                    Id = "legacy:b",
+                    Name = "B",
+                    BaseUrl = "http://localhost:11435",
+                },
+            }
+        );
+        host.Secrets["api-key.legacy:a"] = "secret-a";
+        host.Secrets["api-key.legacy:b"] = "secret-b";
+        host.SettingWrites.Clear();
+        host.StoreSecretFailAfter = 1;
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+
+        await Assert.ThrowsAsync<IOException>(() => sut.ActivateAsync(host));
+
+        Assert.Equal("secret-a", host.Secrets["api-key.legacy:a"]);
+        Assert.Equal("secret-b", host.Secrets["api-key.legacy:b"]);
+        Assert.Empty(host.DeletedSecretKeys);
+        Assert.Empty(host.SettingWrites);
+        Assert.Equal(
+            ["legacy:a", "legacy:b"],
+            host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!
+                .Select(profile => profile.Id)
+        );
+    }
+
+    [Fact]
+    public async Task ActivateAsync_MigrationStoreFailure_PreservesOldSecret()
+    {
+        // Pre-fix, no migration store was attempted at all, so activation did not
+        // surface the failure and the repaired profile silently lost access to its key.
+        const string oldSecretKey = "api-key.legacy:server";
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            new List<OpenAiCompatibleProfile>
+            {
+                new()
+                {
+                    Id = "legacy:server",
+                    Name = "Legacy",
+                    BaseUrl = "http://localhost:11434",
+                },
+            }
+        );
+        host.Secrets[oldSecretKey] = "legacy-secret";
+        host.SettingWrites.Clear();
+        host.FailStoreSecretWrites = true;
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+
+        await Assert.ThrowsAsync<IOException>(() => sut.ActivateAsync(host));
+
+        Assert.Equal("legacy-secret", host.Secrets[oldSecretKey]);
+        Assert.Single(host.Secrets);
+        Assert.Empty(host.StoredSecrets);
+        Assert.Empty(host.DeletedSecretKeys);
+        Assert.Empty(host.SettingWrites);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ValidUniqueProfileIds_DoesNotRewriteProfiles()
+    {
+        // Pre-fix, a clean load also performed no settings write; this guard ensures
+        // repair persistence remains conditional and preserves that behavior.
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            new List<OpenAiCompatibleProfile>
+            {
+                new()
+                {
+                    Id = "openai-compatible-one",
+                    Name = "One",
+                    BaseUrl = "http://localhost:11434",
+                },
+                new()
+                {
+                    Id = "openai-compatible-two",
+                    Name = "Two",
+                    BaseUrl = "http://localhost:11435",
+                },
+            }
+        );
+        host.SettingWrites.Clear();
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+
+        await sut.ActivateAsync(host);
+
+        Assert.Empty(host.SettingWrites);
+    }
+
+    [Fact]
     public async Task SetBaseUrl_EndpointChange_InvalidatesStateThenRefreshSelectsFirstModel()
     {
         var host = new TestPluginHostServices();
@@ -869,11 +1582,20 @@ public sealed class OpenAiCompatiblePluginTests
         public Dictionary<string, string?> Secrets { get; } = [];
         public List<(string Key, string Value)> StoredSecrets { get; } = [];
         public List<string> DeletedSecretKeys { get; } = [];
+        public List<(string Operation, string Key)> SecretOperations { get; } = [];
+        public List<string> SettingWrites { get; } = [];
+        public bool FailStoreSecretWrites { get; set; }
+        public int StoreSecretFailAfter { get; set; } = int.MaxValue;
+        public bool FailDeleteSecretWrites { get; set; }
         public int CapabilitiesChangedCount { get; private set; }
 
         public Task StoreSecretAsync(string key, string value)
         {
+            if (FailStoreSecretWrites || StoredSecrets.Count >= StoreSecretFailAfter)
+                throw new IOException("Simulated secret-store failure.");
+
             StoredSecrets.Add((key, value));
+            SecretOperations.Add(("store", key));
             Secrets[key] = value;
             return Task.CompletedTask;
         }
@@ -883,7 +1605,11 @@ public sealed class OpenAiCompatiblePluginTests
 
         public Task DeleteSecretAsync(string key)
         {
+            if (FailDeleteSecretWrites)
+                throw new IOException("Simulated secret-delete failure.");
+
             DeletedSecretKeys.Add(key);
+            SecretOperations.Add(("delete", key));
             Secrets.Remove(key);
             return Task.CompletedTask;
         }
@@ -891,8 +1617,11 @@ public sealed class OpenAiCompatiblePluginTests
         public T? GetSetting<T>(string key) =>
             _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(s_jsonOptions) : default;
 
-        public void SetSetting<T>(string key, T value) =>
+        public void SetSetting<T>(string key, T value)
+        {
+            SettingWrites.Add(key);
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
+        }
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;
