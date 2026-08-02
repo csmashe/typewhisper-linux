@@ -335,6 +335,122 @@ public class Reson8PluginTests
     }
 
     [Fact]
+    public async Task StreamingAdapter_ProviderCancellation_RetriesBatchExactlyOnce()
+    {
+        var batchCalls = 0;
+
+        var result = await Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+            _ => Task.FromException<string?>(
+                new OperationCanceledException("provider canceled")
+            ),
+            () =>
+            {
+                batchCalls++;
+                return Task.FromResult("batch");
+            },
+            CancellationToken.None
+        );
+
+        Assert.Equal("batch", result);
+        Assert.Equal(1, batchCalls);
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_PrivateTimeout_RetriesBatchExactlyOnce()
+    {
+        var batchCalls = 0;
+
+        var result = await Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+            _ => Task.FromException<string?>(new TimeoutException("provider deadline")),
+            () =>
+            {
+                batchCalls++;
+                return Task.FromResult("batch");
+            },
+            CancellationToken.None
+        );
+
+        Assert.Equal("batch", result);
+        Assert.Equal(1, batchCalls);
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_CallerCancellation_DoesNotRetryBatch()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var batchCalls = 0;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+                _ => Task.FromException<string?>(new HttpRequestException("provider raced")),
+                () =>
+                {
+                    batchCalls++;
+                    return Task.FromResult("batch");
+                },
+                cts.Token
+            ));
+
+        Assert.Equal(0, batchCalls);
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_ProgressStop_DoesNotRetryBatch()
+    {
+        var batchCalls = 0;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+                markProgressStopped =>
+                {
+                    markProgressStopped();
+                    return Task.FromException<string?>(
+                        new OperationCanceledException("progress stopped")
+                    );
+                },
+                () =>
+                {
+                    batchCalls++;
+                    return Task.FromResult("batch");
+                },
+                CancellationToken.None
+            ));
+
+        Assert.Equal(0, batchCalls);
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_CallerAndProgressRace_CallerWinsWithoutRetry()
+    {
+        using var cts = new CancellationTokenSource();
+        var batchCalls = 0;
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+                markProgressStopped =>
+                {
+                    markProgressStopped();
+                    // ReSharper disable once AccessToDisposedClosure -- the callback runs inside the
+                    // awaited call, which completes before the using-scope disposes cts.
+                    cts.Cancel();
+                    return Task.FromException<string?>(
+                        new TimeoutException("provider deadline")
+                    );
+                },
+                () =>
+                {
+                    batchCalls++;
+                    return Task.FromResult("batch");
+                },
+                cts.Token
+            ));
+
+        Assert.Equal(cts.Token, exception.CancellationToken);
+        Assert.Equal(0, batchCalls);
+    }
+
+    [Fact]
     public void StreamingSession_BuildsExpectedUrisHeadersAndCollectsTranscriptEvents()
     {
         var uri = Reson8StreamingSession.BuildRealtimeUri("https://api.reson8.dev", "domain-model", "de");

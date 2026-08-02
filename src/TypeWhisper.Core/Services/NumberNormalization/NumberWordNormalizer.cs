@@ -61,11 +61,9 @@ public static class NumberWordNormalizer
     {
         var normalized = word.Normalize(NormalizationForm.FormD);
         var builder = new StringBuilder(normalized.Length);
-        foreach (var c in normalized)
-        {
-            if (CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
-                builder.Append(c);
-        }
+        foreach (var c in normalized.Where(static c =>
+                     CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark))
+            builder.Append(c);
 
         return builder.ToString().Normalize(NormalizationForm.FormC).ToLowerInvariant();
     }
@@ -82,7 +80,7 @@ public static class NumberWordNormalizer
             "en" => EnglishNumberWordParser.Parse(wordTexts),
             "de" => GermanNumberWordParser.Parse(wordTexts),
             "es" => SpanishNumberWordParser.Parse(wordTexts),
-            _ => null
+            _ => null,
         };
 
         if (parsed is null || parsed.ConsumedWords <= 0 || parsed.ConsumedWords > words.Count)
@@ -176,7 +174,7 @@ public static class NumberWordNormalizer
     private enum TokenKind
     {
         Word,
-        Other
+        Other,
     }
 
     private sealed record Token(string Text, TokenKind Kind)

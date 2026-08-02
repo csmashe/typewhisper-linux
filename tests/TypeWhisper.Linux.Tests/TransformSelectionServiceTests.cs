@@ -134,6 +134,39 @@ public sealed class TransformSelectionServiceTests
         Assert.Equal(0, platform.TypeCalls);
     }
 
+    [Fact]
+    public void ProcessingFailure_ProviderCancellationWithLiveDeadline_UsesFailedWarning()
+    {
+        var message = TransformSelectionService.ProcessingFailureMessage(
+            new OperationCanceledException("provider canceled"),
+            deadlineExpired: false
+        );
+
+        Assert.Equal("Transform selection failed: provider canceled", message);
+    }
+
+    [Fact]
+    public void ProcessingFailure_PrivateDeadline_UsesTimedOutWarning()
+    {
+        var message = TransformSelectionService.ProcessingFailureMessage(
+            new OperationCanceledException("deadline canceled"),
+            deadlineExpired: true
+        );
+
+        Assert.Equal("Transform selection timed out.", message);
+    }
+
+    [Fact]
+    public void ProcessingFailure_DeadlineRacingProviderFault_DeadlineWins()
+    {
+        var message = TransformSelectionService.ProcessingFailureMessage(
+            new HttpRequestException("provider failed"),
+            deadlineExpired: true
+        );
+
+        Assert.Equal("Transform selection timed out.", message);
+    }
+
     private sealed class FakeTextInsertionPlatform : ITextInsertionPlatform
     {
         public string? Clipboard { get; set; }

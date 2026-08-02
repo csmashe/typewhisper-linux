@@ -13,8 +13,9 @@ public static class OpenAiApiHelper
 {
     /// <summary>
     ///     Sends an HTTP request and throws <see cref="InvalidOperationException" /> for
-    ///     network failures, timeouts, and non-success HTTP status codes, converting the
-    ///     raw error body into a human-readable message where possible.
+    ///     network failures and non-success HTTP status codes, or <see cref="TimeoutException" />
+    ///     for a private HTTP-client deadline, converting the raw error body into a
+    ///     human-readable message where possible.
     /// </summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedParameter.Global
@@ -35,7 +36,7 @@ public static class OpenAiApiHelper
         }
         catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
         {
-            throw new InvalidOperationException("API request timed out.", ex);
+            throw new TimeoutException("API request timed out.", ex);
         }
 
         if (response.IsSuccessStatusCode)

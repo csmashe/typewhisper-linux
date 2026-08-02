@@ -20,6 +20,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
 
     private readonly IFileTranscriptionProcessor _processor;
     private readonly PluginManager _pluginManager;
+    private readonly Action<Action> _postStatus;
     private readonly ISettingsService _settings;
 
     // One concurrent transcription at a time — shared between manual queue
@@ -96,9 +97,11 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         ISettingsService settings,
         AudioFileService audioFiles,
         WatchFolderService watchFolder,
-        PluginManager pluginManager
+        PluginManager pluginManager,
+        Action<Action>? postStatus = null
     )
     {
+        _postStatus = postStatus ?? (action => Dispatcher.UIThread.Post(action));
         _processor = processor;
         _settings = settings;
         _audioFiles = audioFiles;
@@ -350,10 +353,17 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         try
         {
             while (
-                Items.FirstOrDefault(i => i.Status == FileTranscriptionQueueItemStatus.Queued)
+                Items.FirstOrDefault(i =>
+                    i is
+                    {
+                        Status: FileTranscriptionQueueItemStatus.Queued,
+                        ProcessingAttempted: false,
+                    }
+                )
                 is { } item
             )
             {
+                item.ProcessingAttempted = true;
                 SelectedItem = item;
                 item.Cancellation = new CancellationTokenSource();
                 var gateHeld = false;
@@ -385,7 +395,9 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
                         )
                     );
                 }
-                catch (OperationCanceledException)
+                catch (Exception) when (
+                    item.Cancellation.Token.IsCancellationRequested
+                )
                 {
                     SetStatus(
                         item,
@@ -444,7 +456,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         string statusText
     )
     {
-        Dispatcher.UIThread.Post(() =>
+        _postStatus(() =>
         {
             item.Status = status;
             item.StatusText = statusText;

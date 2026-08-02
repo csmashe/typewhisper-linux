@@ -155,13 +155,42 @@ public sealed class PromptPaletteService
             await Dispatcher.UIThread.InvokeAsync(() => window.AttachRunCancellation(userCts));
         }
 
+        string result;
         try
         {
-            var result = await RunActionAsync(action, capturedText, window, userCts.Token);
+            result = await RunActionAsync(action, capturedText, window, userCts.Token);
 
             // Don't paste a result the user aborted while it was being finalized.
             userCts.Token.ThrowIfCancellationRequested();
+        }
+        catch (Exception ex) when (
+            ClassifyCancellationOrigin(ex, userCts.Token, CancellationToken.None)
+            == PromptPaletteCancellationOrigin.UserCancellation
+        )
+        {
+            // Genuine user abort — best effort, no insertion.
+            await CloseWindowAsync(window);
+            return;
+        }
+        catch (PromptPaletteDeadlineException)
+        {
+            // Private batch/action deadline — bounded quiet exit, no insertion.
+            await CloseWindowAsync(window);
+            return;
+        }
+        catch (Exception ex)
+        {
+            await CloseWindowAsync(window);
+            Debug.WriteLine($"[PromptPalette] Prompt processing failed: {ex}");
+            await ShowWarningAsync("TypeWhisper", $"Prompt processing failed: {ex.Message}");
+            return;
+        }
 
+        // Delivery phase. Closing the palette trips userCts (PromptPaletteWindow.OnClosed
+        // cancels it unconditionally), so nothing below may consult it — a delivery
+        // failure is never a user abort.
+        try
+        {
             // Close the palette BEFORE inserting so focus returns to the target
             // app and the paste lands where the user selected the text.
             await CloseWindowAsync(window);
@@ -169,28 +198,35 @@ public sealed class PromptPaletteService
             var actionPlugin = ResolveActionPlugin(action);
             if (actionPlugin is not null)
             {
+                // Unlinked: userCts is dead once the palette closed; the plugin's
+                // only budget is this private deadline.
                 using var execCts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-                await ExecuteActionPluginAsync(
-                    _actionPluginExecutionHost,
-                    actionPlugin,
-                    result,
-                    capturedText,
-                    _dictation.TryPublishActionFeedback,
-                    execCts.Token
-                );
+                try
+                {
+                    await ExecuteActionPluginAsync(
+                        _actionPluginExecutionHost,
+                        actionPlugin,
+                        result,
+                        capturedText,
+                        _dictation.TryPublishActionFeedback,
+                        execCts.Token
+                    );
+                }
+                catch (Exception ex) when (
+                    ClassifyCancellationOrigin(ex, CancellationToken.None, execCts.Token)
+                    == PromptPaletteCancellationOrigin.PrivateDeadline
+                )
+                {
+                    // Private action deadline — bounded quiet exit.
+                }
+
                 return;
             }
 
             await _textInsertion.InsertTextAsync(result, targetWindowId: targetWindowId);
         }
-        catch (OperationCanceledException)
-        {
-            // User abort or everything timed out — best effort, no insertion.
-            await CloseWindowAsync(window);
-        }
         catch (Exception ex)
         {
-            await CloseWindowAsync(window);
             Debug.WriteLine($"[PromptPalette] Prompt processing failed: {ex}");
             await ShowWarningAsync("TypeWhisper", $"Prompt processing failed: {ex.Message}");
         }
@@ -254,11 +290,17 @@ public sealed class PromptPaletteService
                 streamCts.Token
             );
         }
-        catch (OperationCanceledException) when (userToken.IsCancellationRequested)
+        catch (Exception ex) when (
+            ClassifyCancellationOrigin(ex, userToken, streamCts.Token)
+            == PromptPaletteCancellationOrigin.UserCancellation
+        )
         {
-            throw; // genuine user abort — do not fall back, do not insert.
+            throw new OperationCanceledException(userToken);
         }
-        catch (OperationCanceledException)
+        catch (Exception ex) when (
+            ClassifyCancellationOrigin(ex, userToken, streamCts.Token)
+            == PromptPaletteCancellationOrigin.PrivateDeadline
+        )
         {
             // Streaming timed out (no user cancel) — fall back to batch.
             return await BatchAsync(action, capturedText, userToken);
@@ -280,7 +322,43 @@ public sealed class PromptPaletteService
         // Fresh timeout so a streaming attempt that burned its budget doesn't starve the batch.
         using var batchCts = CancellationTokenSource.CreateLinkedTokenSource(userToken);
         batchCts.CancelAfter(TimeSpan.FromSeconds(60));
-        return await _processing.ProcessAsync(action, capturedText, ct: batchCts.Token);
+        try
+        {
+            return await _processing.ProcessAsync(action, capturedText, ct: batchCts.Token);
+        }
+        catch (Exception ex) when (
+            ClassifyCancellationOrigin(ex, userToken, batchCts.Token)
+            == PromptPaletteCancellationOrigin.UserCancellation
+        )
+        {
+            throw new OperationCanceledException(userToken);
+        }
+        catch (Exception ex) when (
+            ClassifyCancellationOrigin(ex, userToken, batchCts.Token)
+            == PromptPaletteCancellationOrigin.PrivateDeadline
+        )
+        {
+            throw new PromptPaletteDeadlineException(
+                "Prompt batch processing timed out.",
+                ex
+            );
+        }
+    }
+
+    internal static PromptPaletteCancellationOrigin ClassifyCancellationOrigin(
+        Exception _,
+        CancellationToken userToken,
+        CancellationToken privateDeadlineToken
+    )
+    {
+        if (userToken.IsCancellationRequested)
+        {
+            return PromptPaletteCancellationOrigin.UserCancellation;
+        }
+
+        return privateDeadlineToken.IsCancellationRequested
+            ? PromptPaletteCancellationOrigin.PrivateDeadline
+            : PromptPaletteCancellationOrigin.DependencyFault;
     }
 
     private static async Task CloseWindowAsync(PromptPaletteWindow? window)
@@ -322,4 +400,14 @@ public sealed class PromptPaletteService
             await dialog.ShowMessageAsync(title, message);
         });
     }
+
+    private sealed class PromptPaletteDeadlineException(string message, Exception innerException)
+        : TimeoutException(message, innerException);
+}
+
+internal enum PromptPaletteCancellationOrigin
+{
+    UserCancellation,
+    PrivateDeadline,
+    DependencyFault,
 }

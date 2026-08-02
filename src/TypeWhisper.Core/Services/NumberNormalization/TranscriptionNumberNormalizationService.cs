@@ -4,6 +4,8 @@ namespace TypeWhisper.Core.Services.NumberNormalization;
 
 public static class TranscriptionNumberNormalizationService
 {
+    // ReSharper disable once MemberCanBePrivate.Global -- public API of the service, so callers can
+    // check the toggle without running a normalization pass.
     public static bool IsEnabled(bool globalEnabled = true, bool? normalizeNumbersOverride = null) =>
         normalizeNumbersOverride ?? globalEnabled;
 
@@ -14,24 +16,18 @@ public static class TranscriptionNumberNormalizationService
         string? configuredLanguage,
         IReadOnlyList<string> configuredLanguageCandidates,
         bool globalEnabled = true,
-        bool? normalizeNumbersOverride = null)
-    {
-        if (!IsEnabled(globalEnabled, normalizeNumbersOverride))
-            return text;
-
-        foreach (var language in NormalizationLanguages(
-                     transcriptionTask,
-                     detectedLanguage,
-                     configuredLanguage,
-                     configuredLanguageCandidates))
-        {
-            var normalized = NumberWordNormalizer.Normalize(text, language);
-            if (!string.Equals(normalized, text, StringComparison.Ordinal))
-                return normalized;
-        }
-
-        return text;
-    }
+        bool? normalizeNumbersOverride = null) =>
+        IsEnabled(globalEnabled, normalizeNumbersOverride)
+            ? NormalizeText(
+                text,
+                NormalizationLanguages(
+                    transcriptionTask,
+                    detectedLanguage,
+                    configuredLanguage,
+                    configuredLanguageCandidates),
+                globalEnabled,
+                normalizeNumbersOverride)
+            : text;
 
     public static TranscriptionResult NormalizeResult(
         TranscriptionResult result,
@@ -58,10 +54,12 @@ public static class TranscriptionNumberNormalizationService
                 result.Segments,
                 languages,
                 globalEnabled,
-                normalizeNumbersOverride)
+                normalizeNumbersOverride),
         };
     }
 
+    // ReSharper disable once UnusedMember.Global -- segment-level counterpart of NormalizeText and
+    // NormalizeResult; part of the public API even though callers currently only need the other two.
     public static IReadOnlyList<TranscriptionSegment> NormalizeSegments(
         IReadOnlyList<TranscriptionSegment> segments,
         TranscriptionTask transcriptionTask,
@@ -80,7 +78,7 @@ public static class TranscriptionNumberNormalizationService
         return NormalizeSegments(segments, languages, globalEnabled, normalizeNumbersOverride);
     }
 
-    internal static IReadOnlyList<string> NormalizationLanguages(
+    private static List<string> NormalizationLanguages(
         TranscriptionTask transcriptionTask,
         string? detectedLanguage,
         string? configuredLanguage,
@@ -121,7 +119,7 @@ public static class TranscriptionNumberNormalizationService
         segments
             .Select(segment => segment with
             {
-                Text = NormalizeText(segment.Text, languages, globalEnabled, normalizeNumbersOverride)
+                Text = NormalizeText(segment.Text, languages, globalEnabled, normalizeNumbersOverride),
             })
             .ToList();
 
@@ -130,6 +128,8 @@ public static class TranscriptionNumberNormalizationService
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var result = new List<string>();
 
+        // ReSharper disable once LoopCanBeConvertedToQuery -- the dedupe is the HashSet side effect;
+        // a query would hide the mutating seen.Add inside a where-clause.
         foreach (var rawLanguage in new[] { primary }.Where(static language => language is not null).Select(static language => language!).Concat(candidates))
         {
             var normalized = NumberWordNormalizer.NormalizeLanguageCode(rawLanguage);

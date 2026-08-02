@@ -13,6 +13,7 @@ public sealed class TransformSelectionService
     private readonly SystemCommandAvailabilityService _commands;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ModelManagerService _models;
+    private readonly Func<TimeSpan, CancellationTokenSource> _processingTimeoutCtsFactory;
     private readonly PromptProcessingService _promptProcessing;
     private readonly ISettingsService _settings;
 
@@ -28,7 +29,8 @@ public sealed class TransformSelectionService
         PromptProcessingService promptProcessing,
         ISettingsService settings,
         ActiveWindowService activeWindow,
-        SystemCommandAvailabilityService commands
+        SystemCommandAvailabilityService commands,
+        Func<TimeSpan, CancellationTokenSource>? processingTimeoutCtsFactory = null
     )
     {
         _textInsertion = textInsertion;
@@ -38,6 +40,8 @@ public sealed class TransformSelectionService
         _settings = settings;
         _activeWindow = activeWindow;
         _commands = commands;
+        _processingTimeoutCtsFactory = processingTimeoutCtsFactory
+                                       ?? (timeout => new CancellationTokenSource(timeout));
     }
 
     public async Task ToggleAsync()
@@ -257,13 +261,15 @@ public sealed class TransformSelectionService
             return;
         }
 
+        using var processingCts = _processingTimeoutCtsFactory(s_processingTimeout);
         try
         {
-            using var cts = new CancellationTokenSource(s_processingTimeout);
             ModelManagerService.TranscriptionLease lease;
             try
             {
-                lease = await _models.AcquireTranscriptionAsync(cancellationToken: cts.Token);
+                lease = await _models.AcquireTranscriptionAsync(
+                    cancellationToken: processingCts.Token
+                );
             }
             catch (InvalidOperationException)
             {
@@ -285,7 +291,7 @@ public sealed class TransformSelectionService
                     language,
                     false,
                     null,
-                    cts.Token
+                    processingCts.Token
                 );
                 // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- Text comes from a plugin TranscribeAsync result; the non-null annotation is not guaranteed across plugin implementations
                 command = transcription.Text?.Trim();
@@ -317,7 +323,7 @@ public sealed class TransformSelectionService
             var transformed = await _promptProcessing.ProcessSystemPromptAsync(
                 prompt,
                 session.SelectedText,
-                ct: cts.Token
+                ct: processingCts.Token
             );
             if (string.IsNullOrWhiteSpace(transformed))
             {
@@ -370,15 +376,23 @@ public sealed class TransformSelectionService
                     break;
             }
         }
-        catch (OperationCanceledException)
-        {
-            await ShowWarningAsync("Transform selection timed out.");
-        }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[TransformSelection] Transform failed: {ex}");
-            await ShowWarningAsync($"Transform selection failed: {ex.Message}");
+            var deadlineExpired = processingCts.IsCancellationRequested;
+            if (!deadlineExpired)
+            {
+                Trace.WriteLine($"[TransformSelection] Transform failed: {ex}");
+            }
+
+            await ShowWarningAsync(ProcessingFailureMessage(ex, deadlineExpired));
         }
+    }
+
+    internal static string ProcessingFailureMessage(Exception exception, bool deadlineExpired)
+    {
+        return deadlineExpired
+            ? "Transform selection timed out."
+            : $"Transform selection failed: {exception.Message}";
     }
 
     private async Task AbortReplacementAsync(string transformed)

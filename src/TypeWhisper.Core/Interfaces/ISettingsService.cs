@@ -11,6 +11,8 @@ public interface ISettingsService
     AppSettings Current { get; }
 
     /// <summary>Reads settings from disk into <see cref="Current" /> and returns them.</summary>
+    // ReSharper disable once UnusedMethodReturnValue.Global -- callers today only want the reload
+    // side effect, but returning the loaded settings is part of the published contract.
     AppSettings Load();
 
     /// <summary>Persists <paramref name="settings" />, updates <see cref="Current" />, and raises <see cref="SettingsChanged" />.</summary>

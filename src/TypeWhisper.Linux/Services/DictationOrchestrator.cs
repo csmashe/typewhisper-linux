@@ -1432,7 +1432,9 @@ public sealed class DictationOrchestrator : IDisposable
                     );
                 });
             }
-            catch (OperationCanceledException)
+            catch (Exception ex) when (
+                ClassifyPostStopTerminal(ex, recordingContext.CancelToken) == "canceled"
+            )
             {
                 Trace.WriteLine("[Dictation] Post-stop pipeline canceled before completion.");
                 PublishSessionTerminal(recordingContext.SessionId, "canceled", "Canceled");
@@ -2418,6 +2420,14 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
+    internal static string ClassifyPostStopTerminal(
+        Exception _,
+        CancellationToken callerToken
+    )
+    {
+        return callerToken.IsCancellationRequested ? "canceled" : "failed";
+    }
+
     private PromptAction? ResolvePromptAction(RecordingContext context)
     {
         return ResolveAutoPromptAction(context.Profile?.PromptActionId, _promptActions.EnabledActions);
@@ -2436,47 +2446,42 @@ public sealed class DictationOrchestrator : IDisposable
             Trace.WriteLine($"[Dictation] {message}");
             ReportStatus(context, message);
 
-            var pump = new LlmStreamPump(accumulated =>
-            {
-                // Match ReportStatus(context,...)/ShowFeedback(context,...): a
-                // newer session that has taken over the overlay must not have its
-                // LlmResponseText clobbered by an older session's still-running
-                // prompt action (audit §2 H3). The event still publishes
-                // unconditionally for non-overlay observers.
-                if (IsContextStillOwningOverlay(context))
-                {
-                    SetOverlayState(state => state with { LlmResponseText = accumulated });
-                }
-
-                _models.PluginManager.EventBus.Publish(
-                    new LlmResponseTokenEvent
-                    {
-                        AccumulatedText = accumulated, StepName = PostProcessingStepNames.Llm,
-                    });
-            });
-
-            var streamed = await pump.RunAsync(
+            var (result, streamFaulted) = await RunPromptActionStreamWithFallbackAsync(
                 _promptProcessing.ProcessStreamingAsync(promptAction, text, context.Capture, token),
-                token);
+                () => _promptProcessing.ProcessAsync(
+                    promptAction,
+                    text,
+                    context.Capture,
+                    token
+                ),
+                accumulated =>
+                {
+                    // Match ReportStatus(context,...)/ShowFeedback(context,...): a
+                    // newer session that has taken over the overlay must not have its
+                    // LlmResponseText clobbered by an older session's still-running
+                    // prompt action (audit §2 H3). The event still publishes
+                    // unconditionally for non-overlay observers.
+                    if (IsContextStillOwningOverlay(context))
+                    {
+                        SetOverlayState(state => state with { LlmResponseText = accumulated });
+                    }
 
-            // Streaming→batch fallback: retry with the batch path when the pump
-            // faulted OR yielded nothing (proxy EOF, empty 200). ReceivedAnyChunk
-            // distinguishes a legitimately empty single-chunk result from a silent
-            // empty stream — the single chunk is already a completed ProcessAsync call.
-            // Pass the capture on the fallback: the batch retry is a distinct call whose
-            // response is the text actually used, so it must be recorded too — otherwise
-            // the saved provenance shows the faulted/empty streaming attempt while the
-            // history FinalText is the batch response.
-            var result = pump.Faulted || !pump.ReceivedAnyChunk
-                ? await _promptProcessing.ProcessAsync(promptAction, text, context.Capture, token)
-                : streamed;
-
+                    _models.PluginManager.EventBus.Publish(
+                        new LlmResponseTokenEvent
+                        {
+                            AccumulatedText = accumulated,
+                            StepName = PostProcessingStepNames.Llm,
+                        }
+                    );
+                },
+                token
+            );
             _models.PluginManager.EventBus.Publish(
                 new LlmResponseTokenEvent
                 {
                     AccumulatedText = result,
                     IsFinal = true,
-                    Faulted = pump.Faulted,
+                    Faulted = streamFaulted,
                     StepName = PostProcessingStepNames.Llm,
                 });
 
@@ -2494,6 +2499,31 @@ public sealed class DictationOrchestrator : IDisposable
             throw;
         }
     }
+
+    internal static async Task<PromptActionStreamOutcome> RunPromptActionStreamWithFallbackAsync(
+        IAsyncEnumerable<string> source,
+        Func<Task<string>> runBatch,
+        Action<string> onAccumulated,
+        CancellationToken token
+    )
+    {
+        var pump = new LlmStreamPump(onAccumulated);
+        var streamed = await pump.RunAsync(source, token);
+
+        // Streaming→batch fallback: retry with the batch path when the pump
+        // faulted OR yielded nothing (proxy EOF, empty 200). ReceivedAnyChunk
+        // distinguishes a legitimately empty single-chunk result from a silent
+        // empty stream — the single chunk is already a completed ProcessAsync call.
+        // The caller passes the capture on the fallback: the batch retry is a
+        // distinct call whose response is the text actually used, so it must be
+        // recorded too — otherwise saved provenance shows only the failed stream.
+        var result = pump.Faulted || !pump.ReceivedAnyChunk
+            ? await runBatch()
+            : streamed;
+        return new PromptActionStreamOutcome(result, pump.Faulted);
+    }
+
+    internal sealed record PromptActionStreamOutcome(string Text, bool StreamFaulted);
 
     // A weak model handed a non-generative command sometimes echoes an empty container instead of
     // refusing; never type that into the app.
@@ -2894,7 +2924,7 @@ public sealed class DictationOrchestrator : IDisposable
                 await FlushAsync();
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             // User hit Escape: drop the buffered tail rather than typing it, and never trigger
             // onFirstType post-cancel (it hides the overlay and refocuses the target window).
@@ -2902,17 +2932,17 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Command] Streaming insertion faulted: {ex.Message}");
-
             // Key recovery off whether anything was actually TYPED, not merely accumulated: a short
             // first delta can still be sitting unflushed in the buffer, so the page is clean and a
             // full batch retry recovers the whole result. Flushing that buffer first would type a
             // truncated prefix the retry can't cleanly replace. Once a chunk has landed, the visible
             // text is a truncated prefix a retry would duplicate, so just mark the stream faulted.
-            if (typedAnything || !await TryBatchFallbackAsync())
-            {
-                streamFaulted = true;
-            }
+            streamFaulted = await RecoverSpokenCommandStreamFaultAsync(
+                ex,
+                typedAnything,
+                TryBatchFallbackAsync,
+                token
+            );
         }
 
         // Streaming completed but yielded nothing (proxy EOF / empty 200) — the batch endpoint may
@@ -2997,6 +3027,20 @@ public sealed class DictationOrchestrator : IDisposable
 
             return true;
         }
+    }
+
+    internal static async Task<bool> RecoverSpokenCommandStreamFaultAsync(
+        Exception exception,
+        bool typedAnything,
+        Func<Task<bool>> tryBatchFallback,
+        CancellationToken commandToken
+    )
+    {
+        // Caller cancellation wins a race with a provider timeout/fault and must
+        // never start a duplicate batch request.
+        commandToken.ThrowIfCancellationRequested();
+        Trace.WriteLine($"[Command] Streaming insertion faulted: {exception.Message}");
+        return typedAnything || !await tryBatchFallback();
     }
 
     private static bool IsWhitespaceOrTrivialResult(string text)

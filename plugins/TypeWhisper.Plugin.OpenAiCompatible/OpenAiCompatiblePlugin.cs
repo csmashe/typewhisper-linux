@@ -356,9 +356,13 @@ public sealed class OpenAiCompatiblePlugin
                 .OrderBy(m => m.Id)
                 .ToList();
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(ct);
         }
         catch
         {
@@ -380,9 +384,13 @@ public sealed class OpenAiCompatiblePlugin
             using var response = await _httpClient.SendAsync(request, ct);
             return response.IsSuccessStatusCode;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(ct);
         }
         catch
         {
@@ -1150,9 +1158,13 @@ public sealed class OpenAiCompatiblePlugin
                 .OrderBy(m => m.Id)
                 .ToList();
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(ct);
         }
         catch
         {

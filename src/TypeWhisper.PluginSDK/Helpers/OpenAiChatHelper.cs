@@ -161,8 +161,7 @@ public static class OpenAiChatHelper
         // ResponseHeadersRead: start reading the body as it streams rather than buffering.
         // The batch path uses SendWithErrorHandlingAsync (which buffers), so here we send and
         // check the status line ourselves.
-        using var response = await httpClient.SendAsync(
-            request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await SendStreamingRequestAsync(httpClient, request, ct);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -181,6 +180,26 @@ public static class OpenAiChatHelper
 
         await foreach (var delta in SseEventDecoder.ReadValidatedAsync(reader, s_streamPolicy, ct))
             yield return delta;
+    }
+
+    private static async Task<HttpResponseMessage> SendStreamingRequestAsync(
+        HttpClient httpClient,
+        HttpRequestMessage request,
+        CancellationToken ct
+    )
+    {
+        try
+        {
+            return await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                ct
+            );
+        }
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException("API request timed out.", ex);
+        }
     }
 
     /// <summary>

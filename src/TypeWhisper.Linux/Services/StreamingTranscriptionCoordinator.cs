@@ -521,14 +521,19 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
                 await session.SendAudioAsync(chunk, ct);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             // Normal teardown — Finalize or Dispose closed the writer.
         }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            // Teardown/caller cancellation wins a race with a dependency fault.
+        }
         catch (Exception ex)
         {
-            // Plugin SendAudioAsync is external and can throw arbitrary types;
-            // route all non-cancel failures through HandleFault so batch fallback fires.
+            // Plugin SendAudioAsync is external and can throw arbitrary types,
+            // including an OCE while the sender token is still live; route every
+            // dependency fault through HandleFault so batch fallback fires.
             HandleFault(ex);
         }
     }

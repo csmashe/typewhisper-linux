@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
@@ -201,6 +202,184 @@ public sealed class FileTranscriptionSectionViewModelTests : IDisposable
         Assert.Equal(Loc.Instance["FileTranscription.Stopped"], vm.WatchFolderStatusText);
     }
 
+    [Fact]
+    public async Task QueueItem_ProcessorCancellationWithLiveItemToken_IsError()
+    {
+        var vm = CreateViewModel(
+            processor: new DelegateProcessor((_, _) =>
+                throw new OperationCanceledException("provider canceled"))
+        );
+
+        var item = await StartAndWaitForTerminalAsync(vm, "provider-oce.wav");
+
+        Assert.Equal(FileTranscriptionQueueItemStatus.Error, item.Status);
+        Assert.Equal("provider canceled", item.ErrorText);
+    }
+
+    [Fact]
+    public async Task QueueItem_PrivateTimeout_IsError()
+    {
+        var vm = CreateViewModel(
+            processor: new DelegateProcessor((_, _) =>
+                throw new TimeoutException("provider deadline"))
+        );
+
+        var item = await StartAndWaitForTerminalAsync(vm, "timeout.wav");
+
+        Assert.Equal(FileTranscriptionQueueItemStatus.Error, item.Status);
+        Assert.Equal("provider deadline", item.ErrorText);
+    }
+
+    [Fact]
+    public async Task QueueItem_GenuineItemCancellation_IsCancelled()
+    {
+        var entered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var vm = CreateViewModel(
+            processor: new DelegateProcessor(async (onProgress, ct) =>
+            {
+                onProgress(
+                    new FileTranscriptionProcessProgress(
+                        FileTranscriptionQueueItemStatus.Transcribing,
+                        "Transcribing"
+                    )
+                );
+                entered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                throw new UnreachableException();
+            })
+        );
+
+        vm.TranscribeFileCommand.Execute("cancel.wav");
+        var item = await WaitForSingleItemAsync(vm);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        vm.CancelItemCommand.Execute(item);
+        await WaitForAsync(
+            () => item.Status == FileTranscriptionQueueItemStatus.Cancelled,
+            TimeSpan.FromSeconds(2)
+        );
+
+        Assert.Equal(FileTranscriptionQueueItemStatus.Cancelled, item.Status);
+        Assert.Empty(item.ErrorText);
+    }
+
+    [Fact]
+    public async Task QueueItem_DependencyFaultRacingItemCancellation_CancellationWins()
+    {
+        var entered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var canceled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var vm = CreateViewModel(
+            processor: new DelegateProcessor(async (onProgress, ct) =>
+            {
+                onProgress(
+                    new FileTranscriptionProcessProgress(
+                        FileTranscriptionQueueItemStatus.Transcribing,
+                        "Transcribing"
+                    )
+                );
+                // ReSharper disable once UseAwaitUsing -- detaching the callback is all this needs;
+                // await using would additionally block on the in-flight cancellation callback that
+                // this race test is deliberately sitting inside.
+                using var registration = ct.Register(() => canceled.TrySetResult());
+                entered.TrySetResult();
+                await canceled.Task;
+                throw new HttpRequestException("provider failed during cancellation");
+            })
+        );
+
+        vm.TranscribeFileCommand.Execute("race.wav");
+        var item = await WaitForSingleItemAsync(vm);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        vm.CancelItemCommand.Execute(item);
+        await WaitForAsync(
+            () => item.Status == FileTranscriptionQueueItemStatus.Cancelled,
+            TimeSpan.FromSeconds(2)
+        );
+
+        Assert.Equal(FileTranscriptionQueueItemStatus.Cancelled, item.Status);
+        Assert.Empty(item.ErrorText);
+    }
+
+    [Fact]
+    public void QueueItem_SynchronousProcessorFault_IsAttemptedExactlyOnce()
+    {
+        // Deferred posts reproduce the real dispatcher: the queue loop must not
+        // respin an item whose terminal status is still in a pending post.
+        var pendingPosts = new List<Action>();
+        var invocations = 0;
+        var vm = CreateViewModel(
+            processor: new DelegateProcessor((_, _) =>
+            {
+                // Escape hatch so a regression fails on the count below instead
+                // of spinning the test host until it is OOM-killed.
+                // ReSharper disable once InvertIf -- the throw below is the normal path; inverting
+                // would duplicate it into both branches.
+                if (Interlocked.Increment(ref invocations) >= 5)
+                {
+                    foreach (var action in pendingPosts.ToList())
+                    {
+                        action();
+                    }
+                }
+
+                throw new TimeoutException("sync fault");
+            }),
+            postStatus: pendingPosts.Add
+        );
+
+        vm.TranscribeFileCommand.Execute("sync-fault.wav");
+
+        Assert.Equal(1, invocations);
+        foreach (var action in pendingPosts)
+        {
+            action();
+        }
+
+        var item = Assert.Single(vm.Items);
+        Assert.Equal(FileTranscriptionQueueItemStatus.Error, item.Status);
+        Assert.Equal("sync fault", item.ErrorText);
+    }
+
+    private static async Task<FileTranscriptionQueueItemViewModel> StartAndWaitForTerminalAsync(
+        FileTranscriptionSectionViewModel vm,
+        string fileName
+    )
+    {
+        vm.TranscribeFileCommand.Execute(fileName);
+        var item = await WaitForSingleItemAsync(vm);
+        await WaitForAsync(
+            () => item.Status is FileTranscriptionQueueItemStatus.Error
+                or FileTranscriptionQueueItemStatus.Cancelled
+                or FileTranscriptionQueueItemStatus.Completed,
+            TimeSpan.FromSeconds(2)
+        );
+        return item;
+    }
+
+    private static async Task<FileTranscriptionQueueItemViewModel> WaitForSingleItemAsync(
+        FileTranscriptionSectionViewModel vm
+    )
+    {
+        await WaitForAsync(() => vm.Items.Count == 1, TimeSpan.FromSeconds(2));
+        return Assert.Single(vm.Items);
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (!condition() && stopwatch.Elapsed < timeout)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.True(condition(), $"Condition was not met within {timeout}.");
+    }
+
     private static void AddItem(
         FileTranscriptionSectionViewModel vm,
         string name,
@@ -241,7 +420,8 @@ public sealed class FileTranscriptionSectionViewModelTests : IDisposable
     private FileTranscriptionSectionViewModel CreateViewModel(
         SettingsService? settings = null,
         IFileTranscriptionProcessor? processor = null,
-        WatchFolderService? watchFolder = null
+        WatchFolderService? watchFolder = null,
+        Action<Action>? postStatus = null
     )
     {
         settings ??= new SettingsService(Path.Join(_tempDir, "settings.json"));
@@ -257,7 +437,10 @@ public sealed class FileTranscriptionSectionViewModelTests : IDisposable
             settings,
             audioFiles,
             watchFolder,
-            pluginManager
+            pluginManager,
+            // Synchronous post: mirrors the real Dispatcher.UIThread serialization
+            // without a headless dispatcher to pump.
+            postStatus ?? (action => action())
         );
     }
 
@@ -285,5 +468,21 @@ public sealed class FileTranscriptionSectionViewModelTests : IDisposable
             CallCount++;
             throw new InvalidOperationException("Processor should not be invoked before readiness.");
         }
+    }
+
+    private sealed class DelegateProcessor(
+        Func<
+            Action<FileTranscriptionProcessProgress>,
+            CancellationToken,
+            Task<FileTranscriptionProcessResult>
+        > process
+    ) : IFileTranscriptionProcessor
+    {
+        public Task<FileTranscriptionProcessResult> ProcessAsync(
+            string filePath,
+            Action<FileTranscriptionProcessProgress> onProgress,
+            FileTranscriptionProcessOptions? options,
+            CancellationToken cancellationToken
+        ) => process(onProgress, cancellationToken);
     }
 }

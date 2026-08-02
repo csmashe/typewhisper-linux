@@ -48,6 +48,11 @@ public sealed partial class FileTranscriptionQueueItemViewModel : ObservableObje
     public string FilePath { get; }
     public string FileName { get; }
     public CancellationTokenSource? Cancellation { get; set; }
+
+    // Status updates land via Dispatcher.UIThread.Post, so the queue loop cannot use
+    // Status to tell "not yet attempted" from "attempted, post still in flight". A
+    // synchronously-faulting processor would otherwise respin the same item forever.
+    public bool ProcessingAttempted { get; set; }
     public TranscriptionResult? RawResult { get; set; }
 
     public bool IsProcessing =>

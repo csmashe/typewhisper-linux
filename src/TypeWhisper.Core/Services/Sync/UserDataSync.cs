@@ -1,3 +1,12 @@
+// Public contract surface for the Premium Cloud Folder Sync feature: the store interface, the
+// wire records it exchanges, and the item-id scheme. Nothing in-tree implements or calls it yet,
+// so every member reads as unused; the shapes are the agreed contract and must not be trimmed.
+// ReSharper disable UnusedType.Global
+// ReSharper disable UnusedMember.Global
+// ReSharper disable NotAccessedPositionalProperty.Global
+// ReSharper disable ClassNeverInstantiated.Global
+// ReSharper disable MemberCanBePrivate.Global
+
 using System.Globalization;
 using System.Text;
 using TypeWhisper.Core.Models;
@@ -22,7 +31,7 @@ public enum UserDataSyncCollection
     /// <summary>
     /// Represents the snippets option.
     /// </summary>
-    Snippets
+    Snippets,
 }
 
 /// <summary>
@@ -37,7 +46,7 @@ public enum UserDataSyncDictionaryEntryType
     /// <summary>
     /// Represents the correction option.
     /// </summary>
-    Correction
+    Correction,
 }
 
 /// <summary>

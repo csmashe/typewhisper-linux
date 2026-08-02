@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -1521,6 +1522,167 @@ public sealed class OpenAiCompatiblePluginTests
     }
 
     [Fact]
+    public async Task ValidateAsync_InternalTaskCancellation_ReturnsFailureAndRetainsDefaultCache()
+    {
+        var host = CachedDefaultHost();
+        using var httpClient = new HttpClient(
+            new CapturingHandler((_, _) => throw new TaskCanceledException("client timeout"))
+        );
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ValidateAsync(CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(["m1"], sut.FetchedModels.Select(model => model.Id));
+    }
+
+    [Fact]
+    public async Task RefreshModelCatalogAsync_ProfileInternalCancellation_RetainsProfileCache()
+    {
+        var host = CachedProfileHost();
+        using var httpClient = new HttpClient(
+            new CapturingHandler((_, _) => throw new TaskCanceledException("client timeout"))
+        );
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await sut.RefreshModelCatalogAsync(CancellationToken.None);
+
+        var profile = Assert.Single(await sut.GetItemsAsync("profiles"));
+        Assert.Equal("m1", profile.Values["selectedModel"]);
+        Assert.Equal(
+            ["m1"],
+            Assert.Single(sut.AdditionalTranscriptionEngines)
+                .TranscriptionModels.Select(model => model.Id)
+        );
+    }
+
+    [Fact]
+    public async Task FetchModelsAsync_CallerCancellation_Throws()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        using var httpClient = new HttpClient(
+            // ReSharper disable once AccessToDisposedClosure -- the handler only runs inside the
+            // awaited call below, which completes before the using-scope disposes cts.
+            new CapturingHandler((_, _) => throw new OperationCanceledException(cts.Token))
+        );
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "http://localhost:11434");
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.FetchModelsAsync(cts.Token));
+    }
+
+    [Fact]
+    public async Task RefreshModelCatalogAsync_ProfileCallerCancellation_Throws()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var host = CachedProfileHost();
+        using var httpClient = new HttpClient(
+            // ReSharper disable once AccessToDisposedClosure -- the handler only runs inside the
+            // awaited call below, which completes before the using-scope disposes cts.
+            new CapturingHandler((_, _) => throw new OperationCanceledException(cts.Token))
+        );
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.RefreshModelCatalogAsync(cts.Token));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_HttpClientPrivateTimeout_ReturnsFailureAndRetainsDefaultCache()
+    {
+        var host = CachedDefaultHost();
+        using var httpClient = new HttpClient(
+            new AsyncHandler(async (_, ct) =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                throw new UnreachableException();
+            })
+        );
+        httpClient.Timeout = TimeSpan.FromMilliseconds(20);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ValidateAsync(CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(["m1"], sut.FetchedModels.Select(model => model.Id));
+    }
+
+    [Fact]
+    public async Task RefreshModelCatalogAsync_ProfileHttpClientTimeout_RetainsCache()
+    {
+        var host = CachedProfileHost();
+        using var httpClient = new HttpClient(
+            new AsyncHandler(async (_, ct) =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                throw new UnreachableException();
+            })
+        );
+        httpClient.Timeout = TimeSpan.FromMilliseconds(20);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await sut.RefreshModelCatalogAsync(CancellationToken.None);
+
+        var profile = Assert.Single(await sut.GetItemsAsync("profiles"));
+        Assert.Equal("m1", profile.Values["selectedModel"]);
+    }
+
+    [Fact]
+    public async Task FetchModelsAsync_InternalCancellationRacingCallerCancellation_CallerWins()
+    {
+        using var cts = new CancellationTokenSource();
+        using var httpClient = new HttpClient(
+            new CapturingHandler((_, _) =>
+            {
+                // ReSharper disable once AccessToDisposedClosure -- the handler only runs inside the
+                // awaited call below, which completes before the using-scope disposes cts.
+                cts.Cancel();
+                throw new TaskCanceledException("both canceled");
+            })
+        );
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "http://localhost:11434");
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.FetchModelsAsync(cts.Token));
+    }
+
+    [Fact]
+    public async Task RefreshModelCatalogAsync_ProfileInternalAndCallerCancellation_CallerWins()
+    {
+        using var cts = new CancellationTokenSource();
+        var host = CachedProfileHost();
+        using var httpClient = new HttpClient(
+            new CapturingHandler((_, _) =>
+            {
+                // ReSharper disable once AccessToDisposedClosure -- the handler only runs inside the
+                // awaited call below, which completes before the using-scope disposes cts.
+                cts.Cancel();
+                throw new TaskCanceledException("both canceled");
+            })
+        );
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.RefreshModelCatalogAsync(cts.Token));
+    }
+
+    [Fact]
     public async Task ProcessStreamingAsync_ThroughProfile_StreamsDeltas()
     {
         var sse = string.Join("\n",
@@ -1571,6 +1733,50 @@ public sealed class OpenAiCompatiblePluginTests
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             return responder(request, body);
         }
+    }
+
+    private sealed class AsyncHandler(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> responder
+    ) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) => responder(request, cancellationToken);
+    }
+
+    private static TestPluginHostServices CachedDefaultHost()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "http://localhost:11434");
+        host.SetSetting("selectedModel", "m1");
+        host.SetSetting("selectedLlmModel", "m1");
+        host.SetSetting(
+            "fetchedModels",
+            JsonSerializer.Serialize(new List<FetchedModel> { new("m1", null) })
+        );
+        return host;
+    }
+
+    private static TestPluginHostServices CachedProfileHost()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            new List<OpenAiCompatibleProfile>
+            {
+                new()
+                {
+                    Id = "openai-compatible-profile",
+                    Name = "Profile",
+                    BaseUrl = "http://localhost:9999",
+                    SelectedModelId = "m1",
+                    SelectedLlmModelId = "m1",
+                    FetchedModels = [new FetchedModel("m1", null)],
+                },
+            }
+        );
+        return host;
     }
 
     private sealed class TestPluginHostServices : IPluginHostServices
