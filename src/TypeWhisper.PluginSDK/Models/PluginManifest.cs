@@ -4,11 +4,15 @@
 namespace TypeWhisper.PluginSDK.Models;
 
 /// <summary>
-///     Describes a plugin's metadata, loaded from plugin.json in the plugin directory.
+///     Describes a plugin's metadata, loaded from <c>manifest.json</c> in the plugin
+///     directory. The required filename is exposed by <see cref="FileName" />.
 /// </summary>
 // ReSharper disable once UnusedType.Global
 public sealed record PluginManifest
 {
+    /// <summary>The required plugin manifest filename.</summary>
+    public const string FileName = "manifest.json";
+
     /// <summary>Unique plugin identifier (e.g. "com.typewhisper.openai").</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
