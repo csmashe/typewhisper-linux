@@ -981,10 +981,60 @@ public sealed class OpenAiCompatiblePlugin
 
         var stored = host.GetSetting<List<OpenAiCompatibleProfile>>(AdditionalProfilesSettingKey) ?? [];
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var repaired = false;
+        var secretMigrations = new List<(string OldId, string NewId)>();
+        var claimedLegacyIds = new HashSet<string>(StringComparer.Ordinal);
+        var assignedIds = new string?[stored.Count];
 
-        foreach (var profile in stored)
+        // Reserve IDs that are already stored in their final form for the profiles
+        // holding them, before repairing anything else. A padded or malformed
+        // neighbour would otherwise normalize onto an ID another profile owns
+        // outright and inherit its secret, sending that credential to a different
+        // endpoint. Order within the file must not decide who keeps an exact ID.
+        for (var i = 0; i < stored.Count; i++)
         {
-            profile.Id = NormalizeProfileId(profile.Id, seen);
+            var storedId = stored[i].Id;
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- profiles are JSON-deserialized from persisted settings, so Id arrives null despite its non-nullable annotation.
+            if (storedId is not null
+                && string.Equals(storedId, storedId.Trim(), StringComparison.Ordinal)
+                && IsValidProfileId(storedId)
+                && seen.Add(storedId))
+            {
+                assignedIds[i] = storedId;
+            }
+        }
+
+        for (var i = 0; i < stored.Count; i++)
+            assignedIds[i] ??= NormalizeProfileId(stored[i].Id, seen);
+
+        for (var i = 0; i < stored.Count; i++)
+        {
+            var profile = stored[i];
+            var oldRawId = profile.Id;
+            var normalizedId = assignedIds[i]!;
+
+            // A missing ID addresses the same secret key as an empty one, so both
+            // legacy forms share a single claim. Secrets are addressed by the exact
+            // stored ID, so a duplicate shares a key with the profile that kept the ID
+            // only when the raw IDs match; a padded or malformed variant addresses a
+            // key of its own.
+            // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- same JSON-deserialized null as above; the fallback is what makes a missing ID share the empty ID's secret key.
+            var legacyId = oldRawId ?? "";
+            var sharesKeeperSecretKey = IsValidProfileId(legacyId) && seen.Contains(legacyId);
+            if (!string.Equals(oldRawId, normalizedId, StringComparison.Ordinal))
+            {
+                repaired = true;
+
+                // Exactly one profile may claim a legacy key: the keeper owns a shared
+                // one, and a repeated raw ID is ambiguous, so only its first claimant
+                // migrates. Copying it again would hand one credential to a second,
+                // possibly unrelated, base URL. Every other legacy key is orphaned by
+                // the repair, so move its secret before retiring the old key.
+                if (!sharesKeeperSecretKey && claimedLegacyIds.Add(legacyId))
+                    secretMigrations.Add((legacyId, normalizedId));
+            }
+
+            profile.Id = normalizedId;
 
             profile.Name = string.IsNullOrWhiteSpace(profile.Name) ? "Custom Server" : profile.Name.Trim();
             profile.BaseUrl = NormalizeBaseUrl(profile.BaseUrl);
@@ -995,10 +1045,56 @@ public sealed class OpenAiCompatiblePlugin
                 .ToList();
 
             _additionalProfiles.Add(profile);
+        }
 
+        var migratedOldSecretKeys = new List<string>();
+        foreach (var (oldId, newId) in secretMigrations)
+        {
+            var oldSecretKey = SecretKeyFor(oldId);
+            var keyToMigrate = await host.LoadSecretAsync(oldSecretKey);
+            if (string.IsNullOrEmpty(keyToMigrate))
+                continue;
+
+            // A destination that already holds a secret is the credential the
+            // repaired ID has been using, and the legacy entry is the stale copy.
+            // Overwriting it and then retiring the old key would destroy the
+            // working credential, so leave both entries alone.
+            var newSecretKey = SecretKeyFor(newId);
+            if (!string.IsNullOrEmpty(await host.LoadSecretAsync(newSecretKey)))
+                continue;
+
+            // Keep every old key until all fallible stores and the repaired
+            // profile-list write succeed. A later failure then leaves every
+            // legacy credential addressable through the still-persisted IDs.
+            await host.StoreSecretAsync(newSecretKey, keyToMigrate);
+            migratedOldSecretKeys.Add(oldSecretKey);
+        }
+
+        foreach (var profile in _additionalProfiles)
+        {
             var key = await host.LoadSecretAsync(SecretKeyFor(profile.Id));
             if (!string.IsNullOrEmpty(key))
                 _additionalApiKeys[profile.Id] = key;
+        }
+
+        if (repaired)
+            host.SetSetting(AdditionalProfilesSettingKey, _additionalProfiles);
+
+        // The migration is durable once the repaired list is written, so retiring the
+        // legacy keys is cleanup: a failure here must not fail activation, and the
+        // next activation sees valid IDs with nothing left to migrate.
+        foreach (var oldSecretKey in migratedOldSecretKeys)
+        {
+            try
+            {
+                await host.DeleteSecretAsync(oldSecretKey);
+            }
+            catch (Exception ex)
+            {
+                host.Log(
+                    PluginLogLevel.Warning,
+                    $"Failed to retire a migrated legacy secret: {ex.Message}");
+            }
         }
 
         var changedApiKeyIds = previousApiKeys
@@ -1150,10 +1246,7 @@ public sealed class OpenAiCompatiblePlugin
     private string NormalizeProfileId(string? rawId, HashSet<string> taken)
     {
         var id = (rawId ?? "").Trim();
-        if (id.Length == 0
-            || id.Contains(':')
-            || !id.StartsWith(ProfileIdPrefix, StringComparison.Ordinal)
-            || taken.Contains(id))
+        if (!IsValidProfileId(id) || taken.Contains(id))
         {
             id = CreateProfileId(taken);
         }
@@ -1161,6 +1254,11 @@ public sealed class OpenAiCompatiblePlugin
         taken.Add(id);
         return id;
     }
+
+    private static bool IsValidProfileId(string id) =>
+        id.Length > 0
+        && !id.Contains(':')
+        && id.StartsWith(ProfileIdPrefix, StringComparison.Ordinal);
 
     private string CreateProfileId(HashSet<string> taken)
     {
