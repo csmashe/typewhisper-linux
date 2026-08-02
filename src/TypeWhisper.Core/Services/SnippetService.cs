@@ -16,10 +16,12 @@ public sealed partial class SnippetService : ISnippetService
 {
     private readonly string _filePath;
     private readonly AtomicJsonStore<ImmutableArray<Snippet>> _store;
+    private readonly TimeProvider _timeProvider;
 
-    public SnippetService(string filePath)
+    public SnippetService(string filePath, TimeProvider? timeProvider = null)
     {
         _filePath = Path.GetFullPath(filePath);
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _store = new AtomicJsonStore<ImmutableArray<Snippet>>(
             _filePath,
             static () => [],
@@ -232,9 +234,9 @@ public sealed partial class SnippetService : ISnippetService
                );
     }
 
-    private static string ExpandPlaceholders(string template, Func<string>? clipboardProvider)
+    private string ExpandPlaceholders(string template, Func<string>? clipboardProvider)
     {
-        var now = DateTime.Now;
+        var now = _timeProvider.GetLocalNow();
 
         template = template
             .Replace("{day}", now.ToString("dddd"))
@@ -250,9 +252,9 @@ public sealed partial class SnippetService : ISnippetService
 
                     return name switch
                     {
-                        "date" => now.ToString(format ?? "yyyy-MM-dd"),
-                        "time" => now.ToString(format ?? "HH:mm"),
-                        "datetime" => now.ToString(format ?? "yyyy-MM-dd HH:mm"),
+                        "date" => Format(now, format ?? "yyyy-MM-dd"),
+                        "time" => Format(now, format ?? "HH:mm"),
+                        "datetime" => Format(now, format ?? "yyyy-MM-dd HH:mm"),
                         "clipboard" => clipboardProvider?.Invoke() ?? "",
                         _ => match.Value,
                     };
@@ -260,6 +262,16 @@ public sealed partial class SnippetService : ISnippetService
             );
 
         return template;
+
+        // DateTimeOffset rejects "U" and converts "u"/"R"/"r" to UTC, where DateTime formats the
+        // local wall-clock fields. Keep the output these specifiers had before the injected clock.
+        static string Format(DateTimeOffset value, string format) =>
+            format switch
+            {
+                "U" => value.UtcDateTime.ToString(format),
+                "u" or "R" or "r" => value.DateTime.ToString(format),
+                _ => value.ToString(format),
+            };
     }
 
     [GeneratedRegex(@"\{(date|time|datetime|clipboard)(?::([^}]+))?\}")]

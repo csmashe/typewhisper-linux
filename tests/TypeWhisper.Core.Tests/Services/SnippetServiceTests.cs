@@ -6,13 +6,35 @@ namespace TypeWhisper.Core.Tests.Services;
 /// <summary>Covers <see cref="SnippetService" />: trigger expansion, placeholders, tags, profile scoping, and JSON import/export.</summary>
 public sealed class SnippetServiceTests : IDisposable
 {
+    private static readonly TimeSpan s_frozenOffset = TimeSpan.FromHours(2);
+    private static readonly DateTimeOffset s_frozenLocalNow = new(
+        2039,
+        12,
+        31,
+        23,
+        59,
+        59,
+        s_frozenOffset
+    );
+    private static readonly TimeZoneInfo s_frozenTimeZone = TimeZoneInfo.CreateCustomTimeZone(
+        "SnippetServiceTests/UTC+02",
+        s_frozenOffset,
+        "SnippetServiceTests/UTC+02",
+        "SnippetServiceTests/UTC+02"
+    );
+
     private readonly string _filePath;
+    private readonly FixedTimeProvider _timeProvider;
     private readonly SnippetService _sut;
 
     public SnippetServiceTests()
     {
         _filePath = Path.GetTempFileName();
-        _sut = new SnippetService(_filePath);
+        _timeProvider = new FixedTimeProvider(
+            s_frozenLocalNow.ToUniversalTime(),
+            s_frozenTimeZone
+        );
+        _sut = new SnippetService(_filePath, _timeProvider);
     }
 
     public void Dispose()
@@ -86,7 +108,7 @@ public sealed class SnippetServiceTests : IDisposable
         );
 
         var result = _sut.ApplySnippets("heute");
-        Assert.Equal(DateTime.Now.ToString("dd.MM.yyyy"), result);
+        Assert.Equal(s_frozenLocalNow.ToString("dd.MM.yyyy"), result);
     }
 
     [Fact]
@@ -102,7 +124,7 @@ public sealed class SnippetServiceTests : IDisposable
         );
 
         var result = _sut.ApplySnippets("uhr");
-        var expected = DateTime.Now.ToString("HH:mm:ss");
+        var expected = s_frozenLocalNow.ToString("HH:mm:ss");
         Assert.Equal(expected, result);
     }
 
@@ -142,24 +164,109 @@ public sealed class SnippetServiceTests : IDisposable
             }
         );
 
-        var now = DateTime.Now;
-        Assert.Equal(now.ToString("yyyy-MM-dd"), _sut.ApplySnippets("datum"));
-        Assert.Equal(now.ToString("HH:mm"), _sut.ApplySnippets("zeit"));
-        Assert.Equal(now.ToString("dddd"), _sut.ApplySnippets("tag"));
-        Assert.Equal(now.Year.ToString(), _sut.ApplySnippets("jahr"));
+        Assert.Equal(
+            s_frozenLocalNow.ToString("yyyy-MM-dd"),
+            _sut.ApplySnippets("datum")
+        );
+        Assert.Equal(s_frozenLocalNow.ToString("HH:mm"), _sut.ApplySnippets("zeit"));
+        Assert.Equal(s_frozenLocalNow.ToString("dddd"), _sut.ApplySnippets("tag"));
+        Assert.Equal(s_frozenLocalNow.Year.ToString(), _sut.ApplySnippets("jahr"));
     }
 
     [Fact]
     public void PreviewReplacement_ExpandsPlaceholdersWithoutSnippetTrigger()
     {
-        var now = DateTime.Now;
-
         var result = _sut.PreviewReplacement(
             "Today is {date:yyyy-MM-dd}; clipboard={clipboard}",
             () => "copied"
         );
 
-        Assert.Equal($"Today is {now:yyyy-MM-dd}; clipboard=copied", result);
+        Assert.Equal(
+            $"Today is {s_frozenLocalNow:yyyy-MM-dd}; clipboard=copied",
+            result
+        );
+    }
+
+    [Fact]
+    public void ApplySnippets_MultipleDateTimePlaceholders_UseSingleFrozenInstant()
+    {
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "boundary",
+                Replacement =
+                    "{date:yyyy-MM-dd}|{time:HH:mm:ss}|{datetime:yyyy-MM-dd HH:mm:ss}|{day}|{year}",
+            }
+        );
+
+        var result = _sut.ApplySnippets("boundary");
+
+        Assert.Equal(
+            $"{s_frozenLocalNow:yyyy-MM-dd}|{s_frozenLocalNow:HH:mm:ss}|"
+                + $"{s_frozenLocalNow:yyyy-MM-dd HH:mm:ss}|{s_frozenLocalNow:dddd}|"
+                + s_frozenLocalNow.Year,
+            result
+        );
+        Assert.Equal(1, _timeProvider.UtcNowReadCount);
+    }
+
+    [Fact]
+    public void ApplySnippets_OffsetBearingFormats_EmitLocalUtcOffset()
+    {
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "offset",
+                Replacement = "{datetime:O}|{datetime:yyyy-MM-dd HH:mm:sszzz}",
+            }
+        );
+
+        var result = _sut.ApplySnippets("offset");
+
+        Assert.Equal(
+            $"{s_frozenLocalNow:O}|{s_frozenLocalNow:yyyy-MM-dd HH:mm:sszzz}",
+            result
+        );
+    }
+
+    [Fact]
+    public void ApplySnippets_UniversalFullDateTimeFormat_FormatsAsUtc()
+    {
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "universal",
+                Replacement = "{datetime:U}",
+            }
+        );
+
+        var result = _sut.ApplySnippets("universal");
+
+        Assert.Equal(s_frozenLocalNow.UtcDateTime.ToString("U"), result);
+    }
+
+    [Theory]
+    [InlineData("u", "2039-12-31 23:59:59Z")]
+    [InlineData("R", "Sat, 31 Dec 2039 23:59:59 GMT")]
+    [InlineData("r", "Sat, 31 Dec 2039 23:59:59 GMT")]
+    public void ApplySnippets_WallClockStandardFormats_KeepLocalFields(
+        string format,
+        string expected
+    )
+    {
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "legacy",
+                Replacement = $"{{datetime:{format}}}",
+            }
+        );
+
+        Assert.Equal(expected, _sut.ApplySnippets("legacy"));
     }
 
     [Fact]
@@ -500,5 +607,26 @@ public sealed class SnippetServiceTests : IDisposable
         Assert.Null(updated.LastUsedAt);
         Assert.Equal(before, File.ReadAllBytes(failurePath.FilePath));
         Assert.Empty(failurePath.TemporaryFiles);
+    }
+
+    private sealed class FixedTimeProvider : TimeProvider
+    {
+        private readonly DateTimeOffset _utcNow;
+
+        public FixedTimeProvider(DateTimeOffset utcNow, TimeZoneInfo localTimeZone)
+        {
+            _utcNow = utcNow;
+            LocalTimeZone = localTimeZone;
+        }
+
+        public int UtcNowReadCount { get; private set; }
+
+        public override TimeZoneInfo LocalTimeZone { get; }
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            UtcNowReadCount++;
+            return _utcNow;
+        }
     }
 }
