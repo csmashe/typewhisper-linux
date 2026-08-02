@@ -55,89 +55,32 @@ jobs:
             throw "$($result.FailedCount) plugin release transaction test(s) failed."
           }
 
+      - name: Test plugin smoke discovery
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/workflows/PluginSmokeDiscovery.Tests.ps1
+
       - id: discover
         shell: pwsh
         run: |
-          $allProjects = @(Get-ChildItem plugins -Recurse -Filter *.csproj | Sort-Object FullName)
-          if ($allProjects.Count -eq 0) {
-            throw "No plugin projects found under plugins/."
-          }
-
-          $runAll = $env:GITHUB_EVENT_NAME -ne 'pull_request'
-          $selectedPluginDirs = [ordered]@{}
           $changedFiles = @()
-
-          if (-not $runAll) {
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
             $baseSha = '${{ github.event.pull_request.base.sha }}'
-            $changedFiles = @(git diff --name-only $baseSha HEAD | ForEach-Object { $_.Replace('\', '/') })
-
-            foreach ($file in $changedFiles) {
-              if (
-                $file -eq '.github/workflows/plugins-smoke.yml' -or
-                $file -eq 'Directory.Build.props' -or
-                $file -like 'src/TypeWhisper.PluginSDK/*'
-              ) {
-                $runAll = $true
-                break
-              }
-
-              if ($file -match '^plugins/([^/]+)/') {
-                $selectedPluginDirs[$Matches[1]] = $true
-              }
-            }
+            # --no-renames is load-bearing: with rename detection on, moving a
+            # file out of plugins/Shared reports only the destination path, so
+            # the shared-code trigger never fires and the other plugins that
+            # <Compile Include> that file are never smoke-built. Splitting
+            # renames into delete+add can only widen the matrix, never narrow it.
+            $changedFiles = @(git diff --name-only --no-renames $baseSha HEAD)
           }
 
-          # Flat string array of plugin .csproj paths. We used to emit objects
-          # ({name, path}) here, but GitHub Actions' matrix expression engine
-          # silently dropped most entries when the matrix value was an
-          # [ordered]-hashtable-derived JSON object — only one matrix job got
-          # created and ${{ matrix.plugin.path }} rendered as empty in run:
-          # blocks. A flat string matrix sidesteps that entirely.
-          $projects = @()
-          foreach ($project in $allProjects) {
-            $relativePath = $project.FullName.Replace($env:GITHUB_WORKSPACE + [System.IO.Path]::DirectorySeparatorChar, '').Replace('\', '/')
-            $parts = $relativePath.Split('/')
-            $pluginDir = if ($parts.Count -ge 2) { $parts[1] } else { '' }
+          $result = & "$env:GITHUB_WORKSPACE/scripts/select-plugin-smoke-projects.ps1" `
+            -ChangedFiles $changedFiles `
+            -EventName $env:GITHUB_EVENT_NAME `
+            -WorkspaceRoot $env:GITHUB_WORKSPACE
 
-            if ($runAll -or $selectedPluginDirs.Contains($pluginDir)) {
-              $projects += $relativePath
-            }
-          }
-
-          $scanMode = if ($runAll) { 'all' } elseif ($projects.Count -gt 0) { 'changed' } else { 'none' }
-          # ConvertTo-Json has two traps here we have to avoid:
-          #   1. `-InputObject $projects -AsArray` wraps everything in an extra
-          #      outer array (`[["a","b"]]`), which the matrix engine then
-          #      treats as one sequence-typed value instead of an array of
-          #      strings to fan out over. This was the original bug.
-          #   2. Piping a single-element array unwraps it, so `@("a") | ...`
-          #      serialises as `"a"`, not `["a"]`.
-          # Building the JSON by hand for these flat strings sidesteps both.
-          $hasProjects = if ($projects.Count -gt 0) { 'true' } else { 'false' }
-          if ($projects.Count -gt 0) {
-            $escaped = $projects | ForEach-Object {
-              '"' + ($_ -replace '\\', '\\\\' -replace '"', '\"') + '"'
-            }
-            $json = '[' + ($escaped -join ',') + ']'
-          } else {
-            $json = '[]'
-          }
-
-          Write-Host "Plugin smoke scan mode: $scanMode"
-          if ($changedFiles.Count -gt 0) {
-            Write-Host "Changed files:"
-            $changedFiles | ForEach-Object { Write-Host "  $_" }
-          }
-          if ($projects.Count -gt 0) {
-            Write-Host "Selected plugin projects:"
-            $projects | ForEach-Object { Write-Host "  $_" }
-          } else {
-            Write-Host "No plugin projects selected for this pull request."
-          }
-
-          "projects=$json" >> $env:GITHUB_OUTPUT
-          "has_projects=$hasProjects" >> $env:GITHUB_OUTPUT
-          "scan_mode=$scanMode" >> $env:GITHUB_OUTPUT
+          "projects=$($result.Projects)" >> $env:GITHUB_OUTPUT
+          "has_projects=$($result.HasProjects)" >> $env:GITHUB_OUTPUT
+          "scan_mode=$($result.ScanMode)" >> $env:GITHUB_OUTPUT
 
   validate-metadata:
     runs-on: ubuntu-latest
