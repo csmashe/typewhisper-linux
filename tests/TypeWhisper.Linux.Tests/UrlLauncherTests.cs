@@ -31,4 +31,12 @@ public sealed class UrlLauncherTests
             Assert.Single(runner.LaunchedUris)
         );
     }
+
+    [Theory]
+    [InlineData("https://example.com/result", "https://example.com/result")]
+    [InlineData("http://example.com:80/path", "http://example.com/path")]
+    public void NormalizeHttpUrl_returns_canonical_safe_url(string value, string expected)
+    {
+        Assert.Equal(expected, UrlLauncher.NormalizeHttpUrl(value));
+    }
 }

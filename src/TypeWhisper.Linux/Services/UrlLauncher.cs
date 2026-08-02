@@ -10,14 +10,13 @@ public sealed class UrlLauncher(IProcessRunner processRunner)
     {
         // Only well-formed http(s) URLs reach the desktop handler — never a raw string that
         // could be coerced into a local path or a command.
-        if (
-            !Uri.TryCreate(url, UriKind.Absolute, out var uri)
-            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
-        )
+        var normalizedUrl = NormalizeHttpUrl(url);
+        if (normalizedUrl is null)
         {
             return false;
         }
 
+        var uri = new Uri(normalizedUrl, UriKind.Absolute);
         var result = processRunner.LaunchUri(uri);
         if (!result.Started)
         {
@@ -27,5 +26,19 @@ public sealed class UrlLauncher(IProcessRunner processRunner)
         }
 
         return result.Started;
+    }
+
+    /// <summary>Returns a canonical absolute HTTP(S) URL, or null when the value is unsafe.</summary>
+    internal static string? NormalizeHttpUrl(string? url)
+    {
+        if (
+            !Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+        )
+        {
+            return null;
+        }
+
+        return uri.AbsoluteUri;
     }
 }

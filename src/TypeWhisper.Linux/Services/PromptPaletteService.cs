@@ -13,6 +13,8 @@ namespace TypeWhisper.Linux.Services;
 public sealed class PromptPaletteService
 {
     private readonly ActiveWindowService _activeWindow;
+    private readonly ActionPluginExecutionHost _actionPluginExecutionHost;
+    private readonly DictationOrchestrator _dictation;
     private readonly PluginManager _pluginManager;
     private readonly PromptProcessingService _processing;
     private readonly IPromptActionService _promptActions;
@@ -27,7 +29,9 @@ public sealed class PromptPaletteService
         PromptProcessingService processing,
         TextInsertionService textInsertion,
         PluginManager pluginManager,
-        ActiveWindowService activeWindow
+        ActiveWindowService activeWindow,
+        ActionPluginExecutionHost actionPluginExecutionHost,
+        DictationOrchestrator dictation
     )
     {
         _services = services;
@@ -36,6 +40,8 @@ public sealed class PromptPaletteService
         _textInsertion = textInsertion;
         _pluginManager = pluginManager;
         _activeWindow = activeWindow;
+        _actionPluginExecutionHost = actionPluginExecutionHost;
+        _dictation = dictation;
     }
 
     public async Task TogglePaletteAsync()
@@ -163,9 +169,15 @@ public sealed class PromptPaletteService
             var actionPlugin = ResolveActionPlugin(action);
             if (actionPlugin is not null)
             {
-                var context = new ActionContext(null, null, null, null, capturedText);
                 using var execCts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-                await actionPlugin.ExecuteAsync(result, context, execCts.Token);
+                await ExecuteActionPluginAsync(
+                    _actionPluginExecutionHost,
+                    actionPlugin,
+                    result,
+                    capturedText,
+                    _dictation.TryPublishActionFeedback,
+                    execCts.Token
+                );
                 return;
             }
 
@@ -182,6 +194,35 @@ public sealed class PromptPaletteService
             Debug.WriteLine($"[PromptPalette] Prompt processing failed: {ex}");
             await ShowWarningAsync("TypeWhisper", $"Prompt processing failed: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    ///     Every terminal result is published, success or failure — a plugin that declares
+    ///     failure must never be silently swallowed. <paramref name="publishFeedback" /> is
+    ///     passed as a method group so this contract lives here, under test, instead of being
+    ///     restated (and re-broken) at each call site.
+    /// </summary>
+    internal static async Task<ActionPluginExecutionResult> ExecuteActionPluginAsync(
+        ActionPluginExecutionHost executionHost,
+        IActionPlugin actionPlugin,
+        string processedText,
+        string capturedText,
+        Func<ActionPluginExecutionResult, bool> publishFeedback,
+        CancellationToken cancellationToken
+    )
+    {
+        var result = await executionHost.ExecuteAsync(
+            actionPlugin,
+            processedText,
+            new ActionContext(null, null, null, null, capturedText),
+            null,
+            cancellationToken
+        );
+
+        // Discarded: the publisher declines while a live dictation owns the overlay,
+        // which is its call to make, not a reason to withhold the result.
+        _ = publishFeedback(result);
+        return result;
     }
 
     /// <summary>

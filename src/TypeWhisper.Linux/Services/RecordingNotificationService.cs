@@ -168,23 +168,34 @@ public sealed partial class RecordingNotificationService : IDisposable
             return new NotificationPresentation(
                 Loc.Instance["Appearance.NotificationRecordingTitle"],
                 BodyFor(_settings.Current.Mode),
-                0
+                0,
+                null
             );
         }
 
         if (state.ShowFeedback && !string.IsNullOrWhiteSpace(state.FeedbackText))
         {
-            var expiry = AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+            var globalExpiry = AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
                 _settings.Current.PreviewBubbleAutoHideMilliseconds
             );
+            var expiry = globalExpiry == 0
+                ? 0
+                : AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+                    state.FeedbackDurationMilliseconds ?? globalExpiry
+                );
             return expiry <= 0
                 ? null
-                : new NotificationPresentation(state.FeedbackText, string.Empty, expiry);
+                : new NotificationPresentation(
+                    state.FeedbackText,
+                    state.ActionResultUrl ?? string.Empty,
+                    expiry,
+                    state.NotificationIconName
+                );
         }
 
         if (state.IsOverlayVisible && !string.IsNullOrWhiteSpace(state.StatusText))
         {
-            return new NotificationPresentation(state.StatusText, string.Empty, 0);
+            return new NotificationPresentation(state.StatusText, string.Empty, 0, null);
         }
 
         return null;
@@ -278,7 +289,10 @@ public sealed partial class RecordingNotificationService : IDisposable
                     [
                         "call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path",
                         "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.Notify",
-                        "TypeWhisper", replaceId.ToString(), ResolveIconPath(),
+                        // Stops GOption parsing: the icon and summary carry plugin-supplied text, and a
+                        // leading "-" would otherwise be read as an option and abort the whole call.
+                        "--",
+                        "TypeWhisper", replaceId.ToString(), presentation.IconName ?? ResolveIconPath(),
                         presentation.Summary, presentation.Body, "[]", // actions
                         "{}", // hints
                         presentation.ExpireTimeout.ToString(),
@@ -366,6 +380,7 @@ public sealed partial class RecordingNotificationService : IDisposable
     private sealed record NotificationPresentation(
         string Summary,
         string Body,
-        int ExpireTimeout
+        int ExpireTimeout,
+        string? IconName
     );
 }

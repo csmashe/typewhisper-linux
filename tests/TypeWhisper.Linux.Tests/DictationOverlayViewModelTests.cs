@@ -175,6 +175,84 @@ public sealed class DictationOverlayViewModelTests
         Assert.Equal(0, sut.AudioLevel);
     }
 
+    [Fact]
+    public void Action_result_uses_plugin_duration_override_and_offers_url()
+    {
+        var settings = new FakeSettingsService(
+            AppSettings.Default with { PreviewBubbleAutoHideMilliseconds = 1200 }
+        );
+        var sut = CreateViewModel(settings);
+
+        sut.ApplyState(
+            new DictationOverlayState
+            {
+                ShowFeedback = true,
+                FeedbackText = "Issue created",
+                ActionResultUrl = "https://example.com/issues/42",
+                FeedbackDurationMilliseconds = 5000,
+            }
+        );
+
+        Assert.True(sut.ShowFeedback);
+        Assert.True(sut.HasActionResultUrl);
+        Assert.Equal("https://example.com/issues/42", sut.ActionResultUrl);
+        Assert.Equal(TimeSpan.FromSeconds(5), sut.FeedbackTimerInterval);
+    }
+
+    [Fact]
+    public void Global_zero_hides_action_feedback_even_with_plugin_duration()
+    {
+        var settings = new FakeSettingsService(
+            AppSettings.Default with { PreviewBubbleAutoHideMilliseconds = 0 }
+        );
+        var sut = CreateViewModel(settings);
+
+        sut.ApplyState(
+            new DictationOverlayState
+            {
+                ShowFeedback = true,
+                FeedbackText = "Issue created",
+                ActionResultUrl = "https://example.com/issues/42",
+                FeedbackDurationMilliseconds = 5000,
+            }
+        );
+
+        Assert.False(sut.ShowFeedback);
+        Assert.False(sut.HasActionResultUrl);
+        Assert.Null(sut.ActionResultUrl);
+    }
+
+    [Fact]
+    public void OpenActionResultCommand_never_opens_until_explicitly_invoked()
+    {
+        var openedUrls = new List<string?>();
+        var sut = new DictationOverlayViewModel(
+            new FakeSettingsService(AppSettings.Default),
+            static action => action(),
+            openUrl: url =>
+            {
+                openedUrls.Add(url);
+                return true;
+            }
+        );
+
+        sut.ApplyState(
+            new DictationOverlayState
+            {
+                ShowFeedback = true,
+                FeedbackText = "Issue created",
+                ActionResultUrl = "https://example.com/issues/42",
+                FeedbackDurationMilliseconds = 5000,
+            }
+        );
+
+        Assert.Empty(openedUrls);
+
+        sut.OpenActionResultCommand.Execute(null);
+
+        Assert.Equal(["https://example.com/issues/42"], openedUrls);
+    }
+
     private static DictationOverlayViewModel CreateViewModel(FakeSettingsService settings)
     {
         return new DictationOverlayViewModel(settings, static action => action());

@@ -23,6 +23,9 @@ public sealed record DictationOverlayState
     public string? LlmResponseText { get; init; }
 
     public string? FeedbackText { get; init; }
+    public string? ActionResultUrl { get; init; }
+    public string? NotificationIconName { get; init; }
+    public int? FeedbackDurationMilliseconds { get; init; }
     public string? ActiveProfileName { get; init; }
     public string? ActiveAppName { get; init; }
     public DateTime? SessionStartedAtUtc { get; init; }
