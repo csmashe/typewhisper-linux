@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+        <DeployBundledLinuxPlugins>false</DeployBundledLinuxPlugins>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*"/>
+        <PackageReference Include="xunit" Version="2.*"/>
+        <PackageReference Include="xunit.runner.visualstudio" Version="2.*"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App"/>
+        <ProjectReference Include="..\..\src\TypeWhisper.Linux\TypeWhisper.Linux.csproj"
+                          AdditionalProperties="DeployBundledLinuxPlugins=false"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Compile Include="../TestPaths.cs" Link="TestPaths.cs"/>
+    </ItemGroup>
+</Project>
