@@ -14,6 +14,11 @@ public partial class AppearanceSectionViewModel : ObservableObject
     private readonly Action<Action> _post;
     private readonly ISettingsService _settings;
 
+    // Set while Refresh applies persisted state so the generated On<Property>Changed hooks don't
+    // write it straight back: their equality guards compare against _settings.Current, which a
+    // queued refresh has already fallen behind, so a stale value would overwrite the newer commit.
+    private bool _hydratingFromSettings;
+
     [ObservableProperty]
     private double _previewBubbleAutoHideSeconds =
         AppSettings.DefaultPreviewBubbleAutoHideMilliseconds / 1000d;
@@ -35,11 +40,9 @@ public partial class AppearanceSectionViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(PreviewRightText))]
     private OverlayWidgetOption? _selectedRightWidget;
 
-    /// <param name="post">
-    ///     Marshals a settings refresh onto the UI thread. Defaults to the real dispatcher;
-    ///     tests inject a synchronous one, since <see cref="Dispatcher.UIThread" /> binds to
-    ///     whichever thread touches it first and nothing pumps it under the test runner.
-    /// </param>
+    // post marshals refreshes onto the UI thread; it is injected rather than calling
+    // Dispatcher.UIThread directly because that dispatcher binds to whichever thread touches it
+    // first and nothing pumps it under the test runner, so tests pass a synchronous one.
     public AppearanceSectionViewModel(ISettingsService settings, Action<Action>? post = null)
     {
         _settings = settings;
@@ -145,7 +148,9 @@ public partial class AppearanceSectionViewModel : ObservableObject
     // migration both save off the UI thread — and Refresh writes bound properties.
     private void OnSettingsChanged(AppSettings settings)
     {
-        _post(() => Refresh(settings));
+        // Read Current when the post runs rather than capturing the payload, so queued
+        // refreshes coalesce onto the newest commit instead of replaying superseded ones.
+        _post(() => Refresh(_settings.Current));
     }
 
     private static void PostToUiThread(Action action)
@@ -163,6 +168,22 @@ public partial class AppearanceSectionViewModel : ObservableObject
     }
 
     private void Refresh(AppSettings settings)
+    {
+        // Restore rather than clear: a nested Refresh must not un-guard the remainder
+        // of the outer one, which would let it write its older snapshot back.
+        var wasHydrating = _hydratingFromSettings;
+        _hydratingFromSettings = true;
+        try
+        {
+            ApplySettings(settings);
+        }
+        finally
+        {
+            _hydratingFromSettings = wasHydrating;
+        }
+    }
+
+    private void ApplySettings(AppSettings settings)
     {
         SelectedOverlayPosition =
             OverlayPositions.FirstOrDefault(option => option.Value == settings.OverlayPosition)
@@ -219,7 +240,7 @@ public partial class AppearanceSectionViewModel : ObservableObject
 
     partial void OnSelectedOverlayPositionChanged(OverlayPositionOption? value)
     {
-        if (value is null || _settings.Current.OverlayPosition == value.Value)
+        if (_hydratingFromSettings || value is null || _settings.Current.OverlayPosition == value.Value)
         {
             return;
         }
@@ -229,7 +250,7 @@ public partial class AppearanceSectionViewModel : ObservableObject
 
     partial void OnSelectedLeftWidgetChanged(OverlayWidgetOption? value)
     {
-        if (value is null || _settings.Current.OverlayLeftWidget == value.Value)
+        if (_hydratingFromSettings || value is null || _settings.Current.OverlayLeftWidget == value.Value)
         {
             return;
         }
@@ -239,7 +260,7 @@ public partial class AppearanceSectionViewModel : ObservableObject
 
     partial void OnSelectedRightWidgetChanged(OverlayWidgetOption? value)
     {
-        if (value is null || _settings.Current.OverlayRightWidget == value.Value)
+        if (_hydratingFromSettings || value is null || _settings.Current.OverlayRightWidget == value.Value)
         {
             return;
         }
@@ -254,7 +275,8 @@ public partial class AppearanceSectionViewModel : ObservableObject
         var milliseconds = AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
             (int)Math.Round(value * 1000, MidpointRounding.AwayFromZero));
 
-        if (_settings.Current.PreviewBubbleAutoHideMilliseconds == milliseconds)
+        if (_hydratingFromSettings
+            || _settings.Current.PreviewBubbleAutoHideMilliseconds == milliseconds)
         {
             return;
         }

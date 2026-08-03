@@ -15,6 +15,11 @@ public partial class AdvancedSectionViewModel : ObservableObject
     private readonly PluginManager _pluginManager;
     private readonly Action<Action> _post;
     private readonly ISettingsService _settings;
+
+    // Set while Refresh applies persisted state so the generated On<Property>Changed hooks don't
+    // write it straight back: their equality guards compare against _settings.Current, which a
+    // queued refresh has already fallen behind, so a stale value would overwrite the newer commit.
+    private bool _hydratingFromSettings;
     private readonly SpeechFeedbackService _speechFeedback;
 
     [ObservableProperty]
@@ -41,11 +46,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _spokenFeedbackEnabled;
 
-    /// <param name="post">
-    ///     Marshals a settings refresh onto the UI thread. Defaults to the real dispatcher;
-    ///     tests inject a synchronous one, since <see cref="Dispatcher.UIThread" /> binds to
-    ///     whichever thread touches it first and nothing pumps it under the test runner.
-    /// </param>
+    // post marshals refreshes onto the UI thread; it is injected rather than calling
+    // Dispatcher.UIThread directly because that dispatcher binds to whichever thread touches it
+    // first and nothing pumps it under the test runner, so tests pass a synchronous one.
     public AdvancedSectionViewModel(
         ISettingsService settings,
         SpeechFeedbackService speechFeedback,
@@ -57,11 +60,14 @@ public partial class AdvancedSectionViewModel : ObservableObject
         _speechFeedback = speechFeedback;
         _pluginManager = pluginManager;
         _post = post ?? PostToUiThread;
-        _speechFeedback.ProvidersChanged += (_, _) => RefreshSpokenFeedbackProviders();
+        // Every callback that writes bound properties goes through _post: plugin and provider
+        // notifications can arrive on background threads, and they also touch the properties the
+        // hydration flag guards, so they must be serialized with Refresh rather than race it.
+        _speechFeedback.ProvidersChanged += (_, _) => _post(RefreshSpokenFeedbackProviders);
         Refresh(settings.Current);
         RefreshSpokenFeedbackProviders();
         _settings.SettingsChanged += OnSettingsChanged;
-        _pluginManager.PluginStateChanged += (_, _) =>
+        _pluginManager.PluginStateChanged += (_, _) => _post(() =>
         {
             OnPropertyChanged(nameof(CanUseMemory));
             OnPropertyChanged(nameof(ShowMemoryUnavailableReason));
@@ -74,7 +80,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
             {
                 MemoryEnabled = false;
             }
-        };
+        });
     }
 
     public ObservableCollection<TtsProviderOption> SpokenFeedbackProviders { get; } = [];
@@ -181,7 +187,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
     // migration both save off the UI thread — and Refresh writes bound properties.
     private void OnSettingsChanged(AppSettings settings)
     {
-        _post(() => Refresh(settings));
+        // Read Current when the post runs rather than capturing the payload, so queued
+        // refreshes coalesce onto the newest commit instead of replaying superseded ones.
+        _post(() => Refresh(_settings.Current));
     }
 
     private static void PostToUiThread(Action action)
@@ -199,6 +207,22 @@ public partial class AdvancedSectionViewModel : ObservableObject
     }
 
     private void Refresh(AppSettings settings)
+    {
+        // Restore rather than clear: a nested Refresh must not un-guard the remainder
+        // of the outer one, which would let it write its older snapshot back.
+        var wasHydrating = _hydratingFromSettings;
+        _hydratingFromSettings = true;
+        try
+        {
+            ApplySettings(settings);
+        }
+        finally
+        {
+            _hydratingFromSettings = wasHydrating;
+        }
+    }
+
+    private void ApplySettings(AppSettings settings)
     {
         MemoryEnabled = settings.MemoryEnabled && CanUseMemory;
         SpokenFeedbackEnabled = settings.SpokenFeedbackEnabled && CanUseSpokenFeedback;
@@ -223,7 +247,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
     partial void OnMemoryEnabledChanged(bool value)
     {
-        if (_settings.Current.MemoryEnabled == value)
+        if (_hydratingFromSettings || _settings.Current.MemoryEnabled == value)
         {
             return;
         }
@@ -239,7 +263,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
     partial void OnSelectedAutoUnloadOptionChanged(AutoUnloadOption? value)
     {
-        if (value is null || _settings.Current.ModelAutoUnloadSeconds == value.Seconds)
+        if (_hydratingFromSettings || value is null || _settings.Current.ModelAutoUnloadSeconds == value.Seconds)
         {
             return;
         }
@@ -249,7 +273,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
     partial void OnSpokenFeedbackEnabledChanged(bool value)
     {
-        if (_settings.Current.SpokenFeedbackEnabled == value)
+        if (_hydratingFromSettings || _settings.Current.SpokenFeedbackEnabled == value)
         {
             return;
         }
@@ -272,7 +296,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
         RefreshSpokenFeedbackVoices();
 
-        if (_settings.Current.SpokenFeedbackProviderId == value)
+        if (_hydratingFromSettings || _settings.Current.SpokenFeedbackProviderId == value)
         {
             return;
         }
@@ -292,7 +316,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
     {
         _speechFeedback.SelectVoice(SelectedSpokenFeedbackProviderId, value);
         var normalized = SpeechFeedbackService.IsDefaultVoiceOptionId(value) ? null : value;
-        if (_settings.Current.SpokenFeedbackVoiceId == normalized)
+        if (_hydratingFromSettings || _settings.Current.SpokenFeedbackVoiceId == normalized)
         {
             return;
         }
@@ -303,7 +327,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
     partial void OnSaveToHistoryEnabledChanged(bool value)
     {
-        if (_settings.Current.SaveToHistoryEnabled == value)
+        if (_hydratingFromSettings || _settings.Current.SaveToHistoryEnabled == value)
         {
             return;
         }
@@ -313,7 +337,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
     partial void OnCaptureLlmProvenanceChanged(bool value)
     {
-        if (_settings.Current.CaptureLlmProvenance == value)
+        if (_hydratingFromSettings || _settings.Current.CaptureLlmProvenance == value)
         {
             return;
         }
@@ -323,7 +347,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
     partial void OnSelectedHistoryRetentionChanged(HistoryRetentionOption? value)
     {
-        if (value is null)
+        if (_hydratingFromSettings || value is null)
         {
             return;
         }

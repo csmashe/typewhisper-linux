@@ -104,6 +104,35 @@ public sealed class AppearanceSectionViewModelTests
         Assert.Contains(nameof(AppearanceSectionViewModel.IsOverlayPositionCustomized), propertyChanged);
     }
 
+    [Fact]
+    public void QueuedRefreshes_ApplyNewestSettings_WithoutPersistingStaleValues()
+    {
+        var settings = CreateSettingsMock(AppSettings.Default);
+        var queued = new List<Action>();
+        var sut = new AppearanceSectionViewModel(settings.Object, post: queued.Add);
+
+        // Two commits land before the dispatcher drains, as happens when a background save
+        // (dictation, model-storage migration) races the UI.
+        var first = AppSettings.Default with { PreviewBubbleAutoHideMilliseconds = 2000 };
+        settings.SetupGet(s => s.Current).Returns(first);
+        settings.Raise(s => s.SettingsChanged += null, first);
+
+        var second = AppSettings.Default with { PreviewBubbleAutoHideMilliseconds = 4000 };
+        settings.SetupGet(s => s.Current).Returns(second);
+        settings.Raise(s => s.SettingsChanged += null, second);
+
+        settings.Invocations.Clear();
+        foreach (var action in queued)
+        {
+            action();
+        }
+
+        // Both refreshes read Current, so the superseded 2000 is never applied, and hydrating
+        // the view model must not write anything back.
+        Assert.Equal(4.0, sut.PreviewBubbleAutoHideSeconds);
+        settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+    }
+
     private static Mock<ISettingsService> CreateSettingsMock(AppSettings current)
     {
         var settings = new Mock<ISettingsService>();
