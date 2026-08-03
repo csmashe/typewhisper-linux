@@ -119,7 +119,7 @@ internal sealed partial class ControlSocketOwnership : IDisposable
         catch (Exception ex)
         {
             Trace.WriteLine(
-                $"[ControlSocketOwnership] Could not acquire cleanup ownership for {socketPath}: {ex.Message}"
+                $"[ControlSocketOwnership] Stale-socket cleanup for {socketPath} failed: {ex.Message}"
             );
             return ControlSocketCleanupResult.Indeterminate;
         }
@@ -127,6 +127,9 @@ internal sealed partial class ControlSocketOwnership : IDisposable
 
     /// <summary>
     ///     Re-probes and, only on ECONNREFUSED, unlinks a stale socket while ownership is held.
+    ///     Both lifecycle callers (Start and Dispose) hold the server's lifecycle gate across the
+    ///     probe, but a live peer answers or refuses immediately — only a wedged peer costs the
+    ///     full <see cref="s_probeTimeout" />.
     /// </summary>
     internal ControlSocketCleanupResult CleanupStaleSocket()
     {

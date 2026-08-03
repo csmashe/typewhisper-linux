@@ -1416,6 +1416,51 @@ public sealed class HotkeyServiceTests
     }
 
     [Fact]
+    public async Task NativeDictationActive_KeepsAppCancelWhenToggleHotkeyEndsInEscape()
+    {
+        // DictationShortcutSpecFactory drops the native cancel bind when the trigger already
+        // ends in Escape, so suppressing the app-owned cancel would leave no way to cancel.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Mode = RecordingMode.PushToTalk;
+        hotkey.IsCancelShortcutEnabled = true;
+        Assert.True(hotkey.TrySetHotkeyFromString("Ctrl+Shift+Escape"));
+        hotkey.Initialize();
+
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(KeyCode.VcUndefined, snapshot.DictationKey);
+        Assert.Equal(KeyCode.VcEscape, snapshot.CancelKey);
+        Assert.Equal(ModifierMask.None, snapshot.CancelModifiers);
+        Assert.True(snapshot.IsCancelEnabled);
+    }
+
+    [Fact]
+    public async Task NativeDictationActive_SuppressesAppCancelWhenToggleHotkeyIsBareEscape()
+    {
+        // Nothing distinguishes the app's bare-Escape cancel from a native trigger that is also
+        // bare Escape, so one press would start a native recording and cancel it at the same time.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Mode = RecordingMode.PushToTalk;
+        hotkey.IsCancelShortcutEnabled = true;
+        Assert.True(hotkey.TrySetHotkeyFromString("Escape"));
+        hotkey.Initialize();
+
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(KeyCode.VcUndefined, snapshot.DictationKey);
+        Assert.Equal(KeyCode.VcUndefined, snapshot.CancelKey);
+        Assert.False(snapshot.IsCancelEnabled);
+    }
+
+    [Fact]
     public async Task NativeDictationInactive_RestoresConfiguredDictationAndCancelWithoutChangingOthers()
     {
         var backend = new TestShortcutBackend();

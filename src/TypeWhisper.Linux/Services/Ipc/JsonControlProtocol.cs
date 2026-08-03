@@ -24,7 +24,15 @@ internal static class JsonControlProtocol
     /// </summary>
     public const int MaxLineBytes = 4 * 1024;
 
-    /// <summary>Current protocol version. Bumped only on breaking changes.</summary>
+    /// <summary>
+    ///     Current protocol version. Bumped only on breaking changes — a widened
+    ///     <c>state</c>/<c>prev</c> vocabulary is additive, so this stays at 1.
+    /// </summary>
+    /// <remarks>
+    ///     <c>state</c>/<c>prev</c> may carry <c>starting</c> alongside <c>idle</c> and
+    ///     <c>recording</c>: an accepted start reports it until capture is observably open or
+    ///     the start settles.
+    /// </remarks>
     public const int CurrentVersion = 1;
 
     public const string CmdRecordStart = "record.start";

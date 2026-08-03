@@ -398,6 +398,106 @@ public sealed class ShortcutDispatcherTests
     }
 
     [Fact]
+    public void ClearShortcuts_DropsHeldDictationGuard_ReboundKeyStillTogglesAfterReRegister()
+    {
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(Set(RecordingMode.Toggle));
+        var toggles = 0;
+        d.DictationToggleRequested += () => toggles++;
+
+        // Unregister mid-hold: the matching release never reaches the dispatcher.
+        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        Assert.Equal(1, toggles);
+        d.ClearShortcuts();
+
+        // Re-register with a different dictation key; its first press must not be swallowed
+        // by the held-key guard left behind by the unregistered binding.
+        d.UpdateShortcuts(Set(RecordingMode.Toggle) with { DictationKey = KeyCode.VcD });
+        d.Handle(KeyCode.VcD, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+
+        Assert.Equal(2, toggles);
+    }
+
+    [Fact]
+    public void ClearShortcuts_DropsCancelGuard_ReboundCancelStillFiresAfterReRegister()
+    {
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(Set(RecordingMode.Toggle, true));
+        var cancels = 0;
+        d.CancelRequested += () => cancels++;
+
+        d.Handle(KeyCode.VcEscape, ModifierMask.None, true);
+        Assert.Equal(1, cancels);
+        d.ClearShortcuts();
+
+        d.UpdateShortcuts(Set(RecordingMode.Toggle, true));
+        d.Handle(KeyCode.VcEscape, ModifierMask.None, true);
+
+        Assert.Equal(2, cancels);
+    }
+
+    [Fact]
+    public void SelectionWorkflows_SharingOneKeyUnderDifferentModifiers_BothDispatch()
+    {
+        var d = new ShortcutDispatcher();
+        // Ctrl+Alt+R runs "alpha"; the palette answers to Ctrl+R on the same physical key.
+        var set = SetWithPromptAction(
+            "alpha",
+            KeyCode.VcR,
+            ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+        );
+        d.UpdateShortcuts(
+            set with { PromptPaletteKey = KeyCode.VcR, PromptPaletteModifiers = ModifierMask.LeftCtrl }
+        );
+        var observed = new List<string>();
+        d.PromptActionRequested += observed.Add;
+        d.PromptPaletteRequested += () => observed.Add("palette");
+
+        // Claim the prompt action, release only its Alt modifier, then claim the palette on
+        // the same key before every modifier is up.
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, false);
+        d.Handle(KeyCode.VcLeftAlt, ModifierMask.LeftCtrl, false);
+        Assert.Empty(observed);
+
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl, true);
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl, false);
+        d.Handle(KeyCode.VcLeftControl, ModifierMask.None, false);
+
+        Assert.Equal(2, observed.Count);
+        Assert.Contains("alpha", observed);
+        Assert.Contains("palette", observed);
+    }
+
+    [Fact]
+    public void SelectionWorkflows_AutoRepeatAfterDroppingAModifier_ClaimsOnlyTheFirstWorkflow()
+    {
+        var d = new ShortcutDispatcher();
+        var set = SetWithPromptAction(
+            "alpha",
+            KeyCode.VcR,
+            ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+        );
+        d.UpdateShortcuts(
+            set with { PromptPaletteKey = KeyCode.VcR, PromptPaletteModifiers = ModifierMask.LeftCtrl }
+        );
+        var observed = new List<string>();
+        d.PromptActionRequested += observed.Add;
+        d.PromptPaletteRequested += () => observed.Add("palette");
+
+        // R stays down throughout; releasing Alt makes the auto-repeat presses match the palette.
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt, true);
+        d.Handle(KeyCode.VcLeftAlt, ModifierMask.LeftCtrl, false);
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl, true);
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl, true);
+
+        d.Handle(KeyCode.VcR, ModifierMask.LeftCtrl, false);
+        d.Handle(KeyCode.VcLeftControl, ModifierMask.None, false);
+
+        Assert.Equal(["alpha"], observed);
+    }
+
+    [Fact]
     public void ProfileStartDictation_Toggle_FiresToggleWithId()
     {
         var d = new ShortcutDispatcher();

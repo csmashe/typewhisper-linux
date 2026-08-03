@@ -85,8 +85,13 @@ public static class DictationShortcutSpecFactory
             return "Ctrl+Shift+Escape";
         }
 
-        // Compare against the trigger rebuilt from the same parts so spacing and casing
-        // differences ("ctrl + shift + escape") can't hide a collision.
+        // Compare against the trigger rebuilt from the same parts so spacing, casing, and the
+        // "Esc" alias ("ctrl + shift + esc") can't hide a collision.
+        if (string.Equals(parts[^1], "Esc", StringComparison.OrdinalIgnoreCase))
+        {
+            parts[^1] = "Escape";
+        }
+
         var normalizedTrigger = string.Join('+', parts);
         parts[^1] = "Escape";
         var cancel = string.Join('+', parts);

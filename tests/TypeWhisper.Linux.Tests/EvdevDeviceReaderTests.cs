@@ -7,6 +7,8 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class EvdevDeviceReaderTests
 {
+    private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(2);
+
     [Fact]
     public async Task NormalStream_DeliversEdgesAndSuppressesRepeatsAndDuplicates()
     {
@@ -115,7 +117,7 @@ public sealed class EvdevDeviceReaderTests
         device.Enqueue(InputEvent.EvKey, 57, InputEvent.Pressed);
         device.Enqueue(InputEvent.EvSyn, InputEvent.SynReport, 0);
 
-        var actualFailure = await failure.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var actualFailure = await failure.Task.WaitAsync(s_testGuard);
 
         Assert.Same(snapshotFailure, actualFailure);
         Assert.Equal(1, device.QueryCount);
@@ -184,7 +186,7 @@ public sealed class EvdevDeviceReaderTests
 
         public async Task WaitForCountAsync(int count)
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            using var timeout = new CancellationTokenSource(s_testGuard);
             while (Snapshot().Length < count)
             {
                 await _updated.WaitAsync(timeout.Token);

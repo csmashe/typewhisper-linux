@@ -655,6 +655,7 @@ public sealed class TextInsertionServiceTests
         Assert.Equal(InsertionResult.Pasted, result);
         // No restore write happened: only the initial set.
         Assert.Equal(1, platform.SetClipboardCount);
+        Assert.Equal("new text", platform.Clipboard);
     }
 
     [Fact]

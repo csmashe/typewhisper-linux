@@ -49,6 +49,27 @@ public sealed class LocalizationResourcesTests
     }
 
     [Fact]
+    public void CanonicalCatalog_HasGlobalHotkeyOptOutMessages()
+    {
+        // GlobalHotkeySetupTaskTests assert through Loc.Instance, which returns the key itself
+        // when it is missing — so the catalog needs its own explicit coverage.
+        var en = Load(CanonicalLanguage);
+        var keys = new[]
+        {
+            "Setup.GlobalHotkeyOptedOut",
+            "Setup.GlobalHotkeyOptedOutRuleInstalled",
+            "Setup.GlobalHotkeyOptedOutRuleInstalledDetail",
+            "Setup.GlobalHotkeyRevokeButton"
+        };
+
+        foreach (var key in keys)
+        {
+            Assert.True(en.TryGetValue(key, out var value), $"Missing canonical key: {key}");
+            Assert.False(string.IsNullOrWhiteSpace(value), $"Canonical key is empty: {key}");
+        }
+    }
+
+    [Fact]
     public void CanonicalCatalog_HasDesktopIntegrationStaleAndRefreshMessages()
     {
         var en = Load(CanonicalLanguage);

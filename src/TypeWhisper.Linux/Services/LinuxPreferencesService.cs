@@ -80,6 +80,16 @@ public sealed class LinuxPreferencesService
     // ReSharper disable once MemberCanBePrivate.Global -- public reload entry point mirroring ISettingsService.Load(); only the constructor calls it in-tree.
     public LinuxPreferences Load()
     {
+        // Serialize with Save/Update so a reload can't clobber (or be clobbered by) a
+        // concurrent write's Current assignment.
+        lock (_gate)
+        {
+            return LoadLocked();
+        }
+    }
+
+    private LinuxPreferences LoadLocked()
+    {
         if (!File.Exists(_path))
         {
             return Current;
@@ -88,7 +98,6 @@ public sealed class LinuxPreferencesService
         try
         {
             var json = File.ReadAllText(_path);
-            // ReSharper disable once InconsistentlySynchronizedField -- s_jsonOptions is an immutable static readonly options instance; reads require no synchronization.
             Current =
                 JsonSerializer.Deserialize<LinuxPreferences>(json, s_jsonOptions)
                 ?? LinuxPreferences.Default;

@@ -161,6 +161,34 @@ public sealed class MediaPauseServiceTests
         errorLog.VerifyNoOtherCalls();
     }
 
+    [Fact]
+    public void PauseMedia_StillRunsWhileAnEarlierPlayerIsAwaitingResume()
+    {
+        const string players = "vlc Playing";
+        string[] status = ["-a", "--format", "{{playerName}} {{status}}", "status"];
+        string[] pause = ["-p", "vlc", "pause"];
+        string[] play = ["-p", "vlc", "play"];
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(status),
+            players
+        );
+        runner.FailWhen(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(play),
+            "resume keeps failing"
+        );
+        var service = new MediaPauseService(runner, Mock.Of<IErrorLogService>());
+
+        // vlc stays owed a resume after the first cycle; the next recording must still pause.
+        service.PauseMedia();
+        service.ResumeMedia();
+        service.PauseMedia();
+
+        Assert.Equal(2, CountInvocations(runner, status));
+        Assert.Equal(2, CountInvocations(runner, pause));
+        Assert.Equal(1, CountInvocations(runner, play));
+    }
+
     private static int CountInvocations(FakeProcessRunner runner, IReadOnlyList<string> args)
     {
         return runner.Invocations.Count(invocation => invocation.Args.SequenceEqual(args));

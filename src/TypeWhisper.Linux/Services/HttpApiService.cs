@@ -10,14 +10,18 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services;
 
-internal sealed class HttpApiRequestDispatcher
+internal sealed class HttpApiRequestDispatcher : IDisposable
 {
+    private static readonly TimeSpan s_drainTimeout = TimeSpan.FromSeconds(1);
+
+    private readonly int _capacity;
     private readonly Action<Exception> _reportException;
     private readonly SemaphoreSlim _slots;
 
     public HttpApiRequestDispatcher(int capacity, Action<Exception>? reportException = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
+        _capacity = capacity;
         _slots = new SemaphoreSlim(capacity, capacity);
         _reportException = reportException ?? (ex =>
             Trace.WriteLine($"[HttpApiService] Dispatched request failed: {ex}"));
@@ -27,6 +31,31 @@ internal sealed class HttpApiRequestDispatcher
     {
         ArgumentNullException.ThrowIfNull(handler);
         return _slots.Wait(0) ? RunAsync(handler) : null;
+    }
+
+    /// <summary>
+    ///     Reclaims every slot first, proving no admitted handler is still in flight: a handler
+    ///     releases its slot in a finally block, so disposing underneath one would surface an
+    ///     <see cref="ObjectDisposedException" /> as an unobserved fault. A handler that outlasts
+    ///     the drain leaves the semaphore undisposed, which is harmless — the Wait(0) path never
+    ///     allocates a wait handle.
+    /// </summary>
+    public void Dispose()
+    {
+        for (var acquired = 0; acquired < _capacity; acquired++)
+        {
+            if (_slots.Wait(s_drainTimeout))
+            {
+                continue;
+            }
+
+            Trace.WriteLine(
+                "[HttpApiService] Request slots still in use at dispose; leaving them undisposed."
+            );
+            return;
+        }
+
+        _slots.Dispose();
     }
 
     private async Task RunAsync(Func<Task> handler)
@@ -61,6 +90,10 @@ public sealed class HttpApiService : IDisposable
 {
     internal const int MaxConcurrentRequests = 2;
     internal const long MaxTranscribeRequestBytes = 100 * 1024 * 1024;
+
+    // Applies to every JSON endpoint, including bulk PUT /v1/dictionary/terms uploads. A body
+    // over this limit is rejected with 413 "Request body too large" rather than truncated, so
+    // clients with a larger dictionary must split it across requests.
     internal const long MaxJsonRequestBytes = 1 * 1024 * 1024;
 
     private const string AllowedCorsHeaders =
@@ -145,6 +178,9 @@ public sealed class HttpApiService : IDisposable
             // Best-effort wait for the listener loop to drain during dispose.
         }
 
+        // Waiting on _listenTask only drains the accept loop; admitted handlers run detached,
+        // so the dispatcher does its own bounded drain before releasing the semaphore.
+        _requestDispatcher.Dispose();
         _disposed = true;
     }
 

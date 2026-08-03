@@ -623,17 +623,7 @@ public sealed class WatchFolderServiceTests : IDisposable
     )
     {
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult(
-            new WatchFolderTranscriptionResult(
-                $"Transcribed {Path.GetFileName(request.FilePath)}",
-                "en",
-                1,
-                0.1,
-                [],
-                "fake",
-                "test"
-            )
-        );
+        return Task.FromResult(CreateResult(request));
     }
 
     private static WatchFolderOptions CreateOptions(

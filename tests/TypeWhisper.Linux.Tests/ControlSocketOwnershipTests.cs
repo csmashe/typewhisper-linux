@@ -242,6 +242,13 @@ public sealed class ControlSocketOwnershipTests
     [Fact]
     public void IndeterminateProbe_LeavesSocketPathIntact()
     {
+        // The probe is driven indeterminate by a mode-000 socket, and root bypasses that
+        // permission check entirely — as root the connect would succeed and report Live.
+        if (Environment.IsPrivilegedProcess)
+        {
+            return;
+        }
+
         var tempDirectory = TestPaths.CreateTempDirectory("ipc-m7");
         var socketPath = Path.Join(tempDirectory, "control.sock");
         ControlSocketOwnership? ownership = null;

@@ -173,10 +173,19 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
                 .ConfigureAwait(false);
         }
 
+        // Mirrors WriteAsync: report the backup only when one was actually written.
+        var removed = new List<string>();
+        if (mutation.BackupPath is not null)
+        {
+            removed.Add(mutation.BackupPath);
+        }
+
+        removed.Add($"{MediaKeysSchema}.{ListKey}");
+
         return new DeShortcutWriteResult(
             true,
             "GNOME shortcut removed.",
-            [mutation.BackupPath!, $"{MediaKeysSchema}.{ListKey}"]
+            removed
         );
     }
 
@@ -589,12 +598,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             return false;
         }
 
-        var (ok, listOut, _) = await RunAsync(
-                "gsettings",
-                ["get", MediaKeysSchema, ListKey],
-                ct
-            )
-            .ConfigureAwait(false);
+        var (ok, listOut, _) = await ReadListAsync(ct).ConfigureAwait(false);
         if (!ok)
         {
             return false;

@@ -242,14 +242,16 @@ public sealed class ProcessRunner : IProcessRunner
         }
         catch (Exception ex)
         {
+            // Any failure after Start leaves a live child: Process.Dispose only releases the
+            // handle, so without this the child keeps running past the failed run.
+            if (process is not null)
+            {
+                await KillAndReapProcessTreeAsync(process).ConfigureAwait(false);
+            }
+
             // ReSharper disable once InvertIf -- inverting would duplicate the `return ProcessRunResult.NotStarted(...)` tail.
             if (ct.IsCancellationRequested)
             {
-                if (process is not null)
-                {
-                    await KillAndReapProcessTreeAsync(process).ConfigureAwait(false);
-                }
-
                 if (standardOutputReader is not null && stdoutTask is not null)
                 {
                     AbandonRead(standardOutputReader, stdoutTask);

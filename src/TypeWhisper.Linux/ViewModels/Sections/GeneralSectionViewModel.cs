@@ -220,7 +220,23 @@ public partial class GeneralSectionViewModel : ObservableObject
             return;
         }
 
-        _linuxPrefs.Update(current => current with { CloseToTray = value });
+        try
+        {
+            _linuxPrefs.Update(current => current with { CloseToTray = value });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A read-only or full disk must not throw out of a property setter into the binding.
+            System.Diagnostics.Trace.WriteLine(
+                $"[General] Could not persist the close-to-tray preference: {ex.Message}"
+            );
+
+            // The generated setter already published `value`, but the close handler reads
+            // LinuxPreferences.Current, which a failed write leaves untouched — roll the toggle
+            // back so it can't advertise behavior the app won't honor. The re-entrant call stops
+            // at the equality guard above.
+            CloseToTray = _linuxPrefs.Current.CloseToTray;
+        }
     }
 }
 
