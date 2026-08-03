@@ -2,6 +2,7 @@ using Moq;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
@@ -110,7 +111,9 @@ public sealed class LearnedCorrectionsFeedbackPresenterTests
         Assert.False(presenter.HasPendingBatch);
         var confirmation = Assert.Single(emitted);
         Assert.False(confirmation.ShowUndo);
-        Assert.Equal("Correction learning undone.", confirmation.Text);
+        // Catalog, not the English copy: still fails on a wrong key (which resolves to itself)
+        // without breaking on a wording edit.
+        Assert.Equal(Loc.Instance["Feedback.CorrectionLearningUndone"], confirmation.Text);
         Assert.Equal(TimeSpan.FromSeconds(2), scheduler.LastDelay);
     }
 
@@ -199,6 +202,47 @@ public sealed class LearnedCorrectionsFeedbackPresenterTests
         var hidden = Assert.Single(emitted);
         Assert.Equal(string.Empty, hidden.Text);
         Assert.False(presenter.HasPendingBatch);
+    }
+
+    [Fact]
+    public void StaleAutoHide_AfterReArm_LeavesFreshBatchVisible()
+    {
+        // FakeScheduler models disposal as cancellation, so it can't reproduce the real hazard: in
+        // production the superseded callback is already queued when the re-arm disposes its handle,
+        // and disposal can't retract it. Invoke the raw callbacks to exercise _feedbackGeneration.
+        var dictionary = new Mock<IDictionaryService>();
+        var callbacks = new List<Action>();
+        var presenter = new LearnedCorrectionsFeedbackPresenter(
+            dictionary.Object,
+            new Mock<IErrorLogService>().Object,
+            (_, callback) =>
+            {
+                callbacks.Add(callback);
+                return new NoopHandle();
+            });
+        var emitted = new List<LearnedCorrectionsFeedback>();
+        presenter.FeedbackChanged += emitted.Add;
+
+        presenter.ShowLearned([Correction("1", "a", "A")]);
+        presenter.ShowLearned([Correction("2", "b", "B")]);
+        emitted.Clear();
+
+        callbacks[0]();
+
+        // The stale hide belongs to the superseded generation: the fresh batch and its Undo stay.
+        Assert.True(presenter.HasPendingBatch);
+        Assert.Empty(emitted);
+
+        callbacks[1]();
+        Assert.False(presenter.HasPendingBatch);
+        Assert.Equal(string.Empty, Assert.Single(emitted).Text);
+    }
+
+    private sealed class NoopHandle : IDisposable
+    {
+        public void Dispose()
+        {
+        }
     }
 
     [Fact]

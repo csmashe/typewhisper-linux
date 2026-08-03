@@ -4,6 +4,7 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.ActiveWindow;
+using TypeWhisper.Tests;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
@@ -34,6 +35,10 @@ public sealed class LearnedCorrectionsNotificationServiceTests : IDisposable
     private readonly string _dictionaryPath;
     private readonly string _tempDir;
 
+    // Every service CreateSut hands out, so teardown exercises its disposal path (unsubscribe +
+    // channel close) instead of leaving it wired to the test's learning service.
+    private readonly List<LearnedCorrectionsNotificationService> _services = [];
+
     public LearnedCorrectionsNotificationServiceTests()
     {
         // Clear the other detector signals, then set only the Hyprland one, so every test's
@@ -44,16 +49,17 @@ public sealed class LearnedCorrectionsNotificationServiceTests : IDisposable
         }
 
         Environment.SetEnvironmentVariable(HyprlandSignatureEnv, "test-session");
-        _tempDir = Path.Join(
-            Path.GetTempPath(),
-            "TypeWhisper.LearnedNotify.Tests_" + Guid.NewGuid().ToString("N")
-        );
-        Directory.CreateDirectory(_tempDir);
+        _tempDir = TestPaths.CreateTempDirectory("TypeWhisper.LearnedNotify.Tests");
         _dictionaryPath = Path.Join(_tempDir, "dictionary.json");
     }
 
     public void Dispose()
     {
+        foreach (var service in _services)
+        {
+            service.Dispose();
+        }
+
         foreach (var (name, value) in _originalDetectorEnv)
         {
             Environment.SetEnvironmentVariable(name, value);
@@ -239,6 +245,7 @@ public sealed class LearnedCorrectionsNotificationServiceTests : IDisposable
             post: action => action(),
             scheduleDelay: scheduler.Schedule
         );
+        _services.Add(service);
         return (learning, dictionary, channel, scheduler, service);
     }
 

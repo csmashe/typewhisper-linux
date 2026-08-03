@@ -1637,6 +1637,17 @@ public partial class DictationSectionViewModel : ObservableObject
             }
         }
 
+        if (ok)
+        {
+            // A confirmed write is authoritative — the follow-up read applies nothing when it
+            // returns null (bus timeout), leaving Setup/Remove on the pre-toggle state after a
+            // toggle that succeeded. Claiming the newest generation stops a slower refresh undoing it.
+            _accessibilityBridgeAppliedGeneration = ++_accessibilityBridgeRefreshGeneration;
+            _accessibilityBridgeStateKnown = true;
+            AccessibilityBridgeActivated = enable;
+            OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
+        }
+
         await RefreshAccessibilityBridgeStateAsync();
         OnPropertyChanged(nameof(ShowAccessibilityBridgeRemove));
         AccessibilityBridgeStatus = ok

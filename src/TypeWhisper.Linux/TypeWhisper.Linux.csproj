@@ -62,7 +62,10 @@
              12.0.1 depends on and resolves at startup. Newer releases (e.g. 0.94.2)
              change the Tmds.DBus.Protocol types Avalonia loads during X11/IME init,
              so a higher pin makes Avalonia throw TypeLoadException before the window
-             ever appears. -->
+             ever appears.
+             MAINTENANCE: recheck this pin after every Avalonia.FreeDesktop upgrade — it
+             must track whatever version that package depends on. A stale pin fails at
+             runtime (blank launch), not at build time. -->
         <PackageReference Include="Tmds.DBus.Protocol" Version="0.92.0"/>
     </ItemGroup>
 

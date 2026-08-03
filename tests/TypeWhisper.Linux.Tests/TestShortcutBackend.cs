@@ -7,6 +7,7 @@ internal sealed class TestShortcutBackend : IGlobalShortcutBackend
 {
     private readonly TaskCompletionSource _gate = new();
     private int _pending;
+    private int _registerCount;
 
     public GlobalShortcutRegistrationResult NextResult { get; init; } =
         new(
@@ -17,7 +18,10 @@ internal sealed class TestShortcutBackend : IGlobalShortcutBackend
             null
         );
 
-    public int RegisterCount { get; private set; }
+    // HotkeyService applies through chained thread-pool continuations, so the increment must be
+    // atomic and the read must not see a stale cached value.
+    public int RegisterCount => Volatile.Read(ref _registerCount);
+
     public GlobalShortcutSet? LastSet { get; private set; }
     public bool Disposed { get; private set; }
 
@@ -131,7 +135,7 @@ internal sealed class TestShortcutBackend : IGlobalShortcutBackend
     {
         _gate.TrySetResult();
         Interlocked.Increment(ref _pending);
-        RegisterCount++;
+        Interlocked.Increment(ref _registerCount);
         LastSet = shortcuts;
         Interlocked.Decrement(ref _pending);
         return Task.FromResult(NextResult);

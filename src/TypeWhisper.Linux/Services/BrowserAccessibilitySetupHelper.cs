@@ -1124,8 +1124,10 @@ public sealed partial class BrowserAccessibilitySetupHelper
     }
 
     // accessibility.force_disabled = -1 pref line, matched per-line across full user.js content
-    // (Multiline so the line is recognized even when our attribution comment precedes it).
-    [GeneratedRegex("""^\s*user_pref\(\s*"accessibility\.force_disabled"\s*,\s*-1\s*\)\s*;""", RegexOptions.Multiline)]
+    // (Multiline so the line is recognized even when our attribution comment precedes it). Accepts
+    // either quote style, like ForceDisabledAnyValueLineRegex: Firefox's pref parser takes both, so
+    // a single-quoted user-authored -1 is already effective and must not be rewritten/preserved.
+    [GeneratedRegex("""^\s*user_pref\(\s*(?<quote>["'])accessibility\.force_disabled\k<quote>\s*,\s*-1\s*\)\s*;""", RegexOptions.Multiline)]
     private static partial Regex ForceDisabledNegOneMultilineRegex();
 
     // Any live accessibility.force_disabled line, captured verbatim (minus its
