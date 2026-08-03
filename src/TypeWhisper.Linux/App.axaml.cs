@@ -316,7 +316,16 @@ public class App : Application
             }
 
             var profileService = services.GetRequiredService<IProfileService>();
-            profileService.SeedFirstRunDefaultsIfMissing();
+            // Best-effort seed: a failure here must not abort startup.
+            try
+            {
+                profileService.SeedFirstRunDefaultsIfMissing();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[App] Failed to seed first-run profiles: {ex}");
+                errorLog.AddEntry($"Could not seed first-run profiles: {ex.Message}");
+            }
 
             // ActionsChanged fires on the UI thread while ProfilesChanged can fire off the
             // HTTP worker thread (e.g. /v1/profiles/toggle), so the two subscriptions can enter

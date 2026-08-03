@@ -725,7 +725,9 @@ public sealed class TextInsertionServiceTests
         Assert.Equal(1, platform.SetClipboardCount);
         var entry = Assert.Single(errorLog.AddedEntries);
         Assert.Equal(ErrorCategory.Insertion, entry.Category);
-        Assert.Contains("lossy restore", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("was not restored", entry.Message, StringComparison.Ordinal);
+        // The message must say what the clipboard holds now, not imply the original survived.
+        Assert.Contains("now holds the dictated text", entry.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1627,6 +1629,18 @@ public sealed class TextInsertionServiceTests
         false,
         true
     )]
+    // ICCCM metadata / side-effect targets carry no content of their own.
+    [InlineData("TARGETS\nSTRING\nLENGTH\n", false, false)]
+    [InlineData("TARGETS\nSTRING\nDELETE\n", false, false)]
+    [InlineData("TARGETS\nSTRING\nINSERT_SELECTION\n", false, false)]
+    [InlineData("TARGETS\nSTRING\nINSERT_PROPERTY\n", false, false)]
+    [InlineData(
+        "TARGETS\nMULTIPLE\nTIMESTAMP\nLENGTH\nDELETE\nINSERT_SELECTION\nINSERT_PROPERTY\nSTRING\nUTF8_STRING\nTEXT\nCOMPOUND_TEXT\n",
+        false,
+        false
+    )]
+    // A real rich format alongside them still counts.
+    [InlineData("TARGETS\nSTRING\nLENGTH\ntext/html\n", false, true)]
     public void LinuxTextInsertionPlatform_ListingHasNonTextFormats_classifies_targets(
         string listing,
         bool isWayland,

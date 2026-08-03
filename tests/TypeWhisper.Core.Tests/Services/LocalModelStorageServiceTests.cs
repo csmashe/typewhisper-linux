@@ -97,68 +97,6 @@ public sealed class LocalModelStorageServiceTests : IDisposable
         Assert.Equal(Path.GetFullPath(target), settings.Current.LocalModelStoragePath);
     }
 
-    [Theory]
-    // Same byte length as the source, so a length-only check would wrongly accept it.
-    [InlineData("stale-x-weights")]
-    // Different length.
-    [InlineData("stale")]
-    public async Task MoveDownloadsAndUsePathAsync_ConflictingPreExistingTarget_IsReplacedNotTrusted(
-        string staleContent
-    )
-    {
-        var source = Path.Join(_tempRoot, $"source-stale-{staleContent.Length}");
-        var target = Path.Join(_tempRoot, $"target-stale-{staleContent.Length}");
-        var modelDir = Path.Join(source, LocalModelStoragePaths.PluginDataFolderName, "com.typewhisper.whisper-cpp", "Models");
-        Directory.CreateDirectory(modelDir);
-        const string sourceContent = "current weights";
-        await File.WriteAllTextAsync(Path.Join(modelDir, "ggml-base.bin"), sourceContent);
-
-        // A leftover from an earlier manual copy or an older install. Treating its presence —
-        // or its size — as "already migrated" would skip the copy and delete the real source.
-        var stalePath = Path.Join(target, LocalModelStoragePaths.PluginDataFolderName, "com.typewhisper.whisper-cpp", "Models", "ggml-base.bin");
-        Directory.CreateDirectory(Path.GetDirectoryName(stalePath)!);
-        await File.WriteAllTextAsync(stalePath, staleContent);
-
-        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source });
-        var service = new LocalModelStorageService(settings);
-
-        await service.MoveDownloadsAndUsePathAsync(target);
-
-        Assert.Equal(sourceContent, await File.ReadAllTextAsync(stalePath));
-    }
-
-    [Fact]
-    public async Task MoveDownloadsAndUsePathAsync_MatchingPreExistingTarget_SkipsRecopyAndCleansSource()
-    {
-        var source = Path.Join(_tempRoot, "source-resume");
-        var target = Path.Join(_tempRoot, "target-resume");
-        var modelDir = Path.Join(source, LocalModelStoragePaths.PluginDataFolderName, "com.typewhisper.whisper-cpp", "Models");
-        Directory.CreateDirectory(modelDir);
-        var sourceModel = Path.Join(modelDir, "ggml-base.bin");
-        const string content = "current weights";
-        await File.WriteAllTextAsync(sourceModel, content);
-
-        // An interrupted earlier run already copied this through; identical content is the
-        // proof that lets a resume skip re-copying it.
-        var alreadyCopied = Path.Join(target, LocalModelStoragePaths.PluginDataFolderName, "com.typewhisper.whisper-cpp", "Models", "ggml-base.bin");
-        Directory.CreateDirectory(Path.GetDirectoryName(alreadyCopied)!);
-        await File.WriteAllTextAsync(alreadyCopied, content);
-        // Stamp a deterministic old mtime: a stray re-copy sets "now", which is unambiguously
-        // different from this, whereas the file's just-written time could match within the
-        // filesystem's timestamp resolution and let a re-copy slip past the assertion.
-        var copiedAt = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        File.SetLastWriteTimeUtc(alreadyCopied, copiedAt);
-
-        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source });
-        var service = new LocalModelStorageService(settings);
-
-        await service.MoveDownloadsAndUsePathAsync(target);
-
-        Assert.Equal(content, await File.ReadAllTextAsync(alreadyCopied));
-        Assert.Equal(copiedAt, File.GetLastWriteTimeUtc(alreadyCopied));
-        Assert.False(File.Exists(sourceModel));
-    }
-
     [Fact]
     public async Task MoveDownloadsAndUsePathAsync_SaveFails_LeavesSourceIntact()
     {
@@ -181,6 +119,74 @@ public sealed class LocalModelStorageServiceTests : IDisposable
         // Save failed before the best-effort cleanup, so source and persisted path are untouched.
         Assert.True(File.Exists(sourceModel));
         Assert.Equal(source, settings.Current.LocalModelStoragePath);
+    }
+
+    [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_DifferentFileAtTarget_FailsWithoutDeletingSource()
+    {
+        var source = Path.Join(_tempRoot, "source-conflict");
+        var target = Path.Join(_tempRoot, "target-conflict");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(target);
+        var sourceModel = Path.Join(source, "ggml-base.bin");
+        var conflictingTarget = Path.Join(target, "ggml-base.bin");
+        await File.WriteAllTextAsync(sourceModel, "complete weights");
+        await File.WriteAllTextAsync(conflictingTarget, "truncated");
+
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source });
+        var service = new LocalModelStorageService(settings);
+
+        await Assert.ThrowsAsync<IOException>(() => service.MoveDownloadsAndUsePathAsync(target));
+
+        Assert.Equal("complete weights", await File.ReadAllTextAsync(sourceModel));
+        Assert.Equal("truncated", await File.ReadAllTextAsync(conflictingTarget));
+        Assert.Equal(source, settings.Current.LocalModelStoragePath);
+    }
+
+    [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_PreexistingSameSizeTarget_KeepsSourceRatherThanTrustingIt()
+    {
+        var source = Path.Join(_tempRoot, "source-resume");
+        var target = Path.Join(_tempRoot, "target-resume");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(target);
+        var sourceModel = Path.Join(source, "ggml-base.bin");
+        await File.WriteAllTextAsync(sourceModel, "weights");
+        await File.WriteAllTextAsync(Path.Join(target, "ggml-base.bin"), "weights");
+
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source });
+        var service = new LocalModelStorageService(settings);
+
+        await service.MoveDownloadsAndUsePathAsync(target);
+
+        // Equal size is not proof of equal bytes, and this run did not write the target, so the
+        // source is retained. Wasting disk beats deleting the only good copy.
+        Assert.True(File.Exists(sourceModel));
+        Assert.Equal(Path.GetFullPath(target), settings.Current.LocalModelStoragePath);
+    }
+
+    [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_SameSizeDifferentContentAtTarget_NeverDeletesSource()
+    {
+        var source = Path.Join(_tempRoot, "source-collision");
+        var target = Path.Join(_tempRoot, "target-collision");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(target);
+        var sourceModel = Path.Join(source, "ggml-base.bin");
+        var targetModel = Path.Join(target, "ggml-base.bin");
+
+        // Byte-for-byte different, identical length — the case a length-only identity check
+        // would wave through before deleting the source.
+        await File.WriteAllTextAsync(sourceModel, "AAAAAAA");
+        await File.WriteAllTextAsync(targetModel, "BBBBBBB");
+
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source });
+        var service = new LocalModelStorageService(settings);
+
+        await service.MoveDownloadsAndUsePathAsync(target);
+
+        Assert.Equal("AAAAAAA", await File.ReadAllTextAsync(sourceModel));
+        Assert.Equal("BBBBBBB", await File.ReadAllTextAsync(targetModel));
     }
 
     [Fact]

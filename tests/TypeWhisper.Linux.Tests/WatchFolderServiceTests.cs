@@ -662,7 +662,7 @@ public sealed class WatchFolderServiceTests : IDisposable
         Assert.All(processed, item => Assert.True(item.Success, item.ErrorMessage));
         Assert.Equal(
             [Path.Join(outputPath, "meeting (1).md"), Path.Join(outputPath, "meeting.md")],
-            processed.Select(item => item.OutputPath).Order()
+            processed.Select(item => item.OutputPath).Order(StringComparer.Ordinal)
         );
         Assert.All(processed, item => Assert.True(File.Exists(item.OutputPath)));
         Assert.False(File.Exists(wavPath));

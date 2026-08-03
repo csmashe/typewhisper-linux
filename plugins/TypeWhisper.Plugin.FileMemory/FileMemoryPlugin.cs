@@ -248,11 +248,32 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
                 Directory.CreateDirectory(dir);
 
             var json = JsonSerializer.Serialize(entries, s_jsonOptions);
+
+            if (!OperatingSystem.IsWindows())
+            {
+                // Owner-only on *every* write, including the first: neither the umask (0644 under
+                // a typical 022) nor an existing permissive mode may widen dictated memories.
+                // Set before the content is written so it is never briefly readable.
+                using (
+                    new FileStream(
+                        tempPath,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None,
+                        bufferSize: 1
+                    )
+                )
+                {
+                    File.SetUnixFileMode(tempPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                }
+            }
+
             await File.WriteAllTextAsync(tempPath, json, ct);
-            if (File.Exists(_filePath))
-                File.Replace(tempPath, _filePath, destinationBackupFileName: null);
-            else
-                File.Move(tempPath, _filePath);
+
+            // One atomic rename for both the create and the replace case; sampling whether the
+            // destination existed first would only add races in each direction. Moves the temp
+            // file's inode and its 0600 into place, repairing a world-readable legacy file.
+            File.Move(tempPath, _filePath, overwrite: true);
         }
         catch (Exception ex)
         {

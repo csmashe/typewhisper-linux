@@ -123,7 +123,9 @@ public sealed class DictationInsertionOrderGateTests
     [Fact]
     public async Task WaitForTurnAsync_FailsOpen_WhenMaximumWaitExpires()
     {
-        var gate = new DictationInsertionOrderGate(TimeSpan.FromMilliseconds(50));
+        // Long enough that the backstop cannot fire before the not-yet-completed assertion
+        // below, still far under s_testTimeout so the fail-open path is what ends the wait.
+        var gate = new DictationInsertionOrderGate(TimeSpan.FromMilliseconds(500));
         gate.Reserve(1);
         gate.Reserve(2);
 
@@ -141,6 +143,19 @@ public sealed class DictationInsertionOrderGateTests
         var gate = new DictationInsertionOrderGate();
 
         var wait = gate.WaitForTurnAsync(42, CancellationToken.None);
+
+        Assert.True(wait.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public void WaitForTurnAsync_CompletesImmediately_WhenSessionWasNeverReserved()
+    {
+        // No predecessor Release would ever target an unreserved session's waiter, so it must
+        // not queue behind session 1 and sit until the fail-open backstop.
+        var gate = new DictationInsertionOrderGate();
+        gate.Reserve(1);
+
+        var wait = gate.WaitForTurnAsync(2, CancellationToken.None);
 
         Assert.True(wait.IsCompletedSuccessfully);
     }

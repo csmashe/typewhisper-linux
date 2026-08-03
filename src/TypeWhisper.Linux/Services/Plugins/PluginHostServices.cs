@@ -352,7 +352,10 @@ public sealed class PluginHostServices : IPluginHostServices
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
-                // A genuinely absent file is an empty store, not a load failure.
+                // A genuinely absent file is an empty store, not a load failure. Clear the flag
+                // too: an earlier unreadable-file failure has nothing left to protect once the
+                // file is gone, and leaving it set would reject every save from here on.
+                _loadFailed = false;
                 _settingsCache = [];
                 return _settingsCache;
             }
@@ -365,8 +368,9 @@ public sealed class PluginHostServices : IPluginHostServices
                     $"Plugin '{_pluginDisplayName}' ({_pluginId}) settings could not be read; saves are disabled to protect the existing file: {ex.Message}"
                 );
                 _loadFailed = true;
-                _settingsCache = [];
-                return _settingsCache;
+                // Deliberately not cached: the failure may be transient (a lock, a brief
+                // permissions blip), so the next call re-reads instead of being stuck empty.
+                return [];
             }
 
             try
@@ -376,17 +380,17 @@ public sealed class PluginHostServices : IPluginHostServices
                         json,
                         s_jsonOptions
                     ) ?? throw new JsonException("The settings file contained null JSON.");
+                _loadFailed = false;
             }
             catch (JsonException ex)
             {
                 Trace.WriteLine($"[Plugin:{_pluginId}] Failed to parse settings: {ex.Message}");
                 var brokenPath = PreserveBrokenFile(_settingsFilePath);
-                if (brokenPath is null && File.Exists(_settingsFilePath))
-                {
-                    // The corrupt original is still on disk; overwriting it would lose the only
-                    // copy, so disable saves until it is dealt with.
-                    _loadFailed = true;
-                }
+                // Saves stay disabled only while the corrupt original is still the sole copy on
+                // disk; once it has been preserved elsewhere (or has vanished) there is nothing
+                // left to overwrite. Assigned rather than only set, so a stale flag from an
+                // earlier unreadable-file failure clears on this recovery.
+                _loadFailed = brokenPath is null && File.Exists(_settingsFilePath);
 
                 AddSettingsError(
                     brokenPath is null

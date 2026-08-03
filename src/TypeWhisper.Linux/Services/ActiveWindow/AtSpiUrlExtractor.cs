@@ -75,14 +75,24 @@ public sealed partial class AtSpiUrlExtractor
     private string? _missProcessName;
     private string? _missTitle;
 
+    // Test seam standing in for the AT-SPI tree walk, so the cache/miss-backoff state machine
+    // can be exercised without busctl, gdbus, or a live a11y bus. Always null in production.
+    private readonly Func<string, string?>? _walkOverride;
+
     public AtSpiUrlExtractor()
         : this(null)
     {
     }
 
     public AtSpiUrlExtractor(IErrorLogService? errorLog)
+        : this(errorLog, walkOverride: null)
+    {
+    }
+
+    internal AtSpiUrlExtractor(IErrorLogService? errorLog, Func<string, string?>? walkOverride)
     {
         _errorLog = errorLog;
+        _walkOverride = walkOverride;
     }
 
     public string? TryGetBrowserUrl(
@@ -137,22 +147,39 @@ public sealed partial class AtSpiUrlExtractor
             }
         }
 
-        if (!s_isBusctlAvailable || !s_isGdbusAvailable)
+        string? url;
+        if (_walkOverride is not null)
         {
-            LogOnce("AT-SPI URL walk skipped: busctl/gdbus not on PATH.");
-            return null;
+            url = _walkOverride(processHint);
         }
-
-        var address = GetAtSpiBusAddress();
-        if (string.IsNullOrWhiteSpace(address))
+        else
         {
-            LogOnce("AT-SPI URL walk skipped: a11y bus address not resolvable via gdbus.");
-            return null;
-        }
+            if (!s_isBusctlAvailable || !s_isGdbusAvailable)
+            {
+                LogOnce("AT-SPI URL walk skipped: busctl/gdbus not on PATH.");
+                return null;
+            }
 
-        using var cts = new CancellationTokenSource(s_walkBudget);
-        var stats = new WalkStats();
-        var url = WalkForUrl(address, processHint, stats, cts.Token);
+            var address = GetAtSpiBusAddress();
+            if (string.IsNullOrWhiteSpace(address))
+            {
+                LogOnce("AT-SPI URL walk skipped: a11y bus address not resolvable via gdbus.");
+                return null;
+            }
+
+            using var cts = new CancellationTokenSource(s_walkBudget);
+            var stats = new WalkStats();
+            url = WalkForUrl(address, processHint, stats, cts.Token);
+            LogOnce(
+                BuildDiagnosticLine(
+                    processHint,
+                    focusedTitle,
+                    stats,
+                    url,
+                    cts.IsCancellationRequested
+                )
+            );
+        }
 
         lock (_cacheLock)
         {
@@ -177,9 +204,6 @@ public sealed partial class AtSpiUrlExtractor
             }
         }
 
-        LogOnce(
-            BuildDiagnosticLine(processHint, focusedTitle, stats, url, cts.IsCancellationRequested)
-        );
         return url;
     }
 

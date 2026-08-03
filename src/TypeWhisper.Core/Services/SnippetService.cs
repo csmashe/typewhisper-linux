@@ -327,6 +327,9 @@ public sealed partial class SnippetService : ISnippetService
                 return;
             }
 
+            // Deliberately the reverse of the mutating APIs, which persist before swapping the
+            // cache: usage counts are best-effort telemetry on the dictation path, so a failed
+            // write must not cost the in-memory increment too.
             _cache = next;
             try
             {

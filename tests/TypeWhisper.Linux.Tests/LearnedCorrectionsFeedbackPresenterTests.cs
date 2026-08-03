@@ -139,11 +139,25 @@ public sealed class LearnedCorrectionsFeedbackPresenterTests
         errorLog.Verify(
             e => e.AddEntry(It.IsAny<string>(), ErrorCategory.General),
             Times.Once);
+    }
 
-        // A successful retry must act on the retained batch.
+    [Fact]
+    public void Undo_AfterAFailedUndo_RetriesTheRetainedBatchAndConfirms()
+    {
+        var (presenter, dictionary, _, _, emitted) = CreateSut();
+        var batch = new[] { Correction("1", "teh", "the") };
+        presenter.ShowLearned(batch);
+        dictionary
+            .Setup(d => d.UndoLearnedCorrections(
+                It.IsAny<IEnumerable<LearnedDictionaryCorrection>>()))
+            .Throws(new IOException("disk full"));
+        presenter.Undo();
+        Assert.True(presenter.HasPendingBatch);
+
         emitted.Clear();
         dictionary.Setup(d => d.UndoLearnedCorrections(
             It.IsAny<IEnumerable<LearnedDictionaryCorrection>>()));
+
         presenter.Undo();
 
         Assert.False(presenter.HasPendingBatch);

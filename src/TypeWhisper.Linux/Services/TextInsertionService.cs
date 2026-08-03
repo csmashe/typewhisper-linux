@@ -59,8 +59,10 @@ public sealed class TextInsertionService
     private const int PasteAttemptCount = 3;
     private const string ClipboardNonTextCouldNotRestoreMessage =
         "Clipboard preservation skipped: the previous clipboard offered a non-text format (e.g. an image or file list) that cannot be captured as plain text, so it was replaced and could not be restored.";
+    // Both call sites reach here after the dictated text is already on the clipboard, so the
+    // message must not imply the previous content survived.
     private const string ClipboardRichRestoreSkippedMessage =
-        "Clipboard preservation skipped: the previous clipboard also offered a richer, non-text format (e.g. HTML) that would be lost if restored as plain text, so it was left as-is instead of a lossy restore.";
+        "Clipboard preservation skipped: the previous clipboard also offered a richer, non-text format (e.g. HTML) that a plain-text restore would have lost, so it was not restored. The clipboard now holds the dictated text — copy the original content again if you still need it.";
     private const string ClipboardUnprovableRestoreSkippedMessage =
         "Clipboard preservation skipped: the clipboard no longer reads back as text — another app may have replaced it with an image or file list — so the previous text was not restored over it.";
     private const string ClipboardRichRestoreLossyMessage =
@@ -1009,6 +1011,12 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             "MULTIPLE",
             "SAVE_TARGETS",
             "TIMESTAMP",
+            // ICCCM metadata and side-effect targets that Xt/Motif-based owners routinely
+            // advertise. Treating them as content would strand the clipboard on plain-text copies.
+            "LENGTH",
+            "DELETE",
+            "INSERT_SELECTION",
+            "INSERT_PROPERTY",
             "STRING",
             "UTF8_STRING",
             "TEXT",

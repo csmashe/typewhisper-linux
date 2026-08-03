@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -58,7 +59,7 @@ public sealed class ErrorLogService : IErrorLogService
             SaveToDisk();
         }
 
-        EntriesChanged?.Invoke();
+        RaiseEntriesChanged();
     }
 
     public void ClearAll()
@@ -69,7 +70,31 @@ public sealed class ErrorLogService : IErrorLogService
             SaveToDisk();
         }
 
-        EntriesChanged?.Invoke();
+        RaiseEntriesChanged();
+    }
+
+    // Callers report errors from inside their own catch blocks; a throwing subscriber must not
+    // escape from there and take down the operation that was trying to report a failure.
+    private void RaiseEntriesChanged()
+    {
+        foreach (var subscriber in EntriesChanged?.GetInvocationList() ?? [])
+        {
+            try
+            {
+                ((Action)subscriber)();
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    Trace.WriteLine($"[ErrorLogService] An EntriesChanged subscriber threw: {ex}");
+                }
+                catch
+                {
+                    /* logging must never throw: ToString is virtual and listeners can fail */
+                }
+            }
+        }
     }
 
     public string ExportDiagnostics()
