@@ -24,7 +24,7 @@ public sealed class RecordingNotificationServiceTests
             AppSettings.Default with
             {
                 Mode = RecordingMode.PushToTalk,
-                PreviewBubbleAutoHideMilliseconds = terminalExpiry
+                PreviewBubbleAutoHideMilliseconds = terminalExpiry,
             }
         );
         service.Initialize();
@@ -34,7 +34,7 @@ public sealed class RecordingNotificationServiceTests
             {
                 IsOverlayVisible = true,
                 IsRecording = true,
-                StatusText = Loc.Instance["Dictation.StatusRecording"]
+                StatusText = Loc.Instance["Dictation.StatusRecording"],
             }
         );
         await service.WaitForIdleAsync().WaitAsync(s_testGuard);
@@ -44,7 +44,7 @@ public sealed class RecordingNotificationServiceTests
             new DictationOverlayState
             {
                 IsOverlayVisible = true,
-                StatusText = processing
+                StatusText = processing,
             }
         );
         await service.WaitForIdleAsync().WaitAsync(s_testGuard);
@@ -54,7 +54,7 @@ public sealed class RecordingNotificationServiceTests
             new DictationOverlayState
             {
                 ShowFeedback = true,
-                FeedbackText = success
+                FeedbackText = success,
             }
         );
         await service.WaitForIdleAsync().WaitAsync(s_testGuard);
@@ -90,7 +90,7 @@ public sealed class RecordingNotificationServiceTests
         var settings = AppSettings.Default with
         {
             PreviewBubbleAutoHideMilliseconds =
-                AppSettings.MaxPreviewBubbleAutoHideMilliseconds + 500
+                AppSettings.MaxPreviewBubbleAutoHideMilliseconds + 500,
         };
         var (source, runner, service) = CreateSut(settings);
         service.Initialize();
@@ -104,7 +104,7 @@ public sealed class RecordingNotificationServiceTests
                 ShowFeedback = true,
                 FeedbackIsError = isError,
                 FeedbackText = feedbackText,
-                IsRecording = false
+                IsRecording = false,
             }
         );
         await service.WaitForIdleAsync().WaitAsync(s_testGuard);
@@ -130,7 +130,7 @@ public sealed class RecordingNotificationServiceTests
             IsRecording = true,
             PartialText = "one",
             ActiveProfileName = "Profile A",
-            ActiveAppName = "Editor"
+            ActiveAppName = "Editor",
         };
 
         source.Raise(recording);
@@ -141,7 +141,7 @@ public sealed class RecordingNotificationServiceTests
                 PartialText = "one two",
                 ActiveProfileName = "Profile B",
                 ActiveAppName = "Terminal",
-                SessionStartedAtUtc = DateTime.UtcNow
+                SessionStartedAtUtc = DateTime.UtcNow,
             }
         );
         await service.WaitForIdleAsync().WaitAsync(s_testGuard);
@@ -149,7 +149,7 @@ public sealed class RecordingNotificationServiceTests
         var processing = new DictationOverlayState
         {
             IsOverlayVisible = true,
-            StatusText = Loc.Instance["Overlay.Processing"]
+            StatusText = Loc.Instance["Overlay.Processing"],
         };
         source.Raise(processing);
         await service.WaitForIdleAsync().WaitAsync(s_testGuard);
@@ -158,7 +158,7 @@ public sealed class RecordingNotificationServiceTests
             {
                 PartialText = "ignored preview",
                 ActiveProfileName = "Profile C",
-                ActiveAppName = "Browser"
+                ActiveAppName = "Browser",
             }
         );
         await service.WaitForIdleAsync().WaitAsync(s_testGuard);
@@ -185,7 +185,7 @@ public sealed class RecordingNotificationServiceTests
 
         var zeroSettings = AppSettings.Default with
         {
-            PreviewBubbleAutoHideMilliseconds = -100
+            PreviewBubbleAutoHideMilliseconds = -100,
         };
         var (zeroSource, zeroRunner, zeroService) = CreateSut(zeroSettings);
         zeroService.Initialize();
@@ -196,7 +196,7 @@ public sealed class RecordingNotificationServiceTests
             new DictationOverlayState
             {
                 ShowFeedback = true,
-                FeedbackText = "Finished"
+                FeedbackText = "Finished",
             }
         );
         await zeroService.WaitForIdleAsync().WaitAsync(s_testGuard);
@@ -224,7 +224,7 @@ public sealed class RecordingNotificationServiceTests
             new DictationOverlayState
             {
                 IsOverlayVisible = true,
-                StatusText = Loc.Instance["Overlay.Processing"]
+                StatusText = Loc.Instance["Overlay.Processing"],
             }
         );
         const string terminal = "Dictation inserted";
@@ -232,7 +232,7 @@ public sealed class RecordingNotificationServiceTests
             new DictationOverlayState
             {
                 ShowFeedback = true,
-                FeedbackText = terminal
+                FeedbackText = terminal,
             }
         );
         Assert.Single(runner.Invocations);
@@ -284,7 +284,7 @@ public sealed class RecordingNotificationServiceTests
             new DictationOverlayState
             {
                 IsOverlayVisible = true,
-                StatusText = Loc.Instance["Overlay.Processing"]
+                StatusText = Loc.Instance["Overlay.Processing"],
             }
         );
 

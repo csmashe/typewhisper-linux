@@ -29,7 +29,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         "com.typewhisper.soniox",
         "com.typewhisper.speechmatics",
         "com.typewhisper.voxtral",
-        "com.typewhisper.whisper-cpp"
+        "com.typewhisper.whisper-cpp",
     ];
 
     private static readonly HashSet<string> s_llmPluginIds =
@@ -42,7 +42,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         "com.typewhisper.gemma-local",
         "com.typewhisper.groq",
         "com.typewhisper.openai-compatible",
-        "com.typewhisper.openrouter"
+        "com.typewhisper.openrouter",
     ];
 
     private static readonly HashSet<string> s_actionPluginIds =
@@ -50,18 +50,18 @@ public partial class PluginsSectionViewModel : ObservableObject
         "com.typewhisper.linear",
         "com.typewhisper.obsidian",
         "com.typewhisper.script",
-        "com.typewhisper.webhook"
+        "com.typewhisper.webhook",
     ];
 
     private static readonly HashSet<string> s_memoryPluginIds =
     [
         "com.typewhisper.file-memory",
-        "com.typewhisper.openai-vector-memory"
+        "com.typewhisper.openai-vector-memory",
     ];
 
     private static readonly HashSet<string> s_utilityPluginIds =
     [
-        "com.typewhisper.openai-compatible"
+        "com.typewhisper.openai-compatible",
     ];
 
     private readonly IErrorLogService? _errorLog;
@@ -718,7 +718,7 @@ internal static class PluginCategories
             ),
             "action" => new PluginCategoryInfo("action", Loc.Instance["Plugins.CategoryAction"], 3),
             "memory" => new PluginCategoryInfo("memory", Loc.Instance["Plugins.CategoryMemory"], 4),
-            _ => new PluginCategoryInfo("utility", Loc.Instance["Plugins.CategoryUtility"], 5)
+            _ => new PluginCategoryInfo("utility", Loc.Instance["Plugins.CategoryUtility"], 5),
         };
     }
 
@@ -732,7 +732,7 @@ internal static class PluginCategories
                 "post-processing",
             "action" => "action",
             "memory" => "memory",
-            _ => "utility"
+            _ => "utility",
         };
     }
 }

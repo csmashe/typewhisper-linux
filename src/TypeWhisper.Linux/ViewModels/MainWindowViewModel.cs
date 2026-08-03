@@ -95,7 +95,7 @@ public partial class MainWindowViewModel : ObservableObject
             new NavItem("Nav.General", Symbol.Settings, General, false),
             new NavItem("Nav.Appearance", Symbol.Color, Appearance, false),
             new NavItem("Nav.Advanced", Symbol.AppsSettings, Advanced, false),
-            new NavItem("Nav.About", Symbol.Info, About, false)
+            new NavItem("Nav.About", Symbol.Info, About, false),
         ];
 
         SelectedItem = NavItems.First(i => i.Content is DashboardSectionViewModel);

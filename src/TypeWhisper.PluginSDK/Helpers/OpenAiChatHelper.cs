@@ -168,7 +168,7 @@ public static class OpenAiChatHelper
             {
                 401 => "Invalid API key",
                 429 => "Rate limit reached, please wait",
-                _ => $"API error {(int)response.StatusCode}: {OpenAiApiHelper.ExtractErrorMessage(errorBody)}"
+                _ => $"API error {(int)response.StatusCode}: {OpenAiApiHelper.ExtractErrorMessage(errorBody)}",
             };
             throw new InvalidOperationException(message);
         }
@@ -382,8 +382,8 @@ public static class OpenAiChatHelper
             ["model"] = model,
             ["messages"] = new object[]
             {
-                new { role = "system", content = systemPrompt }, new { role = "user", content = userText }
-            }
+                new { role = "system", content = systemPrompt }, new { role = "user", content = userText },
+            },
         };
 
         if (temperature is not null)

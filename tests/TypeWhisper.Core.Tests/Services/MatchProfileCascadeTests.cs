@@ -161,7 +161,7 @@ public sealed class MatchProfileCascadeTests : IDisposable
             IsEnabled = true,
             Priority = priority,
             ProcessNames = processNames,
-            UrlPatterns = urlPatterns
+            UrlPatterns = urlPatterns,
         };
     }
 }

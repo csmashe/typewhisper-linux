@@ -117,7 +117,7 @@ public sealed class DictationShortcutSpecFactoryTests : IDisposable
             settings.Current with
             {
                 Mode = mode,
-                ToggleHotkey = trigger
+                ToggleHotkey = trigger,
             }
         );
         return settings;
@@ -131,7 +131,7 @@ public sealed class DictationShortcutSpecFactoryTests : IDisposable
             "sway" => new SwayShortcutWriter(),
             "gnome" => new GnomeShortcutWriter(),
             "kde" => new KdeShortcutWriter(),
-            _ => throw new ArgumentOutOfRangeException(nameof(writerId), writerId, null)
+            _ => throw new ArgumentOutOfRangeException(nameof(writerId), writerId, null),
         };
     }
 }

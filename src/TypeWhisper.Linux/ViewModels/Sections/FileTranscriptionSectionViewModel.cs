@@ -723,7 +723,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
                 FileTranscriptionEngineOverride = CleanSettingValue(
                     FileTranscriptionEngineOverride
                 ),
-                FileTranscriptionModelOverride = CleanSettingValue(FileTranscriptionModelOverride)
+                FileTranscriptionModelOverride = CleanSettingValue(FileTranscriptionModelOverride),
             }
         );
     }
@@ -747,7 +747,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
                 WatchFolderDeleteSource = WatchFolderDeleteSource,
                 WatchFolderLanguage = string.IsNullOrWhiteSpace(WatchFolderLanguage)
                     ? "auto"
-                    : WatchFolderLanguage
+                    : WatchFolderLanguage,
             }
         );
 

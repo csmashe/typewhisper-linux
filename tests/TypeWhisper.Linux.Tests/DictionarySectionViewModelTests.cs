@@ -59,7 +59,7 @@ public sealed class DictionarySectionViewModelTests : IDisposable
             EntryType = DictionaryEntryType.Correction,
             Original = "wispr",
             Replacement = "Wispr",
-            Priority = 1
+            Priority = 1,
         };
         dictionary.AddEntry(entry);
         var sut = CreateViewModel(dictionary);
@@ -86,22 +86,22 @@ public sealed class DictionarySectionViewModelTests : IDisposable
             {
                 Id = "low",
                 EntryType = DictionaryEntryType.Term,
-                Original = "alpha"
+                Original = "alpha",
             },
             new DictionaryEntry
             {
                 Id = "priority",
                 EntryType = DictionaryEntryType.Term,
                 Original = "beta",
-                Priority = 5
+                Priority = 5,
             },
             new DictionaryEntry
             {
                 Id = "starred",
                 EntryType = DictionaryEntryType.Term,
                 Original = "gamma",
-                IsStarred = true
-            }
+                IsStarred = true,
+            },
         ]);
 
         var sut = CreateViewModel(dictionary);

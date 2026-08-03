@@ -361,7 +361,7 @@ public sealed class LinuxDictationReadbackLanguagePolicyTests
             new(PostProcessingStepNames.Formatting, Changed: true),
             new(PostProcessingStepNames.Cleanup, Changed: true),
             new(PostProcessingStepNames.Dictionary, Changed: true),
-            new(PostProcessingStepNames.Snippets, Changed: true)
+            new(PostProcessingStepNames.Snippets, Changed: true),
         ];
 
         var language = LinuxDictationReadbackLanguagePolicy.Resolve(

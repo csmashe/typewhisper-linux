@@ -85,8 +85,8 @@ public sealed class HotkeyServiceTests
                 Id = "other",
                 Name = "Other",
                 SystemPrompt = "x",
-                HotkeyKey = "Alt+F8"
-            }
+                HotkeyKey = "Alt+F8",
+            },
         };
 
         var result = hotkey.ValidatePromptActionHotkeyCandidate(
@@ -112,8 +112,8 @@ public sealed class HotkeyServiceTests
             {
                 Id = "other",
                 Name = "Other",
-                HotkeyData = "Right Ctrl"
-            }
+                HotkeyData = "Right Ctrl",
+            },
         };
 
         var result = hotkey.ValidatePromptActionHotkeyCandidate(
@@ -140,7 +140,7 @@ public sealed class HotkeyServiceTests
                 Id = "edited-action",
                 Name = "Edited",
                 SystemPrompt = "x",
-                HotkeyKey = "alt+f8"
+                HotkeyKey = "alt+f8",
             },
             new PromptAction
             {
@@ -148,8 +148,8 @@ public sealed class HotkeyServiceTests
                 Name = "Disabled",
                 SystemPrompt = "x",
                 HotkeyKey = "Alt+F8",
-                IsEnabled = false
-            }
+                IsEnabled = false,
+            },
         };
         var profiles = new[]
         {
@@ -157,15 +157,15 @@ public sealed class HotkeyServiceTests
             {
                 Id = "edited-profile",
                 Name = "Edited",
-                HotkeyData = "Meta+F9"
+                HotkeyData = "Meta+F9",
             },
             new Profile
             {
                 Id = "disabled-profile",
                 Name = "Disabled",
                 HotkeyData = "Meta+F9",
-                IsEnabled = false
-            }
+                IsEnabled = false,
+            },
         };
 
         var actionResult = hotkey.ValidatePromptActionHotkeyCandidate(
@@ -223,7 +223,7 @@ public sealed class HotkeyServiceTests
             Id = "disabled",
             Name = "Disabled",
             SystemPrompt = "x",
-            IsEnabled = false
+            IsEnabled = false,
         };
         var enabled = disabled with { Id = "enabled", Name = "Enabled", IsEnabled = true };
 
@@ -297,7 +297,7 @@ public sealed class HotkeyServiceTests
                 null,
                 true,
                 null
-            )
+            ),
         };
         using var hotkey = new HotkeyService(new BackendSelector(() => backend));
 
@@ -319,7 +319,7 @@ public sealed class HotkeyServiceTests
                 "boom",
                 false,
                 null
-            )
+            ),
         };
         using var hotkey = new HotkeyService(new BackendSelector(() => backend));
         string? observed = null;
@@ -396,7 +396,7 @@ public sealed class HotkeyServiceTests
                     "keeper",
                     KeyCode.VcR,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt
-                )
+                ),
             ]
         );
 
@@ -425,7 +425,7 @@ public sealed class HotkeyServiceTests
                     "second",
                     KeyCode.VcR,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt
-                )
+                ),
             ]
         );
 
@@ -461,7 +461,7 @@ public sealed class HotkeyServiceTests
                     "ctrl-chord",
                     KeyCode.VcF12,
                     ModifierMask.LeftCtrl
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -512,7 +512,7 @@ public sealed class HotkeyServiceTests
                     "alpha",
                     KeyCode.VcR,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -536,7 +536,7 @@ public sealed class HotkeyServiceTests
         var entries = new[]
         {
             new PromptActionHotkey("alpha", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt),
-            new PromptActionHotkey("beta", KeyCode.VcT, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)
+            new PromptActionHotkey("beta", KeyCode.VcT, ModifierMask.LeftCtrl | ModifierMask.LeftAlt),
         };
 
         hotkey.SetPromptActionHotkeys(entries);
@@ -559,7 +559,7 @@ public sealed class HotkeyServiceTests
                     Id = "enabled",
                     Name = "E",
                     SystemPrompt = "x",
-                    HotkeyKey = "Ctrl+Alt+R"
+                    HotkeyKey = "Ctrl+Alt+R",
                 },
                 new PromptAction
                 {
@@ -567,21 +567,21 @@ public sealed class HotkeyServiceTests
                     Name = "D",
                     SystemPrompt = "x",
                     IsEnabled = false,
-                    HotkeyKey = "Ctrl+Alt+T"
+                    HotkeyKey = "Ctrl+Alt+T",
                 },
                 new PromptAction
                 {
                     Id = "no-hotkey",
                     Name = "N",
-                    SystemPrompt = "x"
+                    SystemPrompt = "x",
                 },
                 new PromptAction
                 {
                     Id = "bad",
                     Name = "B",
                     SystemPrompt = "x",
-                    HotkeyKey = "Not+a+real+combo"
-                }
+                    HotkeyKey = "Not+a+real+combo",
+                },
             ]
         );
 
@@ -605,7 +605,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcE,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                     ProfileHotkeyBehavior.StartDictation
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -633,7 +633,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcS,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                     ProfileHotkeyBehavior.ProcessSelectedText
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -666,7 +666,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcE,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                     ProfileHotkeyBehavior.StartDictation
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -702,7 +702,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcE,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                     ProfileHotkeyBehavior.StartDictation
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -732,7 +732,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcE,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                     ProfileHotkeyBehavior.ProcessSelectedText
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -780,7 +780,7 @@ public sealed class HotkeyServiceTests
         foreach (var snapshot in new[]
                  {
                      actionFirstBackend.LastSet,
-                     profileFirstBackend.LastSet
+                     profileFirstBackend.LastSet,
                  })
         {
             Assert.NotNull(snapshot);
@@ -808,7 +808,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcR,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                     ProfileHotkeyBehavior.StartDictation
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -829,7 +829,7 @@ public sealed class HotkeyServiceTests
         PromptActionHotkey[] actions =
         [
             new("action-winner", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt),
-            new("action-only", KeyCode.VcT, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)
+            new("action-only", KeyCode.VcT, ModifierMask.LeftCtrl | ModifierMask.LeftAlt),
         ];
         ProfileHotkey[] profiles =
         [
@@ -844,7 +844,7 @@ public sealed class HotkeyServiceTests
                 KeyCode.VcE,
                 ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                 ProfileHotkeyBehavior.ProcessSelectedText
-            )
+            ),
         ];
         var incrementalBackend = new TestShortcutBackend();
         var freshBackend = new TestShortcutBackend();
@@ -905,7 +905,7 @@ public sealed class HotkeyServiceTests
                     "",
                     KeyCode.VcT,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt
-                )
+                ),
             ],
             [
                 new ProfileHotkey(
@@ -919,7 +919,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcE,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                     ProfileHotkeyBehavior.ProcessSelectedText
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -980,7 +980,7 @@ public sealed class HotkeyServiceTests
                 KeyCode.VcR,
                 ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                 ProfileHotkeyBehavior.StartDictation
-            )
+            ),
         };
         hotkey.SetProfileHotkeys(profiles);
 
@@ -1009,33 +1009,33 @@ public sealed class HotkeyServiceTests
                     Id = "dictate",
                     Name = "Dictate",
                     HotkeyData = "Ctrl+Alt+E",
-                    HotkeyBehavior = ProfileHotkeyBehavior.StartDictation
+                    HotkeyBehavior = ProfileHotkeyBehavior.StartDictation,
                 },
                 new Profile
                 {
                     Id = "selection",
                     Name = "Selection",
                     HotkeyData = "Ctrl+Alt+S",
-                    HotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText
+                    HotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
                 },
                 new Profile
                 {
                     Id = "disabled",
                     Name = "Disabled",
                     IsEnabled = false,
-                    HotkeyData = "Ctrl+Alt+T"
+                    HotkeyData = "Ctrl+Alt+T",
                 },
                 new Profile
                 {
                     Id = "no-hotkey",
-                    Name = "None"
+                    Name = "None",
                 },
                 new Profile
                 {
                     Id = "bad",
                     Name = "Bad",
-                    HotkeyData = "Not+a+real+combo"
-                }
+                    HotkeyData = "Not+a+real+combo",
+                },
             ]
         );
 
@@ -1064,7 +1064,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcR,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                     ProfileHotkeyBehavior.StartDictation
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -1308,7 +1308,7 @@ public sealed class HotkeyServiceTests
                     "keeper",
                     KeyCode.VcR,
                     ModifierMask.LeftAlt | ModifierMask.LeftMeta
-                )
+                ),
             ]
         );
 
@@ -1338,7 +1338,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcF11,
                     ModifierMask.LeftMeta,
                     ProfileHotkeyBehavior.StartDictation
-                )
+                ),
             ]
         );
         hotkey.IsCancelShortcutEnabled = true;
@@ -1435,7 +1435,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcF11,
                     ModifierMask.LeftMeta,
                     ProfileHotkeyBehavior.StartDictation
-                )
+                ),
             ]
         );
         hotkey.Initialize();

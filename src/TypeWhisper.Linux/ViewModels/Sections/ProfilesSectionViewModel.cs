@@ -206,13 +206,13 @@ public partial class ProfilesSectionViewModel : ObservableObject
         new(ProfileStylePreset.CasualMessage, Loc.Instance["Profiles.StylePresetCasualMessage"]),
         new(ProfileStylePreset.Developer, Loc.Instance["Profiles.StylePresetDeveloper"]),
         new(ProfileStylePreset.TerminalSafe, Loc.Instance["Profiles.StylePresetTerminalSafe"]),
-        new(ProfileStylePreset.MeetingNotes, Loc.Instance["Profiles.StylePresetMeetingNotes"])
+        new(ProfileStylePreset.MeetingNotes, Loc.Instance["Profiles.StylePresetMeetingNotes"]),
     ];
 
     public ObservableCollection<ProfileHotkeyBehaviorOption> HotkeyBehaviorOptions { get; } =
     [
         new(ProfileHotkeyBehavior.StartDictation, Loc.Instance["Profiles.HotkeyBehaviorStartDictation"]),
-        new(ProfileHotkeyBehavior.ProcessSelectedText, Loc.Instance["Profiles.HotkeyBehaviorProcessSelectedText"])
+        new(ProfileHotkeyBehavior.ProcessSelectedText, Loc.Instance["Profiles.HotkeyBehaviorProcessSelectedText"]),
     ];
 
     public ObservableCollection<NullableCleanupLevelOption> CleanupOverrideOptions { get; } =
@@ -221,7 +221,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         new(CleanupLevel.None, Loc.Instance["Profiles.CleanupNone"]),
         new(CleanupLevel.Light, Loc.Instance["Profiles.CleanupLight"]),
         new(CleanupLevel.Medium, Loc.Instance["Profiles.CleanupMedium"]),
-        new(CleanupLevel.High, Loc.Instance["Profiles.CleanupHigh"])
+        new(CleanupLevel.High, Loc.Instance["Profiles.CleanupHigh"]),
     ];
 
     public ObservableCollection<string> ProcessNameChips { get; } = [];
@@ -327,7 +327,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     [
         new(null, Loc.Instance["Profiles.UseGlobalDefault"]),
         new(true, Loc.Instance["Common.Enabled"]),
-        new(false, Loc.Instance["Common.Disabled"])
+        new(false, Loc.Instance["Common.Disabled"]),
     ];
 
     public TranslationTargetOption? SelectedTranslationTargetOption
@@ -600,7 +600,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             IsEnabled = true,
             Priority = 0,
             ProcessNames = [],
-            UrlPatterns = []
+            UrlPatterns = [],
         };
 
         _profiles.AddProfile(profile);
@@ -635,7 +635,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
                     Loc.Instance["Profiles.HotkeyMalformed"],
                 HotkeyCandidateValidationStatus.MissingEnabledPromptAction =>
                     Loc.Instance["Profiles.HotkeyPromptActionRequired"],
-                _ => Loc.Instance["Profiles.HotkeyCollision"]
+                _ => Loc.Instance["Profiles.HotkeyCollision"],
             };
             return;
         }
@@ -662,7 +662,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             CleanupLevelOverride = EditCleanupLevelOverride,
             DeveloperFormattingOverride = EditDeveloperFormattingOverride,
             Priority = EditPriority,
-            IsEnabled = EditIsEnabled
+            IsEnabled = EditIsEnabled,
         };
 
         var selectedId = SelectedProfile.Id;
@@ -687,7 +687,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             // so a copied hotkey would be silently dead.
             HotkeyData = null,
             CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
+            UpdatedAt = DateTime.UtcNow,
         };
 
         _profiles.AddProfile(duplicate);

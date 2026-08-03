@@ -137,7 +137,7 @@ public partial class FileTranscriptionSection : UserControl
                 Title = Loc.Instance["Dialog.ExportText"],
                 SuggestedFileName = $"{baseName}.txt",
                 DefaultExtension = "txt",
-                FileTypeChoices = [new FilePickerFileType("Text") { Patterns = ["*.txt"] }]
+                FileTypeChoices = [new FilePickerFileType("Text") { Patterns = ["*.txt"] }],
             }
         );
 
@@ -189,7 +189,7 @@ public partial class FileTranscriptionSection : UserControl
                 Title = $"Export {label}",
                 SuggestedFileName = $"{baseName}.{extension}",
                 DefaultExtension = extension,
-                FileTypeChoices = [new FilePickerFileType(label) { Patterns = [$"*.{extension}"] }]
+                FileTypeChoices = [new FilePickerFileType(label) { Patterns = [$"*.{extension}"] }],
             }
         );
 

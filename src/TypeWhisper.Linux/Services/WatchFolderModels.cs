@@ -7,7 +7,7 @@ public enum WatchFolderOutputFormat
     Markdown,
     PlainText,
     Srt,
-    Vtt
+    Vtt,
 }
 
 public sealed record WatchFolderOptions(
@@ -68,7 +68,7 @@ public static class WatchFolderOutputFormats
             WatchFolderOutputFormat.PlainText => "txt",
             WatchFolderOutputFormat.Srt => "srt",
             WatchFolderOutputFormat.Vtt => "vtt",
-            _ => "md"
+            _ => "md",
         };
     }
 }

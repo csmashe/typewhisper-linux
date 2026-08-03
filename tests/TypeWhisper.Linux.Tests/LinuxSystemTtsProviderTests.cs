@@ -254,7 +254,7 @@ public sealed class LinuxSystemTtsProviderTests
         {
             "success" => Success(),
             "not-started" => new ProcessRunResult(false, false, -1, "", "launch failed"),
-            _ => throw new ArgumentOutOfRangeException(nameof(outcome))
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome)),
         };
         var runner = ControlledProcessRunner.WithImmediateResult(result);
         using var provider = CreateProvider("spd-say", runner);
@@ -504,7 +504,7 @@ public sealed class LinuxSystemTtsProviderTests
             "failed" => new ProcessRunResult(false, false, -1, "", "launch failed"),
             "timed-out" => new ProcessRunResult(true, true, -1, "", ""),
             "throwing" => null,
-            _ => throw new ArgumentOutOfRangeException(nameof(outcome))
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome)),
         };
         var runner = ControlledProcessRunner.WithPendingResults(2);
         using var provider = CreateProvider("spd-say", runner);
@@ -592,7 +592,7 @@ public sealed class LinuxSystemTtsProviderTests
             "not-started" => new ProcessRunResult(false, false, -1, "", "launch failed"),
             "non-zero" => new ProcessRunResult(true, false, 23, "", "failed"),
             "timed-out" => new ProcessRunResult(true, true, -1, "", ""),
-            _ => throw new ArgumentOutOfRangeException(nameof(failure))
+            _ => throw new ArgumentOutOfRangeException(nameof(failure)),
         };
         var runner = ControlledProcessRunner.WithImmediateResult(result);
         using var provider = CreateProvider("espeak", runner);

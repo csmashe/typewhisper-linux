@@ -15,7 +15,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteSucceeds = true
+            PasteSucceeds = true,
         };
         var sut = new TextInsertionService(platform);
 
@@ -33,7 +33,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteSucceeds = false
+            PasteSucceeds = false,
         };
         var confirmation = new FakePasteConfirmationSource { Result = true };
         var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
@@ -56,7 +56,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteResults = new Queue<bool>([false, false, true])
+            PasteResults = new Queue<bool>([false, false, true]),
         };
         var sut = new TextInsertionService(platform);
 
@@ -81,9 +81,9 @@ public sealed class TextInsertionServiceTests
                 [
                     "previous", // snapshot of the user's clipboard
                     "previous", // verify attempt 1 — wl-copy not serving yet
-                    "new text" // verify attempt 2 — serving
+                    "new text", // verify attempt 2 — serving
                 ]
-            )
+            ),
         };
         var sut = new TextInsertionService(platform);
 
@@ -111,9 +111,9 @@ public sealed class TextInsertionServiceTests
                 [
                     "previous", // snapshot
                     "previous", "previous", "previous", "previous", // verify pass 1 — all stale
-                    "new text" // verify pass 2 after the re-set — serving
+                    "new text", // verify pass 2 after the re-set — serving
                 ]
-            )
+            ),
         };
         var sut = new TextInsertionService(platform);
 
@@ -140,9 +140,9 @@ public sealed class TextInsertionServiceTests
                 [
                     "previous", // snapshot
                     "previous", "previous", "previous", "previous", // verify pass 1
-                    "previous", "previous", "previous", "previous" // verify pass 2 after re-set
+                    "previous", "previous", "previous", "previous", // verify pass 2 after re-set
                 ]
-            )
+            ),
         };
         var sut = new TextInsertionService(platform);
 
@@ -160,7 +160,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteSucceeds = true
+            PasteSucceeds = true,
         };
         var confirmation = new FakePasteConfirmationSource { Result = true };
         var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
@@ -188,12 +188,12 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = "previous",
             PasteSucceeds = true,
-            OnPasteSent = () => order.Add("ctrl-v")
+            OnPasteSent = () => order.Add("ctrl-v"),
         };
         var confirmation = new FakePasteConfirmationSource
         {
             Result = true,
-            OnBeginWatch = () => order.Add("begin-watch")
+            OnBeginWatch = () => order.Add("begin-watch"),
         };
         var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
 
@@ -215,13 +215,13 @@ public sealed class TextInsertionServiceTests
         var client = new FakeAtSpiEventClient
         {
             CurrentFocusedElement = targetElement,
-            TextByElement = { [targetElement] = "Prefix new text suffix" }
+            TextByElement = { [targetElement] = "Prefix new text suffix" },
         };
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
             PasteSucceeds = true,
-            OnPasteSent = () => client.RaiseTextChanged(targetElement)
+            OnPasteSent = () => client.RaiseTextChanged(targetElement),
         };
         var sut = new TextInsertionService(
             platform,
@@ -255,13 +255,13 @@ public sealed class TextInsertionServiceTests
         var client = new FakeAtSpiEventClient
         {
             CurrentFocusedElement = focusedElement,
-            TextByElement = { [unrelatedElement] = "Background log count: 17" }
+            TextByElement = { [unrelatedElement] = "Background log count: 17" },
         };
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
             PasteSucceeds = true,
-            OnPasteSent = () => client.RaiseTextChanged(unrelatedElement)
+            OnPasteSent = () => client.RaiseTextChanged(unrelatedElement),
         };
         var sut = new TextInsertionService(
             platform,
@@ -289,13 +289,13 @@ public sealed class TextInsertionServiceTests
         var client = new FakeAtSpiEventClient
         {
             CurrentFocusedElement = null,
-            TextByElement = { [changedElement] = "Background log count: 17" }
+            TextByElement = { [changedElement] = "Background log count: 17" },
         };
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
             PasteSucceeds = true,
-            OnPasteSent = () => client.RaiseTextChanged(changedElement)
+            OnPasteSent = () => client.RaiseTextChanged(changedElement),
         };
         var sut = new TextInsertionService(
             platform,
@@ -319,7 +319,7 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = "previous",
             PasteSucceeds = true,
-            OnPasteSent = () => client.RaiseTextChanged(targetElement)
+            OnPasteSent = () => client.RaiseTextChanged(targetElement),
         };
         var sut = new TextInsertionService(
             platform,
@@ -345,13 +345,13 @@ public sealed class TextInsertionServiceTests
         {
             CurrentFocusedElement = targetElement,
             TextByElement = { [targetElement] = "Prefix new text suffix" },
-            PasswordRoleByElement = { [targetElement] = true }
+            PasswordRoleByElement = { [targetElement] = true },
         };
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
             PasteSucceeds = true,
-            OnPasteSent = () => client.RaiseTextChanged(targetElement)
+            OnPasteSent = () => client.RaiseTextChanged(targetElement),
         };
         var sut = new TextInsertionService(
             platform,
@@ -380,8 +380,8 @@ public sealed class TextInsertionServiceTests
             TextByElement =
             {
                 [unrelatedElement] = "Background log count: 17",
-                [targetElement] = "Prefix new text suffix"
-            }
+                [targetElement] = "Prefix new text suffix",
+            },
         };
         var platform = new FakeTextInsertionPlatform
         {
@@ -391,7 +391,7 @@ public sealed class TextInsertionServiceTests
             {
                 client.RaiseTextChanged(unrelatedElement);
                 client.RaiseTextChanged(targetElement);
-            }
+            },
         };
         var sut = new TextInsertionService(
             platform,
@@ -420,7 +420,7 @@ public sealed class TextInsertionServiceTests
             Clipboard = "previous",
             PasteSucceeds = true,
             OnPasteSent = () => order.Add("paste"),
-            OnEnterSent = () => order.Add("enter")
+            OnEnterSent = () => order.Add("enter"),
         };
         var confirmation = new FakePasteConfirmationSource
         {
@@ -429,7 +429,7 @@ public sealed class TextInsertionServiceTests
             {
                 order.Add("gate");
                 Assert.False(platform.EnterSent);
-            }
+            },
         };
         var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
 
@@ -460,7 +460,7 @@ public sealed class TextInsertionServiceTests
                     order.Add("floor");
                 }
             },
-            OnEnterSent = () => order.Add("enter")
+            OnEnterSent = () => order.Add("enter"),
         };
         var confirmation = new FakePasteConfirmationSource { Result = null };
         var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
@@ -499,7 +499,7 @@ public sealed class TextInsertionServiceTests
                     order.Add("floor");
                 }
             },
-            OnEnterSent = () => order.Add("enter")
+            OnEnterSent = () => order.Add("enter"),
         };
         var sut = new TextInsertionService(platform);
 
@@ -525,7 +525,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteSucceeds = true
+            PasteSucceeds = true,
         };
         var sut = new TextInsertionService(
             platform,
@@ -545,7 +545,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteSucceeds = true
+            PasteSucceeds = true,
         };
         var sut = new TextInsertionService(platform);
 
@@ -564,7 +564,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteSucceeds = true
+            PasteSucceeds = true,
         };
         var confirmation = new FakePasteConfirmationSource { SourceNotRunning = true };
         var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
@@ -586,7 +586,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteSucceeds = true
+            PasteSucceeds = true,
         };
         var confirmation = new FakePasteConfirmationSource { Result = null };
         var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
@@ -615,9 +615,9 @@ public sealed class TextInsertionServiceTests
                 [
                     "previous", // snapshot
                     "new text", // verify — serving
-                    "user copied meanwhile" // ownership check before restore
+                    "user copied meanwhile", // ownership check before restore
                 ]
-            )
+            ),
         };
         var confirmation = new FakePasteConfirmationSource { Result = true };
         var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
@@ -643,9 +643,9 @@ public sealed class TextInsertionServiceTests
                 [
                     "previous", // snapshot
                     "new text", // verify — serving
-                    null // ownership check — clipboard no longer reads back as text
+                    null, // ownership check — clipboard no longer reads back as text
                 ]
-            )
+            ),
         };
         var confirmation = new FakePasteConfirmationSource { Result = true };
         var sut = new TextInsertionService(platform, pasteConfirmation: confirmation);
@@ -667,7 +667,7 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = null,
             ClipboardHasNonTextFormats = false,
-            PasteSucceeds = true
+            PasteSucceeds = true,
         };
         var confirmation = new FakePasteConfirmationSource { Result = true };
         var errorLog = new RecordingErrorLogService();
@@ -691,7 +691,7 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = null,
             ClipboardHasNonTextFormats = true,
-            PasteSucceeds = true
+            PasteSucceeds = true,
         };
         var errorLog = new RecordingErrorLogService();
         var sut = new TextInsertionService(platform, errorLog);
@@ -712,7 +712,7 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = "previous",
             ClipboardHasNonTextFormats = true,
-            PasteSucceeds = true
+            PasteSucceeds = true,
         };
         var confirmation = new FakePasteConfirmationSource { Result = true };
         var errorLog = new RecordingErrorLogService();
@@ -748,7 +748,7 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = "previous",
             ActiveWindowId = "other",
-            ActivateSucceeds = false
+            ActivateSucceeds = false,
         };
         var sut = new TextInsertionService(platform);
 
@@ -775,7 +775,7 @@ public sealed class TextInsertionServiceTests
             Clipboard = "previous",
             TypeSucceeds = false,
             TypeFailureReason = InsertionFailureReason.PartialTypingFailure,
-            LastTypingDeliveredPartialText = true
+            LastTypingDeliveredPartialText = true,
         };
         var sut = new TextInsertionService(platform);
 
@@ -801,7 +801,7 @@ public sealed class TextInsertionServiceTests
             Clipboard = "previous",
             TypeSucceeds = false,
             TypeFailureReason = InsertionFailureReason.YdotoolSocketUnreachable,
-            LastTypingDeliveredPartialText = true
+            LastTypingDeliveredPartialText = true,
         };
         var sut = new TextInsertionService(platform);
 
@@ -827,7 +827,7 @@ public sealed class TextInsertionServiceTests
             TypeSucceeds = false,
             TypeFailureReason = InsertionFailureReason.YdotoolSocketUnreachable,
             PasteSucceeds = false,
-            PasteFailureReason = InsertionFailureReason.NoWaylandTypingTool
+            PasteFailureReason = InsertionFailureReason.NoWaylandTypingTool,
         };
         var sut = new TextInsertionService(platform);
 
@@ -846,7 +846,7 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = "previous",
             ActiveWindowId = "other",
-            ActivateSucceeds = false
+            ActivateSucceeds = false,
         };
         var sut = new TextInsertionService(platform);
 
@@ -876,9 +876,9 @@ public sealed class TextInsertionServiceTests
                 [
                     "previous", // snapshot
                     "previous", "previous", "previous", "previous", // verify pass 1
-                    "previous", "previous", "previous", "previous" // verify pass 2 after re-set
+                    "previous", "previous", "previous", "previous", // verify pass 2 after re-set
                 ]
-            )
+            ),
         };
         var sut = new TextInsertionService(platform);
 
@@ -903,7 +903,7 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = null,
             ActiveWindowId = "other",
-            ActivateSucceeds = false
+            ActivateSucceeds = false,
         };
         var sut = new TextInsertionService(platform);
 
@@ -924,7 +924,7 @@ public sealed class TextInsertionServiceTests
             Clipboard = null,
             ClipboardHasNonTextFormats = true,
             ActiveWindowId = "other",
-            ActivateSucceeds = false
+            ActivateSucceeds = false,
         };
         var errorLog = new RecordingErrorLogService();
         var sut = new TextInsertionService(platform, errorLog);
@@ -956,9 +956,9 @@ public sealed class TextInsertionServiceTests
             ClipboardReadResults = new Queue<string?>(
                 [
                     "previous", // snapshot before staging
-                    "user-copied-this-later" // ownership check during fail-closed restore
+                    "user-copied-this-later", // ownership check during fail-closed restore
                 ]
-            )
+            ),
         };
         var sut = new TextInsertionService(platform);
 
@@ -977,7 +977,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             ClipboardSetAvailable = false,
-            PasteAvailable = true
+            PasteAvailable = true,
         };
         var sut = new TextInsertionService(platform);
 
@@ -993,7 +993,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             ClipboardSetAvailable = true,
-            PasteAvailable = false
+            PasteAvailable = false,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1010,7 +1010,7 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = "previous",
             ClipboardSetAvailable = true,
-            PasteAvailable = false
+            PasteAvailable = false,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1027,7 +1027,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteSucceeds = true
+            PasteSucceeds = true,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1113,7 +1113,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteSucceeds = true
+            PasteSucceeds = true,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1154,7 +1154,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             ClipboardSetAvailable = false,
-            PasteAvailable = true
+            PasteAvailable = true,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1175,7 +1175,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteSucceeds = false
+            PasteSucceeds = false,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1237,7 +1237,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteSucceeds = true
+            PasteSucceeds = true,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1260,7 +1260,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteSucceeds = true
+            PasteSucceeds = true,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1307,7 +1307,7 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = "previous",
             PasteSucceeds = true,
-            PrefersDirectTypingForUnknownTarget = true
+            PrefersDirectTypingForUnknownTarget = true,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1340,7 +1340,7 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = "previous",
             PasteSucceeds = true,
-            PrefersDirectTypingForUnknownTarget = true
+            PrefersDirectTypingForUnknownTarget = true,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1365,7 +1365,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PrefersDirectTypingForUnknownTarget = true
+            PrefersDirectTypingForUnknownTarget = true,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1424,7 +1424,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            PasteAvailable = false
+            PasteAvailable = false,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1442,7 +1442,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            SelectionText = "the selected text"
+            SelectionText = "the selected text",
         };
         var sut = new TextInsertionService(platform);
 
@@ -1461,7 +1461,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            SelectionText = "the selected text"
+            SelectionText = "the selected text",
         };
         var sut = new TextInsertionService(platform);
 
@@ -1498,7 +1498,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "stale clipboard content",
-            SelectionText = null
+            SelectionText = null,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1517,7 +1517,7 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = "previous",
             SelectionText = "the selected text",
-            CopyLandsOnAttempt = 3
+            CopyLandsOnAttempt = 3,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1537,7 +1537,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            SelectionText = null
+            SelectionText = null,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1553,7 +1553,7 @@ public sealed class TextInsertionServiceTests
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
-            CopySucceeds = false
+            CopySucceeds = false,
         };
         var sut = new TextInsertionService(platform);
 
@@ -1572,7 +1572,7 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = null,
             ClipboardHasNonTextFormats = true,
-            SelectionText = null
+            SelectionText = null,
         };
         var errorLog = new RecordingErrorLogService();
         var sut = new TextInsertionService(platform, errorLog);
@@ -1593,7 +1593,7 @@ public sealed class TextInsertionServiceTests
         {
             Clipboard = "previous",
             ClipboardHasNonTextFormats = true,
-            SelectionText = "the selected text"
+            SelectionText = "the selected text",
         };
         var errorLog = new RecordingErrorLogService();
         var sut = new TextInsertionService(platform, errorLog);
@@ -1855,7 +1855,7 @@ public sealed class TextInsertionServiceTests
                 ["keydown", "--clearmodifiers", "Shift_L"],
                 ["key", "v"],
                 ["keyup", "Shift_L"],
-                ["keyup", "Control_L"]
+                ["keyup", "Control_L"],
             ],
             runner.Calls.Select(call => call.Arguments).ToArray()
         );
@@ -2361,7 +2361,7 @@ public sealed class TextInsertionServiceTests
             [
                 ["--", "line one"],
                 ["-M", "shift", "-k", "Return", "-m", "shift"],
-                ["--", "line two"]
+                ["--", "line two"],
             ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
@@ -2490,7 +2490,7 @@ public sealed class TextInsertionServiceTests
                 // LEFTSHIFT(42)+ENTER(28) press/release pairs, with an inter-event delay so the
                 // Shift modifier reliably registers before Enter.
                 ["key", "--key-delay", "25", "42:1", "28:1", "28:0", "42:0"],
-                ["type", "--key-delay", "2", "--key-hold", "2", "--", "line two"]
+                ["type", "--key-delay", "2", "--key-hold", "2", "--", "line two"],
             ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
@@ -2513,7 +2513,7 @@ public sealed class TextInsertionServiceTests
             [
                 ["type", "--clearmodifiers", "--delay", "8", "--", "line one"],
                 ["key", "--clearmodifiers", "shift+Return"],
-                ["type", "--clearmodifiers", "--delay", "8", "--", "line two"]
+                ["type", "--clearmodifiers", "--delay", "8", "--", "line two"],
             ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
@@ -2538,7 +2538,7 @@ public sealed class TextInsertionServiceTests
                 ["--", "first"],
                 ["-M", "shift", "-k", "Return", "-m", "shift"],
                 ["-M", "shift", "-k", "Return", "-m", "shift"],
-                ["--", "second"]
+                ["--", "second"],
             ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
@@ -2560,7 +2560,7 @@ public sealed class TextInsertionServiceTests
             [
                 ["--", "a"],
                 ["-M", "shift", "-k", "Return", "-m", "shift"],
-                ["--", "b"]
+                ["--", "b"],
             ],
             runner.Calls.Select(c => c.Arguments).ToArray()
         );
@@ -2645,7 +2645,7 @@ public sealed class TextInsertionServiceTests
                 -1,
                 string.Empty,
                 string.Empty
-            )
+            ),
         };
     }
 

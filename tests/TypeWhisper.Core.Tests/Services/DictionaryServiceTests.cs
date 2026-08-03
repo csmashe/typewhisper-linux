@@ -36,7 +36,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -52,7 +52,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -69,7 +69,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "A"
+                Original = "A",
             }
         );
         _sut.AddEntry(
@@ -77,7 +77,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "2",
                 EntryType = DictionaryEntryType.Term,
-                Original = "B"
+                Original = "B",
             }
         );
         _sut.AddEntry(
@@ -85,7 +85,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "3",
                 EntryType = DictionaryEntryType.Term,
-                Original = "C"
+                Original = "C",
             }
         );
 
@@ -115,7 +115,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "existing",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -175,7 +175,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "manual",
                 EntryType = DictionaryEntryType.Term,
-                Original = "TypeScript"
+                Original = "TypeScript",
             }
         );
 
@@ -194,7 +194,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "1",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "kubernets",
-                Replacement = "Kubernetes"
+                Replacement = "Kubernetes",
             }
         );
 
@@ -211,7 +211,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "1",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "kubernets",
-                Replacement = "Kubernetes"
+                Replacement = "Kubernetes",
             }
         );
 
@@ -228,7 +228,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "1",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "kubernets",
-                Replacement = "Kubernetes"
+                Replacement = "Kubernetes",
             }
         );
 
@@ -251,7 +251,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "1",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "kubernets",
-                Replacement = "Kubernetes"
+                Replacement = "Kubernetes",
             }
         );
 
@@ -270,7 +270,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "1",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "kubernets",
-                Replacement = "Kubernetes"
+                Replacement = "Kubernetes",
             }
         );
 
@@ -291,7 +291,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "1",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "test",
-                Replacement = "exam"
+                Replacement = "exam",
             }
         );
 
@@ -311,7 +311,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "low",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "type whisper",
-                Replacement = "Type Whisper"
+                Replacement = "Type Whisper",
             }
         );
         _sut.AddEntry(
@@ -321,7 +321,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 EntryType = DictionaryEntryType.Correction,
                 Original = "type whisper",
                 Replacement = "TypeWhisper",
-                Priority = 10
+                Priority = 10,
             }
         );
 
@@ -338,7 +338,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
         _sut.AddEntry(
@@ -346,7 +346,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "2",
                 EntryType = DictionaryEntryType.Term,
-                Original = "Vue"
+                Original = "Vue",
             }
         );
 
@@ -362,7 +362,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -379,7 +379,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
         _sut.AddEntry(
@@ -388,7 +388,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "2",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "teh",
-                Replacement = "the"
+                Replacement = "the",
             }
         );
 
@@ -406,7 +406,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
         _sut.AddEntry(
@@ -415,7 +415,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "2",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "teh",
-                Replacement = "the"
+                Replacement = "the",
             }
         );
 
@@ -473,7 +473,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 EntryType = DictionaryEntryType.Correction,
                 Original = "kubernets",
                 Replacement = "Kubernetes",
-                Source = source
+                Source = source,
             }
         );
 
@@ -489,7 +489,7 @@ public sealed class DictionaryServiceTests : IDisposable
     {
         var learned = _sut.LearnCorrections([
             new CorrectionSuggestion("teh", "the"),
-            new CorrectionSuggestion("recieve", "receive")
+            new CorrectionSuggestion("recieve", "receive"),
         ]);
 
         Assert.Equal(2, learned.Count);
@@ -527,7 +527,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 EntryType = DictionaryEntryType.Correction,
                 Original = "teh",
                 Replacement = "the",
-                Source = source
+                Source = source,
             }
         );
 
@@ -590,7 +590,7 @@ public sealed class DictionaryServiceTests : IDisposable
     {
         var learned = _sut.LearnCorrections([
             new CorrectionSuggestion("teh", "the"),
-            new CorrectionSuggestion("TEH", "thee")
+            new CorrectionSuggestion("TEH", "thee"),
         ]);
 
         Assert.Single(learned);
@@ -604,7 +604,7 @@ public sealed class DictionaryServiceTests : IDisposable
     {
         var learned = _sut.LearnCorrections([
             new CorrectionSuggestion("teh", "the"),
-            new CorrectionSuggestion("recieve", "receive")
+            new CorrectionSuggestion("recieve", "receive"),
         ]);
         _sut.AddEntry(
             new DictionaryEntry
@@ -613,7 +613,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 EntryType = DictionaryEntryType.Correction,
                 Original = "seperate",
                 Replacement = "separate",
-                Source = DictionaryEntrySource.Manual
+                Source = DictionaryEntrySource.Manual,
             }
         );
 
@@ -668,7 +668,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 CaseSensitive = true,
                 IsStarred = true,
                 Priority = 7,
-                Source = DictionaryEntrySource.CorrectionSuggestion
+                Source = DictionaryEntrySource.CorrectionSuggestion,
             }
         );
 
@@ -726,7 +726,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Original = "wispr",
                 Replacement = "Wispr",
                 Priority = 5,
-                Source = DictionaryEntrySource.Manual
+                Source = DictionaryEntrySource.Manual,
             }
         );
 
@@ -762,7 +762,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 IsStarred = true,
                 UsageCount = 12,
                 Priority = 5,
-                Source = DictionaryEntrySource.Manual
+                Source = DictionaryEntrySource.Manual,
             }
         );
 
@@ -809,7 +809,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "existing",
                 EntryType = DictionaryEntryType.Term,
-                Original = "TypeWhisper"
+                Original = "TypeWhisper",
             }
         );
 
@@ -844,7 +844,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -865,7 +865,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
         _sut.DeleteEntry("1");

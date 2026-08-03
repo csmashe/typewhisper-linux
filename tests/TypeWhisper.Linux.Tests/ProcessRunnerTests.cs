@@ -22,7 +22,7 @@ public sealed class ProcessRunnerTests
                     "-c",
                     "sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; exit 0",
                     "process-runner-test",
-                    pidFile
+                    pidFile,
                 ],
                 timeout: TimeSpan.FromSeconds(2)
             );
@@ -314,7 +314,7 @@ public sealed class ProcessRunnerTests
                     "-c",
                     "sleep 30 & child=$!; printf '%s %s' \"$$\" \"$child\" > \"$1\"; exit 0",
                     "process-runner-test",
-                    pidFile
+                    pidFile,
                 ],
                 timeout: TimeSpan.FromSeconds(30),
                 ct: cts.Token

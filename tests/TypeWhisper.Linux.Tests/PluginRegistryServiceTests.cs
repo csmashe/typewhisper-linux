@@ -50,7 +50,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
                 Description = "A Linux-compatible plugin",
                 Size = 1024L,
                 DownloadUrl = "https://example.com/plugin.zip",
-                RequiresApiKey = false
+                RequiresApiKey = false,
             },
             new
             {
@@ -61,8 +61,8 @@ public sealed class PluginRegistryServiceTests : IDisposable
                 Description = "A Windows-only plugin entry for this test",
                 Size = 1024L,
                 DownloadUrl = "https://example.com/live-transcript.zip",
-                RequiresApiKey = false
-            }
+                RequiresApiKey = false,
+            },
         };
 
         var json = JsonSerializer.Serialize(plugins);
@@ -90,8 +90,8 @@ public sealed class PluginRegistryServiceTests : IDisposable
                 Description = "D",
                 Size = 100L,
                 DownloadUrl = "u",
-                RequiresApiKey = false
-            }
+                RequiresApiKey = false,
+            },
         };
 
         var json = JsonSerializer.Serialize(plugins);
@@ -110,7 +110,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
                 callCount++;
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent(json)
+                    Content = new StringContent(json),
                 };
             });
 

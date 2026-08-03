@@ -51,7 +51,7 @@ public static class OpenAiApiHelper
                 401 => "Invalid API key",
                 413 => "Audio too large (max 25 MB)",
                 429 => "Rate limit reached, please wait",
-                _ => $"API error {(int)response.StatusCode}: {ExtractErrorMessage(errorBody)}"
+                _ => $"API error {(int)response.StatusCode}: {ExtractErrorMessage(errorBody)}",
             };
             throw new InvalidOperationException(message);
         }

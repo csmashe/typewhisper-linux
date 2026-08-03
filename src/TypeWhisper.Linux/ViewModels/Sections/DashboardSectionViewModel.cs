@@ -14,7 +14,7 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
     {
         Weekly,
         Month,
-        AllTime
+        AllTime,
     }
 
     private const double ManualTypingWordsPerMinute = 40.0;
@@ -168,7 +168,7 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         {
             TimeRange.Weekly => now.AddDays(-7),
             TimeRange.Month => now.AddDays(-30),
-            _ => DateTime.MinValue
+            _ => DateTime.MinValue,
         };
 
         var records = _history.Records.Where(r => r.Timestamp >= cutoff).ToList();

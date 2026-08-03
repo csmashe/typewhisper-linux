@@ -310,7 +310,7 @@ public sealed class ShortcutDispatcherTests
             Set(RecordingMode.Toggle) with
             {
                 TransformSelectionKey = KeyCode.VcT,
-                TransformSelectionModifiers = allShortcutModifiers
+                TransformSelectionModifiers = allShortcutModifiers,
             }
         );
         var transform = 0;
@@ -346,7 +346,7 @@ public sealed class ShortcutDispatcherTests
             Set(RecordingMode.Toggle) with
             {
                 TransformSelectionKey = KeyCode.VcT,
-                TransformSelectionModifiers = ModifierMask.LeftAlt
+                TransformSelectionModifiers = ModifierMask.LeftAlt,
             }
         );
         var transform = 0;

@@ -557,7 +557,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
                     _settings.Current with
                     {
                         SelectedMicrophoneDevice = SelectedMic.Index,
-                        SelectedMicrophoneDeviceId = SelectedMic.PersistentId
+                        SelectedMicrophoneDeviceId = SelectedMic.PersistentId,
                     }
                 );
             }
@@ -598,7 +598,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
                 EnabledPackIds = IndustryPreset.MergeIntoEnabledPackIds(
                     _settings.Current.EnabledPackIds,
                     SelectedIndustryPresetId
-                )
+                ),
             }
         );
     }
@@ -1018,7 +1018,7 @@ public sealed partial class SetupTaskRow : ObservableObject
         SetupTaskStatusKind.Satisfied => "ok",
         SetupTaskStatusKind.Failed => "error",
         SetupTaskStatusKind.Working => "busy",
-        _ => "missing"
+        _ => "missing",
     };
 
     public string StatusGlyph => Kind switch
@@ -1026,7 +1026,7 @@ public sealed partial class SetupTaskRow : ObservableObject
         SetupTaskStatusKind.Satisfied => "✓",
         SetupTaskStatusKind.Failed => "!",
         SetupTaskStatusKind.Working => "…",
-        _ => "•"
+        _ => "•",
     };
 
     public void Apply(SetupTaskState state)

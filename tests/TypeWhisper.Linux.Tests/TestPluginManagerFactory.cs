@@ -80,7 +80,7 @@ internal static class TestPluginManagerFactory
                 Name = plugin.PluginName,
                 Version = plugin.PluginVersion,
                 AssemblyName = "fake.dll",
-                PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name
+                PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name,
             },
             plugin,
             new PluginAssemblyLoadContext(pluginDir),

@@ -340,7 +340,7 @@ public partial class DictationOverlayWindow : Window
         _settings.Save(_settings.Current with
         {
             OverlayCustomLeft = (double)pos.X,
-            OverlayCustomTop = (double)pos.Y
+            OverlayCustomTop = (double)pos.Y,
         });
     }
 }

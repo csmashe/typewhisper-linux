@@ -323,11 +323,11 @@ public partial class DictationOverlayViewModel : ObservableObject
                 RecordingMode.Toggle => Loc.Instance["Common.ModeToggle"],
                 RecordingMode.PushToTalk => Loc.Instance["Common.ModePushToTalk"],
                 RecordingMode.Hybrid => Loc.Instance["Common.ModeHybrid"],
-                _ => ""
+                _ => "",
             },
             OverlayWidget.AppName => ActiveAppName ?? "",
             // Indicator, Waveform and None render no text; handled by the default arm.
-            _ => ""
+            _ => "",
         };
     }
 }

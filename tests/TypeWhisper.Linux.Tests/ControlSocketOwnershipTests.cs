@@ -109,7 +109,7 @@ public sealed class ControlSocketOwnershipTests
             var request = new JsonControlProtocol.Request
             {
                 Version = JsonControlProtocol.CurrentVersion,
-                Command = JsonControlProtocol.CmdStatus
+                Command = JsonControlProtocol.CmdStatus,
             };
             Assert.False(
                 ControlSocketClient.TrySendJson(

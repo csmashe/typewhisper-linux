@@ -35,7 +35,7 @@ public sealed class LocalizationResourcesTests
             "Shortcuts.NativeDictationOwnershipActive",
             "Shortcuts.NativeDictationInstallDeferred",
             "Shortcuts.NativeDictationRemovalActive",
-            "Shortcuts.NativeDictationRemovalDeferred"
+            "Shortcuts.NativeDictationRemovalDeferred",
         };
 
         foreach (var key in disclosureKeys)
@@ -57,7 +57,7 @@ public sealed class LocalizationResourcesTests
             "Shortcuts.DesktopIntegrationStale",
             "Shortcuts.DesktopIntegrationStaleHint",
             "Shortcuts.DesktopIntegrationStaleUnsupported",
-            "Shortcuts.RefreshDesktopIntegrationOn"
+            "Shortcuts.RefreshDesktopIntegrationOn",
         };
 
         foreach (var key in keys)

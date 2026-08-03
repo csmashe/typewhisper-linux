@@ -52,7 +52,7 @@ public sealed class LearnedCorrectionsFeedbackPresenterTests
         presenter.ShowLearned(
         [
             Correction("1", "a", "A"),
-            Correction("2", "b", "B")
+            Correction("2", "b", "B"),
         ]);
 
         var feedback = Assert.Single(emitted);
