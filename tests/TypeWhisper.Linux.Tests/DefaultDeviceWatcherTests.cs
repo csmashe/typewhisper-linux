@@ -308,6 +308,135 @@ public sealed class DefaultDeviceWatcherFallbackTests
         Assert.Equal(2, starts);
     }
 
+    [Fact]
+    public void PactlWatcher_Reconnects_WhenASurvivingSubscriptionEnds()
+    {
+        // Regression: pactl exits when the sound server restarts, and AudioRecordingService
+        // latches "watcher started" and never calls Start() again — so the watcher had to
+        // reconnect itself or live default-device following was over for the session.
+        // minRunBeforeRestart: Zero makes every instant-EOF fake count as a surviving run, so
+        // each reconnects immediately; the factory ends the chain on the 3rd call.
+        var starts = 0;
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement
+        PactlSubscription Factory()
+        {
+            // ReSharper disable once AccessToModifiedClosure -- counting the reconnects IS the
+            // assertion; the reader threads write it and the waits below read it, both interlocked.
+            return Interlocked.Increment(ref starts) >= 3
+                ? throw new InvalidOperationException("no more subscriptions")
+                : PactlSubscription.ForTest(new StringReader("Event 'change' on server #0\n"));
+        }
+
+        using var sut = new PactlDefaultDeviceWatcher(
+            isPactlAvailable: () => true,
+            subscriptionFactory: Factory,
+            minRunBeforeRestart: TimeSpan.Zero,
+            retryBackoff: TimeSpan.FromMilliseconds(1));
+
+        sut.Start(() => { });
+
+        WaitUntil(() => Volatile.Read(ref starts) >= 3);
+        Assert.True(Volatile.Read(ref starts) >= 3, "the watcher never reconnected on its own.");
+    }
+
+    [Fact]
+    public void PactlWatcher_RecoversFromATemporarilyUnavailableServer()
+    {
+        // The first reconnect after a server restart routinely lands before the server is
+        // listening again, so pactl dies young. That must back off and keep trying, not
+        // abandon recovery — otherwise the most common real outage kills the watcher.
+        var starts = 0;
+        var live = new BlockingSubscriptionReader();
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement
+        PactlSubscription Factory()
+        {
+            // ReSharper disable once AccessToModifiedClosure -- see above; interlocked throughout.
+            var attempt = Interlocked.Increment(ref starts);
+            // Attempts 1-3 die instantly (server still down); the 4th connects and stays up.
+            // Kill/Dispose release the blocked reader so teardown does not strand a thread.
+            return attempt >= 4
+                ? PactlSubscription.ForTest(live, onKill: live.Release, onDispose: live.Release)
+                : PactlSubscription.ForTest(new StringReader(""));
+        }
+
+        using var sut = new PactlDefaultDeviceWatcher(
+            isPactlAvailable: () => true,
+            // Every instant-EOF run counts as dying young, so all of them take the backoff path.
+            minRunBeforeRestart: TimeSpan.FromHours(1),
+            subscriptionFactory: Factory,
+            retryBackoff: TimeSpan.FromMilliseconds(1));
+
+        sut.Start(() => { });
+
+        // Wait on the attempt count first: IsRunningForTest also flickers true for each of
+        // the three short-lived runs, so it alone would not identify the recovered one.
+        WaitUntil(() => Volatile.Read(ref starts) >= 4);
+        // ReSharper disable once AccessToDisposedClosure -- WaitUntil spin-waits synchronously.
+        WaitUntil(() => sut.IsRunningForTest);
+        Assert.Equal(4, Volatile.Read(ref starts));
+    }
+
+    [Fact]
+    public void PactlWatcher_GivesUp_WhenTheServerNeverComesBack()
+    {
+        // The bounded budget is what stops a permanently broken server from respawning pactl
+        // forever: the initial start plus MaxAutoRestarts attempts, then it stays down.
+        var starts = 0;
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement
+        PactlSubscription Factory()
+        {
+            // ReSharper disable once AccessToModifiedClosure -- see above; interlocked throughout.
+            Interlocked.Increment(ref starts);
+            return PactlSubscription.ForTest(new StringReader(""));
+        }
+
+        using var sut = new PactlDefaultDeviceWatcher(
+            isPactlAvailable: () => true,
+            minRunBeforeRestart: TimeSpan.FromHours(1),
+            subscriptionFactory: Factory,
+            retryBackoff: TimeSpan.FromMilliseconds(1));
+
+        sut.Start(() => { });
+
+        WaitUntil(() => Volatile.Read(ref starts) == 11);
+        Thread.Sleep(150);
+        Assert.Equal(11, Volatile.Read(ref starts));
+    }
+
+    [Fact]
+    public void PactlWatcher_Stop_IsNotUndoneByAConcurrentReconnect()
+    {
+        // Stop() and the read loop's reconnect both take the watcher's lock; the reconnect
+        // publishes its replacement without releasing it in between, so a Stop landing in
+        // that window can never be overtaken by a watcher that restarts itself afterwards.
+        var starts = 0;
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement
+        PactlSubscription Factory()
+        {
+            // ReSharper disable once AccessToModifiedClosure -- see above; interlocked throughout.
+            Interlocked.Increment(ref starts);
+            return PactlSubscription.ForTest(new StringReader("Event 'change' on server #0\n"));
+        }
+
+        for (var i = 0; i < 50; i++)
+        {
+            using var sut = new PactlDefaultDeviceWatcher(
+                isPactlAvailable: () => true,
+                subscriptionFactory: Factory,
+                minRunBeforeRestart: TimeSpan.Zero,
+                retryBackoff: TimeSpan.FromMilliseconds(1));
+
+            sut.Start(() => { });
+            sut.Stop();
+
+            // Whatever the interleaving, a stopped watcher must settle with nothing running.
+            // ReSharper disable once AccessToDisposedClosure -- WaitUntil spin-waits synchronously.
+            WaitUntil(() => !sut.IsRunningForTest);
+            Thread.Sleep(5);
+            Assert.False(sut.IsRunningForTest, "Stop() was undone by a concurrent reconnect.");
+        }
+    }
+
     private static void WaitUntil(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
@@ -516,5 +645,27 @@ internal sealed class DeferredFireTimeProvider : TimeProvider
             Dispose();
             return ValueTask.CompletedTask;
         }
+    }
+}
+
+// A subscription reader that stays open until released, modeling a pactl that connected
+// successfully and is waiting for events. Release() (wired to the fake subscription's
+// Kill/Dispose) unblocks it and reports EOF so teardown never strands a pool thread.
+internal sealed class BlockingSubscriptionReader : TextReader
+{
+    private readonly ManualResetEventSlim _released = new(false);
+
+    public override string? ReadLine()
+    {
+        _released.Wait();
+        return null;
+    }
+
+    public void Release() => _released.Set();
+
+    protected override void Dispose(bool disposing)
+    {
+        _released.Set();
+        base.Dispose(disposing);
     }
 }
