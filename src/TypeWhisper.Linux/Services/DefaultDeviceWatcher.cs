@@ -387,9 +387,15 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
             _callback = onDefaultDeviceChanged;
             _wantRunning = true;
             _autoRestarts = 0;
-            // A new session, so any retry worker still sleeping from the previous one retires.
+            // A new session retires any retry worker still sleeping from the previous one, so
+            // the one scheduled below is the only one that can exist for it.
             _session++;
-            SpawnLocked();
+            if (SpawnLocked() is null)
+            {
+                // pactl was reported available but would not launch. Retry on the same bounded
+                // schedule as a runtime failure instead of silently staying down forever.
+                ScheduleRetryLocked(_session);
+            }
         }
     }
 
@@ -530,7 +536,6 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
     // leaving only the lazy re-resolve at the next recording start.
     private void TryReconnect(TimeSpan runDuration, long session)
     {
-        int attempt;
         lock (_gate)
         {
             // Disposing, Stop() cleared the intent, something already reconnected, or this
@@ -558,22 +563,26 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
             // It died young: the server is probably still coming back up. Back off rather
             // than either respawning in a tight loop or abandoning recovery, since the first
             // reconnect after a restart routinely lands before the server is listening again.
-            if (_autoRestarts >= MaxAutoRestarts)
-            {
-                Trace.WriteLine(
-                    $"[PactlDefaultDeviceWatcher] giving up after {MaxAutoRestarts} attempts; "
-                    + "falling back to lazy re-resolve at the next recording start."
-                );
-                return;
-            }
+            ScheduleRetryLocked(session);
+        }
+    }
 
-            attempt = ++_autoRestarts;
+    // Caller holds _gate. One task owns the whole backoff sequence for this session: it keeps
+    // trying until a subscription is launched (from then on that run's own exit drives any
+    // further recovery) or the budget runs out. Driving it from the read loop instead would end
+    // recovery silently whenever the launch itself failed, since no loop would exist to retry.
+    private void ScheduleRetryLocked(long session)
+    {
+        if (_autoRestarts >= MaxAutoRestarts)
+        {
+            Trace.WriteLine(
+                $"[PactlDefaultDeviceWatcher] giving up after {MaxAutoRestarts} attempts; "
+                + "falling back to lazy re-resolve at the next recording start."
+            );
+            return;
         }
 
-        // One task owns the whole backoff sequence: it keeps trying until a subscription is
-        // actually launched (from then on that run's own exit drives any further recovery) or
-        // the budget runs out. Driving it from the read loop instead would end recovery
-        // silently whenever the launch itself failed, since no loop would exist to retry.
+        var attempt = ++_autoRestarts;
         _ = Task.Run(async () =>
         {
             while (true)

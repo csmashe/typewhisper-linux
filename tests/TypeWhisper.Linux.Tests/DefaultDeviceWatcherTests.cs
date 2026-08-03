@@ -283,21 +283,28 @@ public sealed class DefaultDeviceWatcherFallbackTests
         // ReSharper disable once MoveLocalFunctionAfterJumpStatement
         PactlSubscription Factory()
         {
-            starts++;
+            // ReSharper disable once AccessToModifiedClosure -- the reader threads write the
+            // counter and the asserts read it; interlocked on both sides.
+            Interlocked.Increment(ref starts);
             // One relevant line then EOF (StringReader returns null after its content).
             return PactlSubscription.ForTest(new StringReader("Event 'change' on server #0\n"));
         }
 
+        // This test is about the EXPLICIT restart, so both reconnect knobs are pinned out of
+        // reach: every instant-EOF run counts as dying young and its backoff never elapses here.
+        // Otherwise an automatic reconnect could bump `starts` under the assertions below.
         using var sut = new PactlDefaultDeviceWatcher(
             isPactlAvailable: () => true,
-            subscriptionFactory: Factory);
+            subscriptionFactory: Factory,
+            minRunBeforeRestart: TimeSpan.FromHours(1),
+            retryBackoff: TimeSpan.FromHours(1));
 
         sut.Start(() => { });
         // The first run's read loop hits EOF and self-tears-down: wait until it clears.
         // WaitUntil runs the closure synchronously (spin-wait) before `sut` is disposed.
         // ReSharper disable once AccessToDisposedClosure
         WaitUntil(() => !sut.IsRunningForTest);
-        Assert.Equal(1, starts);
+        Assert.Equal(1, Volatile.Read(ref starts));
 
         // A second Start() must NOT be rejected as "already running" — it spawns a fresh
         // subscription because the first run cleared its state on exit.
@@ -305,7 +312,7 @@ public sealed class DefaultDeviceWatcherFallbackTests
         // Synchronous spin-wait again; captured `sut` is not accessed after disposal.
         // ReSharper disable once AccessToDisposedClosure
         WaitUntil(() => !sut.IsRunningForTest);
-        Assert.Equal(2, starts);
+        Assert.Equal(2, Volatile.Read(ref starts));
     }
 
     [Fact]
@@ -315,15 +322,17 @@ public sealed class DefaultDeviceWatcherFallbackTests
         // latches "watcher started" and never calls Start() again — so the watcher had to
         // reconnect itself or live default-device following was over for the session.
         // minRunBeforeRestart: Zero makes every instant-EOF fake count as a surviving run, so
-        // each reconnects immediately; the factory ends the chain on the 3rd call.
+        // each one reconnects immediately and at full budget. The 3rd subscription stays open,
+        // which ends the chain at an exact count instead of leaving it to the retry budget.
         var starts = 0;
+        var live = new BlockingSubscriptionReader();
         // ReSharper disable once MoveLocalFunctionAfterJumpStatement
         PactlSubscription Factory()
         {
             // ReSharper disable once AccessToModifiedClosure -- counting the reconnects IS the
             // assertion; the reader threads write it and the waits below read it, both interlocked.
             return Interlocked.Increment(ref starts) >= 3
-                ? throw new InvalidOperationException("no more subscriptions")
+                ? PactlSubscription.ForTest(live, onKill: live.Release, onDispose: live.Release)
                 : PactlSubscription.ForTest(new StringReader("Event 'change' on server #0\n"));
         }
 
@@ -335,8 +344,11 @@ public sealed class DefaultDeviceWatcherFallbackTests
 
         sut.Start(() => { });
 
-        WaitUntil(() => Volatile.Read(ref starts) >= 3);
-        Assert.True(Volatile.Read(ref starts) >= 3, "the watcher never reconnected on its own.");
+        // Two self-reconnects (after runs 1 and 2), then the third stays up.
+        WaitUntil(() => Volatile.Read(ref starts) == 3);
+        // ReSharper disable once AccessToDisposedClosure -- WaitUntil spin-waits synchronously.
+        WaitUntil(() => sut.IsRunningForTest);
+        Assert.Equal(3, Volatile.Read(ref starts));
     }
 
     [Fact]
