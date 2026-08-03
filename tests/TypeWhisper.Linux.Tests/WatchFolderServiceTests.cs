@@ -1153,7 +1153,7 @@ public sealed class WatchFolderServiceTests : IDisposable
             Assert.Null(service.WatchPath);
             Assert.Null(service.CurrentlyProcessing);
             Assert.True(run.CancellationSource.IsCancellationRequested);
-            Assert.IsType<ArgumentException>(run.WorkerFailure, exactMatch: false);
+            Assert.IsType<ArgumentException>(run.WorkerFailure, exactMatch: true);
             Assert.True(run.WorkerCompletion.IsCompletedSuccessfully);
             Assert.Empty(service.History);
             Assert.Empty(processed);

@@ -763,26 +763,27 @@ public sealed class OpenAiCompatiblePlugin
             });
         }
 
-        // Do the fallible host secret-store writes before swapping the shared
-        // profile set, so a failure here can't leave _additionalProfiles half
-        // updated. Each _additionalApiKeys mutation is paired with its host op,
-        // so the cache stays consistent with the store even on a mid-loop throw.
+        // Do the fallible secret-store writes before swapping any shared state, and
+        // stage the key changes locally rather than applying them as they land:
+        // publishing a new key while the profile set still holds the old BaseUrl
+        // would send that credential to the previous endpoint.
+        var newApiKeys = SnapshotProfileApiKeys();
         if (_host is not null)
         {
             foreach (var removedId in previousById.Keys.Where(k => !seenIds.Contains(k)))
             {
                 await _host.DeleteSecretAsync(SecretKeyFor(removedId));
-                _additionalApiKeys.Remove(removedId);
+                newApiKeys.Remove(removedId);
             }
 
             foreach (var (id, key) in keyUpdates)
             {
                 await _host.StoreSecretAsync(SecretKeyFor(id), key!);
-                _additionalApiKeys[id] = key;
+                newApiKeys[id] = key;
             }
         }
 
-        ReplaceProfiles(newProfiles);
+        ReplaceProfilesAndApiKeys(newProfiles, newApiKeys);
 
         // State is now persisted; the best-effort model fetch below may fail or be
         // cancelled, but that must not revert the saved profiles.
@@ -852,17 +853,23 @@ public sealed class OpenAiCompatiblePlugin
 
     internal void SelectProfileModel(string id, string modelId)
     {
-        var profile = FindAdditional(id);
-        if (profile is null)
-            return;
-
         var selectedModelId = string.IsNullOrWhiteSpace(modelId) ? null : modelId.Trim();
-        if (string.Equals(profile.SelectedModelId, selectedModelId, StringComparison.Ordinal))
-            return;
 
-        profile.SelectedModelId = selectedModelId;
+        // Re-resolve inside the lock: a snapshot taken outside it can be orphaned by
+        // a concurrent save, and the selection would then be written to a discarded
+        // instance and silently lost on the next persist.
         lock (_profileRolesLock)
         {
+            var profile = _additionalProfiles.FirstOrDefault(p =>
+                string.Equals(p.Id, id, StringComparison.Ordinal)
+            );
+            if (profile is null
+                || string.Equals(profile.SelectedModelId, selectedModelId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            profile.SelectedModelId = selectedModelId;
             _profileRoles.Remove(id);
         }
 
@@ -878,17 +885,17 @@ public sealed class OpenAiCompatiblePlugin
         CancellationToken ct
     )
     {
-        var profile = RequireAdditional(id);
-        if (string.IsNullOrEmpty(profile.BaseUrl))
+        var endpoint = ResolveProfileEndpoint(id);
+        if (string.IsNullOrEmpty(endpoint.BaseUrl))
             throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
-        if (string.IsNullOrEmpty(profile.SelectedModelId))
+        if (string.IsNullOrEmpty(endpoint.SelectedModelId))
             throw new InvalidOperationException(Loc.L("Settings.NoTranscriptionModelSelected"));
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
-            profile.BaseUrl,
-            GetProfileApiKey(id) ?? "",
-            profile.SelectedModelId!,
+            endpoint.BaseUrl,
+            endpoint.ApiKey ?? "",
+            endpoint.SelectedModelId!,
             wavAudio,
             language,
             translate,
@@ -906,18 +913,18 @@ public sealed class OpenAiCompatiblePlugin
         CancellationToken ct
     )
     {
-        var profile = RequireAdditional(id);
-        if (string.IsNullOrEmpty(profile.BaseUrl))
+        var endpoint = ResolveProfileEndpoint(id);
+        if (string.IsNullOrEmpty(endpoint.BaseUrl))
             throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
 
-        var modelId = !string.IsNullOrEmpty(model) ? model : profile.SelectedLlmModelId ?? "";
+        var modelId = !string.IsNullOrEmpty(model) ? model : endpoint.SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
             throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient,
-            profile.BaseUrl,
-            GetProfileApiKey(id) ?? "",
+            endpoint.BaseUrl,
+            endpoint.ApiKey ?? "",
             modelId,
             systemPrompt,
             userText,
@@ -943,18 +950,18 @@ public sealed class OpenAiCompatiblePlugin
             yield break;
         }
 
-        var profile = RequireAdditional(id);
-        if (string.IsNullOrEmpty(profile.BaseUrl))
+        var endpoint = ResolveProfileEndpoint(id);
+        if (string.IsNullOrEmpty(endpoint.BaseUrl))
             throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
 
-        var modelId = !string.IsNullOrEmpty(model) ? model : profile.SelectedLlmModelId ?? "";
+        var modelId = !string.IsNullOrEmpty(model) ? model : endpoint.SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
             throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
 
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
-            profile.BaseUrl,
-            GetProfileApiKey(id) ?? "",
+            endpoint.BaseUrl,
+            endpoint.ApiKey ?? "",
             modelId,
             systemPrompt,
             userText,
@@ -968,14 +975,14 @@ public sealed class OpenAiCompatiblePlugin
     private async Task LoadAdditionalProfilesAsync(IPluginHostServices host)
     {
         var previousById = SnapshotProfiles().ToDictionary(p => p.Id, StringComparer.Ordinal);
-        var previousApiKeys = new Dictionary<string, string?>(_additionalApiKeys, StringComparer.Ordinal);
-        _additionalApiKeys.Clear();
+        var previousApiKeys = SnapshotProfileApiKeys();
 
         var stored = host.GetSetting<List<OpenAiCompatibleProfile>>(AdditionalProfilesSettingKey) ?? [];
         var seen = new HashSet<string>(StringComparer.Ordinal);
         // Built locally and swapped in once, so the awaited secret loads below
         // never expose a half-populated profile set to the host.
         var loadedProfiles = new List<OpenAiCompatibleProfile>();
+        var loadedApiKeys = new Dictionary<string, string?>(StringComparer.Ordinal);
 
         foreach (var profile in stored)
         {
@@ -993,17 +1000,17 @@ public sealed class OpenAiCompatiblePlugin
 
             var key = await host.LoadSecretAsync(SecretKeyFor(profile.Id));
             if (!string.IsNullOrEmpty(key))
-                _additionalApiKeys[profile.Id] = key;
+                loadedApiKeys[profile.Id] = key;
         }
 
-        ReplaceProfiles(loadedProfiles);
+        ReplaceProfilesAndApiKeys(loadedProfiles, loadedApiKeys);
 
         var changedApiKeyIds = previousApiKeys
-            .Keys.Union(_additionalApiKeys.Keys, StringComparer.Ordinal)
+            .Keys.Union(loadedApiKeys.Keys, StringComparer.Ordinal)
             .Where(id =>
                 !string.Equals(
                     previousApiKeys.GetValueOrDefault(id),
-                    _additionalApiKeys.GetValueOrDefault(id),
+                    loadedApiKeys.GetValueOrDefault(id),
                     StringComparison.Ordinal
                 )
             );
@@ -1066,8 +1073,73 @@ public sealed class OpenAiCompatiblePlugin
 
     private static string SecretKeyFor(string profileId) => $"api-key.{profileId}";
 
-    private string? GetProfileApiKey(string id) =>
-        _additionalApiKeys.GetValueOrDefault(id);
+    // _additionalApiKeys is rewritten by the settings-save and activation paths
+    // while the transcription/LLM paths read it, so it shares the profile lock.
+    // A Dictionary read racing a resize can loop or return the wrong entry.
+    private string? GetProfileApiKey(string id)
+    {
+        lock (_profileRolesLock)
+        {
+            return _additionalApiKeys.GetValueOrDefault(id);
+        }
+    }
+
+    private Dictionary<string, string?> SnapshotProfileApiKeys()
+    {
+        lock (_profileRolesLock)
+        {
+            return new Dictionary<string, string?>(_additionalApiKeys, StringComparer.Ordinal);
+        }
+    }
+
+
+    private void ReplaceProfileApiKeysLocked(IReadOnlyDictionary<string, string?> keys)
+    {
+        _additionalApiKeys.Clear();
+        foreach (var (id, key) in keys)
+            _additionalApiKeys[id] = key;
+    }
+
+    // Publish together: between two separate lock acquisitions a request could
+    // pair the new endpoint with the old credential and send it to the wrong host.
+    private void ReplaceProfilesAndApiKeys(
+        IEnumerable<OpenAiCompatibleProfile> profiles,
+        IReadOnlyDictionary<string, string?> keys
+    )
+    {
+        lock (_profileRolesLock)
+        {
+            _additionalProfiles.Clear();
+            _additionalProfiles.AddRange(profiles);
+            ReplaceProfileApiKeysLocked(keys);
+        }
+    }
+
+    // Read together, for the same reason.
+    private (string BaseUrl, string? SelectedModelId, string? SelectedLlmModelId, string? ApiKey)
+        ResolveProfileEndpoint(string id)
+    {
+        lock (_profileRolesLock)
+        {
+            var profile = _additionalProfiles.FirstOrDefault(p =>
+                string.Equals(p.Id, id, StringComparison.Ordinal)
+            );
+            if (profile is null)
+            {
+                throw new ArgumentException(
+                    $"Unknown OpenAI-compatible profile: {id}",
+                    nameof(id)
+                );
+            }
+
+            return (
+                profile.BaseUrl,
+                profile.SelectedModelId,
+                profile.SelectedLlmModelId,
+                _additionalApiKeys.GetValueOrDefault(id)
+            );
+        }
+    }
 
     // The settings-save and activation paths replace _additionalProfiles wholesale
     // while the catalog refresh and the host's capability queries enumerate it across
@@ -1088,14 +1160,6 @@ public sealed class OpenAiCompatiblePlugin
         }
     }
 
-    private void ReplaceProfiles(IEnumerable<OpenAiCompatibleProfile> profiles)
-    {
-        lock (_profileRolesLock)
-        {
-            _additionalProfiles.Clear();
-            _additionalProfiles.AddRange(profiles);
-        }
-    }
 
     // A settings save during the awaited fetch swaps in new profile objects, so
     // mutating the snapshot's orphan would drop the catalog while reporting success.
@@ -1186,8 +1250,6 @@ public sealed class OpenAiCompatiblePlugin
     private OpenAiCompatibleProfile? FindAdditional(string id) =>
         SnapshotProfiles().FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.Ordinal));
 
-    private OpenAiCompatibleProfile RequireAdditional(string id) =>
-        FindAdditional(id) ?? throw new ArgumentException($"Unknown OpenAI-compatible profile: {id}", nameof(id));
 
     private static string NormalizeBaseUrl(string url)
     {

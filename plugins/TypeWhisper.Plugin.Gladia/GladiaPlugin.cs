@@ -216,22 +216,33 @@ public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         var json = await SendJsonAsync(request, "Gladia transcription initiation", ct);
         using var document = ParseProtocolJson(json, "transcription initiation");
         var id = RequireString(document.RootElement, "id", "transcription initiation");
-        var resultUrl = RequireString(
-            document.RootElement,
-            "result_url",
-            "transcription initiation"
-        );
 
-        // Require HTTPS: polling sends x-gladia-key to this URL; non-HTTPS would leak it in plaintext.
-        if (!Uri.TryCreate(resultUrl, UriKind.Absolute, out var resultUri)
-            || resultUri.Scheme != Uri.UriSchemeHttps)
+        // The job now exists server-side, so anything that fails below has to
+        // delete it before propagating or the audio leaks.
+        try
         {
-            throw new InvalidOperationException(
-                "Gladia transcription initiation response contained an invalid result_url."
+            var resultUrl = RequireString(
+                document.RootElement,
+                "result_url",
+                "transcription initiation"
             );
-        }
 
-        return new InitiatedJob(id, resultUri);
+            // Require HTTPS: polling sends x-gladia-key to this URL; non-HTTPS would leak it in plaintext.
+            if (!Uri.TryCreate(resultUrl, UriKind.Absolute, out var resultUri)
+                || resultUri.Scheme != Uri.UriSchemeHttps)
+            {
+                throw new InvalidOperationException(
+                    "Gladia transcription initiation response contained an invalid result_url."
+                );
+            }
+
+            return new InitiatedJob(id, resultUri);
+        }
+        catch
+        {
+            await DeleteJobBestEffortAsync(id, apiKey);
+            throw;
+        }
     }
 
     private async Task<string> PollUntilTerminalAsync(

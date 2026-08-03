@@ -641,6 +641,7 @@ public sealed class WebhookPlugin
         catch
         {
             service.Dispose();
+            Service = null;
             Host = null;
             throw;
         }
