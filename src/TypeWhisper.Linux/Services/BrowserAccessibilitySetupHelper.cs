@@ -41,15 +41,23 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
     private const string UserJsOwnedSeparatorSuffix = "; separator newline owned";
 
+    // Native package names and Flatpak app IDs both: a Flatpak-only install ships no
+    // native launcher, so omitting an app ID makes that browser invisible entirely.
     private static readonly string[] s_chromiumLauncherNames =
     [
         "google-chrome.desktop",
+        "com.google.Chrome.desktop",
         "chromium.desktop",
         "chromium-browser.desktop",
+        "org.chromium.Chromium.desktop",
         "microsoft-edge.desktop",
+        "com.microsoft.Edge.desktop",
         "brave-browser.desktop",
+        "com.brave.Browser.desktop",
         "vivaldi-stable.desktop",
+        "com.vivaldi.Vivaldi.desktop",
         "opera.desktop",
+        "com.opera.Opera.desktop",
     ];
 
     private static readonly string[] s_firefoxLauncherNames =
@@ -64,10 +72,13 @@ public sealed partial class BrowserAccessibilitySetupHelper
         "io.github.zen_browser.zen.desktop",
     ];
 
-    private static readonly string[] s_systemLauncherDirectories =
+    // Appended even when XDG_DATA_DIRS omits them: Flatpak's profile.d snippet and
+    // systemd generator do not reach every session type, so an absent export root means
+    // a propagation gap. System roots get no such treatment — one the session left out
+    // is one whose launchers the desktop does not read at all.
+    private static readonly string[] s_flatpakExportRoots =
     [
-        "/usr/share/applications",
-        "/var/lib/flatpak/exports/share/applications",
+        "/var/lib/flatpak/exports/share",
     ];
 
     /// <summary>
@@ -895,9 +906,45 @@ public sealed partial class BrowserAccessibilitySetupHelper
         return -1;
     }
 
-    private static string? FindSystemLauncher(string name)
+    /// <summary>
+    ///     Launcher source directories in XDG_DATA_DIRS precedence order; the spec
+    ///     defaults apply only when that variable is unset. The per-user Flatpak export
+    ///     dir leads because <c>flatpak install --user</c> writes there and that copy is
+    ///     the one the application menu launches — sourcing a lower-precedence duplicate
+    ///     would shadow the launcher with a different browser's Exec line.
+    /// </summary>
+    internal static IEnumerable<string> LauncherSourceDirectories()
     {
-        return s_systemLauncherDirectories
+        var dataDirs = Environment.GetEnvironmentVariable("XDG_DATA_DIRS");
+        var roots = new List<string> { Path.Join(DataHome(), "flatpak", "exports", "share") };
+        roots.AddRange(
+            string.IsNullOrEmpty(dataDirs)
+                ? ["/usr/local/share", "/usr/share"]
+                : dataDirs.Split(':', StringSplitOptions.RemoveEmptyEntries)
+        );
+        roots.AddRange(s_flatpakExportRoots);
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- only the guard is convertible; the body still mutates `seen` and yields.
+        foreach (var root in roots)
+        {
+            // The XDG spec says relative entries are invalid and must be ignored.
+            if (!Path.IsPathRooted(root))
+            {
+                continue;
+            }
+
+            var dir = Path.Join(root, "applications");
+            if (seen.Add(dir.TrimEnd('/')))
+            {
+                yield return dir;
+            }
+        }
+    }
+
+    internal static string? FindSystemLauncher(string name)
+    {
+        return LauncherSourceDirectories()
             .Select(dir => Path.Join(dir, name))
             .FirstOrDefault(File.Exists);
     }
@@ -1088,16 +1135,30 @@ public sealed partial class BrowserAccessibilitySetupHelper
         return Path.Join(home, ".config", "environment.d", EnvFileName);
     }
 
-    private static string UserApplicationsDir()
+    /// <summary>
+    ///     The user's XDG data home, resolved as
+    ///     <see cref="Hotkey.DeSetup.KdeShortcutWriter" /> does. A shadow launcher
+    ///     written under a data home the session does not read never reaches the
+    ///     application menu, so setup would report success while changing nothing.
+    /// </summary>
+    private static string DataHome()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Join(home, ".local", "share", "applications");
+        var xdg = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
+        // A relative value is invalid per the spec, and would resolve against the CWD.
+        return string.IsNullOrEmpty(xdg) || !Path.IsPathRooted(xdg)
+            ? Path.Join(home, ".local", "share")
+            : xdg;
+    }
+
+    private static string UserApplicationsDir()
+    {
+        return Path.Join(DataHome(), "applications");
     }
 
     private static string LauncherBackupDir()
     {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Join(home, ".local", "share", "typewhisper", "launcher-backups");
+        return Path.Join(DataHome(), "typewhisper", "launcher-backups");
     }
 
     public sealed record Status(

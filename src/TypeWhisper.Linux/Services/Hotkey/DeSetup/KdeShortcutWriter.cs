@@ -160,7 +160,11 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var xdg = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
-        var dataHome = string.IsNullOrEmpty(xdg) ? Path.Join(home, ".local", "share") : xdg;
+        // A relative value is invalid per the spec, and would write the shortcut under
+        // the CWD where KGlobalAccel never looks.
+        var dataHome = string.IsNullOrEmpty(xdg) || !Path.IsPathRooted(xdg)
+            ? Path.Join(home, ".local", "share")
+            : xdg;
         var dir = Path.Join(dataHome, "kglobalaccel");
         return (dir, Path.Join(dir, FileName(shortcutId)));
     }
