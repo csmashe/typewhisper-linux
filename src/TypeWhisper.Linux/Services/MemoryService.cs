@@ -138,7 +138,7 @@ public sealed class MemoryService
             ProviderId = providerId,
             ModelId = modelId,
             RanLocally = ranLocally,
-            InjectedMemoryContext = null
+            InjectedMemoryContext = null,
         };
         capture.Add(provenance);
         return provenance;

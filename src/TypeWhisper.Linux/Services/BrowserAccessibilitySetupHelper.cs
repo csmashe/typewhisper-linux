@@ -49,7 +49,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
         "microsoft-edge.desktop",
         "brave-browser.desktop",
         "vivaldi-stable.desktop",
-        "opera.desktop"
+        "opera.desktop",
     ];
 
     private static readonly string[] s_firefoxLauncherNames =
@@ -61,13 +61,13 @@ public sealed partial class BrowserAccessibilitySetupHelper
         "io.gitlab.librewolf-community.desktop",
         "zen.desktop",
         "app.zen_browser.zen.desktop",
-        "io.github.zen_browser.zen.desktop"
+        "io.github.zen_browser.zen.desktop",
     ];
 
     private static readonly string[] s_systemLauncherDirectories =
     [
         "/usr/share/applications",
-        "/var/lib/flatpak/exports/share/applications"
+        "/var/lib/flatpak/exports/share/applications",
     ];
 
     /// <summary>
@@ -561,7 +561,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
             Path.Join(home, ".var", "app", "app.zen_browser.zen", ".zen"),
             Path.Join(home, ".var", "app", "io.github.zen_browser.zen", ".zen"), Path.Join(home, ".zen"),
             Path.Join(home, ".var", "app", "io.gitlab.librewolf-community", ".librewolf"),
-            Path.Join(home, ".librewolf")
+            Path.Join(home, ".librewolf"),
         };
         foreach (var root in roots)
         {

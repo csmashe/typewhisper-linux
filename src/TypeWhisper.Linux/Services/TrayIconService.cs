@@ -58,7 +58,7 @@ public sealed class TrayIconService : IDisposable
         {
             _trayIcon = new TrayIcon
             {
-                ToolTipText = "TypeWhisper", IsVisible = true, Menu = BuildMenu(), Icon = LoadIcon()
+                ToolTipText = "TypeWhisper", IsVisible = true, Menu = BuildMenu(), Icon = LoadIcon(),
             };
             _trayIcon.Clicked += (_, _) => ShowSettingsRequested?.Invoke(this, EventArgs.Empty);
 
@@ -110,7 +110,7 @@ public sealed class TrayIconService : IDisposable
                     "--method",
                     "org.freedesktop.DBus.Properties.Get",
                     "org.kde.StatusNotifierWatcher",
-                    "IsStatusNotifierHostRegistered"
+                    "IsStatusNotifierHostRegistered",
                 ],
                 timeout: TimeSpan.FromSeconds(2)
             )

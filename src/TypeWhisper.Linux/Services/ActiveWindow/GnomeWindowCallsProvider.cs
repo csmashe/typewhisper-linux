@@ -25,7 +25,7 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
     private static readonly (string Path, string Interface)[] s_endpoints =
     [
         ("/org/gnome/Shell/Extensions/Windows", "org.gnome.Shell.Extensions.Windows"),
-        ("/org/gnome/Shell/Extensions/WindowsExt", "org.gnome.Shell.Extensions.WindowsExt")
+        ("/org/gnome/Shell/Extensions/WindowsExt", "org.gnome.Shell.Extensions.WindowsExt"),
     ];
 
     public string Name => "gnome-window-calls";
@@ -162,7 +162,7 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
                     {
                         JsonValueKind.Number => idProp.GetInt64().ToString(),
                         JsonValueKind.String => idProp.GetString(),
-                        _ => null
+                        _ => null,
                     };
                 }
 

@@ -47,7 +47,7 @@ public static class DictationShortcutSpecFactory
                 cancelTrigger,
                 cancelTrigger is null ? null : $"{gui} record cancel"
             ),
-            _ => null
+            _ => null,
         };
     }
 

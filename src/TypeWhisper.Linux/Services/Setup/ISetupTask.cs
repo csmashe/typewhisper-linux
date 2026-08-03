@@ -7,7 +7,7 @@ namespace TypeWhisper.Linux.Services.Setup;
 public enum SetupTaskSeverity
 {
     Required,
-    Recommended
+    Recommended,
 }
 
 /// <summary>
@@ -25,7 +25,7 @@ public enum SetupTaskStatusKind
     Working,
 
     /// <summary>The last action failed; the user can retry or fall back to the manual command.</summary>
-    Failed
+    Failed,
 }
 
 /// <summary>

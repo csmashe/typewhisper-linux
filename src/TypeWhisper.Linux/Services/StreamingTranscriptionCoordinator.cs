@@ -195,7 +195,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
             var channel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(ChannelCapacity)
             {
-                FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true, SingleWriter = false
+                FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true, SingleWriter = false,
             });
 
             var handler = OnTranscriptReceived;

@@ -52,7 +52,7 @@ public sealed partial class AtSpiUrlExtractor
         "opera",
         "zen",
         "zen-browser",
-        "zen-bin"
+        "zen-bin",
     };
 
     private static readonly TimeSpan s_cacheTtl = TimeSpan.FromSeconds(10);
@@ -685,7 +685,7 @@ public sealed partial class AtSpiUrlExtractor
             destination,
             path,
             @interface,
-            method
+            method,
         };
         args.AddRange(signatureAndArgs);
 
@@ -716,7 +716,7 @@ public sealed partial class AtSpiUrlExtractor
             using var p = Process.Start(
                 new ProcessStartInfo(command, args)
                 {
-                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
+                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
                 }
             );
             p?.WaitForExit(1000);
@@ -737,7 +737,7 @@ public sealed partial class AtSpiUrlExtractor
             using var p = Process.Start(
                 new ProcessStartInfo(fileName, args)
                 {
-                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
+                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
                 }
             );
             if (p is null)
@@ -779,7 +779,7 @@ public sealed partial class AtSpiUrlExtractor
         {
             var startInfo = new ProcessStartInfo(fileName)
             {
-                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
+                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
             };
             foreach (var arg in args)
             {

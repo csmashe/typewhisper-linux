@@ -1245,7 +1245,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                     // body arg, so Arg0="focused" lets the bus daemon filter to focus changes
                     // for us instead of waking us for every state change session-wide. The
                     // in-handler detail/detail1 checks below stay as defense in depth.
-                    Arg0 = FocusedStateName
+                    Arg0 = FocusedStateName,
                 },
                 s_readSignal,
                 HandleStateChanged,
@@ -1258,7 +1258,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                 {
                     Type = MessageType.Signal,
                     Interface = EventObjectInterface,
-                    Member = "TextChanged"
+                    Member = "TextChanged",
                 },
                 s_readSignal,
                 HandleTextChanged,
@@ -1278,7 +1278,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                     Sender = "org.freedesktop.DBus",
                     Interface = "org.freedesktop.DBus",
                     Member = "NameOwnerChanged",
-                    Arg0 = RegistryBusName
+                    Arg0 = RegistryBusName,
                 },
                 s_readNameOwnerChanged,
                 HandleRegistryOwnerChanged,
@@ -1688,7 +1688,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         "org.freedesktop.DBus.Error.UnknownMethod",
         "org.freedesktop.DBus.Error.ServiceUnknown", // app's a11y bridge went away
         "org.freedesktop.DBus.Error.NoReply", // app busy / not responding
-        "org.freedesktop.DBus.Error.Disconnected"
+        "org.freedesktop.DBus.Error.Disconnected",
     ];
 
     // at-spi2-core 2.52 (Ubuntu/Mint) answers a property Get for an interface the element does not

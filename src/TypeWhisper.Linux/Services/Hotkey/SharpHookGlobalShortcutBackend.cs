@@ -203,7 +203,7 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
             KeyCode.VcRightAlt => ModifierMask.RightAlt,
             KeyCode.VcLeftMeta => ModifierMask.LeftMeta,
             KeyCode.VcRightMeta => ModifierMask.RightMeta,
-            _ => ModifierMask.None
+            _ => ModifierMask.None,
         };
         return modBit == ModifierMask.None ? mask : mask & ~modBit;
     }

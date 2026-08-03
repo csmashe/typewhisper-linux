@@ -19,7 +19,7 @@ internal enum CliActionKind
     Status,
 
     /// <summary>Args didn't parse; the driver should print usage and exit non-zero.</summary>
-    Invalid
+    Invalid,
 }
 
 /// <summary>Result of parsing the command line.</summary>

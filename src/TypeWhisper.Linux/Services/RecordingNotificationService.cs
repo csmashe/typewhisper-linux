@@ -103,7 +103,7 @@ public sealed partial class RecordingNotificationService : IDisposable
         {
             RecordingMode.Toggle => Loc.Instance["Notify.BodyToggle"],
             RecordingMode.PushToTalk => Loc.Instance["Notify.BodyPushToTalk"],
-            _ => Loc.Instance["Notify.BodyHybrid"]
+            _ => Loc.Instance["Notify.BodyHybrid"],
         };
     }
 
@@ -281,7 +281,7 @@ public sealed partial class RecordingNotificationService : IDisposable
                         "TypeWhisper", replaceId.ToString(), ResolveIconPath(),
                         presentation.Summary, presentation.Body, "[]", // actions
                         "{}", // hints
-                        presentation.ExpireTimeout.ToString()
+                        presentation.ExpireTimeout.ToString(),
                     ],
                     timeout: s_callTimeout
                 )
@@ -317,7 +317,7 @@ public sealed partial class RecordingNotificationService : IDisposable
                     [
                         "call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path",
                         "/org/freedesktop/Notifications", "--method",
-                        "org.freedesktop.Notifications.CloseNotification", id.ToString()
+                        "org.freedesktop.Notifications.CloseNotification", id.ToString(),
                     ],
                     timeout: s_callTimeout
                 )

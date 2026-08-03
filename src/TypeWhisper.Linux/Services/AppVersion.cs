@@ -107,7 +107,7 @@ public static class AppVersion
             // Numeric identifiers rank below alphanumeric (SemVer §11.4).
             (true, _) => -1,
             (_, true) => 1,
-            _ => string.CompareOrdinal(a, b)
+            _ => string.CompareOrdinal(a, b),
         };
     }
 

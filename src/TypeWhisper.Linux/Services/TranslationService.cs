@@ -113,7 +113,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
             ProviderId = providerId,
             ModelId = modelId,
             RanLocally = ranLocally,
-            InjectedMemoryContext = null
+            InjectedMemoryContext = null,
         };
         capture.Add(provenance);
         return provenance;
@@ -263,7 +263,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         {
             GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
             InterOpNumThreads = 1,
-            IntraOpNumThreads = Environment.ProcessorCount
+            IntraOpNumThreads = Environment.ProcessorCount,
         };
 
         var encoder = new InferenceSession(
@@ -299,7 +299,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
 
         using var encoderResults = model.Encoder.Run([
             NamedOnnxValue.CreateFromTensor("input_ids", inputIdsTensor),
-            NamedOnnxValue.CreateFromTensor("attention_mask", attentionMask)
+            NamedOnnxValue.CreateFromTensor("attention_mask", attentionMask),
         ]);
 
         var encoderHidden =
@@ -321,7 +321,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
             {
                 NamedOnnxValue.CreateFromTensor("input_ids", decoderInputIds),
                 NamedOnnxValue.CreateFromTensor("encoder_attention_mask", attentionMask),
-                NamedOnnxValue.CreateFromTensor("encoder_hidden_states", encoderHidden)
+                NamedOnnxValue.CreateFromTensor("encoder_hidden_states", encoderHidden),
             };
 
             using var decoderResults = model.Decoder.Run(decoderInputs);
@@ -383,7 +383,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
                 var rid = RuntimeInformation.ProcessArchitecture switch
                 {
                     Architecture.Arm64 => "linux-arm64",
-                    _ => "linux-x64"
+                    _ => "linux-x64",
                 };
 
                 var candidate = Path.Join(

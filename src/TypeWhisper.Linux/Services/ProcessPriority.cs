@@ -21,7 +21,7 @@ internal static class ProcessPriority
         var results = new List<string>
         {
             Run("renice", $"-n 0 -p {pid}"),
-            Run("ionice", $"-c 2 -n 4 -p {pid}")
+            Run("ionice", $"-c 2 -n 4 -p {pid}"),
         };
 
         return string.Join("; ", results);
@@ -39,7 +39,7 @@ internal static class ProcessPriority
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
                 }
             );
             if (p is null)

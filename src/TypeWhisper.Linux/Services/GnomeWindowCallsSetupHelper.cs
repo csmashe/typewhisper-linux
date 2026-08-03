@@ -20,7 +20,7 @@ public sealed class GnomeWindowCallsSetupHelper
     private static readonly (string Path, string Interface)[] s_endpoints =
     [
         ("/org/gnome/Shell/Extensions/Windows", "org.gnome.Shell.Extensions.Windows"),
-        ("/org/gnome/Shell/Extensions/WindowsExt", "org.gnome.Shell.Extensions.WindowsExt")
+        ("/org/gnome/Shell/Extensions/WindowsExt", "org.gnome.Shell.Extensions.WindowsExt"),
     ];
 
     // kept instance: injected as a DI/test seam by callers
@@ -104,7 +104,7 @@ public sealed class GnomeWindowCallsSetupHelper
             using var p = Process.Start(
                 new ProcessStartInfo("xdg-open", ExtensionInstallUrl)
                 {
-                    UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true
+                    UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true,
                 }
             );
             return p is not null;
