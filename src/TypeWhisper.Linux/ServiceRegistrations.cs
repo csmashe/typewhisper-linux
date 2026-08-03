@@ -181,6 +181,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<YdotoolSetupHelper>();
         services.AddSingleton<InputAccessSetupHelper>();
         services.AddSingleton<BrowserAccessibilitySetupHelper>();
+        services.AddSingleton<CudaLibraryPathSetupService>();
         services.AddSingleton<GnomeWindowCallsSetupHelper>();
 
         // Onboarding checklist tasks. Each self-gates via AppliesToThisMachine();

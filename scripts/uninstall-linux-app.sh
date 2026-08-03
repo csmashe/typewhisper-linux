@@ -1,101 +1,89 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-# Uninstall TypeWhisper from the current user's profile (companion to
-# install-linux-app.sh). DATA SAFETY: the user's dictation/recorder recordings
-# (Audio/), history + database (Data/), saved backups (backups/), plugin API
-# keys (PluginData/) and configuration (settings.json, linux-preferences.json)
-# all live in DATA_DIR = $XDG_DATA_HOME/TypeWhisper. install-linux-app.sh keeps
-# the app BINARY in a SEPARATE dir (typewhisper-app), precisely so uninstall can
-# remove the program without touching that irreplaceable data. This script MUST
-# preserve DATA_DIR by default. An earlier version ran `rm -rf` on DATA_DIR and
-# destroyed recordings, history and API keys with no recovery — never again.
+# Remove TypeWhisper from the current user's profile.
 #
 # Usage:
-#   uninstall-linux-app.sh            Remove the app; KEEP all user data.
-#   uninstall-linux-app.sh --purge    Also remove DATA_DIR (recordings, history,
-#                                     keys, models) — everything gone.
-# Non-interactive: no prompts, safe to run from scripts.
+#   uninstall-linux-app.sh            Remove only recorded application artifacts.
+#   uninstall-linux-app.sh --purge    Also remove recordings, history, backups,
+#                                     plugin keys, models, and settings.
+set -euo pipefail
 
-APP_ID="typewhisper"
-DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/TypeWhisper"
-APP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/typewhisper-app"
-APPLICATIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-ICONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/128x128/apps"
-BIN_LINK="$HOME/.local/bin/$APP_ID"
-DESKTOP_FILE="$APPLICATIONS_DIR/$APP_ID.desktop"
-ICON_FILE="$ICONS_DIR/$APP_ID.png"
+[ -n "${HOME:-}" ] || { printf 'HOME must be set.\n' >&2; exit 1; }
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+# shellcheck source=lib/managed-artifacts.sh
+source "$ROOT/scripts/lib/managed-artifacts.sh"
+
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+DATA_DIR="$DATA_HOME/TypeWhisper"
+APP_DIR="$DATA_HOME/typewhisper-app"
+APPLICATIONS_DIR="$DATA_HOME/applications"
+ICONS_DIR="$DATA_HOME/icons/hicolor/128x128/apps"
+BIN_LINK="$HOME/.local/bin/typewhisper"
+DESKTOP_FILE="$APPLICATIONS_DIR/typewhisper.desktop"
+ICON_FILE="$ICONS_DIR/typewhisper.png"
+STATE_DIR="$STATE_HOME/typewhisper/installer"
 
 PURGE=0
 case "${1:-}" in
   "") ;;
-  --purge|--all)
-    PURGE=1
-    ;;
+  --purge|--all) PURGE=1 ;;
   -h|--help)
-    grep -E '^#( |$)' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,7s/^# \{0,1\}//p' "$0"
     exit 0
     ;;
   *)
-    echo "Unknown option: $1 (expected --purge/--all or nothing)" >&2
+    printf 'Unknown option: %s (expected --purge/--all or nothing)\n' "$1" >&2
     exit 2
     ;;
 esac
+[ "$#" -le 1 ] || { printf 'Too many arguments.\n' >&2; exit 2; }
 
-[ -n "${HOME:-}" ] || { echo "HOME must be set." >&2; exit 1; }
-
-# Belt-and-suspenders: never let a mis-set variable point rm at HOME or /.
 for guarded in "$DATA_DIR" "$APP_DIR"; do
   case "$guarded" in
-    ""|"/"|"$HOME"|"$HOME/")
-      echo "Refusing to uninstall: a target path ('$guarded') is unsafe to remove." >&2
+    ""|/|"$HOME"|"$HOME/")
+      printf "Refusing to uninstall: target path ('%s') is unsafe.\n" "$guarded" >&2
       exit 1
       ;;
   esac
 done
-
-# Remove the app binary payload, launcher, icon and CLI symlink. None of these
-# hold user data; install-linux-app.sh keeps the binary in APP_DIR, distinct
-# from DATA_DIR.
-rm -rf "$APP_DIR"
-rm -f "$DESKTOP_FILE"
-rm -f "$ICON_FILE"
-rm -f "$BIN_LINK"
-
-# Some older/tarball installs put the binary INSIDE DATA_DIR. Sweep only the
-# known published-payload artifacts (top level only) out of DATA_DIR without
-# touching user data. We match binary/library names and the .NET runtime's own
-# config files by suffix — never settings.json / linux-preferences.json, and
-# never the user-data subdirs (Audio, Data, PluginData, backups, ...).
-if [ -d "$DATA_DIR" ]; then
-  rm -f "$DATA_DIR/$APP_ID" "$DATA_DIR/AppRun" \
-        "$DATA_DIR/$APP_ID.png" "$DATA_DIR/$APP_ID.desktop" \
-        "$DATA_DIR/typewhisper.runtimeconfig.json" "$DATA_DIR/typewhisper.deps.json" 2>/dev/null || true
-  find "$DATA_DIR" -maxdepth 1 -type f \
-    \( -name '*.dll' -o -name '*.so' -o -name '*.so.*' -o -name '*.pdb' \
-       -o -name '*.runtimeconfig.json' -o -name '*.deps.json' \) -delete 2>/dev/null || true
+if [ "$APP_DIR" = "$DATA_DIR" ]; then
+  printf 'Refusing to uninstall: application and user-data paths overlap.\n' >&2
+  exit 1
 fi
 
+ma_initialize typewhisper "$STATE_DIR"
+ma_register_directory app "$APP_DIR"
+ma_register_file desktop "$DESKTOP_FILE"
+ma_register_file icon "$ICON_FILE"
+ma_register_link launcher "$BIN_LINK" "$APP_DIR/typewhisper"
+# Installs predating the manifest carry no record, so ownership evidence is what
+# authorizes their removal. Anything failing its probe is refused, not deleted.
+ma_register_adoption app payload
+ma_register_adoption desktop desktop "$APP_DIR"
+ma_register_adoption icon icon "$DESKTOP_FILE"
+ma_register_adoption launcher link-into "$APP_DIR"
+ma_remove
+
 if [ "$PURGE" -eq 1 ]; then
-  # User explicitly asked to remove everything, including recordings/history/keys.
-  rm -rf "$DATA_DIR"
+  # --purge is the sole path that removes user-created data.
+  rm -rf -- "$DATA_DIR"
 fi
 
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$APPLICATIONS_DIR" >/dev/null 2>&1 || true
 fi
-
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-  gtk-update-icon-cache "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor" >/dev/null 2>&1 || true
+  gtk-update-icon-cache "$DATA_HOME/icons/hicolor" >/dev/null 2>&1 || true
 fi
 
 if [ "$PURGE" -eq 1 ]; then
-  echo "TypeWhisper and all its user data have been removed from this user profile."
+  printf 'TypeWhisper and all its user data have been removed from this user profile.\n'
 else
-  echo "TypeWhisper has been removed from this user profile."
+  printf 'TypeWhisper uninstall finished: %s.\n' "$MA_LAST_MESSAGE"
   if [ -d "$DATA_DIR" ]; then
-    echo "Your recordings, history, backups and settings were KEPT at:"
-    echo "  $DATA_DIR"
-    echo "Run with --purge to delete that data too."
+    printf 'Your recordings, history, backups, keys, models, and settings were kept at:\n'
+    printf '  %s\n' "$DATA_DIR"
+    printf 'Run with --purge to delete that data too.\n'
   fi
 fi

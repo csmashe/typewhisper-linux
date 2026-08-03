@@ -1,6 +1,8 @@
+// ReSharper disable UnusedParameterInPartialMethod
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using Avalonia.Threading;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -12,6 +14,7 @@ public partial class GeneralSectionViewModel : ObservableObject
 {
     private readonly HttpApiService _api;
     private readonly CliInstallService _cliInstall;
+    private readonly CudaLibraryPathSetupService _cudaLibraryPathSetup;
     private readonly LinuxPreferencesService _linuxPrefs;
     private readonly ISettingsService _settings;
     private readonly TrayIconService _tray;
@@ -46,6 +49,12 @@ public partial class GeneralSectionViewModel : ObservableObject
     private bool _closeToTray;
 
     [ObservableProperty]
+    private bool _cudaPathRemovalAvailable;
+
+    [ObservableProperty]
+    private string _cudaPathRemovalStatusText = "";
+
+    [ObservableProperty]
     private bool _startWithSystem;
 
     [ObservableProperty]
@@ -58,6 +67,7 @@ public partial class GeneralSectionViewModel : ObservableObject
         ISettingsService settings,
         HttpApiService api,
         CliInstallService cliInstall,
+        CudaLibraryPathSetupService cudaLibraryPathSetup,
         LinuxPreferencesService linuxPrefs,
         TrayIconService tray
     )
@@ -65,6 +75,7 @@ public partial class GeneralSectionViewModel : ObservableObject
         _settings = settings;
         _api = api;
         _cliInstall = cliInstall;
+        _cudaLibraryPathSetup = cudaLibraryPathSetup;
         _linuxPrefs = linuxPrefs;
         _tray = tray;
         Refresh(settings.Current);
@@ -81,6 +92,11 @@ public partial class GeneralSectionViewModel : ObservableObject
         _api.StateChanged += () => ApiStatusText = _api.StatusText;
         ApiStatusText = _api.StatusText;
         RefreshCliState();
+        CudaPathRemovalAvailable = _cudaLibraryPathSetup.HasInstalledChanges();
+        _cudaLibraryPathSetup.InstalledChangesChanged += (_, _) =>
+            Dispatcher.UIThread.Post(() =>
+                CudaPathRemovalAvailable = _cudaLibraryPathSetup.HasInstalledChanges()
+            );
     }
 
     public ObservableCollection<CommandExample> CurlExamples { get; } = [];
@@ -122,6 +138,9 @@ public partial class GeneralSectionViewModel : ObservableObject
 
     public bool IsTrayUnavailable => !_tray.IsTrayAvailable;
 
+    public bool ShowCudaPathRemovalSurface =>
+        CudaPathRemovalAvailable || !string.IsNullOrWhiteSpace(CudaPathRemovalStatusText);
+
     private void Refresh(AppSettings s)
     {
         UiLanguage = s.UiLanguage;
@@ -150,6 +169,19 @@ public partial class GeneralSectionViewModel : ObservableObject
         {
             CliStatusText = ex.Message;
         }
+    }
+
+    [RelayCommand]
+    private async Task RemoveCudaLibraryPathAsync()
+    {
+        var result = await _cudaLibraryPathSetup.RemoveAsync(CancellationToken.None);
+        CudaPathRemovalStatusText = result.Success
+            ? Loc.Instance["General.CudaPathRemoved"]
+            : Loc.Instance.GetString(
+                "General.CudaPathRemoveFailed",
+                result.Detail ?? string.Empty
+            );
+        CudaPathRemovalAvailable = _cudaLibraryPathSetup.HasInstalledChanges();
     }
 
     private void ApplyCliState(CliInstallState state)
@@ -186,6 +218,16 @@ public partial class GeneralSectionViewModel : ObservableObject
         _settings.Save(_settings.Current with { UiLanguage = value });
         Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(value);
         OnPropertyChanged(nameof(SelectedUiLanguageOption));
+    }
+
+    partial void OnCudaPathRemovalAvailableChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ShowCudaPathRemovalSurface));
+    }
+
+    partial void OnCudaPathRemovalStatusTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(ShowCudaPathRemovalSurface));
     }
 
     partial void OnStartWithSystemChanged(bool value)

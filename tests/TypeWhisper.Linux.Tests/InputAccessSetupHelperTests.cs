@@ -82,7 +82,7 @@ public sealed class InputAccessSetupHelperTests
     [Theory]
     [InlineData("# Managed by another application\nfoo\n", false)] // foreign header
     [InlineData("# Installed by TypeWhisperer\nfoo\n", false)] // prefix-only, not ours
-    [InlineData("# Installed by TypeWhisper — old header\nold\n", true)] // marker-owned
+    [InlineData("# Installed by TypeWhisper — old header\nold\n", false)] // customized-owned
     public void ManualInstallCommand_write_block_refuses_foreign_targets(
         string existing,
         bool shouldRewrite
@@ -151,6 +151,7 @@ public sealed class InputAccessSetupHelperTests
             WriteShim(shimDir, "sudo", "exec \"$@\"\n");
             WriteShim(shimDir, "udevadm", "exit 0\n");
             WriteShim(shimDir, "usermod", "exit 0\n");
+            WriteShim(shimDir, "chown", "exit 0\n");
 
             var cmd = InputAccessSetupHelper.ManualInstallCommand();
             // ReSharper disable once UseObjectOrCollectionInitializer -- Environment["PATH"] is set post-construction, matching CommandRunner's convention.
@@ -287,7 +288,7 @@ public sealed class InputAccessSetupHelperTests
     }
 
     [Fact]
-    public async Task InstallAsync_rewrites_a_marker_owned_rule()
+    public async Task InstallAsync_refuses_a_customized_marker_owned_rule()
     {
         using var env = new SysConfEnvironment();
         SysConfEnvironment.WriteRule(
@@ -298,10 +299,13 @@ public sealed class InputAccessSetupHelperTests
 
         var result = await helper.InstallAsync(CancellationToken.None);
 
-        Assert.True(result.Success);
-        Assert.Equal(0, runner.LastPrivilegedResult?.ExitCode);
+        Assert.False(result.Success);
         Assert.Equal(
-            InputAccessSetupHelper.UdevRuleContent,
+            InputAccessSetupHelper.UdevRuleConflictExitCode,
+            runner.LastPrivilegedResult?.ExitCode
+        );
+        Assert.Equal(
+            "# Installed by TypeWhisper — old header\nold rule content\n",
             File.ReadAllText(InputAccessSetupHelper.UdevRulePath)
         );
     }
@@ -427,26 +431,28 @@ public sealed class InputAccessSetupHelperTests
     }
 
     [Fact]
-    public async Task RemoveAsync_leaves_a_foreign_rule_untouched()
+    public async Task RemoveAsync_root_transaction_refuses_a_foreign_rule()
     {
         using var env = new SysConfEnvironment();
         env.PutFakeBinaryOnPath("pkexec");
         // A rule a user / distro package wrote at our conventional path — no marker.
         SysConfEnvironment.WriteRule("# Some other tool's rule\nSUBSYSTEM==\"input\", MODE=\"0660\"\n");
 
-        var runner = new FakeProcessRunner();
+        var runner = env.CreatePrivilegedScriptRunner();
         var helper = new InputAccessSetupHelper(runner);
 
         var result = await helper.RemoveAsync(CancellationToken.None);
 
-        // Reported as success-with-caveat; the foreign file is never deleted.
-        Assert.True(result.Success);
-        Assert.DoesNotContain(runner.Invocations, i => i.FileName == "pkexec");
+        Assert.False(result.Success);
+        Assert.Equal(
+            InputAccessSetupHelper.UdevRuleConflictExitCode,
+            runner.LastPrivilegedResult?.ExitCode
+        );
         Assert.True(File.Exists(InputAccessSetupHelper.UdevRulePath));
     }
 
     [Fact]
-    public async Task RemoveAsync_leaves_a_foreign_rule_that_only_mentions_the_marker_mid_body()
+    public async Task RemoveAsync_root_transaction_refuses_mid_body_marker_mention()
     {
         using var env = new SysConfEnvironment();
         env.PutFakeBinaryOnPath("pkexec");
@@ -456,13 +462,16 @@ public sealed class InputAccessSetupHelperTests
             "# Managed by another application\n# note: not Installed by TypeWhisper\nSUBSYSTEM==\"input\", MODE=\"0660\"\n"
         );
 
-        var runner = new FakeProcessRunner();
+        var runner = env.CreatePrivilegedScriptRunner();
         var helper = new InputAccessSetupHelper(runner);
 
         var result = await helper.RemoveAsync(CancellationToken.None);
 
-        Assert.True(result.Success);
-        Assert.DoesNotContain(runner.Invocations, i => i.FileName == "pkexec");
+        Assert.False(result.Success);
+        Assert.Equal(
+            InputAccessSetupHelper.UdevRuleConflictExitCode,
+            runner.LastPrivilegedResult?.ExitCode
+        );
         Assert.True(File.Exists(InputAccessSetupHelper.UdevRulePath));
     }
 
@@ -472,13 +481,13 @@ public sealed class InputAccessSetupHelperTests
         using var env = new SysConfEnvironment();
         env.PutFakeBinaryOnPath("pkexec");
 
-        var runner = new FakeProcessRunner();
+        var runner = env.CreatePrivilegedScriptRunner();
         var helper = new InputAccessSetupHelper(runner);
 
         var result = await helper.RemoveAsync(CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.DoesNotContain(runner.Invocations, i => i.FileName == "pkexec");
+        Assert.Equal(0, runner.LastPrivilegedResult?.ExitCode);
     }
 
     /// <summary>
@@ -491,6 +500,8 @@ public sealed class InputAccessSetupHelperTests
     {
         private readonly string? _originalPath = Environment.GetEnvironmentVariable("PATH");
         private readonly string? _originalSysConf = InputAccessSetupHelper.SysConfDirOverride;
+        private readonly string? _originalRootManagedState =
+            InputAccessSetupHelper.RootManagedArtifactStateRootOverride;
         private readonly string _pathDir = Path.Join(Path.GetTempPath(), $"tw-path-{Guid.NewGuid():N}");
 
         public SysConfEnvironment()
@@ -500,6 +511,10 @@ public sealed class InputAccessSetupHelperTests
             Directory.CreateDirectory(Dir);
             Environment.SetEnvironmentVariable("PATH", _pathDir);
             InputAccessSetupHelper.SysConfDirOverride = Dir;
+            InputAccessSetupHelper.RootManagedArtifactStateRootOverride = Path.Join(
+                Dir,
+                "managed-root-state"
+            );
             Directory.CreateDirectory(
                 Path.GetDirectoryName(InputAccessSetupHelper.UdevRulePath)!
             );
@@ -511,6 +526,8 @@ public sealed class InputAccessSetupHelperTests
         {
             Environment.SetEnvironmentVariable("PATH", _originalPath);
             InputAccessSetupHelper.SysConfDirOverride = _originalSysConf;
+            InputAccessSetupHelper.RootManagedArtifactStateRootOverride =
+                _originalRootManagedState;
             TryDelete(_pathDir);
             TryDelete(Dir);
         }
@@ -524,6 +541,7 @@ public sealed class InputAccessSetupHelperTests
         {
             PutFakeBinaryOnPath("pkexec");
             PutExecutableSuccessBinaryOnPath("udevadm");
+            PutExecutableSuccessBinaryOnPath("chown");
             return new PrivilegedScriptRunner(
                 $"{_pathDir}{Path.PathSeparator}/usr/bin{Path.PathSeparator}/bin"
             );

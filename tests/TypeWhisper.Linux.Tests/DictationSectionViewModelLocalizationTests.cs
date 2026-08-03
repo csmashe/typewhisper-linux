@@ -57,6 +57,7 @@ public sealed class DictationSectionViewModelLocalizationTests
                 settings.Object,
                 pluginManager,
                 commands,
+                new CudaLibraryPathSetupService(),
                 a11yBus.Object,
                 () => []
             )
@@ -161,6 +162,7 @@ public sealed class DictationSectionViewModelLocalizationTests
             settings.Object,
             pluginManager,
             commands,
+            new CudaLibraryPathSetupService(),
             a11yBus.Object,
             () => []
         );
