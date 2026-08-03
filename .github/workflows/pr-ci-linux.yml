@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
 
     steps:
@@ -28,11 +28,13 @@ jobs:
 
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
           cache: true
           cache-dependency-path: |
             **/*.csproj
             Directory.Build.props
+            tests/Directory.Packages.props
+            **/packages.lock.json
 
       - name: Create artifact directories
         run: |
@@ -49,6 +51,33 @@ jobs:
 
       - name: Build CLI
         run: dotnet build src/TypeWhisper.Cli/TypeWhisper.Cli.csproj -c Release --no-restore -bl:artifacts/logs/typewhisper-cli.binlog
+
+      - name: Verify test package lock files
+        run: |
+          failed=0
+
+          # Every package-bearing test project must ship a tracked lock file, or
+          # restore would be free to resolve an unreviewed dependency graph.
+          for project in tests/*/*.csproj; do
+            grep -q '<PackageReference' "$project" || continue
+            lock="$(dirname "$project")/packages.lock.json"
+            if ! git ls-files --error-unmatch -- "$lock" >/dev/null 2>&1; then
+              echo "::error file=$project::Missing tracked lock file $lock. Restore the project and commit the generated lock file."
+              failed=1
+            fi
+          done
+
+          # --untracked-files=all also catches lock files restore generated for a
+          # project whose lock file was never committed; plain `git diff` cannot.
+          drift="$(git status --porcelain --untracked-files=all -- 'tests/**/packages.lock.json')"
+          if [ -n "$drift" ]; then
+            echo "$drift"
+            git diff -- 'tests/**/packages.lock.json'
+            echo "::error::Test package lock files drifted during restore/build. Regenerate and commit the updated lock files."
+            failed=1
+          fi
+
+          exit "$failed"
 
       - name: Test TypeWhisper.Core
         timeout-minutes: 15
