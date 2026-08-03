@@ -14,7 +14,7 @@ internal enum ManagedDesktopIntegrationState
     Unknown,
     Absent,
     Current,
-    Stale
+    Stale,
 }
 
 // MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
@@ -296,7 +296,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             // times per second. The orchestrator is idempotent so it's safe,
             // just noisy.
             "Sway" => "bindsym --no-repeat $mod+space exec typewhisper record start",
-            _ => ""
+            _ => "",
         };
 
     // ReSharper disable once MemberCanBeMadeStatic.Global
@@ -306,7 +306,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         {
             "Hyprland" => "bindr = CTRL SHIFT, SPACE, exec, typewhisper record stop",
             "Sway" => "bindsym --release $mod+space exec typewhisper record stop",
-            _ => ""
+            _ => "",
         };
 
     // ReSharper disable once MemberCanBeMadeStatic.Global
@@ -316,7 +316,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         {
             "Hyprland" => Loc.Instance["Shortcuts.PushToTalkSnippetHintHyprland"],
             "Sway" => Loc.Instance["Shortcuts.PushToTalkSnippetHintSway"],
-            _ => ""
+            _ => "",
         };
 
     // DesktopDetector normalizes edge cases like "ubuntu:GNOME".
@@ -344,7 +344,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             "XFCE" => Loc.Instance["Shortcuts.DesktopInstructionsXfce"],
             "Cinnamon" => Loc.Instance["Shortcuts.DesktopInstructionsCinnamon"],
             "MATE" => Loc.Instance["Shortcuts.DesktopInstructionsMate"],
-            _ => Loc.Instance["Shortcuts.DesktopInstructionsGeneric"]
+            _ => Loc.Instance["Shortcuts.DesktopInstructionsGeneric"],
         };
 
     private IDeShortcutWriter? ActiveWriter
@@ -616,7 +616,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             RecordingMode.Toggle => Loc.Instance["Common.ModeToggle"],
             RecordingMode.PushToTalk => Loc.Instance["Common.ModePushToTalk"],
             RecordingMode.Hybrid => Loc.Instance["Common.ModeHybrid"],
-            _ => ""
+            _ => "",
         };
     }
 
@@ -662,7 +662,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             _settings.Save(
                 _settings.Current with
                 {
-                    CopyLastTranscriptionHotkey = _hotkey.CurrentCopyLastTranscriptionHotkeyString
+                    CopyLastTranscriptionHotkey = _hotkey.CurrentCopyLastTranscriptionHotkeyString,
                 }
             );
             StatusMessage = string.IsNullOrWhiteSpace(
@@ -944,7 +944,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             RecordingMode.Toggle => Loc.Instance["Shortcuts.ModeToggleStatus"],
             RecordingMode.PushToTalk => Loc.Instance["Shortcuts.ModePushToTalkStatus"],
             RecordingMode.Hybrid => Loc.Instance["Shortcuts.ModeHybridStatus"],
-            _ => ""
+            _ => "",
         };
         OnPropertyChanged(nameof(ShowCapabilityMismatch));
         OnPropertyChanged(nameof(IntegrationPreview));

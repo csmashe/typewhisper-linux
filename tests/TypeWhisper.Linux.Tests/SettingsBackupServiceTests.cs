@@ -849,7 +849,7 @@ public sealed class SettingsBackupServiceTests : IDisposable
             Id = id,
             Name = name,
             CreatedAt = DateTime.UnixEpoch,
-            UpdatedAt = DateTime.UnixEpoch
+            UpdatedAt = DateTime.UnixEpoch,
         };
     }
 

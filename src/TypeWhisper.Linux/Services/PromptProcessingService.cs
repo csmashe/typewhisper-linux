@@ -228,7 +228,7 @@ public sealed class PromptProcessingService
             ProviderId = providerId,
             ModelId = modelId,
             RanLocally = ranLocally,
-            InjectedMemoryContext = injectedMemoryContext
+            InjectedMemoryContext = injectedMemoryContext,
         };
         capture.Add(provenance);
         return provenance;

@@ -118,7 +118,7 @@ public sealed class SoundFeedbackServiceTests
             RunnerOutcome.Exception => ControlledProcessRunner.WithException(
                 new InvalidOperationException("fake runner failure")
             ),
-            _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, null)
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, null),
         };
         var sut = new SoundFeedbackService(runner, "fake-player", sounds.Path);
 
@@ -138,7 +138,7 @@ public sealed class SoundFeedbackServiceTests
             @"\bProcess\s*\.\s*Start\b",
             @"\bProcessStartInfo\b",
             @"\bWaitForExit(?:Async)?\b",
-            @"\bnew\s+Process\s*\("
+            @"\bnew\s+Process\s*\(",
         ];
 
         foreach (var pattern in directProcessPatterns)
@@ -206,7 +206,7 @@ public sealed class SoundFeedbackServiceTests
     {
         NotStarted,
         TimedOut,
-        Exception
+        Exception,
     }
 
     private sealed class ControlledProcessRunner : IProcessRunner

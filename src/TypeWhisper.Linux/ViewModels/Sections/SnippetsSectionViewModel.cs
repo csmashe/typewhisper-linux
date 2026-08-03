@@ -85,7 +85,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     public IReadOnlyList<SnippetTriggerModeOption> TriggerModeOptions { get; } =
     [
         new(SnippetTriggerMode.Anywhere, Loc.Instance["Snippets.TriggerModeAnywhere"]),
-        new(SnippetTriggerMode.ExactPhrase, Loc.Instance["Snippets.TriggerModeExactPhrase"])
+        new(SnippetTriggerMode.ExactPhrase, Loc.Instance["Snippets.TriggerModeExactPhrase"]),
     ];
 
     public void Dispose()
@@ -173,7 +173,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
             IsEnabled = existing?.IsEnabled ?? true,
             UsageCount = existing?.UsageCount ?? 0,
             LastUsedAt = existing?.LastUsedAt,
-            CreatedAt = existing?.CreatedAt ?? DateTime.UtcNow
+            CreatedAt = existing?.CreatedAt ?? DateTime.UtcNow,
         };
 
         if (existing is null)
@@ -327,7 +327,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
             ),
             {
                     EntryType: DictionaryEntryType.Correction,
-                    Replacement: { Length: > 0 } replacement
+                    Replacement: { Length: > 0 } replacement,
                 } => Loc.Instance.GetString(
                 "Snippets.ConflictCorrectionReplacement",
                 conflict.Original,
@@ -337,7 +337,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
                 "Snippets.ConflictCorrection",
                 conflict.Original
             ),
-            _ => ""
+            _ => "",
         };
     }
 

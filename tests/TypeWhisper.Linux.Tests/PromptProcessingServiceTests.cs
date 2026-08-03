@@ -53,7 +53,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
             {
                 Id = "prompt",
                 Name = "Rewrite",
-                SystemPrompt = "Rewrite this"
+                SystemPrompt = "Rewrite this",
             },
             "hello",
             ct: CancellationToken.None
@@ -82,7 +82,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
             [defaultProvider, overrideProvider],
             [
                 CreateLoadedPlugin(defaultProvider.PluginId, defaultProvider),
-                CreateLoadedPlugin(overrideProvider.PluginId, overrideProvider)
+                CreateLoadedPlugin(overrideProvider.PluginId, overrideProvider),
             ]
         );
         var settings = CreateSettings(
@@ -101,7 +101,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
                 Id = "prompt",
                 Name = "Rewrite",
                 SystemPrompt = "Rewrite this",
-                ProviderOverride = "plugin:com.test.override:model-b"
+                ProviderOverride = "plugin:com.test.override:model-b",
             },
             "hello",
             ct: CancellationToken.None
@@ -134,7 +134,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
             {
                 Id = "prompt",
                 Name = "Rewrite",
-                SystemPrompt = "Rewrite this"
+                SystemPrompt = "Rewrite this",
             },
             "hello",
             ct: CancellationToken.None
@@ -462,7 +462,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
                 Version = plugin.PluginVersion,
                 AssemblyName = "fake.dll",
                 PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name,
-                IsLocal = isLocal
+                IsLocal = isLocal,
             },
             plugin,
             new PluginAssemblyLoadContext(pluginDir),

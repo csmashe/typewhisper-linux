@@ -148,7 +148,7 @@ public sealed class DashboardSectionViewModelTests : IDisposable
             SnippetApplied = snippetApplied,
             DictionaryCorrectionApplied = dictionaryApplied,
             PromptActionApplied = promptApplied,
-            TranslationApplied = translationApplied
+            TranslationApplied = translationApplied,
         };
     }
 }

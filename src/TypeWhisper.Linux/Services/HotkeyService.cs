@@ -12,7 +12,7 @@ public enum HotkeyCandidateValidationStatus
     CollidesWithFixedBinding,
     CollidesWithPromptAction,
     CollidesWithProfile,
-    MissingEnabledPromptAction
+    MissingEnabledPromptAction,
 }
 
 public sealed record HotkeyCandidateValidationResult(
@@ -552,7 +552,7 @@ public sealed class HotkeyService : IDisposable
             return parsed with
             {
                 Status = HotkeyCandidateValidationStatus.CollidesWithFixedBinding,
-                NormalizedHotkey = null
+                NormalizedHotkey = null,
             };
         }
 
@@ -567,7 +567,7 @@ public sealed class HotkeyService : IDisposable
             return parsed with
             {
                 Status = HotkeyCandidateValidationStatus.CollidesWithPromptAction,
-                NormalizedHotkey = null
+                NormalizedHotkey = null,
             };
         }
 
@@ -581,7 +581,7 @@ public sealed class HotkeyService : IDisposable
             return parsed with
             {
                 Status = HotkeyCandidateValidationStatus.CollidesWithProfile,
-                NormalizedHotkey = null
+                NormalizedHotkey = null,
             };
         }
 
@@ -623,7 +623,7 @@ public sealed class HotkeyService : IDisposable
             return parsed with
             {
                 Status = HotkeyCandidateValidationStatus.MissingEnabledPromptAction,
-                NormalizedHotkey = null
+                NormalizedHotkey = null,
             };
         }
 
@@ -637,7 +637,7 @@ public sealed class HotkeyService : IDisposable
             return parsed with
             {
                 Status = HotkeyCandidateValidationStatus.CollidesWithFixedBinding,
-                NormalizedHotkey = null
+                NormalizedHotkey = null,
             };
         }
 
@@ -651,7 +651,7 @@ public sealed class HotkeyService : IDisposable
             return parsed with
             {
                 Status = HotkeyCandidateValidationStatus.CollidesWithPromptAction,
-                NormalizedHotkey = null
+                NormalizedHotkey = null,
             };
         }
 
@@ -666,7 +666,7 @@ public sealed class HotkeyService : IDisposable
             return parsed with
             {
                 Status = HotkeyCandidateValidationStatus.CollidesWithProfile,
-                NormalizedHotkey = null
+                NormalizedHotkey = null,
             };
         }
 
@@ -1213,7 +1213,7 @@ public sealed class HotkeyService : IDisposable
                 => ModifierMask.LeftAlt | ModifierMask.RightAlt,
             KeyCode.VcLeftMeta or KeyCode.VcRightMeta
                 => ModifierMask.LeftMeta | ModifierMask.RightMeta,
-            _ => ModifierMask.None
+            _ => ModifierMask.None,
         };
     }
 
@@ -1296,7 +1296,7 @@ public sealed class HotkeyService : IDisposable
                 KeyCode.VcRightAlt => "Right Alt",
                 KeyCode.VcLeftMeta => "Left Meta",
                 KeyCode.VcRightMeta => "Right Meta",
-                _ => null
+                _ => null,
             };
             if (sideSpecific is not null)
             {
@@ -1419,7 +1419,7 @@ public sealed class HotkeyService : IDisposable
                 "right" => KeyCode.VcRight,
                 "up" => KeyCode.VcUp,
                 "down" => KeyCode.VcDown,
-                _ => (KeyCode?)null
+                _ => (KeyCode?)null,
             };
             if (named is not null)
             {
@@ -1467,7 +1467,7 @@ public sealed class HotkeyService : IDisposable
             "right alt" => KeyCode.VcRightAlt,
             "left meta" or "left super" or "left win" => KeyCode.VcLeftMeta,
             "right meta" or "right super" or "right win" => KeyCode.VcRightMeta,
-            _ => KeyCode.VcUndefined
+            _ => KeyCode.VcUndefined,
         };
         return key != KeyCode.VcUndefined;
     }
@@ -1478,6 +1478,6 @@ public sealed class HotkeyService : IDisposable
         PromptPalette,
         RecentTranscriptions,
         CopyLastTranscription,
-        TransformSelection
+        TransformSelection,
     }
 }

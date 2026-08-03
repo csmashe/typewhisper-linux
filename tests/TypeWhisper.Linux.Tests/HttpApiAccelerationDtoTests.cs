@@ -25,11 +25,11 @@ public class HttpApiAccelerationDtoTests
             AccelerationStatus = new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
                 "Using CPU"
-            )
+            ),
         };
         var settings = AppSettings.Default with
         {
-            LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu
+            LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu,
         };
 
         var dto = HttpApiService.BuildAccelerationDto(plugin, settings);
@@ -51,11 +51,11 @@ public class HttpApiAccelerationDtoTests
                 TranscriptionAccelerationBackend.Cpu,
                 "Using CPU",
                 "CUDA not available; falling back to CPU."
-            )
+            ),
         };
         var settings = AppSettings.Default with
         {
-            LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto
+            LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto,
         };
 
         var dto = HttpApiService.BuildAccelerationDto(plugin, settings);
@@ -78,11 +78,11 @@ public class HttpApiAccelerationDtoTests
                 "Using CPU",
                 "Process is pinned to CPU. Restart to switch to NVIDIA CUDA.",
                 RequiresRestart: true
-            )
+            ),
         };
         var settings = AppSettings.Default with
         {
-            LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda
+            LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda,
         };
 
         var dto = HttpApiService.BuildAccelerationDto(plugin, settings);

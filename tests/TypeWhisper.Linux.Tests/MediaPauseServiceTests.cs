@@ -117,7 +117,7 @@ public sealed class MediaPauseServiceTests
                 0,
                 string.Empty,
                 "forced timeout"
-            )
+            ),
         };
         runner.RespondWith(
             (fileName, args) => fileName == "playerctl" && args.SequenceEqual(status),

@@ -306,7 +306,7 @@ internal sealed class ShortcutDispatcher
             {
                 _pendingSelectionWorkflows[key] = releasedWorkflow with
                 {
-                    TriggerReleased = true
+                    TriggerReleased = true,
                 };
             }
 
@@ -543,7 +543,7 @@ internal sealed class ShortcutDispatcher
         PromptPalette,
         PromptAction,
         ProfileTextProcessing,
-        TransformSelection
+        TransformSelection,
     }
 
     private readonly record struct PendingSelectionWorkflow(

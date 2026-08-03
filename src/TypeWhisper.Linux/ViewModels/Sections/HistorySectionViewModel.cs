@@ -93,7 +93,7 @@ public partial class HistorySectionViewModel : ObservableObject
             ".csv" => _history.ExportToCsv(visibleRecords),
             ".md" => _history.ExportToMarkdown(visibleRecords),
             ".json" => _history.ExportToJson(visibleRecords),
-            _ => _history.ExportToText(visibleRecords)
+            _ => _history.ExportToText(visibleRecords),
         };
     }
 
@@ -193,7 +193,7 @@ public partial class HistorySectionViewModel : ObservableObject
                 Id = Guid.NewGuid().ToString(),
                 EntryType = DictionaryEntryType.Term,
                 Original = term,
-                Source = DictionaryEntrySource.Manual
+                Source = DictionaryEntrySource.Manual,
             }
         );
     }
@@ -718,7 +718,7 @@ public sealed class LlmCallDisplay
             "Cleanup" => Loc.Instance["History.Inspect.StageCleanup"],
             "Translation" => Loc.Instance["History.Inspect.StageTranslation"],
             "Memory" => Loc.Instance["History.Inspect.StageMemory"],
-            _ => Loc.Instance["History.Inspect.StagePromptAction"]
+            _ => Loc.Instance["History.Inspect.StagePromptAction"],
         };
 
     public string ProviderModelLabel => $"{_call.ProviderName} · {_call.ModelId}";

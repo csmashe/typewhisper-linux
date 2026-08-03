@@ -66,7 +66,7 @@ public sealed class SpeechFeedbackServiceTests
             {
                 Language = "de",
                 SpokenFeedbackEnabled = true,
-                SpokenFeedbackProviderId = "cloud"
+                SpokenFeedbackProviderId = "cloud",
             }
         );
         var plugin = new FakeTtsProvider("cloud", "Cloud Voice", true);
@@ -94,7 +94,7 @@ public sealed class SpeechFeedbackServiceTests
             {
                 Language = "de",
                 SpokenFeedbackEnabled = true,
-                SpokenFeedbackProviderId = "cloud"
+                SpokenFeedbackProviderId = "cloud",
             }
         );
         var plugin = new FakeTtsProvider("cloud", "Cloud Voice", true);
@@ -123,7 +123,7 @@ public sealed class SpeechFeedbackServiceTests
             {
                 Language = "de",
                 SpokenFeedbackEnabled = true,
-                SpokenFeedbackProviderId = "cloud"
+                SpokenFeedbackProviderId = "cloud",
             }
         );
         var plugin = new FakeTtsProvider("cloud", "Cloud Voice", true);

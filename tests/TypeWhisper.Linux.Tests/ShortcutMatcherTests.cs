@@ -61,7 +61,7 @@ public sealed class ShortcutMatcherTests
                     "alpha",
                     KeyCode.VcSpace,
                     ModifierMask.LeftCtrl | ModifierMask.LeftShift
-                )
+                ),
             ],
             []
         );

@@ -183,7 +183,7 @@ internal sealed record CliOptions
             Prompt = prompt,
             Engine = engine,
             Model = model,
-            AwaitDownload = awaitDownload
+            AwaitDownload = awaitDownload,
         };
     }
 

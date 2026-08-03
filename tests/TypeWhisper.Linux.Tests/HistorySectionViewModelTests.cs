@@ -126,7 +126,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
             AppSettings.Default with
             {
                 AutoAddDictionaryCorrections = autoAddCorrections,
-                CaptureLlmProvenance = captureProvenance
+                CaptureLlmProvenance = captureProvenance,
             }
         );
         return settings;
@@ -165,7 +165,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
             FinalText = finalText,
             DurationSeconds = 2.4,
             AppProcessName = "test",
-            LlmCalls = llmCalls ?? []
+            LlmCalls = llmCalls ?? [],
         };
     }
 
@@ -186,7 +186,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
             ProviderId = "com.test.provider",
             ModelId = modelId,
             RanLocally = ranLocally,
-            InjectedMemoryContext = injectedContext
+            InjectedMemoryContext = injectedContext,
         };
     }
 
@@ -203,7 +203,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
                 CreateCall(
                     "Cleanup",
                     injectedContext: "remembered fact"
-                )
+                ),
             ]
         );
         history.AddRecord(record);

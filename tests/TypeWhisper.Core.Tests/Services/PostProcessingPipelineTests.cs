@@ -143,7 +143,7 @@ public class PostProcessingPipelineTests
     {
         var options = new PipelineOptions
         {
-            DictionaryCorrector = text => text.Replace("teh", "the")
+            DictionaryCorrector = text => text.Replace("teh", "the"),
         };
 
         var result = await _sut.ProcessAsync("teh quick fox", options);
@@ -155,7 +155,7 @@ public class PostProcessingPipelineTests
     {
         var options = new PipelineOptions
         {
-            SnippetExpander = text => text.Replace("brb", "be right back")
+            SnippetExpander = text => text.Replace("brb", "be right back"),
         };
 
         var result = await _sut.ProcessAsync("brb", options);
@@ -169,7 +169,7 @@ public class PostProcessingPipelineTests
         {
             CleanupHandler = (text, _) => Task.FromResult(text.Trim()),
             SnippetExpander = text => text.Replace("brb", "be right back"),
-            DictionaryCorrector = text => text
+            DictionaryCorrector = text => text,
         };
 
         var result = await _sut.ProcessAsync(" brb ", options);
@@ -185,7 +185,7 @@ public class PostProcessingPipelineTests
     {
         var options = new PipelineOptions
         {
-            LlmHandler = (text, _) => Task.FromResult(text.ToUpperInvariant())
+            LlmHandler = (text, _) => Task.FromResult(text.ToUpperInvariant()),
         };
 
         var result = await _sut.ProcessAsync("hello", options);
@@ -198,7 +198,7 @@ public class PostProcessingPipelineTests
         var options = new PipelineOptions
         {
             LlmHandler = (_, _) => throw new InvalidOperationException("LLM failed"),
-            RequireLlmSuccess = true
+            RequireLlmSuccess = true,
         };
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -224,7 +224,7 @@ public class PostProcessingPipelineTests
         {
             TranslationHandler = (text, _, tgt, _) => Task.FromResult($"[{tgt}] {text}"),
             TranslationTarget = "fr",
-            DetectedLanguage = "en"
+            DetectedLanguage = "en",
         };
 
         var result = await _sut.ProcessAsync("hello", options);
@@ -244,7 +244,7 @@ public class PostProcessingPipelineTests
             },
             TranslationTarget = "it",
             EffectiveSourceLanguage = "it",
-            DetectedLanguage = "en"
+            DetectedLanguage = "en",
         };
 
         var result = await _sut.ProcessAsync("ciao mondo", options);
@@ -260,7 +260,7 @@ public class PostProcessingPipelineTests
         {
             TranslationHandler = (text, _, tgt, _) => Task.FromResult($"[{tgt}] {text}"),
             TranslationTarget = "en",
-            DetectedLanguage = "en"
+            DetectedLanguage = "en",
         };
 
         var result = await _sut.ProcessAsync("hello", options);
@@ -283,7 +283,7 @@ public class PostProcessingPipelineTests
                         executionOrder.Add("Plugin100");
                         return Task.FromResult(text + "+P100");
                     }
-                )
+                ),
             ],
             LlmHandler = (text, _) =>
             {
@@ -304,7 +304,7 @@ public class PostProcessingPipelineTests
             {
                 executionOrder.Add("Dictionary");
                 return text + "+DICT";
-            }
+            },
         };
 
         var result = await _sut.ProcessAsync("start", options);
@@ -330,7 +330,7 @@ public class PostProcessingPipelineTests
                         executionOrder.Add("Plugin100");
                         return Task.FromResult(text + "+P100");
                     }
-                )
+                ),
             ],
             CleanupHandler = (text, _) =>
             {
@@ -346,7 +346,7 @@ public class PostProcessingPipelineTests
             {
                 executionOrder.Add("Snippets");
                 return text + "+SNP";
-            }
+            },
         };
 
         var result = await _sut.ProcessAsync("start", options);
@@ -387,8 +387,8 @@ public class PostProcessingPipelineTests
                         executionOrder.Add("Plugin400");
                         return Task.FromResult(text + "+P400");
                     }
-                )
-            ]
+                ),
+            ],
         };
 
         var result = await _sut.ProcessAsync("start", options);
@@ -414,7 +414,7 @@ public class PostProcessingPipelineTests
                         executionOrder.Add("Plugin400");
                         return Task.FromResult(text);
                     }
-                )
+                ),
             ],
             LlmHandler = (text, _) =>
             {
@@ -425,7 +425,7 @@ public class PostProcessingPipelineTests
             {
                 executionOrder.Add("Snippets");
                 return text;
-            }
+            },
         };
 
         await _sut.ProcessAsync("test", options);
@@ -444,9 +444,9 @@ public class PostProcessingPipelineTests
                 new PluginPostProcessor(
                     100,
                     (_, _) => throw new InvalidOperationException("Plugin failed")
-                )
+                ),
             ],
-            DictionaryCorrector = text => text + "+DICT"
+            DictionaryCorrector = text => text + "+DICT",
         };
 
         var result = await _sut.ProcessAsync("hello", options);
@@ -473,7 +473,7 @@ public class PostProcessingPipelineTests
                 await Task.Delay(Timeout.Infinite, privateCts.Token);
                 return text;
             },
-            SnippetExpander = text => text + "+SNIPPET"
+            SnippetExpander = text => text + "+SNIPPET",
         };
 
         var result = await _sut.ProcessAsync("hello", options, CancellationToken.None);
@@ -503,9 +503,9 @@ public class PostProcessingPipelineTests
                         null,
                         unrelatedCts.Token
                     )
-                )
+                ),
             ],
-            DictionaryCorrector = text => text + "+DICT"
+            DictionaryCorrector = text => text + "+DICT",
         };
 
         var result = await _sut.ProcessAsync("hello", options, CancellationToken.None);
@@ -517,7 +517,7 @@ public class PostProcessingPipelineTests
             {
                 Name: "Plugin(100)",
                 Succeeded: false,
-                ErrorMessage: "Simulated internal HTTP timeout"
+                ErrorMessage: "Simulated internal HTTP timeout",
             }
         );
     }
@@ -533,7 +533,7 @@ public class PostProcessingPipelineTests
                 sourceLanguage = src;
                 return Task.FromResult(text);
             },
-            TranslationTarget = "fr"
+            TranslationTarget = "fr",
         };
 
         await _sut.ProcessAsync("bonjour", options);
@@ -572,8 +572,8 @@ public class PostProcessingPipelineTests
                         throw new OperationCanceledException(cts.Token);
                         // ReSharper restore AccessToDisposedClosure
                     }
-                )
-            ]
+                ),
+            ],
         };
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
@@ -596,7 +596,7 @@ public class PostProcessingPipelineTests
             {
                 statusCalls.Add(status);
                 return Task.CompletedTask;
-            }
+            },
         };
 
         await _sut.ProcessAsync("test", options);
@@ -623,7 +623,7 @@ public class PostProcessingPipelineTests
                 return Task.FromResult(text);
             },
             TranslationTarget = "fr",
-            DetectedLanguage = "en"
+            DetectedLanguage = "en",
         };
 
         await _sut.ProcessAsync("test", options);
@@ -648,7 +648,7 @@ public class PostProcessingPipelineTests
             {
                 executionOrder.Add("Dictionary");
                 return text.Replace("TypeWhisper", "TYPEWHISPER");
-            }
+            },
         };
 
         var result = await _sut.ProcessAsync("type whisper", options);
@@ -673,7 +673,7 @@ public class PostProcessingPipelineTests
         var options = new PipelineOptions
         {
             AppFormatter = AppFormatterService.Format,
-            TargetProcessName = "OUTLOOK"
+            TargetProcessName = "OUTLOOK",
         };
 
         var result = await _sut.ProcessAsync("- one\n- two", options);

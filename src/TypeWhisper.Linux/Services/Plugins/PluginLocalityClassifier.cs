@@ -24,7 +24,7 @@ public static class PluginLocalityClassifier
         "com.typewhisper.file-memory",
         "com.typewhisper.obsidian",
         "com.typewhisper.script",
-        "com.typewhisper.webhook"
+        "com.typewhisper.webhook",
     ];
 
     public static bool IsLocal(PluginManifest manifest) =>

@@ -35,7 +35,7 @@ public sealed class InputAccessSetupHelper
     private static readonly string[] s_seatManagerDirectoryPaths =
     [
         "/run/systemd/seats",
-        "/run/elogind/seats"
+        "/run/elogind/seats",
     ];
 
     // System config dir holding the udev rule. Always /etc in production. Tests

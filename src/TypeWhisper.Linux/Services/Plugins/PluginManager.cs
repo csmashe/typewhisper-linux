@@ -19,7 +19,7 @@ public sealed class PluginManager : IDisposable
     private static readonly HashSet<string> s_defaultEnabledPluginIds = new(StringComparer.Ordinal)
     {
         "com.typewhisper.whisper-cpp", // offline transcription (recommended default)
-        "com.typewhisper.sherpa-onnx" // offline transcription
+        "com.typewhisper.sherpa-onnx", // offline transcription
     };
 
     private readonly HashSet<string> _activatedPlugins = [];
@@ -579,8 +579,8 @@ public sealed class PluginManager : IDisposable
             {
                 ITranscriptionEnginePlugin => ErrorCategory.Transcription,
                 ILlmProviderPlugin => ErrorCategory.Prompt,
-                _ => ErrorCategory.Plugin
-            }
+                _ => ErrorCategory.Plugin,
+            },
         };
     }
 
@@ -757,7 +757,7 @@ public sealed class PluginManager : IDisposable
                 current with
                 {
                     GroqApiKey = migratedGroq ? "" : current.GroqApiKey,
-                    OpenAiApiKey = migratedOpenAi ? "" : current.OpenAiApiKey
+                    OpenAiApiKey = migratedOpenAi ? "" : current.OpenAiApiKey,
                 }
             );
         }

@@ -17,7 +17,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var plugin = new FakePlugin
         {
-            OnStartStreaming = _ => connectTcs.Task
+            OnStartStreaming = _ => connectTcs.Task,
         };
 
         await using var coord = new StreamingTranscriptionCoordinator(
@@ -261,7 +261,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin
         {
             OnStartStreaming = _ => Task.FromException<IStreamingSession>(
-                new HttpRequestException("auth failed (simulated)"))
+                new HttpRequestException("auth failed (simulated)")),
         };
 
         await using var coord = new StreamingTranscriptionCoordinator(
@@ -795,7 +795,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin
         {
             OnStartStreaming = _ => Task.FromException<IStreamingSession>(
-                new HttpRequestException("simulated"))
+                new HttpRequestException("simulated")),
         };
         var coord = new StreamingTranscriptionCoordinator(
             plugin, null, 1, (_, _) => { }, _ => { });
@@ -857,7 +857,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
             {
                 await Task.Delay(Timeout.Infinite, ct);
                 throw new InvalidOperationException("unreachable");
-            }, ct)
+            }, ct),
         };
 
         var coord = new StreamingTranscriptionCoordinator(
@@ -890,7 +890,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         {
             // Deliberately ignore cancellation — simulate a misbehaving plugin
             // or a native WebSocket that resolves just before honoring cancel.
-            OnStartStreaming = _ => connectTcs.Task
+            OnStartStreaming = _ => connectTcs.Task,
         };
 
         var coord = new StreamingTranscriptionCoordinator(

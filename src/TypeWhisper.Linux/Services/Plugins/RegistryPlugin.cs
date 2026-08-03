@@ -35,5 +35,5 @@ public enum PluginInstallState
     UpdateAvailable,
 
     // ReSharper disable once UnusedMember.Global  member of the JsonStringEnumConverter-serialized install-state vocabulary (PluginInstallState); kept for completeness, not currently produced in-tree
-    Bundled
+    Bundled,
 }

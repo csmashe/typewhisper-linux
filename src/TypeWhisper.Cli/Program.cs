@@ -57,7 +57,7 @@ public static class Program
             "status" => await StatusCommand.RunAsync(api, options.Json),
             "models" => await ModelsCommand.RunAsync(api, options.Json),
             "transcribe" => await TranscribeCommand.RunAsync(api, options),
-            _ => ConsoleOutput.Error($"Unknown command: {options.Command}")
+            _ => ConsoleOutput.Error($"Unknown command: {options.Command}"),
         };
     }
 }

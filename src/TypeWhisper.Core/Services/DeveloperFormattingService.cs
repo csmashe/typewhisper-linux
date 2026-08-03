@@ -32,7 +32,7 @@ public static partial class DeveloperFormattingService
         (SemicolonRegex(), ";"),
         (CommaRegex(), ","),
         (UnderscoreRegex(), "_"),
-        (EqualsRegex(), "=")
+        (EqualsRegex(), "="),
     ];
 
     public static string Format(string text)
@@ -119,7 +119,7 @@ public static partial class DeveloperFormattingService
             "camel" => words[0] + string.Concat(words.Skip(1).Select(ToTitleInvariant)),
             "snake" => string.Join('_', words),
             "kebab" => string.Join('-', words),
-            _ => null
+            _ => null,
         };
     }
 

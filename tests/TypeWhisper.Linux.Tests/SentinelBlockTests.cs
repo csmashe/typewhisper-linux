@@ -187,7 +187,7 @@ public sealed class SentinelBlockTests
         var managed = new[]
         {
             "bind  = CTRL SHIFT, SPACE, exec, typewhisper record start",
-            "bindr = CTRL SHIFT, SPACE, exec, typewhisper record stop"
+            "bindr = CTRL SHIFT, SPACE, exec, typewhisper record stop",
         };
         var input =
             "bind = SUPER, q, killactive\n"

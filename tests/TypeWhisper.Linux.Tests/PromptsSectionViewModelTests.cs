@@ -93,7 +93,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             {
                 Id = "existing",
                 Name = "Existing",
-                SystemPrompt = "x"
+                SystemPrompt = "x",
             }
         );
         using var pluginManager = TestPluginManagerFactory.Create();
@@ -121,7 +121,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
                 Name = "Existing",
                 SystemPrompt = "x",
                 HotkeyKey = "Ctrl+Alt+R",
-                IsManualOnly = true
+                IsManualOnly = true,
             }
         );
         using var pluginManager = TestPluginManagerFactory.Create();
@@ -189,7 +189,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             Id = "existing",
             Name = "Existing",
             SystemPrompt = "x",
-            HotkeyKey = "Alt+F8"
+            HotkeyKey = "Alt+F8",
         };
         var prompts = new Mock<IPromptActionService>();
         prompts.SetupGet(service => service.Actions).Returns([existing]);
@@ -221,7 +221,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             {
                 Id = "profile",
                 Name = "Profile",
-                HotkeyData = "Right Ctrl"
+                HotkeyData = "Right Ctrl",
             }
         );
         var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
@@ -258,7 +258,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             [provider],
             loadedPlugins:
             [
-                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider)
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
             ]
         );
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
@@ -288,7 +288,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             [provider],
             loadedPlugins:
             [
-                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider)
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
             ]
         );
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
@@ -327,13 +327,13 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             [provider],
             loadedPlugins:
             [
-                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider)
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
             ]
         );
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
         var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
-            EditProviderOverride = "plugin:com.typewhisper.openai:gpt-4.1-mini"
+            EditProviderOverride = "plugin:com.typewhisper.openai:gpt-4.1-mini",
         };
         // Simulate the guard flag that the view-model sets while it rebuilds
         // the provider list — a null selection during that window must not
@@ -385,7 +385,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
 
         var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
-            CommandModeEnabled = true
+            CommandModeEnabled = true,
         };
 
         Assert.True(sut.CommandModeEnabled);
@@ -405,7 +405,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
 
         var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
-            CommandKeyphrase = "  Jarvis  "
+            CommandKeyphrase = "  Jarvis  ",
         };
 
         // The re-entrant normalization must land the trimmed value and persist it exactly once.
@@ -428,7 +428,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
 
         var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
-            CommandKeyphrase = "   "
+            CommandKeyphrase = "   ",
         };
 
         Assert.Equal(AppSettings.DefaultCommandKeyphrase, sut.CommandKeyphrase);
@@ -447,7 +447,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
             // Whitespace that normalizes back to the already-saved value: no persist.
-            CommandKeyphrase = "  Jarvis  "
+            CommandKeyphrase = "  Jarvis  ",
         };
 
         Assert.Equal("Jarvis", sut.CommandKeyphrase);

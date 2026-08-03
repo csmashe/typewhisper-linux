@@ -534,7 +534,7 @@ public sealed class LearnedCorrectionsNotificationService : IDisposable
                             Sender = NotificationsService,
                             Interface = NotificationsInterface,
                             Path = NotificationsPath,
-                            Member = "ActionInvoked"
+                            Member = "ActionInvoked",
                         },
                         s_readActionInvoked,
                         HandleActionInvoked,
@@ -549,7 +549,7 @@ public sealed class LearnedCorrectionsNotificationService : IDisposable
                             Sender = NotificationsService,
                             Interface = NotificationsInterface,
                             Path = NotificationsPath,
-                            Member = "NotificationClosed"
+                            Member = "NotificationClosed",
                         },
                         s_readClosed,
                         HandleClosed,

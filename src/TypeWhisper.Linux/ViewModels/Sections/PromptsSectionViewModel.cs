@@ -327,7 +327,7 @@ public partial class PromptsSectionViewModel : ObservableObject
             {
                 HotkeyCandidateValidationStatus.Malformed =>
                     Loc.Instance["Prompts.HotkeyMalformed"],
-                _ => Loc.Instance["Prompts.HotkeyCollision"]
+                _ => Loc.Instance["Prompts.HotkeyCollision"],
             };
             return;
         }
@@ -348,7 +348,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                 HotkeyKey = hotkeyValidation.NormalizedHotkey,
                 IsManualOnly = EditIsManualOnly,
                 IsEnabled = true,
-                SortOrder = _prompts.Actions.Count
+                SortOrder = _prompts.Actions.Count,
             };
 
             if (!TryMutate(() => _prompts.AddAction(action), "add a prompt action"))
@@ -384,7 +384,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                             ProviderOverride = EditProviderOverride,
                             TargetActionPluginId = EditTargetActionPluginId,
                             HotkeyKey = hotkeyValidation.NormalizedHotkey,
-                            IsManualOnly = EditIsManualOnly
+                            IsManualOnly = EditIsManualOnly,
                         }
                     ),
                 "update a prompt action"

@@ -96,7 +96,7 @@ public static class OpenAiTranscriptionHelper
         {
             return new PluginTranscriptionResult(text.Trim(), language, duration, minNoSpeechProb)
             {
-                Segments = segments
+                Segments = segments,
             };
         }
 

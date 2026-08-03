@@ -127,7 +127,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
         new(30, Loc.Instance["Advanced.AutoUnload30Seconds"]),
         new(60, Loc.Instance["Advanced.AutoUnload1Minute"]),
         new(300, Loc.Instance["Advanced.AutoUnload5Minutes"]),
-        new(900, Loc.Instance["Advanced.AutoUnload15Minutes"])
+        new(900, Loc.Instance["Advanced.AutoUnload15Minutes"]),
     ];
 
     public IReadOnlyList<HistoryRetentionOption> HistoryRetentionOptions { get; } =
@@ -137,7 +137,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
         new(HistoryRetentionMode.Duration, 30 * 24 * 60, Loc.Instance["Advanced.Retention30Days"]),
         new(HistoryRetentionMode.Duration, 90 * 24 * 60, Loc.Instance["Advanced.Retention90Days"]),
         new(HistoryRetentionMode.Forever, null, Loc.Instance["Advanced.RetentionForever"]),
-        new(HistoryRetentionMode.UntilAppCloses, null, Loc.Instance["Advanced.RetentionUntilAppCloses"])
+        new(HistoryRetentionMode.UntilAppCloses, null, Loc.Instance["Advanced.RetentionUntilAppCloses"]),
     ];
 
     public bool CanUseSpokenFeedback => _speechFeedback.IsAvailable;
@@ -314,7 +314,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
             {
                 HistoryRetentionMode = value.Mode,
                 HistoryRetentionMinutes =
-                value.Minutes ?? _settings.Current.HistoryRetentionMinutes
+                value.Minutes ?? _settings.Current.HistoryRetentionMinutes,
             }
         );
     }

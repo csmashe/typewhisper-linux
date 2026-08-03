@@ -368,7 +368,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             [
                 new PluginSettingDefinition("name", "Name", Kind: PluginSettingKind.Text),
                 new PluginSettingDefinition("enabled", "Enabled", Kind: PluginSettingKind.Boolean),
-                new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text)
+                new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text),
             ],
             "name",
             "Add thing"

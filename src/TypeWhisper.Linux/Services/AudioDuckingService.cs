@@ -162,7 +162,7 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
         var arguments = new List<string>(2 + volumes.Length)
         {
             "set-sink-input-volume",
-            inputId
+            inputId,
         };
         arguments.AddRange(volumes);
         return RunPactl(arguments);

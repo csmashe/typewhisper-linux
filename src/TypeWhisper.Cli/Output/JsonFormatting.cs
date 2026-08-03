@@ -28,7 +28,7 @@ internal static class JsonFormatting
             JsonValueKind.Number => value.ToString(),
             JsonValueKind.True => "true",
             JsonValueKind.False => "false",
-            _ => ""
+            _ => "",
         };
     }
 

@@ -119,7 +119,7 @@ public sealed class FileTranscriptionProcessor(
                     segment.Start,
                     segment.End
                 ))
-                .ToArray()
+                .ToArray(),
         };
 
         var pipelineResult = await pipeline.ProcessAsync(
@@ -129,7 +129,7 @@ public sealed class FileTranscriptionProcessor(
                 VocabularyBooster = currentSettings.VocabularyBoostingEnabled
                     ? vocabularyBoosting.Apply
                     : null,
-                DictionaryCorrector = dictionary.ApplyCorrections
+                DictionaryCorrector = dictionary.ApplyCorrections,
             },
             cancellationToken
         );
@@ -206,7 +206,7 @@ public sealed class FileTranscriptionProcessor(
                 $"Ambiguous transcription model '{options.ModelId}': provided by multiple engines. "
                     + "Specify the engine explicitly or use the full plugin-qualified model id."
             ),
-            _ => ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), options.ModelId)
+            _ => ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), options.ModelId),
         };
     }
 }

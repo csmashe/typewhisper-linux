@@ -38,7 +38,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "SvelteKit",
                 "Vercel",
                 "Netlify",
-                "Supabase"
+                "Supabase",
             ]
         ),
         new(
@@ -65,7 +65,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "Moq",
                 "CommunityToolkit",
                 "Avalonia",
-                "Orleans"
+                "Orleans",
             ]
         ),
         new(
@@ -87,7 +87,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "ArgoCD",
                 "Pulumi",
                 "Vault",
-                "Consul"
+                "Consul",
             ]
         ),
         new(
@@ -109,7 +109,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "Pandas",
                 "NumPy",
                 "Scikit-learn",
-                "RAG"
+                "RAG",
             ]
         ),
         new(
@@ -131,7 +131,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "Accessibility",
                 "Responsive",
                 "Breakpoint",
-                "Viewport"
+                "Viewport",
             ]
         ),
         new(
@@ -153,7 +153,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "Sprite",
                 "Tilemap",
                 "NavMesh",
-                "GameLoop"
+                "GameLoop",
             ]
         ),
         new(
@@ -174,7 +174,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "Room",
                 "Firebase",
                 "TestFlight",
-                "CocoaPods"
+                "CocoaPods",
             ]
         ),
         new(
@@ -196,7 +196,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "SIEM",
                 "SOC",
                 "Ransomware",
-                "Phishing"
+                "Phishing",
             ]
         ),
         // These packs originated upstream with German display names and German
@@ -221,7 +221,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "Supabase",
                 "PlanetScale",
                 "Prisma",
-                "Drizzle"
+                "Drizzle",
             ]
         ),
         new(
@@ -243,7 +243,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "Orthopedics",
                 "Neurology",
                 "Pediatrics",
-                "Radiology"
+                "Radiology",
             ]
         ),
         new(
@@ -265,7 +265,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "Civil law",
                 "Arbitration",
                 "Data protection",
-                "Warranty"
+                "Warranty",
             ]
         ),
         new(
@@ -287,7 +287,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "Cryptocurrency",
                 "Blockchain",
                 "Fintech",
-                "Liquidity"
+                "Liquidity",
             ]
         ),
         new(
@@ -309,7 +309,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "Limiter",
                 "Chorus",
                 "Phaser",
-                "Arpeggiator"
+                "Arpeggiator",
             ]
         ),
         new(
@@ -366,7 +366,7 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "ARM",
                 "PITI",
                 "Disclosure",
-                "Zoning"
+                "Zoning",
             ]
         ),
         new(
@@ -423,9 +423,9 @@ public sealed record TermPack(string Id, string Name, string Icon, string[] Term
                 "Grasshopper",
                 "RFI",
                 "Schematic design",
-                "Construction documents"
+                "Construction documents",
             ]
-        )
+        ),
     ];
 
     public static TermPack? FindById(string id)

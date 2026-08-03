@@ -152,7 +152,7 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
         {
             "espeak" or "espeak-ng" => ["-v", language, text],
             "spd-say" => ["--wait", "-l", language, text],
-            _ => BuildDefaultArguments(command, text)
+            _ => BuildDefaultArguments(command, text),
         };
     }
 

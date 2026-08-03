@@ -32,7 +32,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "1",
                 Trigger = "mfg",
                 Replacement = "Mit freundlichen Grüßen",
-                Tags = "E-Mail,Gruß"
+                Tags = "E-Mail,Gruß",
             }
         );
 
@@ -49,7 +49,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "link",
-                Replacement = "Siehe: {clipboard}"
+                Replacement = "Siehe: {clipboard}",
             }
         );
 
@@ -65,7 +65,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "link",
-                Replacement = "Siehe: {clipboard}"
+                Replacement = "Siehe: {clipboard}",
             }
         );
 
@@ -81,7 +81,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "heute",
-                Replacement = "{date:dd.MM.yyyy}"
+                Replacement = "{date:dd.MM.yyyy}",
             }
         );
 
@@ -97,7 +97,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "uhr",
-                Replacement = "{time:HH:mm:ss}"
+                Replacement = "{time:HH:mm:ss}",
             }
         );
 
@@ -114,7 +114,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "datum",
-                Replacement = "{date}"
+                Replacement = "{date}",
             }
         );
         _sut.AddSnippet(
@@ -122,7 +122,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "2",
                 Trigger = "zeit",
-                Replacement = "{time}"
+                Replacement = "{time}",
             }
         );
         _sut.AddSnippet(
@@ -130,7 +130,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "3",
                 Trigger = "tag",
-                Replacement = "{day}"
+                Replacement = "{day}",
             }
         );
         _sut.AddSnippet(
@@ -138,7 +138,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "4",
                 Trigger = "jahr",
-                Replacement = "{year}"
+                Replacement = "{year}",
             }
         );
 
@@ -171,7 +171,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "1",
                 Trigger = "a",
                 Replacement = "A",
-                Tags = "Code,E-Mail"
+                Tags = "Code,E-Mail",
             }
         );
         _sut.AddSnippet(
@@ -180,7 +180,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "2",
                 Trigger = "b",
                 Replacement = "B",
-                Tags = "E-Mail,Datum"
+                Tags = "E-Mail,Datum",
             }
         );
         _sut.AddSnippet(
@@ -189,7 +189,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "3",
                 Trigger = "c",
                 Replacement = "C",
-                Tags = ""
+                Tags = "",
             }
         );
 
@@ -209,7 +209,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "1",
                 Trigger = "mfg",
                 Replacement = "Grüße",
-                Tags = "E-Mail"
+                Tags = "E-Mail",
             }
         );
         _sut.AddSnippet(
@@ -217,7 +217,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "2",
                 Trigger = "sig",
-                Replacement = "Signatur\nZeile 2"
+                Replacement = "Signatur\nZeile 2",
             }
         );
 
@@ -236,7 +236,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "existing",
-                Replacement = "Existing"
+                Replacement = "Existing",
             }
         );
 
@@ -260,7 +260,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "mfg",
-                Replacement = "Grüße"
+                Replacement = "Grüße",
             }
         );
 
@@ -284,7 +284,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "sig",
-                Replacement = "Mit freundlichen Grüßen\nMarco Mustermann\nTypeWhisper GmbH"
+                Replacement = "Mit freundlichen Grüßen\nMarco Mustermann\nTypeWhisper GmbH",
             }
         );
 
@@ -305,7 +305,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "mfg",
-                Replacement = "Mit freundlichen Grüßen"
+                Replacement = "Mit freundlichen Grüßen",
             }
         );
 
@@ -322,7 +322,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "1",
                 Trigger = "sig",
                 Replacement = "Signature",
-                TriggerMode = SnippetTriggerMode.ExactPhrase
+                TriggerMode = SnippetTriggerMode.ExactPhrase,
             }
         );
 
@@ -339,7 +339,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "1",
                 Trigger = "sig",
                 Replacement = "Profile signature",
-                ProfileIds = ["profile-1"]
+                ProfileIds = ["profile-1"],
             }
         );
 
@@ -356,7 +356,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "sig",
-                Replacement = "Global signature"
+                Replacement = "Global signature",
             }
         );
 
@@ -371,7 +371,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "sig",
-                Replacement = "Signature"
+                Replacement = "Signature",
             }
         );
 
@@ -414,7 +414,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "1",
                 Trigger = "mfg",
                 Replacement = "Grüße",
-                Tags = "Alt"
+                Tags = "Alt",
             }
         );
         _sut.UpdateSnippet(
@@ -423,7 +423,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "1",
                 Trigger = "mfg",
                 Replacement = "Grüße",
-                Tags = "Neu"
+                Tags = "Neu",
             }
         );
 
@@ -449,7 +449,7 @@ public sealed class SnippetServiceTests : IDisposable
                 {
                     Id = "new",
                     Trigger = "new",
-                    Replacement = "Do not persist"
+                    Replacement = "Do not persist",
                 }
             )
         );

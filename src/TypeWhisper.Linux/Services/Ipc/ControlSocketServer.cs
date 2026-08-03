@@ -576,7 +576,7 @@ internal sealed class ControlSocketServer : IDisposable
                 JsonControlProtocol.CmdRecordCancel => await HandleCancelAsync()
                     .ConfigureAwait(false),
                 JsonControlProtocol.CmdStatus => HandleStatus(),
-                _ => JsonControlProtocol.SerializeError(JsonControlProtocol.ErrUnknownCommand)
+                _ => JsonControlProtocol.SerializeError(JsonControlProtocol.ErrUnknownCommand),
             };
 
             await writer.WriteLineAsync(response).ConfigureAwait(false);
@@ -684,7 +684,7 @@ internal sealed class ControlSocketServer : IDisposable
             Backend = _hotkey?.ActiveBackendId,
             SupportsPressRelease = _hotkey?.ActiveBackendSupportsPressRelease ?? false,
             ActiveBinding = _hotkey?.CurrentHotkeyString,
-            Mode = _settings?.Current.Mode.ToString()
+            Mode = _settings?.Current.Mode.ToString(),
         };
         return JsonControlProtocol.SerializeStatus(response);
     }

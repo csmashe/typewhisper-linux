@@ -61,7 +61,7 @@ public partial class AppearanceSectionViewModel : ObservableObject
     public IReadOnlyList<OverlayPositionOption> OverlayPositions { get; } =
     [
         new(OverlayPosition.Top, "Appearance.PositionTop"),
-        new(OverlayPosition.Bottom, "Appearance.PositionBottom")
+        new(OverlayPosition.Bottom, "Appearance.PositionBottom"),
     ];
 
     public IReadOnlyList<OverlayWidgetOption> OverlayWidgets { get; } =
@@ -73,7 +73,7 @@ public partial class AppearanceSectionViewModel : ObservableObject
         new(OverlayWidget.Clock, "Appearance.WidgetClock"),
         new(OverlayWidget.Profile, "Appearance.WidgetProfile"),
         new(OverlayWidget.HotkeyMode, "Appearance.WidgetHotkeyMode"),
-        new(OverlayWidget.AppName, "Appearance.WidgetAppName")
+        new(OverlayWidget.AppName, "Appearance.WidgetAppName"),
     ];
 
     public string PreviewBubbleAutoHideSecondsText =>
@@ -181,10 +181,10 @@ public partial class AppearanceSectionViewModel : ObservableObject
                 RecordingMode.Toggle => Loc.Instance["Common.ModeToggle"],
                 RecordingMode.PushToTalk => Loc.Instance["Common.ModePushToTalk"],
                 RecordingMode.Hybrid => Loc.Instance["Common.ModeHybrid"],
-                _ => ""
+                _ => "",
             },
             OverlayWidget.AppName => Loc.Instance["Appearance.SampleAppName"],
-            _ => ""
+            _ => "",
         };
     }
 

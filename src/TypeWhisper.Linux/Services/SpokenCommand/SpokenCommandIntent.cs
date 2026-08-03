@@ -17,7 +17,7 @@ public static class SpokenCommandIntent
 
     private static readonly HashSet<string> s_selectionReferents = new(StringComparer.OrdinalIgnoreCase)
     {
-        "this", "that", "it", "these", "those", "them", "selection", "highlighted", "selected"
+        "this", "that", "it", "these", "those", "them", "selection", "highlighted", "selected",
     };
 
     private static readonly string[] s_selectionPhrases =
@@ -32,7 +32,7 @@ public static class SpokenCommandIntent
         "translate", "shorten", "lengthen", "summarize", "summarise", "rewrite", "rephrase", "reword",
         "reformat", "format", "fix", "correct", "proofread", "simplify", "condense", "expand",
         "capitalize", "capitalise", "uppercase", "lowercase", "bold", "italicize", "italicise",
-        "punctuate"
+        "punctuate",
     };
 
     // A command that opens with one of these asks for new text from scratch ("write an email",
@@ -42,7 +42,7 @@ public static class SpokenCommandIntent
     // demoting those to create would hijack a legitimate invocation of that saved action.
     private static readonly HashSet<string> s_leadingCreationVerbs = new(StringComparer.OrdinalIgnoreCase)
     {
-        "write", "draft", "compose", "create", "generate"
+        "write", "draft", "compose", "create", "generate",
     };
 
     public static bool RefersToSelection(string command)

@@ -581,7 +581,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             ),
             "plugin:com.typewhisper.voxtral:mistral-whisper" =>
                 GetPluginModelId("com.typewhisper.voxtral", "voxtral-mini-latest"),
-            _ => modelId
+            _ => modelId,
         };
     }
 
@@ -596,7 +596,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         {
             "plugin:com.typewhisper.voxtral:mistral-whisper" =>
                 GetPluginModelId("com.typewhisper.voxtral", "voxtral-mini-latest"),
-            _ => modelId
+            _ => modelId,
         };
     }
 
@@ -608,7 +608,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             AppSettings.LocalModelAccelerationNvidiaCuda =>
                 TranscriptionAccelerationPreference.NvidiaCuda,
             AppSettings.LocalModelAccelerationCpu => TranscriptionAccelerationPreference.Cpu,
-            _ => TranscriptionAccelerationPreference.Auto
+            _ => TranscriptionAccelerationPreference.Auto,
         };
     }
 
@@ -1111,7 +1111,7 @@ internal sealed class PluginTranscriptionEngineAdapter : ITranscriptionEngine
             Text = result.Text,
             DetectedLanguage = result.DetectedLanguage,
             Duration = result.DurationSeconds,
-            NoSpeechProbability = result.NoSpeechProbability
+            NoSpeechProbability = result.NoSpeechProbability,
         };
     }
 }

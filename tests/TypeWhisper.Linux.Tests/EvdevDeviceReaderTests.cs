@@ -38,7 +38,7 @@ public sealed class EvdevDeviceReaderTests
     {
         var device = new FakeInputDevice
         {
-            Snapshot = Bitmap(LinuxKeyMap.KeyLeftctrl, 30) // LeftCtrl + KEY_A.
+            Snapshot = Bitmap(LinuxKeyMap.KeyLeftctrl, 30), // LeftCtrl + KEY_A.
         };
         var events = new EventLog();
         var failure = NewFailureSignal();
@@ -68,7 +68,7 @@ public sealed class EvdevDeviceReaderTests
                 new KeyEdge(LinuxKeyMap.KeyLeftshift, false),
                 new KeyEdge(LinuxKeyMap.KeyLeftctrl, true), // Presses: modifier before terminal.
                 new KeyEdge(30, true),
-                new KeyEdge(30, false)
+                new KeyEdge(30, false),
             ],
             events.Snapshot()
         );

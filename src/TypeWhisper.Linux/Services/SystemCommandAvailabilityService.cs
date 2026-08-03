@@ -37,12 +37,12 @@ public sealed partial class SystemCommandAvailabilityService
         "/usr/local/cuda-12.1/lib64",
         "/usr/local/cuda-12.1/targets/x86_64-linux/lib",
         "/usr/local/cuda-12.0/lib64",
-        "/usr/local/cuda-12.0/targets/x86_64-linux/lib"
+        "/usr/local/cuda-12.0/targets/x86_64-linux/lib",
     ];
     private static readonly string[] s_requiredCuda12RuntimeLibraries =
     [
         "libcudart.so.12",
-        "libcublas.so.12"
+        "libcublas.so.12",
     ];
 
     private static readonly Lock s_cudaPreloadLock = new();
@@ -349,7 +349,7 @@ public sealed partial class SystemCommandAvailabilityService
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
                 }
             );
 
@@ -598,7 +598,7 @@ public sealed partial class SystemCommandAvailabilityService
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
                 }
             );
             if (p is null)
@@ -721,7 +721,7 @@ public sealed partial class SystemCommandAvailabilityService
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
                 }
             );
 
