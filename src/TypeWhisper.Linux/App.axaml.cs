@@ -329,19 +329,17 @@ public class App : Application
 
             // ActionsChanged fires on the UI thread while ProfilesChanged can fire off the
             // HTTP worker thread (e.g. /v1/profiles/toggle), so the two subscriptions can enter
-            // this reconcile concurrently. Serialize the apply so the candidate lists are replaced
-            // atomically for each independently captured service-state snapshot.
-            // Never read gate-guarded service state (Profiles/Actions) while holding reconcileLock — snapshot first.
-            // ProfilesChanged/ActionsChanged fire under their service gates, so a read-under-reconcileLock inverts
-            // the lock order and deadlocks.
+            // this reconcile concurrently. Both services are read AND applied under reconcileLock
+            // so a callback that snapshots first and is then preempted can't overwrite a newer
+            // reconciliation with its stale lists.
+            // Lock order is reconcileLock -> service gate, one direction only: neither service
+            // raises its change event while holding its own gate.
             var reconcileLock = new object();
             var reconcileRevision = 0L;
 
             void ReconcileDynamicHotkeys()
             {
                 var revision = Interlocked.Increment(ref reconcileRevision);
-                var actionsSnapshot = promptActions.Actions;
-                var profilesSnapshot = profileService.Profiles;
                 IReadOnlyList<string> rejections;
                 lock (reconcileLock)
                 {
@@ -353,8 +351,8 @@ public class App : Application
                     }
 
                     rejections = hotkey.SetDynamicHotkeys(
-                        HotkeyService.ParsePromptActionHotkeys(actionsSnapshot),
-                        HotkeyService.ParseProfileHotkeys(profilesSnapshot)
+                        HotkeyService.ParsePromptActionHotkeys(promptActions.Actions),
+                        HotkeyService.ParseProfileHotkeys(profileService.Profiles)
                     );
                 }
 

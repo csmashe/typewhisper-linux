@@ -294,7 +294,15 @@ public sealed class SoundFeedbackServiceTests
 
         public void Dispose()
         {
-            Directory.Delete(Path, recursive: true);
+            try
+            {
+                Directory.Delete(Path, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                           or DirectoryNotFoundException)
+            {
+                // Best-effort: an already-removed temp directory must not fail a passing test.
+            }
         }
     }
 }

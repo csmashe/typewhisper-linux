@@ -16,6 +16,9 @@ public sealed class ProfileService : IProfileService
     private readonly string _filePath;
     private readonly IErrorLogService? _errorLog;
     private readonly Lock _gate = new();
+
+    // Serializes notification delivery; never taken while _gate is held.
+    private readonly Lock _notifyGate = new();
     private List<Profile> _cache = [];
     private bool _cacheLoaded;
     private bool _loadFailed;
@@ -69,6 +72,8 @@ public sealed class ProfileService : IProfileService
             var newCache = new List<Profile>(_cache) { FirstRunDefaults.CreateAutoFormatProfile() };
             CommitLocked(newCache);
         }
+
+        NotifyProfilesChanged();
     }
 
     public void AddProfile(Profile profile)
@@ -79,6 +84,8 @@ public sealed class ProfileService : IProfileService
             var newCache = new List<Profile>(_cache) { profile };
             CommitLocked(newCache);
         }
+
+        NotifyProfilesChanged();
     }
 
     public void UpdateProfile(Profile profile)
@@ -97,6 +104,8 @@ public sealed class ProfileService : IProfileService
             newCache[idx] = updated;
             CommitLocked(newCache);
         }
+
+        NotifyProfilesChanged();
     }
 
     public void DeleteProfile(string id)
@@ -108,10 +117,13 @@ public sealed class ProfileService : IProfileService
             newCache.RemoveAll(p => p.Id == id);
             CommitLocked(newCache);
         }
+
+        NotifyProfilesChanged();
     }
 
     public Profile? ToggleProfileEnabled(string id)
     {
+        Profile updated;
         lock (_gate)
         {
             EnsureCacheLoadedLocked();
@@ -122,15 +134,17 @@ public sealed class ProfileService : IProfileService
                 return null;
             }
 
-            var updated = newCache[idx] with
+            updated = newCache[idx] with
             {
                 IsEnabled = !newCache[idx].IsEnabled,
                 UpdatedAt = DateTime.UtcNow,
             };
             newCache[idx] = updated;
             CommitLocked(newCache);
-            return updated;
         }
+
+        NotifyProfilesChanged();
+        return updated;
     }
 
     public MatchResult MatchProfile(
@@ -381,9 +395,22 @@ public sealed class ProfileService : IProfileService
     {
         SortList(newCache);
         // Persist before swapping _cache so a save failure can't leave a published-but-unsaved
-        // cache; on throw _cache stays on its prior committed list and ProfilesChanged never fires.
+        // cache; on throw _cache keeps its prior list and the caller never reaches its notify.
         SaveToDisk(newCache);
         _cache = newCache;
-        ProfilesChanged?.Invoke();
+    }
+
+    /// <summary>
+    ///     Raised outside <c>_gate</c> because subscribers run arbitrary code and re-enter this
+    ///     service, and serialized on <c>_notifyGate</c> so two callbacks can't interleave.
+    ///     Subscribers re-read <see cref="Profiles" />, so whichever runs last still sees the
+    ///     newest list.
+    /// </summary>
+    private void NotifyProfilesChanged()
+    {
+        lock (_notifyGate)
+        {
+            ProfilesChanged?.Invoke();
+        }
     }
 }
