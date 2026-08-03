@@ -219,10 +219,10 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     private readonly Lock _focusLock = new();
     private readonly SemaphoreSlim _startGate = new(1, 1);
 
-    // Guards the {_disposed, _started, IsRunning} triple and the connection/subscription fields.
-    // Dispose is synchronous and must not block on _startGate (a shutdown landing mid-connect would
-    // stall on the bus), so it cannot serialize with a start that way; this lock is what keeps a
-    // start that raced disposal from republishing IsRunning = true over the torn-down connection.
+    // Guards the {_disposed, _started, IsRunning} triple and TearDownConnection's snapshot-and-null
+    // of the connection/subscription fields. TryStartAsync writes them outside it: starts serialize
+    // on _startGate, and a post-disposal publish is swept by EnsureStartedAsync's _disposed
+    // re-check. Dispose can't use _startGate — it is synchronous and would stall mid-connect.
     private readonly Lock _lifecycleLock = new();
 
     // Guards _textChangedRefCount and _textChangedRegistered. A dedicated lock (not _focusLock) so
