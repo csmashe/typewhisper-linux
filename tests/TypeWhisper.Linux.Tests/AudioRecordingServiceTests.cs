@@ -878,6 +878,9 @@ public sealed class AudioRecordingServiceTests
 
     private sealed class FakeSettingsService(AppSettings current) : ISettingsService
     {
+        // ISettingsService.Update must read and persist under the same gate as Save.
+        private readonly Lock _gate = new();
+
         public int SaveCount { get; private set; }
         public AppSettings Current { get; private set; } = current;
 
@@ -888,16 +891,22 @@ public sealed class AudioRecordingServiceTests
 
         public void Save(AppSettings settings)
         {
-            SaveCount++;
-            Current = settings;
-            SettingsChanged?.Invoke(settings);
+            lock (_gate)
+            {
+                SaveCount++;
+                Current = settings;
+                SettingsChanged?.Invoke(settings);
+            }
         }
 
         public AppSettings Update(Func<AppSettings, AppSettings> mutate)
         {
-            var updated = mutate(Current);
-            Save(updated);
-            return updated;
+            lock (_gate)
+            {
+                var updated = mutate(Current);
+                Save(updated);
+                return updated;
+            }
         }
 
         public event Action<AppSettings>? SettingsChanged;

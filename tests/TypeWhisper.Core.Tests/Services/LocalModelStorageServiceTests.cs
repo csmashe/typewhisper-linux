@@ -432,6 +432,9 @@ public sealed class LocalModelStorageServiceTests : IDisposable
 
     private sealed class FakeSettingsService : ISettingsService
     {
+        // ISettingsService.Update must read and persist under the same gate as Save.
+        private readonly Lock _gate = new();
+
         public FakeSettingsService(AppSettings initial) => Current = initial;
 
         public AppSettings Current { get; private set; }
@@ -442,18 +445,24 @@ public sealed class LocalModelStorageServiceTests : IDisposable
 
         public void Save(AppSettings settings)
         {
-            if (ThrowOnSave is not null)
-                throw ThrowOnSave;
+            lock (_gate)
+            {
+                if (ThrowOnSave is not null)
+                    throw ThrowOnSave;
 
-            Current = settings;
-            SettingsChanged?.Invoke(settings);
+                Current = settings;
+                SettingsChanged?.Invoke(settings);
+            }
         }
 
         public AppSettings Update(Func<AppSettings, AppSettings> mutate)
         {
-            var updated = mutate(Current);
-            Save(updated);
-            return updated;
+            lock (_gate)
+            {
+                var updated = mutate(Current);
+                Save(updated);
+                return updated;
+            }
         }
 
         public event Action<AppSettings>? SettingsChanged;
