@@ -62,7 +62,8 @@ public sealed class PluginHostServices : IPluginHostServices
         string? pluginDisplayName = null,
         string? pluginDataRoot = null,
         string? secretProtectionKeyFilePath = null,
-        IPluginProcessSupervisor? processes = null
+        IPluginProcessSupervisor? processes = null,
+        IPluginPcmPlaybackService? pcmPlayback = null
     )
     {
         _pluginId = pluginId;
@@ -83,6 +84,7 @@ public sealed class PluginHostServices : IPluginHostServices
                         pluginId,
                         new ProcessRunner()
                     );
+        PcmPlayback = pcmPlayback ?? UnavailablePluginPcmPlaybackService.Instance;
         var settingsFilePath = Path.Join(_pluginDataDirectory, "settings.json");
         _secretProtectionKeyFilePath = ResolveSecretProtectionKeyFilePath(
             _pluginDataRoot,
@@ -132,6 +134,7 @@ public sealed class PluginHostServices : IPluginHostServices
 
     public IPluginEventBus EventBus { get; }
     public IPluginProcessSupervisor Processes { get; }
+    public IPluginPcmPlaybackService PcmPlayback { get; }
 
     internal PluginProcessSupervisorScope? ProcessScope =>
         Processes as PluginProcessSupervisorScope;

@@ -741,7 +741,8 @@ public sealed class PluginManager : IDisposable
                 plugin.Manifest.Name,
                 _loader.PluginDataRoot,
                 _secretProtectionKeyFilePath,
-                processScope
+                processScope,
+                new PcmPlaybackService(processScope)
             );
 
             await plugin.Instance.ActivateAsync(hostServices);

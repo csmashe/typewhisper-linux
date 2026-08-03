@@ -556,9 +556,7 @@ public sealed partial class SystemCommandAvailabilityService
         var hasPlayerCtl = IsCommandAvailable("playerctl");
         // Plays bundled WAVs via any PCM player rather than libcanberra/XDG events —
         // works regardless of the desktop sound theme or "System Sounds" toggle.
-        var hasAudioPlayer = IsCommandAvailable("pw-play")
-                             || IsCommandAvailable("paplay")
-                             || IsCommandAvailable("aplay");
+        var hasAudioPlayer = PcmPlayerResolver.Resolve() is not null;
         var hasYdotool = IsCommandAvailable("ydotool");
         var ydotoolSocket = ResolveYdotoolSocketPath(_processRunner);
 

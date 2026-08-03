@@ -813,7 +813,23 @@ public sealed partial class HttpApiService : IDisposable
         );
         try
         {
-            await File.WriteAllBytesAsync(tempPath, transcribeRequest.AudioData, ct);
+            var fileOptions = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                Options = FileOptions.Asynchronous,
+            };
+            if (!OperatingSystem.IsWindows())
+            {
+                fileOptions.UnixCreateMode =
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            }
+
+            await using (var destination = new FileStream(tempPath, fileOptions))
+            {
+                await destination.WriteAsync(transcribeRequest.AudioData, ct);
+            }
             var opts = new TranscriptionRunOptions(
                 transcribeRequest.Language,
                 transcribeRequest.LanguageHints,

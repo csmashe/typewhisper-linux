@@ -49,6 +49,17 @@ public interface IPluginHostServices
             "This plugin host does not provide process supervision."
         );
 
+    /// <summary>Host-owned playback for interleaved PCM audio.</summary>
+    /// <remarks>
+    ///     Unlike <see cref="Processes"/>, this default returns the unavailable sentinel
+    ///     instead of throwing, so plugins can preflight without a try/catch. It doesn't
+    ///     help old hosts, though: the load context resolves TypeWhisper.PluginSDK to the
+    ///     host's own copy, so an old host's SDK never sees this default.
+    /// </remarks>
+    // ReSharper disable once UnusedMemberInSuper.Global
+    IPluginPcmPlaybackService PcmPlayback =>
+        UnavailablePluginPcmPlaybackService.Instance;
+
     /// <summary>Stores a secret value using the platform secret store, scoped to the plugin.</summary>
     /// <remarks>
     ///     Throws an <see cref="IOException"/> or similar exception if persistence fails; the
