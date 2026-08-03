@@ -278,7 +278,23 @@ public sealed class CliInstallService
             CreateNoWindow = true,
         };
         process.StartInfo.ArgumentList.Add("--version");
-        if (!process.Start())
+        bool started;
+        try
+        {
+            started = process.Start();
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            // exec fails here rather than at chmod when the install directory is mounted
+            // noexec or the copy is not a valid binary. Normalized because callers only
+            // filter on this type.
+            throw new InvalidOperationException(
+                $"Could not start CLI verification: {ex.Message}",
+                ex
+            );
+        }
+
+        if (!started)
         {
             throw new InvalidOperationException("Could not start CLI verification.");
         }

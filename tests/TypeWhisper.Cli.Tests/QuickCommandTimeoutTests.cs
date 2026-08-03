@@ -235,7 +235,7 @@ public sealed class QuickCommandTimeoutTests
             {
                 // Expected while releasing the listener.
             }
-            catch (SocketException)
+            catch (SocketException ex) when (SocketShutdown.IsShutdownError(ex))
             {
                 // Expected when the timed-out client resets its connection.
             }

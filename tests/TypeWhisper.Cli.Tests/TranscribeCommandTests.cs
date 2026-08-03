@@ -460,7 +460,7 @@ public sealed class TranscribeCommandTests : IDisposable
             {
                 // Expected when the CLI closes before finishing its request.
             }
-            catch (SocketException)
+            catch (SocketException ex) when (SocketShutdown.IsShutdownError(ex))
             {
                 // Expected when the CLI resets the connection during shutdown.
             }

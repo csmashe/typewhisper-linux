@@ -207,11 +207,18 @@ public sealed class UnixSocketApiClientTests
             {
                 // Expected while ending the accept loop.
             }
-
-            _cts.Dispose();
-            if (Directory.Exists(_tempDirectory))
+            // Teardown faults must not replace whatever the test was actually asserting.
+            catch (SocketException ex) when (SocketShutdown.IsShutdownError(ex))
             {
-                Directory.Delete(_tempDirectory, recursive: true);
+                // Expected when a client resets its connection during shutdown.
+            }
+            finally
+            {
+                _cts.Dispose();
+                if (Directory.Exists(_tempDirectory))
+                {
+                    Directory.Delete(_tempDirectory, recursive: true);
+                }
             }
         }
 
