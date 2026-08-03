@@ -218,6 +218,7 @@ public sealed class GoogleCloudSttPlugin
 
             // Prefer the later window when scores tie so uniformly quiet audio stays
             // as close as possible to the nominal 55-second boundary.
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (score <= quietestScore)
             {
                 quietestScore = score;
@@ -340,6 +341,7 @@ public sealed class GoogleCloudSttPlugin
         )
         {
             var first = resultsForLang[0];
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (first.TryGetProperty("languageCode", out var lc))
             {
                 if (lc.ValueKind != JsonValueKind.String)

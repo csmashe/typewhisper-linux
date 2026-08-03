@@ -1,3 +1,4 @@
+// ReSharper disable ArrangeObjectCreationWhenTypeNotEvident -- target-typed `new(...)` in collection expressions is the prevailing style here.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -1014,6 +1015,7 @@ public class App : Application
                 string? skippedDueTo = null;
                 foreach (var dependency in stage.Dependencies)
                 {
+                    // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                     if (
                         !outcomesByName.TryGetValue(dependency, out var dependencyOutcome)
                         || dependencyOutcome.Status != BootstrapStageStatus.Succeeded
@@ -1067,6 +1069,7 @@ public class App : Application
             }
 
             var report = new BootstrapReport(outcomes);
+            // ReSharper disable once ConvertIfStatementToReturnStatement -- the branch throws; a ternary throw-expression reads worse than the guard.
             if (report.RequiredFailures.Count > 0)
             {
                 throw new RequiredBootstrapStageException(report);

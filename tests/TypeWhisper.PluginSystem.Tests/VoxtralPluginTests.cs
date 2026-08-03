@@ -221,6 +221,7 @@ public class VoxtralPluginTests
     }
 
     [Theory]
+    // ReSharper disable once RawStringCanBeSimplified -- kept raw so all InlineData rows share one literal form.
     [InlineData("""{}""")]
     [InlineData("""{ "text": null }""")]
     [InlineData("""{ "text": 42 }""")]

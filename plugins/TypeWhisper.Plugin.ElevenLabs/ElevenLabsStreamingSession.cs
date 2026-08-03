@@ -417,6 +417,7 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
                         $"ElevenLabs streaming provider error: {error}"
                     );
 
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (
                     isCommittedTranscript
                     && Volatile.Read(ref _finalCommitPending) != 0

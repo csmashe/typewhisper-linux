@@ -191,7 +191,9 @@ public class CudaRuntimeProvisioner
     public string CacheDirectory { get; }
 
     // Test seams: pin the lock paths and timeout so tests avoid a real per-user cache.
+    // ReSharper disable once ConvertToAutoPropertyWhenPossible -- the field is used throughout the class; this property is only a test seam over it.
     internal string MaintenanceLockPathForTests => _maintenanceLockPath;
+    // ReSharper disable once ConvertToAutoPropertyWhenPossible -- the field is used throughout the class; this property is only a test seam over it.
     internal string WheelLockDirectoryForTests => _wheelLockDirectory;
     internal TimeSpan MaintenanceLockTimeoutForTests { get; init; } =
         s_defaultMaintenanceLockTimeout;
@@ -1033,32 +1035,29 @@ public class CudaRuntimeProvisioner
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            try
+            await using (
+                await AcquireMaintenanceLocksAsync(
+                        "clearing the CUDA runtime cache",
+                        ct
+                    )
+                    .ConfigureAwait(false)
+            )
             {
-                await using (
-                    await AcquireMaintenanceLocksAsync(
-                            "clearing the CUDA runtime cache",
-                            ct
-                        )
-                        .ConfigureAwait(false)
-                )
-                {
-                    if (!Directory.Exists(_cacheRoot))
-                        return;
+                if (!Directory.Exists(_cacheRoot))
+                    return;
 
-                    Directory.Delete(_cacheRoot, recursive: true);
-                    _log?.Invoke($"CUDA runtime: cleared cache at {_cacheRoot}.");
-                }
+                Directory.Delete(_cacheRoot, recursive: true);
+                _log?.Invoke($"CUDA runtime: cleared cache at {_cacheRoot}.");
             }
-            catch (Exception ex)
-            {
-                // Don't swallow: the caller reports "cleared" to the user only when the
-                // cache is actually gone, so a corrupt runtime can't masquerade as repaired.
-                _log?.Invoke(
-                    $"CUDA runtime: failed to clear cache at {_cacheRoot}: {ex.Message}"
-                );
-                throw;
-            }
+        }
+        catch (Exception ex)
+        {
+            // Don't swallow: the caller reports "cleared" to the user only when the
+            // cache is actually gone, so a corrupt runtime can't masquerade as repaired.
+            _log?.Invoke(
+                $"CUDA runtime: failed to clear cache at {_cacheRoot}: {ex.Message}"
+            );
+            throw;
         }
         finally
         {

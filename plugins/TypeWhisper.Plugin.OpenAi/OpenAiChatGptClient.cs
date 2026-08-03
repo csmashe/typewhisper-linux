@@ -85,10 +85,9 @@ internal sealed class OpenAiChatGptClient
 
     internal static string? ParseResponseText(string body)
     {
-        if (TryParseJsonResponseText(body, out var responseText))
-            return responseText;
-
-        return ParseEventStreamResponseText(body);
+        return TryParseJsonResponseText(body, out var responseText)
+            ? responseText
+            : ParseEventStreamResponseText(body);
     }
 
     private static string? ParseEventStreamResponseText(string body)

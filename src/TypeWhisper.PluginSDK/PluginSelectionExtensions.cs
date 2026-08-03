@@ -71,6 +71,7 @@ public static class PluginSelectionExtensions
             return false;
         }
 
+        // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- LINQ would swap the struct enumerator for the boxing interface one in a hot path.
         foreach (var character in selectionId)
         {
             if (

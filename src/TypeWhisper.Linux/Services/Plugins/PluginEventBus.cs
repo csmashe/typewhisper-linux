@@ -70,6 +70,7 @@ public sealed class PluginEventBus : IPluginEventBus, IDisposable, IAsyncDisposa
         where T : PluginEvent
     {
         var eventType = typeof(T);
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- local function kept near its point of use for readability.
         Task WrappedHandler(object obj) => handler((T)obj);
         var subscription = new Subscription(this, eventType, WrappedHandler);
 

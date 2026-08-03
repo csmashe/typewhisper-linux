@@ -22,6 +22,7 @@ public sealed class BundledPluginDeployer
     public static int DeployIfMissing()
     {
         var source = FindBundledPluginsDir();
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (source is null)
         {
             Trace.WriteLine(
@@ -234,6 +235,7 @@ public sealed class BundledPluginDeployer
             Directory.Delete(abandonedStage, recursive: true);
         }
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (Directory.Exists(backup))
         {
             if (Directory.Exists(dest))

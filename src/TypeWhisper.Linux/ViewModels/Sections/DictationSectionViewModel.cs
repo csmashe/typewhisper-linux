@@ -1,3 +1,4 @@
+// ReSharper disable ArrangeObjectCreationWhenTypeNotEvident -- target-typed `new(...)` in collection expressions is the prevailing style here.
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;

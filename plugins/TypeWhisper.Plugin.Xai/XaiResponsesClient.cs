@@ -254,6 +254,7 @@ internal sealed class XaiResponsesClient
         if (ExtractErrorMessage(root) is { } rootError)
             return rootError;
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (TryGetResponse(root, out var response))
         {
             if (ExtractErrorMessage(response) is { } responseError)

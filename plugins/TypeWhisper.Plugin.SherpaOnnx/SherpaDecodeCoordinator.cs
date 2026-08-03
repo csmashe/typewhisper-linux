@@ -100,7 +100,7 @@ internal sealed class SherpaDecodeCoordinator
             start + OverlapSampleCount + EnergyWindowSampleCount,
             hardEnd - BoundarySearchSampleCount
         );
-        var halfWindow = EnergyWindowSampleCount / 2;
+        const int halfWindow = EnergyWindowSampleCount / 2;
         var bestCut = hardEnd;
         var bestEnergy = double.MaxValue;
 
@@ -117,6 +117,7 @@ internal sealed class SherpaDecodeCoordinator
                 energy += audioSamples[i] * audioSamples[i];
 
             energy /= Math.Max(1, windowEnd - windowStart);
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (energy < bestEnergy)
             {
                 bestEnergy = energy;
@@ -144,6 +145,7 @@ internal sealed class SherpaDecodeCoordinator
             var matches = true;
             for (var i = 0; i < length; i++)
             {
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (
                     !string.Equals(
                         accumulatedTokens[accumulatedTokens.Length - length + i],
@@ -157,6 +159,7 @@ internal sealed class SherpaDecodeCoordinator
                 }
             }
 
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (matches)
             {
                 overlap = length;
@@ -186,6 +189,7 @@ internal sealed class SherpaDecodeCoordinator
                 text = textNode.GetString()?.Trim() ?? string.Empty;
 
             string? language = null;
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (json.RootElement.TryGetProperty("lang", out var languageNode))
             {
                 var parsed = languageNode.GetString();

@@ -416,6 +416,7 @@ public partial class PluginsSectionViewModel : ObservableObject
                     return true;
                 }
             );
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (!setResult.IsSuccess)
             {
                 row.Status = Loc.Instance["Plugins.SettingsSaveFailed"];
@@ -652,7 +653,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
     }
 
-    private void MarkSettingsLoadFailed(PluginRow row, bool preserveStatus = false)
+    private static void MarkSettingsLoadFailed(PluginRow row, bool preserveStatus = false)
     {
         row.SettingFields.Clear();
         row.Collections.Clear();
@@ -689,27 +690,34 @@ public partial class PluginsSectionViewModel : ObservableObject
     )
     {
         var timeoutDuration = overrideTimeout ?? _pluginBoundaryTimeout;
+        // Cancelable, not CancellationToken.None: a cooperative boundary should stop
+        // doing work once we've given up on it.
+        var timeoutSource = new CancellationTokenSource(timeoutDuration);
+        // Read the token out here so the closure captures the struct, not the source.
+        var timeoutToken = timeoutSource.Token;
         var boundaryTask = Task.Run(
-            () => boundary(CancellationToken.None),
+            () => boundary(timeoutToken),
             CancellationToken.None
         );
         var completedTask = await Task.WhenAny(
                 boundaryTask,
+                // ReSharper disable once MethodSupportsCancellation -- this delay IS the timeout; passing timeoutToken would make it cancel itself.
                 Task.Delay(timeoutDuration)
             )
             .ConfigureAwait(false);
 
         if (completedTask != boundaryTask)
         {
-            var timeout = new TimeoutException(
-                $"The operation timed out after "
-                    + $"{timeoutDuration.TotalSeconds:0.###} seconds."
+            ReportPluginBoundaryFailure(
+                plugin,
+                operation,
+                BoundaryTimeout(timeoutDuration)
             );
-            ReportPluginBoundaryFailure(plugin, operation, timeout);
             ObserveLatePluginBoundary(
                 boundaryTask,
                 plugin.Manifest.Id,
-                operation
+                operation,
+                timeoutSource
             );
             return PluginBoundaryResult<T>.Failure;
         }
@@ -719,11 +727,32 @@ public partial class PluginsSectionViewModel : ObservableObject
             var value = await boundaryTask.ConfigureAwait(false);
             return new PluginBoundaryResult<T>(true, value);
         }
+        catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
+        {
+            // The boundary honored the token and stopped at the deadline — still a timeout.
+            ReportPluginBoundaryFailure(
+                plugin,
+                operation,
+                BoundaryTimeout(timeoutDuration)
+            );
+            return PluginBoundaryResult<T>.Failure;
+        }
         catch (Exception ex)
         {
             ReportPluginBoundaryFailure(plugin, operation, ex);
             return PluginBoundaryResult<T>.Failure;
         }
+        finally
+        {
+            timeoutSource.Dispose();
+        }
+    }
+
+    private static TimeoutException BoundaryTimeout(TimeSpan timeoutDuration)
+    {
+        return new TimeoutException(
+            $"The operation timed out after {timeoutDuration.TotalSeconds:0.###} seconds."
+        );
     }
 
     private void ReportPluginBoundaryFailure(
@@ -742,12 +771,15 @@ public partial class PluginsSectionViewModel : ObservableObject
     private static void ObserveLatePluginBoundary(
         Task boundaryTask,
         string pluginId,
-        string operation
+        string operation,
+        CancellationTokenSource timeoutSource
     )
     {
         _ = boundaryTask.ContinueWith(
             completedTask =>
             {
+                // Deferred to here: the abandoned boundary still holds this source's token.
+                timeoutSource.Dispose();
                 if (completedTask.IsFaulted)
                 {
                     Trace.WriteLine(
@@ -940,6 +972,7 @@ public partial class PluginRow : ObservableObject
     private PluginSettingsDraftEntry[] CaptureSettingsDraft()
     {
         var entries = new List<PluginSettingsDraftEntry>();
+        // ReSharper disable once LoopCanBeConvertedToQuery -- reads better than the equivalent LINQ chain.
         for (var fieldIndex = 0; fieldIndex < SettingFields.Count; fieldIndex++)
         {
             var field = SettingFields[fieldIndex];
@@ -974,6 +1007,7 @@ public partial class PluginRow : ObservableObject
             for (var itemIndex = 0; itemIndex < collection.Items.Count; itemIndex++)
             {
                 var item = collection.Items[itemIndex];
+                // ReSharper disable once LoopCanBeConvertedToQuery -- reads better than the equivalent LINQ chain.
                 for (var fieldIndex = 0; fieldIndex < item.Fields.Count; fieldIndex++)
                 {
                     var field = item.Fields[fieldIndex];

@@ -1,3 +1,4 @@
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
@@ -70,7 +71,9 @@ public partial class GeneralSectionViewModel : ObservableObject
         Refresh(settings.Current);
         _startWithSystem = StartupService.IsEnabled;
         CloseToTray = _linuxPrefs.Current.CloseToTray;
-        _settings.SettingsChanged += Refresh;
+        // SettingsChanged can fire off the UI thread (HTTP API), and Refresh
+        // rebuilds the curl/CLI example collections.
+        _settings.SettingsChanged += changed => Dispatcher.UIThread.Post(() => Refresh(changed));
         Loc.Instance.LanguageChanged += (_, _) =>
         {
             if (_autostartStatusIsHint)

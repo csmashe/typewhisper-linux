@@ -170,6 +170,9 @@ public sealed class PluginManager : IDisposable
             activated = [.. _activatedPlugins];
         }
 
+        // One budget for the whole pass: a per-plugin timeout multiplies by the plugin count.
+        var shutdownBudget = Stopwatch.StartNew();
+
         foreach (var plugin in plugins)
         {
             // Dispose is synchronous and can't be canceled. A hostile plugin can strand this
@@ -181,34 +184,11 @@ public sealed class PluginManager : IDisposable
                 TaskScheduler.Default
             );
 
-            var completedTask = Task.WhenAny(
-                    shutdownTask,
-                    Task.Delay(_pluginShutdownTimeout)
-                )
-                .GetAwaiter()
-                .GetResult();
-
-            if (completedTask == shutdownTask)
-            {
-                try
-                {
-                    shutdownTask.GetAwaiter().GetResult();
-                }
-                catch (Exception ex)
-                {
-                    Trace.WriteLine(
-                        $"[PluginManager] Error shutting down plugin {plugin.Manifest.Id}: {ex.Message}"
-                    );
-                }
-            }
-            else
-            {
-                Trace.WriteLine(
-                    $"[PluginManager] Timed out shutting down plugin {plugin.Manifest.Id} "
-                        + $"after {_pluginShutdownTimeout.TotalSeconds:0.###} seconds"
-                );
-                ObserveLateShutdown(shutdownTask, plugin.Manifest.Id);
-            }
+            AwaitPluginShutdown(
+                shutdownTask,
+                plugin.Manifest.Id,
+                _pluginShutdownTimeout - shutdownBudget.Elapsed
+            );
 
             try
             {
@@ -232,6 +212,45 @@ public sealed class PluginManager : IDisposable
             _postProcessors.Clear();
             _actionPlugins.Clear();
             _ttsProviders.Clear();
+        }
+    }
+
+    private void AwaitPluginShutdown(Task shutdownTask, string pluginId, TimeSpan remaining)
+    {
+        if (remaining <= TimeSpan.Zero)
+        {
+            Trace.WriteLine(
+                "[PluginManager] Shutdown budget of "
+                    + $"{_pluginShutdownTimeout.TotalSeconds:0.###} seconds is spent; "
+                    + $"not waiting for plugin {pluginId}"
+            );
+            ObserveLateShutdown(shutdownTask, pluginId);
+            return;
+        }
+
+        var completedTask = Task.WhenAny(shutdownTask, Task.Delay(remaining))
+            .GetAwaiter()
+            .GetResult();
+
+        if (completedTask != shutdownTask)
+        {
+            Trace.WriteLine(
+                $"[PluginManager] Timed out shutting down plugin {pluginId} "
+                    + $"after {remaining.TotalSeconds:0.###} seconds"
+            );
+            ObserveLateShutdown(shutdownTask, pluginId);
+            return;
+        }
+
+        try
+        {
+            shutdownTask.GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[PluginManager] Error shutting down plugin {pluginId}: {ex.Message}"
+            );
         }
     }
 

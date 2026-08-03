@@ -393,9 +393,8 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
         var parent = new FakeAdditionalRolesPlugin("com.test.additional-owner");
         var manager = await CreateManagerAsync(parent);
 
-        IReadOnlyList<ILlmProviderRole> llmRoles = manager.LlmProviders;
-        IReadOnlyList<ITranscriptionEngineRole> transcriptionRoles =
-            manager.TranscriptionEngines;
+        var llmRoles = manager.LlmProviders;
+        var transcriptionRoles = manager.TranscriptionEngines;
         var llmRole = Assert.Single(llmRoles);
         var transcriptionRole = Assert.Single(transcriptionRoles);
 

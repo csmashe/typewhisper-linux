@@ -65,7 +65,9 @@ public sealed class UiOperationGuardTests
     }
 
     [Theory]
-    [MemberData(nameof(ExpectedFailures))]
+    // Exception instances aren't serializable for row enumeration, and the real
+    // exception types are the point of the theory.
+    [MemberData(nameof(ExpectedFailures), DisableDiscoveryEnumeration = true)]
     public async Task RunAsync_ExpectedFailure_RollsBackThenPresentsAndLogs(
         UiFailureKind failureKind,
         Exception failure

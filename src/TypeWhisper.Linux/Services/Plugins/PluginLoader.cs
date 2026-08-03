@@ -319,6 +319,7 @@ public sealed class PluginLoader
             );
         }
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (categories is not null)
         {
             if (

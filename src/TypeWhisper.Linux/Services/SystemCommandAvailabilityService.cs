@@ -338,9 +338,10 @@ public sealed partial class SystemCommandAvailabilityService
         }
 
         var stopwatch = Stopwatch.StartNew();
+        Process? process = null;
         try
         {
-            using var process = Process.Start(
+            process = Process.Start(
                 new ProcessStartInfo(
                     "nvidia-smi",
                     "--query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits"
@@ -367,15 +368,6 @@ public sealed partial class SystemCommandAvailabilityService
 
             if (!ReferenceEquals(completed, waitTask) && !process.HasExited)
             {
-                try
-                {
-                    process.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
                 return new CudaBenchmarkResult(
                     false,
                     "nvidia-smi did not respond within 3 seconds.",
@@ -420,6 +412,31 @@ public sealed partial class SystemCommandAvailabilityService
                 $"CUDA benchmark failed: {ex.Message}",
                 stopwatch.Elapsed
             );
+        }
+        finally
+        {
+            if (process is not null)
+            {
+                // Disposing a Process does not stop the child, so every early exit —
+                // cancellation, the 3 s timeout, an I/O failure — would orphan nvidia-smi.
+                TryKillProcessTree(process);
+                process.Dispose();
+            }
+        }
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(true);
+            }
+        }
+        catch
+        {
+            /* best effort */
         }
     }
 

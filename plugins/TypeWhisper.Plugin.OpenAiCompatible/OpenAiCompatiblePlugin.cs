@@ -972,6 +972,7 @@ public sealed class OpenAiCompatiblePlugin
     {
         lock (_profileRolesLock)
         {
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (!_profileRoles.TryGetValue(id, out var role))
             {
                 role = new OpenAiCompatibleProfileRole(this, id);

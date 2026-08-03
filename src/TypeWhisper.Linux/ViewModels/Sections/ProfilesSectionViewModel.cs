@@ -1,3 +1,4 @@
+// ReSharper disable ArrangeObjectCreationWhenTypeNotEvident -- target-typed `new(...)` in collection expressions is the prevailing style here.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;

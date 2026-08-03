@@ -77,6 +77,7 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
 
     internal static OpenAiRealtimeStreamingSession CreateConnectedSessionForTests(WebSocket ws)
     {
+        // ReSharper disable once ConvertIfStatementToReturnStatement -- the branch throws; a ternary throw-expression reads worse than the guard.
         if (ws.State != WebSocketState.Open)
             throw new InvalidOperationException("The test WebSocket must already be open.");
 

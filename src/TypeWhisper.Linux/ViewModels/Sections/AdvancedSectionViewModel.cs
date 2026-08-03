@@ -1,3 +1,4 @@
+// ReSharper disable ArrangeObjectCreationWhenTypeNotEvident -- target-typed `new(...)` in collection expressions is the prevailing style here.
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using System.Collections.ObjectModel;
@@ -77,7 +78,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
         _speechFeedback.ProvidersChanged += (_, _) => PostPluginStateRefresh();
         RefreshSpokenFeedbackProviders();
         Refresh(settings.Current);
-        _settings.SettingsChanged += Refresh;
+        // SettingsChanged can fire off the UI thread (HTTP API, model manager), and
+        // Refresh mutates the provider/voice collections.
+        _settings.SettingsChanged += changed => _post(() => Refresh(changed));
         _pluginManager.PluginStateChanged += (_, _) => PostPluginStateRefresh();
         Loc.Instance.LanguageChanged += OnInterfaceLanguageChanged;
     }

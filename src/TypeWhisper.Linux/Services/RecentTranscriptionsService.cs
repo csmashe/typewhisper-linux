@@ -354,6 +354,7 @@ public sealed class RecentTranscriptionsService
             }
         }
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (!string.IsNullOrWhiteSpace(target.ProcessName))
         {
             hasAppIdentity = true;

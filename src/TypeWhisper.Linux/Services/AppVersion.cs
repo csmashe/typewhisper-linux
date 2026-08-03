@@ -211,6 +211,7 @@ public static class AppVersion
             return core;
         }
 
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
         if (a.PreRelease.Count == 0 && b.PreRelease.Count == 0)
         {
             return 0;
@@ -268,6 +269,7 @@ public static class AppVersion
             return false;
         }
 
+        // ReSharper disable once LoopCanBeConvertedToQuery -- reads better than the equivalent LINQ chain.
         foreach (var identifier in value.Split('.'))
         {
             if (

@@ -353,6 +353,7 @@ public class PluginEventBusTests
                 received.Add(description);
             }
 
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
             if (
                 pluginEvent
                 is PartialTranscriptionUpdateEvent
@@ -664,6 +665,7 @@ public class PluginEventBusTests
                 received.Add(pluginEvent.AccumulatedText);
             }
 
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
             if (pluginEvent.AccumulatedText == "gate")
             {
                 firstEntered.TrySetResult(true);

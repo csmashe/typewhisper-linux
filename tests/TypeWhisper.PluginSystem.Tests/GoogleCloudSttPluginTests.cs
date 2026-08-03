@@ -65,7 +65,7 @@ public class GoogleCloudSttPluginTests
         );
 
         Assert.Equal(2, handler.Requests.Count);
-        var expectedFirstChunkBytes = quietWindowStart + QuietWindowBytes / 2;
+        const int expectedFirstChunkBytes = quietWindowStart + QuietWindowBytes / 2;
         Assert.Equal(expectedFirstChunkBytes, handler.Requests[0].Audio.Length);
         Assert.Equal(audioBytes - expectedFirstChunkBytes, handler.Requests[1].Audio.Length);
         Assert.All(handler.Requests, request =>
@@ -346,6 +346,7 @@ public class GoogleCloudSttPluginTests
         BinaryPrimitives.WriteUInt32LittleEndian(span[(offset + 4)..], 0xFFFFFFFF);
         offset += 8;
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (amplitude != 0)
         {
             for (var sampleOffset = offset; sampleOffset < buffer.Length; sampleOffset += 2)
@@ -386,7 +387,7 @@ public class GoogleCloudSttPluginTests
         )
         {
             var body = await Assert
-                .IsAssignableFrom<HttpContent>(request.Content)
+                .IsType<HttpContent>(request.Content, exactMatch: false)
                 .ReadAsStringAsync(cancellationToken);
             using var json = JsonDocument.Parse(body);
             var root = json.RootElement;

@@ -1372,6 +1372,7 @@ public class OpenAiPluginTests
         var received = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- local function kept near its point of use for readability.
         void OnTranscript(StreamingTranscriptEvent transcriptEvent)
         {
             if (transcriptEvent == expected)
@@ -1499,7 +1500,9 @@ public class OpenAiPluginTests
         private WebSocketCloseStatus? _closeStatus;
         private string? _closeStatusDescription;
 
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- overrides a get-only WebSocket property; a setter here would not compile.
         public override WebSocketCloseStatus? CloseStatus => _closeStatus;
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- overrides a get-only WebSocket property; a setter here would not compile.
         public override string? CloseStatusDescription => _closeStatusDescription;
         public override WebSocketState State => (WebSocketState)Volatile.Read(ref _state);
         public override string? SubProtocol => null;

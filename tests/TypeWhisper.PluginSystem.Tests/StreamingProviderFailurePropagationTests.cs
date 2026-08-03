@@ -519,8 +519,11 @@ public sealed class StreamingProviderFailurePropagationTests
         private string? _closeDescription;
 
         public Task LastReceiveConsumed => _lastReceiveConsumed.Task;
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- overrides a get-only WebSocket property; a setter here would not compile.
         public override WebSocketCloseStatus? CloseStatus => _closeStatus;
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- overrides a get-only WebSocket property; a setter here would not compile.
         public override string? CloseStatusDescription => _closeDescription;
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- overrides a get-only WebSocket property; a setter here would not compile.
         public override WebSocketState State => _state;
         public override string? SubProtocol => null;
 

@@ -642,6 +642,7 @@ public class GladiaPluginTests
     }
 
     [Theory]
+    // ReSharper disable once RawStringCanBeSimplified -- kept raw so all InlineData rows share one literal form.
     [InlineData("""{}""")]
     [InlineData("""{ "status": 17 }""")]
     [InlineData("""{ "status": "paused" }""")]

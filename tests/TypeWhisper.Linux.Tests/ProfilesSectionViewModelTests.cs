@@ -132,6 +132,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
                 sut.SelectedCleanupOverrideOption = null;
             sut.PropertyChanged += (_, args) =>
             {
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (args.PropertyName == nameof(ProfilesSectionViewModel.WhisperModeOptions))
                 {
                     sut.SelectedWhisperModeOption = null;
