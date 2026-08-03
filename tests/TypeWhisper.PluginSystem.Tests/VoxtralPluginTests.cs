@@ -101,7 +101,7 @@ public class VoxtralPluginTests
 
         var result = await sut.TranscribeAsync(
             [1, 2, 3],
-            "auto",
+            null,
             translate: false,
             prompt: "Do not send this as prompt or context_bias",
             CancellationToken.None

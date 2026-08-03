@@ -14,6 +14,7 @@ namespace TypeWhisper.Plugin.Xai;
 
 public sealed class XaiPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         ILlmProviderPlugin,
         ITtsProviderPlugin,
         IPluginSettingsProvider,
@@ -118,6 +119,8 @@ public sealed class XaiPlugin
 
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public IReadOnlyList<string> SupportedLanguages => s_languages;
 
     public void SelectModel(string modelId)
@@ -165,9 +168,6 @@ public sealed class XaiPlugin
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
-        // Run through the same normalization the batch TranscribeAsync uses
-        // so a setting value like " de " or "auto" doesn't propagate into the
-        // streaming URI as %20de%20 or language=auto.
         return await XaiStreamingSession.ConnectAsync(ApiKey!, NormalizeLanguage(language), ct);
     }
 
@@ -600,9 +600,7 @@ public sealed class XaiPlugin
         string.IsNullOrWhiteSpace(voiceId) ? XaiTtsConfiguration.DefaultVoiceId : voiceId.Trim();
 
     private static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
-            ? null
-            : language.Trim();
+        string.IsNullOrWhiteSpace(language) ? null : language.Trim();
 
     private static string NormalizeTtsLanguage(string? language) =>
         string.IsNullOrWhiteSpace(language) ? "auto" : language.Trim();

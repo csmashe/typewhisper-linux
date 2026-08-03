@@ -14,6 +14,7 @@ namespace TypeWhisper.Plugin.OpenAiCompatible;
 
 public sealed class OpenAiCompatiblePlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         ILlmProviderPlugin,
         IPluginSettingsProvider,
         IModelCatalogProvider,
@@ -124,6 +125,8 @@ public sealed class OpenAiCompatiblePlugin
     }
 
     public bool SupportsTranslation => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
         byte[] wavAudio,
@@ -1294,6 +1297,7 @@ public sealed class OpenAiCompatiblePlugin
     // still resolve to the real plugin. The owner is its only lifetime authority.
     private sealed class OpenAiCompatibleProfileRole(OpenAiCompatiblePlugin owner, string profileId)
         : ITranscriptionEngineRole,
+            ITranscriptionLanguageSelectionCapabilities,
             ILlmProviderRole,
             ITranscriptionEngineSelectionIdentity,
             ILlmProviderSelectionIdentity
@@ -1307,6 +1311,8 @@ public sealed class OpenAiCompatiblePlugin
         public IReadOnlyList<PluginModelInfo> TranscriptionModels => owner.ProfileTranscriptionModels(profileId);
         public string? SelectedModelId => owner.ProfileSelectedModel(profileId);
         public bool SupportsTranslation => true;
+        public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+        public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
         public string ProviderName => owner.ProfileDisplayName(profileId);
         public bool IsAvailable => owner.ProfileLlmAvailable(profileId);
         public IReadOnlyList<PluginModelInfo> SupportedModels => owner.ProfileLlmModels(profileId);

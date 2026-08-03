@@ -1,4 +1,7 @@
+using Microsoft.Extensions.DependencyInjection;
 using TypeWhisper.Core;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using Xunit;
 
 namespace TypeWhisper.Integration.Tests;
@@ -216,6 +219,40 @@ public sealed class DictationOrchestratorCompositionTests
             {
                 fixture.CueProcessRunner.ReleaseCue();
             }
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task ForcedProfileLanguage_ReachesBatchTranscription_WhenSnapshotFails()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture();
+            // Headless: the active-window snapshot cannot resolve here, so this pins
+            // that a hotkey-forced profile's language survives snapshot failure all
+            // the way to the batch transcription call.
+            var profiles = fixture.Provider.GetRequiredService<IProfileService>();
+            profiles.AddProfile(
+                new Profile
+                {
+                    Id = "integration-forced-de",
+                    Name = "Forced German",
+                    InputLanguage = "de",
+                }
+            );
+            fixture.Plugin.EnqueueText("hallo");
+
+            var sessionId = await BoundedTest.WaitAsync(
+                fixture.Orchestrator.StartAsync("integration-forced-de")
+            );
+            fixture.FeedNonSilentAudio();
+            var resultTask = fixture.WaitForResultAsync(sessionId);
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+            var result = await BoundedTest.WaitAsync(resultTask);
+
+            Assert.Equal("ready", result.Status);
+            Assert.Equal(["de"], fixture.Plugin.ReceivedLanguages);
         });
     }
 }

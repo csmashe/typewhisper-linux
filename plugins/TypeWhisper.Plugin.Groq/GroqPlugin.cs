@@ -14,6 +14,7 @@ namespace TypeWhisper.Plugin.Groq;
 
 public sealed class GroqPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         ILlmProviderPlugin,
         IPluginSettingsProvider,
         IPluginLocalizationAware
@@ -104,6 +105,9 @@ public sealed class GroqPlugin
             return entry?.SupportsTranslation ?? false;
         }
     }
+
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public void SelectModel(string modelId)
     {

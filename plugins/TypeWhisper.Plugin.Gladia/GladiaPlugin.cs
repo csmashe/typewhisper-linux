@@ -11,7 +11,11 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Gladia;
 
-public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class GladiaPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.gladia.io";
 
@@ -90,6 +94,8 @@ public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     public bool SupportsTranslation => false;
 
     public bool SupportsStreaming => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
@@ -583,10 +589,7 @@ public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     private static string? NormalizeLanguage(string? language)
     {
         var normalized = language?.Trim();
-        return string.IsNullOrEmpty(normalized)
-            || string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase)
-                ? null
-                : normalized;
+        return string.IsNullOrEmpty(normalized) ? null : normalized;
     }
 
     private static void AddApiKey(HttpRequestMessage request, string apiKey) =>

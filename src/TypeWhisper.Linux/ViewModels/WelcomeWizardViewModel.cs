@@ -1055,7 +1055,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
                 );
                 var result = await plugin.TranscribeAsync(
                     wav,
-                    null,
+                    LanguageSelection.Automatic,
                     false,
                     null,
                     _lifetimeToken
@@ -1090,7 +1090,10 @@ public partial class WelcomeWizardViewModel : ObservableObject
                 return;
             }
 
-            FirstDictationStatus = Loc.Instance.GetString("Wizard.TranscriptionFailed", ex.Message);
+            FirstDictationStatus = Loc.Instance.GetString(
+                "Wizard.TranscriptionFailed",
+                LanguageSelectionUiMessage.From(ex)
+            );
         }
     }
 

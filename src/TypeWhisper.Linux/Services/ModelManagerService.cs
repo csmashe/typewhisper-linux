@@ -1099,9 +1099,10 @@ internal sealed class PluginTranscriptionEngineAdapter : ITranscriptionEngine
     {
         var wavBytes = WavEncoder.Encode(audioSamples);
         var translate = task == TranscriptionTask.Translate;
+        var languageSelection = LanguageSelectionResolver.Resolve(language);
         var result = await _plugin.TranscribeAsync(
             wavBytes,
-            language,
+            languageSelection,
             translate,
             null,
             cancellationToken

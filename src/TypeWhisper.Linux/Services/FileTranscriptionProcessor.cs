@@ -74,8 +74,11 @@ public sealed class FileTranscriptionProcessor(
         );
 
         var currentSettings = settings.Current;
-        var configuredLanguage = options?.Language ?? currentSettings.Language;
-        var language = configuredLanguage == "auto" ? null : configuredLanguage;
+        var languageSelection = LanguageSelectionResolver.Resolve(
+            options?.Language,
+            currentSettings.Language
+        );
+        var configuredLanguage = languageSelection.LanguageTag;
         var task =
             options?.Task
             ?? (
@@ -99,7 +102,7 @@ public sealed class FileTranscriptionProcessor(
         {
             pluginResult = await lease.Plugin.TranscribeAsync(
                 wav,
-                language,
+                languageSelection,
                 task == TranscriptionTask.Translate,
                 null,
                 cancellationToken
@@ -132,7 +135,7 @@ public sealed class FileTranscriptionProcessor(
                 DictionaryCorrector = dictionary.ApplyCorrections,
                 TranscriptionTask = task,
                 DetectedLanguage = result.DetectedLanguage,
-                ConfiguredLanguage = language,
+                ConfiguredLanguage = configuredLanguage,
                 TranscriptionNumberNormalizationEnabled =
                     currentSettings.TranscriptionNumberNormalizationEnabled,
             },

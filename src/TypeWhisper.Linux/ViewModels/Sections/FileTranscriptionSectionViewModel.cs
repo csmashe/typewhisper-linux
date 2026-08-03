@@ -407,8 +407,9 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
                 }
                 catch (Exception ex)
                 {
-                    item.ErrorText = ex.Message;
-                    SetStatus(item, FileTranscriptionQueueItemStatus.Error, ex.Message);
+                    var message = LanguageSelectionUiMessage.From(ex);
+                    item.ErrorText = message;
+                    SetStatus(item, FileTranscriptionQueueItemStatus.Error, message);
                 }
                 finally
                 {
@@ -436,7 +437,6 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     private FileTranscriptionProcessOptions BuildFileTranscriptionOptions()
     {
         var s = _settings.Current;
-        var language = s.Language == "auto" ? null : s.Language;
         var task =
             s.TranscriptionTask == "translate"
                 ? TranscriptionTask.Translate
@@ -445,7 +445,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         return new FileTranscriptionProcessOptions(
             CleanSettingValue(FileTranscriptionEngineOverride),
             CleanSettingValue(FileTranscriptionModelOverride),
-            language,
+            s.Language,
             task
         );
     }
@@ -635,15 +635,10 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     private FileTranscriptionProcessOptions BuildWatchFolderProcessOptions()
     {
         var s = _settings.Current;
-        var language =
-            string.IsNullOrWhiteSpace(s.WatchFolderLanguage) || s.WatchFolderLanguage == "auto"
-                ? null
-                : s.WatchFolderLanguage;
-
         return new FileTranscriptionProcessOptions(
             CleanSettingValue(s.WatchFolderEngineOverride),
             CleanSettingValue(s.WatchFolderModelOverride),
-            language,
+            s.WatchFolderLanguage,
             TranscriptionTask.Transcribe
         );
     }

@@ -36,7 +36,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     private readonly StringBuilder _finalSegments = new();
     private readonly TimeSpan _finalizeSenderTimeout;
     private readonly TimeSpan _finalizeSessionTimeout;
-    private readonly string? _language;
+    private readonly LanguageSelection _languageSelection;
 
     private readonly Lock _lock = new();
     private readonly Action<Exception> _onFault;
@@ -69,7 +69,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
     public StreamingTranscriptionCoordinator(
         ITranscriptionEngineRole plugin,
-        string? language,
+        LanguageSelection languageSelection,
         int sessionVersion,
         Action<int, string> onPartial,
         Action<Exception> onFault,
@@ -77,7 +77,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
         TimeSpan? finalizeSessionTimeout = null)
     {
         _plugin = plugin;
-        _language = language;
+        _languageSelection = languageSelection;
         _sessionVersion = sessionVersion;
         _onPartial = onPartial;
         _onFault = onFault;
@@ -190,8 +190,10 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
-            var lang = _language == "auto" ? null : _language;
-            var session = await _plugin.StartStreamingAsync(lang, _cts.Token);
+            var session = await _plugin.StartStreamingAsync(
+                _languageSelection,
+                _cts.Token
+            );
 
             var channel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(ChannelCapacity)
             {

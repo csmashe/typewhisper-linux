@@ -235,6 +235,34 @@ public sealed class HttpApiUnixSocketTests
         Assert.Contains("Invalid response_format", formatError, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task LocalFileEndpointRejectsInvalidLanguageWithStableReason()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        var audioPath = fixture.CreateSupportedAudioFile();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = new StringContent(
+            $$"""{"path":{{JsonSerializer.Serialize(audioPath)}},"language":"notalang"}""",
+            Encoding.UTF8,
+            "application/json"
+        );
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "invalid_language_selection",
+            json.RootElement.GetProperty("reason").GetString()
+        );
+        Assert.Contains(
+            "valid BCP-47 tag",
+            json.RootElement.GetProperty("error").GetString(),
+            StringComparison.Ordinal
+        );
+    }
+
     private static async Task<string> PostLocalFileForErrorAsync(HttpClient client, string body)
     {
         using var content = new StringContent(body, Encoding.UTF8, "application/json");

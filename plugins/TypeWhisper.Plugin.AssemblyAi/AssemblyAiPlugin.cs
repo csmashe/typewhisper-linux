@@ -12,7 +12,11 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.AssemblyAi;
 
-public sealed class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class AssemblyAiPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.assemblyai.com";
 
@@ -53,6 +57,8 @@ public sealed class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
@@ -119,7 +125,7 @@ public sealed class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
             ["speech_models"] = new[] { SelectedModelId! },
         };
 
-        if (string.IsNullOrEmpty(language) || language == "auto")
+        if (string.IsNullOrEmpty(language))
             body["language_detection"] = true;
         else
             body["language_code"] = language;

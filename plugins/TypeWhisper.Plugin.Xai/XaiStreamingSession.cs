@@ -151,10 +151,7 @@ internal sealed class XaiStreamingSession : IStreamingSession
             $"interim_results={(interimResults ? "true" : "false")}",
         };
 
-        if (
-            !string.IsNullOrWhiteSpace(language)
-            && !language.Equals("auto", StringComparison.OrdinalIgnoreCase)
-        )
+        if (!string.IsNullOrWhiteSpace(language))
         {
             query.Add($"language={Uri.EscapeDataString(language)}");
         }

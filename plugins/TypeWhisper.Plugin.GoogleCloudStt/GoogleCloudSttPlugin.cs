@@ -22,6 +22,7 @@ namespace TypeWhisper.Plugin.GoogleCloudStt;
 // to follow exists.
 public sealed class GoogleCloudSttPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         IPluginSettingsProvider,
         IPluginLocalizationAware
 {
@@ -80,6 +81,8 @@ public sealed class GoogleCloudSttPlugin
     public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Unsupported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public void SelectModel(string modelId)
     {
@@ -98,10 +101,7 @@ public sealed class GoogleCloudSttPlugin
     )
     {
         var langCode = language?.Trim();
-        if (
-            string.IsNullOrWhiteSpace(langCode)
-            || string.Equals(langCode, "auto", StringComparison.OrdinalIgnoreCase)
-        )
+        if (string.IsNullOrWhiteSpace(langCode))
         {
             throw new NotSupportedException(
                 "Google Cloud STT requires an explicit language; automatic language detection is not supported."

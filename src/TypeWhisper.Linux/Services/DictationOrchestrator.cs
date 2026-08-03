@@ -30,7 +30,7 @@ internal sealed record RecordingContext(
     bool StreamingFaulted,
     string? StreamingProviderId,
     string? StreamingModelId,
-    string? StreamingLanguageHint,
+    LanguageSelection StreamingLanguageSelection,
     CancellationToken CancelToken
 )
 {
@@ -139,7 +139,7 @@ public sealed class DictationOrchestrator : IDisposable
     private EventHandler? _stopHandler;
     private EventHandler? _discardHandler;
     private StreamingTranscriptionCoordinator? _streamingCoordinator;
-    private string? _streamingLanguageHint;
+    private LanguageSelection _streamingLanguageSelection = LanguageSelection.Automatic;
     private string? _streamingModelId;
     private string? _streamingProviderId;
     private CancellationTokenSource? _streamingStartupCts;
@@ -300,7 +300,7 @@ public sealed class DictationOrchestrator : IDisposable
         _streamingStartupCts = null;
         _streamingProviderId = null;
         _streamingModelId = null;
-        _streamingLanguageHint = null;
+        _streamingLanguageSelection = LanguageSelection.Automatic;
         var streamingTeardown = TeardownStreamingSessionAsync(
             disposingCoordinator,
             disposingStartupCts,
@@ -684,13 +684,11 @@ public sealed class DictationOrchestrator : IDisposable
                     }
                 }
 
-                var startupLanguage =
-                    startupProfile?.InputLanguage ?? startupSettings.Language;
-                // ReSharper disable once InlineTemporaryVariable -- named local kept for readability over inlining into the pattern match.
-                var startupLanguageHint =
-                    startupLanguage is { Length: > 0 } lang && lang != "auto"
-                        ? lang
-                        : null;
+                var startupLanguageSelection = LanguageSelectionResolver.Resolve(
+                    startupProfile?.InputLanguage,
+                    startupSettings.Language
+                );
+                _streamingLanguageSelection = startupLanguageSelection;
                 var startupPlugin = _models.ActiveTranscriptionPlugin;
                 var startupMode = LinuxLiveTranscriptionStartupPolicy.Select(
                     startupSettings, startupPlugin);
@@ -711,7 +709,7 @@ public sealed class DictationOrchestrator : IDisposable
                 {
                     StartStreamingTranscriptionSession(
                         startupPlugin,
-                        startupLanguageHint,
+                        startupLanguageSelection,
                         sessionVersion,
                         captureSession
                     );
@@ -733,7 +731,7 @@ public sealed class DictationOrchestrator : IDisposable
                 _streamingStartupCts = null;
                 _streamingProviderId = null;
                 _streamingModelId = null;
-                _streamingLanguageHint = null;
+                _streamingLanguageSelection = LanguageSelection.Automatic;
                 _ = await TeardownStreamingSessionAsync(
                     faultedCoordinator,
                     faultedStartupCts,
@@ -775,6 +773,19 @@ public sealed class DictationOrchestrator : IDisposable
                 string? appUrl = null;
                 var initialMatch = MatchResult.NoMatch;
                 Profile? matchedProfile = null;
+                if (forcedProfileId is not null)
+                {
+                    // Resolve the forced profile before the snapshot attempt: a manual
+                    // override bypasses window/URL context entirely, so it must survive
+                    // a snapshot timeout or provider failure.
+                    var forcedMatch = _profiles.MatchProfile(null, null, forcedProfileId);
+                    if (forcedMatch.Kind == MatchKind.ManualOverride)
+                    {
+                        initialMatch = forcedMatch;
+                        matchedProfile = forcedMatch.Profile;
+                    }
+                }
+
                 try
                 {
                     // 50ms was too tight: xdotool's chain (window-id + title +
@@ -789,9 +800,11 @@ public sealed class DictationOrchestrator : IDisposable
                         .ConfigureAwait(false);
                     appProcess = initialSnap?.ProcessName;
                     appTitle = initialSnap?.Title;
-                    // A forced profile id yields MatchKind.ManualOverride, bypassing window/URL context.
-                    initialMatch = _profiles.MatchProfile(appProcess, null, forcedProfileId);
-                    matchedProfile = initialMatch.Profile;
+                    if (matchedProfile is null)
+                    {
+                        initialMatch = _profiles.MatchProfile(appProcess, null, forcedProfileId);
+                        matchedProfile = initialMatch.Profile;
+                    }
 
                     if (initialSnap is null)
                     {
@@ -981,7 +994,7 @@ public sealed class DictationOrchestrator : IDisposable
                     _streamingStartupCts = null;
                     _streamingProviderId = null;
                     _streamingModelId = null;
-                    _streamingLanguageHint = null;
+                    _streamingLanguageSelection = LanguageSelection.Automatic;
                 }
 
                 _ = await TeardownStreamingSessionAsync(
@@ -1225,12 +1238,12 @@ public sealed class DictationOrchestrator : IDisposable
                 stoppedStreamingStartupCts = _streamingStartupCts;
                 var stoppedStreamingProviderId = _streamingProviderId;
                 var stoppedStreamingModelId = _streamingModelId;
-                var stoppedStreamingLanguageHint = _streamingLanguageHint;
+                var stoppedLanguageSelection = _streamingLanguageSelection;
                 _streamingCoordinator = null;
                 _streamingStartupCts = null;
                 _streamingProviderId = null;
                 _streamingModelId = null;
-                _streamingLanguageHint = null;
+                _streamingLanguageSelection = LanguageSelection.Automatic;
 
                 recordingContext = new RecordingContext(
                     stoppedSessionId,
@@ -1245,7 +1258,7 @@ public sealed class DictationOrchestrator : IDisposable
                     false,
                     stoppedStreamingProviderId,
                     stoppedStreamingModelId,
-                    stoppedStreamingLanguageHint,
+                    stoppedLanguageSelection,
                     snapshotCts?.Token ?? CancellationToken.None
                 );
 
@@ -1746,10 +1759,14 @@ public sealed class DictationOrchestrator : IDisposable
         var transcriptionCompletedPublished = false;
         try
         {
-            var effectiveLanguage = context.Profile?.InputLanguage ?? _settings.Current.Language;
-            // ReSharper disable once InlineTemporaryVariable -- named local kept for readability over inlining into the pattern match.
-            var languageHint =
-                effectiveLanguage is { Length: > 0 } lang && lang != "auto" ? lang : null;
+            // Resolve here, not at startup: the active-window snapshot settles
+            // context.Profile asynchronously, so a matched profile's
+            // InputLanguage is only known once the recording has stopped.
+            var languageSelection = LanguageSelectionResolver.Resolve(
+                context.Profile?.InputLanguage,
+                _settings.Current.Language
+            );
+            var configuredLanguage = languageSelection.LanguageTag;
             var translate = string.Equals(
                 context.Profile?.SelectedTask ?? _settings.Current.TranscriptionTask,
                 "translate",
@@ -1761,8 +1778,8 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 // Reject streaming if the engine or language changed mid-session
                 // (profile override resolved post-start, or global vs. profile
-                // InputLanguage mismatch). Also reject when translate is requested —
-                // streaming doesn't support it.
+                // InputLanguage mismatch). Also reject when translate is
+                // requested — streaming doesn't support it.
                 var streamingEngineMatches =
                     context.StreamingProviderId is not null
                     && string.Equals(
@@ -1775,17 +1792,11 @@ public sealed class DictationOrchestrator : IDisposable
                         plugin.SelectedModelId,
                         StringComparison.Ordinal
                     );
-                var streamingLanguageMatches = string.Equals(
-                    context.StreamingLanguageHint,
-                    languageHint,
-                    StringComparison.Ordinal
-                );
-
                 if (
                     !string.IsNullOrWhiteSpace(context.StreamingFinalText)
                     && !context.StreamingFaulted
                     && streamingEngineMatches
-                    && streamingLanguageMatches
+                    && context.StreamingLanguageSelection == languageSelection
                     && !translate
                 )
                 {
@@ -1793,7 +1804,7 @@ public sealed class DictationOrchestrator : IDisposable
                     // the redundant batch call.
                     result = new PluginTranscriptionResult(
                         context.StreamingFinalText!,
-                        languageHint,
+                        configuredLanguage,
                         DurationSeconds: duration
                     );
                 }
@@ -1805,7 +1816,7 @@ public sealed class DictationOrchestrator : IDisposable
                     // streaming state.
                     result = await plugin.TranscribeAsync(
                         wav,
-                        languageHint,
+                        languageSelection,
                         translate,
                         null,
                         cancelToken
@@ -1822,6 +1833,7 @@ public sealed class DictationOrchestrator : IDisposable
             }
             catch (Exception ex)
             {
+                var userMessage = LanguageSelectionUiMessage.From(ex);
                 Trace.WriteLine($"[Dictation] Transcription failed: {ex}");
                 _errorLog.AddEntry(
                     $"Transcription failed via {plugin.ProviderDisplayName} ({engineModelId}): {ex.Message}",
@@ -1833,10 +1845,10 @@ public sealed class DictationOrchestrator : IDisposable
                         ErrorMessage = ex.Message, ModelId = engineModelId, AppName = context.AppTitle,
                     }
                 );
-                ReportStatus(context, $"Transcription failed: {ex.Message}");
-                _speechFeedback.AnnounceError(ex.Message);
+                ReportStatus(context, $"Transcription failed: {userMessage}");
+                _speechFeedback.AnnounceError(userMessage);
                 ShowFeedback(context, "Transcription failed.", true);
-                PublishSessionTerminal(context.SessionId, "failed", ex.Message);
+                PublishSessionTerminal(context.SessionId, "failed", userMessage);
                 return;
             }
             finally
@@ -1958,7 +1970,7 @@ public sealed class DictationOrchestrator : IDisposable
 
             var postProcessingLanguage = ResolvePostProcessingSourceLanguage(
                 result?.DetectedLanguage,
-                languageHint,
+                configuredLanguage,
                 translate,
                 engineSupportsTranslation
             );
@@ -2059,7 +2071,7 @@ public sealed class DictationOrchestrator : IDisposable
                     TranscriptionTask = translate
                         ? TranscriptionTask.Translate
                         : TranscriptionTask.Transcribe,
-                    ConfiguredLanguage = languageHint,
+                    ConfiguredLanguage = configuredLanguage,
                     TranscriptionNumberNormalizationEnabled =
                         _settings.Current.TranscriptionNumberNormalizationEnabled,
                     PluginPostProcessors = pluginProcessors,
@@ -2088,7 +2100,7 @@ public sealed class DictationOrchestrator : IDisposable
                 finalText,
                 LinuxDictationReadbackLanguagePolicy.Resolve(
                     result?.DetectedLanguage,
-                    effectiveLanguage,
+                    configuredLanguage,
                     translate,
                     translationTarget,
                     pipelineResult.Steps
@@ -3393,7 +3405,9 @@ public sealed class DictationOrchestrator : IDisposable
         var engine = string.IsNullOrEmpty(engineUsed) ? "unknown" : engineUsed;
         var language =
             result?.DetectedLanguage
-            ?? (_settings.Current.Language is { Length: > 0 } l && l != "auto" ? l : null);
+            ?? LanguageSelectionResolver
+                .ResolveOrAutomatic(context.Profile?.InputLanguage, _settings.Current.Language)
+                .LanguageTag;
 
         return new TranscriptionRecord
         {
@@ -3952,14 +3966,14 @@ public sealed class DictationOrchestrator : IDisposable
 
     private void StartStreamingTranscriptionSession(
         ITranscriptionEngineRole plugin,
-        string? language,
+        LanguageSelection languageSelection,
         int sessionVersion,
         AudioRecordingService.AudioCaptureSession captureSession
     )
     {
         var coordinator = new StreamingTranscriptionCoordinator(
             plugin,
-            language,
+            languageSelection,
             sessionVersion,
             (version, text) => TryPublishPartialTranscript(version, captureSession, text),
             ex =>
@@ -3999,17 +4013,12 @@ public sealed class DictationOrchestrator : IDisposable
         _streamingStartupCts = startupCts;
 
         _streamingCoordinator = coordinator;
-        // Capture the engine identity AND language hint bound to this
-        // streaming session so the post-stop path can detect a profile-driven
-        // model swap or language switch (the active-window snapshot resolves
-        // a profile asynchronously, so streaming may have started before the
-        // profile's InputLanguage / TranscriptionModelOverride was known) and
-        // refuse to insert a streaming transcript that was transcribed under
-        // the wrong settings. SelectedModelId is set during plugin activation
-        // and is stable for the recording's duration.
+        // Capture the engine identity bound to this streaming session so the
+        // post-stop path can detect a profile-driven model swap. The same typed
+        // languageSelection instance is retained in the recording context for
+        // either the streaming result or batch fallback.
         _streamingProviderId = plugin.ProviderId;
         _streamingModelId = plugin.SelectedModelId;
-        _streamingLanguageHint = language;
 
         // Fire-and-forget the connect. The coordinator owns its internal CTS
         // and its own Faulted flag once StartAsync runs; before then, our
@@ -4307,10 +4316,6 @@ public sealed class DictationOrchestrator : IDisposable
         CancellationToken ct
     )
     {
-        var effectiveLanguage = _recordingProfile?.InputLanguage ?? _settings.Current.Language;
-        // ReSharper disable once InlineTemporaryVariable -- named local kept for readability over inlining into the pattern match.
-        var languageHint =
-            effectiveLanguage is { Length: > 0 } lang && lang != "auto" ? lang : null;
         var translate = string.Equals(
             _recordingProfile?.SelectedTask ?? _settings.Current.TranscriptionTask,
             "translate",
@@ -4319,9 +4324,15 @@ public sealed class DictationOrchestrator : IDisposable
 
         try
         {
+            // Read live: the profile snapshot can land mid-recording, and later
+            // previews should use the matched profile's language.
+            var languageSelection = LanguageSelectionResolver.Resolve(
+                _recordingProfile?.InputLanguage,
+                _settings.Current.Language
+            );
             var result = await plugin.TranscribeStreamingAsync(
                 wav,
-                languageHint,
+                languageSelection,
                 translate,
                 null,
                 partial =>

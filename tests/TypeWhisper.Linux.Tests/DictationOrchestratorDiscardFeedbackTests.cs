@@ -1,5 +1,6 @@
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.PluginSDK;
 using Xunit;
 
 // The Assert.Collection lambdas in this file assert on each element; ReSharper reads
@@ -107,7 +108,7 @@ public sealed class DictationOrchestratorDiscardFeedbackTests
             StreamingFaulted: false,
             StreamingProviderId: null,
             StreamingModelId: null,
-            StreamingLanguageHint: null,
+            StreamingLanguageSelection: LanguageSelection.Automatic,
             CancelToken: CancellationToken.None
         );
     }

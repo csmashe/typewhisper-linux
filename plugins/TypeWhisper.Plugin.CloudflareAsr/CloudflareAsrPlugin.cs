@@ -12,6 +12,7 @@ namespace TypeWhisper.Plugin.CloudflareAsr;
 
 public sealed class CloudflareAsrPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         IPluginSettingsProvider,
         IPluginLocalizationAware
 {
@@ -69,6 +70,8 @@ public sealed class CloudflareAsrPlugin
     public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Unsupported;
 
     public void SelectModel(string modelId)
     {

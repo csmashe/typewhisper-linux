@@ -93,10 +93,7 @@ internal sealed class Reson8StreamingSession : IStreamingSession
             "include_interim=true",
         };
 
-        if (
-            !string.IsNullOrWhiteSpace(language)
-            && !language.Equals("auto", StringComparison.OrdinalIgnoreCase)
-        )
+        if (!string.IsNullOrWhiteSpace(language))
         {
             query.Add($"language={Uri.EscapeDataString(language.Trim())}");
         }

@@ -956,5 +956,8 @@
   "Wizard.WindowTitle": "Willkommen bei TypeWhisper",
   "Wizard.WritingFocus": "Schreibfokus",
   "Wizard.WritingFocusHint": "Optional: Wählen Sie eine Branche, um beim Abschluss ein passendes Vokabel-Pack zu aktivieren.",
-  "Wizard.YouAreReady": "Sie sind bereit"
+  "Wizard.YouAreReady": "Sie sind bereit",
+  "LanguageSelection.Invalid": "Ungültige Transkriptionssprache „{0}“. Wählen Sie Auto oder geben Sie ein gültiges BCP-47-Tag ein.",
+  "LanguageSelection.AutomaticNotSupported": "{0} kann die Sprache nicht automatisch erkennen. Wählen Sie eine Sprache ausdrücklich aus.",
+  "LanguageSelection.ExplicitNotSupported": "{0} akzeptiert keine ausdrückliche Sprachauswahl. Wählen Sie Auto."
 }

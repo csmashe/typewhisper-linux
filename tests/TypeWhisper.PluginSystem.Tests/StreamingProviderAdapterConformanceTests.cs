@@ -92,7 +92,7 @@ public sealed class StreamingProviderAdapterConformanceTests
         var deepgram = await new DeepgramWebSocketAdapter(
                 "deepgram-key",
                 "nova-3",
-                "auto"
+                null
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
         var eleven = await new ElevenLabsWebSocketAdapter(

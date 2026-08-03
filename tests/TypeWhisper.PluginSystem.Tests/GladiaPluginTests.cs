@@ -279,8 +279,7 @@ public class GladiaPluginTests
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    [InlineData("auto")]
-    public async Task TranscribeAsync_OmitsLanguageConfigForAutoOrEmpty(string? language)
+    public async Task TranscribeAsync_OmitsLanguageConfigForUnspecifiedLanguage(string? language)
     {
         var handler = new SuccessfulFlowHandler((request, body) =>
         {
@@ -966,8 +965,7 @@ public class GladiaPluginTests
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    [InlineData("auto")]
-    public void BuildInitRequest_OmitsLanguageConfig_ForAutoOrEmpty(string? language)
+    public void BuildInitRequest_OmitsLanguageConfig_ForUnspecifiedLanguage(string? language)
     {
         var json = GladiaSession.BuildInitRequest(language, 16000);
 

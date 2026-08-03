@@ -10,7 +10,11 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Speechmatics;
 
-public sealed class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class SpeechmaticsPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string BaseUrl = "https://asr.api.speechmatics.com/v2";
 
@@ -52,20 +56,18 @@ public sealed class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPluginSett
     public bool SupportsTranslation => false;
 
     public bool SupportsStreaming => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Unsupported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
-        // Speechmatics v2 requires an explicit language code; it has no automatic
-        // language detection. The host maps an "auto" profile to null before calling
-        // here, so reject null/empty/"auto" rather than silently streaming as English
-        // (which produces garbage for non-English audio). Mirrors the batch
-        // TranscribeAsync guard; throwing makes the host fall back to batch, which
-        // applies the same guard and surfaces a clear error.
+        // Defense in depth for direct/legacy callers; the typed host invoker rejects
+        // automatic selection before entering the plugin.
         var normalized = language?.Trim().ToLowerInvariant();
-        if (string.IsNullOrEmpty(normalized) || normalized == "auto")
+        if (string.IsNullOrEmpty(normalized))
             throw new NotSupportedException(
                 "Speechmatics does not support automatic language detection. Choose an explicit language for this profile."
             );
@@ -92,14 +94,10 @@ public sealed class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPluginSett
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
-        // Speechmatics v2 requires an explicit language code; it has no automatic
-        // language detection. Reject null/empty/"auto" rather than silently
-        // transcribing as English, which produces garbage output for non-English
-        // audio. Normalize first so " Auto " / "AUTO" / etc. from less-careful
-        // callers hit the same guard. Mirrors the StartStreamingAsync guard so the
-        // streaming→batch fallback path surfaces the same clear error.
+        // Defense in depth for direct/legacy callers; the typed host invoker rejects
+        // automatic selection before entering the plugin.
         var normalized = language?.Trim().ToLowerInvariant();
-        if (string.IsNullOrEmpty(normalized) || normalized == "auto")
+        if (string.IsNullOrEmpty(normalized))
             throw new NotSupportedException(
                 "Speechmatics does not support automatic language detection. Choose an explicit language for this profile."
             );
