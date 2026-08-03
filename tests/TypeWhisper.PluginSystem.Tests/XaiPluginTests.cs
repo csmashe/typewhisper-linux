@@ -7,7 +7,6 @@ using TypeWhisper.Plugin.Xai;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
-using TypeWhisper.PluginSDK.Processes;
 
 // The CapturingHandler lambdas assert on the outgoing 'request' (method, URI,
 // headers) and return a canned response. ReSharper reads xUnit asserts as
@@ -20,36 +19,6 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class XaiPluginTests
 {
-    [Fact]
-    public async Task Playback_stop_terminates_then_cleans_temp_file_once()
-    {
-        var supervisor = new RecordingPluginProcessSupervisor();
-        var processSession = new ControlledPluginProcessSession();
-        supervisor.NextSession = processSession;
-        var playback = XaiPcmTtsPlaybackSession.Create(
-            [0, 1, 2, 3],
-            XaiTtsConfiguration.SampleRate,
-            supervisor,
-            "fake-player"
-        );
-        var completed = 0;
-        playback.Completed += (_, _) => completed++;
-        var wavPath = Assert.Single(
-            Assert.Single(supervisor.Sessions).Command.Arguments
-        );
-
-        playback.Stop();
-        playback.Stop();
-        Assert.Equal(1, processSession.TerminateCount);
-        Assert.True(File.Exists(wavPath));
-        processSession.Complete(
-            new ProcessExitOutcome(ProcessExitReason.Terminated, null)
-        );
-        await ProcessTestWait.UntilAsync(() => completed == 1);
-
-        Assert.False(File.Exists(wavPath));
-    }
-
     [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {
@@ -897,9 +866,8 @@ public class XaiPluginTests
     }
 
     [Fact]
-    public async Task SpeakAsync_PostsPcmTtsRequestAndUsesPlaybackFactory()
+    public async Task SpeakAsync_PostsPcmTtsRequestAndUsesHostPcmPlayback()
     {
-        byte[]? playbackBytes = null;
         var handler = new CapturingHandler((request, body) =>
         {
             Assert.Equal(HttpMethod.Post, request.Method);
@@ -922,17 +890,15 @@ public class XaiPluginTests
             };
         });
 
-        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        var playback = new RecordingPcmPlaybackService();
+        var host = new TestPluginHostServices
+        {
+            PcmPlayback = playback,
+            Secrets = { ["api-key"] = "xai-key" },
+        };
         using var httpClient = new HttpClient(handler);
         httpClient.Timeout = TimeSpan.FromSeconds(5);
-        var sut = new XaiPlugin(
-            httpClient,
-            pcm =>
-            {
-                playbackBytes = pcm;
-                return new FakeTtsPlaybackSession();
-            },
-            ttsPlaybackAvailableProbe: () => true);
+        var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
         sut.SelectVoice("rex");
         sut.SetTtsLowLatency(true);
@@ -941,7 +907,11 @@ public class XaiPluginTests
         var session = await sut.SpeakAsync(new TtsSpeakRequest("Read this", "de"), CancellationToken.None);
 
         Assert.NotNull(session);
-        Assert.Equal([0, 1, 2, 3], playbackBytes);
+        var playbackRequest = Assert.Single(playback.Requests);
+        Assert.Equal([0, 1, 2, 3], playbackRequest.Payload.ToArray());
+        Assert.Equal(24_000, playbackRequest.SampleRate);
+        Assert.Equal(1, playbackRequest.Channels);
+        Assert.Equal(PcmSampleFormat.Signed16LittleEndian, playbackRequest.Format);
     }
 
     [Fact]
@@ -960,7 +930,7 @@ public class XaiPluginTests
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
         using var httpClient = new HttpClient(handler);
         httpClient.Timeout = TimeSpan.FromSeconds(5);
-        var sut = new XaiPlugin(httpClient, ttsPlaybackAvailableProbe: () => false);
+        var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var session = await sut.SpeakAsync(new TtsSpeakRequest("Read this", "en"), CancellationToken.None);
@@ -1275,6 +1245,8 @@ public class XaiPluginTests
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
+        public IPluginPcmPlaybackService PcmPlayback { get; init; } =
+            UnavailablePluginPcmPlaybackService.Instance;
         public string? ActiveAppProcessName => null;
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();
@@ -1305,16 +1277,4 @@ public class XaiPluginTests
         public void Dispose() { }
     }
 
-    private sealed class FakeTtsPlaybackSession : ITtsPlaybackSession
-    {
-        public bool IsActive => false;
-
-        public event EventHandler? Completed
-        {
-            add { value?.Invoke(this, EventArgs.Empty); }
-            remove { }
-        }
-
-        public void Stop() { }
-    }
 }

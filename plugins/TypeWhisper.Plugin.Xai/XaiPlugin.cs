@@ -52,8 +52,6 @@ public sealed class XaiPlugin
     ];
 
     private readonly HttpClient _httpClient;
-    private readonly Func<byte[], ITtsPlaybackSession>? _ttsPlaybackFactory;
-    private readonly Func<bool> _ttsPlaybackAvailableProbe;
     private IPluginHostServices? _host;
     private List<XaiFetchedModel> _fetchedLlmModels = [];
     private string? _selectedVoiceId;
@@ -65,15 +63,9 @@ public sealed class XaiPlugin
     {
     }
 
-    internal XaiPlugin(
-        HttpClient httpClient,
-        Func<byte[], ITtsPlaybackSession>? ttsPlaybackFactory = null,
-        Func<bool>? ttsPlaybackAvailableProbe = null)
+    internal XaiPlugin(HttpClient httpClient)
     {
         _httpClient = httpClient;
-        _ttsPlaybackFactory = ttsPlaybackFactory;
-        _ttsPlaybackAvailableProbe = ttsPlaybackAvailableProbe
-            ?? XaiPcmTtsPlaybackSession.IsPlaybackAvailable;
     }
 
     // ITypeWhisperPlugin
@@ -256,14 +248,17 @@ public sealed class XaiPlugin
         if (string.IsNullOrWhiteSpace(text))
             return XaiInactiveTtsPlaybackSession.Instance;
 
-        // The xAI TTS endpoint is a paid request. With no audio player on PATH
-        // the synthesized PCM could only be discarded (XaiPcmTtsPlaybackSession
-        // would return the inactive sentinel), so skip the request entirely.
-        if (!_ttsPlaybackAvailableProbe())
+        var host = _host
+                   ?? throw new InvalidOperationException(
+                       "xAI plugin is not activated."
+                   );
+        // Paid endpoint: preflight playback before issuing a request that couldn't be played.
+        if (!host.PcmPlayback.IsAvailable)
         {
-            _host?.Log(
+            host.Log(
                 PluginLogLevel.Warning,
-                "Skipping xAI TTS request: no audio player (paplay/aplay) found on PATH.");
+                "Skipping xAI TTS request: no supported PCM audio player is available."
+            );
             return XaiInactiveTtsPlaybackSession.Instance;
         }
 
@@ -278,19 +273,21 @@ public sealed class XaiPlugin
         httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
         httpRequest.Content = XaiJson.CreateJsonContent(body);
 
-        var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, httpRequest, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient,
+            httpRequest,
+            ct
+        );
         var pcm = await response.Content.ReadAsByteArrayAsync(ct);
-        return _ttsPlaybackFactory?.Invoke(pcm)
-               ?? XaiPcmTtsPlaybackSession.Create(
-                   pcm,
-                   XaiTtsConfiguration.SampleRate,
-                   (
-                       _host
-                       ?? throw new InvalidOperationException(
-                           "xAI plugin is not activated."
-                       )
-                   ).Processes
-               );
+        return await host.PcmPlayback.PlayAsync(
+            new PcmPlaybackRequest(
+                pcm,
+                XaiTtsConfiguration.SampleRate,
+                1,
+                PcmSampleFormat.Signed16LittleEndian
+            ),
+            ct
+        );
     }
 
     // Settings support

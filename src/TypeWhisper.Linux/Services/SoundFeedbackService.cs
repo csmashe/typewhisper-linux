@@ -15,13 +15,12 @@ public sealed class SoundFeedbackService
     private static readonly string s_soundsDir =
         Path.Join(AppContext.BaseDirectory, "Resources", "Sounds");
 
-    private readonly string? _player;
     private readonly IProcessRunner _processRunner;
     private readonly string _soundsDir;
 
     // ReSharper disable once UnusedMember.Global -- resolved by DI (AddSingleton<SoundFeedbackService>).
     public SoundFeedbackService(IProcessRunner processRunner)
-        : this(processRunner, ResolvePlayer(), s_soundsDir)
+        : this(processRunner, PcmPlayerResolver.Resolve()?.AbsolutePath, s_soundsDir)
     {
     }
 
@@ -32,9 +31,11 @@ public sealed class SoundFeedbackService
     )
     {
         _processRunner = processRunner;
-        _player = player;
+        PlayerPath = player;
         _soundsDir = soundsDir;
     }
+
+    internal string? PlayerPath { get; }
 
     /// <summary>
     ///     Plays the startup cue to completion before capture opens. The process
@@ -63,7 +64,7 @@ public sealed class SoundFeedbackService
 
     private async Task PlayAsync(string fileName, TimeSpan timeout, CancellationToken ct = default)
     {
-        if (_player is null)
+        if (PlayerPath is null)
         {
             return;
         }
@@ -77,7 +78,7 @@ public sealed class SoundFeedbackService
         try
         {
             _ = await _processRunner
-                .RunAsync(_player, [path], timeout: timeout, ct: ct)
+                .RunAsync(PlayerPath, [path], timeout: timeout, ct: ct)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -98,12 +99,4 @@ public sealed class SoundFeedbackService
         );
     }
 
-    private static string? ResolvePlayer()
-    {
-        // Same candidate order as SystemCommandAvailabilityService.HasAudioPlayer.
-        return Array.Find(
-            ["pw-play", "paplay", "aplay"],
-            SystemCommandAvailabilityService.IsCommandAvailable
-        );
-    }
 }

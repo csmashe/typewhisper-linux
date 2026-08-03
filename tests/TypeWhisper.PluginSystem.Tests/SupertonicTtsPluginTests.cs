@@ -1,4 +1,5 @@
 using System.Net;
+using System.Buffers.Binary;
 using System.Text.Json;
 using TypeWhisper.Plugin.SupertonicTts;
 using TypeWhisper.PluginSDK;
@@ -10,25 +11,6 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class SupertonicTtsPluginTests
 {
     private static readonly TimeSpan s_coordinationTimeout = TimeSpan.FromSeconds(5);
-
-    [Fact]
-    public void Playback_start_failure_removes_temp_file()
-    {
-        var supervisor = new RecordingPluginProcessSupervisor();
-
-        var playback = SupertonicTtsPlaybackSession.Create(
-            [0.1f, -0.1f],
-            24_000,
-            supervisor,
-            "fake-player"
-        );
-
-        Assert.False(playback.IsActive);
-        var wavPath = Assert.Single(
-            Assert.Single(supervisor.Sessions).Command.Arguments
-        );
-        Assert.False(File.Exists(wavPath));
-    }
 
     [Fact]
     public void Manifest_DeclaresLocalTtsPlugin()
@@ -92,7 +74,10 @@ public class SupertonicTtsPluginTests
     {
         var assets = new FakeSupertonicAssets { AreAssetsReadyValue = false };
         var sut = new SupertonicTtsPlugin(assets, _ => new FakeSupertonicSynthesizer());
-        await sut.ActivateAsync(new TestPluginHostServices());
+        await sut.ActivateAsync(new TestPluginHostServices
+        {
+            PcmPlayback = new RecordingPcmPlaybackService(),
+        });
 
         var empty = await sut.SpeakAsync(new TtsSpeakRequest("   ", "en"), CancellationToken.None);
         Assert.False(empty.IsActive);
@@ -103,22 +88,31 @@ public class SupertonicTtsPluginTests
     }
 
     [Fact]
+    public async Task SpeakAsync_SkipsInferenceWhenHostPcmPlaybackIsUnavailable()
+    {
+        var assets = new FakeSupertonicAssets { AreAssetsReadyValue = true };
+        var synthesizer = new FakeSupertonicSynthesizer();
+        var sut = new SupertonicTtsPlugin(assets, _ => synthesizer);
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        var session = await sut.SpeakAsync(
+            new TtsSpeakRequest("Do not synthesize", "en"),
+            CancellationToken.None
+        );
+
+        Assert.False(session.IsActive);
+        Assert.Null(synthesizer.LastRequest);
+        Assert.False(synthesizer.Started.IsCompleted);
+    }
+
+    [Fact]
     public async Task SpeakAsync_UsesSynthesizerWithSelectedVoiceLanguageAndSettings()
     {
         var assets = new FakeSupertonicAssets { AreAssetsReadyValue = true, AssetRoot = "/models/supertonic-3" };
         var synth = new FakeSupertonicSynthesizer();
-        float[]? playedSamples = null;
-        int? playedSampleRate = null;
-        var sut = new SupertonicTtsPlugin(
-            assets,
-            _ => synth,
-            (samples, sampleRate) =>
-            {
-                playedSamples = samples;
-                playedSampleRate = sampleRate;
-                return new FakeTtsPlaybackSession();
-            });
-        await sut.ActivateAsync(new TestPluginHostServices());
+        var playback = new RecordingPcmPlaybackService();
+        var sut = new SupertonicTtsPlugin(assets, _ => synth);
+        await sut.ActivateAsync(new TestPluginHostServices { PcmPlayback = playback });
         sut.SelectVoice("F3");
         sut.SetSpeed(1.25);
         sut.SetDenoisingSteps(12);
@@ -131,9 +125,21 @@ public class SupertonicTtsPluginTests
         Assert.EndsWith(Path.Join("voice_styles", "F3.json"), synth.LastRequest?.VoiceStylePath);
         Assert.Equal(1.25, synth.LastRequest?.Speed);
         Assert.Equal(12, synth.LastRequest?.DenoisingSteps);
-        Assert.NotNull(playedSamples);
-        Assert.Equal([0.1f, -0.1f], playedSamples);
-        Assert.Equal(24_000, playedSampleRate);
+        var playbackRequest = Assert.Single(playback.Requests);
+        Assert.Equal(PcmSampleFormat.Float32, playbackRequest.Format);
+        Assert.Equal(24_000, playbackRequest.SampleRate);
+        Assert.Equal(1, playbackRequest.Channels);
+        Assert.Equal(2 * sizeof(float), playbackRequest.Payload.Length);
+        Assert.Equal(
+            [0.1f, -0.1f],
+            Enumerable.Range(0, 2)
+                .Select(i => BitConverter.Int32BitsToSingle(
+                    BinaryPrimitives.ReadInt32LittleEndian(
+                        playbackRequest.Payload.Span.Slice(i * sizeof(float), sizeof(float))
+                    )
+                ))
+                .ToArray()
+        );
     }
 
     [Fact]
@@ -310,8 +316,11 @@ public class SupertonicTtsPluginTests
         var gate = new TaskCompletionSource();
         var synth = new FakeSupertonicSynthesizer { Gate = gate.Task };
         var assets = new FakeSupertonicAssets { AreAssetsReadyValue = true };
-        var sut = new SupertonicTtsPlugin(assets, _ => synth, (_, _) => new FakeTtsPlaybackSession());
-        await sut.ActivateAsync(new TestPluginHostServices());
+        var sut = new SupertonicTtsPlugin(assets, _ => synth);
+        await sut.ActivateAsync(new TestPluginHostServices
+        {
+            PcmPlayback = new RecordingPcmPlaybackService(),
+        });
         using var speakCts = new CancellationTokenSource();
         Task<ITtsPlaybackSession>? speak = null;
         Task? deactivate = null;
@@ -419,13 +428,6 @@ public class SupertonicTtsPluginTests
         public void Dispose() => Disposed = true;
     }
 
-    private sealed class FakeTtsPlaybackSession : ITtsPlaybackSession
-    {
-        public bool IsActive => true;
-        public event EventHandler? Completed;
-        public void Stop() => Completed?.Invoke(this, EventArgs.Empty);
-    }
-
     private sealed class CapturingHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
@@ -457,6 +459,8 @@ public class SupertonicTtsPluginTests
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
+        public IPluginPcmPlaybackService PcmPlayback { get; set; } =
+            UnavailablePluginPcmPlaybackService.Instance;
         public string? ActiveAppProcessName => null;
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();

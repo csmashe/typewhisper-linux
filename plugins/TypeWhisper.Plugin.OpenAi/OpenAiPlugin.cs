@@ -47,8 +47,6 @@ public sealed class OpenAiPlugin
         new() { PropertyNameCaseInsensitive = true };
 
     private readonly HttpClient _httpClient;
-    private readonly Func<byte[], ITtsPlaybackSession>? _ttsPlaybackFactory;
-    private readonly Func<bool> _ttsPlaybackAvailableProbe;
     private IPluginHostServices? _host;
     private string? _selectedApiModelName;
     private string _selectedResponseFormat = "verbose_json";
@@ -117,15 +115,9 @@ public sealed class OpenAiPlugin
     {
     }
 
-    internal OpenAiPlugin(
-        HttpClient httpClient,
-        Func<byte[], ITtsPlaybackSession>? ttsPlaybackFactory = null,
-        Func<bool>? ttsPlaybackAvailableProbe = null)
+    internal OpenAiPlugin(HttpClient httpClient)
     {
         _httpClient = httpClient;
-        _ttsPlaybackFactory = ttsPlaybackFactory;
-        _ttsPlaybackAvailableProbe = ttsPlaybackAvailableProbe
-            ?? OpenAiPcmTtsPlaybackSession.IsPlaybackAvailable;
     }
 
     // ITypeWhisperPlugin
@@ -427,31 +419,36 @@ public sealed class OpenAiPlugin
         if (string.IsNullOrWhiteSpace(text))
             return OpenAiInactiveTtsPlaybackSession.Instance;
 
-        // The OpenAI speech endpoint is a paid request. With no audio player on
-        // PATH the synthesized PCM could only be discarded (OpenAiPcmTtsPlaybackSession
-        // would return the inactive sentinel), so skip the request entirely.
-        if (!_ttsPlaybackAvailableProbe())
+        var host = _host
+                   ?? throw new InvalidOperationException(
+                       "OpenAI plugin is not activated."
+                   );
+        // Paid endpoint: preflight playback before issuing a request that couldn't be played.
+        if (!host.PcmPlayback.IsAvailable)
         {
-            _host?.Log(
+            host.Log(
                 PluginLogLevel.Warning,
-                "Skipping OpenAI TTS request: no audio player (paplay/aplay) found on PATH.");
+                "Skipping OpenAI TTS request: no supported PCM audio player is available."
+            );
             return OpenAiInactiveTtsPlaybackSession.Instance;
         }
 
         using var httpRequest = CreateTtsRequest(text);
-        var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, httpRequest, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient,
+            httpRequest,
+            ct
+        );
         var pcm = await response.Content.ReadAsByteArrayAsync(ct);
-        return _ttsPlaybackFactory?.Invoke(pcm)
-               ?? OpenAiPcmTtsPlaybackSession.Create(
-                   pcm,
-                   OpenAiTtsConfiguration.SampleRate,
-                   (
-                       _host
-                       ?? throw new InvalidOperationException(
-                           "OpenAI plugin is not activated."
-                       )
-                   ).Processes
-               );
+        return await host.PcmPlayback.PlayAsync(
+            new PcmPlaybackRequest(
+                pcm,
+                OpenAiTtsConfiguration.SampleRate,
+                1,
+                PcmSampleFormat.Signed16LittleEndian
+            ),
+            ct
+        );
     }
 
     // LLM model catalog

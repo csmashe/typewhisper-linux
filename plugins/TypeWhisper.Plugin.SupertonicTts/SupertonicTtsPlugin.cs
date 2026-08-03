@@ -4,6 +4,7 @@
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
 using System.Globalization;
+using System.Buffers.Binary;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -39,7 +40,6 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
 
     private readonly ISupertonicAssetManager? _injectedAssetManager;
     private readonly Func<string, ISupertonicSynthesizer> _synthesizerFactory;
-    private readonly Func<float[], int, ITtsPlaybackSession>? _playbackFactory;
     private readonly SemaphoreSlim _synthesisLock = new(1, 1);
     private readonly SemaphoreSlim _downloadLock = new(1, 1);
     private ISupertonicAssetManager? _assetManager;
@@ -58,30 +58,26 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
         : this(
             assetManager: null,
             synthesizerFactory: assetRoot => new SupertonicOnnxSynthesizer(assetRoot),
-            playbackFactory: null,
             useNullableAssetManagerOverload: true)
     {
     }
 
     internal SupertonicTtsPlugin(
         ISupertonicAssetManager assetManager,
-        Func<string, ISupertonicSynthesizer> synthesizerFactory,
-        Func<float[], int, ITtsPlaybackSession>? playbackFactory = null)
-        : this(assetManager, synthesizerFactory, playbackFactory, useNullableAssetManagerOverload: true)
+        Func<string, ISupertonicSynthesizer> synthesizerFactory)
+        : this(assetManager, synthesizerFactory, useNullableAssetManagerOverload: true)
     {
     }
 
     private SupertonicTtsPlugin(
         ISupertonicAssetManager? assetManager,
         Func<string, ISupertonicSynthesizer> synthesizerFactory,
-        Func<float[], int, ITtsPlaybackSession>? playbackFactory,
         // ReSharper disable once UnusedParameter.Local -- disambiguates the constructor overload; required by the signature even though unused in the body.
         bool useNullableAssetManagerOverload)
     {
         _injectedAssetManager = assetManager;
         _assetManager = assetManager;
         _synthesizerFactory = synthesizerFactory;
-        _playbackFactory = playbackFactory;
     }
 
     public string PluginId => "com.typewhisper.supertonic-tts";
@@ -168,6 +164,19 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
         if (string.IsNullOrWhiteSpace(text))
             return SupertonicInactiveTtsPlaybackSession.Instance;
 
+        var host = _host
+                   ?? throw new InvalidOperationException(
+                       "Supertonic plugin is not activated."
+                   );
+        if (!host.PcmPlayback.IsAvailable)
+        {
+            host.Log(
+                PluginLogLevel.Warning,
+                "Skipping Supertonic synthesis: no supported PCM audio player is available."
+            );
+            return SupertonicInactiveTtsPlaybackSession.Instance;
+        }
+
         if (_assetManager?.AreAssetsReady != true)
             throw new InvalidOperationException("Supertonic 3 assets are not downloaded. Open plugin settings to download them.");
 
@@ -184,22 +193,29 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
                     Speed),
                 ct);
 
-            return synthesis.Samples.Length == 0
-                ? SupertonicInactiveTtsPlaybackSession.Instance
-                : _playbackFactory?.Invoke(
-                    synthesis.Samples,
-                    synthesis.SampleRate
-                )
-                  ?? SupertonicTtsPlaybackSession.Create(
-                      synthesis.Samples,
-                      synthesis.SampleRate,
-                      (
-                          _host
-                          ?? throw new InvalidOperationException(
-                              "Supertonic plugin is not activated."
-                          )
-                      ).Processes
-                  );
+            if (synthesis.Samples.Length == 0)
+            {
+                return SupertonicInactiveTtsPlaybackSession.Instance;
+            }
+
+            var float32 = new byte[checked(synthesis.Samples.Length * sizeof(float))];
+            for (var i = 0; i < synthesis.Samples.Length; i++)
+            {
+                BinaryPrimitives.WriteInt32LittleEndian(
+                    float32.AsSpan(i * sizeof(float), sizeof(float)),
+                    BitConverter.SingleToInt32Bits(synthesis.Samples[i])
+                );
+            }
+
+            return await host.PcmPlayback.PlayAsync(
+                new PcmPlaybackRequest(
+                    float32,
+                    synthesis.SampleRate,
+                    1,
+                    PcmSampleFormat.Float32
+                ),
+                ct
+            );
         }
         finally
         {
