@@ -284,6 +284,10 @@ public sealed class AudioRecordingService : IDisposable
             return [];
         }
 
+        // Any reason recorded by an earlier failure is now stale; leaving it set would make
+        // the UI report audio as unavailable for the rest of the session.
+        Volatile.Write(ref s_nativeAudioUnavailable, null);
+
         var result = new List<AudioInputDevice>();
         for (var i = 0; i < PortAudio.DeviceCount; i++)
         {
@@ -551,6 +555,8 @@ public sealed class AudioRecordingService : IDisposable
             return ResolveSystemDefault(devices);
         }
 
+        // ReSharper disable once InvertIf -- keeps the three resolution cases as a flat
+        // ladder; inverting pulls the last case's return into the middle branch.
         if (!string.IsNullOrWhiteSpace(preferredDeviceId))
         {
             var matches = devices
@@ -560,12 +566,9 @@ public sealed class AudioRecordingService : IDisposable
             return matches.Length == 1 ? matches[0] : null;
         }
 
-        if (preferredIndex.HasValue)
-        {
-            return null;
-        }
-
-        return ResolveSystemDefault(devices);
+        // A pinned index that survived the id lookup above is a device that no longer exists;
+        // fall back to the system default only when nothing was pinned at all.
+        return preferredIndex.HasValue ? null : ResolveSystemDefault(devices);
     }
 
     internal static bool IsFollowSystemDefault(string? deviceId) =>

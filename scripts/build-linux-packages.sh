@@ -166,6 +166,23 @@ APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/128x128/apps"
 BIN_DIR="$HOME/.local/bin"
 
+# Both the uninstall and the reinstall path delete entries under INSTALL_ROOT, so the
+# sanity check on it covers both.
+case "$INSTALL_ROOT" in
+  ""|"/"|"$HOME"|"$HOME/")
+    echo "Refusing to continue: INSTALL_ROOT ('$INSTALL_ROOT') is unsafe to delete from." >&2
+    exit 1
+    ;;
+esac
+
+# Everything the running app creates inside INSTALL_ROOT. Defined once and shared by both
+# cleanup loops below: two copies of this list could drift and silently delete user data.
+# NOTE: Plugins/ is on the list. In this tarball layout BasePath == INSTALL_ROOT, so
+# PluginsPath == $INSTALL_ROOT/Plugins holds BOTH the shipped bundled plugins AND any
+# marketplace/custom plugins the user installed at runtime. Deleting it would destroy
+# user-installed plugins (and their keys) — only --purge may remove it.
+KEEP=" Audio Data PluginData Plugins Logs Models Runtimes backups training settings.json settings.json.bak linux-preferences.json "
+
 if [ "${1:-}" = "--uninstall" ]; then
   PURGE=0
   case "${2:-}" in
@@ -176,13 +193,6 @@ if [ "${1:-}" = "--uninstall" ]; then
 
   rm -f "$APPS_DIR/typewhisper.desktop" "$ICONS_DIR/typewhisper.png" "$BIN_DIR/typewhisper"
 
-  case "$INSTALL_ROOT" in
-    ""|"/"|"$HOME"|"$HOME/")
-      echo "Refusing to uninstall: INSTALL_ROOT ('$INSTALL_ROOT') is unsafe to remove." >&2
-      exit 1
-      ;;
-  esac
-
   if [ "$PURGE" -eq 1 ]; then
     rm -rf "$INSTALL_ROOT"
     echo "TypeWhisper and all its user data have been uninstalled."
@@ -190,16 +200,10 @@ if [ "${1:-}" = "--uninstall" ]; then
   fi
 
   # Preserve user data, remove only the program payload. Everything the running
-  # app creates is on this KEEP list; anything else at the top level is payload
-  # shipped in the tarball (binary, *.dll, *.so, runtime configs,
+  # app creates is on the KEEP list defined above; anything else at the top level
+  # is payload shipped in the tarball (binary, *.dll, *.so, runtime configs,
   # icon/desktop/installer) and is safe to delete.
-  # NOTE: Plugins/ is on the KEEP list. In this tarball layout BasePath ==
-  # INSTALL_ROOT, so PluginsPath == $INSTALL_ROOT/Plugins holds BOTH the shipped
-  # bundled plugins AND any marketplace/custom plugins the user installed at
-  # runtime. Deleting it here would destroy user-installed plugins (and their
-  # keys) on an ordinary uninstall — only --purge (rm -rf above) may remove it.
   if [ -d "$INSTALL_ROOT" ]; then
-    KEEP=" Audio Data PluginData Plugins Logs Models Runtimes backups training settings.json settings.json.bak linux-preferences.json "
     for entry in "$INSTALL_ROOT"/* "$INSTALL_ROOT"/.[!.]*; do
       [ -e "$entry" ] || continue
       name="$(basename "$entry")"
@@ -235,7 +239,6 @@ mkdir -p "$INSTALL_ROOT" "$APPS_DIR" "$ICONS_DIR" "$BIN_DIR"
 # Plugins/ is KEPT: it holds user-installed marketplace/custom plugins alongside
 # the bundled ones. The `cp -R "$HERE"/*` below merges the fresh bundled plugins
 # on top, refreshing them while leaving the user's installed plugins intact.
-KEEP=" Audio Data PluginData Plugins Logs Models Runtimes backups training settings.json settings.json.bak linux-preferences.json "
 for entry in "$INSTALL_ROOT"/* "$INSTALL_ROOT"/.[!.]*; do
   [ -e "$entry" ] || continue
   name="$(basename "$entry")"

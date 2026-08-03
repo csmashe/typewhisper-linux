@@ -276,8 +276,15 @@ container_smoke_tarball() {
 
   echo "==> Installing tarball into isolated HOME/XDG roots"
   env "${SMOKE_PROFILE_ENV[@]}" bash "$install_script"
-  env "${SMOKE_PROFILE_ENV[@]}" bash "$install_script"
   app_root="$SMOKE_DATA_ROOT/typewhisper-app"
+
+  # The app writes its user data INTO the install root, so the installer's KEEP list is
+  # all that stands between a reinstall/uninstall and permanent data loss.
+  mkdir -p "$app_root/Data"
+  printf 'preserve user data\n' >"$app_root/Data/smoke-user-data"
+
+  env "${SMOKE_PROFILE_ENV[@]}" bash "$install_script"
+  require_file "$app_root/Data/smoke-user-data"
   require_executable "$SMOKE_HOME_ROOT/.local/bin/typewhisper"
   require_executable "$app_root/Cli/typewhisper-cli"
   require_file "$SMOKE_DATA_ROOT/applications/typewhisper.desktop"
@@ -309,6 +316,7 @@ container_smoke_tarball() {
   # ones), so the root legitimately survives. Assert the program payload is gone.
   assert_removed "$app_root/typewhisper"
   assert_removed "$app_root/Cli/typewhisper-cli"
+  require_file "$app_root/Data/smoke-user-data"
   require_file "$SMOKE_DATA_ROOT/TypeWhisper/smoke-sentinel"
 
   # --purge is the path that must leave nothing behind.

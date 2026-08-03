@@ -264,6 +264,8 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
             );
         }
 
+        // ReSharper disable once InvertIf -- last of a run of uniform "if configured,
+        // steps.Add(...)" blocks; inverting it alone would duplicate the return.
         if (
             options.TranslationHandler is not null
             && !string.IsNullOrEmpty(options.TranslationTarget)

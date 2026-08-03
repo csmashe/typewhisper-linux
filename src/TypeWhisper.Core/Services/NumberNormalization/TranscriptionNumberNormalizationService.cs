@@ -4,7 +4,7 @@ namespace TypeWhisper.Core.Services.NumberNormalization;
 
 public static class TranscriptionNumberNormalizationService
 {
-    public static bool IsEnabled(bool globalEnabled = true, bool? normalizeNumbersOverride = null) =>
+    private static bool IsEnabled(bool globalEnabled = true, bool? normalizeNumbersOverride = null) =>
         normalizeNumbersOverride ?? globalEnabled;
 
     public static string NormalizeText(
@@ -19,18 +19,15 @@ public static class TranscriptionNumberNormalizationService
         if (!IsEnabled(globalEnabled, normalizeNumbersOverride))
             return text;
 
-        foreach (var language in NormalizationLanguages(
-                     transcriptionTask,
-                     detectedLanguage,
-                     configuredLanguage,
-                     configuredLanguageCandidates))
-        {
-            var normalized = NumberWordNormalizer.Normalize(text, language);
-            if (!string.Equals(normalized, text, StringComparison.Ordinal))
-                return normalized;
-        }
-
-        return text;
+        return NormalizeText(
+            text,
+            NormalizationLanguages(
+                transcriptionTask,
+                detectedLanguage,
+                configuredLanguage,
+                configuredLanguageCandidates),
+            globalEnabled,
+            normalizeNumbersOverride);
     }
 
     public static TranscriptionResult NormalizeResult(
@@ -58,29 +55,11 @@ public static class TranscriptionNumberNormalizationService
                 result.Segments,
                 languages,
                 globalEnabled,
-                normalizeNumbersOverride)
+                normalizeNumbersOverride),
         };
     }
 
-    public static IReadOnlyList<TranscriptionSegment> NormalizeSegments(
-        IReadOnlyList<TranscriptionSegment> segments,
-        TranscriptionTask transcriptionTask,
-        string? detectedLanguage,
-        string? configuredLanguage,
-        IReadOnlyList<string> configuredLanguageCandidates,
-        bool globalEnabled = true,
-        bool? normalizeNumbersOverride = null)
-    {
-        var languages = NormalizationLanguages(
-            transcriptionTask,
-            detectedLanguage,
-            configuredLanguage,
-            configuredLanguageCandidates);
-
-        return NormalizeSegments(segments, languages, globalEnabled, normalizeNumbersOverride);
-    }
-
-    internal static IReadOnlyList<string> NormalizationLanguages(
+    private static List<string> NormalizationLanguages(
         TranscriptionTask transcriptionTask,
         string? detectedLanguage,
         string? configuredLanguage,
@@ -121,7 +100,7 @@ public static class TranscriptionNumberNormalizationService
         segments
             .Select(segment => segment with
             {
-                Text = NormalizeText(segment.Text, languages, globalEnabled, normalizeNumbersOverride)
+                Text = NormalizeText(segment.Text, languages, globalEnabled, normalizeNumbersOverride),
             })
             .ToList();
 
@@ -130,6 +109,8 @@ public static class TranscriptionNumberNormalizationService
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var result = new List<string>();
 
+        // ReSharper disable once LoopCanBeConvertedToQuery -- the loop's filter is the side
+        // effect (seen.Add dedupes); as a query that mutation would hide inside a Where.
         foreach (var rawLanguage in new[] { primary }.Where(static language => language is not null).Select(static language => language!).Concat(candidates))
         {
             var normalized = NumberWordNormalizer.NormalizeLanguageCode(rawLanguage);

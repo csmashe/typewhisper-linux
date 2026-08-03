@@ -241,7 +241,7 @@ public class PostProcessingPipelineTests
             TranslationHandler = (_, _, _, _) => throw expected,
             TranslationTarget = "fr",
             DetectedLanguage = "en",
-            RequireTranslationSuccess = true
+            RequireTranslationSuccess = true,
         };
 
         var ex = await Assert.ThrowsAsync<IOException>(() => _sut.ProcessAsync("hello", options));
@@ -273,7 +273,7 @@ public class PostProcessingPipelineTests
                 throw new IOException("translation unavailable");
             },
             TranslationTarget = "fr",
-            DetectedLanguage = "en"
+            DetectedLanguage = "en",
         };
 
         var result = await _sut.ProcessAsync("hello", options);
@@ -300,7 +300,7 @@ public class PostProcessingPipelineTests
             },
             TranslationTarget = "fr",
             DetectedLanguage = "en",
-            RequireTranslationSuccess = true
+            RequireTranslationSuccess = true,
         };
 
         var result = await _sut.ProcessAsync("hello", options);
@@ -434,7 +434,7 @@ public class PostProcessingPipelineTests
                 executionOrder.Add($"Translation:{text}");
                 return Task.FromResult(text + "+TR");
             },
-            TranslationTarget = "fr"
+            TranslationTarget = "fr",
         };
 
         var result = await _sut.ProcessAsync("twenty three", options);
@@ -447,7 +447,7 @@ public class PostProcessingPipelineTests
                 "Snippets:23+FMT+LLM",
                 "Boosting:23+FMT+LLM+SNP",
                 "Dictionary:23+FMT+LLM+SNP+BOOST",
-                "Translation:23+FMT+LLM+SNP+BOOST+DICT"
+                "Translation:23+FMT+LLM+SNP+BOOST+DICT",
             ],
             executionOrder);
     }
@@ -458,7 +458,7 @@ public class PostProcessingPipelineTests
         var options = new PipelineOptions
         {
             TranscriptionNumberNormalizationEnabled = false,
-            DetectedLanguage = "en"
+            DetectedLanguage = "en",
         };
 
         var result = await _sut.ProcessAsync("twenty three", options);
@@ -472,7 +472,7 @@ public class PostProcessingPipelineTests
         var options = new PipelineOptions
         {
             TranscriptionNumberNormalizationEnabled = true,
-            DetectedLanguage = "en"
+            DetectedLanguage = "en",
         };
 
         var result = await _sut.ProcessAsync("twenty three", options);
@@ -488,7 +488,7 @@ public class PostProcessingPipelineTests
             TranscriptionNumberNormalizationEnabled = true,
             DetectedLanguage = "de",
             ConfiguredLanguage = "de",
-            ConfiguredLanguageCandidates = ["de", "en"]
+            ConfiguredLanguageCandidates = ["de", "en"],
         };
 
         var result = await _sut.ProcessAsync("Set the value to twenty three", options);
@@ -504,7 +504,7 @@ public class PostProcessingPipelineTests
             TranscriptionNumberNormalizationEnabled = true,
             TranscriptionTask = TranscriptionTask.Translate,
             DetectedLanguage = "de",
-            ConfiguredLanguage = "de"
+            ConfiguredLanguage = "de",
         };
 
         var result = await _sut.ProcessAsync("twenty three", options);
