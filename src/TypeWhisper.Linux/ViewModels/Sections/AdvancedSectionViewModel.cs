@@ -83,7 +83,10 @@ public partial class AdvancedSectionViewModel : ObservableObject
         // default provider when the selected one is absent, and firing that against an un-hydrated
         // selection would persist the default over the user's saved provider.
         _speechFeedback.ProvidersChanged += (_, _) => PostPluginStateRefresh();
-        _settings.SettingsChanged += Refresh;
+
+        // SettingsChanged can fire off the UI thread (HTTP API, model manager), and
+        // Refresh mutates the provider/voice collections.
+        _settings.SettingsChanged += changed => _post(() => Refresh(changed));
         _pluginManager.PluginStateChanged += (_, _) => PostPluginStateRefresh();
         Loc.Instance.LanguageChanged += OnInterfaceLanguageChanged;
     }

@@ -284,11 +284,12 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
 
         // ReSharper disable once MethodSupportsCancellation -- the worker observes run.CancellationSource internally; passing the token to Task.Run would leave a Canceled task for StopCoreAsync to await.
         var queueWorker = Task.Run(() => ProcessQueueAsync(run));
-        var observedQueueWorker = ObserveQueueWorkerAsync(run, queueWorker);
+        var observedQueueWorker = ObserveWorkerAsync(run, queueWorker, "queue");
         // Periodic rescan catches files missed when the OS event buffer overflows.
         // ReSharper disable once MethodSupportsCancellation -- the worker observes run.CancellationSource internally; passing the token to Task.Run would leave a Canceled task for StopCoreAsync to await.
         var rescanWorker = Task.Run(() => RescanLoopAsync(run));
-        run.SetWorkers(observedQueueWorker, rescanWorker);
+        var observedRescanWorker = ObserveWorkerAsync(run, rescanWorker, "rescan");
+        run.SetWorkers(observedQueueWorker, observedRescanWorker);
 
         lock (_stateGate)
         {
@@ -524,15 +525,15 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
         }
     }
 
-    private async Task ObserveQueueWorkerAsync(WatchFolderRun run, Task queueWorker)
+    private async Task ObserveWorkerAsync(WatchFolderRun run, Task worker, string workerName)
     {
         try
         {
-            await queueWorker.ConfigureAwait(false);
+            await worker.ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"WatchFolder queue worker stopped with an error: {ex}");
+            Debug.WriteLine($"WatchFolder {workerName} worker stopped with an error: {ex}");
             if (run.CancellationSource.IsCancellationRequested)
             {
                 return;
@@ -546,7 +547,9 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
         {
             MarkQueueWorkerFailed(
                 run,
-                new InvalidOperationException("Watch-folder queue worker stopped unexpectedly.")
+                new InvalidOperationException(
+                    $"Watch-folder {workerName} worker stopped unexpectedly."
+                )
             );
         }
     }
@@ -632,6 +635,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
         filePath = Path.GetFullPath(filePath);
         var fileName = Path.GetFileName(filePath);
         string? fingerprint = null;
+        string? committedOutputPath = null;
         if (!_activeFiles.TryAdd(filePath, run))
         {
             return;
@@ -686,6 +690,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
                 artifact,
                 ct
             );
+            committedOutputPath = outputPath;
 
             string? sourceDeletionError = null;
             if (run.Options.DeleteSource)
@@ -758,7 +763,9 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
                     Id = Guid.NewGuid().ToString(),
                     FileName = fileName,
                     ProcessedAtUtc = DateTime.UtcNow,
-                    OutputPath = "",
+                    // A failure after CommitExport still left the transcript on disk — record
+                    // where, or the user can't find it once DeleteSource removed the original.
+                    OutputPath = committedOutputPath ?? "",
                     Success = false,
                     ErrorMessage = ex.Message,
                 }
