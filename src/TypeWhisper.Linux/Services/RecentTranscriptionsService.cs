@@ -131,10 +131,12 @@ public sealed class RecentTranscriptionsService
 
     private static bool IsError(InsertionResult result)
     {
+        // Inverted so an unrecognized result reports failure instead of claiming the text landed.
         return result
-            is InsertionResult.Failed
-            or InsertionResult.MissingClipboardTool
-            or InsertionResult.MissingPasteTool;
+            is not (InsertionResult.Typed
+                or InsertionResult.Pasted
+                or InsertionResult.CopiedToClipboard
+                or InsertionResult.NoText);
     }
 
     private string StatusTextFor(InsertionResult result)
@@ -147,8 +149,7 @@ public sealed class RecentTranscriptionsService
             InsertionResult.NoText => Localization.Loc.Instance["Overlay.NoRecentTranscriptions"],
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             InsertionResult.MissingPasteTool => _commands.GetSnapshot().PasteToolInstallHint,
-            InsertionResult.Failed => "Text insertion failed.",
-            _ => "Done.",
+            _ => "Text insertion failed.",
         };
     }
 

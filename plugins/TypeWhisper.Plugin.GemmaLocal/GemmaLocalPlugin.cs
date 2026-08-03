@@ -48,6 +48,10 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromHours(2) };
     private readonly SemaphoreSlim _inferenceLock = new(1, 1);
+
+    // Guards SelectedModelId only: _inferenceLock is held across the multi-second native load, so
+    // it can't also serialize selection without freezing the settings UI. Never held across await.
+    private readonly Lock _selectionLock = new();
     private IPluginHostServices? _host;
     private LLamaWeights? _weights;
     private LLamaContext? _context;
@@ -216,7 +220,11 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                SelectedModelId = null;
+                lock (_selectionLock)
+                {
+                    SelectedModelId = null;
+                }
+
                 _host?.SetSetting("selectedModel", string.Empty);
                 UnloadModel();
             }
@@ -389,7 +397,11 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     internal void SelectModel(string modelId)
     {
         _ = GetModelDefinition(modelId);
-        SelectedModelId = modelId;
+        lock (_selectionLock)
+        {
+            SelectedModelId = modelId;
+        }
+
         _host?.SetSetting("selectedModel", modelId);
         _host?.NotifyCapabilitiesChanged();
     }
@@ -554,16 +566,18 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                     // so the user can switch selections while we're loading. If
                     // that happened, drop what we just loaded instead of letting
                     // the late finish silently roll back their newer choice.
-                    if (SelectedModelId != modelId)
+                    lock (_selectionLock)
+                    {
+                        loaded = SelectedModelId == modelId;
+                        if (loaded)
+                            LoadedModelId = modelId;
+                    }
+
+                    if (!loaded)
                     {
                         UnloadModel();
                         return;
                     }
-
-                    LoadedModelId = modelId;
-                    SelectedModelId = modelId;
-                    _host?.SetSetting("selectedModel", modelId);
-                    loaded = true;
                 }
                 finally
                 {

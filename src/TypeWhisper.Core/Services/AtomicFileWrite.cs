@@ -46,9 +46,9 @@ public static partial class AtomicFileWrite
             {
                 File.Delete(tempPath);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch
             {
-                // Best-effort: an extra hard link is harmless, the content is already published.
+                // Best-effort and deliberately unfiltered: an extra hard link is harmless.
             }
 
             return;
@@ -63,6 +63,36 @@ public static partial class AtomicFileWrite
         // ENOSYS. Fall back to the framework move: weaker under concurrency, but the alternative
         // is failing the write outright on those mounts.
         File.Move(tempPath, path);
+    }
+
+    /// <summary>
+    ///     Publishes a temporary file over <paramref name="path" />, existing or not.
+    /// </summary>
+    private static void PublishReplace(string tempPath, string path)
+    {
+        if (!File.Exists(path))
+        {
+            try
+            {
+                PublishCreateNew(tempPath, path);
+                return;
+            }
+            catch (IOException) when (File.Exists(path))
+            {
+                // A concurrent writer created the destination between the check and the link.
+                // Replacement is unconditional here, so fall through rather than surfacing the
+                // create-new path's "already exists" failure.
+            }
+        }
+
+        // File.Replace brings the temp file's inode (and mode) into the destination, so copy the
+        // destination's mode over first to preserve its permissions.
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(tempPath, File.GetUnixFileMode(path));
+        }
+
+        File.Replace(tempPath, path, null);
     }
 
     public static void WriteAllText(string path, string contents)
@@ -133,16 +163,9 @@ public static partial class AtomicFileWrite
                 writeTemporaryFile(tempPath);
             }
 
-            if (replaceExisting && File.Exists(path))
+            if (replaceExisting)
             {
-                // File.Replace brings the temp file's inode (and mode) into the destination, so
-                // copy the destination's mode over first to preserve its permissions.
-                if (!OperatingSystem.IsWindows())
-                {
-                    File.SetUnixFileMode(tempPath, File.GetUnixFileMode(path));
-                }
-
-                File.Replace(tempPath, path, null);
+                PublishReplace(tempPath, path);
             }
             else
             {
