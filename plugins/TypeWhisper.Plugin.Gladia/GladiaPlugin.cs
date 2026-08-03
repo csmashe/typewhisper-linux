@@ -63,7 +63,7 @@ public sealed class GladiaPlugin
 
     public string PluginId => "com.typewhisper.gladia";
     public string PluginName => "Gladia";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

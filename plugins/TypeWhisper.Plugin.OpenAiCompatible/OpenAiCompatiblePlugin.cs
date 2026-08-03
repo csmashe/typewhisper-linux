@@ -58,7 +58,7 @@ public sealed class OpenAiCompatiblePlugin
 
     public string PluginId => "com.typewhisper.openai-compatible";
     public string PluginName => "OpenAI Compatible";
-    public string PluginVersion => "1.0.1";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

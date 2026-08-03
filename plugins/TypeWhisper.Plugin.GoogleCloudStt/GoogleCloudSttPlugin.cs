@@ -55,7 +55,7 @@ public sealed class GoogleCloudSttPlugin
 
     public string PluginId => "com.typewhisper.google-cloud-stt";
     public string PluginName => "Google Cloud STT";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

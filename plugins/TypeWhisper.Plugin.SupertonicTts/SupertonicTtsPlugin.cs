@@ -86,7 +86,7 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
 
     public string PluginId => "com.typewhisper.supertonic-tts";
     public string PluginName => "Supertonic TTS";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
     public string ProviderId => "supertonic-tts";
     public string ProviderDisplayName => "Supertonic TTS";
     public bool IsConfigured => _assetManager?.AreAssetsReady ?? false;

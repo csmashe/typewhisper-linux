@@ -56,7 +56,7 @@ public sealed class GroqPlugin
 
     public string PluginId => "com.typewhisper.groq";
     public string PluginName => "Groq";
-    public string PluginVersion => "1.0.3";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

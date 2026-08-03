@@ -819,8 +819,20 @@ public class App : Application
                 Required: false
             ),
             new(
-                BootstrapStageNames.BundledPluginDeployment,
+                BootstrapStageNames.PluginRegistryRecovery,
                 [],
+                async () =>
+                {
+                    await services
+                        .GetRequiredService<PluginRegistryService>()
+                        .RecoverInterruptedInstallsAsync();
+                    BootTrace.Stage("PluginRegistryService.RecoverInterruptedInstallsAsync");
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.BundledPluginDeployment,
+                [BootstrapStageNames.PluginRegistryRecovery],
                 () =>
                 {
                     _ = services.GetRequiredService<BundledPluginDeployer>();
@@ -841,9 +853,18 @@ public class App : Application
                 },
                 Required: false
             ),
-            // PluginRegistryService targets the upstream Windows registry (Windows-built
-            // artifacts); the Linux fork ships its own plugins via BundledPluginDeployer,
-            // so the registry is not used.
+            new(
+                BootstrapStageNames.PluginRegistryBootstrap,
+                [BootstrapStageNames.PluginInitialization],
+                async () =>
+                {
+                    await services
+                        .GetRequiredService<PluginRegistryService>()
+                        .FirstRunAutoInstallAsync();
+                    BootTrace.Stage("PluginRegistryService.FirstRunAutoInstallAsync");
+                },
+                Required: false
+            ),
             new(
                 BootstrapStageNames.RetentionInitialization,
                 [],
@@ -985,7 +1006,9 @@ public class App : Application
         public const string SessionCleanup = "Session cleanup";
         public const string AudioConfiguration = "Audio configuration";
         public const string BundledPluginDeployment = "Bundled-plugin deployment";
+        public const string PluginRegistryRecovery = "Plugin-registry recovery";
         public const string PluginInitialization = "Plugin initialization";
+        public const string PluginRegistryBootstrap = "Plugin-registry bootstrap";
         public const string RetentionInitialization = "Retention initialization";
         public const string ModelMigration = "Model migration";
         public const string ModelAutoLoad = "Model auto-load";

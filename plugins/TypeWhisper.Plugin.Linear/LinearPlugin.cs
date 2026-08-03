@@ -37,7 +37,7 @@ public sealed class LinearPlugin : IActionPlugin, IPluginSettingsProvider, IPlug
 
     public string PluginId => "com.typewhisper.linear";
     public string PluginName => "Linear";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public string ActionId => "create-linear-issue";
     public string ActionName => "Create Linear Issue";

@@ -132,7 +132,7 @@ public sealed class OpenAiPlugin
 
     public string PluginId => "com.typewhisper.openai";
     public string PluginName => "OpenAI / ChatGPT";
-    public string PluginVersion => "1.2.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

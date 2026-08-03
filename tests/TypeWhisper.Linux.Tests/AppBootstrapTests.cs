@@ -7,49 +7,56 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class AppBootstrapTests
 {
-    public static TheoryData<string, string?, string?> ProductionStageFailures =>
+    public static TheoryData<string, string[]> ProductionStageFailures =>
         new()
         {
-            { App.BootstrapStageNames.HistoryLoad, null, null },
-            { App.BootstrapStageNames.SessionCleanup, null, null },
-            { App.BootstrapStageNames.AudioConfiguration, null, null },
+            { App.BootstrapStageNames.HistoryLoad, [] },
+            { App.BootstrapStageNames.SessionCleanup, [] },
+            { App.BootstrapStageNames.AudioConfiguration, [] },
+            {
+                App.BootstrapStageNames.PluginRegistryRecovery,
+                [
+                    App.BootstrapStageNames.BundledPluginDeployment,
+                    App.BootstrapStageNames.PluginInitialization,
+                    App.BootstrapStageNames.PluginRegistryBootstrap,
+                    App.BootstrapStageNames.WatchFolderAutoStart,
+                ]
+            },
             {
                 App.BootstrapStageNames.BundledPluginDeployment,
-                App.BootstrapStageNames.PluginInitialization,
-                App.BootstrapStageNames.WatchFolderAutoStart
+                [
+                    App.BootstrapStageNames.PluginInitialization,
+                    App.BootstrapStageNames.PluginRegistryBootstrap,
+                    App.BootstrapStageNames.WatchFolderAutoStart,
+                ]
             },
             {
                 App.BootstrapStageNames.PluginInitialization,
-                App.BootstrapStageNames.WatchFolderAutoStart,
-                null
+                [
+                    App.BootstrapStageNames.PluginRegistryBootstrap,
+                    App.BootstrapStageNames.WatchFolderAutoStart,
+                ]
             },
-            { App.BootstrapStageNames.RetentionInitialization, null, null },
+            { App.BootstrapStageNames.PluginRegistryBootstrap, [] },
+            { App.BootstrapStageNames.RetentionInitialization, [] },
             {
                 App.BootstrapStageNames.ModelMigration,
-                App.BootstrapStageNames.ModelAutoLoad,
-                null
+                [App.BootstrapStageNames.ModelAutoLoad]
             },
-            { App.BootstrapStageNames.ModelAutoLoad, null, null },
-            { App.BootstrapStageNames.WatchFolderAutoStart, null, null },
+            { App.BootstrapStageNames.ModelAutoLoad, [] },
+            { App.BootstrapStageNames.WatchFolderAutoStart, [] },
         };
 
     [Theory]
     [MemberData(nameof(ProductionStageFailures))]
     public async Task RunAsync_WhenEachProductionStageFails_RunsIndependentStagesAndSkipsDependents(
         string failingStage,
-        string? firstExpectedSkippedStage,
-        string? secondExpectedSkippedStage
+        string[] expectedSkippedStages
     )
     {
         var attempted = new List<string>();
         var failure = new InvalidOperationException($"Failure in {failingStage}");
         var stages = CreateProductionShapedStages(attempted, failingStage, failure);
-        var expectedSkippedStages = new[]
-        {
-            firstExpectedSkippedStage,
-            secondExpectedSkippedStage,
-        }.OfType<string>().ToArray();
-
         var report = await new App.BootstrapRunner(stages).RunAsync();
 
         var expectedAttempted = stages

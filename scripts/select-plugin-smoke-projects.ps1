@@ -17,6 +17,37 @@ if ($allProjects.Count -eq 0) {
   throw "No plugin projects found under plugins/."
 }
 
+$catalogPath = Join-Path $pluginsPath 'catalog.json'
+if (-not (Test-Path -LiteralPath $catalogPath -PathType Leaf)) {
+  throw "Plugin catalog not found: $catalogPath"
+}
+try {
+  $catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json
+} catch {
+  throw "Invalid plugin catalog JSON at ${catalogPath}: $($_.Exception.Message)"
+}
+
+$filesystemProjectPaths = @(
+  $allProjects | ForEach-Object {
+    $_.FullName.Replace($workspacePath + [System.IO.Path]::DirectorySeparatorChar, '').Replace('\', '/')
+  }
+)
+$catalogProjectPaths = @($catalog.plugins | ForEach-Object { [string] $_.projectPath } | Sort-Object)
+$uniqueCatalogProjectPaths = @($catalogProjectPaths | Select-Object -Unique)
+if ($catalogProjectPaths.Count -ne $uniqueCatalogProjectPaths.Count) {
+  throw 'Plugin catalog contains duplicate projectPath values.'
+}
+$catalogDifference = @(
+  Compare-Object `
+    -ReferenceObject $catalogProjectPaths `
+    -DifferenceObject $filesystemProjectPaths `
+    -CaseSensitive
+)
+if ($catalogDifference.Count -gt 0) {
+  $details = $catalogDifference | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" }
+  throw "Plugin catalog and filesystem projects disagree:`n$($details -join [Environment]::NewLine)"
+}
+
 $runAll = $EventName -ne 'pull_request'
 $selectedPluginDirs = [ordered]@{}
 $changedFiles = @($ChangedFiles | ForEach-Object { ([string] $_).Replace('\', '/') })
@@ -30,6 +61,9 @@ if (-not $runAll) {
       # separate file.
       $file -eq 'scripts/select-plugin-smoke-projects.ps1' -or
       $file -eq 'Directory.Build.props' -or
+      $file -eq 'plugins/Directory.Build.props' -or
+      $file -eq 'plugins/catalog.json' -or
+      $file -eq 'scripts/plugin-catalog.ps1' -or
       $file -like 'src/TypeWhisper.PluginSDK/*' -or
       $file -like 'plugins/Shared/*'
     ) {

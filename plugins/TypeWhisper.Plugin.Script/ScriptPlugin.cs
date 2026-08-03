@@ -410,7 +410,7 @@ public sealed class ScriptPlugin
 
     public string PluginId => "com.typewhisper.script";
     public string PluginName => "Script Runner";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
     public string ProcessorName => "Script Runner";
     public int Priority => 400;
 

@@ -80,7 +80,7 @@ public sealed class XaiPlugin
 
     public string PluginId => "com.typewhisper.xai";
     public string PluginName => "xAI / Grok";
-    public string PluginVersion => "1.1.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

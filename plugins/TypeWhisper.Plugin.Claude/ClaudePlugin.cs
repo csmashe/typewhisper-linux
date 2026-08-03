@@ -42,7 +42,7 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
 
     public string PluginId => "com.typewhisper.claude";
     public string PluginName => "Claude";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

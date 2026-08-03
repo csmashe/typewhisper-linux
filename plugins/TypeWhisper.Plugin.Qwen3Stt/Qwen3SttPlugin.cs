@@ -35,7 +35,7 @@ public sealed class Qwen3SttPlugin
 
     public string PluginId => "com.typewhisper.qwen3-stt";
     public string PluginName => "Qwen3 STT";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

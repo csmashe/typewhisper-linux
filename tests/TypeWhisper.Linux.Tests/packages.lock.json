@@ -435,6 +435,12 @@
       "typewhisper.core": {
         "type": "Project"
       },
+      "typewhisper.plugin.webhook": {
+        "type": "Project",
+        "dependencies": {
+          "TypeWhisper.PluginSDK": "[0.13.0, )"
+        }
+      },
       "typewhisper.pluginsdk": {
         "type": "Project"
       },

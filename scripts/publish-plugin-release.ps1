@@ -5,6 +5,9 @@ param(
     [string]$ProjectName,
     [string]$PluginVersion,
     [string]$PluginId,
+    [string]$Platform,
+    [string]$Rid,
+    [string]$SdkAbi,
     [string]$ZipPath,
     [string]$ManifestPath,
     [string]$RegistryWorktreePath = 'gh-pages-work',
@@ -257,19 +260,6 @@ function Get-RegistryEntries {
     return $entries
 }
 
-function Set-RegistryProperty {
-    param(
-        [Parameter(Mandatory)]
-        [object]$Entry,
-        [Parameter(Mandatory)]
-        [string]$Name,
-        [AllowNull()]
-        [object]$Value
-    )
-
-    $Entry | Add-Member -MemberType NoteProperty -Name $Name -Value $Value -Force
-}
-
 function Write-StagedRegistry {
     param(
         [Parameter(Mandatory)]
@@ -284,6 +274,16 @@ function Write-StagedRegistry {
         [long]$ExpectedZipSize,
         [Parameter(Mandatory)]
         [string]$ExpectedDownloadUrl,
+        [Parameter(Mandatory)]
+        [string]$ExpectedSha256,
+        [Parameter(Mandatory)]
+        [string]$ExpectedPlatform,
+        [Parameter(Mandatory)]
+        [string]$ExpectedRid,
+        [Parameter(Mandatory)]
+        [string]$ExpectedSdkAbi,
+        [Parameter(Mandatory)]
+        [string]$ExpectedTimestamp,
         [Parameter(Mandatory)]
         [string]$SourceZipPath
     )
@@ -300,41 +300,46 @@ function Write-StagedRegistry {
     }
 
     if ($matches.Count -eq 1) {
-        $entry = $matches[0]
-
-        $existingVersion = $null
-        $incomingVersion = $null
-        if (
-            [version]::TryParse([string]$entry.version, [ref]$existingVersion) -and
-            [version]::TryParse($ExpectedVersion, [ref]$incomingVersion) -and
-            $existingVersion -gt $incomingVersion
-        ) {
-            throw "Registry already contains a newer version '$($entry.version)' for '$ExpectedPluginId'; refusing to downgrade to '$ExpectedVersion'."
+        try {
+            $existingVersion = [System.Management.Automation.SemanticVersion]::new(
+                [string]$matches[0].version
+            )
+            $incomingVersion = [System.Management.Automation.SemanticVersion]::new(
+                $ExpectedVersion
+            )
+        } catch {
+            throw "Registry version comparison requires valid SemVer values: $($_.Exception.Message)"
         }
-
-        Set-RegistryProperty -Entry $entry -Name 'version' -Value $ExpectedVersion
-        Set-RegistryProperty -Entry $entry -Name 'size' -Value $ExpectedZipSize
-        Set-RegistryProperty -Entry $entry -Name 'downloadUrl' -Value $ExpectedDownloadUrl
-        Write-Host "Staged registry update for $ExpectedPluginId v$ExpectedVersion."
-    } else {
-        $entry = [pscustomobject][ordered]@{
-            id = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'id')
-            name = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'name')
-            version = $ExpectedVersion
-            minHostVersion = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'minHostVersion')
-            author = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'author')
-            description = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'description')
-            category = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'category')
-            size = $ExpectedZipSize
-            downloadUrl = $ExpectedDownloadUrl
-            iconSystemName = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'iconSystemName')
-            requiresApiKey = [bool](Get-JsonPropertyValue -InputObject $Manifest -Name 'requiresApiKey' -DefaultValue $false)
-            descriptions = Get-JsonPropertyValue -InputObject $Manifest -Name 'descriptions'
+        if ($existingVersion -gt $incomingVersion) {
+            throw "Registry already contains a newer version '$($matches[0].version)' for '$ExpectedPluginId'; refusing to downgrade to '$ExpectedVersion'."
         }
-
-        $registry += $entry
-        Write-Host "Staged new registry entry for $ExpectedPluginId v$ExpectedVersion."
     }
+
+    # Always rebuild the complete target entry. Existing target metadata is never copied.
+    $entry = [pscustomobject][ordered]@{
+        id = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'id')
+        name = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'name')
+        version = $ExpectedVersion
+        minHostVersion = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'minHostVersion')
+        author = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'author')
+        description = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'description')
+        category = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'category')
+        size = $ExpectedZipSize
+        downloadUrl = $ExpectedDownloadUrl
+        sha256 = $ExpectedSha256
+        platform = $ExpectedPlatform
+        rid = $ExpectedRid
+        sdkAbi = $ExpectedSdkAbi
+        timestamp = $ExpectedTimestamp
+        iconSystemName = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'iconSystemName')
+        requiresApiKey = [bool](Get-JsonPropertyValue -InputObject $Manifest -Name 'requiresApiKey' -DefaultValue $false)
+        descriptions = Get-JsonPropertyValue -InputObject $Manifest -Name 'descriptions'
+    }
+    $registry = @(
+        @($registry | Where-Object { [string]$_.id -ne $ExpectedPluginId }) + $entry |
+            Sort-Object id
+    )
+    Write-Host "Staged complete registry entry for $ExpectedPluginId v$ExpectedVersion."
 
     ConvertTo-Json -InputObject $registry -Depth 20 |
         Set-Content -LiteralPath $registryPath -Encoding utf8NoBOM
@@ -351,10 +356,20 @@ function Write-StagedRegistry {
     }
 
     $stagedEntry = $stagedMatches[0]
+    $stagedTimestamp = [DateTimeOffset]$stagedEntry.timestamp
+    $expectedTimestampValue = [DateTimeOffset]::Parse(
+        $ExpectedTimestamp,
+        [System.Globalization.CultureInfo]::InvariantCulture
+    )
     if (
         [string]$stagedEntry.version -ne $ExpectedVersion -or
         [long]$stagedEntry.size -ne $ExpectedZipSize -or
-        [string]$stagedEntry.downloadUrl -ne $ExpectedDownloadUrl
+        [string]$stagedEntry.downloadUrl -ne $ExpectedDownloadUrl -or
+        [string]$stagedEntry.sha256 -ne $ExpectedSha256 -or
+        [string]$stagedEntry.platform -ne $ExpectedPlatform -or
+        [string]$stagedEntry.rid -ne $ExpectedRid -or
+        [string]$stagedEntry.sdkAbi -ne $ExpectedSdkAbi -or
+        $stagedTimestamp -ne $expectedTimestampValue
     ) {
         throw "The staged registry entry for '$ExpectedPluginId' failed validation."
     }
@@ -538,6 +553,70 @@ function Assert-ReleaseAsset {
     }
 }
 
+function Get-PublishedAssetSha256 {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Repository,
+        [Parameter(Mandatory)]
+        [string]$Tag,
+        [Parameter(Mandatory)]
+        [string]$AssetName,
+        [Parameter(Mandatory)]
+        [object]$Manifest,
+        [Parameter(Mandatory)]
+        [string]$PluginId,
+        [Parameter(Mandatory)]
+        [string]$PluginVersion,
+        [Parameter(Mandatory)]
+        [long]$ExpectedSize,
+        [Parameter(Mandatory)]
+        [string]$LocalSha256
+    )
+
+    $downloadDirectory = Join-Path ([System.IO.Path]::GetTempPath()) (
+        'plugin-release-verify-' + [Guid]::NewGuid().ToString('N')
+    )
+    New-Item -ItemType Directory -Path $downloadDirectory -Force | Out-Null
+    try {
+        Invoke-GhCommand -Arguments @(
+            'release',
+            'download',
+            $Tag,
+            '--repo',
+            $Repository,
+            '--pattern',
+            $AssetName,
+            '--dir',
+            $downloadDirectory
+        ) | Out-Null
+
+        $downloadedPath = Join-Path $downloadDirectory $AssetName
+        if (-not (Test-Path -LiteralPath $downloadedPath -PathType Leaf)) {
+            throw "Published asset '$AssetName' could not be downloaded for verification."
+        }
+
+        $downloadedSize = (Get-Item -LiteralPath $downloadedPath).Length
+        if ($downloadedSize -ne $ExpectedSize) {
+            throw "Published asset '$AssetName' is $downloadedSize bytes, expected $ExpectedSize."
+        }
+
+        Assert-ZipPackage `
+            -Path $downloadedPath `
+            -Manifest $Manifest `
+            -ExpectedPluginId $PluginId `
+            -ExpectedVersion $PluginVersion
+
+        $publishedSha256 = (Get-FileHash -LiteralPath $downloadedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($publishedSha256 -ne $LocalSha256) {
+            Write-Host "The published asset is not byte-identical to this rebuild; recording its own SHA-256."
+        }
+
+        return $publishedSha256
+    } finally {
+        Remove-Item -LiteralPath $downloadDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Set-DraftReleaseAsset {
     param(
         [Parameter(Mandatory)]
@@ -585,6 +664,16 @@ function Push-StagedRegistry {
         [Parameter(Mandatory)]
         [string]$DownloadUrl,
         [Parameter(Mandatory)]
+        [string]$Sha256,
+        [Parameter(Mandatory)]
+        [string]$Platform,
+        [Parameter(Mandatory)]
+        [string]$Rid,
+        [Parameter(Mandatory)]
+        [string]$SdkAbi,
+        [Parameter(Mandatory)]
+        [string]$Timestamp,
+        [Parameter(Mandatory)]
         [string]$ZipPath,
         [Parameter(Mandatory)]
         [string]$ProjectName,
@@ -596,15 +685,23 @@ function Push-StagedRegistry {
         try {
             if ($attempt -gt 1) {
                 Sync-RegistryWorktree -RepositoryRoot $RepositoryRoot -WorktreePath $WorktreePath
-                Write-StagedRegistry `
-                    -WorktreePath $WorktreePath `
-                    -Manifest $Manifest `
-                    -ExpectedPluginId $PluginId `
-                    -ExpectedVersion $PluginVersion `
-                    -ExpectedZipSize $ZipSize `
-                    -ExpectedDownloadUrl $DownloadUrl `
-                    -SourceZipPath $ZipPath
             }
+
+            # Stage on every attempt rather than inheriting the pre-flight staging: the
+            # caller can only resolve the authoritative SHA-256 after probing the release.
+            Write-StagedRegistry `
+                -WorktreePath $WorktreePath `
+                -Manifest $Manifest `
+                -ExpectedPluginId $PluginId `
+                -ExpectedVersion $PluginVersion `
+                -ExpectedZipSize $ZipSize `
+                -ExpectedDownloadUrl $DownloadUrl `
+                -ExpectedSha256 $Sha256 `
+                -ExpectedPlatform $Platform `
+                -ExpectedRid $Rid `
+                -ExpectedSdkAbi $SdkAbi `
+                -ExpectedTimestamp $Timestamp `
+                -SourceZipPath $ZipPath
 
             Invoke-GitCommand -WorkingDirectory $WorktreePath -Arguments @('add', '--all') | Out-Null
             Invoke-GitCommand -WorkingDirectory $WorktreePath -Arguments @(
@@ -671,6 +768,12 @@ function Invoke-PluginReleaseTransaction {
         [Parameter(Mandatory)]
         [string]$PluginId,
         [Parameter(Mandatory)]
+        [string]$Platform,
+        [Parameter(Mandatory)]
+        [string]$Rid,
+        [Parameter(Mandatory)]
+        [string]$SdkAbi,
+        [Parameter(Mandatory)]
         [string]$ZipPath,
         [Parameter(Mandatory)]
         [string]$ManifestPath,
@@ -689,6 +792,9 @@ function Invoke-PluginReleaseTransaction {
         ProjectName = $ProjectName
         PluginVersion = $PluginVersion
         PluginId = $PluginId
+        Platform = $Platform
+        Rid = $Rid
+        SdkAbi = $SdkAbi
         ZipPath = $ZipPath
         ManifestPath = $ManifestPath
         RegistryWorktreePath = $RegistryWorktreePath
@@ -733,6 +839,8 @@ function Invoke-PluginReleaseTransaction {
         -ExpectedVersion $PluginVersion
 
     $zipSize = (Get-Item -LiteralPath $resolvedZipPath).Length
+    $zipSha256 = (Get-FileHash -LiteralPath $resolvedZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $registryTimestamp = [DateTimeOffset]::UtcNow.ToString('O')
     $encodedTag = [Uri]::EscapeDataString($Tag)
     $encodedZipName = [Uri]::EscapeDataString($expectedZipName)
     $downloadUrl = "https://github.com/$Repository/releases/download/$encodedTag/$encodedZipName"
@@ -745,6 +853,11 @@ function Invoke-PluginReleaseTransaction {
         -ExpectedVersion $PluginVersion `
         -ExpectedZipSize $zipSize `
         -ExpectedDownloadUrl $downloadUrl `
+        -ExpectedSha256 $zipSha256 `
+        -ExpectedPlatform $Platform `
+        -ExpectedRid $Rid `
+        -ExpectedSdkAbi $SdkAbi `
+        -ExpectedTimestamp $registryTimestamp `
         -SourceZipPath $resolvedZipPath
 
     Write-Host "Validated the plugin ZIP and prospective registry before release mutation."
@@ -820,6 +933,19 @@ function Invoke-PluginReleaseTransaction {
             -Release $release `
             -ExpectedAssetName $expectedZipName `
             -ExpectedAssetSize $zipSize
+
+        # A published asset is immutable and a rebuild is not byte-reproducible, so the
+        # registry has to carry the hash of the released bytes rather than of this ZIP;
+        # equal sizes are no evidence that the two are identical.
+        $zipSha256 = Get-PublishedAssetSha256 `
+            -Repository $Repository `
+            -Tag $Tag `
+            -AssetName $expectedZipName `
+            -Manifest $manifest `
+            -PluginId $PluginId `
+            -PluginVersion $PluginVersion `
+            -ExpectedSize $zipSize `
+            -LocalSha256 $zipSha256
     }
 
     Push-StagedRegistry `
@@ -830,6 +956,11 @@ function Invoke-PluginReleaseTransaction {
         -PluginVersion $PluginVersion `
         -ZipSize $zipSize `
         -DownloadUrl $downloadUrl `
+        -Sha256 $zipSha256 `
+        -Platform $Platform `
+        -Rid $Rid `
+        -SdkAbi $SdkAbi `
+        -Timestamp $registryTimestamp `
         -ZipPath $resolvedZipPath `
         -ProjectName $ProjectName `
         -MaxAttempts $MaxPushAttempts

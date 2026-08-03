@@ -6,6 +6,7 @@
 #
 # Usage:
 #   scripts/deploy-linux-plugins.sh [Release|Debug] [version]
+#   scripts/deploy-linux-plugins.sh --validate-only
 #
 # The optional version arg must match whatever version was passed to the host
 # publish (-p:Version=...). It propagates to PluginSDK and every plugin so the
@@ -13,6 +14,12 @@
 # on AssemblyVersion. Mismatch → plugins fail to type-load at runtime because
 # PluginAssemblyLoadContext redirects PluginSDK references to the host's copy
 # and the version doesn't satisfy the bind.
+#
+# Requires PowerShell 7 (pwsh): plugins/catalog.json is the authoritative plugin
+# list and scripts/plugin-catalog.ps1 is what validates it and turns it into this
+# script's deploy map. TypeWhisper.Linux runs this from an AfterTargets="Build"
+# target, so `dotnet build` needs pwsh too; build with
+# -p:DeployBundledLinuxPlugins=false to skip plugin bundling instead.
 #
 # Environment:
 #   TYPEWHISPER_PLUGIN_PUBLISH_JOBS=<n>  Max concurrent plugin publishes.
@@ -22,8 +29,23 @@
 
 set -euo pipefail
 
-CONFIG="${1:-Release}"
-VERSION="${2:-}"
+VALIDATE_ONLY=false
+if [ "${1:-}" = "--validate-only" ]; then
+  if [ "$#" -ne 1 ]; then
+    echo "ERROR: --validate-only does not accept other arguments." >&2
+    exit 2
+  fi
+  VALIDATE_ONLY=true
+  CONFIG="Release"
+  VERSION=""
+else
+  if [ "$#" -gt 2 ]; then
+    echo "ERROR: expected [Release|Debug] [version] or --validate-only." >&2
+    exit 2
+  fi
+  CONFIG="${1:-Release}"
+  VERSION="${2:-}"
+fi
 
 # Reject anything that isn't a real msbuild Configuration before letting it
 # feed into OUT — the script does rm -rf "$OUT" and we don't want "../.."
@@ -52,45 +74,38 @@ cleanup() {
 
 trap cleanup EXIT
 
-# Plugin ID (manifest id) → plugin project name
-declare -A PLUGINS=(
-  ["com.typewhisper.sherpa-onnx"]="TypeWhisper.Plugin.SherpaOnnx"
-  ["com.typewhisper.whisper-cpp"]="TypeWhisper.Plugin.WhisperCpp"
-  ["com.typewhisper.file-memory"]="TypeWhisper.Plugin.FileMemory"
-  ["com.typewhisper.openai"]="TypeWhisper.Plugin.OpenAi"
-  ["com.typewhisper.openrouter"]="TypeWhisper.Plugin.OpenRouter"
-  ["com.typewhisper.gemini"]="TypeWhisper.Plugin.Gemini"
-  ["com.typewhisper.cerebras"]="TypeWhisper.Plugin.Cerebras"
-  ["com.typewhisper.claude"]="TypeWhisper.Plugin.Claude"
-  ["com.typewhisper.cohere"]="TypeWhisper.Plugin.Cohere"
-  ["com.typewhisper.fireworks"]="TypeWhisper.Plugin.Fireworks"
-  ["com.typewhisper.groq"]="TypeWhisper.Plugin.Groq"
-  ["com.typewhisper.xai"]="TypeWhisper.Plugin.Xai"
-  ["com.typewhisper.supertonic-tts"]="TypeWhisper.Plugin.SupertonicTts"
-  ["com.typewhisper.assemblyai"]="TypeWhisper.Plugin.AssemblyAi"
-  ["com.typewhisper.deepgram"]="TypeWhisper.Plugin.Deepgram"
-  ["com.typewhisper.smallest-ai"]="TypeWhisper.Plugin.SmallestAi"
-  ["com.typewhisper.elevenlabs"]="TypeWhisper.Plugin.ElevenLabs"
-  ["com.typewhisper.cloudflare-asr"]="TypeWhisper.Plugin.CloudflareAsr"
-  ["com.typewhisper.gladia"]="TypeWhisper.Plugin.Gladia"
-  ["com.typewhisper.speechmatics"]="TypeWhisper.Plugin.Speechmatics"
-  ["com.typewhisper.soniox"]="TypeWhisper.Plugin.Soniox"
-  ["com.typewhisper.reson8"]="TypeWhisper.Plugin.Reson8"
-  ["com.typewhisper.google-cloud-stt"]="TypeWhisper.Plugin.GoogleCloudStt"
-  ["com.typewhisper.voxtral"]="TypeWhisper.Plugin.Voxtral"
-  ["com.typewhisper.qwen3-stt"]="TypeWhisper.Plugin.Qwen3Stt"
-  ["com.typewhisper.obsidian"]="TypeWhisper.Plugin.Obsidian"
-  ["com.typewhisper.linear"]="TypeWhisper.Plugin.Linear"
-  ["com.typewhisper.openai-compatible"]="TypeWhisper.Plugin.OpenAiCompatible"
-  ["com.typewhisper.gemma-local"]="TypeWhisper.Plugin.GemmaLocal"
-  ["com.typewhisper.openai-vector-memory"]="TypeWhisper.Plugin.OpenAiVectorMemory"
-  ["com.typewhisper.script"]="TypeWhisper.Plugin.Script"
-  ["com.typewhisper.webhook"]="TypeWhisper.Plugin.Webhook"
-)
+# Generate the Linux deployment view from the canonical catalog. Write it to a
+# real file before sourcing so a pwsh/validation failure propagates reliably;
+# process-substitution exit codes are otherwise easy for bash to miss.
+if ! command -v pwsh > /dev/null 2>&1; then
+  echo "ERROR: pwsh is required to validate and read plugins/catalog.json." >&2
+  echo "       Install PowerShell 7, or build without bundled plugins:" >&2
+  echo "       dotnet build -p:DeployBundledLinuxPlugins=false" >&2
+  exit 1
+fi
 
-# Clean any plugins lingering from previous builds. The script's PLUGINS array
-# is the authoritative manifest; anything else in $OUT is a stale artifact from
-# an earlier script revision (or a hand-deployed plugin) that would otherwise
+CATALOG_MAP="$TMP_DIR/plugin-deploy-map.sh"
+if ! pwsh -NoProfile -File "$ROOT/scripts/plugin-catalog.ps1" \
+  -View DeployMap -Platform linux -Rid "$RID" > "$CATALOG_MAP"; then
+  echo "ERROR: plugin catalog validation or deploy-map generation failed." >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "$CATALOG_MAP"
+
+if [ "${#PLUGIN_IDS[@]}" -eq 0 ]; then
+  echo "ERROR: plugin catalog generated an empty Linux deploy map." >&2
+  exit 1
+fi
+
+if [ "$VALIDATE_ONLY" = true ]; then
+  echo "Validated ${#PLUGIN_IDS[@]} Linux plugin catalog entries for $RID."
+  exit 0
+fi
+
+# Clean any plugins lingering from previous builds. The catalog-generated map
+# is authoritative; anything else in $OUT is a stale artifact from an earlier
+# catalog revision (or a hand-deployed plugin) that would otherwise
 # get bundled into the package with whatever PluginSDK version it was last
 # built against — usually mismatched with the host and a hard load failure.
 rm -rf "$OUT"
@@ -111,19 +126,21 @@ dotnet build "$ROOT/src/TypeWhisper.PluginSDK/TypeWhisper.PluginSDK.csproj" \
 # src/TypeWhisper.PluginSDK/obj/project.assets.json. Combined with --no-restore
 # in publish_plugin below, restore happens exactly once per project and the
 # parallel phase is restore-free.
-for id in "${!PLUGINS[@]}"; do
-  project="${PLUGINS[$id]}"
-  dotnet restore "$ROOT/plugins/$project/$project.csproj" \
+for id in "${PLUGIN_IDS[@]}"; do
+  project_path="${PLUGINS[$id]}"
+  dotnet restore "$ROOT/$project_path" \
     -r "$RID" "${VERSION_ARG[@]}" --nologo -v quiet > /dev/null
 done
 
 publish_plugin() {
   local id="$1"
-  project="${PLUGINS[$id]}"
-  proj_dir="$ROOT/plugins/$project"
-  pub_dir="$proj_dir/bin/$CONFIG/net10.0/$RID/publish"
-  dest="$OUT/$id"
-  log_file="$TMP_DIR/${id//\//_}.log"
+  local project_path="${PLUGINS[$id]}"
+  local project="${project_path##*/}"
+  project="${project%.csproj}"
+  local proj_dir="$ROOT/${project_path%/*}"
+  local pub_dir="$proj_dir/bin/$CONFIG/net10.0/$RID/publish"
+  local dest="$OUT/$id"
+  local log_file="$TMP_DIR/${id//\//_}.log"
 
   {
     echo "==> $id ($project)"
@@ -163,7 +180,7 @@ throttle_jobs() {
 declare -a PIDS=()
 declare -a IDS=()
 
-for id in "${!PLUGINS[@]}"; do
+for id in "${PLUGIN_IDS[@]}"; do
   throttle_jobs
   publish_plugin "$id" &
   PIDS+=("$!")
@@ -185,7 +202,7 @@ if [ "$status" -ne 0 ]; then
   exit "$status"
 fi
 
-for id in "${!PLUGINS[@]}"; do
+for id in "${PLUGIN_IDS[@]}"; do
   sed -n '1,200p' "$TMP_DIR/${id//\//_}.log"
 done
 

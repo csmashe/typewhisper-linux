@@ -82,6 +82,8 @@ jobs:
       - name: Validate plugin manifests and localization files
         shell: pwsh
         run: |
+          & ./scripts/plugin-catalog.ps1 -View Validate
+
           $errors = [System.Collections.Generic.List[string]]::new()
 
           foreach ($manifestPath in Get-ChildItem plugins -Recurse -Filter manifest.json | Sort-Object FullName) {

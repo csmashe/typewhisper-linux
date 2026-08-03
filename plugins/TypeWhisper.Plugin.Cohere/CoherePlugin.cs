@@ -30,7 +30,7 @@ public sealed class CoherePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
 
     public string PluginId => "com.typewhisper.cohere";
     public string PluginName => "Cohere";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

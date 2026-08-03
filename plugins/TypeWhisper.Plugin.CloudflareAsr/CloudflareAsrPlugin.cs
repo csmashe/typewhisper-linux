@@ -38,7 +38,7 @@ public sealed class CloudflareAsrPlugin
 
     public string PluginId => "com.typewhisper.cloudflare-asr";
     public string PluginName => "Cloudflare ASR";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
