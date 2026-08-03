@@ -33,7 +33,7 @@ public sealed class FireworksPlugin
 
     public string PluginId => "com.typewhisper.fireworks";
     public string PluginName => "Fireworks";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

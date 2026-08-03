@@ -41,7 +41,7 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
 
     public string PluginId => "com.typewhisper.openai-vector-memory";
     public string PluginName => "OpenAI Vector Memory";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     private IPluginLocalization? _injectedLocalization;
 

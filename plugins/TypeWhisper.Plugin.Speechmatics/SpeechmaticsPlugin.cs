@@ -29,7 +29,7 @@ public sealed class SpeechmaticsPlugin
 
     public string PluginId => "com.typewhisper.speechmatics";
     public string PluginName => "Speechmatics";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

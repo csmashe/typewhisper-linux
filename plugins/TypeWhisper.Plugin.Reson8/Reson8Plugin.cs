@@ -55,7 +55,7 @@ public sealed class Reson8Plugin
 
     public string PluginId => "com.typewhisper.reson8";
     public string PluginName => "Reson8";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

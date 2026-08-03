@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using TypeWhisper.Core;
+using TypeWhisper.Linux.Services.ManagedArtifacts;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -16,7 +17,6 @@ public sealed class BundledPluginDeployer
 {
     private const string StampFileName = ".typewhisper-bundle.sha256";
     private const string ScratchDirectoryName = ".typewhisper-deploy";
-    private const string BackupDirectoryName = "backup";
 
     // ReSharper disable once UnusedMethodReturnValue.Global -- returns the count of synced plugins for callers that want it; the current caller ignores it.
     public static int DeployIfMissing()
@@ -105,8 +105,16 @@ public sealed class BundledPluginDeployer
     {
         var scratchRoot = Path.Join(destRoot, ScratchDirectoryName);
         var pluginScratch = Path.Join(scratchRoot, pluginName);
-        var backup = Path.Join(pluginScratch, BackupDirectoryName);
-        RecoverInterruptedDeployment(dest, pluginScratch, backup);
+        var transaction = new ManagedDirectoryTransaction(
+            scratchRoot,
+            ManagedDirectoryRecoveryMode.KeepPublished,
+            useCrossProcessLock: false,
+            cleanupAbandonedStages: true
+        );
+        transaction
+            .RecoverAsync(pluginName, dest)
+            .GetAwaiter()
+            .GetResult();
 
         Fingerprints? sourceFingerprints = null;
         if (TryReadStamp(dest, out var stamp))
@@ -161,8 +169,7 @@ public sealed class BundledPluginDeployer
         }
 
         sourceFingerprints ??= ComputeFingerprints(source);
-        Directory.CreateDirectory(pluginScratch);
-        var stage = CreateStageDirectory(pluginScratch);
+        var stage = transaction.CreateStageDirectory(pluginName);
         try
         {
             CopyDirectory(source, stage, copyFile);
@@ -181,30 +188,57 @@ public sealed class BundledPluginDeployer
                     stagedFingerprints.Stat
                 )
             );
-            CommitStage(stage, dest, backup);
-            afterCommit?.Invoke(dest);
-
-            var destStat = ComputeStatDigest(dest);
-            if (!DigestsEqual(destStat, stagedFingerprints.Stat))
+            var commit = transaction
+                .CommitAsync(pluginName, stage, dest)
+                .GetAwaiter()
+                .GetResult();
+            try
             {
-                var committedFingerprints = ComputeFingerprints(dest);
-                if (!DigestsEqual(sourceFingerprints.Content, committedFingerprints.Content))
+                try
                 {
-                    throw new IOException("Bundled plugin changed while it was being committed.");
+                    afterCommit?.Invoke(dest);
+
+                    var destStat = ComputeStatDigest(dest);
+                    if (!DigestsEqual(destStat, stagedFingerprints.Stat))
+                    {
+                        var committedFingerprints = ComputeFingerprints(dest);
+                        if (
+                            !DigestsEqual(
+                                sourceFingerprints.Content,
+                                committedFingerprints.Content
+                            )
+                        )
+                        {
+                            throw new IOException(
+                                "Bundled plugin changed while it was being committed."
+                            );
+                        }
+
+                        destStat = committedFingerprints.Stat;
+                    }
+
+                    WriteStamp(
+                        dest,
+                        new DeploymentStamp(
+                            sourceFingerprints.Content,
+                            sourceFingerprints.Stat,
+                            destStat
+                        )
+                    );
                 }
-
-                destStat = committedFingerprints.Stat;
+                finally
+                {
+                    // BundledPluginDeployer has always treated a published tree as
+                    // authoritative even when its post-commit verification reports a
+                    // failure; preserve that observable contract while still clearing
+                    // the journal and backup transactionally.
+                    commit.CompleteAsync().GetAwaiter().GetResult();
+                }
             }
-
-            WriteStamp(
-                dest,
-                new DeploymentStamp(
-                    sourceFingerprints.Content,
-                    sourceFingerprints.Stat,
-                    destStat
-                )
-            );
-            TryDeleteDirectory(backup);
+            finally
+            {
+                commit.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
             return true;
         }
         finally
@@ -212,85 +246,6 @@ public sealed class BundledPluginDeployer
             TryDeleteDirectory(stage);
             RemoveEmptyDirectory(pluginScratch);
             RemoveEmptyDirectory(scratchRoot);
-        }
-    }
-
-    private static void RecoverInterruptedDeployment(
-        string dest,
-        string pluginScratch,
-        string backup
-    )
-    {
-        if (!Directory.Exists(pluginScratch))
-        {
-            return;
-        }
-
-        foreach (
-            var abandonedStage in Directory
-                .GetDirectories(pluginScratch, "stage-*", SearchOption.TopDirectoryOnly)
-                .OrderBy(path => path, StringComparer.Ordinal)
-        )
-        {
-            Directory.Delete(abandonedStage, recursive: true);
-        }
-
-        if (!Directory.Exists(backup))
-        {
-            return;
-        }
-
-        if (Directory.Exists(dest))
-        {
-            Directory.Delete(backup, recursive: true);
-        }
-        else
-        {
-            Directory.Move(backup, dest);
-        }
-    }
-
-    private static string CreateStageDirectory(string pluginScratch)
-    {
-        string stage;
-        do
-        {
-            stage = Path.Join(pluginScratch, $"stage-{Guid.NewGuid():N}");
-        } while (Directory.Exists(stage) || File.Exists(stage));
-
-        Directory.CreateDirectory(stage);
-        return stage;
-    }
-
-    private static void CommitStage(string stage, string dest, string backup)
-    {
-        if (!Directory.Exists(dest))
-        {
-            Directory.Move(stage, dest);
-            return;
-        }
-
-        Directory.Move(dest, backup);
-        try
-        {
-            Directory.Move(stage, dest);
-        }
-        catch (Exception commitException)
-        {
-            try
-            {
-                Directory.Move(backup, dest);
-            }
-            catch (Exception rollbackException)
-            {
-                throw new AggregateException(
-                    "Failed to commit the bundled plugin and restore its previous deployment.",
-                    commitException,
-                    rollbackException
-                );
-            }
-
-            throw;
         }
     }
 

@@ -23,6 +23,9 @@ Describe 'Publish plugin release transaction' {
         $script:projectName = 'TypeWhisper.Plugin.Example'
         $script:pluginId = 'example'
         $script:pluginVersion = '2.0.0'
+        $script:platform = 'linux'
+        $script:rid = 'linux-x64'
+        $script:sdkAbi = 'net10.0'
         $script:releaseState = 'missing'
         $script:releaseTarget = $script:commitSha
         $script:releaseAssets = @()
@@ -67,14 +70,22 @@ Describe 'Publish plugin release transaction' {
         $script:zipPath = Join-Path $script:fixtureRoot "$($script:pluginId)-$($script:pluginVersion).zip"
         Compress-Archive -Path (Join-Path $script:packageRoot '*') -DestinationPath $script:zipPath
         $script:zipSize = (Get-Item -LiteralPath $script:zipPath).Length
+        # What `gh release download` hands back; tests override it to model a published
+        # asset that a later rebuild no longer reproduces byte for byte.
+        $script:publishedZipPath = $script:zipPath
 
         $oldRegistry = @(
             [ordered]@{
                 id = $script:pluginId
-                name = 'Example'
+                name = 'Stale name'
                 version = '1.0.0'
                 size = 10
                 downloadUrl = 'https://example.invalid/old.zip'
+                sha256 = 'stale'
+                platform = 'windows'
+                rid = 'win-x64'
+                sdkAbi = 'net8.0'
+                timestamp = '2000-01-01T00:00:00Z'
             }
         )
         ConvertTo-Json -InputObject $oldRegistry -Depth 10 |
@@ -174,6 +185,22 @@ Describe 'Publish plugin release transaction' {
                 return New-CommandResult
             }
 
+            if ($command -match '^release download ') {
+                $directoryIndex = $Arguments.IndexOf('--dir')
+                if ($directoryIndex -lt 0) {
+                    throw 'release download requires --dir'
+                }
+
+                Copy-Item `
+                    -LiteralPath $script:publishedZipPath `
+                    -Destination (
+                        Join-Path $Arguments[$directoryIndex + 1] `
+                            ([System.IO.Path]::GetFileName($script:zipPath))
+                    )
+                $script:events.Add('asset-downloaded')
+                return New-CommandResult
+            }
+
             if ($command -match '^release edit ') {
                 if ($script:releaseState -ne 'draft') {
                     throw 'publication attempted for a non-draft release'
@@ -194,6 +221,9 @@ Describe 'Publish plugin release transaction' {
             ProjectName = $script:projectName
             PluginVersion = $script:pluginVersion
             PluginId = $script:pluginId
+            Platform = $script:platform
+            Rid = $script:rid
+            SdkAbi = $script:sdkAbi
             ZipPath = $script:zipPath
             ManifestPath = $script:manifestPath
             RegistryWorktreePath = $script:worktreePath
@@ -234,6 +264,16 @@ Describe 'Publish plugin release transaction' {
             ConvertFrom-Json
         $registry[0].version | Should -Be $script:pluginVersion
         [long]$registry[0].size | Should -Be $script:zipSize
+        $registry[0].name | Should -Be 'Example'
+        $registry[0].platform | Should -Be $script:platform
+        $registry[0].rid | Should -Be $script:rid
+        $registry[0].sdkAbi | Should -Be $script:sdkAbi
+        $registry[0].sha256 | Should -Be (
+            (Get-FileHash -LiteralPath $script:zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        )
+        [DateTimeOffset]::Parse([string]$registry[0].timestamp) | Should -BeGreaterThan (
+            [DateTimeOffset]'2025-01-01T00:00:00Z'
+        )
     }
 
     It 'repairs the registry for a verified existing public release without recreating it' {
@@ -253,6 +293,42 @@ Describe 'Publish plugin release transaction' {
         @($script:ghCalls | Where-Object { $_ -match '^release create ' }).Count | Should -Be 0
         @($script:ghCalls | Where-Object { $_ -match '^release upload ' }).Count | Should -Be 0
         @($script:ghCalls | Where-Object { $_ -match '^release edit ' }).Count | Should -Be 0
+    }
+
+    It 'records the published asset hash when the rebuild is not byte-identical' {
+        $republishedRoot = Join-Path $script:fixtureRoot 'republished'
+        Copy-Item -LiteralPath $script:packageRoot -Destination $republishedRoot -Recurse
+        Get-ChildItem -LiteralPath $republishedRoot -File | ForEach-Object {
+            $_.LastWriteTime = $_.LastWriteTime.AddDays(-30)
+        }
+        $publishedZipPath = Join-Path $script:fixtureRoot 'published.zip'
+        Compress-Archive -Path (Join-Path $republishedRoot '*') -DestinationPath $publishedZipPath
+        $script:publishedZipPath = $publishedZipPath
+
+        $publishedSha256 = (
+            Get-FileHash -LiteralPath $publishedZipPath -Algorithm SHA256
+        ).Hash.ToLowerInvariant()
+        $localSha256 = (
+            Get-FileHash -LiteralPath $script:zipPath -Algorithm SHA256
+        ).Hash.ToLowerInvariant()
+        # Only the stored timestamps differ, so the two archives must be the same length.
+        (Get-Item -LiteralPath $publishedZipPath).Length | Should -Be $script:zipSize
+        $publishedSha256 | Should -Not -Be $localSha256
+
+        $script:releaseState = 'public'
+        $script:releaseAssets = @(
+            [ordered]@{
+                name = [System.IO.Path]::GetFileName($script:zipPath)
+                size = $script:zipSize
+                state = 'uploaded'
+            }
+        )
+
+        Invoke-PluginReleaseTransaction @script:transactionParameters
+
+        $registry = Get-Content -LiteralPath (Join-Path $script:worktreePath 'plugins.json') -Raw |
+            ConvertFrom-Json
+        $registry[0].sha256 | Should -Be $publishedSha256
     }
 
     It 'refuses to downgrade the registry when a newer version is already published' {

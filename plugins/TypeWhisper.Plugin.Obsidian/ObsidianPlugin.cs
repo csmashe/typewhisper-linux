@@ -34,7 +34,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
 
     public string PluginId => "com.typewhisper.obsidian";
     public string PluginName => "Obsidian";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public string ActionId => "save-to-obsidian";
     public string ActionName => "Save to Obsidian";

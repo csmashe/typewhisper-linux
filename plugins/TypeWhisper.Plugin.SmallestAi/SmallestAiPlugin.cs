@@ -52,7 +52,7 @@ public sealed class SmallestAiPlugin
 
     public string PluginId => "com.typewhisper.smallest-ai";
     public string PluginName => "Smallest AI Pulse";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

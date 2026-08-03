@@ -592,13 +592,13 @@ public sealed class PluginManager : IDisposable
         RebuildCapabilityIndices();
     }
 
-    public async Task LoadPluginFromDirectoryAsync(string pluginDirectory, bool activate)
+    public async Task<bool> LoadPluginFromDirectoryAsync(string pluginDirectory, bool activate)
     {
         var plugin = _loader.LoadPlugin(pluginDirectory);
         if (plugin is null)
         {
             Trace.WriteLine($"[PluginManager] Failed to load plugin from {pluginDirectory}");
-            return;
+            return false;
         }
 
         // Unload any existing plugin with the same Id to avoid leaking host services or load context.
@@ -620,11 +620,17 @@ public sealed class PluginManager : IDisposable
 
         if (activate)
         {
-            await ActivatePluginAsync(plugin);
+            if (!await ActivatePluginAsync(plugin))
+            {
+                await UnloadPluginAsync(plugin.Manifest.Id);
+                return false;
+            }
+
             PersistEnabledState(plugin.Manifest.Id, true);
         }
 
         RebuildCapabilityIndices();
+        return true;
     }
 
     public ITtsProviderPlugin? GetTtsProvider(string providerId)

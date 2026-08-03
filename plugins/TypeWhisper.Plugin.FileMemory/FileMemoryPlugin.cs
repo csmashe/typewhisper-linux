@@ -14,7 +14,7 @@ public sealed class FileMemoryPlugin : IMemoryStoragePlugin
 
     public string PluginId => "com.typewhisper.file-memory";
     public string PluginName => "File Memory";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public Task ActivateAsync(IPluginHostServices host)
     {

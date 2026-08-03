@@ -123,7 +123,7 @@ public sealed class SherpaOnnxPlugin
 
     public string PluginId => "com.typewhisper.sherpa-onnx";
     public string PluginName => "Local Models (sherpa-onnx)";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public string ProviderId => "sherpa-onnx";
     public string ProviderDisplayName => "Lokal (sherpa-onnx)";

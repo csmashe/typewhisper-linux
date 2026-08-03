@@ -50,6 +50,9 @@ public sealed class PluginRegistryServiceTests : IDisposable
                 Description = "A Linux-compatible plugin",
                 Size = 1024L,
                 DownloadUrl = "https://example.com/plugin.zip",
+                Platform = "linux",
+                Rid = "linux-x64",
+                SdkAbi = "net10.0",
                 RequiresApiKey = false,
             },
             new
@@ -61,6 +64,9 @@ public sealed class PluginRegistryServiceTests : IDisposable
                 Description = "A Windows-only plugin entry for this test",
                 Size = 1024L,
                 DownloadUrl = "https://example.com/live-transcript.zip",
+                Platform = "windows",
+                Rid = "win-x64",
+                SdkAbi = "net10.0",
                 RequiresApiKey = false,
             },
         };
@@ -90,6 +96,9 @@ public sealed class PluginRegistryServiceTests : IDisposable
                 Description = "D",
                 Size = 100L,
                 DownloadUrl = "u",
+                Platform = "linux",
+                Rid = "linux-x64",
+                SdkAbi = "net10.0",
                 RequiresApiKey = false,
             },
         };
@@ -157,6 +166,52 @@ public sealed class PluginRegistryServiceTests : IDisposable
         await service.FirstRunAutoInstallAsync();
 
         _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task FirstRunAutoInstallAsync_OfflineFetch_DoesNotCompleteAndRetries()
+    {
+        AppSettings? savedSettings = null;
+        _settings
+            .Setup(settings => settings.Current)
+            .Returns(new AppSettings { PluginFirstRunCompleted = false });
+        _settings
+            .Setup(settings => settings.Save(It.IsAny<AppSettings>()))
+            .Callback<AppSettings>(settings => savedSettings = settings);
+        var requests = 0;
+        var handler = new Mock<HttpMessageHandler>();
+        handler
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>()
+            )
+            .ReturnsAsync(() =>
+            {
+                requests++;
+                return requests == 1
+                    ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                    : new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent("[]"),
+                    };
+            });
+        var service = new PluginRegistryService(
+            CreateManager(),
+            _loader,
+            _settings.Object,
+            new HttpClient(handler.Object)
+        );
+
+        await service.FirstRunAutoInstallAsync();
+        Assert.Null(savedSettings);
+
+        await service.FirstRunAutoInstallAsync();
+
+        Assert.Equal(2, requests);
+        Assert.NotNull(savedSettings);
+        Assert.True(savedSettings!.PluginFirstRunCompleted);
     }
 
     private PluginManager CreateManager()

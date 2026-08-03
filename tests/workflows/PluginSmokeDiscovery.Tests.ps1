@@ -48,6 +48,15 @@ try {
     Set-Content -LiteralPath $fullPath -Value '<Project />'
   }
 
+  $catalogPath = Join-Path $workspaceRoot 'plugins/catalog.json'
+  $catalog = [ordered]@{
+    schemaVersion = 1
+    plugins = @(
+      $projectPaths | ForEach-Object { [ordered]@{ projectPath = $_ } }
+    )
+  }
+  $catalog | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $catalogPath
+
   $allProjectsJson = '["plugins/TypeWhisper.Plugin.SherpaOnnx/TypeWhisper.Plugin.SherpaOnnx.csproj","plugins/TypeWhisper.Plugin.WhisperCpp/TypeWhisper.Plugin.WhisperCpp.csproj"]'
   $whisperCppJson = '["plugins/TypeWhisper.Plugin.WhisperCpp/TypeWhisper.Plugin.WhisperCpp.csproj"]'
 
@@ -82,6 +91,24 @@ try {
     -ExpectedScanMode 'all'
 
   Invoke-DiscoveryCase `
+    -Name 'Catalog-tool change selects all projects' `
+    -ChangedFiles 'scripts/plugin-catalog.ps1' `
+    -ExpectedProjects $allProjectsJson `
+    -ExpectedScanMode 'all'
+
+  Invoke-DiscoveryCase `
+    -Name 'Catalog change selects all projects' `
+    -ChangedFiles 'plugins/catalog.json' `
+    -ExpectedProjects $allProjectsJson `
+    -ExpectedScanMode 'all'
+
+  Invoke-DiscoveryCase `
+    -Name 'Plugin build props change selects all projects' `
+    -ChangedFiles 'plugins/Directory.Build.props' `
+    -ExpectedProjects $allProjectsJson `
+    -ExpectedScanMode 'all'
+
+  Invoke-DiscoveryCase `
     -Name 'Non-plugin change selects no projects' `
     -ChangedFiles 'docs/plugin-development.md' `
     -ExpectedProjects '[]' `
@@ -102,7 +129,27 @@ try {
     -ExpectedProjects $allProjectsJson `
     -ExpectedScanMode 'all'
 
-  Write-Host 'All 8 plugin smoke discovery tests passed.'
+  $incompleteCatalog = [ordered]@{
+    schemaVersion = 1
+    plugins = @([ordered]@{ projectPath = $projectPaths[0] })
+  }
+  $incompleteCatalog | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $catalogPath
+  $catalogMismatchRejected = $false
+  try {
+    & $selectorPath `
+      -ChangedFiles @() `
+      -EventName 'push' `
+      -WorkspaceRoot $workspaceRoot | Out-Null
+  } catch {
+    if ($_.Exception.Message -notlike '*catalog and filesystem projects disagree*') {
+      throw
+    }
+    $catalogMismatchRejected = $true
+  }
+  Assert-Equal $true $catalogMismatchRejected 'Catalog/filesystem mismatch was not rejected.'
+  Write-Host 'PASS: Catalog/filesystem mismatch fails closed'
+
+  Write-Host 'All 12 plugin smoke discovery tests passed.'
 } finally {
   if (Test-Path -LiteralPath $testRoot) {
     Remove-Item -LiteralPath $testRoot -Recurse -Force

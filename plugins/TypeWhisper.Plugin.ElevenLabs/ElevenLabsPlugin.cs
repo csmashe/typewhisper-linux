@@ -147,7 +147,7 @@ public sealed class ElevenLabsPlugin
 
     public string PluginId => "com.typewhisper.elevenlabs";
     public string PluginName => "ElevenLabs";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

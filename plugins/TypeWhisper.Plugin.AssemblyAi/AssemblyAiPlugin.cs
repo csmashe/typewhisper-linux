@@ -31,7 +31,7 @@ public sealed class AssemblyAiPlugin
 
     public string PluginId => "com.typewhisper.assemblyai";
     public string PluginName => "AssemblyAI";
-    public string PluginVersion => "1.1.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

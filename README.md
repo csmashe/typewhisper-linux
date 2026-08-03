@@ -61,7 +61,10 @@ Whichever format you install, the first-run [Setup Wizard](https://github.com/cs
 
 ### Build from source
 
-Requires the **.NET 10 SDK**.
+Requires the **.NET 10 SDK** and **PowerShell 7** (`pwsh`). The build bundles the Linux
+plugins, and `plugins/catalog.json` — the authoritative plugin list — is read through
+`scripts/plugin-catalog.ps1`. Without `pwsh`, build with `-p:DeployBundledLinuxPlugins=false`
+to skip plugin bundling.
 
 ```bash
 git clone https://github.com/csmashe/typewhisper-linux.git

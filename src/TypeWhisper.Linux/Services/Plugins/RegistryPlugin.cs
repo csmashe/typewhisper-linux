@@ -19,6 +19,12 @@ public sealed record RegistryPlugin
     public string? Category { get; init; }
     public long Size { get; init; }
     public string DownloadUrl { get; init; } = "";
+    public string Sha256 { get; init; } = "";
+    public string Platform { get; init; } = "";
+    public string Rid { get; init; } = "";
+    public string SdkAbi { get; init; } = "";
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global  part of the plugin-registry JSON schema (record deserialized in PluginRegistryService); data-carrier field
+    public DateTimeOffset Timestamp { get; init; }
     // ReSharper disable once UnusedMember.Global  part of the plugin-registry JSON schema (RegistryPlugin deserialized in PluginRegistryService line 90); data-carrier field
     public string? IconSystemName { get; init; }
     // ReSharper disable once UnusedMember.Global  part of the plugin-registry JSON schema (RegistryPlugin deserialized in PluginRegistryService line 90); data-carrier field

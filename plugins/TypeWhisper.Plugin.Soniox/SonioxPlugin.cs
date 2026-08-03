@@ -75,7 +75,7 @@ public sealed class SonioxPlugin
 
     public string PluginId => "com.typewhisper.soniox";
     public string PluginName => "Soniox";
-    public string PluginVersion => "1.0.3";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

@@ -30,7 +30,7 @@ public sealed class DeepgramPlugin
 
     public string PluginId => "com.typewhisper.deepgram";
     public string PluginName => "Deepgram";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

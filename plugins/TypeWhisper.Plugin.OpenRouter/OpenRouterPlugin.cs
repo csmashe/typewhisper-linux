@@ -84,7 +84,7 @@ public sealed class OpenRouterPlugin
 
     public string PluginId => "com.typewhisper.openrouter";
     public string PluginName => "OpenRouter";
-    public string PluginVersion => "1.1.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

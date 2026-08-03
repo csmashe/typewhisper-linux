@@ -32,7 +32,7 @@ public sealed class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
 
     public string PluginId => "com.typewhisper.gemini";
     public string PluginName => "Google Gemini";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
