@@ -60,12 +60,16 @@ public partial class AdvancedSectionViewModel : ObservableObject
         _speechFeedback = speechFeedback;
         _pluginManager = pluginManager;
         _post = post ?? PostToUiThread;
-        // Every callback that writes bound properties goes through _post: plugin and provider
+        Refresh(settings.Current);
+        RefreshSpokenFeedbackProviders();
+
+        // Subscribe only once hydration has run. RefreshSpokenFeedbackProviders falls back to the
+        // default provider when the selected one is absent, and that write is not under the
+        // hydration guard — firing it against an un-hydrated selection would persist the default
+        // over the user's saved provider. Every callback goes through _post: plugin and provider
         // notifications can arrive on background threads, and they also touch the properties the
         // hydration flag guards, so they must be serialized with Refresh rather than race it.
         _speechFeedback.ProvidersChanged += (_, _) => _post(RefreshSpokenFeedbackProviders);
-        Refresh(settings.Current);
-        RefreshSpokenFeedbackProviders();
         _settings.SettingsChanged += OnSettingsChanged;
         _pluginManager.PluginStateChanged += (_, _) => _post(() =>
         {
