@@ -916,7 +916,10 @@ public sealed partial class BrowserAccessibilitySetupHelper
     internal static IEnumerable<string> LauncherSourceDirectories()
     {
         var dataDirs = Environment.GetEnvironmentVariable("XDG_DATA_DIRS");
-        var roots = new List<string> { Path.Join(DataHome(), "flatpak", "exports", "share") };
+        var roots = new List<string>
+        {
+            Path.Join(XdgPaths.ResolveDataHome(), "flatpak", "exports", "share"),
+        };
         roots.AddRange(
             string.IsNullOrEmpty(dataDirs)
                 ? ["/usr/local/share", "/usr/share"]
@@ -1135,30 +1138,14 @@ public sealed partial class BrowserAccessibilitySetupHelper
         return Path.Join(home, ".config", "environment.d", EnvFileName);
     }
 
-    /// <summary>
-    ///     The user's XDG data home, resolved as
-    ///     <see cref="Hotkey.DeSetup.KdeShortcutWriter" /> does. A shadow launcher
-    ///     written under a data home the session does not read never reaches the
-    ///     application menu, so setup would report success while changing nothing.
-    /// </summary>
-    private static string DataHome()
-    {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var xdg = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
-        // A relative value is invalid per the spec, and would resolve against the CWD.
-        return string.IsNullOrEmpty(xdg) || !Path.IsPathRooted(xdg)
-            ? Path.Join(home, ".local", "share")
-            : xdg;
-    }
-
     private static string UserApplicationsDir()
     {
-        return Path.Join(DataHome(), "applications");
+        return Path.Join(XdgPaths.ResolveDataHome(), "applications");
     }
 
     private static string LauncherBackupDir()
     {
-        return Path.Join(DataHome(), "typewhisper", "launcher-backups");
+        return Path.Join(XdgPaths.ResolveDataHome(), "typewhisper", "launcher-backups");
     }
 
     public sealed record Status(

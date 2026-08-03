@@ -1,3 +1,4 @@
+using TypeWhisper.Core;
 using TypeWhisper.Linux.Services;
 using Xunit;
 
@@ -24,6 +25,9 @@ public sealed class BrowserAccessibilityLauncherDiscoveryTests : IDisposable
 
     public BrowserAccessibilityLauncherDiscoveryTests()
     {
+        // BasePath freezes on first access from these same env vars; touch it before
+        // redirecting them so this class cannot pin it to a temp dir.
+        _ = TypeWhisperEnvironment.BasePath;
         Directory.CreateDirectory(_tempDir);
         // An isolated HOME keeps the developer's real browsers out of the assertions.
         Environment.SetEnvironmentVariable("HOME", _tempDir);
