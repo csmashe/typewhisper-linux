@@ -17,6 +17,7 @@ namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 public sealed class GnomeShortcutWriter : IDeShortcutWriter
 {
     private const int MaxListMutationAttempts = 3;
+    private const int MaxSnapshotAttempts = 5;
     private const string MediaKeysSchema = "org.gnome.settings-daemon.plugins.media-keys";
 
     private const string CustomKeybindingSchema =
@@ -27,6 +28,11 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
     private static readonly TimeSpan s_gsettingsTimeout = TimeSpan.FromSeconds(5);
 
     private readonly string _backupDirectory;
+
+    // The writer is a DI singleton and the Shortcuts panel exposes install and remove as
+    // separate commands, so one flow could otherwise roll back the other's half-published path.
+    // Cross-process edits are separate, handled by the read/confirm/retry loop in MutateListAsync.
+    private readonly SemaphoreSlim _mutationGate = new(1, 1);
     private readonly IProcessRunner _processRunner;
 
     public GnomeShortcutWriter()
@@ -89,6 +95,22 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
 
     public async Task<DeShortcutWriteResult> WriteAsync(DeShortcutSpec spec, CancellationToken ct)
     {
+        await _mutationGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await WriteLockedAsync(spec, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
+    }
+
+    private async Task<DeShortcutWriteResult> WriteLockedAsync(
+        DeShortcutSpec spec,
+        CancellationToken ct
+    )
+    {
         var path = BuildCustomPath(spec.ShortcutId);
         var mutation = await MutateListAsync(path, add: true, ct).ConfigureAwait(false);
         if (mutation.Failure is not null)
@@ -109,28 +131,44 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
 
         // Set name/command/binding only after the complete-list add is stable.
         var schemaWithPath = $"{CustomKeybindingSchema}:{path}";
-        foreach (
-            var (key, value) in new[]
-            {
-                ("name", spec.DisplayName), ("command", spec.OnPressCommand),
-                ("binding", FormatGnomeAccel(spec.Trigger))
-            }
-        )
+        try
         {
-            var (ok, _, err) = await RunAsync(
-                    "gsettings",
-                    ["set", schemaWithPath, key, value],
-                    ct
-                )
-                .ConfigureAwait(false);
-            if (!ok)
+            foreach (
+                var (key, value) in new[]
+                {
+                    ("name", spec.DisplayName), ("command", spec.OnPressCommand),
+                    ("binding", FormatGnomeAccel(spec.Trigger))
+                }
+            )
             {
+                var (ok, _, err) = await RunAsync(
+                        "gsettings",
+                        ["set", schemaWithPath, key, value],
+                        ct
+                    )
+                    .ConfigureAwait(false);
+                if (ok)
+                {
+                    continue;
+                }
+
+                var cleanup = await TryUnpublishAddedPathAsync(spec, path, mutation.Changed)
+                    .ConfigureAwait(false);
+                // The cleanup writes its own list snapshot; FilesChanged must report it.
+                changed.AddRange(cleanup.FilesChanged);
                 return new DeShortcutWriteResult(
                     false,
                     $"Could not set {key}: {err.Trim()}",
-                    changed
+                    changed,
+                    cleanup.Unpublished ? null : LeftoverEntryWarning(path)
                 );
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation has no result to carry a warning; the helper traces a failed cleanup.
+            await TryUnpublishAddedPathAsync(spec, path, mutation.Changed).ConfigureAwait(false);
+            throw;
         }
 
         changed.Add(schemaWithPath);
@@ -145,6 +183,22 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
     }
 
     public async Task<DeShortcutWriteResult> RemoveAsync(string shortcutId, CancellationToken ct)
+    {
+        await _mutationGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await RemoveLockedAsync(shortcutId, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
+    }
+
+    private async Task<DeShortcutWriteResult> RemoveLockedAsync(
+        string shortcutId,
+        CancellationToken ct
+    )
     {
         var path = BuildCustomPath(shortcutId);
         var mutation = await MutateListAsync(path, add: false, ct).ConfigureAwait(false);
@@ -187,6 +241,82 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             "GNOME shortcut removed.",
             removed
         );
+    }
+
+    /// <summary>
+    ///     Drops a path this call just added when its name/command/binding writes didn't land,
+    ///     so a failed or cancelled install leaves no empty custom shortcut in GNOME's Settings
+    ///     UI. An already-listed path is left alone — it is the user's entry, not this call's
+    ///     litter. Reports <c>Unpublished: false</c> if it is still published, plus any backup
+    ///     the cleanup wrote.
+    /// </summary>
+    private async Task<UnpublishOutcome> TryUnpublishAddedPathAsync(
+        DeShortcutSpec spec,
+        string path,
+        bool addedByThisCall
+    )
+    {
+        if (!addedByThisCall)
+        {
+            return new UnpublishOutcome(true, []);
+        }
+
+        try
+        {
+            // CancellationToken.None throughout: the caller's token may already be cancelled and
+            // this cleanup is what makes that safe. Each call is still bounded by the timeout.
+            // A fully configured entry is no longer this call's litter — another writer completed
+            // the install between our failed property write and this cleanup, so leave it alone.
+            if (await IsInstalledAsync(spec, CancellationToken.None).ConfigureAwait(false))
+            {
+                return new UnpublishOutcome(true, []);
+            }
+
+            var cleanup = await MutateListAsync(path, add: false, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (cleanup.Failure is null)
+            {
+                return new UnpublishOutcome(
+                    true,
+                    cleanup.BackupPath is null ? [] : [cleanup.BackupPath]
+                );
+            }
+
+            System.Diagnostics.Trace.WriteLine(
+                $"[GnomeShortcutWriter] Could not unpublish {path}: {cleanup.Failure.UserMessage}"
+            );
+            return new UnpublishOutcome(false, cleanup.Failure.FilesChanged);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.WriteLine(
+                $"[GnomeShortcutWriter] Could not unpublish {path} after a failed install: {ex.Message}"
+            );
+            return new UnpublishOutcome(false, []);
+        }
+    }
+
+    private sealed record UnpublishOutcome(bool Unpublished, IReadOnlyList<string> FilesChanged);
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.WriteLine(
+                $"[GnomeShortcutWriter] Could not delete partial snapshot {path}: {ex.Message}"
+            );
+        }
+    }
+
+    private static string LeftoverEntryWarning(string path)
+    {
+        return $"The half-configured entry at {path} is still listed and could not be removed. "
+               + "Remove it under Settings → Keyboard → Custom Shortcuts, or retry once the "
+               + "settings backend is writable again.";
     }
 
     private async Task<ListMutationOutcome> MutateListAsync(
@@ -254,7 +384,9 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             }
             else
             {
-                list.Remove(path);
+                // RemoveAll, not Remove: an externally duplicated entry would otherwise survive
+                // removal and leave the shortcut registered.
+                list.RemoveAll(entry => string.Equals(entry, path, StringComparison.Ordinal));
             }
 
             // Compare the exact raw value immediately before replacing the complete list.
@@ -619,18 +751,60 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         try
         {
             Directory.CreateDirectory(_backupDirectory);
-            var stamp = DateTime.UtcNow.ToString(
-                "yyyyMMdd-HHmmss-fffffff",
-                CultureInfo.InvariantCulture
-            );
-            var file = Path.Join(_backupDirectory, $"gnome-keybindings-{stamp}.txt");
-            var contents =
+            var contents = Encoding.UTF8.GetBytes(
                 $"# GNOME custom-keybindings list snapshot taken {DateTime.UtcNow:O}\n"
                 + $"# Restore with:\n"
                 + $"#   gsettings set {MediaKeysSchema} {ListKey} \"<value below>\"\n"
-                + $"\n{currentValue.TrimEnd()}\n";
-            await File.WriteAllTextAsync(file, contents, ct).ConfigureAwait(false);
-            return file;
+                + $"\n{currentValue.TrimEnd()}\n"
+            );
+
+            // CreateNew reserves the name, so a colliding stamp (a second instance, or a clock
+            // step) can never overwrite a snapshot the user may still need.
+            for (var attempt = 0; attempt < MaxSnapshotAttempts; attempt++)
+            {
+                var stamp = DateTime.UtcNow.ToString(
+                    "yyyyMMdd-HHmmss-fffffff",
+                    CultureInfo.InvariantCulture
+                );
+                var suffix = attempt == 0
+                    ? ""
+                    : $"-{attempt.ToString(CultureInfo.InvariantCulture)}";
+                var file = Path.Join(_backupDirectory, $"gnome-keybindings-{stamp}{suffix}.txt");
+                FileStream stream;
+                try
+                {
+                    stream = new FileStream(
+                        file,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None
+                    );
+                }
+                catch (IOException) when (File.Exists(file))
+                {
+                    // Name already taken — regenerate and retry. Only the create step retries:
+                    // a write that fails after the file exists is a real failure, not a collision.
+                    continue;
+                }
+
+                try
+                {
+                    await using (stream)
+                    {
+                        await stream.WriteAsync(contents, ct).ConfigureAwait(false);
+                    }
+
+                    return file;
+                }
+                catch
+                {
+                    // Never leave a truncated file behind — it would read as a valid snapshot.
+                    TryDeleteFile(file);
+                    throw;
+                }
+            }
+
+            return null;
         }
         catch (OperationCanceledException)
         {

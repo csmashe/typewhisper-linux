@@ -346,6 +346,190 @@ public sealed class GnomeShortcutWriterTests : IDisposable
     }
 
     [Fact]
+    public async Task WriteAsync_PropertySetFailure_UnpublishesThePathItJustAdded()
+    {
+        var runner = new StatefulGSettingsRunner(
+            GnomeShortcutWriter.FormatGSettingsList(["/old-a/"]),
+            resultOverride: args => args is ["set", _, "command", _]
+                ? new ProcessRunResult(true, false, 1, string.Empty, "dconf write failed")
+                : null
+        );
+        var writer = new GnomeShortcutWriter(
+            runner,
+            Path.Join(_tempDirectory, "rollback-backups")
+        );
+
+        var result = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        // The half-written entry must not stay listed, or GNOME shows an empty custom shortcut.
+        Assert.Equal(
+            "/old-a/",
+            Assert.Single(GnomeShortcutWriter.ParseGSettingsList(runner.CurrentRaw))
+        );
+    }
+
+    [Fact]
+    public async Task WriteAsync_PropertySetFailure_KeepsAnEntryAnotherWriterFullyConfigured()
+    {
+        var spec = CreateSpec();
+        var runner = new StatefulGSettingsRunner(
+            GnomeShortcutWriter.FormatGSettingsList(["/old-a/"]),
+            resultOverride: args => args switch
+            {
+                ["set", _, "command", _] =>
+                    new ProcessRunResult(true, false, 1, string.Empty, "dconf write failed"),
+                // A competing install completed between our failed set and the cleanup.
+                ["get", _, "command"] =>
+                    new ProcessRunResult(true, false, 0, $"'{spec.OnPressCommand}'", string.Empty),
+                ["get", _, "binding"] => new ProcessRunResult(
+                    true,
+                    false,
+                    0,
+                    $"'{GnomeShortcutWriter.FormatGnomeAccel(spec.Trigger)}'",
+                    string.Empty
+                ),
+                _ => null
+            }
+        );
+        var writer = new GnomeShortcutWriter(
+            runner,
+            Path.Join(_tempDirectory, "competing-install-backups")
+        );
+        var managedPath = GetManagedPath(writer, spec);
+
+        var result = await writer.WriteAsync(spec, CancellationToken.None);
+
+        Assert.False(result.Success);
+        // Rolling back would have deleted the other caller's working shortcut.
+        Assert.Contains(managedPath, GnomeShortcutWriter.ParseGSettingsList(runner.CurrentRaw));
+        Assert.Null(result.Warning);
+    }
+
+    [Fact]
+    public async Task WriteAsync_RollbackListSetFails_WarnsThatTheEntryIsStillListed()
+    {
+        var listSets = 0;
+        var runner = new StatefulGSettingsRunner(
+            GnomeShortcutWriter.FormatGSettingsList(["/old-a/"]),
+            resultOverride: args =>
+            {
+                if (args is ["set", _, "command", _])
+                {
+                    return new ProcessRunResult(true, false, 1, string.Empty, "dconf write failed");
+                }
+
+                // The same outage that broke the property write breaks the cleanup's list write.
+                return IsListSet(args) && ++listSets == 2
+                    ? new ProcessRunResult(true, false, 1, string.Empty, "dconf list write failed")
+                    : null;
+            }
+        );
+        var writer = new GnomeShortcutWriter(
+            runner,
+            Path.Join(_tempDirectory, "rollback-set-fail-backups")
+        );
+        var managedPath = GetManagedPath(writer, CreateSpec());
+
+        var result = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.Warning);
+        Assert.Contains(managedPath, result.Warning);
+        Assert.Contains(managedPath, GnomeShortcutWriter.ParseGSettingsList(runner.CurrentRaw));
+    }
+
+    [Fact]
+    public async Task WriteAsync_RollbackListReadFails_WarnsThatTheEntryIsStillListed()
+    {
+        var listGets = 0;
+        var runner = new StatefulGSettingsRunner(
+            GnomeShortcutWriter.FormatGSettingsList(["/old-a/"]),
+            resultOverride: args =>
+            {
+                if (args is ["set", _, "command", _])
+                {
+                    return new ProcessRunResult(true, false, 1, string.Empty, "dconf write failed");
+                }
+
+                // The add's read and confirm succeed; the cleanup's read does not.
+                return IsListGet(args) && ++listGets > 2
+                    ? new ProcessRunResult(true, false, 1, string.Empty, "dconf read failed")
+                    : null;
+            }
+        );
+        var writer = new GnomeShortcutWriter(
+            runner,
+            Path.Join(_tempDirectory, "rollback-read-fail-backups")
+        );
+        var managedPath = GetManagedPath(writer, CreateSpec());
+
+        var result = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.Warning);
+        Assert.Contains(managedPath, result.Warning);
+        Assert.Contains(managedPath, GnomeShortcutWriter.ParseGSettingsList(runner.CurrentRaw));
+    }
+
+    [Fact]
+    public async Task WriteAsync_PropertySetFailure_LeavesAPreExistingPathListed()
+    {
+        var spec = CreateSpec();
+        var pathProbe = new GnomeShortcutWriter(
+            new StatefulGSettingsRunner("[]"),
+            Path.Join(_tempDirectory, "pre-existing-probe-backups")
+        );
+        var managedPath = GetManagedPath(pathProbe, spec);
+        var runner = new StatefulGSettingsRunner(
+            GnomeShortcutWriter.FormatGSettingsList(["/old-a/", managedPath]),
+            resultOverride: args => args is ["set", _, "command", _]
+                ? new ProcessRunResult(true, false, 1, string.Empty, "dconf write failed")
+                : null
+        );
+        var writer = new GnomeShortcutWriter(
+            runner,
+            Path.Join(_tempDirectory, "pre-existing-backups")
+        );
+
+        var result = await writer.WriteAsync(spec, CancellationToken.None);
+
+        Assert.False(result.Success);
+        // This call didn't publish the path, so the user's existing entry stays put.
+        Assert.Equal(
+            new[] { "/old-a/", managedPath },
+            GnomeShortcutWriter.ParseGSettingsList(runner.CurrentRaw)
+        );
+    }
+
+    [Fact]
+    public async Task RemoveAsync_DuplicatedManagedPath_RemovesEveryOccurrence()
+    {
+        var spec = CreateSpec();
+        var pathProbe = new GnomeShortcutWriter(
+            new StatefulGSettingsRunner("[]"),
+            Path.Join(_tempDirectory, "duplicate-probe-backups")
+        );
+        var managedPath = GetManagedPath(pathProbe, spec);
+        // An external edit (dconf-editor, a restored backup) can list the path twice.
+        var runner = new StatefulGSettingsRunner(
+            GnomeShortcutWriter.FormatGSettingsList([managedPath, "/old-a/", managedPath])
+        );
+        var writer = new GnomeShortcutWriter(
+            runner,
+            Path.Join(_tempDirectory, "duplicate-backups")
+        );
+
+        var result = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(
+            "/old-a/",
+            Assert.Single(GnomeShortcutWriter.ParseGSettingsList(runner.CurrentRaw))
+        );
+    }
+
+    [Fact]
     public async Task RemoveAsync_ConcurrentListAddition_RetriesMergeAndBacksUpLatestList()
     {
         var spec = CreateSpec();
