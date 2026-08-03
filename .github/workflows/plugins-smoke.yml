@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   discover-plugins:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       projects: ${{ steps.discover.outputs.projects }}
       has_projects: ${{ steps.discover.outputs.has_projects }}
@@ -33,19 +33,8 @@ jobs:
       - name: Run plugin release transaction regression
         shell: pwsh
         run: |
-          $minimumPesterVersion = [version]'5.5.0'
-          $pester = Get-Module -ListAvailable Pester |
-            Where-Object Version -ge $minimumPesterVersion |
-            Sort-Object Version -Descending |
-            Select-Object -First 1
-          if (-not $pester) {
-            Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
-            $pester = Get-Module -ListAvailable Pester |
-              Where-Object Version -ge $minimumPesterVersion |
-              Sort-Object Version -Descending |
-              Select-Object -First 1
-          }
-          Import-Module $pester.Path -Force
+          Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
+          Import-Module Pester -RequiredVersion 5.7.1 -Force
 
           $result = Invoke-Pester `
             -Path tests/workflows/PublishPluginReleaseTransaction.Tests.ps1 `
@@ -83,7 +72,7 @@ jobs:
           "scan_mode=$($result.ScanMode)" >> $env:GITHUB_OUTPUT
 
   validate-metadata:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v7
@@ -138,7 +127,7 @@ jobs:
   build-plugin:
     needs: discover-plugins
     if: needs.discover-plugins.outputs.has_projects == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -168,11 +157,13 @@ jobs:
 
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
           cache: true
           cache-dependency-path: |
             **/*.csproj
             Directory.Build.props
+            tests/Directory.Packages.props
+            **/packages.lock.json
 
       - name: Create artifact directory
         shell: pwsh
