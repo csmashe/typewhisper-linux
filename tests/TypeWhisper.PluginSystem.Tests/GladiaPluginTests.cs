@@ -685,22 +685,37 @@ public class GladiaPluginTests
     }
 
     [Theory]
+    // No id means no job to clean up; a valid id with a bad result_url must delete it.
     [InlineData(
         """{ "result_url": "https://results.gladia.test/custom/jobs/job-123" }""",
-        "id"
+        "id",
+        0
     )]
-    [InlineData("""{ "id": "job-123" }""", "result_url")]
+    [InlineData("""{ "id": "job-123" }""", "result_url", 1)]
     public async Task TranscribeAsync_InitiationRequiresIdAndResultUrl(
         string initiationJson,
-        string missingField
+        string missingField,
+        int expectedDeleteCount
     )
     {
+        var deleteCount = 0;
         var handler = new CapturingHandler((request, _) =>
         {
             if (request.Method == HttpMethod.Post
                 && request.RequestUri?.AbsolutePath == "/v2/upload")
             {
                 return JsonResponse("""{ "audio_url": "https://api.gladia.io/file/upload-456" }""");
+            }
+
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
+            if (request.Method == HttpMethod.Delete)
+            {
+                Assert.Equal(
+                    "https://api.gladia.io/v2/pre-recorded/job-123",
+                    request.RequestUri?.ToString()
+                );
+                deleteCount++;
+                return JsonResponse("{}", HttpStatusCode.Accepted);
             }
 
             return request.Method == HttpMethod.Post
@@ -724,21 +739,34 @@ public class GladiaPluginTests
         );
 
         Assert.Contains(missingField, exception.Message);
+        Assert.Equal(expectedDeleteCount, deleteCount);
     }
 
     [Theory]
     [InlineData("http://results.gladia.test/custom/jobs/job-123?token=returned")]
     [InlineData("ftp://results.gladia.test/custom/jobs/job-123")]
     [InlineData("not-a-url")]
-    public async Task TranscribeAsync_RejectsNonHttpsResultUrl(string resultUrl)
+    public async Task TranscribeAsync_RejectsNonHttpsResultUrlAndDeletesJob(string resultUrl)
     {
         // Non-HTTPS result_url would leak x-gladia-key in plaintext during polling; must be rejected.
+        var deleteCount = 0;
         var handler = new CapturingHandler((request, _) =>
         {
             if (request.Method == HttpMethod.Post
                 && request.RequestUri?.AbsolutePath == "/v2/upload")
             {
                 return JsonResponse("""{ "audio_url": "https://api.gladia.io/file/upload-456" }""");
+            }
+
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
+            if (request.Method == HttpMethod.Delete)
+            {
+                Assert.Equal(
+                    "https://api.gladia.io/v2/pre-recorded/job-123",
+                    request.RequestUri?.ToString()
+                );
+                deleteCount++;
+                return JsonResponse("{}", HttpStatusCode.Accepted);
             }
 
             return request.Method == HttpMethod.Post
@@ -765,6 +793,7 @@ public class GladiaPluginTests
         );
 
         Assert.Contains("result_url", exception.Message);
+        Assert.Equal(1, deleteCount);
     }
 
     [Fact]
