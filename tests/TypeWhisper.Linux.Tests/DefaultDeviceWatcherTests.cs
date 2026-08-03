@@ -382,6 +382,10 @@ internal sealed class ManualTimeProvider : TimeProvider
 
     public override long GetTimestamp() => _nowTicks;
 
+    // GetTimestamp hands out TimeSpan ticks, so the frequency has to match or
+    // GetElapsedTime would scale them by Stopwatch.Frequency.
+    public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
     private sealed class ManualTimer(
         ManualTimeProvider owner,
         TimerCallback callback,

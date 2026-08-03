@@ -14,21 +14,21 @@ internal static class GermanNumberWordParser
     {
         ["null"] = 0, ["eins"] = 1, ["ein"] = 1, ["eine"] = 1, ["einen"] = 1, ["einem"] = 1, ["einer"] = 1,
         ["zwei"] = 2, ["drei"] = 3, ["vier"] = 4, ["funf"] = 5, ["fuenf"] = 5,
-        ["sechs"] = 6, ["sieben"] = 7, ["acht"] = 8, ["neun"] = 9
+        ["sechs"] = 6, ["sieben"] = 7, ["acht"] = 8, ["neun"] = 9,
     };
 
     private static readonly Dictionary<string, int> s_teens = new(StringComparer.Ordinal)
     {
         ["zehn"] = 10, ["elf"] = 11, ["zwolf"] = 12, ["zwoelf"] = 12, ["dreizehn"] = 13, ["vierzehn"] = 14,
         ["funfzehn"] = 15, ["fuenfzehn"] = 15, ["sechzehn"] = 16, ["siebzehn"] = 17,
-        ["achtzehn"] = 18, ["neunzehn"] = 19
+        ["achtzehn"] = 18, ["neunzehn"] = 19,
     };
 
     private static readonly Dictionary<string, int> s_tens = new(StringComparer.Ordinal)
     {
         ["zwanzig"] = 20, ["dreissig"] = 30, ["dreizig"] = 30, ["vierzig"] = 40,
         ["funfzig"] = 50, ["fuenfzig"] = 50, ["sechzig"] = 60, ["siebzig"] = 70,
-        ["achtzig"] = 80, ["neunzig"] = 90
+        ["achtzig"] = 80, ["neunzig"] = 90,
     };
 
     public static NumberWordNormalizer.ParsedWords? Parse(IReadOnlyList<string> words)
@@ -86,9 +86,11 @@ internal static class GermanNumberWordParser
         {
             var word = words[index];
 
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- the branches test
+            // different subjects (connector plus parser state, then bare scale words), so a
+            // switch on `word` could not carry them.
             if (word == "und" &&
-                current > 0 &&
-                current < 10 &&
+                current is > 0 and < 10 &&
                 index + 1 < words.Count &&
                 s_tens.TryGetValue(words[index + 1], out var tenValue))
             {
@@ -110,9 +112,10 @@ internal static class GermanNumberWordParser
 
             if (word is "tausend" or "million" or "millionen")
             {
-                // A plural scale word ("millionen") is a count noun without a leading number
-                // ("Millionen von Menschen"); only treat it as a number when a count precedes it.
-                if (word == "millionen" && current == 0)
+                // Without a leading count these are nouns, not numbers ("Millionen von
+                // Menschen", "eine halbe Million"). "eine Million" still converts:
+                // AllowsArticleOne consumes the article as 1 before this branch is reached.
+                if (word is "million" or "millionen" && current == 0)
                     break;
 
                 var scale = word == "tausend" ? 1_000 : 1_000_000;
@@ -173,6 +176,8 @@ internal static class GermanNumberWordParser
         }
 
         var hundredIndex = word.IndexOf("hundert", StringComparison.Ordinal);
+        // ReSharper disable once InvertIf -- kept parallel to the "tausend" block above, which
+        // cannot be inverted; both decompose a fused word the same way.
         if (hundredIndex >= 0)
         {
             var prefix = word[..hundredIndex];
@@ -193,30 +198,24 @@ internal static class GermanNumberWordParser
             return direct;
 
         var undIndex = word.IndexOf("und", StringComparison.Ordinal);
-        if (undIndex >= 0)
-        {
-            var prefix = word[..undIndex];
-            var suffix = word[(undIndex + "und".Length)..];
-            if (DirectUnitValue(prefix, true) is { } unit &&
-                unit > 0 &&
-                unit < 10 &&
-                s_tens.TryGetValue(suffix, out var tenValue))
-            {
-                return unit + tenValue;
-            }
-        }
+        if (undIndex < 0)
+            return null;
 
-        return null;
+        var prefix = word[..undIndex];
+        var suffix = word[(undIndex + "und".Length)..];
+        return DirectUnitValue(prefix, true) is { } unit and > 0 and < 10 &&
+               s_tens.TryGetValue(suffix, out var tenValue)
+            ? unit + tenValue
+            : null;
     }
 
     private static int? DirectValue(string word, bool allowArticleOne) =>
-        DirectUnitValue(word, allowArticleOne) is { } unit
-            ? unit
-            : s_teens.TryGetValue(word, out var teen)
-                ? teen
-                : s_tens.TryGetValue(word, out var ten)
-                    ? ten
-                    : null;
+        DirectUnitValue(word, allowArticleOne)
+        ?? (s_teens.TryGetValue(word, out var teen)
+            ? teen
+            : s_tens.TryGetValue(word, out var ten)
+                ? ten
+                : null);
 
     private static int? DirectUnitValue(string word, bool allowArticleOne)
     {

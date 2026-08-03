@@ -13,25 +13,25 @@ internal static class EnglishNumberWordParser
     private static readonly Dictionary<string, int> s_unitValues = new(StringComparer.Ordinal)
     {
         ["zero"] = 0, ["one"] = 1, ["two"] = 2, ["three"] = 3, ["four"] = 4,
-        ["five"] = 5, ["six"] = 6, ["seven"] = 7, ["eight"] = 8, ["nine"] = 9
+        ["five"] = 5, ["six"] = 6, ["seven"] = 7, ["eight"] = 8, ["nine"] = 9,
     };
 
     private static readonly Dictionary<string, int> s_teenValues = new(StringComparer.Ordinal)
     {
         ["ten"] = 10, ["eleven"] = 11, ["twelve"] = 12, ["thirteen"] = 13, ["fourteen"] = 14,
-        ["fifteen"] = 15, ["sixteen"] = 16, ["seventeen"] = 17, ["eighteen"] = 18, ["nineteen"] = 19
+        ["fifteen"] = 15, ["sixteen"] = 16, ["seventeen"] = 17, ["eighteen"] = 18, ["nineteen"] = 19,
     };
 
     private static readonly Dictionary<string, int> s_tensValues = new(StringComparer.Ordinal)
     {
         ["twenty"] = 20, ["thirty"] = 30, ["forty"] = 40, ["fifty"] = 50,
-        ["sixty"] = 60, ["seventy"] = 70, ["eighty"] = 80, ["ninety"] = 90
+        ["sixty"] = 60, ["seventy"] = 70, ["eighty"] = 80, ["ninety"] = 90,
     };
 
     private static readonly Dictionary<string, int> s_scaleValues = new(StringComparer.Ordinal)
     {
         ["thousand"] = 1_000,
-        ["million"] = 1_000_000
+        ["million"] = 1_000_000,
     };
 
     public static NumberWordNormalizer.ParsedWords? Parse(IReadOnlyList<string> words)
@@ -99,6 +99,8 @@ internal static class EnglishNumberWordParser
                 index++;
 
             var nextGroup = ParseGroup(words, index);
+            // ReSharper disable once InvertIf -- last statement in the loop body; inverting
+            // only buys a trailing `continue`.
             if (nextGroup is not null)
             {
                 group = nextGroup;
@@ -137,9 +139,8 @@ internal static class EnglishNumberWordParser
             index++;
             consumed = true;
 
-            if (index < words.Count &&
-                s_unitValues.TryGetValue(words[index], out var unit) &&
-                unit > 0)
+            // ReSharper disable once InvertIf -- no early exit in the tens branch to invert toward.
+            if (index < words.Count && s_unitValues.TryGetValue(words[index], out var unit) && unit > 0)
             {
                 value += unit;
                 index++;

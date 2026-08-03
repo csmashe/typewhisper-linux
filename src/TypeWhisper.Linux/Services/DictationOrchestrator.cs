@@ -2042,9 +2042,13 @@ public sealed class DictationOrchestrator : IDisposable
                     RequireTranslationSuccess = !string.IsNullOrWhiteSpace(translationTarget),
                     EffectiveSourceLanguage = postProcessingLanguage,
                     DetectedLanguage = postProcessingLanguage,
-                    TranscriptionTask = translate
-                        ? TranscriptionTask.Translate
-                        : TranscriptionTask.Transcribe,
+                    // Same rule as postProcessingLanguage above: an engine that ignores the
+                    // translate task returns source-language text, and reporting Translate
+                    // would make number normalization treat it as English.
+                    TranscriptionTask =
+                        translate && engineSupportsTranslation
+                            ? TranscriptionTask.Translate
+                            : TranscriptionTask.Transcribe,
                     ConfiguredLanguage = languageHint,
                     TranscriptionNumberNormalizationEnabled =
                         _settings.Current.TranscriptionNumberNormalizationEnabled,

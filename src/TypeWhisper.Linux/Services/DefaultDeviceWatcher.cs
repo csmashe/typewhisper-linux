@@ -399,9 +399,11 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
         var psi = new ProcessStartInfo("pactl")
         {
             RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            // Deliberately NOT redirected: nothing here drains it, so a chatty pactl would
+            // fill the pipe buffer and block the child, stalling the event stream.
+            RedirectStandardError = false,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
         };
         psi.ArgumentList.Add("subscribe");
         // Force a stable, parseable locale for the event lines.

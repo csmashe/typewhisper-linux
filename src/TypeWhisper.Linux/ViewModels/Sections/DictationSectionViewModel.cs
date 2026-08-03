@@ -1498,7 +1498,7 @@ public partial class DictationSectionViewModel : ObservableObject
                 _settings.Current with
                 {
                     SelectedMicrophoneDevice = null,
-                    SelectedMicrophoneDeviceId = AppSettings.FollowSystemDefaultMicrophoneId
+                    SelectedMicrophoneDeviceId = AppSettings.FollowSystemDefaultMicrophoneId,
                 }
             );
             return;

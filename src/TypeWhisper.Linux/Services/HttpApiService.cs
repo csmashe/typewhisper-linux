@@ -919,6 +919,7 @@ public sealed partial class HttpApiService : IDisposable
         PluginTranscriptionResult result;
         string engineProviderId;
         string? selectedModelId;
+        bool engineSupportsTranslation;
 
         ModelManagerService.TranscriptionLease lease;
         try
@@ -942,7 +943,15 @@ public sealed partial class HttpApiService : IDisposable
             );
             engineProviderId = plugin.ProviderId;
             selectedModelId = plugin.SelectedModelId;
+            engineSupportsTranslation = plugin.SupportsTranslation;
         }
+
+        // An engine that ignores the translate task returns source-language text; reporting
+        // Translate downstream would make number normalization treat it as English.
+        var effectiveTask =
+            opts.Task == TranscriptionTask.Translate && engineSupportsTranslation
+                ? TranscriptionTask.Translate
+                : TranscriptionTask.Transcribe;
 
         var processed = await _pipeline.ProcessAsync(
             result.Text,
@@ -952,7 +961,7 @@ public sealed partial class HttpApiService : IDisposable
                     ? _vocabularyBoosting.Apply
                     : null,
                 DictionaryCorrector = _dictionary.ApplyCorrections,
-                TranscriptionTask = opts.Task,
+                TranscriptionTask = effectiveTask,
                 DetectedLanguage = result.DetectedLanguage,
                 ConfiguredLanguage = language,
                 ConfiguredLanguageCandidates = opts.LanguageHints,
