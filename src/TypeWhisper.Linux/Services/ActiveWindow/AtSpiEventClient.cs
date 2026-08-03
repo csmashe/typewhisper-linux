@@ -219,6 +219,12 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     private readonly Lock _focusLock = new();
     private readonly SemaphoreSlim _startGate = new(1, 1);
 
+    // Guards the {_disposed, _started, IsRunning} triple and the connection/subscription fields.
+    // Dispose is synchronous and must not block on _startGate (a shutdown landing mid-connect would
+    // stall on the bus), so it cannot serialize with a start that way; this lock is what keeps a
+    // start that raced disposal from republishing IsRunning = true over the torn-down connection.
+    private readonly Lock _lifecycleLock = new();
+
     // Guards _textChangedRefCount and _textChangedRegistered. A dedicated lock (not _focusLock) so
     // an acquire/release from a commit or paste path never contends with the focus-event fast path
     // on the dispatch thread.
@@ -288,26 +294,60 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
+        lock (_lifecycleLock)
         {
-            return;
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            // Consumers that must not start the listeners themselves gate on IsRunning; leaving it
+            // true after disposal would send them at a torn-down connection.
+            _started = false;
+            IsRunning = false;
         }
 
-        _disposed = true;
+        TearDownConnection();
+
+        // _startGate is deliberately NOT disposed: fire-and-forget reconciles and arms can still be
+        // mid-wait at shutdown, and a disposed semaphore would fault their WaitAsync or their
+        // finally's Release. SemaphoreSlim needs disposal only when its AvailableWaitHandle is used
+        // — same rationale as TargetAppCorrectionLearningService's listen gate.
+    }
+
+    // The single teardown point, so the startup-failure, stop, disposal and
+    // disposed-while-connecting paths can't drift apart. Detaches under the lock and disposes
+    // outside it, so racing callers can't double-dispose or run bus teardown while holding it.
+    private void TearDownConnection()
+    {
+        IDisposable? stateSubscription;
+        IDisposable? textSubscription;
+        IDisposable? registryOwnerSubscription;
+        DBusConnection? connection;
+        lock (_lifecycleLock)
+        {
+            stateSubscription = _stateSubscription;
+            textSubscription = _textSubscription;
+            registryOwnerSubscription = _registryOwnerSubscription;
+            connection = _connection;
+            _stateSubscription = null;
+            _textSubscription = null;
+            _registryOwnerSubscription = null;
+            _connection = null;
+        }
 
         try
         {
-            _stateSubscription?.Dispose();
-            _textSubscription?.Dispose();
-            _registryOwnerSubscription?.Dispose();
-            _connection?.Dispose();
+            stateSubscription?.Dispose();
+            textSubscription?.Dispose();
+            registryOwnerSubscription?.Dispose();
+            connection?.Dispose();
         }
         catch
         {
             // best effort — teardown of a dying bus connection must not throw.
         }
-
-        _startGate.Dispose();
     }
 
     public event Action<AtSpiElementRef>? FocusChanged;
@@ -336,6 +376,12 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     public async Task<bool> EnsureStartedAsync()
     {
+        // Fast path only — the authoritative check happens under the gate below.
+        if (_disposed)
+        {
+            return false;
+        }
+
         if (_started)
         {
             return IsRunning;
@@ -344,18 +390,39 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         await _startGate.WaitAsync().ConfigureAwait(false);
         try
         {
+            // Dispose can land during the wait; connecting after its teardown would build a
+            // connection nothing ever closes.
+            if (_disposed)
+            {
+                return false;
+            }
+
             if (_started)
             {
                 return IsRunning;
             }
 
             var started = await TryStartAsync().ConfigureAwait(false);
-            IsRunning = started;
-            // Only cache success. On failure TryStartAsync has already torn down any partial
-            // connection, so leaving _started false lets a later call retry (e.g. the a11y bus
-            // became available, or a transient connect error cleared).
-            _started = started;
-            return started;
+
+            // TryStartAsync awaits, so Dispose may have swept past this brand-new connection while
+            // it was being built. Test and publish together, or this overwrites its cleared state.
+            lock (_lifecycleLock)
+            {
+                if (!_disposed)
+                {
+                    IsRunning = started;
+                    // Only cache success. On failure TryStartAsync has already torn down any
+                    // partial connection, so leaving _started false lets a later call retry
+                    // (e.g. the a11y bus became available, or a transient connect error cleared).
+                    _started = started;
+                    return started;
+                }
+            }
+
+            // Disposed while connecting: drop what we just built. Idempotent, so it's safe even
+            // when Dispose's own teardown already claimed it.
+            TearDownConnection();
+            return false;
         }
         finally
         {
@@ -532,25 +599,17 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     public async Task StopAsync()
     {
+        // Dispose already tore the connection down; a late reconcile or observer-error reset has
+        // nothing left to stop.
+        if (_disposed)
+        {
+            return;
+        }
+
         await _startGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            try
-            {
-                _stateSubscription?.Dispose();
-                _textSubscription?.Dispose();
-                _registryOwnerSubscription?.Dispose();
-                _connection?.Dispose();
-            }
-            catch
-            {
-                // best effort — teardown of a dying bus connection must not throw.
-            }
-
-            _stateSubscription = null;
-            _textSubscription = null;
-            _registryOwnerSubscription = null;
-            _connection = null;
+            TearDownConnection();
             // Reset so the next EnsureStartedAsync reconnects fresh rather than returning
             // the stale cached availability.
             _started = false;
@@ -1322,22 +1381,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             // A connection may have been made before AddMatchAsync/RegisterEventAsync threw.
             // Tear down any partial state so we don't leak a live connection/match, and so the
             // next EnsureStartedAsync retries from a clean slate.
-            try
-            {
-                _stateSubscription?.Dispose();
-                _textSubscription?.Dispose();
-                _registryOwnerSubscription?.Dispose();
-                _connection?.Dispose();
-            }
-            catch
-            {
-                // best effort — teardown of a half-open connection must not throw.
-            }
-
-            _stateSubscription = null;
-            _textSubscription = null;
-            _registryOwnerSubscription = null;
-            _connection = null;
+            TearDownConnection();
             return false;
         }
     }

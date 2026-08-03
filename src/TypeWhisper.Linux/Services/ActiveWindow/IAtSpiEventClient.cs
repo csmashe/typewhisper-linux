@@ -58,7 +58,8 @@ public interface IAtSpiEventClient
     ///     Connects to the a11y bus and registers event listeners on first call.
     ///     Returns <c>true</c> when the bus is reachable and listeners are live,
     ///     <c>false</c> when AT-SPI is unavailable (headless/minimal/remote sessions).
-    ///     Idempotent — subsequent calls return the cached availability.
+    ///     Idempotent — only a successful start is cached; a failed attempt leaves the
+    ///     client able to retry, so a later call reconnects once the bus becomes available.
     /// </summary>
     Task<bool> EnsureStartedAsync();
 

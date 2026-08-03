@@ -873,8 +873,27 @@ public sealed class DictationOrchestrator : IDisposable
             if (!_sessionActivityMonitor.IsInputAllowed)
             {
                 Trace.WriteLine("[Dictation] Session locked during start; rolling back recording.");
-                RollBackStartedRecording();
-                _ = await StopPartialTranscriptionSessionAsync();
+
+                // Every step is isolated (as in Dispose): a throw from one must not skip the rest.
+                // Clearing the session id with a coordinator still attached would report the
+                // dictation finished while buffered audio kept flowing behind the lock screen.
+                try
+                {
+                    RollBackStartedRecording();
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Dictation] Recording rollback on lock failed: {ex.Message}");
+                }
+
+                try
+                {
+                    _ = await StopPartialTranscriptionSessionAsync();
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Dictation] Partial-loop stop on lock failed: {ex.Message}");
+                }
 
                 StreamingTranscriptionCoordinator? rolledBackCoordinator;
                 CancellationTokenSource? rolledBackStartupCts;
@@ -893,12 +912,20 @@ public sealed class DictationOrchestrator : IDisposable
                 }
 
                 _audio.LiveFrameSink = null;
-                _ = await TeardownStreamingSessionAsync(
-                    rolledBackCoordinator,
-                    rolledBackStartupCts,
-                    false,
-                    CancellationToken.None
-                );
+
+                try
+                {
+                    _ = await TeardownStreamingSessionAsync(
+                        rolledBackCoordinator,
+                        rolledBackStartupCts,
+                        false,
+                        CancellationToken.None
+                    );
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Dictation] Streaming teardown on lock failed: {ex.Message}");
+                }
 
                 _hotkey.IsCancelShortcutEnabled = false;
                 _activeDictationCts?.Dispose();

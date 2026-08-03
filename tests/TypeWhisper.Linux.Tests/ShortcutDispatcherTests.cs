@@ -183,6 +183,27 @@ public sealed class ShortcutDispatcherTests
     }
 
     [Fact]
+    public void ResetState_ClearsHeldKeyBookkeeping()
+    {
+        // The lock closed the fd while the key was held, so no release ever arrives. ResetState
+        // must clear the held-key state too — otherwise the next press reads as OS auto-repeat and
+        // is suppressed, leaving the hotkey dead until the user presses twice.
+        var d = new ShortcutDispatcher();
+        d.UpdateShortcuts(Set(RecordingMode.Toggle));
+        var toggle = 0;
+        var discard = 0;
+        d.DictationToggleRequested += () => toggle++;
+        d.DictationDiscardRequested += () => discard++;
+
+        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        d.ResetState();
+        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+
+        Assert.Equal(2, toggle);
+        Assert.Equal(1, discard);
+    }
+
+    [Fact]
     public void OsAutoRepeat_DoesNotDoubleFire()
     {
         var d = new ShortcutDispatcher();

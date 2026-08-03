@@ -46,6 +46,11 @@ public sealed partial class YdotoolSetupHelper
     private const string ModulesLoadSymlinkToken = "TYPEWHISPER_MODULES_LOAD_SYMLINK";
     private const string UdevRuleSymlinkToken = "TYPEWHISPER_UDEV_RULE_SYMLINK";
 
+    // Shared with BuildPrivilegedInstallScript, which greps for this exact line to detect a foreign
+    // rules file that already grants the access; a copy there would silently stop matching.
+    private const string UdevRuleLine =
+        "KERNEL==\"uinput\", TAG+=\"uaccess\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"";
+
     private const string UdevRuleContent =
         "# "
         + OwnershipMarker
@@ -56,7 +61,8 @@ public sealed partial class YdotoolSetupHelper
         + "# active seat read/write without group membership or logout.\n"
         + "# The GROUP=\"input\" fallback covers init systems without\n"
         + "# logind (Devuan, Alpine without elogind, etc.).\n"
-        + "KERNEL==\"uinput\", TAG+=\"uaccess\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"\n";
+        + UdevRuleLine
+        + "\n";
 
     // The udev rule above can only grant access to a device whose kernel
     // module is actually loaded. Distros like Arch / Omarchy do NOT auto-load
@@ -744,14 +750,17 @@ public sealed partial class YdotoolSetupHelper
                + $"    exit {UdevRuleConflictExitCode}\n"
                + "  elif first=$(head -n 1 \"$udev_path\") && case \"$first\" in \"$marker\"|\"$marker \"*) true;; *) false;; esac; then\n"
                + "    udev_action=write\n"
-               + "  elif grep -Fqx 'KERNEL==\"uinput\", TAG+=\"uaccess\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"' \"$udev_path\"; then\n"
+               + $"  elif grep -Fqx '{UdevRuleLine}' \"$udev_path\"; then\n"
                + "    udev_action=skip # Foreign file already contains the required rule; preserve it.\n"
                + "  else\n"
                + $"    echo '{UdevRuleConflictToken}' >&2\n"
                + $"    exit {UdevRuleConflictExitCode}\n"
                + "  fi\n"
                + "fi\n"
-               // --- Both targets validated; apply the recorded decisions.
+               // --- Both targets validated; apply the recorded decisions. Deliberately NO mkdir -p:
+               // a missing directory means no systemd-udev, so udevadm below would fail anyway, and
+               // aborting on the redirect keeps this all-or-nothing instead of reporting failure
+               // with a root-owned rule left behind.
                + "if [ \"$modules_action\" = write ]; then\n"
                + "  cat > \"$modules_path\" <<'EOF'\n"
                + ModulesLoadContent
