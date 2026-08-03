@@ -34,7 +34,7 @@ public sealed class KdeShortcutWriterTests : IDisposable
     [Fact]
     public async Task WriteAsync_writes_the_file_when_none_exists()
     {
-        var writer = new KdeShortcutWriter();
+        var writer = CreateWriter();
 
         var result = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
 
@@ -46,7 +46,7 @@ public sealed class KdeShortcutWriterTests : IDisposable
     [Fact]
     public async Task WriteAsync_overwrites_a_file_it_previously_wrote_with_a_different_trigger()
     {
-        var writer = new KdeShortcutWriter();
+        var writer = CreateWriter();
         var firstResult = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
 
         var result = await writer.WriteAsync(
@@ -67,7 +67,7 @@ public sealed class KdeShortcutWriterTests : IDisposable
     {
         const string foreignContents = "[Desktop Entry]\nName=Foreign shortcut\n";
         WriteTarget(foreignContents);
-        var writer = new KdeShortcutWriter();
+        var writer = CreateWriter();
 
         var result = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
 
@@ -84,7 +84,7 @@ public sealed class KdeShortcutWriterTests : IDisposable
         const string mismatchedContents =
             "[Desktop Entry]\nX-TypeWhisper-Managed=true\nX-TypeWhisper-ShortcutId=another.shortcut\n";
         WriteTarget(mismatchedContents);
-        var writer = new KdeShortcutWriter();
+        var writer = CreateWriter();
 
         var result = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
 
@@ -98,7 +98,7 @@ public sealed class KdeShortcutWriterTests : IDisposable
     [Fact]
     public async Task ManagedPresence_DistinguishesAbsentCurrentAndStale()
     {
-        var writer = new KdeShortcutWriter();
+        var writer = CreateWriter();
         var installed = CreateSpec();
         var changed = CreateSpec("Alt+F8");
 
@@ -123,7 +123,7 @@ public sealed class KdeShortcutWriterTests : IDisposable
     [Fact]
     public async Task RemoveAsync_deletes_a_file_it_previously_wrote()
     {
-        var writer = new KdeShortcutWriter();
+        var writer = CreateWriter();
         var writeResult = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
 
         var result = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
@@ -134,9 +134,49 @@ public sealed class KdeShortcutWriterTests : IDisposable
     }
 
     [Fact]
+    public async Task Customized_recorded_file_is_not_updated_or_removed()
+    {
+        var writer = CreateWriter();
+        Assert.True((await writer.WriteAsync(CreateSpec(), CancellationToken.None)).Success);
+        await File.AppendAllTextAsync(TargetPath, "X-User-Customization=true\n");
+
+        var update = await writer.WriteAsync(
+            CreateSpec("Alt+Shift+Space"),
+            CancellationToken.None
+        );
+        var removal = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
+
+        Assert.False(update.Success);
+        Assert.True(removal.Success);
+        Assert.NotNull(removal.Warning);
+        Assert.Contains("X-User-Customization=true", File.ReadAllText(TargetPath));
+    }
+
+    [Fact]
+    public async Task WriteAsync_refuses_symlink_and_preserves_its_target()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(TargetPath)!);
+        var target = Path.Join(_tempDir, "foreign-kde.desktop");
+        const string targetContent = "[Desktop Entry]\nName=Foreign\n";
+        await File.WriteAllTextAsync(target, targetContent);
+        File.CreateSymbolicLink(TargetPath, target);
+
+        var result = await CreateWriter().WriteAsync(CreateSpec(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(new FileInfo(TargetPath).LinkTarget);
+        Assert.Equal(targetContent, File.ReadAllText(target));
+    }
+
+    [Fact]
     public async Task RemoveAsync_returns_success_no_op_when_nothing_installed()
     {
-        var writer = new KdeShortcutWriter();
+        var writer = CreateWriter();
 
         var result = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
 
@@ -149,7 +189,7 @@ public sealed class KdeShortcutWriterTests : IDisposable
     {
         const string foreignContents = "[Desktop Entry]\nName=Foreign shortcut\n";
         WriteTarget(foreignContents);
-        var writer = new KdeShortcutWriter();
+        var writer = CreateWriter();
 
         var result = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
 
@@ -166,7 +206,7 @@ public sealed class KdeShortcutWriterTests : IDisposable
         const string mismatchedContents =
             "[Desktop Entry]\nX-TypeWhisper-Managed=true\nX-TypeWhisper-ShortcutId=another.shortcut\n";
         WriteTarget(mismatchedContents);
-        var writer = new KdeShortcutWriter();
+        var writer = CreateWriter();
 
         var result = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
 
@@ -177,7 +217,42 @@ public sealed class KdeShortcutWriterTests : IDisposable
         Assert.Equal(mismatchedContents, File.ReadAllText(TargetPath));
     }
 
+    // A shortcut dropped by a release that predates the managed-artifact manifest has no
+    // recorded state, so its markers are the only ownership evidence. It must still be
+    // removable and rewritable after the upgrade — the previous release allowed both.
+    [Fact]
+    public async Task RemoveAsync_removes_a_pre_manifest_shortcut_carrying_our_markers()
+    {
+        var legacy = ExpectedDesktopContents("Meta+Z");
+        WriteTarget(legacy);
+        var writer = CreateWriter();
+
+        Assert.True(await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None));
+
+        var result = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.False(File.Exists(TargetPath));
+    }
+
+    [Fact]
+    public async Task WriteAsync_rewrites_a_pre_manifest_shortcut_carrying_our_markers()
+    {
+        WriteTarget(ExpectedDesktopContents("Meta+Z"));
+        var writer = CreateWriter();
+
+        var result = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(ExpectedDesktopContents(), File.ReadAllText(TargetPath));
+    }
+
     private string TargetPath => Path.Join(_tempDir, "kglobalaccel", $"{ShortcutId}.desktop");
+
+    private KdeShortcutWriter CreateWriter()
+    {
+        return new KdeShortcutWriter(Path.Join(_tempDir, "managed-state"));
+    }
 
     private void WriteTarget(string contents)
     {

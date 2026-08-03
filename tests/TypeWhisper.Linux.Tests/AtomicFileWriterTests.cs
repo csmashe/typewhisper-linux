@@ -44,6 +44,40 @@ public sealed class AtomicFileWriterTests
 
             Assert.Equal("fresh install", await File.ReadAllTextAsync(path));
             Assert.Null(new FileInfo(path).LinkTarget);
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                    File.GetUnixFileMode(path)
+                );
+            }
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public async Task WriteAsync_ExistingFile_PreservesExactMode()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Join(dir, "hyprland.conf");
+            await File.WriteAllTextAsync(path, "old");
+            const UnixFileMode mode =
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead;
+            File.SetUnixFileMode(path, mode);
+
+            await AtomicFileWriter.WriteAsync(path, "new", CancellationToken.None);
+
+            Assert.Equal(mode, File.GetUnixFileMode(path));
         }
         finally
         {
@@ -105,6 +139,63 @@ public sealed class AtomicFileWriterTests
     }
 
     [Fact]
+    public async Task WriteIfUnchangedAsync_ModeChangedAfterCapture_ReportsConflict()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Join(dir, "hyprland.conf");
+            await File.WriteAllTextAsync(path, "old");
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite
+            );
+            var snapshot = await AtomicFileWriter.CaptureAsync(path, CancellationToken.None);
+            File.SetUnixFileMode(path, UnixFileMode.UserRead);
+
+            var committed = await AtomicFileWriter.WriteIfUnchangedAsync(
+                snapshot,
+                "new",
+                CancellationToken.None
+            );
+
+            Assert.False(committed);
+            Assert.Equal("old", await File.ReadAllTextAsync(path));
+            Assert.Equal(UnixFileMode.UserRead, File.GetUnixFileMode(path));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public async Task WriteAsync_TargetIsDirectory_RefusesNonRegularEntry()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var target = Path.Join(dir, "hyprland.conf");
+            Directory.CreateDirectory(target);
+
+            await Assert.ThrowsAsync<IOException>(
+                () => AtomicFileWriter.WriteAsync(target, "new", CancellationToken.None)
+            );
+
+            Assert.True(Directory.Exists(target));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
     public async Task WriteIfUnchangedAsync_FileCreatedAfterMissingCapture_ReportsConflict()
     {
         var dir = CreateTempDir();
@@ -123,6 +214,41 @@ public sealed class AtomicFileWriterTests
             Assert.False(committed);
             Assert.Equal("user-created config", await File.ReadAllTextAsync(path));
             Assert.Empty(Directory.EnumerateFiles(dir, "*.tmp"));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteIfUnchangedAsync_DeletesOnlyMatchingDirectFile()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Join(dir, "user.js");
+            await File.WriteAllTextAsync(path, "owned block");
+            var snapshot = await AtomicFileWriter.CaptureAsync(path, CancellationToken.None);
+
+            Assert.True(
+                await AtomicFileWriter.DeleteIfUnchangedAsync(
+                    snapshot,
+                    CancellationToken.None
+                )
+            );
+            Assert.False(File.Exists(path));
+
+            await File.WriteAllTextAsync(path, "original");
+            snapshot = await AtomicFileWriter.CaptureAsync(path, CancellationToken.None);
+            await File.WriteAllTextAsync(path, "external edit");
+            Assert.False(
+                await AtomicFileWriter.DeleteIfUnchangedAsync(
+                    snapshot,
+                    CancellationToken.None
+                )
+            );
+            Assert.Equal("external edit", await File.ReadAllTextAsync(path));
         }
         finally
         {

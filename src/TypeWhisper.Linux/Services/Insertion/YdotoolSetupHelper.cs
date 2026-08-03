@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.ManagedArtifacts;
 
 namespace TypeWhisper.Linux.Services.Insertion;
 
@@ -26,6 +28,8 @@ public sealed partial class YdotoolSetupHelper
     // command-injection / breakage surface. The override is internal, so only
     // the in-process test (via InternalsVisibleTo) can set it.
     internal static string? SysConfDirOverride { get; set; }
+    internal static string? ManagedArtifactStateRootOverride { get; set; }
+    internal static string? RootManagedArtifactStateRootOverride { get; set; }
 
     private static string SysConfDir => SysConfDirOverride ?? "/etc";
 
@@ -45,6 +49,7 @@ public sealed partial class YdotoolSetupHelper
     private const string UdevRuleConflictToken = "TYPEWHISPER_UDEV_RULE_CONFLICT";
     private const string ModulesLoadSymlinkToken = "TYPEWHISPER_MODULES_LOAD_SYMLINK";
     private const string UdevRuleSymlinkToken = "TYPEWHISPER_UDEV_RULE_SYMLINK";
+    private const string ActivationFailureToken = "TYPEWHISPER_YDOTOOL_ACTIVATION_FAILED";
 
     private const string UdevRuleContent =
         "# "
@@ -82,14 +87,21 @@ public sealed partial class YdotoolSetupHelper
     // a root-owned socket the user can't reach), so on a clean install no
     // user unit by this name resolves and we write our own.
     private const string UserUnitName = "ydotoold.service";
+    private const UnixFileMode UserUnitMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite
+        | UnixFileMode.GroupRead | UnixFileMode.OtherRead;
 
     private readonly SystemCommandAvailabilityService _commands;
     private readonly IProcessRunner _runner;
+    private readonly ManagedFileTransaction _managedFiles;
 
     public YdotoolSetupHelper(SystemCommandAvailabilityService commands, IProcessRunner runner)
     {
         _commands = commands;
         _runner = runner;
+        _managedFiles = ManagedArtifactStateRootOverride is { } stateRoot
+            ? new ManagedFileTransaction(stateRoot)
+            : new ManagedFileTransaction();
     }
 
     /// <summary>
@@ -248,7 +260,20 @@ public sealed partial class YdotoolSetupHelper
         // distro/AUR units), so unconditionally disabling here would kill a service the user
         // relies on. Foreign unit → leave its enablement state entirely alone.
         var unitPath = UserUnitFilePath();
-        var weOwnUnit = File.Exists(unitPath) && IsFileOwnedByTypeWhisper(unitPath);
+        var unitSpec = BuildUserUnitRemovalSpec(unitPath);
+        ManagedFileClassification unitClassification;
+        try
+        {
+            unitClassification = await _managedFiles.ProbeAsync(unitSpec, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new SetupResult(false, $"Could not delete {unitPath}: {ex.Message}");
+        }
+
+        var weOwnUnit = unitClassification is ManagedFileClassification.CurrentOwned
+            or ManagedFileClassification.StaleOwned;
 
         // Disable first so the socket goes away before the udev rule is removed.
         // Fail closed: if disable fails, the enablement symlink may survive and a
@@ -276,7 +301,7 @@ public sealed partial class YdotoolSetupHelper
         // file → daemon-reload.
         var removedUnit = false;
         string? unitLeftMessage = null;
-        if (File.Exists(unitPath))
+        if (unitClassification != ManagedFileClassification.Absent)
         {
             if (!weOwnUnit)
             {
@@ -295,8 +320,14 @@ public sealed partial class YdotoolSetupHelper
             {
                 try
                 {
-                    File.Delete(unitPath);
-                    removedUnit = true;
+                    var removal = await _managedFiles.RemoveAsync(unitSpec, ct)
+                        .ConfigureAwait(false);
+                    removedUnit = removal.Changed;
+                    if (!removedUnit)
+                    {
+                        unitLeftMessage =
+                            $"Left {unitPath} in place and untouched — it has no TypeWhisper ownership marker, so its ydotoold service stays enabled.";
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -315,58 +346,48 @@ public sealed partial class YdotoolSetupHelper
                 .ConfigureAwait(false);
         }
 
-        // Remove the root-owned files we installed — the udev rule and the
-        // modules-load entry — in a single privileged call so the user sees at
-        // most one auth prompt. Each is ownership-gated independently: both use
-        // conventional paths a user or distro package might have written first,
-        // so a file lacking our marker is left untouched and reported.
-        var leftoverMessages = new List<string>();
-        var privilegedRemovals = new List<string>();
-        foreach (var path in new[] { UdevRulePath, ModulesLoadPath })
+        // Root classifies both fixed paths inside one authorization/lock boundary.
+        // The user-side observations below only decide whether pkexec is necessary
+        // when it is unavailable; they never authorize a deletion.
+        var anyRootEntry = EntryExistsIncludingSymlink(UdevRulePath)
+            || EntryExistsIncludingSymlink(ModulesLoadPath);
+        if (!DesktopDetector.BinaryExists("pkexec"))
         {
-            if (!File.Exists(path))
+            if (anyRootEntry)
             {
-                continue;
-            }
+                // Existence is not ownership: the ydotool package ships both paths as
+                // generic admin config, and the privileged script deletes only
+                // marker-bearing files. Manual guidance must be gated the same way.
+                var guidance = new[] { UdevRulePath, ModulesLoadPath }
+                    .Where(EntryExistsIncludingSymlink)
+                    .Select(path =>
+                        IsRemovableTypeWhisperFile(path)
+                            ? $"Remove it manually: sudo rm -f {path}"
+                            : $"{path} exists but does not carry TypeWhisper's ownership marker, so it may belong to your distribution. Inspect it before deleting anything: sudo cat {path}"
+                    )
+                    .ToList();
 
-            if (!IsFileOwnedByTypeWhisper(path))
-            {
-                leftoverMessages.Add(
-                    $"Left {path} in place — it doesn't carry TypeWhisper's ownership marker, so we won't delete it. Remove it manually if you want to."
-                );
-                continue;
-            }
-
-            if (!DesktopDetector.BinaryExists("pkexec"))
-            {
-                // Fail closed: the file is ours and still on disk, but without
-                // pkexec we can't delete root-owned config. Don't report
-                // success while leaving privileged state behind.
                 return new SetupResult(
                     false,
-                    $"Could not remove {path} — pkexec is not available to delete root-owned config.",
-                    $"Remove it manually: sudo rm -f {path}"
+                    "Could not remove ydotool's root-owned config — pkexec is not available.",
+                    string.Join("\n", guidance)
                 );
             }
-
-            privilegedRemovals.Add(path);
         }
-
-        if (privilegedRemovals.Count > 0)
+        else
         {
-            // Also unload the uinput module we loaded, so a subsequent fresh
-            // install re-exercises the full module-load path rather than
-            // finding the device already present. `-r` no-ops harmlessly if
-            // the module is builtin or still in use by something else.
-            var script =
-                "set -e\n"
-                + "rm -f " + string.Join(" ", privilegedRemovals) + "\n"
-                + "modprobe -r uinput 2>/dev/null || true\n";
             var rm = await _runner
-                .RunAsync("pkexec", ["/bin/sh"], standardInput: script, ct: ct)
+                .RunAsync(
+                    "pkexec",
+                    ["/bin/sh"],
+                    standardInput: BuildPrivilegedRemoveScript(),
+                    ct: ct
+                )
                 .ConfigureAwait(false);
             if (!rm.Succeeded)
             {
+                // Conflict exit codes carry their explanation in stderr, so every failure
+                // reports the same way.
                 return new SetupResult(
                     false,
                     $"Could not remove root-owned config: {rm.StandardError.Trim()}"
@@ -379,7 +400,6 @@ public sealed partial class YdotoolSetupHelper
         var detail = string.Join(
             "\n",
             new[] { unitLeftMessage }
-                .Concat(leftoverMessages)
                 .Where(m => !string.IsNullOrWhiteSpace(m))
         );
         return new SetupResult(
@@ -473,6 +493,25 @@ public sealed partial class YdotoolSetupHelper
         }
 
         return null;
+    }
+
+    /// <summary>
+    ///     Whether unprivileged inspection can prove the entry is a plain file we own.
+    ///     A symlink never qualifies, mirroring the privileged script's symlink refusal:
+    ///     the marker would be read through the link from some other file.
+    /// </summary>
+    private static bool IsRemovableTypeWhisperFile(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            info.Refresh();
+            return info.LinkTarget is null && IsFileOwnedByTypeWhisper(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     internal static bool IsFileOwnedByTypeWhisper(string path)
@@ -679,6 +718,15 @@ public sealed partial class YdotoolSetupHelper
             return SymlinkRefusal(UdevRulePath);
         }
 
+        if (run.StandardError.Contains(ActivationFailureToken, StringComparison.Ordinal))
+        {
+            return new SetupResult(
+                false,
+                Loc.Instance["TextInsertion.YdotoolActivationFailed"],
+                run.StandardError.Trim()
+            );
+        }
+
         return new SetupResult(
             false,
             "Could not install udev rule (pkexec failed or was canceled).",
@@ -697,74 +745,66 @@ public sealed partial class YdotoolSetupHelper
     /// </summary>
     private static string BuildPrivilegedInstallScript()
     {
-        // Pipe content via here-docs, not command-line args, to avoid shell metadata issues.
-        // Order: validate both targets → write both → reload udev → modprobe uinput.
-        // Loading the module AFTER the reload ensures the add-event fires with the
-        // rule already live, applying the input group + uaccess ACL to the new node.
-        //
-        // Marker match is anchored to the start of the first line via `case`
-        // globs: the bare marker, or the marker followed by a space (real
-        // headers are "# Installed by TypeWhisper — ..."), never an arbitrary
-        // continuation — "# Installed by TypeWhisperer" is foreign and must be
-        // preserved, not truncated.
-        return "set -e\n"
-               + $"modules_path='{ModulesLoadPath}'\n"
-               + $"udev_path='{UdevRulePath}'\n"
-               + $"marker='# {OwnershipMarker}'\n"
-               // --- Validate modules-load target (no writes yet).
-               + "modules_action=write\n"
-               + "if [ -L \"$modules_path\" ]; then\n"
-               + $"  echo '{ModulesLoadSymlinkToken}' >&2\n"
-               + $"  exit {ModulesLoadSymlinkExitCode}\n"
-               + "elif [ -e \"$modules_path\" ]; then\n"
-               + "  if [ ! -f \"$modules_path\" ]; then\n"
-               + $"    echo '{ModulesLoadConflictToken}' >&2\n"
-               + $"    exit {ModulesLoadConflictExitCode}\n"
-               + "  elif first=$(head -n 1 \"$modules_path\") && case \"$first\" in \"$marker\"|\"$marker \"*) true;; *) false;; esac; then\n"
-               + "    modules_action=write\n"
-               // Only a bare `uinput` line counts as "already loads it":
-               // modules-load.d does not strip inline comments, so `uinput # boot`
-               // is a module named "uinput # boot" that never loads — such a file
-               // must fall through to the conflict branch.
-               + "  elif grep -Eq '^[[:space:]]*uinput[[:space:]]*$' \"$modules_path\"; then\n"
-               + "    modules_action=skip # Foreign file already loads uinput; preserve it.\n"
-               + "  else\n"
-               + $"    echo '{ModulesLoadConflictToken}' >&2\n"
-               + $"    exit {ModulesLoadConflictExitCode}\n"
-               + "  fi\n"
-               + "fi\n"
-               // --- Validate udev-rule target (no writes yet).
-               + "udev_action=write\n"
-               + "if [ -L \"$udev_path\" ]; then\n"
-               + $"  echo '{UdevRuleSymlinkToken}' >&2\n"
-               + $"  exit {UdevRuleSymlinkExitCode}\n"
-               + "elif [ -e \"$udev_path\" ]; then\n"
-               + "  if [ ! -f \"$udev_path\" ]; then\n"
-               + $"    echo '{UdevRuleConflictToken}' >&2\n"
-               + $"    exit {UdevRuleConflictExitCode}\n"
-               + "  elif first=$(head -n 1 \"$udev_path\") && case \"$first\" in \"$marker\"|\"$marker \"*) true;; *) false;; esac; then\n"
-               + "    udev_action=write\n"
-               + "  elif grep -Fqx 'KERNEL==\"uinput\", TAG+=\"uaccess\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"' \"$udev_path\"; then\n"
-               + "    udev_action=skip # Foreign file already contains the required rule; preserve it.\n"
-               + "  else\n"
-               + $"    echo '{UdevRuleConflictToken}' >&2\n"
-               + $"    exit {UdevRuleConflictExitCode}\n"
-               + "  fi\n"
-               + "fi\n"
-               // --- Both targets validated; apply the recorded decisions.
-               + "if [ \"$modules_action\" = write ]; then\n"
-               + "  cat > \"$modules_path\" <<'EOF'\n"
-               + ModulesLoadContent
-               + "EOF\n"
-               + "fi\n"
-               + "if [ \"$udev_action\" = write ]; then\n"
-               + "  cat > \"$udev_path\" <<'EOF'\n"
-               + UdevRuleContent
-               + "EOF\n"
-               + "fi\n"
-               + "udevadm control --reload\n"
-               + "modprobe uinput || true\n"
-               + "udevadm trigger --subsystem-match=misc --action=change || true\n";
+        return PrivilegedManagedFileTransaction.BuildInstallScript(
+            RootStateRoot,
+            RootSpecs,
+            "if ! udevadm control --reload; then\n"
+            + $"  echo '{ActivationFailureToken}' >&2; exit 80\n"
+            + "fi\n"
+            + "modprobe uinput || true\n"
+            + "udevadm trigger --subsystem-match=misc --action=change || true\n"
+        );
+    }
+
+    private static string BuildPrivilegedRemoveScript()
+    {
+        return PrivilegedManagedFileTransaction.BuildRemoveScript(
+            RootStateRoot,
+            RootSpecs,
+            "modprobe -r uinput 2>/dev/null || true\n"
+        );
+    }
+
+    private static string RootStateRoot =>
+        RootManagedArtifactStateRootOverride
+        ?? "/var/lib/typewhisper/managed-artifacts";
+
+    private static IReadOnlyList<PrivilegedManagedFileSpec> RootSpecs =>
+    [
+        new(
+            "ydotool-modules-load",
+            ModulesLoadPath,
+            ModulesLoadContent,
+            ModulesLoadConflictExitCode,
+            ModulesLoadConflictToken,
+            ModulesLoadSymlinkExitCode,
+            ModulesLoadSymlinkToken,
+            PrivilegedEquivalentProbe.YdotoolModulesLoad
+        ),
+        new(
+            "ydotool-udev-rule",
+            UdevRulePath,
+            UdevRuleContent,
+            UdevRuleConflictExitCode,
+            UdevRuleConflictToken,
+            UdevRuleSymlinkExitCode,
+            UdevRuleSymlinkToken,
+            PrivilegedEquivalentProbe.YdotoolUdevRule
+        ),
+    ];
+
+    private static bool EntryExistsIncludingSymlink(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            info.Refresh();
+            return info.Exists || info.LinkTarget is not null || Directory.Exists(path);
+        }
+        catch
+        {
+            return true;
+        }
     }
 
     private static bool MatchesPrivilegedFailure(
@@ -842,10 +882,9 @@ public sealed partial class YdotoolSetupHelper
         var unitPath = UserUnitFilePath();
         try
         {
-            // Ownership guard, mirroring the udev-rule check: if a file is
-            // already at our path but lacks our marker, the user put it
-            // there — don't clobber it.
-            if (File.Exists(unitPath) && !IsFileOwnedByTypeWhisper(unitPath))
+            var spec = BuildUserUnitSpec(unitPath, ydotooldPath);
+            var install = await _managedFiles.InstallAsync(spec, ct).ConfigureAwait(false);
+            if (!install.OwnsDestination)
             {
                 return (
                     new SetupResult(
@@ -857,14 +896,18 @@ public sealed partial class YdotoolSetupHelper
                 );
             }
 
-            // Atomic write: temp file + move, same pattern as
-            // BrowserAccessibilitySetupHelper.WriteEnvFile.
-            Directory.CreateDirectory(Path.GetDirectoryName(unitPath)!);
-            var tempPath = unitPath + ".tmp";
-            await File.WriteAllTextAsync(tempPath, BuildUserUnitContent(ydotooldPath), ct)
-                .ConfigureAwait(false);
-            File.Move(tempPath, unitPath, true);
-            return (new SetupResult(true, $"Wrote {unitPath}."), true);
+            // Reaching here means `systemctl --user cat` found no unit, so the manager
+            // has not loaded one — even when InstallAsync merely adopted an exact
+            // pre-manifest file and changed no bytes. Reporting "no reload needed" off
+            // install.Changed would let the following `enable --now` run against a unit
+            // systemd still doesn't know about.
+            return (
+                new SetupResult(
+                    true,
+                    $"Wrote {unitPath}."
+                ),
+                true
+            );
         }
         catch (Exception ex)
         {
@@ -877,6 +920,60 @@ public sealed partial class YdotoolSetupHelper
                 false
             );
         }
+    }
+
+    private static ManagedFileSpec BuildUserUnitSpec(string unitPath, string ydotooldPath)
+    {
+        return new ManagedFileSpec
+        {
+            ArtifactId = "ydotool-user-unit",
+            DestinationPath = unitPath,
+            DesiredBytes = ManagedFileSpec.Utf8(BuildUserUnitContent(ydotooldPath)),
+            CreateMode = UserUnitMode,
+            OwnershipProbe = HasUserUnitMarker,
+            LegacyOwnershipProbe = IsCanonicalUserUnit,
+        };
+    }
+
+    private static ManagedFileSpec BuildUserUnitRemovalSpec(string unitPath)
+    {
+        return new ManagedFileSpec
+        {
+            ArtifactId = "ydotool-user-unit",
+            DestinationPath = unitPath,
+            DesiredBytes = [],
+            CreateMode = UserUnitMode,
+            OwnershipProbe = HasUserUnitMarker,
+            LegacyOwnershipProbe = IsCanonicalUserUnit,
+        };
+    }
+
+    private static bool HasUserUnitMarker(ReadOnlyMemory<byte> bytes)
+    {
+        using var reader = new StringReader(Encoding.UTF8.GetString(bytes.Span));
+        var firstLine = reader.ReadLine();
+        return firstLine is not null
+            && (string.Equals(firstLine, $"# {OwnershipMarker}", StringComparison.Ordinal)
+                || firstLine.StartsWith($"# {OwnershipMarker} —", StringComparison.Ordinal));
+    }
+
+    private static bool IsCanonicalUserUnit(ReadOnlyMemory<byte> bytes)
+    {
+        var contents = Encoding.UTF8.GetString(bytes.Span);
+        const string prefix = "ExecStart=";
+        var execLine = contents
+            .Split('\n')
+            .FirstOrDefault(line => line.StartsWith(prefix, StringComparison.Ordinal));
+        if (execLine is null || execLine.Length == prefix.Length)
+        {
+            return false;
+        }
+
+        return string.Equals(
+            contents,
+            BuildUserUnitContent(execLine[prefix.Length..]),
+            StringComparison.Ordinal
+        );
     }
 
     private async Task<SetupResult> EnableUserUnitAsync(string unit, CancellationToken ct)

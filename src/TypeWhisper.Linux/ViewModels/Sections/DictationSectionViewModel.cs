@@ -25,6 +25,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private readonly AudioRecordingService _audio;
     private readonly Func<IReadOnlyList<AudioInputDevice>> _getInputDevices;
     private readonly SystemCommandAvailabilityService _commands;
+    private readonly CudaLibraryPathSetupService _cudaLibraryPathSetup;
     private readonly DictationOrchestrator _dictation;
     private readonly ModelManagerService _models;
     private readonly PluginManager _pluginManager;
@@ -215,6 +216,7 @@ public partial class DictationSectionViewModel : ObservableObject
         ISettingsService settings,
         PluginManager pluginManager,
         SystemCommandAvailabilityService commands,
+        CudaLibraryPathSetupService cudaLibraryPathSetup,
         // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym mirroring org.a11y.Bus; ReSharper's camelCase splitter mis-reads "11y".
         IAccessibilityBusActivation a11yBus
     )
@@ -225,6 +227,7 @@ public partial class DictationSectionViewModel : ObservableObject
             settings,
             pluginManager,
             commands,
+            cudaLibraryPathSetup,
             a11yBus,
             AudioRecordingService.GetInputDevices
         )
@@ -238,6 +241,7 @@ public partial class DictationSectionViewModel : ObservableObject
         ISettingsService settings,
         PluginManager pluginManager,
         SystemCommandAvailabilityService commands,
+        CudaLibraryPathSetupService cudaLibraryPathSetup,
         // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym mirroring org.a11y.Bus; ReSharper's camelCase splitter mis-reads "11y".
         IAccessibilityBusActivation a11yBus,
         Func<IReadOnlyList<AudioInputDevice>> getInputDevices
@@ -250,6 +254,7 @@ public partial class DictationSectionViewModel : ObservableObject
         _settings = settings;
         _pluginManager = pluginManager;
         _commands = commands;
+        _cudaLibraryPathSetup = cudaLibraryPathSetup;
         _a11yBus = a11yBus;
         // Unload the active local model before moving its files so the source
         // path isn't held open during migration.
@@ -373,7 +378,7 @@ public partial class DictationSectionViewModel : ObservableObject
         _commands.HasCudaGpu
         && !CanUseCuda
         && !_commands.HasCudaRuntimeLibraries
-        && FindCuda12LibraryPath() is not null;
+        && _cudaLibraryPathSetup.FindCuda12LibraryPath() is not null;
 
     // ReSharper disable once MemberCanBeMadeStatic.Global
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
@@ -454,7 +459,7 @@ public partial class DictationSectionViewModel : ObservableObject
                 {
                     AppSettings.LocalModelAccelerationCpu => Loc.Instance["Dictation.AccelCpuActive"],
                     AppSettings.LocalModelAccelerationNvidiaCuda when !CanUseCuda =>
-                        FindCuda12LibraryPath() is null
+                        _cudaLibraryPathSetup.FindCuda12LibraryPath() is null
                             ? Loc.Instance["Dictation.AccelCudaNotInstalled"]
                             : Loc.Instance["Dictation.AccelCudaNotVisible"],
                     AppSettings.LocalModelAccelerationNvidiaCuda =>
@@ -1006,7 +1011,7 @@ public partial class DictationSectionViewModel : ObservableObject
             var message =
                 !_commands.HasCudaGpu
                     ? Loc.Instance["Dictation.CudaNoGpu"]
-                    : FindCuda12LibraryPath() is not null
+                    : _cudaLibraryPathSetup.FindCuda12LibraryPath() is not null
                         ? Loc.Instance["Dictation.CudaNotOnPath"]
                         : Loc.Instance["Dictation.CudaRuntimeMissing"];
             // Revert on the next UI frame: a ComboBox ignores SelectedItem changes inside its
@@ -1190,45 +1195,36 @@ public partial class DictationSectionViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void AddCudaLibraryPathToShellProfile()
+    private async Task AddCudaLibraryPathToShellProfileAsync()
     {
         try
         {
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            if (string.IsNullOrWhiteSpace(home))
+            var result = await _cudaLibraryPathSetup.SetUpAsync(CancellationToken.None);
+            // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault -- only the two failures with a dedicated message are handled here; the rest fall through to the generic !Success branch below.
+            switch (result.Failure)
             {
-                StatusText = Loc.Instance["Dictation.NoHomeDirectory"];
-                return;
+                case CudaLibraryPathSetupFailure.HomeDirectoryUnavailable:
+                    StatusText = Loc.Instance["Dictation.NoHomeDirectory"];
+                    return;
+                case CudaLibraryPathSetupFailure.CudaLibrariesUnavailable:
+                    StatusText = Loc.Instance["Dictation.CudaLibsMissingRetry"];
+                    return;
             }
 
-            var cudaLibraryPath = FindCuda12LibraryPath();
-            if (cudaLibraryPath is null)
+            if (!result.Success)
             {
-                StatusText = Loc.Instance["Dictation.CudaLibsMissingRetry"];
-                return;
-            }
-
-            var profilePath = ResolveShellProfilePath(home);
-            var exportLine = GetCudaLibraryPathExport(profilePath, cudaLibraryPath);
-            var existing = File.Exists(profilePath) ? File.ReadAllText(profilePath) : string.Empty;
-
-            Directory.CreateDirectory(Path.GetDirectoryName(profilePath)!);
-            if (
-                !existing.Contains(exportLine, StringComparison.Ordinal)
-                && !existing.Contains(cudaLibraryPath, StringComparison.Ordinal)
-            )
-            {
-                var prefix =
-                    existing.Length > 0 && !existing.EndsWith('\n')
-                        ? Environment.NewLine
-                        : string.Empty;
-                File.AppendAllText(
-                    profilePath,
-                    $"{prefix}{Environment.NewLine}# TypeWhisper CUDA 12 runtime libraries{Environment.NewLine}{exportLine}{Environment.NewLine}"
+                var detail = result.Detail ?? string.Empty;
+                CudaSetupStatus = Loc.Instance.GetString(
+                    "Dictation.CudaPathSaveFailed",
+                    detail
                 );
+                StatusText = Loc.Instance.GetString(
+                    "Dictation.ShellProfileUpdateFailed",
+                    detail
+                );
+                return;
             }
 
-            WriteDesktopEnvironmentFile(home, cudaLibraryPath);
             CudaSetupStatus = Loc.Instance["Dictation.CudaPathSavedDetail"];
             StatusText = Loc.Instance["Dictation.CudaPathSaved"];
         }
@@ -1348,47 +1344,6 @@ public partial class DictationSectionViewModel : ObservableObject
         }
     }
 
-    private static string ResolveShellProfilePath(string home)
-    {
-        var shell = Environment.GetEnvironmentVariable("SHELL") ?? string.Empty;
-        if (shell.EndsWith("/zsh", StringComparison.Ordinal))
-        {
-            return Path.Join(home, ".zshrc");
-        }
-
-        return shell.EndsWith("/fish", StringComparison.Ordinal)
-            ? Path.Join(home, ".config", "fish", "config.fish")
-            : Path.Join(home, ".bashrc");
-    }
-
-    private static string GetCudaLibraryPathExport(string profilePath, string cudaLibraryPath)
-    {
-        return profilePath.EndsWith("config.fish", StringComparison.Ordinal)
-            ? $"set -gx LD_LIBRARY_PATH {cudaLibraryPath} $LD_LIBRARY_PATH"
-            : $"export LD_LIBRARY_PATH={cudaLibraryPath}:${{LD_LIBRARY_PATH:-}}";
-    }
-
-    // ~/.config/environment.d/ is picked up by systemd-environment-d-generator for GUI sessions
-    // on Wayland, covering app-menu launches where the shell profile isn't sourced.
-    // ReSharper disable once UnusedMethodReturnValue.Local -- returns the written path for callers that want it; the current caller invokes it for its file-writing side effect.
-    private static string WriteDesktopEnvironmentFile(string home, string cudaLibraryPath)
-    {
-        var environmentDir = Path.Join(home, ".config", "environment.d");
-        Directory.CreateDirectory(environmentDir);
-
-        var path = Path.Join(environmentDir, "typewhisper-cuda.conf");
-        File.WriteAllText(
-            path,
-            $"# TypeWhisper CUDA 12 runtime libraries{Environment.NewLine}LD_LIBRARY_PATH={cudaLibraryPath}:${{LD_LIBRARY_PATH:-}}{Environment.NewLine}"
-        );
-        return path;
-    }
-
-    private static string? FindCuda12LibraryPath()
-    {
-        return SystemCommandAvailabilityService.FindCuda12RuntimeDirectory();
-    }
-
     partial void OnModelStatusTextChanged(string value)
     {
         OnPropertyChanged(nameof(CanUseCuda));
@@ -1436,14 +1391,14 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(AccelerationStatusText));
     }
 
-    private static string FormatModelStatusError(string? message)
+    private string FormatModelStatusError(string? message)
     {
         if (!IsCudaMissingLibraryError(message))
         {
             return string.IsNullOrWhiteSpace(message) ? Loc.Instance["Dictation.StatusError"] : message;
         }
 
-        var cudaLibraryPath = FindCuda12LibraryPath();
+        var cudaLibraryPath = _cudaLibraryPathSetup.FindCuda12LibraryPath();
         return cudaLibraryPath is null
             ? Loc.Instance["Dictation.CudaNotInstalledRestart"]
             : Loc.Instance["Dictation.CudaNotVisibleRestart"];

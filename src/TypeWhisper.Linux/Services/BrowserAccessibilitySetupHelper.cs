@@ -1,5 +1,8 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
+using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.ManagedArtifacts;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -16,6 +19,15 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed partial class BrowserAccessibilitySetupHelper
 {
+    private const UnixFileMode PrivateConfigMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite;
+    private const UnixFileMode DesktopFileMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite
+        | UnixFileMode.GroupRead | UnixFileMode.OtherRead;
+
+    internal static string? ManagedArtifactStateRootOverride { get; set; }
+    internal static IReadOnlyList<string>? SystemLauncherDirectoriesOverride { get; set; }
+    internal static IReadOnlyList<string>? FirefoxProfileRootsOverride { get; set; }
     private const string OwnershipMarker = "Installed by TypeWhisper";
 
     private const string EnvFileName = "typewhisper-accessibility.conf";
@@ -74,7 +86,24 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
     public static Status IsCurrentlyConfigured()
     {
-        var envFilePresent = File.Exists(EnvFilePath());
+        // Corrupt, incomplete, or unreadable managed state must not escape a status
+        // probe: this feeds Profiles view-model getters and refresh logic, where a
+        // throw breaks rendering instead of just reporting "not configured".
+        ManagedFileClassification envClassification;
+        try
+        {
+            envClassification = CreateManagedTransaction().Probe(BuildEnvFileSpec());
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Trace.WriteLine(
+                $"[BrowserAccessibilitySetupHelper] env-file probe failed: {ex.Message}"
+            );
+            envClassification = ManagedFileClassification.Foreign;
+        }
+
+        var envFilePresent = envClassification is ManagedFileClassification.CurrentOwned
+            or ManagedFileClassification.StaleOwned;
         // "LauncherPresent" means every installed launcher in this family is patched, not just
         // one — a newly-installed browser (e.g. Brave after Chrome was already patched) must not
         // silently count as configured while its own launcher still lacks the flag.
@@ -84,8 +113,14 @@ public sealed partial class BrowserAccessibilitySetupHelper
         var chromiumLauncherNames = GetLauncherNames(
             BrowserLauncherPatchMode.ChromiumRendererAccessibility
         );
-        var firefoxLauncherPresent = AllInstalledLaunchersOwned(firefoxLauncherNames);
-        var chromiumLauncherPresent = AllInstalledLaunchersOwned(chromiumLauncherNames);
+        var firefoxLauncherPresent = AllInstalledLaunchersOwned(
+            firefoxLauncherNames,
+            PrependEnvWrapperToExecLines
+        );
+        var chromiumLauncherPresent = AllInstalledLaunchersOwned(
+            chromiumLauncherNames,
+            AddAccessibilityFlagToExecLines
+        );
         var firefoxInstalled = HasInstalledLauncher(firefoxLauncherNames);
         var chromiumInstalled = HasInstalledLauncher(chromiumLauncherNames);
         var firefoxProfiles = EnumerateFirefoxProfileDirs().ToList();
@@ -191,7 +226,18 @@ public sealed partial class BrowserAccessibilitySetupHelper
     {
         try
         {
-            WriteEnvFile();
+            var envResult = WriteEnvFile();
+            if (!envResult.OwnsDestination)
+            {
+                return Task.FromResult(
+                    new SetupResult(
+                        false,
+                        "Could not enable browser accessibility.",
+                        $"{BuildEnvFileSpec().DestinationPath} was left untouched because "
+                        + (envResult.Detail ?? "it is not owned by TypeWhisper.")
+                    )
+                );
+            }
             var chromiumPatched = PatchLaunchers(
                 GetLauncherNames(BrowserLauncherPatchMode.ChromiumRendererAccessibility),
                 AddAccessibilityFlagToExecLines
@@ -330,12 +376,17 @@ public sealed partial class BrowserAccessibilitySetupHelper
     }
 
     // ReSharper disable once UnusedParameter.Global -- part of the setup API contract (cancellation support and signature symmetry with SetUpAsync)
-    public static Task<SetupResult> RemoveAsync(CancellationToken ct)
+    public static async Task<SetupResult> RemoveAsync(CancellationToken ct)
     {
         try
         {
-            var removedEnv = TryRemoveOwnedFile(EnvFilePath());
-            var removedLaunchers = RemoveOwnedLaunchers();
+            var envRemoval = await CreateManagedTransaction()
+                .RemoveAsync(BuildEnvFileSpec(), ct)
+                .ConfigureAwait(false);
+            var removedEnv = envRemoval.Classification == ManagedFileClassification.Absent
+                || envRemoval.Changed;
+            SweepLegacyEnvFile(ct);
+            var removedLaunchers = await RemoveOwnedLaunchers(ct).ConfigureAwait(false);
             var cleanedProfiles = RemoveOwnedFirefoxAccessibilityEntries();
 
             var summary = new StringBuilder("Browser accessibility integration removed.");
@@ -354,7 +405,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
             if (cleanedProfiles.Count <= 0)
             {
-                return Task.FromResult(new SetupResult(true, summary.ToString()));
+                return new SetupResult(true, summary.ToString());
             }
 
             summary.Append(' ');
@@ -362,16 +413,14 @@ public sealed partial class BrowserAccessibilitySetupHelper
             summary.Append(string.Join(", ", cleanedProfiles));
             summary.Append('.');
 
-            return Task.FromResult(new SetupResult(true, summary.ToString()));
+            return new SetupResult(true, summary.ToString());
         }
         catch (Exception ex)
         {
-            return Task.FromResult(
-                new SetupResult(
-                    false,
-                    "Could not remove browser accessibility integration.",
-                    ex.Message
-                )
+            return new SetupResult(
+                false,
+                "Could not remove browser accessibility integration.",
+                ex.Message
             );
         }
     }
@@ -391,8 +440,18 @@ public sealed partial class BrowserAccessibilitySetupHelper
         }
 
         if (
+            LegacyEnvFilePath() is { } legacyEnv
+            && File.Exists(legacyEnv)
+            && FileStartsWithOwnershipMarker(legacyEnv)
+        )
+        {
+            return true;
+        }
+
+        if (
             HasOwnedLauncher(
-                GetLauncherNames(BrowserLauncherPatchMode.FirefoxEnvironment)
+                GetLauncherNames(BrowserLauncherPatchMode.FirefoxEnvironment),
+                PrependEnvWrapperToExecLines
             )
         )
         {
@@ -401,7 +460,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
         if (
             HasOwnedLauncher(
-                GetLauncherNames(BrowserLauncherPatchMode.ChromiumRendererAccessibility)
+                GetLauncherNames(BrowserLauncherPatchMode.ChromiumRendererAccessibility),
+                AddAccessibilityFlagToExecLines
             )
         )
         {
@@ -426,6 +486,15 @@ public sealed partial class BrowserAccessibilitySetupHelper
         if (File.Exists(EnvFilePath()) && FileStartsWithOwnershipMarker(EnvFilePath()))
         {
             actions.Add($"• Delete {EnvFilePath()}");
+        }
+
+        if (
+            LegacyEnvFilePath() is { } legacyEnv
+            && File.Exists(legacyEnv)
+            && FileStartsWithOwnershipMarker(legacyEnv)
+        )
+        {
+            actions.Add($"• Delete {legacyEnv}");
         }
 
         var ownedLaunchers = EnumerateOwnedLauncherPaths().ToList();
@@ -560,7 +629,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
         // success while user.js never reaches the browser's actual profile.
         // ReSharper disable once LoopCanBeConvertedToQuery -- the nested form keeps the
         // root-coverage and profile-marker rationale anchored to the code each one explains.
-        foreach (var root in GetFirefoxProfileRoots())
+        foreach (var root in FirefoxProfileRootsOverride ?? GetFirefoxProfileRoots())
         {
             if (!Directory.Exists(root))
             {
@@ -634,34 +703,53 @@ public sealed partial class BrowserAccessibilitySetupHelper
     /// <returns><see langword="true" /> when the file changed.</returns>
     internal static bool PatchFirefoxUserJs(string userJsPath)
     {
-        var existing = File.Exists(userJsPath) ? File.ReadAllText(userJsPath) : "";
-        // Already effective (our owned block or a user-authored -1): leave the file
-        // untouched — a temp+rename rewrite would swap a dotfile-managed symlink
-        // for a regular file.
-        if (ForceDisabledNegOneMultilineRegex().IsMatch(existing))
+        for (var attempt = 0; attempt < 3; attempt++)
         {
-            return false;
+            var snapshot = AtomicFileWriter
+                .CaptureAsync(userJsPath, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            var existing = snapshot.Contents;
+            // Already effective (our owned block or a user-authored -1): leave the
+            // exact file, link, and metadata untouched.
+            if (ForceDisabledNegOneMultilineRegex().IsMatch(existing))
+            {
+                return false;
+            }
+
+            var preserved = ForceDisabledAnyValueLineRegex().Replace(
+                existing,
+                match => UserJsPreservedPrefix + match.Value
+            );
+            var ownsSeparatorNewline = preserved.Length > 0 && !preserved.EndsWith('\n');
+            var prefixNewline = ownsSeparatorNewline ? "\n" : "";
+            var ownershipMarker =
+                UserJsOwnershipMarker
+                + (ownsSeparatorNewline ? UserJsOwnedSeparatorSuffix : "");
+            var addition =
+                prefixNewline
+                + ownershipMarker
+                + " — required for AT-SPI URL detection on Wayland.\n"
+                + "user_pref(\"accessibility.force_disabled\", -1);\n";
+
+            if (
+                AtomicFileWriter
+                    .WriteIfUnchangedAsync(
+                        snapshot,
+                        preserved + addition,
+                        CancellationToken.None
+                    )
+                    .GetAwaiter()
+                    .GetResult()
+            )
+            {
+                return true;
+            }
         }
 
-        var preserved = ForceDisabledAnyValueLineRegex().Replace(
-            existing,
-            match => UserJsPreservedPrefix + match.Value
+        throw new IOException(
+            $"'{userJsPath}' kept changing while TypeWhisper tried to update its managed block."
         );
-        var ownsSeparatorNewline = preserved.Length > 0 && !preserved.EndsWith('\n');
-        var prefixNewline = ownsSeparatorNewline ? "\n" : "";
-        var ownershipMarker =
-            UserJsOwnershipMarker
-            + (ownsSeparatorNewline ? UserJsOwnedSeparatorSuffix : "");
-        var addition =
-            prefixNewline
-            + ownershipMarker
-            + " — required for AT-SPI URL detection on Wayland.\n"
-            + "user_pref(\"accessibility.force_disabled\", -1);\n";
-
-        var tmp = userJsPath + ".tmp";
-        File.WriteAllText(tmp, preserved + addition);
-        File.Move(tmp, userJsPath, true);
-        return true;
     }
 
     /// <summary>
@@ -672,50 +760,67 @@ public sealed partial class BrowserAccessibilitySetupHelper
     /// <returns><see langword="true" /> when the file changed or was deleted.</returns>
     internal static bool RevertFirefoxUserJs(string userJsPath)
     {
-        if (!File.Exists(userJsPath))
+        for (var attempt = 0; attempt < 3; attempt++)
         {
-            return false;
-        }
-
-        var content = File.ReadAllText(userJsPath);
-        var restored = PreservedAccessibilityEntryRegex().Replace(
-            content,
-            match => match.Groups["original"].Value
-        );
-        var stripped = OwnedAccessibilityEntryRegex().Replace(
-            restored,
-            match =>
+            var snapshot = AtomicFileWriter
+                .CaptureAsync(userJsPath, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            if (!snapshot.Existed)
             {
-                if (!match.Groups["ownsSeparator"].Success)
-                {
-                    return match.Groups["separator"].Value;
-                }
-
-                // Drop the separator newline we added. The trailing newline is ours
-                // too, but if the user appended content after our block it is the only
-                // thing keeping that content off the preceding line — keep it then.
-                var followedByContent = match.Index + match.Length < restored.Length;
-                return followedByContent ? match.Groups["trailing"].Value : "";
+                return false;
             }
+
+            var content = snapshot.Contents;
+            var restored = PreservedAccessibilityEntryRegex().Replace(
+                content,
+                match => match.Groups["original"].Value
+            );
+            var stripped = OwnedAccessibilityEntryRegex().Replace(
+                restored,
+                match =>
+                {
+                    if (!match.Groups["ownsSeparator"].Success)
+                    {
+                        return match.Groups["separator"].Value;
+                    }
+
+                    // Drop the separator newline we added. The trailing newline is ours
+                    // too, but if the user appended content after our block it is the only
+                    // thing keeping that content off the preceding line — keep it then.
+                    var followedByContent = match.Index + match.Length < restored.Length;
+                    return followedByContent ? match.Groups["trailing"].Value : "";
+                }
+            );
+
+            if (stripped == content)
+            {
+                return false;
+            }
+
+            var requestedIsResolved = string.Equals(
+                Path.GetFullPath(snapshot.RequestedTarget),
+                snapshot.ResolvedTarget,
+                StringComparison.Ordinal
+            );
+            var committed = string.IsNullOrWhiteSpace(stripped) && requestedIsResolved
+                ? AtomicFileWriter
+                    .DeleteIfUnchangedAsync(snapshot, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult()
+                : AtomicFileWriter
+                    .WriteIfUnchangedAsync(snapshot, stripped, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+            if (committed)
+            {
+                return true;
+            }
+        }
+
+        throw new IOException(
+            $"'{userJsPath}' kept changing while TypeWhisper tried to remove its managed block."
         );
-
-        if (stripped == content)
-        {
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(stripped))
-        {
-            File.Delete(userJsPath);
-        }
-        else
-        {
-            var tmp = userJsPath + ".tmp";
-            File.WriteAllText(tmp, stripped);
-            File.Move(tmp, userJsPath, true);
-        }
-
-        return true;
     }
 
     private static List<string> RemoveOwnedFirefoxAccessibilityEntries()
@@ -740,15 +845,155 @@ public sealed partial class BrowserAccessibilitySetupHelper
         return cleaned;
     }
 
-    private static void WriteEnvFile()
+    private static ManagedFileOperationResult WriteEnvFile()
     {
-        var path = EnvFilePath();
-        var directory = Path.GetDirectoryName(path)!;
-        Directory.CreateDirectory(directory);
+        var result = CreateManagedTransaction()
+            .InstallAsync(BuildEnvFileSpec())
+            .GetAwaiter()
+            .GetResult();
+        // Sweep only once we own the canonical file: if publication was refused, the
+        // legacy file may be the user's only working config, and clearing it would
+        // leave nothing exporting the variable.
+        if (result.OwnsDestination)
+        {
+            SweepLegacyEnvFile(CancellationToken.None);
+        }
 
-        var tempPath = path + ".tmp";
-        File.WriteAllText(tempPath, EnvFileContent);
-        File.Move(tempPath, path, true);
+        return result;
+    }
+
+    /// <summary>
+    ///     The pre-XDG release always wrote <c>~/.config/environment.d</c>. When
+    ///     XDG_CONFIG_HOME points elsewhere the canonical path no longer covers that
+    ///     file, so it is swept separately. Returns null when both paths agree.
+    /// </summary>
+    private static string? LegacyEnvFilePath()
+    {
+        var legacy = Path.Join(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".config",
+            "environment.d",
+            EnvFileName
+        );
+        return string.Equals(EnvFilePath(), legacy, StringComparison.Ordinal) ? null : legacy;
+    }
+
+    private static ManagedFileSpec? BuildLegacyEnvFileSpec()
+    {
+        return LegacyEnvFilePath() is not { } legacyPath
+            ? null
+            : BuildEnvFileSpec() with
+            {
+                ArtifactId = "browser-accessibility-environment-legacy",
+                DestinationPath = legacyPath,
+            };
+    }
+
+    /// <summary>
+    ///     Deletes the pre-XDG environment file only when it still carries our marker.
+    ///     Failures are swallowed: a legacy file we cannot read must not fail the whole
+    ///     operation, matching the skip-and-continue rule for removals.
+    /// </summary>
+    private static void SweepLegacyEnvFile(CancellationToken ct)
+    {
+        if (BuildLegacyEnvFileSpec() is not { } spec)
+        {
+            return;
+        }
+
+        try
+        {
+            CreateManagedTransaction().RemoveAsync(spec, ct).GetAwaiter().GetResult();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       or InvalidDataException)
+        {
+            Trace.WriteLine(
+                $"[BrowserAccessibilitySetupHelper] could not sweep '{spec.DestinationPath}': {ex.Message}"
+            );
+        }
+    }
+
+    private static ManagedFileTransaction CreateManagedTransaction()
+    {
+        return ManagedArtifactStateRootOverride is { } stateRoot
+            ? new ManagedFileTransaction(stateRoot)
+            : new ManagedFileTransaction();
+    }
+
+    private static ManagedFileSpec BuildEnvFileSpec()
+    {
+        return new ManagedFileSpec
+        {
+            ArtifactId = "browser-accessibility-environment",
+            DestinationPath = EnvFilePath(),
+            DesiredBytes = ManagedFileSpec.Utf8(EnvFileContent),
+            CreateMode = PrivateConfigMode,
+            OwnershipProbe = bytes =>
+            {
+                using var reader = new StringReader(Encoding.UTF8.GetString(bytes.Span));
+                var firstLine = reader.ReadLine();
+                return firstLine is not null
+                    && firstLine.StartsWith(
+                        $"# {OwnershipMarker}",
+                        StringComparison.Ordinal
+                    );
+            },
+        };
+    }
+
+    private static ManagedFileSpec BuildLauncherSpec(
+        string name,
+        string destination,
+        byte[] desiredBytes,
+        Func<string, string> transform,
+        string? legacyPreimagePath
+    )
+    {
+        return new ManagedFileSpec
+        {
+            ArtifactId = $"browser-launcher-{name}",
+            DestinationPath = destination,
+            DesiredBytes = desiredBytes,
+            CreateMode = DesktopFileMode,
+            OwnershipProbe = bytes =>
+            {
+                using var reader = new StringReader(Encoding.UTF8.GetString(bytes.Span));
+                return string.Equals(
+                    reader.ReadLine(),
+                    DesktopOwnershipComment,
+                    StringComparison.Ordinal
+                );
+            },
+            ExistingPolicy = ManagedFileExistingPolicy.BackupTransformAndRestore,
+            RemovalPolicy = ManagedFileRemovalPolicy.RestorePreimageIfUnchanged,
+            BackupTransform = bytes => BuildPatchedLauncherBytes(bytes.ToArray(), transform),
+            LegacyPreimagePath = legacyPreimagePath,
+        };
+    }
+
+    private static byte[] BuildPatchedLauncherBytes(
+        byte[] sourceBytes,
+        Func<string, string> transform
+    )
+    {
+        var patched = transform(Encoding.UTF8.GetString(sourceBytes));
+        return Encoding.UTF8.GetBytes(DesktopOwnershipComment + "\n" + patched);
+    }
+
+    private static bool EntryExistsIncludingSymlink(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            info.Refresh();
+            return info.Exists || info.LinkTarget is not null || Directory.Exists(path);
+        }
+        catch
+        {
+            // Treat an uninspectable entry as present so the transaction refuses it.
+            return true;
+        }
     }
 
     private static List<string> PatchLaunchers(
@@ -764,36 +1009,11 @@ public sealed partial class BrowserAccessibilitySetupHelper
         foreach (var name in names)
         {
             var userCopy = Path.Join(userAppsDir, name);
-            var userCopyExists = File.Exists(userCopy);
-
-            if (userCopyExists && FileStartsWithOwnershipMarker(userCopy))
-            {
-                patched.Add(name);
-                continue;
-            }
-
-            string sourceContent;
-            if (userCopyExists)
-            {
-                // Non-owned user launcher: preserve it via sidecar backup so RemoveAsync
-                // can restore the user's customizations (Exec wrappers, env, icons, etc.).
-                // Patch from the user's own content rather than the system copy so we
-                // don't clobber their changes.
-                try
-                {
-                    sourceContent = File.ReadAllText(userCopy);
-                }
-                catch
-                {
-                    continue;
-                }
-
-                if (!TryBackupUserLauncher(userCopy, name))
-                {
-                    continue;
-                }
-            }
-            else
+            var userCopyExists = EntryExistsIncludingSymlink(userCopy);
+            var backupPath = Path.Join(LauncherBackupDir(), name);
+            var legacyBackupExists = EntryExistsIncludingSymlink(backupPath);
+            byte[] desiredBytes = [];
+            if (!userCopyExists)
             {
                 var systemSource = FindSystemLauncher(name);
                 if (systemSource is null)
@@ -803,45 +1023,63 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
                 try
                 {
-                    sourceContent = File.ReadAllText(systemSource);
+                    desiredBytes = BuildPatchedLauncherBytes(
+                        File.ReadAllBytes(systemSource),
+                        transformContent
+                    );
                 }
                 catch
                 {
                     continue;
                 }
             }
+            else if (!legacyBackupExists)
+            {
+                // A pre-transaction shadow without a sidecar can be adopted only when
+                // its exact bytes are reproducible from the current system launcher.
+                var systemSource = FindSystemLauncher(name);
+                if (systemSource is not null)
+                {
+                    try
+                    {
+                        desiredBytes = BuildPatchedLauncherBytes(
+                            File.ReadAllBytes(systemSource),
+                            transformContent
+                        );
+                    }
+                    catch
+                    {
+                        // Foreign user launchers are transformed from their captured bytes
+                        // inside the transaction, so a missing system source is not fatal.
+                    }
+                }
+            }
 
-            var patchedContent = transformContent(sourceContent);
-            var finalContent = DesktopOwnershipComment + "\n" + patchedContent;
-
-            var tempPath = userCopy + ".tmp";
-            File.WriteAllText(tempPath, finalContent);
-            File.Move(tempPath, userCopy, true);
-            patched.Add(name);
+            var spec = BuildLauncherSpec(
+                name,
+                userCopy,
+                desiredBytes,
+                transformContent,
+                legacyBackupExists ? backupPath : null
+            );
+            try
+            {
+                var result = CreateManagedTransaction()
+                    .InstallAsync(spec)
+                    .GetAwaiter()
+                    .GetResult();
+                if (result.OwnsDestination)
+                {
+                    patched.Add(name);
+                }
+            }
+            catch
+            {
+                // Per-launcher failures remain isolated, matching the existing behavior.
+            }
         }
 
         return patched;
-    }
-
-    private static bool TryBackupUserLauncher(string userCopy, string name)
-    {
-        try
-        {
-            var backupDir = LauncherBackupDir();
-            Directory.CreateDirectory(backupDir);
-            var backupPath = Path.Join(backupDir, name);
-            // Preserve the oldest backup if we ran setup multiple times.
-            if (!File.Exists(backupPath))
-            {
-                File.Copy(userCopy, backupPath, false);
-            }
-
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     private static string AddAccessibilityFlagToExecLines(string content)
@@ -900,24 +1138,19 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
     private static string? FindSystemLauncher(string name)
     {
-        return s_systemLauncherDirectories
+        return (SystemLauncherDirectoriesOverride ?? s_systemLauncherDirectories)
             .Select(dir => Path.Join(dir, name))
             .FirstOrDefault(File.Exists);
     }
 
-    private static bool HasOwnedLauncher(IReadOnlyList<string> launcherNames)
+    private static bool HasOwnedLauncher(
+        IReadOnlyList<string> launcherNames,
+        Func<string, string> transform
+    )
     {
         var dir = UserApplicationsDir();
-        if (!Directory.Exists(dir))
-        {
-            return false;
-        }
-
-        return launcherNames.Any(name =>
-        {
-            var path = Path.Join(dir, name);
-            return File.Exists(path) && FileStartsWithOwnershipMarker(path);
-        });
+        return Directory.Exists(dir)
+            && launcherNames.Any(name => LauncherIsManaged(name, transform));
     }
 
     /// <summary>
@@ -926,7 +1159,10 @@ public sealed partial class BrowserAccessibilitySetupHelper
     ///     installed). Distinct from <see cref="HasOwnedLauncher" />, which only tests
     ///     whether *any* launcher was patched (used by <see cref="HasInstalledChanges" />).
     /// </summary>
-    private static bool AllInstalledLaunchersOwned(IReadOnlyList<string> launcherNames)
+    private static bool AllInstalledLaunchersOwned(
+        IReadOnlyList<string> launcherNames,
+        Func<string, string> transform
+    )
     {
         var userDir = UserApplicationsDir();
         // ReSharper disable once LoopCanBeConvertedToQuery -- the continue-skip over not-installed launchers mirrors the documented "every installed launcher is owned" semantics more clearly than a chained Where/All.
@@ -940,14 +1176,55 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 continue;
             }
 
-            var ownedShadow = Path.Join(userDir, name);
-            if (!File.Exists(ownedShadow) || !FileStartsWithOwnershipMarker(ownedShadow))
+            if (!LauncherIsManaged(name, transform))
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    private static bool LauncherIsManaged(
+        string name,
+        Func<string, string> transform
+    )
+    {
+        var destination = Path.Join(UserApplicationsDir(), name);
+        var backupPath = Path.Join(LauncherBackupDir(), name);
+        var legacyBackupExists = EntryExistsIncludingSymlink(backupPath);
+        byte[] desired = [];
+        var systemSource = FindSystemLauncher(name);
+        if (systemSource is not null)
+        {
+            try
+            {
+                desired = BuildPatchedLauncherBytes(File.ReadAllBytes(systemSource), transform);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        try
+        {
+            var classification = CreateManagedTransaction().Probe(
+                BuildLauncherSpec(
+                    name,
+                    destination,
+                    desired,
+                    transform,
+                    legacyBackupExists ? backupPath : null
+                )
+            );
+            return classification is ManagedFileClassification.CurrentOwned
+                or ManagedFileClassification.StaleOwned;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool HasUserOwnedOrNonOwnedLauncher(string userDir, string name)
@@ -978,49 +1255,65 @@ public sealed partial class BrowserAccessibilitySetupHelper
         return false;
     }
 
-    private static List<string> RemoveOwnedLaunchers()
+    private static async Task<List<string>> RemoveOwnedLaunchers(CancellationToken ct)
     {
         var dir = UserApplicationsDir();
-        if (!Directory.Exists(dir))
-        {
-            return [];
-        }
-
-        var backupDir = LauncherBackupDir();
         var removed = new List<string>();
-        foreach (var file in Directory.EnumerateFiles(dir, "*.desktop"))
+        var launchers = GetLauncherNames(BrowserLauncherPatchMode.FirefoxEnvironment)
+            .Select(name => (name, transform: (Func<string, string>)PrependEnvWrapperToExecLines))
+            .Concat(
+                GetLauncherNames(BrowserLauncherPatchMode.ChromiumRendererAccessibility)
+                    .Select(name => (name, transform: (Func<string, string>)AddAccessibilityFlagToExecLines))
+            );
+        foreach (var (name, transform) in launchers)
         {
-            if (!FileStartsWithOwnershipMarker(file))
-            {
-                continue;
-            }
-
-            var name = Path.GetFileName(file);
-            var backupPath = Path.Join(backupDir, name);
-
+            var file = Path.Join(dir, name);
+            var backupPath = Path.Join(LauncherBackupDir(), name);
+            var legacyBackupExists = EntryExistsIncludingSymlink(backupPath);
+            byte[] desired = [];
+            var systemSource = FindSystemLauncher(name);
             try
             {
-                if (File.Exists(backupPath))
+                if (systemSource is not null)
                 {
-                    // Atomic restore: write to .tmp then move.
-                    var tempPath = file + ".restore.tmp";
-                    File.Copy(backupPath, tempPath, true);
-                    File.Move(tempPath, file, true);
-                    try
-                    {
-                        File.Delete(backupPath);
-                    }
-                    catch
-                    {
-                        /* best effort */
-                    }
-
-                    removed.Add(name + " (restored)");
+                    desired = BuildPatchedLauncherBytes(
+                        await File.ReadAllBytesAsync(systemSource, ct).ConfigureAwait(false),
+                        transform
+                    );
                 }
-                else
+
+                var result = await CreateManagedTransaction()
+                    .RemoveAsync(
+                        BuildLauncherSpec(
+                            name,
+                            file,
+                            desired,
+                            transform,
+                            legacyBackupExists ? backupPath : null
+                        ),
+                        ct
+                    )
+                    .ConfigureAwait(false);
+                if (result.Changed)
                 {
-                    File.Delete(file);
-                    removed.Add(name);
+                    removed.Add(name + (legacyBackupExists ? " (restored)" : string.Empty));
+                    if (legacyBackupExists)
+                    {
+                        // Spent now that the preimage restored the launcher — delete before it
+                        // accumulates as stale legacy-ownership evidence. No marker check
+                        // needed: we created this backup ourselves.
+                        try
+                        {
+                            File.Delete(backupPath);
+                        }
+                        catch (Exception ex) when (ex is IOException
+                                                       or UnauthorizedAccessException)
+                        {
+                            Trace.WriteLine(
+                                $"[BrowserAccessibilitySetupHelper] could not delete spent backup '{backupPath}': {ex.Message}"
+                            );
+                        }
+                    }
                 }
             }
             catch
@@ -1029,45 +1322,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
             }
         }
 
-        try
-        {
-            if (
-                Directory.Exists(backupDir)
-                && !Directory.EnumerateFileSystemEntries(backupDir).Any()
-            )
-            {
-                Directory.Delete(backupDir);
-            }
-        }
-        catch
-        {
-            /* best effort */
-        }
-
         return removed;
-    }
-
-    private static bool TryRemoveOwnedFile(string path)
-    {
-        if (!File.Exists(path))
-        {
-            return true;
-        }
-
-        if (!FileStartsWithOwnershipMarker(path))
-        {
-            return false;
-        }
-
-        try
-        {
-            File.Delete(path);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     private static bool FileStartsWithOwnershipMarker(string path)
@@ -1087,20 +1342,38 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
     private static string EnvFilePath()
     {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Join(home, ".config", "environment.d", EnvFileName);
+        var configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        if (string.IsNullOrWhiteSpace(configHome))
+        {
+            configHome = Path.Join(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".config"
+            );
+        }
+
+        return Path.Join(configHome, "environment.d", EnvFileName);
     }
 
     private static string UserApplicationsDir()
     {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Join(home, ".local", "share", "applications");
+        return Path.Join(UserDataHome(), "applications");
     }
 
     private static string LauncherBackupDir()
     {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Join(home, ".local", "share", "typewhisper", "launcher-backups");
+        return Path.Join(UserDataHome(), "typewhisper", "launcher-backups");
+    }
+
+    private static string UserDataHome()
+    {
+        var dataHome = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
+        return string.IsNullOrWhiteSpace(dataHome)
+            ? Path.Join(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".local",
+                "share"
+            )
+            : dataHome;
     }
 
     public sealed record Status(

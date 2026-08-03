@@ -1,5 +1,6 @@
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.ManagedArtifacts;
 
 namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 
@@ -48,6 +49,7 @@ public sealed class InputAccessSetupHelper
     // surface. The override is internal, so only the in-process test (via
     // InternalsVisibleTo) can set it.
     internal static string? SysConfDirOverride { get; set; }
+    internal static string? RootManagedArtifactStateRootOverride { get; set; }
 
     private static string SysConfDir => SysConfDirOverride ?? "/etc";
 
@@ -67,6 +69,7 @@ public sealed class InputAccessSetupHelper
 
     private const string UdevRuleConflictToken = "TYPEWHISPER_INPUT_UDEV_RULE_CONFLICT";
     private const string UdevRuleSymlinkToken = "TYPEWHISPER_INPUT_UDEV_RULE_SYMLINK";
+    private const string ActivationFailureToken = "TYPEWHISPER_INPUT_ACTIVATION_FAILED";
 
     internal const string UdevRuleContent =
         "# "
@@ -174,6 +177,15 @@ public sealed class InputAccessSetupHelper
             return SymlinkRefusal();
         }
 
+        if (run.StandardError.Contains(ActivationFailureToken, StringComparison.Ordinal))
+        {
+            return new Result(
+                false,
+                Loc.Instance["Shortcuts.KeyboardAccessActivationFailed"],
+                run.StandardError.Trim()
+            );
+        }
+
         // pkexec exits 126/127 when the auth dialog is dismissed or denied —
         // surface that distinctly so the caller can offer the manual command.
         if (run.ExitCode is 126 or 127)
@@ -200,39 +212,30 @@ public sealed class InputAccessSetupHelper
     ///     and symlink checks deliberately run inside this script so an
     ///     unprivileged preflight cannot race the privileged write.
     /// </summary>
-    private static string BuildPrivilegedInstallScript()
+    private static string BuildPrivilegedInstallScript(bool includeGroupFallback = false)
     {
-        // Pipe content via a here-doc, not command-line args, to avoid shell
-        // metadata issues. The `case` glob anchors the marker match to the first
-        // line, mirroring IsFileOwnedByTypeWhisper. The retrigger applies the rule
-        // to keyboards that are already plugged in.
-        return "set -e\n"
-               + $"udev_path='{UdevRulePath}'\n"
-               + $"marker='# {OwnershipMarker}'\n"
-               + "if [ -L \"$udev_path\" ]; then\n"
-               + $"  echo '{UdevRuleSymlinkToken}' >&2\n"
-               + $"  exit {UdevRuleSymlinkExitCode}\n"
-               + "elif [ -e \"$udev_path\" ]; then\n"
-               + "  if [ ! -f \"$udev_path\" ]; then\n"
-               + $"    echo '{UdevRuleConflictToken}' >&2\n"
-               + $"    exit {UdevRuleConflictExitCode}\n"
-               + "  elif first=$(head -n 1 \"$udev_path\") && case \"$first\" in \"$marker\"|\"$marker \"*) true;; *) false;; esac; then\n"
-               + "    :\n"
-               + "  else\n"
-               + $"    echo '{UdevRuleConflictToken}' >&2\n"
-               + $"    exit {UdevRuleConflictExitCode}\n"
-               + "  fi\n"
-               + "fi\n"
-               + "cat > \"$udev_path\" <<'EOF'\n"
-               + UdevRuleContent
-               + "EOF\n"
-               + "udevadm control --reload\n"
-               + "udevadm trigger --subsystem-match=input --action=change\n"
-               // Block until udev has finished applying the rule (the uaccess ACL is
-               // set during event processing) so the caller's immediate re-probe of
-               // keyboard access sees the granted access rather than racing it.
-               // Bounded so a stuck udev can't wedge the setup flow.
-               + "udevadm settle --timeout=5 || true\n";
+        var afterCommit =
+            "if ! udevadm control --reload; then\n"
+            + $"  echo '{ActivationFailureToken}' >&2; exit 80\n"
+            + "fi\n"
+            + "if ! udevadm trigger --subsystem-match=input --action=change; then\n"
+            + $"  echo '{ActivationFailureToken}' >&2; exit 80\n"
+            + "fi\n"
+            + "udevadm settle --timeout=5 || true\n";
+        if (includeGroupFallback)
+        {
+            afterCommit +=
+                "# Only on systems without systemd-logind/elogind (where uaccess is inert):\n"
+                + $"if {SeatManagerAbsentShellCondition()}; then\n"
+                + "  usermod -aG input \"${SUDO_USER:-$USER}\"\n"
+                + "fi\n";
+        }
+
+        return PrivilegedManagedFileTransaction.BuildInstallScript(
+            RootStateRoot,
+            [RootSpec],
+            afterCommit
+        );
     }
 
     /// <summary>
@@ -243,25 +246,12 @@ public sealed class InputAccessSetupHelper
     /// </summary>
     private static string BuildPrivilegedRemoveScript()
     {
-        return "set -e\n"
-               + $"udev_path='{UdevRulePath}'\n"
-               + $"marker='# {OwnershipMarker}'\n"
-               + "if [ -L \"$udev_path\" ]; then\n"
-               + $"  echo '{UdevRuleSymlinkToken}' >&2\n"
-               + $"  exit {UdevRuleSymlinkExitCode}\n"
-               + "elif [ -e \"$udev_path\" ]; then\n"
-               + "  if [ ! -f \"$udev_path\" ]; then\n"
-               + $"    echo '{UdevRuleConflictToken}' >&2\n"
-               + $"    exit {UdevRuleConflictExitCode}\n"
-               + "  elif first=$(head -n 1 \"$udev_path\") && case \"$first\" in \"$marker\"|\"$marker \"*) true;; *) false;; esac; then\n"
-               + "    rm -f \"$udev_path\"\n"
-               + "  else\n"
-               + $"    echo '{UdevRuleConflictToken}' >&2\n"
-               + $"    exit {UdevRuleConflictExitCode}\n"
-               + "  fi\n"
-               + "fi\n"
-               + "udevadm control --reload\n"
-               + "udevadm trigger --subsystem-match=input --action=change\n";
+        return PrivilegedManagedFileTransaction.BuildRemoveScript(
+            RootStateRoot,
+            [RootSpec],
+            "udevadm control --reload\n"
+            + "udevadm trigger --subsystem-match=input --action=change\n"
+        );
     }
 
     private static bool MatchesPrivilegedFailure(
@@ -302,25 +292,27 @@ public sealed class InputAccessSetupHelper
     /// </summary>
     public async Task<Result> RemoveAsync(CancellationToken ct)
     {
-        if (!File.Exists(UdevRulePath))
+        var entryExists = EntryExistsIncludingSymlink(UdevRulePath);
+        if (!entryExists && !DesktopDetector.BinaryExists("pkexec"))
         {
             return new Result(true, "No keyboard-access rule to remove.");
         }
 
-        if (!IsFileOwnedByTypeWhisper(UdevRulePath))
-        {
-            return new Result(
-                true,
-                "Keyboard-access rule left in place.",
-                $"Left {UdevRulePath} untouched — it doesn't carry TypeWhisper's ownership marker, so we won't delete it. Remove it manually if you want to."
-            );
-        }
-
         if (!DesktopDetector.BinaryExists("pkexec"))
         {
-            // Fail closed: the file is ours and still on disk, but without pkexec
-            // we can't delete root-owned config. Don't report success while
-            // leaving privileged state behind.
+            // Fail closed: without pkexec we can't delete root-owned config, so don't
+            // report success while it's still there. Existence alone is not ownership —
+            // the privileged path checks the marker before deleting, so manual guidance
+            // must too, or we'd tell the user to erase a distro-installed rule.
+            if (!IsFileOwnedByTypeWhisper(UdevRulePath))
+            {
+                return new Result(
+                    false,
+                    $"Could not remove {UdevRulePath} — pkexec is not available to delete root-owned config.",
+                    $"{UdevRulePath} exists but does not carry TypeWhisper's ownership marker, so it may belong to your distribution. Inspect it yourself before deleting anything: sudo cat {UdevRulePath}"
+                );
+            }
+
             return new Result(
                 false,
                 $"Could not remove {UdevRulePath} — pkexec is not available to delete root-owned config.",
@@ -358,6 +350,15 @@ public sealed class InputAccessSetupHelper
             return SymlinkRefusal();
         }
 
+        if (rm.StandardError.Contains(ActivationFailureToken, StringComparison.Ordinal))
+        {
+            return new Result(
+                false,
+                Loc.Instance["Shortcuts.KeyboardAccessActivationFailed"],
+                rm.StandardError.Trim()
+            );
+        }
+
         if (!rm.Succeeded)
         {
             return new Result(
@@ -380,42 +381,8 @@ public sealed class InputAccessSetupHelper
     /// </summary>
     public static string ManualInstallCommand()
     {
-        return "sudo sh -c '\n"
-               + "set -e\n"
-               + $"udev_path=\"{UdevRulePath}\"\n"
-               + $"marker=\"# {OwnershipMarker}\"\n"
-               + "if [ -L \"$udev_path\" ]; then\n"
-               + "  echo \"Refusing: $udev_path is a symbolic link — move it aside first.\" >&2; exit 1\n"
-               + "elif [ -e \"$udev_path\" ] && [ ! -f \"$udev_path\" ]; then\n"
-               + "  echo \"Refusing: $udev_path is not a regular file — move it aside first.\" >&2; exit 1\n"
-               + "elif [ -f \"$udev_path\" ]; then\n"
-               + "  first=$(head -n 1 \"$udev_path\")\n"
-               + "  case \"$first\" in \"$marker\"|\"$marker \"*) : ;; *)\n"
-               + "    echo \"Refusing: $udev_path is foreign config — move it aside first.\" >&2; exit 1 ;;\n"
-               + "  esac\n"
-               + "fi\n"
-               + "cat > \"$udev_path\" <<'\"'\"'EOF'\"'\"'\n"
-               + UdevRuleContent
-               + "EOF\n"
-               + "udevadm control --reload\n"
-               + "udevadm trigger --subsystem-match=input --action=change\n"
-               // || true so a settle timeout under set -e can't stop the script before the
-               // input-group fallback below, matching the privileged install path.
-               + "udevadm settle --timeout=5 || true\n"
-               // Self-correcting fallback. TAG+="uaccess" grants keyboard access on
-               // systems with a logind/elogind seat manager (the common case), so
-               // this only acts where uaccess is inert — detected directly by the
-               // ABSENCE of a seat-manager runtime dir, rather than by probing node
-               // readability (which can't tell a readable mouse from a readable
-               // keyboard). There it joins the input group and asks for a re-login.
-               + "# Only on systems without systemd-logind/elogind (where uaccess is\n"
-               + "# inert): join the input group, then log out and back in.\n"
-               + $"if {SeatManagerAbsentShellCondition()}; then\n"
-               // ${SUDO_USER:-$USER}: the body runs as root under sudo, so bare
-               // $USER would join root, not the invoking user.
-               + "  usermod -aG input \"${SUDO_USER:-$USER}\"\n"
-               + "fi\n"
-               + "'";
+        var body = BuildPrivilegedInstallScript(includeGroupFallback: true);
+        return "sudo sh -c " + PrivilegedManagedFileTransaction.QuoteAsShCArgument(body);
     }
 
     private static string SeatManagerAbsentShellCondition()
@@ -446,6 +413,35 @@ public sealed class InputAccessSetupHelper
             // refusing is always safer than erasing privileged config we can't
             // even inspect.
             return false;
+        }
+    }
+
+    private static string RootStateRoot =>
+        RootManagedArtifactStateRootOverride
+        ?? "/var/lib/typewhisper/managed-artifacts";
+
+    private static PrivilegedManagedFileSpec RootSpec =>
+        new(
+            "evdev-udev-rule",
+            UdevRulePath,
+            UdevRuleContent,
+            UdevRuleConflictExitCode,
+            UdevRuleConflictToken,
+            UdevRuleSymlinkExitCode,
+            UdevRuleSymlinkToken
+        );
+
+    private static bool EntryExistsIncludingSymlink(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            info.Refresh();
+            return info.Exists || info.LinkTarget is not null || Directory.Exists(path);
+        }
+        catch
+        {
+            return true;
         }
     }
 

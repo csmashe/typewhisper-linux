@@ -145,6 +145,57 @@ public sealed class CliInstallServiceTests : IDisposable
     }
 
     [Fact]
+    public void Install_refuses_unrecorded_private_binary_without_running_verification()
+    {
+        var sourceDir = Path.Join(_tempDir, "bundle");
+        var installDir = Path.Join(_tempDir, "install");
+        var launcherDir = Path.Join(_tempDir, "bin");
+        var installPath = Path.Join(installDir, "typewhisper-cli");
+        WriteBundle(sourceDir, "new");
+        Directory.CreateDirectory(installDir);
+        File.WriteAllText(installPath, "foreign-private-binary");
+        var verificationCalled = false;
+        var service = CreateService(
+            sourceDir,
+            installDir,
+            launcherDir,
+            _ =>
+            {
+                verificationCalled = true;
+                return SuccessfulVerification(installPath);
+            }
+        );
+
+        var state = service.Install();
+
+        Assert.False(state.Installed);
+        Assert.False(verificationCalled);
+        Assert.Equal("foreign-private-binary", File.ReadAllText(installPath));
+        Assert.False(File.Exists(Path.Join(launcherDir, "typewhisper-cli")));
+        Assert.Contains(installPath, state.StatusText, StringComparison.Ordinal);
+        Assert.Contains("not managed", state.StatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Install_refuses_customized_recorded_launcher()
+    {
+        var sourceDir = Path.Join(_tempDir, "bundle");
+        var installDir = Path.Join(_tempDir, "install");
+        var launcherDir = Path.Join(_tempDir, "bin");
+        var launcherPath = Path.Join(launcherDir, "typewhisper-cli");
+        WriteBundle(sourceDir, "v1");
+        var service = CreateService(sourceDir, installDir, launcherDir);
+        Assert.True(service.Install().Installed);
+        File.AppendAllText(launcherPath, "# user customization\n");
+
+        var state = service.Install();
+
+        Assert.False(state.Installed);
+        Assert.EndsWith("# user customization\n", File.ReadAllText(launcherPath));
+        Assert.Contains("not managed", state.StatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Install_atomically_replaces_owned_install()
     {
         var sourceDir = Path.Join(_tempDir, "bundle");
@@ -226,6 +277,71 @@ public sealed class CliInstallServiceTests : IDisposable
         );
     }
 
+    // First upgrade after the manifest lands: the old binary predates recorded state and
+    // its bytes differ from the new bundle, so the launcher's marker is the only evidence it's ours.
+    [Fact]
+    public void Install_upgrades_a_pre_manifest_binary_vouched_for_by_our_launcher()
+    {
+        var sourceDir = Path.Join(_tempDir, "bundle");
+        var installDir = Path.Join(_tempDir, "install");
+        var launcherDir = Path.Join(_tempDir, "bin");
+        var installPath = Path.Join(installDir, "typewhisper-cli");
+        var launcherPath = Path.Join(launcherDir, "typewhisper-cli");
+        WriteBundle(sourceDir, "new");
+        WriteBundle(installDir, "old");
+        Directory.CreateDirectory(launcherDir);
+        File.WriteAllText(launcherPath, ExpectedLauncher(installPath));
+        var service = CreateService(sourceDir, installDir, launcherDir);
+
+        var state = service.Install();
+
+        Assert.True(state.Installed);
+        Assert.Equal("apphost-new", File.ReadAllText(installPath));
+        AssertNoTemporaryCliFiles(installDir);
+    }
+
+    [Fact]
+    public void Install_refuses_a_pre_manifest_binary_with_no_launcher_vouching_for_it()
+    {
+        var sourceDir = Path.Join(_tempDir, "bundle");
+        var installDir = Path.Join(_tempDir, "install");
+        var launcherDir = Path.Join(_tempDir, "bin");
+        var installPath = Path.Join(installDir, "typewhisper-cli");
+        WriteBundle(sourceDir, "new");
+        WriteBundle(installDir, "foreign");
+        var service = CreateService(sourceDir, installDir, launcherDir);
+
+        service.Install();
+
+        Assert.Equal("apphost-foreign", File.ReadAllText(installPath));
+    }
+
+    [Fact]
+    public void Install_repairs_an_installed_cli_whose_execute_bit_was_removed()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var sourceDir = Path.Join(_tempDir, "bundle");
+        var installDir = Path.Join(_tempDir, "install");
+        var launcherDir = Path.Join(_tempDir, "bin");
+        var installPath = Path.Join(installDir, "typewhisper-cli");
+        WriteBundle(sourceDir, "v1");
+        WriteBundle(installDir, "v1");
+        // Same bytes as the bundle, but stripped of execute: reporting this as
+        // installed would leave the user with a CLI that cannot run.
+        File.SetUnixFileMode(installPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        var service = CreateService(sourceDir, installDir, launcherDir, SuccessfulVerification);
+
+        var state = service.Install();
+
+        Assert.True(state.Installed);
+        Assert.Equal(ExpectedExecutableMode, File.GetUnixFileMode(installPath));
+        AssertNoTemporaryCliFiles(installDir);
+    }
+
     [Fact]
     public void Install_executable_mode_verification_failure_preserves_old_cli()
     {
@@ -235,11 +351,9 @@ public sealed class CliInstallServiceTests : IDisposable
         var installPath = Path.Join(installDir, "typewhisper-cli");
         var launcherPath = Path.Join(launcherDir, "typewhisper-cli");
         var versionVerificationCalled = false;
+        WriteBundle(sourceDir, "old");
+        CreateService(sourceDir, installDir, launcherDir).Install();
         WriteBundle(sourceDir, "new");
-        Directory.CreateDirectory(installDir);
-        Directory.CreateDirectory(launcherDir);
-        File.WriteAllText(installPath, "old");
-        File.WriteAllText(launcherPath, ExpectedLauncher(installPath));
         var service = CreateService(
             sourceDir,
             installDir,
@@ -256,7 +370,7 @@ public sealed class CliInstallServiceTests : IDisposable
 
         Assert.Contains("mode verification failed", error.Message, StringComparison.Ordinal);
         Assert.False(versionVerificationCalled);
-        Assert.Equal("old", File.ReadAllText(installPath));
+        Assert.Equal("apphost-old", File.ReadAllText(installPath));
         Assert.Equal(ExpectedLauncher(installPath), File.ReadAllText(launcherPath));
         AssertNoTemporaryCliFiles(installDir);
     }
@@ -269,11 +383,9 @@ public sealed class CliInstallServiceTests : IDisposable
         var launcherDir = Path.Join(_tempDir, "bin");
         var installPath = Path.Join(installDir, "typewhisper-cli");
         var launcherPath = Path.Join(launcherDir, "typewhisper-cli");
+        WriteBundle(sourceDir, "old");
+        CreateService(sourceDir, installDir, launcherDir).Install();
         WriteBundle(sourceDir, "new");
-        Directory.CreateDirectory(installDir);
-        Directory.CreateDirectory(launcherDir);
-        File.WriteAllText(installPath, "old");
-        File.WriteAllText(launcherPath, ExpectedLauncher(installPath));
         var service = CreateService(
             sourceDir,
             installDir,
@@ -284,7 +396,7 @@ public sealed class CliInstallServiceTests : IDisposable
         var error = Assert.Throws<InvalidOperationException>(service.Install);
 
         Assert.Contains("exit code 17", error.Message, StringComparison.Ordinal);
-        Assert.Equal("old", File.ReadAllText(installPath));
+        Assert.Equal("apphost-old", File.ReadAllText(installPath));
         Assert.Equal(ExpectedLauncher(installPath), File.ReadAllText(launcherPath));
         AssertNoTemporaryCliFiles(installDir);
     }
@@ -297,11 +409,9 @@ public sealed class CliInstallServiceTests : IDisposable
         var launcherDir = Path.Join(_tempDir, "bin");
         var installPath = Path.Join(installDir, "typewhisper-cli");
         var launcherPath = Path.Join(launcherDir, "typewhisper-cli");
+        WriteBundle(sourceDir, "old");
+        CreateService(sourceDir, installDir, launcherDir).Install();
         WriteBundle(sourceDir, "new");
-        Directory.CreateDirectory(installDir);
-        Directory.CreateDirectory(launcherDir);
-        File.WriteAllText(installPath, "old");
-        File.WriteAllText(launcherPath, ExpectedLauncher(installPath));
         var service = CreateService(
             sourceDir,
             installDir,
@@ -318,7 +428,7 @@ public sealed class CliInstallServiceTests : IDisposable
 
         Assert.Contains("expected", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(AppVersion.Display, error.Message, StringComparison.Ordinal);
-        Assert.Equal("old", File.ReadAllText(installPath));
+        Assert.Equal("apphost-old", File.ReadAllText(installPath));
         Assert.Equal(ExpectedLauncher(installPath), File.ReadAllText(launcherPath));
         AssertNoTemporaryCliFiles(installDir);
     }
@@ -330,6 +440,13 @@ public sealed class CliInstallServiceTests : IDisposable
         var launcherDir = Path.Join(_tempDir, "bin");
         var installPath = Path.Join(installDir, "typewhisper-cli");
         WriteBundle(installDir, "same");
+        // A genuinely already-installed CLI carries the executable mode we publish;
+        // a 0644 file here is drift the installer is now expected to repair.
+        if (OperatingSystem.IsLinux())
+        {
+            File.SetUnixFileMode(installPath, ExpectedExecutableMode);
+        }
+
         var verificationCalled = false;
         var service = CreateService(
             installDir,
@@ -654,15 +771,25 @@ public sealed class CliInstallServiceTests : IDisposable
         var installPath = Path.Join(installDir, "typewhisper-cli");
         WriteExecutableBundle(
             sourceDir,
+            $"""
+            #!/bin/sh
+            printf 'typewhisper-cli %s\n' '{AppVersion.Display}'
+            """
+        );
+        new CliInstallService(
+            () => Path.Join(sourceDir, "typewhisper-cli"),
+            () => installDir,
+            () => launcherDir
+        ).Install();
+        var oldBytes = File.ReadAllBytes(installPath);
+        WriteExecutableBundle(
+            sourceDir,
             """
             #!/bin/sh
             echo 'loader failure' >&2
             exit 3
             """
         );
-        Directory.CreateDirectory(installDir);
-        Directory.CreateDirectory(launcherDir);
-        File.WriteAllText(installPath, "old");
         var service = new CliInstallService(
             () => Path.Join(sourceDir, "typewhisper-cli"),
             () => installDir,
@@ -673,7 +800,7 @@ public sealed class CliInstallServiceTests : IDisposable
 
         Assert.Contains("exit code 3", error.Message, StringComparison.Ordinal);
         Assert.Contains("loader failure", error.Message, StringComparison.Ordinal);
-        Assert.Equal("old", File.ReadAllText(installPath));
+        Assert.Equal(oldBytes, File.ReadAllBytes(installPath));
         AssertNoTemporaryCliFiles(installDir);
     }
 
@@ -696,14 +823,24 @@ public sealed class CliInstallServiceTests : IDisposable
             sourceDir,
             $"""
             #!/bin/sh
+            printf 'typewhisper-cli %s\n' '{AppVersion.Display}'
+            """
+        );
+        new CliInstallService(
+            () => Path.Join(sourceDir, "typewhisper-cli"),
+            () => installDir,
+            () => launcherDir
+        ).Install();
+        var oldBytes = File.ReadAllBytes(installPath);
+        WriteExecutableBundle(
+            sourceDir,
+            $"""
+            #!/bin/sh
             sleep 30 &
             printf 'typewhisper-cli %s\n' '{AppVersion.Display}'
             exit 0
             """
         );
-        Directory.CreateDirectory(installDir);
-        Directory.CreateDirectory(launcherDir);
-        File.WriteAllText(installPath, "old");
         var service = new CliInstallService(
             () => Path.Join(sourceDir, "typewhisper-cli"),
             () => installDir,
@@ -713,7 +850,7 @@ public sealed class CliInstallServiceTests : IDisposable
 
         Assert.Throws<TimeoutException>(service.Install);
 
-        Assert.Equal("old", File.ReadAllText(installPath));
+        Assert.Equal(oldBytes, File.ReadAllBytes(installPath));
         AssertNoTemporaryCliFiles(installDir);
     }
 
