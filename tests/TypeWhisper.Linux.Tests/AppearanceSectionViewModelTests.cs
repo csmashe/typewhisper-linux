@@ -13,7 +13,7 @@ public sealed class AppearanceSectionViewModelTests
     {
         var settings = CreateSettingsMock(AppSettings.Default);
 
-        var sut = new AppearanceSectionViewModel(settings.Object);
+        var sut = new AppearanceSectionViewModel(settings.Object, post: action => action());
 
         Assert.Equal(1.5, sut.PreviewBubbleAutoHideSeconds);
     }
@@ -22,7 +22,7 @@ public sealed class AppearanceSectionViewModelTests
     public void SettingSeconds_PersistsNormalizedMilliseconds()
     {
         var settings = CreateSettingsMock(AppSettings.Default);
-        _ = new AppearanceSectionViewModel(settings.Object) { PreviewBubbleAutoHideSeconds = 3.75 };
+        _ = new AppearanceSectionViewModel(settings.Object, post: action => action()) { PreviewBubbleAutoHideSeconds = 3.75 };
 
         settings.Verify(
             s => s.Save(It.Is<AppSettings>(a => a.PreviewBubbleAutoHideMilliseconds == 3750)),
@@ -33,7 +33,7 @@ public sealed class AppearanceSectionViewModelTests
     public void SettingSecondsAboveMax_ClampsToFiveSecondsOnPersist()
     {
         var settings = CreateSettingsMock(AppSettings.Default);
-        _ = new AppearanceSectionViewModel(settings.Object) { PreviewBubbleAutoHideSeconds = 7.0 };
+        _ = new AppearanceSectionViewModel(settings.Object, post: action => action()) { PreviewBubbleAutoHideSeconds = 7.0 };
 
         settings.Verify(
             s => s.Save(It.Is<AppSettings>(a => a.PreviewBubbleAutoHideMilliseconds == 5000)),
@@ -57,7 +57,7 @@ public sealed class AppearanceSectionViewModelTests
                 OverlayCustomTop = top
             });
 
-        var sut = new AppearanceSectionViewModel(settings.Object);
+        var sut = new AppearanceSectionViewModel(settings.Object, post: action => action());
 
         Assert.Equal(expected, sut.IsOverlayPositionCustomized);
     }
@@ -71,7 +71,7 @@ public sealed class AppearanceSectionViewModelTests
                 OverlayCustomLeft = 120.0,
                 OverlayCustomTop = 80.0
             });
-        var sut = new AppearanceSectionViewModel(settings.Object);
+        var sut = new AppearanceSectionViewModel(settings.Object, post: action => action());
 
         sut.ResetOverlayPositionCommand.Execute(null);
 
@@ -86,7 +86,7 @@ public sealed class AppearanceSectionViewModelTests
     public void Refresh_PropagatesIsOverlayPositionCustomized()
     {
         var settings = CreateSettingsMock(AppSettings.Default);
-        var sut = new AppearanceSectionViewModel(settings.Object);
+        var sut = new AppearanceSectionViewModel(settings.Object, post: action => action());
         Assert.False(sut.IsOverlayPositionCustomized);
 
         var propertyChanged = new List<string?>();

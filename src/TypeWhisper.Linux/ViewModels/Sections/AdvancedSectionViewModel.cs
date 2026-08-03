@@ -1,3 +1,4 @@
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
@@ -12,6 +13,7 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class AdvancedSectionViewModel : ObservableObject
 {
     private readonly PluginManager _pluginManager;
+    private readonly Action<Action> _post;
     private readonly ISettingsService _settings;
     private readonly SpeechFeedbackService _speechFeedback;
 
@@ -39,19 +41,26 @@ public partial class AdvancedSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _spokenFeedbackEnabled;
 
+    /// <param name="post">
+    ///     Marshals a settings refresh onto the UI thread. Defaults to the real dispatcher;
+    ///     tests inject a synchronous one, since <see cref="Dispatcher.UIThread" /> binds to
+    ///     whichever thread touches it first and nothing pumps it under the test runner.
+    /// </param>
     public AdvancedSectionViewModel(
         ISettingsService settings,
         SpeechFeedbackService speechFeedback,
-        PluginManager pluginManager
+        PluginManager pluginManager,
+        Action<Action>? post = null
     )
     {
         _settings = settings;
         _speechFeedback = speechFeedback;
         _pluginManager = pluginManager;
+        _post = post ?? PostToUiThread;
         _speechFeedback.ProvidersChanged += (_, _) => RefreshSpokenFeedbackProviders();
         Refresh(settings.Current);
         RefreshSpokenFeedbackProviders();
-        _settings.SettingsChanged += Refresh;
+        _settings.SettingsChanged += OnSettingsChanged;
         _pluginManager.PluginStateChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(CanUseMemory));
@@ -167,6 +176,27 @@ public partial class AdvancedSectionViewModel : ObservableObject
         CanUseMemory
             ? Loc.Instance["Advanced.MemoryHint"]
             : MemoryUnavailableReason;
+
+    // Saves happen on whichever thread called them — the dictation path and the model-storage
+    // migration both save off the UI thread — and Refresh writes bound properties.
+    private void OnSettingsChanged(AppSettings settings)
+    {
+        _post(() => Refresh(settings));
+    }
+
+    private static void PostToUiThread(Action action)
+    {
+        // Inline when already on the UI thread, so a save from the UI keeps refreshing
+        // synchronously rather than deferring to the next dispatcher turn.
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            action();
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(action);
+        }
+    }
 
     private void Refresh(AppSettings settings)
     {

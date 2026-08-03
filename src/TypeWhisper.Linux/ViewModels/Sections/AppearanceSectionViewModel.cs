@@ -1,3 +1,4 @@
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
@@ -10,6 +11,7 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class AppearanceSectionViewModel : ObservableObject
 {
+    private readonly Action<Action> _post;
     private readonly ISettingsService _settings;
 
     [ObservableProperty]
@@ -33,11 +35,17 @@ public partial class AppearanceSectionViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(PreviewRightText))]
     private OverlayWidgetOption? _selectedRightWidget;
 
-    public AppearanceSectionViewModel(ISettingsService settings)
+    /// <param name="post">
+    ///     Marshals a settings refresh onto the UI thread. Defaults to the real dispatcher;
+    ///     tests inject a synchronous one, since <see cref="Dispatcher.UIThread" /> binds to
+    ///     whichever thread touches it first and nothing pumps it under the test runner.
+    /// </param>
+    public AppearanceSectionViewModel(ISettingsService settings, Action<Action>? post = null)
     {
         _settings = settings;
+        _post = post ?? PostToUiThread;
         Refresh(settings.Current);
-        _settings.SettingsChanged += Refresh;
+        _settings.SettingsChanged += OnSettingsChanged;
         // Option labels and the localized status/preview getters are resolved into
         // strings, so re-resolve them when the UI language changes at runtime.
         Loc.Instance.LanguageChanged += OnLanguageChanged;
@@ -131,6 +139,27 @@ public partial class AppearanceSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(OverlayPositionStatusText));
         OnPropertyChanged(nameof(PreviewLeftText));
         OnPropertyChanged(nameof(PreviewRightText));
+    }
+
+    // Saves happen on whichever thread called them — the dictation path and the model-storage
+    // migration both save off the UI thread — and Refresh writes bound properties.
+    private void OnSettingsChanged(AppSettings settings)
+    {
+        _post(() => Refresh(settings));
+    }
+
+    private static void PostToUiThread(Action action)
+    {
+        // Inline when already on the UI thread, so a save from the UI keeps refreshing
+        // synchronously rather than deferring to the next dispatcher turn.
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            action();
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(action);
+        }
     }
 
     private void Refresh(AppSettings settings)
