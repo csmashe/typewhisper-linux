@@ -956,5 +956,8 @@
   "Wizard.WindowTitle": "Te damos la bienvenida a TypeWhisper",
   "Wizard.WritingFocus": "Enfoque de escritura",
   "Wizard.WritingFocusHint": "Opcional: elige un sector para activar al finalizar un paquete de vocabulario adecuado.",
-  "Wizard.YouAreReady": "Ya estás listo"
+  "Wizard.YouAreReady": "Ya estás listo",
+  "LanguageSelection.Invalid": "El idioma de transcripción «{0}» no es válido. Elige Auto o introduce una etiqueta BCP-47 válida.",
+  "LanguageSelection.AutomaticNotSupported": "{0} no puede detectar el idioma automáticamente. Elige un idioma explícito.",
+  "LanguageSelection.ExplicitNotSupported": "{0} no acepta un idioma explícito. Elige Auto."
 }

@@ -11,7 +11,11 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Deepgram;
 
-public sealed class DeepgramPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class DeepgramPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.deepgram.com";
 
@@ -52,6 +56,11 @@ public sealed class DeepgramPlugin : ITranscriptionEnginePlugin, IPluginSettings
 
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
+    // Every Deepgram model accepts an unspecified language: batch sends
+    // detect_language=true and streaming sends language=multi on Nova-3 and
+    // defers to the endpoint default otherwise.
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
@@ -89,7 +98,7 @@ public sealed class DeepgramPlugin : ITranscriptionEnginePlugin, IPluginSettings
             );
 
         var langParam =
-            string.IsNullOrEmpty(language) || language == "auto"
+            string.IsNullOrEmpty(language)
                 ? "&detect_language=true"
                 : $"&language={Uri.EscapeDataString(language)}";
         var url =

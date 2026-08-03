@@ -12,7 +12,11 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Reson8;
 
-public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class Reson8Plugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     internal const string DefaultModelId = "__default__";
     internal const string DefaultBaseUrl = "https://api.reson8.dev";
@@ -79,6 +83,8 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public IReadOnlyList<string> SupportedLanguages => s_languages;
 
     internal string? ApiKey { get; private set; }
@@ -517,9 +523,7 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     }
 
     internal static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
-            ? null
-            : language.Trim();
+        string.IsNullOrWhiteSpace(language) ? null : language.Trim();
 
     internal static void AddAuthHeader(HttpRequestMessage request, string apiKey, string authHeader)
     {

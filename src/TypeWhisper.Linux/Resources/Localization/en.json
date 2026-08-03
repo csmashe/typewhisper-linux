@@ -975,5 +975,8 @@
   "Wizard.WindowTitle": "Welcome to TypeWhisper",
   "Wizard.WritingFocus": "Writing focus",
   "Wizard.WritingFocusHint": "Optional: pick an industry to enable a matching vocabulary pack on finish.",
-  "Wizard.YouAreReady": "You're ready"
+  "Wizard.YouAreReady": "You're ready",
+  "LanguageSelection.Invalid": "Invalid transcription language “{0}”. Choose Auto or enter a valid BCP-47 tag.",
+  "LanguageSelection.AutomaticNotSupported": "{0} cannot detect the language automatically. Choose an explicit language.",
+  "LanguageSelection.ExplicitNotSupported": "{0} does not accept an explicit language. Choose Auto."
 }

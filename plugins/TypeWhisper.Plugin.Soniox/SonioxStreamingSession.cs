@@ -65,10 +65,7 @@ internal sealed class SonioxStreamingSession : IStreamingSession
             ["enable_endpoint_detection"] = true,
         };
 
-        if (
-            !string.IsNullOrWhiteSpace(language)
-            && !string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase)
-        )
+        if (!string.IsNullOrWhiteSpace(language))
         {
             config["language_hints"] = new[] { language };
         }

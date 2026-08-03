@@ -7,6 +7,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.PluginSDK;
 using Timer = System.Timers.Timer;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
@@ -247,7 +248,7 @@ public partial class RecorderSectionViewModel : ObservableObject
         {
             var result = await lease.Plugin.TranscribeAsync(
                 wav,
-                null,
+                LanguageSelection.Automatic,
                 false,
                 null,
                 CancellationToken.None

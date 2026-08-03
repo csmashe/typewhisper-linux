@@ -219,7 +219,7 @@ public class SmallestAiPluginTests
     }
 
     [Fact]
-    public async Task TranscribeAsync_OmitsLanguageForAuto()
+    public async Task TranscribeAsync_OmitsLanguageWhenUnspecified()
     {
         var handler = new CapturingHandler((request, _) =>
         {
@@ -232,7 +232,7 @@ public class SmallestAiPluginTests
         var sut = new SmallestAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
-        var result = await sut.TranscribeAsync([1, 2, 3], "auto", translate: false, prompt: null, CancellationToken.None);
+        var result = await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
 
         Assert.Equal("Hello", result.Text);
     }
@@ -282,7 +282,7 @@ public class SmallestAiPluginTests
         Assert.Contains("sample_rate=16000", uri.Query);
         Assert.Contains("word_timestamps=true", uri.Query);
 
-        var autoUri = SmallestAiStreamingSession.BuildStreamingUri("auto", wordTimestamps: true);
+        var autoUri = SmallestAiStreamingSession.BuildStreamingUri(null, wordTimestamps: true);
         Assert.DoesNotContain("language=", autoUri.Query);
 
         var headers = SmallestAiStreamingSession.CreateStreamingHeaders("smallest-key");

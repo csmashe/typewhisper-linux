@@ -251,7 +251,7 @@ public class Reson8PluginTests
     }
 
     [Fact]
-    public async Task TranscribeAsync_UsesCustomBaseUrlAndAuthHeaderAndOmitsAutoLanguage()
+    public async Task TranscribeAsync_UsesCustomBaseUrlAndAuthHeaderAndOmitsUnspecifiedLanguage()
     {
         var handler = new CapturingHandler((request, _) =>
         {
@@ -273,7 +273,7 @@ public class Reson8PluginTests
         var sut = new Reson8Plugin(httpClient);
         await sut.ActivateAsync(host);
 
-        var result = await sut.TranscribeAsync(BuildPcm16Wav([0x00, 0x00]), "auto", false, null, CancellationToken.None);
+        var result = await sut.TranscribeAsync(BuildPcm16Wav([0x00, 0x00]), null, false, null, CancellationToken.None);
 
         Assert.Equal("Hello", result.Text);
     }
@@ -464,7 +464,7 @@ public class Reson8PluginTests
         Assert.Contains("language=de", uri.Query);
         Assert.Contains("custom_model_id=domain-model", uri.Query);
 
-        var localUri = Reson8StreamingSession.BuildRealtimeUri("http://localhost:8080/base", "__default__", "auto");
+        var localUri = Reson8StreamingSession.BuildRealtimeUri("http://localhost:8080/base", "__default__", null);
         Assert.Equal("ws", localUri.Scheme);
         Assert.Equal(8080, localUri.Port);
         Assert.Equal("/base/v1/speech-to-text/realtime", localUri.AbsolutePath);

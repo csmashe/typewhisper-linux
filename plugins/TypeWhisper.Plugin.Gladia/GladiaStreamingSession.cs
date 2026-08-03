@@ -59,10 +59,7 @@ internal sealed class GladiaStreamingSession : IStreamingSession
             },
         };
 
-        if (
-            !string.IsNullOrWhiteSpace(language)
-            && !string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase)
-        )
+        if (!string.IsNullOrWhiteSpace(language))
         {
             body["language_config"] = new Dictionary<string, object>
             {

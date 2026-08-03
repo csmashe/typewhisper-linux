@@ -956,5 +956,8 @@
   "Wizard.WindowTitle": "Добро пожаловать в TypeWhisper",
   "Wizard.WritingFocus": "Фокус письма",
   "Wizard.WritingFocusHint": "Необязательно: выберите отрасль, чтобы по завершении включить соответствующий пакет лексики.",
-  "Wizard.YouAreReady": "Вы готовы"
+  "Wizard.YouAreReady": "Вы готовы",
+  "LanguageSelection.Invalid": "Недопустимый язык транскрипции «{0}». Выберите «Авто» или укажите допустимый тег BCP-47.",
+  "LanguageSelection.AutomaticNotSupported": "{0} не может определить язык автоматически. Выберите язык явно.",
+  "LanguageSelection.ExplicitNotSupported": "{0} не принимает явно выбранный язык. Выберите «Авто»."
 }

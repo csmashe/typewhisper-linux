@@ -23,6 +23,7 @@ internal sealed record WhisperCppTranscriptionSegment(
 
 public sealed class WhisperCppPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         IPluginSettingsProvider,
         IPluginLocalizationAware
 {
@@ -269,6 +270,8 @@ public sealed class WhisperCppPlugin
     public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public bool SupportsModelDownload => true;
     public IReadOnlyList<string> SupportedLanguages => [];
 

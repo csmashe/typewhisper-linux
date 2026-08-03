@@ -16,6 +16,7 @@ namespace TypeWhisper.Plugin.OpenAi;
 
 public sealed class OpenAiPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         ILlmProviderPlugin,
         ITtsProviderPlugin,
         IPluginSettingsProvider,
@@ -193,6 +194,9 @@ public sealed class OpenAiPlugin
 
     public bool SupportsTranslation =>
         IsConfigured && SelectedModelEntry is { SupportsTranslation: true };
+
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     // Realtime streaming uses an API-key-authenticated WebSocket. ChatGPT
     // OAuth tokens are scoped for the consumer chat backend and 401 at
@@ -1021,9 +1025,7 @@ public sealed class OpenAiPlugin
         string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
 
     private static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
-            ? null
-            : language;
+        string.IsNullOrWhiteSpace(language) ? null : language;
 
     private static string NormalizeReasoningEffort(string? effort) =>
         effort is "low" or "medium" or "high" or "xhigh" ? effort : "medium";

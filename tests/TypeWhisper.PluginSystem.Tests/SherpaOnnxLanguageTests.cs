@@ -27,9 +27,6 @@ public sealed class SherpaOnnxLanguageTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData(" \t")]
-    [InlineData("auto")]
-    [InlineData("AUTO")]
-    [InlineData(" AuTo ")]
     public void NormalizeCanaryLanguage_AutomaticLanguage_ThrowsWithSupportedSet(
         string? language
     )

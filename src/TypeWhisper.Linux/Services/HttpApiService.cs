@@ -659,6 +659,38 @@ public sealed partial class HttpApiService : IDisposable
                 ct
             );
         }
+        catch (InvalidLanguageSelectionException ex)
+        {
+            await WriteJsonAsync(
+                response,
+                400,
+                Serialize(
+                    new
+                    {
+                        error = ex.Message,
+                        reason = "invalid_language_selection",
+                    }
+                ),
+                GetAllowedOrigin(context.Request),
+                ct
+            );
+        }
+        catch (LanguageSelectionNotSupportedException ex)
+        {
+            await WriteJsonAsync(
+                response,
+                400,
+                Serialize(
+                    new
+                    {
+                        error = ex.Message,
+                        reason = "language_selection_not_supported",
+                    }
+                ),
+                GetAllowedOrigin(context.Request),
+                ct
+            );
+        }
         catch (Exception ex)
         {
             Trace.WriteLine($"[HttpApiService] Request failed: {ex}");
@@ -903,11 +935,16 @@ public sealed partial class HttpApiService : IDisposable
             }
         }
 
+        var settings = _settings.Current;
+        var languageSelection = LanguageSelectionResolver.Resolve(
+            opts.Language,
+            settings.Language
+        );
+        var configuredLanguage = languageSelection.LanguageTag;
+
         // Decode audio before acquiring the lease — ffmpeg shells out and
         // must not hold the model lock while no transcription runs.
         var wav = await _audioFiles.LoadAudioAsWavAsync(audioPath, ct);
-        var settings = _settings.Current;
-        var language = opts.Language ?? (settings.Language == "auto" ? null : settings.Language);
         var prompt = MergePrompt(
             opts.Prompt,
             BuildLanguageHintsPrompt(opts.LanguageHints),
@@ -935,7 +972,7 @@ public sealed partial class HttpApiService : IDisposable
             var plugin = lease.Plugin;
             result = await plugin.TranscribeAsync(
                 wav,
-                language,
+                languageSelection,
                 opts.Task == TranscriptionTask.Translate,
                 prompt,
                 ct
@@ -954,7 +991,7 @@ public sealed partial class HttpApiService : IDisposable
                 DictionaryCorrector = _dictionary.ApplyCorrections,
                 TranscriptionTask = opts.Task,
                 DetectedLanguage = result.DetectedLanguage,
-                ConfiguredLanguage = language,
+                ConfiguredLanguage = configuredLanguage,
                 ConfiguredLanguageCandidates = opts.LanguageHints,
                 TranscriptionNumberNormalizationEnabled =
                     settings.TranscriptionNumberNormalizationEnabled,
@@ -969,7 +1006,7 @@ public sealed partial class HttpApiService : IDisposable
             {
                 finalText = await _translation.TranslateAsync(
                     finalText,
-                    result.DetectedLanguage ?? language ?? "en",
+                    result.DetectedLanguage ?? configuredLanguage ?? "en",
                     opts.TargetLanguage,
                     ct: ct
                 );

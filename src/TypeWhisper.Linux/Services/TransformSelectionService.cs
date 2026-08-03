@@ -281,14 +281,15 @@ public sealed class TransformSelectionService
             var plugin = lease.Plugin;
 
             PublishStatus("Transcribing transform command...");
-            var language =
-                _settings.Current.Language is { Length: > 0 } lang && lang != "auto" ? lang : null;
+            var languageSelection = LanguageSelectionResolver.Resolve(
+                _settings.Current.Language
+            );
             string? command;
             try
             {
                 var transcription = await plugin.TranscribeAsync(
                     wav,
-                    language,
+                    languageSelection,
                     false,
                     null,
                     processingCts.Token
@@ -392,7 +393,7 @@ public sealed class TransformSelectionService
     {
         return deadlineExpired
             ? "Transform selection timed out."
-            : $"Transform selection failed: {exception.Message}";
+            : $"Transform selection failed: {LanguageSelectionUiMessage.From(exception)}";
     }
 
     private async Task AbortReplacementAsync(string transformed)

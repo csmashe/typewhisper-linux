@@ -68,12 +68,9 @@ public class SpeechmaticsPluginTests
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    [InlineData("auto")]
-    [InlineData(" Auto ")]
-    public async Task StartStreamingAsync_RejectsAutoLanguage(string? language)
+    public async Task StartStreamingAsync_RejectsUnspecifiedLanguage(string? language)
     {
-        // Speechmatics has no auto-detect; the host collapses "auto" to null. Rather
-        // than silently streaming as English, reject so the host falls back to batch.
+        // Defense in depth for direct/legacy callers; the typed host rejects this first.
         var host = new TestHost { Secrets = { ["api-key"] = "sm-key" } };
         var sut = new SpeechmaticsPlugin();
         await sut.ActivateAsync(host);
@@ -106,15 +103,10 @@ public class SpeechmaticsPluginTests
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    [InlineData("auto")]
-    public void BuildStartRecognition_DefaultsLanguageToEnglish(string? language)
+    public void BuildStartRecognition_RejectsUnspecifiedLanguage(string? language)
     {
-        var json = SmSession.BuildStartRecognition(language, 16000);
-
-        using var doc = JsonDocument.Parse(json);
-        Assert.Equal(
-            "en",
-            doc.RootElement.GetProperty("transcription_config").GetProperty("language").GetString()
+        Assert.Throws<ArgumentException>(
+            () => SmSession.BuildStartRecognition(language, 16000)
         );
     }
 

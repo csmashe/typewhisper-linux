@@ -11,7 +11,11 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.ElevenLabs;
 
-public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class ElevenLabsPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     internal const string DefaultModelId = "scribe_v2";
     private const string BaseUrl = "https://api.elevenlabs.io";
@@ -172,6 +176,8 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public IReadOnlyList<string> SupportedLanguages => s_languages;
 
     public void SelectModel(string modelId)
@@ -451,7 +457,6 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     private static string? NormalizeLanguage(string? language) =>
         string.IsNullOrWhiteSpace(language)
-        || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
             ? null
             : language;
 

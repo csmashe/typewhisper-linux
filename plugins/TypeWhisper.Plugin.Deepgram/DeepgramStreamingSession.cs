@@ -71,9 +71,7 @@ internal sealed class DeepgramWebSocketAdapter(
         CancellationToken ct
     )
     {
-        var isUnspecified =
-            string.IsNullOrEmpty(language)
-            || string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase);
+        var isUnspecified = string.IsNullOrEmpty(language);
         var languageParameter = isUnspecified
             ? model.StartsWith("nova-3", StringComparison.OrdinalIgnoreCase)
                 ? "&language=multi"

@@ -15,7 +15,10 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
     private readonly ConcurrentQueue<
         Func<CancellationToken, Task<PluginTranscriptionResult>>
     > _results = new();
+    private readonly ConcurrentQueue<string?> _receivedLanguages = new();
     private int _transcriptionCount;
+
+    internal IReadOnlyList<string?> ReceivedLanguages => [.. _receivedLanguages];
 
     public string PluginId => Id;
     public string PluginName => "Integration scripted transcription";
@@ -84,6 +87,7 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
     )
     {
         ct.ThrowIfCancellationRequested();
+        _receivedLanguages.Enqueue(language);
         Interlocked.Increment(ref _transcriptionCount);
         if (!_results.TryDequeue(out var result))
         {

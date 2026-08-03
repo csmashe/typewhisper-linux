@@ -10,7 +10,9 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.SherpaOnnx;
 
-public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
+public sealed class SherpaOnnxPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities
 {
     private const string ParakeetRepo =
         "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main";
@@ -130,6 +132,14 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
 
     public bool SupportsTranslation => SelectedModelId == "canary-180m-flash";
     public bool SupportsModelDownload => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport =>
+        SelectedModelId == "canary-180m-flash"
+            ? LanguageSelectionSupport.Unsupported
+            : LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport =>
+        SelectedModelId == "canary-180m-flash"
+            ? LanguageSelectionSupport.Supported
+            : LanguageSelectionSupport.Unsupported;
 
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
         [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
@@ -1228,10 +1238,7 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
     internal static string NormalizeCanaryLanguage(string? language)
     {
         var normalized = language?.Trim();
-        if (
-            string.IsNullOrWhiteSpace(normalized)
-            || string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase)
-        )
+        if (string.IsNullOrWhiteSpace(normalized))
         {
             throw new NotSupportedException(
                 "Sherpa ONNX Canary requires an explicit source language from the supported set: en, de, fr, es."
