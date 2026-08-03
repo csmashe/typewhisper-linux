@@ -139,14 +139,19 @@ public partial class GeneralSectionViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void InstallCli()
+    private async Task InstallCliAsync()
     {
         try
         {
-            ApplyCliState(_cliInstall.Install());
+            // Install copies the ~17 MB CLI and runs it once to verify, on a 10-second
+            // deadline — far too long to hold the UI thread.
+            ApplyCliState(await Task.Run(_cliInstall.Install));
         }
         catch (Exception ex)
-            when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+            when (ex is InvalidOperationException
+                or IOException
+                or UnauthorizedAccessException
+                or TimeoutException)
         {
             CliStatusText = ex.Message;
         }

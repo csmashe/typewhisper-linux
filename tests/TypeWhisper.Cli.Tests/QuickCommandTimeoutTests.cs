@@ -235,6 +235,10 @@ public sealed class QuickCommandTimeoutTests
             {
                 // Expected while releasing the listener.
             }
+            catch (SocketException)
+            {
+                // Expected when the timed-out client resets its connection.
+            }
 
             _cts.Dispose();
             if (Directory.Exists(_tempDirectory))

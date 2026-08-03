@@ -423,8 +423,10 @@ public sealed class WebhookCollectionSettingsTests : IDisposable
         Assert.DoesNotContain(reference, await File.ReadAllTextAsync(ConfigPath));
     }
 
+    // Duplicating a row or renaming a header carries the placeholder over to a name with
+    // nothing stored behind it.
     [Fact]
-    public async Task SetItems_NewHeaderPlaceholderStoresLiteralValue()
+    public async Task SetItems_NewHeaderPlaceholderIsRejected()
     {
         var host = new TestHost(_tempDir);
         var plugin = await ActivateAsync(host);
@@ -441,11 +443,12 @@ public sealed class WebhookCollectionSettingsTests : IDisposable
             ]
         );
 
-        Assert.True(result.IsSuccess);
-        Assert.Equal(
-            WebhookPlugin.StoredHeaderPlaceholder,
-            host.Secrets[WebhookPlugin.GetHeaderSecretReference(id, "X-Literal")]
+        Assert.False(result.IsSuccess);
+        Assert.DoesNotContain(
+            WebhookPlugin.GetHeaderSecretReference(id, "X-Literal"),
+            host.Secrets.Keys
         );
+        Assert.False(File.Exists(ConfigPath));
     }
 
     [Fact]
