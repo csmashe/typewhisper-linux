@@ -71,6 +71,7 @@ public static class PluginSelectionExtensions
             return false;
         }
 
+        // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- LINQ would box the string's struct enumerator on this validation path.
         foreach (var character in selectionId)
         {
             if (

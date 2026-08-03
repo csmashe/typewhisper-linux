@@ -319,6 +319,7 @@ public sealed class PluginLoader
             );
         }
 
+        // ReSharper disable once InvertIf -- optional-section validation; more checks follow, so there is no early exit.
         if (categories is not null)
         {
             if (
@@ -362,11 +363,6 @@ public sealed class PluginLoader
         if (s_legacyMemoryPluginIds.Contains(id))
         {
             return PluginCategory.Memory;
-        }
-
-        if (s_legacyUtilityPluginIds.Contains(id))
-        {
-            return PluginCategory.Utility;
         }
 
         var combined = $"{manifest.Name} {manifest.Description}".ToLowerInvariant();
@@ -462,11 +458,5 @@ public sealed class PluginLoader
         {
             "com.typewhisper.file-memory",
             "com.typewhisper.openai-vector-memory",
-        }.ToFrozenSet(StringComparer.Ordinal);
-
-    private static readonly FrozenSet<string> s_legacyUtilityPluginIds =
-        new[]
-        {
-            "com.typewhisper.openai-compatible",
         }.ToFrozenSet(StringComparer.Ordinal);
 }

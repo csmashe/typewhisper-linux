@@ -228,6 +228,7 @@ public sealed class GoogleCloudSttPlugin
 
             // Prefer the later window when scores tie so uniformly quiet audio stays
             // as close as possible to the nominal 55-second boundary.
+            // ReSharper disable once InvertIf -- inverting flips the tie-break rule the comment above documents.
             if (score <= quietestScore)
             {
                 quietestScore = score;
@@ -350,6 +351,7 @@ public sealed class GoogleCloudSttPlugin
         )
         {
             var first = resultsForLang[0];
+            // ReSharper disable once InvertIf -- optional-property read; there is no early exit to invert toward.
             if (first.TryGetProperty("languageCode", out var lc))
             {
                 if (lc.ValueKind != JsonValueKind.String)

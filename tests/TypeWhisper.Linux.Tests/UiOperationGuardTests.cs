@@ -64,12 +64,16 @@ public sealed class UiOperationGuardTests
         };
     }
 
+    // Exception is not IXunitSerializable, so Test Explorer cannot pre-enumerate the
+    // cases. They still all run, and the concrete instances are the point of the data.
+#pragma warning disable xUnit1045
     [Theory]
     [MemberData(nameof(ExpectedFailures))]
     public async Task RunAsync_ExpectedFailure_RollsBackThenPresentsAndLogs(
         UiFailureKind failureKind,
         Exception failure
     )
+#pragma warning restore xUnit1045
     {
         var events = new List<string>();
         var errorLog = new Mock<IErrorLogService>();

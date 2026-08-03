@@ -1099,6 +1099,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             CancellationToken ct = default
         )
         {
+            // ReSharper disable once ConvertIfStatementToReturnStatement -- the guard throws; folding it into a ternary would need a throw expression.
             if (ThrowOnGetValue)
             {
                 throw new InvalidOperationException("setting getter exploded");
@@ -1113,6 +1114,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             CancellationToken ct = default
         )
         {
+            // ReSharper disable once ConvertIfStatementToReturnStatement -- the guard throws; folding it into a ternary would need a throw expression.
             if (ThrowOnSetValue)
             {
                 throw new InvalidOperationException("setting setter exploded");

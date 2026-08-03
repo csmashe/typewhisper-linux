@@ -557,6 +557,7 @@ public class OpenAiPluginTests
             {
                 // ReSharper disable once AccessToModifiedClosure -- intentional shared counter across handler invocations; Interlocked.Increment coordinates the concurrent-refresh dedup this test asserts.
                 var refreshNumber = Interlocked.Increment(ref tokenPostCount);
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (refreshNumber == 1)
                 {
                     firstRefreshStarted.TrySetResult(true);
@@ -633,6 +634,7 @@ public class OpenAiPluginTests
 
             // ReSharper disable once AccessToModifiedClosure -- intentional shared counter across handler invocations; Interlocked.Increment coordinates the concurrent-refresh dedup this test asserts.
             var refreshNumber = Interlocked.Increment(ref tokenPostCount);
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (refreshNumber == 1)
             {
                 firstRefreshStarted.TrySetResult(true);
@@ -704,6 +706,7 @@ public class OpenAiPluginTests
 
             // ReSharper disable once AccessToModifiedClosure -- intentional shared counter across handler invocations; Interlocked.Increment coordinates the concurrent-refresh dedup this test asserts.
             var refreshNumber = Interlocked.Increment(ref tokenPostCount);
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (refreshNumber == 1)
             {
                 firstRefreshStarted.TrySetResult(true);
@@ -1626,6 +1629,7 @@ public class OpenAiPluginTests
         var received = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- kept beside the completion source it captures, ahead of the subscribe below.
         void OnTranscript(StreamingTranscriptEvent transcriptEvent)
         {
             if (transcriptEvent == expected)
@@ -1769,7 +1773,9 @@ public class OpenAiPluginTests
         private WebSocketCloseStatus? _closeStatus;
         private string? _closeStatusDescription;
 
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- field-backed to match the Volatile-read siblings in this fake; an auto-property would hide the cross-thread access.
         public override WebSocketCloseStatus? CloseStatus => _closeStatus;
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- field-backed to match the Volatile-read siblings in this fake; an auto-property would hide the cross-thread access.
         public override string? CloseStatusDescription => _closeStatusDescription;
         public override WebSocketState State => (WebSocketState)Volatile.Read(ref _state);
         public override string? SubProtocol => null;

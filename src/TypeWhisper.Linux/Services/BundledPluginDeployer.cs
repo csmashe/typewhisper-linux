@@ -22,6 +22,7 @@ public sealed class BundledPluginDeployer
     public static int DeployIfMissing()
     {
         var source = FindBundledPluginsDir();
+        // ReSharper disable once InvertIf -- already the early-return guard; inverting would nest the happy path.
         if (source is null)
         {
             Trace.WriteLine(
@@ -234,6 +235,7 @@ public sealed class BundledPluginDeployer
             Directory.Delete(abandonedStage, recursive: true);
         }
 
+        // ReSharper disable once InvertIf -- trailing block of a void method; inverting would only add a bare `return`.
         if (Directory.Exists(backup))
         {
             if (Directory.Exists(dest))

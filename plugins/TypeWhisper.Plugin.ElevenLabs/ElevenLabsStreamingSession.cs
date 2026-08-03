@@ -417,6 +417,7 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
                         $"ElevenLabs streaming provider error: {error}"
                     );
 
+                // ReSharper disable once InvertIf -- inverting would add a `continue` for the loop's normal path; this is the terminal check.
                 if (
                     isCommittedTranscript
                     && Volatile.Read(ref _finalCommitPending) != 0

@@ -255,13 +255,24 @@ public sealed class LocalizationResourcesTests
     {
         var catalog = Load(language);
 
-        Assert.Equal(local, catalog["Plugins.BadgeLocal"]);
-        Assert.Equal(network, catalog["Plugins.BadgeCloud"]);
-        Assert.Equal(mixed, catalog["Plugins.BadgeMixed"]);
-        Assert.Equal(userControlled, catalog["Plugins.BadgeUserControlled"]);
-        Assert.Equal(tts, catalog["Plugins.CategoryTts"]);
-        Assert.Equal(integration, catalog["Plugins.CategoryIntegration"]);
-        Assert.Equal(unknown, catalog["Plugins.CategoryUnknown"]);
+        AssertCatalogValue(catalog, language, "Plugins.BadgeLocal", local);
+        AssertCatalogValue(catalog, language, "Plugins.BadgeCloud", network);
+        AssertCatalogValue(catalog, language, "Plugins.BadgeMixed", mixed);
+        AssertCatalogValue(catalog, language, "Plugins.BadgeUserControlled", userControlled);
+        AssertCatalogValue(catalog, language, "Plugins.CategoryTts", tts);
+        AssertCatalogValue(catalog, language, "Plugins.CategoryIntegration", integration);
+        AssertCatalogValue(catalog, language, "Plugins.CategoryUnknown", unknown);
+    }
+
+    private static void AssertCatalogValue(
+        Dictionary<string, string> catalog,
+        string language,
+        string key,
+        string expected
+    )
+    {
+        Assert.True(catalog.TryGetValue(key, out var actual), $"Missing {language} key: {key}");
+        Assert.Equal(expected, actual);
     }
 
     [Theory]

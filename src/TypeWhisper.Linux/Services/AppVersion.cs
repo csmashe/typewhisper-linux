@@ -211,6 +211,7 @@ public static class AppVersion
             return core;
         }
 
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- guards over two different operands (a and b), not one switchable expression.
         if (a.PreRelease.Count == 0 && b.PreRelease.Count == 0)
         {
             return 0;
@@ -268,6 +269,7 @@ public static class AppVersion
             return false;
         }
 
+        // ReSharper disable once LoopCanBeConvertedToQuery -- the ten-line multi-clause predicate reads worse inlined into an All() lambda.
         foreach (var identifier in value.Split('.'))
         {
             if (

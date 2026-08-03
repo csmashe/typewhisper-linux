@@ -77,6 +77,7 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
 
     internal static OpenAiRealtimeStreamingSession CreateConnectedSessionForTests(WebSocket ws)
     {
+        // ReSharper disable once ConvertIfStatementToReturnStatement -- the guard throws; folding it into a ternary would need a throw expression.
         if (ws.State != WebSocketState.Open)
             throw new InvalidOperationException("The test WebSocket must already be open.");
 
@@ -502,7 +503,17 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
             // don't hang until the caller's token.
             CaptureReceiveLoopClosure(ct);
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Deliberate disposal owns this token; not a fault.
+        }
+        catch (OperationCanceledException ex)
+        {
+            // Cancellation from anywhere else (an aborted socket, a subscriber)
+            // still strands finalize's waiters, so publish it as a terminal fault.
+            Debug.WriteLine($"OpenAI realtime receive canceled: {ex.Message}");
+            CaptureReceiveLoopException(ex);
+        }
         catch (WebSocketException ex)
         {
             Debug.WriteLine($"OpenAI realtime WebSocket error: {ex.Message}");

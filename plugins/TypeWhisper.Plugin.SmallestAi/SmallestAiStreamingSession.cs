@@ -44,6 +44,7 @@ internal sealed class SmallestAiStreamingSession : IStreamingSession
 
     internal static SmallestAiStreamingSession CreateConnectedSessionForTests(WebSocket ws)
     {
+        // ReSharper disable once ConvertIfStatementToReturnStatement -- the guard throws; folding it into a ternary would need a throw expression.
         if (ws.State != WebSocketState.Open)
             throw new InvalidOperationException("The test WebSocket must already be open.");
 

@@ -128,10 +128,12 @@ public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
 
         var audioUrl = await UploadAudioAsync(wavAudio, apiKey, ct);
         var job = await InitiateTranscriptionAsync(audioUrl, language, apiKey, ct);
-        var terminalJson = await PollUntilTerminalAsync(job, apiKey, ct);
 
         try
         {
+            // Polling is inside the try so a poll failure, timeout or cancellation
+            // still deletes the server-side job instead of leaking the audio.
+            var terminalJson = await PollUntilTerminalAsync(job, apiKey, ct);
             using var terminalDocument = ParseProtocolJson(
                 terminalJson,
                 "polling"
@@ -154,6 +156,7 @@ public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         }
     }
 
+    // Owns the supplied HttpClient, including an injected one, and disposes it.
     public void Dispose()
     {
         _httpClient.Dispose();
@@ -304,7 +307,9 @@ public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException(
-                $"{operation} error {(int)response.StatusCode}: {ExtractProviderDetails(json)}"
+                $"{operation} error {(int)response.StatusCode}: {ExtractProviderDetails(json)}",
+                null,
+                response.StatusCode
             );
         }
 
@@ -390,6 +395,7 @@ public sealed class GladiaPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
             return null;
         }
 
+        // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- LINQ would box JsonElement's struct ArrayEnumerator.
         foreach (var language in languages.EnumerateArray())
         {
             if (language.ValueKind == JsonValueKind.String

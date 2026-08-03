@@ -794,12 +794,12 @@ public partial class SherpaOnnxPluginTests
 
         // Canary (attention encoder-decoder) has no blank token; preflight must accept
         // it, or a blank requirement would fail every Canary download and delete caches.
-        plugin.RunArtifactPreflightForTests("canary-180m-flash", dir);
+        SherpaOnnxPlugin.RunArtifactPreflightForTests("canary-180m-flash", dir);
 
         // The blank exemption must not switch off the remaining token checks.
         File.WriteAllText(Path.Join(dir, "tokens.txt"), "<unk> 0\n<pad> not-an-id\n");
         Assert.Throws<InvalidDataException>(
-            () => plugin.RunArtifactPreflightForTests("canary-180m-flash", dir)
+            () => SherpaOnnxPlugin.RunArtifactPreflightForTests("canary-180m-flash", dir)
         );
     }
 

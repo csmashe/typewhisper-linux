@@ -573,6 +573,14 @@ public class GladiaPluginTests
                 );
             }
 
+            // A failed poll leaves the job on Gladia's servers, so cleanup runs
+            // for it too — the DELETE is part of the expected request sequence.
+            if (request.Method == HttpMethod.Delete)
+            {
+                Assert.Equal("poll", failingStage);
+                return JsonResponse("{}", HttpStatusCode.Accepted);
+            }
+
             throw new InvalidOperationException(
                 $"Unexpected request: {request.Method} {request.RequestUri}"
             );
@@ -605,7 +613,7 @@ public class GladiaPluginTests
             {
                 "upload" => 1,
                 "initiate" => 2,
-                _ => 3,
+                _ => 4,
             },
             requestCount
         );
@@ -642,6 +650,7 @@ public class GladiaPluginTests
     }
 
     [Theory]
+    // ReSharper disable once RawStringCanBeSimplified -- kept raw so every InlineData in this theory has the same form.
     [InlineData("""{}""")]
     [InlineData("""{ "status": 17 }""")]
     [InlineData("""{ "status": "paused" }""")]
@@ -668,7 +677,12 @@ public class GladiaPluginTests
                 );
         });
 
-        using var sut = await CreateConfiguredPluginAsync(handler);
+        // Without a bound, a regression that treated these statuses as non-terminal
+        // would spin against the zero poll delay for the 30-minute default.
+        using var sut = await CreateConfiguredPluginAsync(
+            handler,
+            pollWindow: TimeSpan.FromSeconds(2)
+        );
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => sut.TranscribeAsync(
@@ -821,7 +835,9 @@ public class GladiaPluginTests
         cts.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => transcription);
-        Assert.Equal(0, deleteCount);
+        // The job exists on Gladia's servers holding the user's audio, so a
+        // cancelled dictation still deletes it.
+        Assert.Equal(1, deleteCount);
     }
 
     [Fact]

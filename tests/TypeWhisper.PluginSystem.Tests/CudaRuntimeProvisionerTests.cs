@@ -804,6 +804,7 @@ public class CudaRuntimeProvisionerTests
                 return new HttpResponseMessage(HttpStatusCode.NotFound);
 
             var wheelRequest = Interlocked.Increment(ref _wheel);
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (_pauseFirstWheelResponse && wheelRequest == 1)
             {
                 _firstWheelRequestStarted.TrySetResult(true);

@@ -845,6 +845,7 @@ public sealed class WebhookPlugin
         }
 
         await _settingsSaveLock.WaitAsync(ct);
+        // ReSharper disable once TryStatementsCanBeMerged -- the outer try/finally owns the lock release and the inner try/catch owns logging; merging blends the two concerns.
         try
         {
             try
@@ -1014,6 +1015,7 @@ public sealed class WebhookPlugin
         var normalizedName = NormalizeHeaderName(headerName);
         foreach (var candidate in references)
         {
+            // ReSharper disable once InvertIf -- find-and-return loop; inverting only adds a `continue`.
             if (NormalizeHeaderName(candidate.Key) == normalizedName)
             {
                 reference = candidate.Value;

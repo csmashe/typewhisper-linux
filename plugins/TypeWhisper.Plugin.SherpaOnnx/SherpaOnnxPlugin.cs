@@ -654,7 +654,8 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
             {
                 ct.ThrowIfCancellationRequested();
                 var audioSamples = DecodeWav(wavAudio);
-                var audioDuration = audioSamples.Length / 16000.0;
+                var audioDuration =
+                    audioSamples.Length / (double)SherpaDecodeCoordinator.SampleRate;
                 ct.ThrowIfCancellationRequested();
 
                 lock (_sync)
@@ -783,7 +784,7 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
 
     // Test seam: run the structural preflight without the native loader, so per-model
     // token/ONNX acceptance (e.g. Canary carries no blank token) is testable in isolation.
-    internal void RunArtifactPreflightForTests(string modelId, string modelDir) =>
+    internal static void RunArtifactPreflightForTests(string modelId, string modelDir) =>
         VerifyModelArtifacts(GetModelDefinition(modelId), modelDir);
 
     internal string ComputeBackendForTests
@@ -859,6 +860,7 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
             return;
         }
 
+        // ReSharper disable once InvertIf -- last arm of a match-then-return dispatch chain; inverting would break its shape.
         if (string.Equals(fileName, "tokens.txt", StringComparison.OrdinalIgnoreCase))
         {
             VerifyTokensFile(path, fileName, requireBlankToken);
@@ -980,7 +982,7 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
 
             while (reader.ReadLine() is { } line)
             {
-                if (line.IndexOf('\0') >= 0)
+                if (line.Contains('\0'))
                     throw new InvalidDataException(
                         $"Model artifact '{fileName}' contains a null character."
                     );
@@ -1032,8 +1034,10 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
 
     private static bool IsArtifactInvalidLoadFailure(Exception exception)
     {
+        // ReSharper disable once SuggestVarOrType_SimpleTypes -- `var` would infer non-nullable Exception and warn on the InnerException assignment.
         for (Exception? current = exception; current is not null; current = current.InnerException)
         {
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- type-pattern guards; the second arm's multi-line Any() would make an unwieldy `when` clause.
             if (current is InvalidDataException)
                 return true;
 

@@ -517,14 +517,22 @@ public sealed class OpenAiCompatiblePlugin
         // catalogs don't go stale when a server adds or removes models after the
         // profile was first saved.
         var changedProfileIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var profile in _additionalProfiles.Where(p => !string.IsNullOrEmpty(p.BaseUrl)))
+        foreach (var snapshot in SnapshotProfiles().Where(p => !string.IsNullOrEmpty(p.BaseUrl)))
         {
-            var models = await FetchModelsForAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
-            if (models is null || !ProfileCatalogStateChanged(profile, models))
+            var apiKey = GetProfileApiKey(snapshot.Id);
+            var models = await FetchModelsForAsync(snapshot.BaseUrl, apiKey, ct);
+            if (models is null)
                 continue;
 
-            ApplyProfileCatalog(profile, models);
-            changedProfileIds.Add(profile.Id);
+            if (TryApplyFetchedCatalog(
+                    snapshot.Id,
+                    snapshot.BaseUrl,
+                    apiKey,
+                    models,
+                    ProfileCatalogStateChanged))
+            {
+                changedProfileIds.Add(snapshot.Id);
+            }
         }
 
         if (changedProfileIds.Count > 0)
@@ -621,13 +629,13 @@ public sealed class OpenAiCompatiblePlugin
     // provider via OpenAiCompatibleProfileRole and the selection-identity scheme.
 
     public IReadOnlyList<ITranscriptionEngineRole> AdditionalTranscriptionEngines =>
-        _additionalProfiles
-            .Select(ITranscriptionEngineRole (profile) => GetProfileRole(profile.Id))
+        SnapshotProfileIds()
+            .Select(ITranscriptionEngineRole (id) => GetProfileRole(id))
             .ToList();
 
     public IReadOnlyList<ILlmProviderRole> AdditionalLlmProviders =>
-        _additionalProfiles
-            .Select(ILlmProviderRole (profile) => GetProfileRole(profile.Id))
+        SnapshotProfileIds()
+            .Select(ILlmProviderRole (id) => GetProfileRole(id))
             .ToList();
 
     public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions() =>
@@ -672,7 +680,7 @@ public sealed class OpenAiCompatiblePlugin
         if (collectionKey != ProfilesCollectionKey)
             return Task.FromResult<IReadOnlyList<PluginCollectionItem>>([]);
 
-        IReadOnlyList<PluginCollectionItem> items = _additionalProfiles
+        IReadOnlyList<PluginCollectionItem> items = SnapshotProfiles()
             .Select(p => new PluginCollectionItem(
                 new Dictionary<string, string?>
                 {
@@ -699,7 +707,7 @@ public sealed class OpenAiCompatiblePlugin
         if (collectionKey != ProfilesCollectionKey)
             return new PluginSettingsValidationResult(false, Loc.L("Settings.UnknownCollection"));
 
-        var previousById = _additionalProfiles.ToDictionary(p => p.Id, StringComparer.Ordinal);
+        var previousById = SnapshotProfiles().ToDictionary(p => p.Id, StringComparer.Ordinal);
         var newProfiles = new List<OpenAiCompatibleProfile>(items.Count);
         var keyUpdates = new Dictionary<string, string?>(StringComparer.Ordinal);
         var seenIds = new HashSet<string>(StringComparer.Ordinal);
@@ -774,8 +782,7 @@ public sealed class OpenAiCompatiblePlugin
             }
         }
 
-        _additionalProfiles.Clear();
-        _additionalProfiles.AddRange(newProfiles);
+        ReplaceProfiles(newProfiles);
 
         // State is now persisted; the best-effort model fetch below may fail or be
         // cancelled, but that must not revert the saved profiles.
@@ -786,11 +793,20 @@ public sealed class OpenAiCompatiblePlugin
         // profile's models. New profiles and profiles whose endpoint changed have an
         // empty catalog here and get (re)fetched; an unchanged endpoint keeps its
         // existing catalog and is skipped.
-        foreach (var profile in _additionalProfiles.Where(p => p.FetchedModels.Count == 0))
+        foreach (var snapshot in SnapshotProfiles().Where(p => p.FetchedModels.Count == 0))
         {
-            var models = await FetchModelsForAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
+            var apiKey = GetProfileApiKey(snapshot.Id);
+            var models = await FetchModelsForAsync(snapshot.BaseUrl, apiKey, ct);
             if (models is not null)
-                ApplyProfileCatalog(profile, models);
+            {
+                TryApplyFetchedCatalog(
+                    snapshot.Id,
+                    snapshot.BaseUrl,
+                    apiKey,
+                    models,
+                    static (_, _) => true
+                );
+            }
         }
 
         PersistAdditionalProfiles(notify: false);
@@ -951,13 +967,15 @@ public sealed class OpenAiCompatiblePlugin
 
     private async Task LoadAdditionalProfilesAsync(IPluginHostServices host)
     {
-        var previousById = _additionalProfiles.ToDictionary(p => p.Id, StringComparer.Ordinal);
+        var previousById = SnapshotProfiles().ToDictionary(p => p.Id, StringComparer.Ordinal);
         var previousApiKeys = new Dictionary<string, string?>(_additionalApiKeys, StringComparer.Ordinal);
-        _additionalProfiles.Clear();
         _additionalApiKeys.Clear();
 
         var stored = host.GetSetting<List<OpenAiCompatibleProfile>>(AdditionalProfilesSettingKey) ?? [];
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        // Built locally and swapped in once, so the awaited secret loads below
+        // never expose a half-populated profile set to the host.
+        var loadedProfiles = new List<OpenAiCompatibleProfile>();
 
         foreach (var profile in stored)
         {
@@ -971,12 +989,14 @@ public sealed class OpenAiCompatiblePlugin
                 .Where(m => !string.IsNullOrWhiteSpace(m.Id))
                 .ToList();
 
-            _additionalProfiles.Add(profile);
+            loadedProfiles.Add(profile);
 
             var key = await host.LoadSecretAsync(SecretKeyFor(profile.Id));
             if (!string.IsNullOrEmpty(key))
                 _additionalApiKeys[profile.Id] = key;
         }
+
+        ReplaceProfiles(loadedProfiles);
 
         var changedApiKeyIds = previousApiKeys
             .Keys.Union(_additionalApiKeys.Keys, StringComparer.Ordinal)
@@ -992,7 +1012,7 @@ public sealed class OpenAiCompatiblePlugin
 
     private void PersistAdditionalProfiles(bool notify)
     {
-        _host?.SetSetting(AdditionalProfilesSettingKey, _additionalProfiles);
+        _host?.SetSetting(AdditionalProfilesSettingKey, SnapshotProfiles());
         if (notify)
             _host?.NotifyCapabilitiesChanged();
     }
@@ -1049,10 +1069,69 @@ public sealed class OpenAiCompatiblePlugin
     private string? GetProfileApiKey(string id) =>
         _additionalApiKeys.GetValueOrDefault(id);
 
+    // The settings-save and activation paths replace _additionalProfiles wholesale
+    // while the catalog refresh and the host's capability queries enumerate it across
+    // awaits, so hand out copies under the lock that already guards _profileRoles.
+    private List<string> SnapshotProfileIds()
+    {
+        lock (_profileRolesLock)
+        {
+            return _additionalProfiles.Select(p => p.Id).ToList();
+        }
+    }
+
+    private List<OpenAiCompatibleProfile> SnapshotProfiles()
+    {
+        lock (_profileRolesLock)
+        {
+            return [.. _additionalProfiles];
+        }
+    }
+
+    private void ReplaceProfiles(IEnumerable<OpenAiCompatibleProfile> profiles)
+    {
+        lock (_profileRolesLock)
+        {
+            _additionalProfiles.Clear();
+            _additionalProfiles.AddRange(profiles);
+        }
+    }
+
+    // A settings save during the awaited fetch swaps in new profile objects, so
+    // mutating the snapshot's orphan would drop the catalog while reporting success.
+    // Re-resolve by ID under the lock, and discard a catalog whose endpoint or key
+    // the profile no longer uses — that one describes a different account.
+    private bool TryApplyFetchedCatalog(
+        string id,
+        string fetchedFromBaseUrl,
+        string? fetchedWithApiKey,
+        List<FetchedModel> models,
+        Func<OpenAiCompatibleProfile, List<FetchedModel>, bool> shouldApply
+    )
+    {
+        lock (_profileRolesLock)
+        {
+            var current = _additionalProfiles.FirstOrDefault(
+                p => string.Equals(p.Id, id, StringComparison.Ordinal)
+            );
+            if (current is null
+                || !string.Equals(current.BaseUrl, fetchedFromBaseUrl, StringComparison.Ordinal)
+                || !string.Equals(GetProfileApiKey(id), fetchedWithApiKey, StringComparison.Ordinal)
+                || !shouldApply(current, models))
+            {
+                return false;
+            }
+
+            ApplyProfileCatalog(current, models);
+            return true;
+        }
+    }
+
     private OpenAiCompatibleProfileRole GetProfileRole(string id)
     {
         lock (_profileRolesLock)
         {
+            // ReSharper disable once InvertIf -- idiomatic get-or-add; inverting would duplicate the return.
             if (!_profileRoles.TryGetValue(id, out var role))
             {
                 role = new OpenAiCompatibleProfileRole(this, id);
@@ -1069,7 +1148,7 @@ public sealed class OpenAiCompatiblePlugin
     )
     {
         var changedSecrets = changedSecretIds.ToHashSet(StringComparer.Ordinal);
-        var currentById = _additionalProfiles.ToDictionary(p => p.Id, StringComparer.Ordinal);
+        var currentById = SnapshotProfiles().ToDictionary(p => p.Id, StringComparer.Ordinal);
 
         lock (_profileRolesLock)
         {
@@ -1105,7 +1184,7 @@ public sealed class OpenAiCompatiblePlugin
     }
 
     private OpenAiCompatibleProfile? FindAdditional(string id) =>
-        _additionalProfiles.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.Ordinal));
+        SnapshotProfiles().FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.Ordinal));
 
     private OpenAiCompatibleProfile RequireAdditional(string id) =>
         FindAdditional(id) ?? throw new ArgumentException($"Unknown OpenAI-compatible profile: {id}", nameof(id));
@@ -1140,13 +1219,13 @@ public sealed class OpenAiCompatiblePlugin
 
     private string CreateProfileId(HashSet<string> taken)
     {
+        var existingIds = SnapshotProfileIds();
         string id;
         do
         {
             id = $"{ProfileIdPrefix}{Guid.NewGuid():N}";
         }
-        while (taken.Contains(id)
-            || _additionalProfiles.Any(p => string.Equals(p.Id, id, StringComparison.Ordinal)));
+        while (taken.Contains(id) || existingIds.Contains(id));
 
         return id;
     }

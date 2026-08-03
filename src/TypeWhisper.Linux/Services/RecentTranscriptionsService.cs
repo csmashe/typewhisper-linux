@@ -354,6 +354,7 @@ public sealed class RecentTranscriptionsService
             }
         }
 
+        // ReSharper disable once InvertIf -- the block also sets hasAppIdentity, so inverting would skip that side effect.
         if (!string.IsNullOrWhiteSpace(target.ProcessName))
         {
             hasAppIdentity = true;

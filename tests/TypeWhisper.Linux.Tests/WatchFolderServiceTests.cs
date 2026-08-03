@@ -242,16 +242,18 @@ public sealed class WatchFolderServiceTests : IDisposable
             }
 
             failures.Enqueue(item);
-            if (failures.Count == 1)
+            switch (failures.Count)
             {
-                firstFailure.TrySetResult(item);
-            }
-            else if (failures.Count == 2)
-            {
-                secondFailure.TrySetResult(item);
+                case 1:
+                    firstFailure.TrySetResult(item);
+                    break;
+                case 2:
+                    secondFailure.TrySetResult(item);
+                    break;
             }
         };
 
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- kept beside the queue it captures, ahead of the Start call that uses it.
         Task<WatchFolderTranscriptionResult> TranscribeAndCountAsync(
             WatchFolderTranscriptionRequest request,
             CancellationToken ct
@@ -763,6 +765,7 @@ public sealed class WatchFolderServiceTests : IDisposable
         WatchFolderService.WatchFolderRun? run = null;
         service.FileProcessed += (_, item) =>
         {
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- compound conditions over several members, not one switchable expression.
             if (
                 !item.Success
                 && string.Equals(item.FileName, "Meeting.wav", StringComparison.Ordinal)
@@ -786,6 +789,7 @@ public sealed class WatchFolderServiceTests : IDisposable
                 (request, ct) =>
                 {
                     ct.ThrowIfCancellationRequested();
+                    // ReSharper disable once ConvertIfStatementToReturnStatement -- the guard throws; folding it into a ternary would need a throw expression.
                     if (
                         string.Equals(
                             Path.GetFileName(request.FilePath),
@@ -958,6 +962,7 @@ public sealed class WatchFolderServiceTests : IDisposable
                 {
                     var fileName = Path.GetFileName(request.FilePath);
                     calls.Enqueue(fileName);
+                    // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                     if (fileName == "a-timeout.wav")
                     {
                         timeoutEntered.TrySetResult(ct);
@@ -1121,6 +1126,7 @@ public sealed class WatchFolderServiceTests : IDisposable
         service.StateChanged += (_, _) =>
         {
             // ReSharper disable once AccessToModifiedClosure -- the handler deliberately reads the current `run` (assigned after Start) to correlate the transition with the active run.
+            // ReSharper disable once InlineTemporaryVariable -- the local is a deliberate snapshot of the mutable `run` capture; inlining would defeat it.
             var observedRun = run;
             if (
                 observedRun is not null
@@ -1147,7 +1153,7 @@ public sealed class WatchFolderServiceTests : IDisposable
             Assert.Null(service.WatchPath);
             Assert.Null(service.CurrentlyProcessing);
             Assert.True(run.CancellationSource.IsCancellationRequested);
-            Assert.IsAssignableFrom<ArgumentException>(run.WorkerFailure);
+            Assert.IsType<ArgumentException>(run.WorkerFailure, exactMatch: false);
             Assert.True(run.WorkerCompletion.IsCompletedSuccessfully);
             Assert.Empty(service.History);
             Assert.Empty(processed);

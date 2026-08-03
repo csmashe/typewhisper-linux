@@ -576,7 +576,7 @@ public sealed class WebhookCollectionSettingsTests : IDisposable
             }
         );
         await File.WriteAllTextAsync(ConfigPath, legacyJson);
-        var expectedMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        const UnixFileMode expectedMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         if (!OperatingSystem.IsWindows())
         {
             File.SetUnixFileMode(

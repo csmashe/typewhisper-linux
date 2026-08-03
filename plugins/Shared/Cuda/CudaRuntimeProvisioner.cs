@@ -191,7 +191,9 @@ public class CudaRuntimeProvisioner
     public string CacheDirectory { get; }
 
     // Test seams: pin the lock paths and timeout so tests avoid a real per-user cache.
+    // ReSharper disable once ConvertToAutoPropertyWhenPossible -- the backing field is read throughout the class; only this test accessor is a property.
     internal string MaintenanceLockPathForTests => _maintenanceLockPath;
+    // ReSharper disable once ConvertToAutoPropertyWhenPossible -- the backing field is read throughout the class; only this test accessor is a property.
     internal string WheelLockDirectoryForTests => _wheelLockDirectory;
     internal TimeSpan MaintenanceLockTimeoutForTests { get; init; } =
         s_defaultMaintenanceLockTimeout;
@@ -1031,6 +1033,7 @@ public class CudaRuntimeProvisioner
     public async Task ClearCacheAsync(CancellationToken ct)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
+        // ReSharper disable once TryStatementsCanBeMerged -- the outer try/finally owns the gate release and the inner try/catch owns logging; merging blends the two concerns.
         try
         {
             try
