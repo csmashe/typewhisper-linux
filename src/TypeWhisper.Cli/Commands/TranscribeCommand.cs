@@ -152,8 +152,24 @@ internal static partial class TranscribeCommand
         {
             if (spoolPath is not null)
             {
-                File.Delete(spoolPath);
+                TryDeleteSpoolFile(spoolPath);
             }
+        }
+    }
+
+    private static void TryDeleteSpoolFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Cleanup must never replace the command's result or the spool failure that
+            // got us here — but the file holds the whole recording, so say where it is.
+            Console.Error.WriteLine(
+                $"Warning: could not remove the temporary audio file {path}: {ex.Message}"
+            );
         }
     }
 
@@ -233,7 +249,7 @@ internal static partial class TranscribeCommand
         }
         catch
         {
-            File.Delete(spoolPath);
+            TryDeleteSpoolFile(spoolPath);
             throw;
         }
     }

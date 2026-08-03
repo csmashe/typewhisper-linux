@@ -535,7 +535,19 @@ public sealed partial class HttpApiService : IDisposable
                 listenOptions.Use(next => async connection =>
                 {
                     var socket = connection.Features.Get<IConnectionSocketFeature>()?.Socket;
-                    if (socket is null || !_validateUnixPeer(socket))
+                    bool owned;
+                    try
+                    {
+                        // A credential read that fails tells us nothing about the peer,
+                        // so it must fail closed here rather than unwind into Kestrel.
+                        owned = socket is not null && _validateUnixPeer(socket);
+                    }
+                    catch (IOException)
+                    {
+                        owned = false;
+                    }
+
+                    if (!owned)
                     {
                         connection.Abort();
                         return;

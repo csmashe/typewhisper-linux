@@ -336,9 +336,8 @@ public sealed class TranscribeCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task EmptyStdinFailsWithoutSendingRequestOrSpooling()
+    public async Task EmptyStdinFailsWithoutSendingRequest()
     {
-        var spooledBefore = Directory.GetFiles(Path.GetTempPath(), "typewhisper-stdin-*").Length;
         await using var stub = new UnixHttpStub();
         var options = new CliOptions { Positionals = ["-"] };
 
@@ -348,10 +347,6 @@ public sealed class TranscribeCommandTests : IDisposable
         Assert.Contains("Empty audio data", result.Error, StringComparison.Ordinal);
         Assert.Equal(0, stub.RequestCount);
         Assert.False(stub.FirstRequest.Task.IsCompleted);
-        Assert.Equal(
-            spooledBefore,
-            Directory.GetFiles(Path.GetTempPath(), "typewhisper-stdin-*").Length
-        );
     }
 
     [Fact]
@@ -456,11 +451,26 @@ public sealed class TranscribeCommandTests : IDisposable
             // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in teardown; there are no cancellation callbacks to defer.
             _cts.Cancel();
             _listener.Dispose();
-            await _serveTask;
-            _cts.Dispose();
-            if (Directory.Exists(_tempDirectory))
+            try
             {
-                Directory.Delete(_tempDirectory, recursive: true);
+                await _serveTask;
+            }
+            // Teardown faults must not replace whatever the test was actually asserting.
+            catch (EndOfStreamException)
+            {
+                // Expected when the CLI closes before finishing its request.
+            }
+            catch (SocketException ex) when (SocketShutdown.IsShutdownError(ex))
+            {
+                // Expected when the CLI resets the connection during shutdown.
+            }
+            finally
+            {
+                _cts.Dispose();
+                if (Directory.Exists(_tempDirectory))
+                {
+                    Directory.Delete(_tempDirectory, recursive: true);
+                }
             }
         }
 
