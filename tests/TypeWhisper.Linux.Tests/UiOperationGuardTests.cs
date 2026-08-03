@@ -64,6 +64,9 @@ public sealed class UiOperationGuardTests
         };
     }
 
+    // Exception is not IXunitSerializable, so Test Explorer cannot pre-enumerate the
+    // cases. They still all run, and the concrete instances are the point of the data.
+#pragma warning disable xUnit1045
     [Theory]
     // Exception instances aren't serializable for row enumeration, and the real
     // exception types are the point of the theory.
@@ -72,6 +75,7 @@ public sealed class UiOperationGuardTests
         UiFailureKind failureKind,
         Exception failure
     )
+#pragma warning restore xUnit1045
     {
         var events = new List<string>();
         var errorLog = new Mock<IErrorLogService>();
