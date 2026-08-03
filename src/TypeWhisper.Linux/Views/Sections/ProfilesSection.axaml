@@ -85,6 +85,19 @@
                            Classes="panel-title" />
                 <TextBlock Text="{Binding Summary}"
                            Classes="page-subtitle" />
+
+                <Border Background="#3A1D1D"
+                        BorderBrush="#7A2E2E"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Padding="10"
+                        Margin="0,10,0,0"
+                        IsVisible="{Binding HasError}">
+                    <TextBlock Text="{Binding ErrorText}"
+                               FontSize="12"
+                               TextWrapping="Wrap"
+                               Foreground="#F4A9A9" />
+                </Border>
             </StackPanel>
 
             <ListBox Grid.Row="1"

@@ -563,7 +563,8 @@ public class ModelManagerServiceTests
         var lease = await sut.AcquireTranscriptionAsync(fullModelId);
         await lease.DisposeAsync();
 
-        Assert.True(sut.IsAutoUnloadArmed);
+        // Arming state is covered by ..._ArmsAutoUnload; asserting it here races the 1 s timer,
+        // which may already have fired and disarmed. The unload signal is the subject.
         await fake.UnloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 

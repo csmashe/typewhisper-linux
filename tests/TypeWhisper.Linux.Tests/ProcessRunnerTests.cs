@@ -75,7 +75,7 @@ public sealed class ProcessRunnerTests
             Assert.False(result.Succeeded);
             Assert.Equal(-1, result.ExitCode);
 
-            var processId = int.Parse(await File.ReadAllTextAsync(pidFile));
+            var processId = await ReadProcessIdAsync(pidFile);
             await AssertProcessDisappearsAsync(processId);
         }
         finally
@@ -115,12 +115,65 @@ public sealed class ProcessRunnerTests
             Assert.False(result.Succeeded);
             Assert.Equal(-1, result.ExitCode);
 
-            var processId = int.Parse(await File.ReadAllTextAsync(pidFile));
+            var processId = await ReadProcessIdAsync(pidFile);
             await AssertProcessDisappearsAsync(processId);
         }
         finally
         {
             File.Delete(pidFile);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_kills_process_and_propagates_when_caller_cancels()
+    {
+        var pidFile = Path.Join(
+            Path.GetTempPath(),
+            $"typewhisper-process-runner-{Guid.NewGuid():N}.pid"
+        );
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            var runTask = new ProcessRunner().RunAsync(
+                "/bin/bash",
+                ["-c", "printf '%s' \"$$\" > \"$1\"; sleep 30", "process-runner-test", pidFile],
+                ct: cts.Token
+            );
+
+            var processId = await ReadProcessIdAsync(pidFile);
+            await cts.CancelAsync();
+
+            // Cancellation must surface, not be flattened into a NotStarted result.
+            // ReSharper disable once MethodSupportsCancellation -- WaitAsync here is only a hang-guard; passing cts.Token would satisfy the OperationCanceledException assertion via the guard's own cancellation instead of the run under test.
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => runTask.WaitAsync(s_testGuard)
+            );
+            await AssertProcessDisappearsAsync(processId);
+        }
+        finally
+        {
+            File.Delete(pidFile);
+        }
+    }
+
+    // The child creates the pid file before writing to it, so a read can land on an empty
+    // file; poll until it holds a parsable id rather than throwing on the first read.
+    private static async Task<int> ReadProcessIdAsync(string pidFile)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (true)
+        {
+            if (File.Exists(pidFile)
+                && int.TryParse(await File.ReadAllTextAsync(pidFile), out var processId))
+            {
+                return processId;
+            }
+
+            Assert.True(
+                stopwatch.Elapsed < s_testGuard,
+                $"Process id file '{pidFile}' never contained a parsable id."
+            );
+            await Task.Delay(20);
         }
     }
 

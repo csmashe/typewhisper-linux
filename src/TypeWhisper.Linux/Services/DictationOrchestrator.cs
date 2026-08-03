@@ -2020,6 +2020,15 @@ public sealed class DictationOrchestrator : IDisposable
                 );
             }
 
+            // Wait for every earlier-started session to finish inserting first
+            // (audit §2 H3) — but only around the delivery call itself, not the
+            // transcription/post-processing above, which stays concurrent. Ahead of the
+            // status/focus handoff below so a queued session doesn't announce "Inserting…" and
+            // take focus minutes before it can deliver. Cancellation here flows to the pipeline's
+            // own handler, and the terminal safety net still releases this session's slot.
+            await _insertionOrder.WaitForTurnAsync(context.SessionId, cancelToken)
+                .ConfigureAwait(false);
+
             // Yield focus before any synthesized keystroke: on Wayland a
             // visible overlay can still hold keyboard focus, and ydotool's
             // virtual keyboard fires Ctrl+V to whatever has focus. wtype on
@@ -2047,12 +2056,6 @@ public sealed class DictationOrchestrator : IDisposable
             var insertionThrew = false;
             try
             {
-                // Wait for every earlier-started session to finish inserting first
-                // (audit §2 H3) — but only around the delivery call itself, not the
-                // transcription/post-processing above, which stays concurrent.
-                await _insertionOrder.WaitForTurnAsync(context.SessionId, cancelToken)
-                    .ConfigureAwait(false);
-
                 // Final lock check before synthesizing any keystroke, re-evaluated
                 // AFTER the insertion-order wait above. A normal stop nulls
                 // _activeDictationCts and releases the gate before transcription

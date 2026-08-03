@@ -23,6 +23,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 {
     private readonly IActiveWindowService _activeWindow;
     private readonly BrowserAccessibilitySetupHelper _browserSetup;
+    private readonly IErrorLogService? _errorLog;
     private readonly IDetectionFailureTracker _failureTracker;
     private readonly GnomeWindowCallsSetupHelper _gnomeSetup;
     private readonly string _hostProcessName = Process.GetCurrentProcess().ProcessName;
@@ -51,6 +52,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private string _currentProcessName = "-";
+
+    [ObservableProperty]
+    private string _errorText = "";
 
     [ObservableProperty]
     private string _currentUrl = "-";
@@ -132,9 +136,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
         IPromptActionService promptActions,
         IDetectionFailureTracker failureTracker,
         GnomeWindowCallsSetupHelper gnomeSetup,
-        BrowserAccessibilitySetupHelper browserSetup
+        BrowserAccessibilitySetupHelper browserSetup,
+        IErrorLogService? errorLog = null
     )
     {
+        _errorLog = errorLog;
         _profiles = profiles;
         _activeWindow = activeWindow;
         _pluginManager = pluginManager;
@@ -301,6 +307,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         HasMatchedProfile
             ? Loc.Instance.GetString("Profiles.Matches", MatchedProfileName)
             : Loc.Instance["Profiles.NoActiveMatch"];
+
+    public bool HasError => !string.IsNullOrEmpty(ErrorText);
 
     public bool ShowLiveContextProfileHint => !HasSelectedProfile;
 
@@ -593,7 +601,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
             UrlPatterns = []
         };
 
-        _profiles.AddProfile(profile);
+        if (!TryMutate(() => _profiles.AddProfile(profile), "add a profile"))
+        {
+            return;
+        }
+
         RefreshProfiles();
         SelectById(profile.Id);
     }
@@ -631,7 +643,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
         };
 
         var selectedId = SelectedProfile.Id;
-        _profiles.UpdateProfile(updated);
+        if (!TryMutate(() => _profiles.UpdateProfile(updated), "save a profile"))
+        {
+            return;
+        }
+
         RefreshProfiles();
         SelectById(selectedId);
     }
@@ -655,7 +671,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
             UpdatedAt = DateTime.UtcNow
         };
 
-        _profiles.AddProfile(duplicate);
+        if (!TryMutate(() => _profiles.AddProfile(duplicate), "duplicate a profile"))
+        {
+            return;
+        }
+
         RefreshProfiles();
         SelectById(duplicate.Id);
     }
@@ -668,7 +688,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
             return;
         }
 
-        _profiles.DeleteProfile(SelectedProfile.Id);
+        if (!TryMutate(() => _profiles.DeleteProfile(SelectedProfile.Id), "delete a profile"))
+        {
+            return;
+        }
+
         RefreshProfiles();
         SelectedProfile = null;
     }
@@ -681,8 +705,40 @@ public partial class ProfilesSectionViewModel : ObservableObject
             return;
         }
 
-        _profiles.UpdateProfile(profile with { IsEnabled = !profile.IsEnabled });
+        if (
+            !TryMutate(
+                () => _profiles.UpdateProfile(profile with { IsEnabled = !profile.IsEnabled }),
+                "toggle a profile"
+            )
+        )
+        {
+            return;
+        }
+
         RefreshProfiles();
+    }
+
+    private bool TryMutate(Action mutation, string operation)
+    {
+        try
+        {
+            mutation();
+            ErrorText = "";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[ProfilesSectionViewModel] Failed to {operation}: {ex}");
+            _errorLog?.AddEntry($"Could not {operation}: {ex.Message}");
+            ErrorText = Loc.Instance.GetString("Profiles.SaveFailed", ex.Message);
+            RefreshProfiles();
+            return false;
+        }
+    }
+
+    partial void OnErrorTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasError));
     }
 
     [RelayCommand]

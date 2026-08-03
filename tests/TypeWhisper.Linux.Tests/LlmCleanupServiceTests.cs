@@ -22,6 +22,18 @@ public sealed class LlmCleanupServiceTests
     }
 
     [Fact]
+    public async Task CleanAsync_Light_KeepsBareUm_ButStripsDoubledUmm()
+    {
+        var sut = CreateService([]);
+
+        // Bare "um" is a real word in German/Dutch/Swedish/Danish/Portuguese, so the
+        // language-agnostic deterministic pass deliberately leaves it alone and only strips the
+        // doubled spelling that collides with nothing (audit §1 M4).
+        Assert.Equal("Um hello", await sut.CleanAsync("um hello", CleanupLevel.Light));
+        Assert.Equal("Hello", await sut.CleanAsync("umm hello", CleanupLevel.Light));
+    }
+
+    [Fact]
     public async Task CleanAsync_Medium_UsesConfiguredLlmPrompt()
     {
         var provider = new FakeLlmProviderPlugin("polished text");

@@ -13,12 +13,16 @@ public sealed class ProfileService : IProfileService
     private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
     private readonly string _filePath;
+    private readonly IErrorLogService? _errorLog;
     private List<Profile> _cache = [];
     private bool _cacheLoaded;
+    private bool _loadFailed;
+    private bool _loadFailureReported;
 
-    public ProfileService(string filePath)
+    public ProfileService(string filePath, IErrorLogService? errorLog = null)
     {
         _filePath = filePath;
+        _errorLog = errorLog;
     }
 
     public IReadOnlyList<Profile> Profiles
@@ -250,22 +254,52 @@ public sealed class ProfileService : IProfileService
 
     private void EnsureCacheLoaded()
     {
-        if (_cacheLoaded)
+        // Retry while a previous load failed rather than staying poisoned for the process
+        // lifetime; the cause may be transient or since repaired. It has to retry *here*: callers
+        // build their next list from _cache, so recovering later would still write the stale set.
+        if (_cacheLoaded && !_loadFailed)
         {
             return;
         }
 
         try
         {
+            _cache = [];
             if (File.Exists(_filePath))
             {
                 var json = File.ReadAllText(_filePath);
-                _cache = JsonSerializer.Deserialize<List<Profile>>(json) ?? [];
+                // A blank file is a benign "no profiles yet" state, not corruption — leave the
+                // cache empty so normal saves still happen. Only non-empty content that fails to
+                // parse is treated as a load failure below.
+                if (!string.IsNullOrWhiteSpace(json))
+                {
+                    _cache = JsonSerializer.Deserialize<List<Profile>>(json) ?? [];
+                }
             }
+
+            _loadFailed = false;
         }
-        catch
+        catch (Exception ex)
         {
+            // Report once per failure streak: this runs on the dictation path via MatchProfile,
+            // so logging every retry would flood the error log.
+            if (!_loadFailureReported)
+            {
+                _errorLog?.AddEntry(
+                    $"Could not load saved profiles from {_filePath}: {ex.Message}"
+                );
+                _loadFailureReported = true;
+            }
+
             _cache = [];
+            // The file exists but couldn't be read or parsed. Treat the cache as untrustworthy so
+            // a later add/update doesn't overwrite the (possibly recoverable) file.
+            _loadFailed = true;
+        }
+
+        if (!_loadFailed)
+        {
+            _loadFailureReported = false;
         }
 
         SortList(_cache);
@@ -274,6 +308,18 @@ public sealed class ProfileService : IProfileService
 
     private void SaveToDisk(IReadOnlyList<Profile> profiles)
     {
+        if (_loadFailed)
+        {
+            // The cache is a partial set (the file didn't load), so refuse until it loads cleanly
+            // rather than clobber the user's saved profiles.
+            const string reason =
+                "the existing file could not be loaded, so writing now would overwrite saved profiles";
+            _errorLog?.AddEntry($"Not saving profiles at {_filePath}: {reason}.");
+            throw new InvalidOperationException(
+                $"Cannot save profiles at '{_filePath}': {reason}."
+            );
+        }
+
         var dir = Path.GetDirectoryName(_filePath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {

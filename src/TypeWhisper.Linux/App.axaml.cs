@@ -207,7 +207,9 @@ public class App : Application
             catch (Exception ex)
             {
                 Trace.WriteLine($"[App] Failed to seed first-run prompt actions: {ex}");
-                services.GetRequiredService<IErrorLogService>().AddEntry(
+                // Optional resolution: a GetRequiredService throw here would escape the catch and
+                // abort startup over a failed best-effort seed.
+                services.GetService<IErrorLogService>()?.AddEntry(
                     $"Could not seed first-run prompt actions: {ex.Message}",
                     ErrorCategory.Prompt
                 );
@@ -221,7 +223,18 @@ public class App : Application
                     HotkeyService.ParsePromptActionHotkeys(promptActions.Actions)
                 );
             var profileService = services.GetRequiredService<IProfileService>();
-            profileService.SeedFirstRunDefaultsIfMissing();
+            try
+            {
+                profileService.SeedFirstRunDefaultsIfMissing();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[App] Failed to seed first-run profiles: {ex}");
+                services.GetService<IErrorLogService>()?.AddEntry(
+                    $"Could not seed first-run profiles: {ex.Message}"
+                );
+            }
+
             hotkey.SetProfileHotkeys(
                 HotkeyService.ParseProfileHotkeys(profileService.Profiles)
             );

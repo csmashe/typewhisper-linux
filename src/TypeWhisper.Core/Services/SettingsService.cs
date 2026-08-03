@@ -18,6 +18,12 @@ public sealed class SettingsService : ISettingsService
     };
 
     private readonly Lock _gate = new();
+
+    // Publication happens outside _gate (handlers must not run under the write lock) but still in
+    // commit order, or a preempted publisher could deliver its older snapshot after a newer
+    // commit. Both fields are guarded by _gate; see PublishPendingChanges.
+    private readonly Queue<AppSettings> _pendingNotifications = new();
+    private bool _publishing;
     private readonly string _filePath;
 
     public SettingsService(string filePath)
@@ -34,6 +40,28 @@ public sealed class SettingsService : ISettingsService
     public event Action<AppSettings>? SettingsChanged;
 
     public AppSettings Load()
+    {
+        // Under _gate for the whole read: Load both writes Current and (on the backup path) copies
+        // over the primary file, so an unsynchronized read could clobber a concurrent Save.
+        lock (_gate)
+        {
+            return LoadLocked();
+        }
+    }
+
+    public AppSettings Reload()
+    {
+        AppSettings committed;
+        lock (_gate)
+        {
+            committed = SaveLocked(LoadLocked());
+        }
+
+        PublishPendingChanges();
+        return committed;
+    }
+
+    private AppSettings LoadLocked()
     {
         var result = TryLoadFrom(_filePath);
         if (result is not null)
@@ -66,20 +94,94 @@ public sealed class SettingsService : ISettingsService
         {
             SaveLocked(settings);
         }
+
+        PublishPendingChanges();
     }
 
     public AppSettings Update(Func<AppSettings, AppSettings> mutate)
     {
         ArgumentNullException.ThrowIfNull(mutate);
+        AppSettings committed;
         lock (_gate)
         {
-            var updated = mutate(Current);
-            SaveLocked(updated);
-            return updated;
+            committed = SaveLocked(mutate(Current));
+        }
+
+        PublishPendingChanges();
+        return committed;
+    }
+
+    /// <summary>
+    ///     Drains committed snapshots to <see cref="SettingsChanged" /> in commit order. No lock is
+    ///     held while a subscriber runs — a handler that saves, or waits on a thread that saves,
+    ///     must not deadlock — so a single active drainer is elected instead. A writer that finds a
+    ///     drain already running (another thread, or this thread re-entering from a handler) leaves
+    ///     its snapshot queued and returns, keeping delivery ordered and non-recursive.
+    /// </summary>
+    private void PublishPendingChanges()
+    {
+        lock (_gate)
+        {
+            if (_publishing)
+            {
+                return;
+            }
+
+            _publishing = true;
+        }
+
+        try
+        {
+            while (true)
+            {
+                AppSettings next;
+                lock (_gate)
+                {
+                    if (_pendingNotifications.Count == 0)
+                    {
+                        // Resign in the same acquisition that observes the empty queue. Clearing
+                        // later leaves a window where a writer enqueues, sees _publishing still
+                        // true, declines to drain, and strands its notification.
+                        _publishing = false;
+                        return;
+                    }
+
+                    next = _pendingNotifications.Dequeue();
+                }
+
+                // Per subscriber, not per multicast invoke: one throwing handler would otherwise
+                // starve every handler after it. The drainer may also be carrying another writer's
+                // snapshot, so a failure must not escape and fail that already-succeeded Save.
+                foreach (var subscriber in
+                         SettingsChanged?.GetInvocationList() ?? [])
+                {
+                    try
+                    {
+                        ((Action<AppSettings>)subscriber)(next);
+                    }
+                    catch (Exception ex)
+                    {
+                        LogWarning($"A SettingsChanged subscriber threw: {ex}");
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Backstop for an abnormal exit (the subscriber chain is already guarded above):
+            // never leave the flag set, or publication stops for the process lifetime.
+            lock (_gate)
+            {
+                _publishing = false;
+            }
+
+            throw;
         }
     }
 
-    private void SaveLocked(AppSettings settings)
+    // Queues the committed snapshot instead of raising SettingsChanged here: handlers must never
+    // run under _gate. Callers publish via PublishPendingChanges once the lock is released.
+    private AppSettings SaveLocked(AppSettings settings)
     {
         var directory = Path.GetDirectoryName(_filePath);
         if (!string.IsNullOrEmpty(directory))
@@ -99,7 +201,8 @@ public sealed class SettingsService : ISettingsService
 
         // Advance in-memory state only after disk success so Current never leads what a reload sees.
         Current = settings;
-        SettingsChanged?.Invoke(settings);
+        _pendingNotifications.Enqueue(settings);
+        return settings;
     }
 
     private static AppSettings? TryLoadFrom(string path)

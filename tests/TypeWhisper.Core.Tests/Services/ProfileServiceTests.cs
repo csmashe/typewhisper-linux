@@ -24,6 +24,50 @@ public sealed class ProfileServiceTests : IDisposable
     }
 
     [Fact]
+    public void AddProfile_WhenExistingFileIsUnreadable_RefusesToOverwriteIt()
+    {
+        File.WriteAllText(_filePath, "{ not valid profile json");
+        var sut = new ProfileService(_filePath);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            sut.AddProfile(new Profile { Id = Guid.NewGuid().ToString(), Name = "New" })
+        );
+
+        Assert.Equal("{ not valid profile json", File.ReadAllText(_filePath));
+    }
+
+    [Fact]
+    public void AddProfile_AfterTheUnreadableFileIsRepaired_RecoversWithoutARestart()
+    {
+        File.WriteAllText(_filePath, "{ not valid profile json");
+        var sut = new ProfileService(_filePath);
+        Assert.Throws<InvalidOperationException>(() =>
+            sut.AddProfile(new Profile { Id = "blocked", Name = "Blocked" })
+        );
+
+        File.WriteAllText(_filePath, """[{"Id":"existing","Name":"Existing"}]""");
+
+        sut.AddProfile(new Profile { Id = "added", Name = "Added" });
+
+        // The recovered content must survive: the retry has to reload before the new list is
+        // built, or the stale empty cache would overwrite "existing".
+        var reloaded = new ProfileService(_filePath).Profiles;
+        Assert.Contains(reloaded, p => p.Id == "existing");
+        Assert.Contains(reloaded, p => p.Id == "added");
+    }
+
+    [Fact]
+    public void AddProfile_WhenExistingFileIsBlank_StillSaves()
+    {
+        File.WriteAllText(_filePath, "   ");
+        var sut = new ProfileService(_filePath);
+
+        sut.AddProfile(new Profile { Id = "blank-file", Name = "New" });
+
+        Assert.Contains(new ProfileService(_filePath).Profiles, p => p.Id == "blank-file");
+    }
+
+    [Fact]
     public void PromptActionId_RoundTrips()
     {
         var profile = new Profile

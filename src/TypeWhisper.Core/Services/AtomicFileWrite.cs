@@ -74,16 +74,27 @@ public static class AtomicFileWrite
                 writeTemporaryFile(tempPath);
             }
 
-            if (replaceExisting && File.Exists(path))
-            {
-                // File.Replace brings the temp file's inode (and mode) into the destination, so
-                // copy the destination's mode over first to preserve its permissions.
-                if (!OperatingSystem.IsWindows())
-                {
-                    File.SetUnixFileMode(tempPath, File.GetUnixFileMode(path));
-                }
+            FlushToDisk(tempPath);
 
-                File.Replace(tempPath, path, null);
+            if (replaceExisting)
+            {
+                if (File.Exists(path))
+                {
+                    // File.Replace brings the temp file's inode (and mode) into the destination, so
+                    // copy the destination's mode over first to preserve its permissions.
+                    if (!OperatingSystem.IsWindows())
+                    {
+                        File.SetUnixFileMode(tempPath, File.GetUnixFileMode(path));
+                    }
+
+                    File.Replace(tempPath, path, null);
+                }
+                else
+                {
+                    // Overwriting move: a destination created between the check above and the move
+                    // must still be replaced rather than fail the write.
+                    File.Move(tempPath, path, overwrite: true);
+                }
             }
             else
             {
@@ -108,5 +119,15 @@ public static class AtomicFileWrite
 
             throw;
         }
+    }
+
+    /// <summary>
+    ///     Forces the finished temporary file out of the page cache before it becomes the
+    ///     destination, so a crash cannot leave a renamed-but-empty file behind.
+    /// </summary>
+    private static void FlushToDisk(string tempPath)
+    {
+        using var handle = File.OpenHandle(tempPath, FileMode.Open, FileAccess.Write);
+        RandomAccess.FlushToDisk(handle);
     }
 }

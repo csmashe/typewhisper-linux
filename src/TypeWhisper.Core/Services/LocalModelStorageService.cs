@@ -94,6 +94,7 @@ public sealed class LocalModelStorageService
     public async Task MoveDownloadsAndUsePathAsync(string targetPath, CancellationToken ct = default)
     {
         var targetRoot = PrepareWritableTarget(targetPath);
+        var migrated = new MigratedTargets();
         var sourceRoot = ResolvedModelStoragePath;
         var currentIsDefault =
             AppSettings.NormalizeLocalModelStoragePath(_settings.Current.LocalModelStoragePath) is null;
@@ -112,7 +113,7 @@ public sealed class LocalModelStorageService
                 await Task.Run(() =>
                 {
                     ct.ThrowIfCancellationRequested();
-                    CopyPluginAssets(pluginAssetSourceRoot, targetRoot, ct);
+                    CopyPluginAssets(pluginAssetSourceRoot, targetRoot, migrated, ct);
                 }, ct);
             }
 
@@ -123,7 +124,7 @@ public sealed class LocalModelStorageService
                 // Settings already point at targetRoot, so this cleanup is best-effort: a failure or
                 // interruption wastes disk space, never data — hence CancellationToken.None after the commit.
                 await Task.Run(
-                    () => DeletePluginAssetSourceContents(pluginAssetSourceRoot, targetRoot),
+                    () => DeletePluginAssetSourceContents(pluginAssetSourceRoot, targetRoot, migrated),
                     CancellationToken.None);
             }
 
@@ -167,8 +168,8 @@ public sealed class LocalModelStorageService
         await Task.Run(() =>
         {
             ct.ThrowIfCancellationRequested();
-            CopyModelRootContents(sourceRoot, targetRoot, ct);
-            CopyPluginAssets(pluginAssetSourceRoot, targetRoot, ct);
+            CopyModelRootContents(sourceRoot, targetRoot, migrated, ct);
+            CopyPluginAssets(pluginAssetSourceRoot, targetRoot, migrated, ct);
         }, ct);
 
         _settings.Save(_settings.Current with { LocalModelStoragePath = targetRoot });
@@ -176,8 +177,8 @@ public sealed class LocalModelStorageService
         // Best-effort cleanup after the commit above — see comment in the currentIsDefault branch.
         await Task.Run(() =>
         {
-            DeleteModelRootSourceContents(sourceRoot, targetRoot);
-            DeletePluginAssetSourceContents(pluginAssetSourceRoot, targetRoot);
+            DeleteModelRootSourceContents(sourceRoot, targetRoot, migrated);
+            DeletePluginAssetSourceContents(pluginAssetSourceRoot, targetRoot, migrated);
         }, CancellationToken.None);
     }
 
@@ -237,7 +238,11 @@ public sealed class LocalModelStorageService
         }
     }
 
-    private static void CopyModelRootContents(string sourceRoot, string targetRoot, CancellationToken ct)
+    private static void CopyModelRootContents(
+        string sourceRoot,
+        string targetRoot,
+        MigratedTargets migrated,
+        CancellationToken ct)
     {
         if (!Directory.Exists(sourceRoot))
             return;
@@ -251,11 +256,14 @@ public sealed class LocalModelStorageService
             if (string.Equals(name, LocalModelStoragePaths.PluginDataFolderName, StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            CopyEntry(entry, Path.Join(targetRoot, SafeLeafName(name, nameof(entry))), ct);
+            CopyEntry(entry, Path.Join(targetRoot, SafeLeafName(name, nameof(entry))), migrated, ct);
         }
     }
 
-    private static void DeleteModelRootSourceContents(string sourceRoot, string targetRoot)
+    private static void DeleteModelRootSourceContents(
+        string sourceRoot,
+        string targetRoot,
+        MigratedTargets migrated)
     {
         if (!Directory.Exists(sourceRoot))
             return;
@@ -266,11 +274,15 @@ public sealed class LocalModelStorageService
             if (string.Equals(name, LocalModelStoragePaths.PluginDataFolderName, StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            DeleteMigratedEntry(entry, Path.Join(targetRoot, SafeLeafName(name, nameof(entry))));
+            DeleteMigratedEntry(entry, Path.Join(targetRoot, SafeLeafName(name, nameof(entry))), migrated);
         }
     }
 
-    private static void CopyPluginAssets(string assetSourceRoot, string targetRoot, CancellationToken ct)
+    private static void CopyPluginAssets(
+        string assetSourceRoot,
+        string targetRoot,
+        MigratedTargets migrated,
+        CancellationToken ct)
     {
         var pluginDataFolderName = SafeRelativeName(LocalModelStoragePaths.PluginDataFolderName, nameof(LocalModelStoragePaths.PluginDataFolderName));
 
@@ -290,12 +302,16 @@ public sealed class LocalModelStorageService
                 CopyEntry(
                     Path.Join(sourcePluginDir, safeEntryName),
                     Path.Join(targetPluginDir, safeEntryName),
+                    migrated,
                     ct);
             }
         }
     }
 
-    private static void DeletePluginAssetSourceContents(string assetSourceRoot, string targetRoot)
+    private static void DeletePluginAssetSourceContents(
+        string assetSourceRoot,
+        string targetRoot,
+        MigratedTargets migrated)
     {
         var pluginDataFolderName = SafeRelativeName(LocalModelStoragePaths.PluginDataFolderName, nameof(LocalModelStoragePaths.PluginDataFolderName));
 
@@ -312,15 +328,66 @@ public sealed class LocalModelStorageService
                 var safeEntryName = SafeRelativeName(entryName, nameof(entryName));
                 DeleteMigratedEntry(
                     Path.Join(sourcePluginDir, safeEntryName),
-                    Path.Join(targetPluginDir, safeEntryName));
+                    Path.Join(targetPluginDir, safeEntryName),
+                    migrated);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     The targets this run copied itself, stamped with the size and modification time they had
+    ///     immediately after the copy. Deletion is gated on this rather than on any inference from
+    ///     the target's contents — equal size is not proof of equal bytes, and a wrong guess costs
+    ///     the user the only remaining copy of a multi-gigabyte model. Hashing instead would roughly
+    ///     double migration I/O and still be a time-of-check race; a replacement moves the timestamp.
+    /// </summary>
+    private sealed class MigratedTargets
+    {
+        private readonly Dictionary<string, (long Length, DateTime LastWriteUtc)> _written =
+            new(StringComparer.Ordinal);
+
+        public void Record(string target)
+        {
+            try
+            {
+                var info = new FileInfo(target);
+                _written[target] = (info.Length, info.LastWriteTimeUtc);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Unstattable right after writing it: leave it unrecorded so cleanup keeps
+                // the source rather than deleting against an unverifiable copy.
+            }
+        }
+
+        public bool IsUnchangedSinceThisRunWroteIt(string target)
+        {
+            if (!_written.TryGetValue(target, out var written))
+            {
+                return false;
+            }
+
+            try
+            {
+                var info = new FileInfo(target);
+                return info.Exists
+                       && info.Length == written.Length
+                       && info.LastWriteTimeUtc == written.LastWriteUtc;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return false;
             }
         }
     }
 
     // Files land at target only via an atomic same-directory rename, so a crash or I/O error
-    // mid-copy never leaves a partial file visible there — a later resume can trust
-    // File.Exists(target) to mean fully copied.
-    private static void CopyEntry(string source, string target, CancellationToken ct)
+    // mid-copy never leaves a partial file visible there.
+    private static void CopyEntry(
+        string source,
+        string target,
+        MigratedTargets migrated,
+        CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
 
@@ -332,14 +399,33 @@ public sealed class LocalModelStorageService
                 CopyEntry(
                     child,
                     Path.Join(target, SafeLeafName(Path.GetFileName(child), nameof(child))),
+                    migrated,
                     ct);
             }
 
             return;
         }
 
-        if (!File.Exists(source) || File.Exists(target))
+        if (!File.Exists(source))
             return;
+
+        if (File.Exists(target))
+        {
+            // Something already occupies the name. A size mismatch is definitely not our copy, so
+            // fail rather than migrate onto an unrelated file. A size match may be a resumed
+            // migration's own output but is not proven to be, so the target is deliberately NOT
+            // recorded — costing disk rather than risking the source.
+            if (!FileLengthsMatch(source, target))
+            {
+                throw new IOException(string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Cannot migrate '{0}': a different file already exists at '{1}'.",
+                    source,
+                    target));
+            }
+
+            return;
+        }
 
         var targetDir = Path.GetDirectoryName(target)!;
         Directory.CreateDirectory(targetDir);
@@ -350,6 +436,7 @@ public sealed class LocalModelStorageService
         {
             File.Copy(source, stagingTarget);
             File.Move(stagingTarget, target);
+            migrated.Record(target);
         }
         catch
         {
@@ -368,7 +455,7 @@ public sealed class LocalModelStorageService
 
     // Deletes source only once its copy is confirmed at target. Runs only after the settings
     // commit, so a failure wastes disk space but cannot make the active model root incomplete.
-    private static void DeleteMigratedEntry(string source, string target)
+    private static void DeleteMigratedEntry(string source, string target, MigratedTargets migrated)
     {
         if (Directory.Exists(source))
         {
@@ -376,17 +463,35 @@ public sealed class LocalModelStorageService
             {
                 DeleteMigratedEntry(
                     child,
-                    Path.Join(target, SafeLeafName(Path.GetFileName(child), nameof(child))));
+                    Path.Join(target, SafeLeafName(Path.GetFileName(child), nameof(child))),
+                    migrated);
             }
 
             TryDeleteDirectoryIfEmpty(source);
             return;
         }
 
-        if (!File.Exists(source) || !File.Exists(target))
+        // Provenance, not resemblance: only a target this run wrote is known to be the source's
+        // copy, and it must still carry the size and timestamp it had when written — a target
+        // swapped out between the copy and this cleanup pass spares the source.
+        if (!File.Exists(source) || !migrated.IsUnchangedSinceThisRunWroteIt(target))
+        {
             return;
+        }
 
         TryDeleteFile(source);
+    }
+
+    private static bool FileLengthsMatch(string source, string target)
+    {
+        try
+        {
+            return new FileInfo(source).Length == new FileInfo(target).Length;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static void TryDeleteFile(string path)
@@ -395,14 +500,7 @@ public sealed class LocalModelStorageService
         {
             File.Delete(path);
         }
-        catch (IOException ex)
-        {
-            System.Diagnostics.Trace.TraceWarning(
-                "Could not delete migrated source file '{0}': {1}",
-                path,
-                ex.Message);
-        }
-        catch (UnauthorizedAccessException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             System.Diagnostics.Trace.TraceWarning(
                 "Could not delete migrated source file '{0}': {1}",

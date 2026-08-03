@@ -46,8 +46,11 @@ internal static class ServiceRegistrations
         services.AddSingleton<ISnippetService>(
             new SnippetService(Path.Join(dataPath, "snippets.json"))
         );
-        services.AddSingleton<IProfileService>(
-            new ProfileService(Path.Join(dataPath, "profiles.json"))
+        services.AddSingleton<IProfileService>(sp =>
+            new ProfileService(
+                Path.Join(dataPath, "profiles.json"),
+                sp.GetRequiredService<IErrorLogService>()
+            )
         );
         services.AddSingleton<IPromptActionService>(sp =>
             new PromptActionService(

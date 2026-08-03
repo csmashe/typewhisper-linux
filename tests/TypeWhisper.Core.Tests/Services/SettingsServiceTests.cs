@@ -16,6 +16,49 @@ public sealed class SettingsServiceTests : IDisposable
     private readonly string _filePath;
     private readonly string _tempDir;
 
+    /// <summary>
+    ///     Runs <paramref name="body" /> on <paramref name="participantCount" /> dedicated threads that
+    ///     all start together. Dedicated rather than pooled: a <see cref="Barrier" /> needs every
+    ///     participant running at once, and the thread pool grows past <c>ProcessorCount</c> only slowly.
+    /// </summary>
+    private static void RunConcurrently(int participantCount, Action<int> body)
+    {
+        using var barrier = new Barrier(participantCount);
+        var failures = new List<Exception>();
+        var threads = new Thread[participantCount];
+        for (var i = 0; i < participantCount; i++)
+        {
+            var idx = i;
+            threads[i] = new Thread(() =>
+            {
+                try
+                {
+                    // ReSharper disable once AccessToDisposedClosure -- disposed only after every thread is joined below.
+                    barrier.SignalAndWait();
+                    body(idx);
+                }
+                catch (Exception ex)
+                {
+                    lock (failures)
+                    {
+                        failures.Add(ex);
+                    }
+                }
+            }) { IsBackground = true };
+            threads[i].Start();
+        }
+
+        foreach (var thread in threads)
+        {
+            thread.Join();
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new AggregateException(failures);
+        }
+    }
+
     public SettingsServiceTests()
     {
         _tempDir = Path.Join(Path.GetTempPath(), $"tw_settings_test_{Guid.NewGuid():N}");
@@ -176,26 +219,144 @@ public sealed class SettingsServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Save_ConcurrentCalls_DoNotThrow()
+    public void Save_WhileASubscriberIsStillDelivering_SerializesPublicationInCommitOrder()
+    {
+        var sut = new SettingsService(_filePath);
+        var firstDelivering = new ManualResetEventSlim();
+        var releaseFirst = new ManualResetEventSlim();
+        var received = new List<string?>();
+        var blockFirstDelivery = true;
+
+        sut.SettingsChanged += s =>
+        {
+            lock (received)
+            {
+                received.Add(s.Language);
+            }
+
+            if (!blockFirstDelivery)
+            {
+                return;
+            }
+
+            blockFirstDelivery = false;
+            firstDelivering.Set();
+            releaseFirst.Wait(TimeSpan.FromSeconds(5));
+        };
+
+        var writerA = new Thread(() => sut.Save(AppSettings.Default with { Language = "a" }))
+        {
+            IsBackground = true
+        };
+        writerA.Start();
+        Assert.True(firstDelivering.Wait(TimeSpan.FromSeconds(5)));
+
+        var writerB = new Thread(() => sut.Save(AppSettings.Default with { Language = "b" }))
+        {
+            IsBackground = true
+        };
+        writerB.Start();
+
+        // B hands its snapshot to the active drainer rather than blocking behind a slow
+        // subscriber. What it must NOT do is announce "b" while A is still delivering "a" — a
+        // subscriber would see the newer value first. Publishing inline fails right here.
+        Assert.True(writerB.Join(TimeSpan.FromSeconds(5)));
+        lock (received)
+        {
+            Assert.Equal(["a"], received);
+        }
+
+        releaseFirst.Set();
+        Assert.True(writerA.Join(TimeSpan.FromSeconds(5)));
+
+        // A's drainer picks up B's queued snapshot before it returns.
+        lock (received)
+        {
+            Assert.Equal(["a", "b"], received);
+        }
+
+        Assert.Equal("b", sut.Current.Language);
+    }
+
+    [Fact]
+    public void Save_ConcurrentCalls_DeliverEveryCommitExactlyOnce()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default);
+
+        const int writers = 16;
+        const int savesPerWriter = 20;
+        var received = 0;
+        // ReSharper disable once AccessToModifiedClosure -- the handler increments the captured counter from many threads (Interlocked); it is read only after every writer has joined.
+        sut.SettingsChanged += _ => Interlocked.Increment(ref received);
+
+        RunConcurrently(
+            writers,
+            idx =>
+            {
+                for (var i = 0; i < savesPerWriter; i++)
+                {
+                    sut.Save(AppSettings.Default with { CommandKeyphrase = $"phrase-{idx}-{i}" });
+                }
+            }
+        );
+
+        // Once every writer has returned no drainer can still be active, so the queue must have
+        // been fully delivered. Asserts that invariant rather than reproducing the narrow resign
+        // race, which needs an interleaving too tight to force without a production seam.
+        Assert.Equal(writers * savesPerWriter, Volatile.Read(ref received));
+    }
+
+    [Fact]
+    public void Save_FromInsideASubscriber_DeliversNestedCommitAfterTheCurrentOne()
+    {
+        var sut = new SettingsService(_filePath);
+        var received = new List<string?>();
+        var reentered = false;
+
+        sut.SettingsChanged += s =>
+        {
+            lock (received)
+            {
+                received.Add(s.Language);
+            }
+
+            if (reentered || s.Language != "a")
+            {
+                return;
+            }
+
+            // Re-entrant save from inside a handler: it must queue, not recurse and deliver "b"
+            // to the remaining subscribers before "a" has finished going out.
+            reentered = true;
+            sut.Save(AppSettings.Default with { Language = "b" });
+
+            lock (received)
+            {
+                Assert.Equal(["a"], received);
+            }
+        };
+
+        sut.Save(AppSettings.Default with { Language = "a" });
+
+        lock (received)
+        {
+            Assert.Equal(["a", "b"], received);
+        }
+    }
+
+    [Fact]
+    public void Save_ConcurrentCalls_DoNotThrow()
     {
         var sut = new SettingsService(_filePath);
         sut.Save(AppSettings.Default); // ensure the primary file exists before racing
 
-        const int taskCount = 24;
-        using var barrier = new Barrier(taskCount);
-        var tasks = new Task[taskCount];
-        for (var i = 0; i < taskCount; i++)
-        {
-            var idx = i;
-            tasks[i] = Task.Run(() =>
-            {
-                // ReSharper disable once AccessToDisposedClosure -- barrier is disposed only after await Task.WhenAll below, by which point every task has finished using it.
-                barrier.SignalAndWait();
-                sut.Save(AppSettings.Default with { CommandKeyphrase = $"phrase-{idx}" });
-            });
-        }
-
-        var exception = await Record.ExceptionAsync(() => Task.WhenAll(tasks));
+        var exception = Record.Exception(() =>
+            RunConcurrently(
+                24,
+                idx => sut.Save(AppSettings.Default with { CommandKeyphrase = $"phrase-{idx}" })
+            )
+        );
 
         Assert.Null(exception);
 
@@ -206,34 +367,24 @@ public sealed class SettingsServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Update_ConcurrentDisjointMutations_AllSurvive()
+    public void Update_ConcurrentDisjointMutations_AllSurvive()
     {
         var sut = new SettingsService(_filePath);
         sut.Save(AppSettings.Default);
 
         const int taskCount = 20;
-        using var barrier = new Barrier(taskCount);
-        var tasks = new Task[taskCount];
-        for (var i = 0; i < taskCount; i++)
-        {
-            var idx = i;
-            tasks[i] = Task.Run(() =>
+        RunConcurrently(
+            taskCount,
+            idx => sut.Update(current => current with
             {
-                // ReSharper disable once AccessToDisposedClosure -- barrier is disposed only after await Task.WhenAll below, by which point every task has finished using it.
-                barrier.SignalAndWait();
-                sut.Update(current => current with
+                AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>(
+                    current.AppInsertionStrategies,
+                    StringComparer.OrdinalIgnoreCase)
                 {
-                    AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>(
-                        current.AppInsertionStrategies,
-                        StringComparer.OrdinalIgnoreCase)
-                    {
-                        [$"app{idx}"] = TextInsertionStrategy.DirectTyping
-                    }
-                });
-            });
-        }
-
-        await Task.WhenAll(tasks);
+                    [$"app{idx}"] = TextInsertionStrategy.DirectTyping
+                }
+            })
+        );
 
         var reloaded = new SettingsService(_filePath);
         for (var i = 0; i < taskCount; i++)

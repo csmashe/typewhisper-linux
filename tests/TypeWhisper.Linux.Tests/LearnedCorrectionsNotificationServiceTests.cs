@@ -126,7 +126,7 @@ public sealed class LearnedCorrectionsNotificationServiceTests : IDisposable
         var channel = new FakeChannel();
         var scheduler = new FakeScheduler();
         var errorLog = new Mock<IErrorLogService>();
-        var service = new LearnedCorrectionsNotificationService(
+        using var service = new LearnedCorrectionsNotificationService(
             learning,
             dictionary.Object,
             errorLog.Object,
@@ -229,7 +229,7 @@ public sealed class LearnedCorrectionsNotificationServiceTests : IDisposable
         );
         var channel = new FakeChannel();
         var scheduler = new FakeScheduler();
-        var service = new LearnedCorrectionsNotificationService(
+        using var service = new LearnedCorrectionsNotificationService(
             learning,
             dictionary,
             Mock.Of<IErrorLogService>(),

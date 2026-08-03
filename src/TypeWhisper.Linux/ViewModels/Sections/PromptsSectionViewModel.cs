@@ -16,9 +16,13 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 // ReSharper disable UnusedParameterInPartialMethod
 public partial class PromptsSectionViewModel : ObservableObject
 {
+    private readonly IErrorLogService? _errorLog;
     private readonly PluginManager _pluginManager;
     private readonly IPromptActionService _prompts;
     private readonly ISettingsService _settings;
+
+    [ObservableProperty]
+    private string _errorText = "";
 
     // Set while hydrating the spoken-command properties from saved settings so the
     // generated On<Property>Changed hooks don't persist the value straight back.
@@ -70,12 +74,14 @@ public partial class PromptsSectionViewModel : ObservableObject
     public PromptsSectionViewModel(
         IPromptActionService prompts,
         PluginManager pluginManager,
-        ISettingsService settings
+        ISettingsService settings,
+        IErrorLogService? errorLog = null
     )
     {
         _prompts = prompts;
         _pluginManager = pluginManager;
         _settings = settings;
+        _errorLog = errorLog;
 
         _prompts.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshActions);
         _pluginManager.PluginStateChanged += (_, _) =>
@@ -106,6 +112,8 @@ public partial class PromptsSectionViewModel : ObservableObject
     // ReSharper disable once MemberCanBeMadeStatic.Global
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string PromptsHint => Loc.Instance["Prompts.Hint"];
+
+    public bool HasError => !string.IsNullOrEmpty(ErrorText);
 
     public bool ShowProviderWarning => AvailableProviders.Count <= 1;
     // ReSharper disable once MemberCanBeMadeStatic.Global
@@ -509,14 +517,22 @@ public partial class PromptsSectionViewModel : ObservableObject
         try
         {
             mutation();
+            ErrorText = "";
             return true;
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"[PromptsSectionViewModel] Failed to {operation}: {ex}");
+            _errorLog?.AddEntry($"Could not {operation}: {ex.Message}", ErrorCategory.Prompt);
+            ErrorText = Loc.Instance.GetString("Prompts.SaveFailed", ex.Message);
             RefreshActions();
             return false;
         }
+    }
+
+    partial void OnErrorTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasError));
     }
 
     private void RefreshPluginOptions()
