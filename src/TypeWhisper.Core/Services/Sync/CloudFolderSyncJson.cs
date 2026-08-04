@@ -1,3 +1,10 @@
+// ReSharper disable UnusedType.Global
+// ReSharper disable UnusedMember.Global
+// ReSharper disable MemberCanBePrivate.Global
+// The serializer settings for the Cloud Folder Sync wire format, carried over from upstream
+// alongside UserDataSync.cs. Its consumers were not ported to Linux, so the "unused" family
+// reports a feature that has not landed rather than a mistake.
+
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -31,7 +38,7 @@ public static class CloudFolderSyncJson
         var options = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = writeIndented
+            WriteIndented = writeIndented,
         };
         options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
         options.Converters.Add(new CloudFolderSyncDateTimeConverter());
@@ -48,20 +55,22 @@ internal sealed class CloudFolderSyncDateTimeConverter : JsonConverter<DateTime>
     /// </summary>
     public override DateTime Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
+        // GetString throws InvalidOperationException on a number/bool/object token, which would
+        // escape the deserializer instead of surfacing as the JsonException callers expect.
+        if (reader.TokenType is not (JsonTokenType.String or JsonTokenType.Null))
+            throw new JsonException($"Expected an ISO-8601 date string, got {reader.TokenType}.");
+
         var value = reader.GetString();
         if (string.IsNullOrWhiteSpace(value))
             throw new JsonException("Expected an ISO-8601 date string.");
 
-        if (DateTimeOffset.TryParse(
+        return DateTimeOffset.TryParse(
                 value,
                 CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                out var parsed))
-        {
-            return parsed.UtcDateTime;
-        }
-
-        throw new JsonException($"Invalid ISO-8601 date: {value}");
+                out var parsed)
+            ? parsed.UtcDateTime
+            : throw new JsonException($"Invalid ISO-8601 date: {value}");
     }
 
     /// <summary>

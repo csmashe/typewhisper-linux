@@ -54,7 +54,7 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
         return new OpenAiRealtimeStreamingSession(pump, adapter);
     }
 
-    internal static OpenAiRealtimeStreamingSession CreateConnectedSessionForTests(
+    internal static async Task<OpenAiRealtimeStreamingSession> CreateConnectedSessionForTests(
         WebSocket ws
     )
     {
@@ -68,14 +68,11 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
             useServerVad: true,
             sendSessionUpdate: false
         );
-        var pump = WebSocketSessionPump
-            .StartConnectedAsync(
-                adapter,
-                new ClientWebSocketTransport(ws),
-                CancellationToken.None
-            )
-            .GetAwaiter()
-            .GetResult();
+        var pump = await WebSocketSessionPump.StartConnectedAsync(
+            adapter,
+            new ClientWebSocketTransport(ws),
+            CancellationToken.None
+        );
         return new OpenAiRealtimeStreamingSession(pump, adapter);
     }
 
@@ -207,8 +204,20 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
         {
             if (_adapter.Collector.HasCompletedTranscript)
                 return;
-            await Task.Delay(50, linked.Token);
+
+            try
+            {
+                await Task.Delay(50, linked.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                // The timeout is a deadline, not a failure: TranscribeWavAsync still returns
+                // whatever the collector accumulated. Only the caller's own token throws.
+                break;
+            }
         }
+
+        ct.ThrowIfCancellationRequested();
     }
 
     internal static byte[] Resample16KPcmTo24K(
@@ -543,6 +552,13 @@ internal sealed class OpenAiRealtimeWebSocketAdapter(
 
 internal sealed class OpenAiRealtimeTranscriptCollector
 {
+    // Deltas whose event omitted item_id all share one bucket, so their fragments accumulate in
+    // arrival order. A fresh id per event would scatter one utterance across unordered buckets.
+    private const string UnidentifiedItemId = "\0unidentified";
+
+    // ApplyEvent runs on the pump's receive loop while CurrentText/HasCompletedTranscript are
+    // read by the caller thread polling for completion, so the collections need a gate.
+    private readonly Lock _gate = new();
     private readonly List<string> _completedOrder = [];
     private readonly Dictionary<string, string> _completedTexts = [];
     private readonly Dictionary<string, string> _deltaTexts = [];
@@ -551,22 +567,32 @@ internal sealed class OpenAiRealtimeTranscriptCollector
     {
         get
         {
-            var parts = _completedOrder
-                .Where(_completedTexts.ContainsKey)
-                .Select(id => _completedTexts[id])
-                .ToList();
-            parts.AddRange(
-                _deltaTexts
-                    .Where(pair => !_completedTexts.ContainsKey(pair.Key))
-                    .OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                    .Select(pair => pair.Value)
-                    .Where(text => !string.IsNullOrWhiteSpace(text))
-            );
-            return string.Join(" ", parts).Trim();
+            lock (_gate)
+            {
+                var parts = _completedOrder
+                    .Where(_completedTexts.ContainsKey)
+                    .Select(id => _completedTexts[id])
+                    .ToList();
+                parts.AddRange(
+                    _deltaTexts
+                        .Where(pair => !_completedTexts.ContainsKey(pair.Key))
+                        .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                        .Select(pair => pair.Value)
+                        .Where(text => !string.IsNullOrWhiteSpace(text))
+                );
+                return string.Join(" ", parts).Trim();
+            }
         }
     }
 
-    public bool HasCompletedTranscript => _completedOrder.Count > 0;
+    public bool HasCompletedTranscript
+    {
+        get
+        {
+            lock (_gate)
+                return _completedOrder.Count > 0;
+        }
+    }
     public bool IsSessionReady { get; private set; }
     public string? Error { get; private set; }
 
@@ -587,28 +613,31 @@ internal sealed class OpenAiRealtimeTranscriptCollector
         {
             case "conversation.item.input_audio_transcription.delta":
             {
-                var itemId =
-                    GetString(root, "item_id")
-                    ?? Guid.NewGuid().ToString("N");
+                var itemId = GetString(root, "item_id") ?? UnidentifiedItemId;
                 var delta = GetString(root, "delta") ?? "";
-                var itemText =
-                    _deltaTexts.TryGetValue(itemId, out var current)
-                        ? current + delta
-                        : delta;
-                _deltaTexts[itemId] = itemText;
-                transcriptEvent = new StreamingTranscriptEvent(itemText, false);
-                return !string.IsNullOrWhiteSpace(itemText);
+                lock (_gate)
+                {
+                    var itemText =
+                        _deltaTexts.TryGetValue(itemId, out var current)
+                            ? current + delta
+                            : delta;
+                    _deltaTexts[itemId] = itemText;
+                    transcriptEvent = new StreamingTranscriptEvent(itemText, false);
+                    return !string.IsNullOrWhiteSpace(itemText);
+                }
             }
             case "conversation.item.input_audio_transcription.completed":
             {
-                var itemId =
-                    GetString(root, "item_id")
-                    ?? Guid.NewGuid().ToString("N");
+                var itemId = GetString(root, "item_id") ?? UnidentifiedItemId;
                 var transcript = (GetString(root, "transcript") ?? "").Trim();
-                if (!_completedTexts.ContainsKey(itemId))
-                    _completedOrder.Add(itemId);
-                _completedTexts[itemId] = transcript;
-                _deltaTexts.Remove(itemId);
+                lock (_gate)
+                {
+                    if (!_completedTexts.ContainsKey(itemId))
+                        _completedOrder.Add(itemId);
+                    _completedTexts[itemId] = transcript;
+                    _deltaTexts.Remove(itemId);
+                }
+
                 if (string.IsNullOrWhiteSpace(transcript))
                     return false;
                 transcriptEvent = new StreamingTranscriptEvent(transcript, true);

@@ -770,39 +770,60 @@ public sealed class OpenAiCompatiblePlugin
             });
         }
 
-        // Do the fallible host secret-store writes before swapping the shared
-        // profile set, so a failure here can't leave _additionalProfiles half
-        // updated. Each _additionalApiKeys mutation is paired with its host op,
-        // so the cache stays consistent with the store even on a mid-loop throw.
-        if (_host is not null)
+        // Secrets and profile metadata are separate writes and the host store has no multi-key
+        // transaction. Persisting a rotated key but not the endpoint it belongs to would, after a
+        // restart, send the new credential to the profile's previous URL — so every committed step
+        // records its inverse and any failure replays them in reverse. Compensation goes through
+        // the same store, so a persistent failure (read-only mount, disk full) can still leave the
+        // two out of step; that is logged, and closing it needs an atomic multi-key host API.
+        var previousProfiles = _additionalProfiles.ToList();
+        var undo = new List<Func<Task>>();
+        try
         {
-            foreach (var removedId in previousById.Keys.Where(k => !seenIds.Contains(k)))
+            if (_host is not null)
             {
-                await _host.DeleteSecretAsync(SecretKeyFor(removedId));
-                _additionalApiKeys.Remove(removedId);
+                foreach (var removedId in previousById.Keys.Where(k => !seenIds.Contains(k)))
+                    await ApplyProfileSecretAsync(removedId, null, undo);
+
+                foreach (var (id, key) in keyUpdates)
+                    await ApplyProfileSecretAsync(id, key, undo);
             }
 
-            foreach (var (id, key) in keyUpdates)
+            _additionalProfiles.Clear();
+            _additionalProfiles.AddRange(newProfiles);
+            undo.Add(() =>
             {
-                if (key is null)
+                _additionalProfiles.Clear();
+                _additionalProfiles.AddRange(previousProfiles);
+                PersistAdditionalProfiles(notify: false);
+                return Task.CompletedTask;
+            });
+
+            // State is now persisted; the best-effort model fetch below may fail or be
+            // cancelled, but that must not revert the saved profiles.
+            PersistAdditionalProfiles(notify: false);
+        }
+        catch
+        {
+            for (var i = undo.Count - 1; i >= 0; i--)
+            {
+                try
                 {
-                    await _host.DeleteSecretAsync(SecretKeyFor(id));
-                    _additionalApiKeys.Remove(id);
+                    await undo[i]();
                 }
-                else
+                catch (Exception rollbackFailure)
                 {
-                    await _host.StoreSecretAsync(SecretKeyFor(id), key);
-                    _additionalApiKeys[id] = key;
+                    // Nothing better to try: report the original failure, not this one.
+                    _host?.Log(
+                        PluginLogLevel.Error,
+                        $"Could not roll back a profile save: {rollbackFailure.Message}"
+                    );
                 }
             }
+
+            throw;
         }
 
-        _additionalProfiles.Clear();
-        _additionalProfiles.AddRange(newProfiles);
-
-        // State is now persisted; the best-effort model fetch below may fail or be
-        // cancelled, but that must not revert the saved profiles.
-        PersistAdditionalProfiles(notify: false);
         InvalidateChangedProfileRoles(previousById, keyUpdates.Keys);
 
         // Best-effort: populate model catalogs so prompts/dictation can list each
@@ -821,6 +842,49 @@ public sealed class OpenAiCompatiblePlugin
         _host?.NotifyCapabilitiesChanged();
 
         return new PluginSettingsValidationResult(true, $"Saved {_additionalProfiles.Count} profile(s).");
+    }
+
+    /// <summary>
+    ///     Writes one profile's API key (<paramref name="key" /> null deletes it) and appends the
+    ///     inverse operation to <paramref name="undo" />. The cache mutation stays paired with the
+    ///     host op so the two can never disagree, in either direction.
+    /// </summary>
+    private async Task ApplyProfileSecretAsync(
+        string id,
+        string? key,
+        List<Func<Task>> undo)
+    {
+        var host = _host!;
+        var secretKey = SecretKeyFor(id);
+        var hadPrevious = _additionalApiKeys.TryGetValue(id, out var previous);
+
+        if (key is null)
+        {
+            await host.DeleteSecretAsync(secretKey);
+            _additionalApiKeys.Remove(id);
+        }
+        else
+        {
+            await host.StoreSecretAsync(secretKey, key);
+            _additionalApiKeys[id] = key;
+        }
+
+        undo.Add(async () =>
+        {
+            if (hadPrevious && previous is not null)
+            {
+                await host.StoreSecretAsync(secretKey, previous);
+                _additionalApiKeys[id] = previous;
+            }
+            else
+            {
+                await host.DeleteSecretAsync(secretKey);
+                if (hadPrevious)
+                    _additionalApiKeys[id] = null;
+                else
+                    _additionalApiKeys.Remove(id);
+            }
+        });
     }
 
     internal string ProfileDisplayName(string id) => FindAdditional(id)?.DisplayName ?? "Custom Server";

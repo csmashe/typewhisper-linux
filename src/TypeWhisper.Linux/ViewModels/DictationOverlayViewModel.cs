@@ -90,8 +90,6 @@ public partial class DictationOverlayViewModel : ObservableObject
         transformSelection.OverlayStateChanged += (_, state) =>
             _postToUiThread(() => ApplyState(state));
 
-        // Raw RMS is typically well below 0.1 for speech, so amplify ×8 to drive a
-        // visible meter — same scaling the recorder and wizard VMs apply.
         SubscribeToAudioLevels(audio);
 
         failureTracker.OnFailure += (_, e) =>
@@ -162,6 +160,8 @@ public partial class DictationOverlayViewModel : ObservableObject
         {
             if (IsRecording)
             {
+                // Raw RMS is typically well below 0.1 for speech, so amplify ×8 to drive a
+                // visible meter — same scaling the recorder and wizard VMs apply.
                 AudioLevel = Math.Clamp(level * 8, 0f, 1f);
             }
         };

@@ -45,13 +45,31 @@ public sealed partial class HistoryService : IHistoryService
         );
     }
 
-    public IReadOnlyList<TranscriptionRecord> Records => _store.Current.ToArray();
+    public IReadOnlyList<TranscriptionRecord> Records => ReadRecords().ToArray();
 
     public event Action? RecordsChanged;
 
-    public int TotalRecords => _store.Current.Length;
-    public int TotalWords => _store.Current.Sum(r => r.WordCount);
-    public double TotalDuration => _store.Current.Sum(r => r.DurationSeconds);
+    public int TotalRecords => ReadRecords().Length;
+    public int TotalWords => ReadRecords().Sum(r => r.WordCount);
+    public double TotalDuration => ReadRecords().Sum(r => r.DurationSeconds);
+
+    /// <summary>
+    ///     A read failure must not stop the app, so it degrades to empty — same contract as
+    ///     <c>ErrorLogService.ReadEntries</c> and <c>WatchFolderService.ReadHistory</c>. Writes
+    ///     still go through the store, which refuses to overwrite an unreadable primary.
+    /// </summary>
+    private ImmutableArray<TranscriptionRecord> ReadRecords()
+    {
+        try
+        {
+            return _store.Current;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Trace.WriteLine($"[HistoryService] Failed to load history: {ex.Message}");
+            return [];
+        }
+    }
 
     public Task EnsureLoadedAsync()
     {
@@ -63,12 +81,12 @@ public sealed partial class HistoryService : IHistoryService
             return Task.CompletedTask;
         }
 
-        return Task.Run(() => _ = _store.Current);
+        return Task.Run(() => _ = ReadRecords());
     }
 
     public IReadOnlyList<string> GetDistinctApps()
     {
-        return _store.Current
+        return ReadRecords()
             .Select(r => r.AppProcessName)
             .Where(a => !string.IsNullOrEmpty(a))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -193,7 +211,7 @@ public sealed partial class HistoryService : IHistoryService
 
     public IReadOnlyList<TranscriptionRecord> Search(string query)
     {
-        var records = _store.Current;
+        var records = ReadRecords();
         if (string.IsNullOrWhiteSpace(query))
         {
             return records.ToArray();

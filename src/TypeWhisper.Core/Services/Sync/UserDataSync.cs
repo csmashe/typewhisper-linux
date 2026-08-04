@@ -1,3 +1,13 @@
+// ReSharper disable UnusedType.Global
+// ReSharper disable UnusedMember.Global
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable ClassNeverInstantiated.Global
+// ReSharper disable NotAccessedPositionalProperty.Global
+// The Cloud Folder Sync contract, carried over from upstream. Its consumers
+// (CloudFolderSyncEngine, TypeWhisperUserDataSyncStore, the Windows PremiumSection view) were not
+// ported to Linux, so everything here reads as unused until the feature lands. Kept verbatim so a
+// later port diffs cleanly against upstream.
+
 using System.Globalization;
 using System.Text;
 using TypeWhisper.Core.Models;
@@ -22,7 +32,7 @@ public enum UserDataSyncCollection
     /// <summary>
     /// Represents the snippets option.
     /// </summary>
-    Snippets
+    Snippets,
 }
 
 /// <summary>
@@ -37,7 +47,7 @@ public enum UserDataSyncDictionaryEntryType
     /// <summary>
     /// Represents the correction option.
     /// </summary>
-    Correction
+    Correction,
 }
 
 /// <summary>

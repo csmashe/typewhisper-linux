@@ -30,6 +30,7 @@ public interface IMemoryStoragePlugin : ITypeWhisperPlugin
 
     /// <summary>Deletes all stored memory entries.</summary>
     // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedMemberInSuper.Global -- callers reach this through the interface at runtime; only the concrete implementations are statically visible.
     Task ClearAllAsync(CancellationToken ct = default);
 
     /// <summary>Number of stored memory entries.</summary>

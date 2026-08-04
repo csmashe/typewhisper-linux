@@ -378,9 +378,29 @@ public sealed class PluginHostServicesTests : IDisposable
     }
 
     [Fact]
+    public async Task LoadSecret_NonStringSiblingSecretIsTreatedAsAnIntegrityFailure()
+    {
+        // A secret:* entry that is not even a JSON string means the file's shape is wrong, not
+        // that a write failed -- withhold, same as an unauthenticatable sibling.
+        var pluginDirectory = Path.Join(_tempDir, "PluginData", "test-plugin");
+        var settingsPath = Path.Join(pluginDirectory, "settings.json");
+        Directory.CreateDirectory(pluginDirectory);
+        File.WriteAllText(
+            settingsPath,
+            $$"""{"secret:valid":"{{EncryptLegacyGcm("valid-secret")}}","secret:broken":42}"""
+        );
+        var before = File.ReadAllBytes(settingsPath);
+
+        var loaded = await CreateServices().LoadSecretAsync("valid");
+
+        Assert.Null(loaded);
+        Assert.Equal(before, File.ReadAllBytes(settingsPath));
+    }
+
+    [Fact]
     public async Task FailedSave_ThrowsWithoutChangingCacheOrSettingsFile()
     {
-        if (!OperatingSystem.IsLinux() || Environment.UserName == "root")
+        if (!OperatingSystem.IsLinux() || Environment.IsPrivilegedProcess)
         {
             // Root can bypass directory write permissions, so chmod cannot force this failure.
             return;
@@ -447,7 +467,7 @@ public sealed class PluginHostServicesTests : IDisposable
     [Fact]
     public void UnreadableSettingsFile_RefusesToOverwriteExistingFile()
     {
-        if (!OperatingSystem.IsLinux() || Environment.UserName == "root")
+        if (!OperatingSystem.IsLinux() || Environment.IsPrivilegedProcess)
         {
             // Root can read a mode-000 file, so this cannot exercise the unreadable-file path.
             return;
@@ -465,10 +485,11 @@ public sealed class PluginHostServicesTests : IDisposable
             File.SetUnixFileMode(settingsPath, UnixFileMode.None);
             var services = CreateServices();
 
-            Assert.ThrowsAny<Exception>(() =>
+            // Narrow: any-exception would also pass on an unrelated failure and hide it.
+            Assert.ThrowsAny<UnauthorizedAccessException>(() =>
                 services.GetSetting<string>("language")
             );
-            Assert.ThrowsAny<Exception>(() =>
+            Assert.ThrowsAny<UnauthorizedAccessException>(() =>
                 services.SetSetting("language", "new-value")
             );
             Assert.True(File.Exists(settingsPath));
@@ -497,7 +518,7 @@ public sealed class PluginHostServicesTests : IDisposable
     [Fact]
     public async Task DeleteSecret_ThrowsWhenFileUnreadableAndLeavesSecretOnDisk()
     {
-        if (!OperatingSystem.IsLinux() || Environment.UserName == "root")
+        if (!OperatingSystem.IsLinux() || Environment.IsPrivilegedProcess)
         {
             // Root can read a mode-000 file, so this cannot exercise the unreadable-file path.
             return;
@@ -516,7 +537,7 @@ public sealed class PluginHostServicesTests : IDisposable
             File.SetUnixFileMode(settingsPath, UnixFileMode.None);
             var services = CreateServices();
 
-            await Assert.ThrowsAnyAsync<Exception>(() =>
+            await Assert.ThrowsAnyAsync<UnauthorizedAccessException>(() =>
                 services.DeleteSecretAsync("api-key")
             );
         }
@@ -571,22 +592,13 @@ public sealed class PluginHostServicesTests : IDisposable
     [InlineData("sub\\state.json")]
     [InlineData("settings.json")]
     [InlineData("secret-protection.key")]
-    public void OpenStateStore_RejectsNonLeafAndReservedNames(string fileName)
-    {
-        var services = CreateServices();
-
-        Assert.Throws<ArgumentException>(() =>
-            services.OpenStateStore<ImmutableArray<string>>(
-                fileName,
-                static () => []
-            )
-        );
-    }
-
-    [Theory]
     [InlineData(".")]
     [InlineData("..")]
-    public void OpenStateStore_RejectsRelativeDirectoryNames(string fileName)
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("/etc/passwd")]
+    [InlineData("C:\\state.json")]
+    public void OpenStateStore_RejectsNonLeafAndReservedNames(string fileName)
     {
         var services = CreateServices();
 

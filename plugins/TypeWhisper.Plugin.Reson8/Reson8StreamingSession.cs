@@ -43,25 +43,24 @@ internal sealed class Reson8StreamingSession : IStreamingSession
         return new Reson8StreamingSession(pump);
     }
 
-    internal static Reson8StreamingSession CreateConnectedSessionForTests(WebSocket ws)
+    internal static async Task<Reson8StreamingSession> CreateConnectedSessionForTests(
+        WebSocket ws
+    )
     {
         if (ws.State != WebSocketState.Open)
             throw new InvalidOperationException("The test WebSocket must already be open.");
 
-        var pump = WebSocketSessionPump
-            .StartConnectedAsync(
-                new Reson8WebSocketAdapter(
-                    "",
-                    "https://api.reson8.dev",
-                    Reson8Plugin.DefaultAuthHeader,
-                    null,
-                    null
-                ),
-                new ClientWebSocketTransport(ws),
-                CancellationToken.None
-            )
-            .GetAwaiter()
-            .GetResult();
+        var pump = await WebSocketSessionPump.StartConnectedAsync(
+            new Reson8WebSocketAdapter(
+                "",
+                "https://api.reson8.dev",
+                Reson8Plugin.DefaultAuthHeader,
+                null,
+                null
+            ),
+            new ClientWebSocketTransport(ws),
+            CancellationToken.None
+        );
         return new Reson8StreamingSession(pump);
     }
 
@@ -76,12 +75,14 @@ internal sealed class Reson8StreamingSession : IStreamingSession
         var basePath = baseUri.AbsolutePath.TrimEnd('/');
         var builder = new UriBuilder(baseUri)
         {
-            Scheme = baseUri.Scheme.Equals(
-                "http",
-                StringComparison.OrdinalIgnoreCase
-            )
-                ? "ws"
-                : "wss",
+            // Plaintext stays plaintext so a self-hosted http:// or ws:// base URL reaches the
+            // server the user configured; everything else (https, wss, anything unrecognized)
+            // takes the secure default.
+            Scheme =
+                baseUri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase)
+                || baseUri.Scheme.Equals("ws", StringComparison.OrdinalIgnoreCase)
+                    ? "ws"
+                    : "wss",
             Path = $"{basePath}/v1/speech-to-text/realtime",
         };
 
@@ -147,7 +148,11 @@ internal sealed class Reson8WebSocketAdapter(
 ) : IWebSocketSessionAdapter
 {
     private readonly Reson8TranscriptCollector _collector = new();
-    private string? _flushId;
+
+    // Written under the pump's send gate by BeginFinalizeAsync, read on the receive loop by
+    // HandleMessage. Volatile so the flush_confirmation match can't observe a stale null and
+    // strand FinalizeAsync waiting for a terminal signal that already arrived.
+    private volatile string? _flushId;
 
     public string ProviderName => "Reson8";
     public WebSocketReadinessPolicy Readiness => WebSocketReadinessPolicy.Immediate;

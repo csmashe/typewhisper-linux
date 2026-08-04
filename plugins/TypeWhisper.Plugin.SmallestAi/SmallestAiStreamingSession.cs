@@ -33,21 +33,18 @@ internal sealed class SmallestAiStreamingSession : IStreamingSession
         return new SmallestAiStreamingSession(pump);
     }
 
-    internal static SmallestAiStreamingSession CreateConnectedSessionForTests(
+    internal static async Task<SmallestAiStreamingSession> CreateConnectedSessionForTests(
         WebSocket ws
     )
     {
         if (ws.State != WebSocketState.Open)
             throw new InvalidOperationException("The test WebSocket must already be open.");
 
-        var pump = WebSocketSessionPump
-            .StartConnectedAsync(
-                new SmallestAiWebSocketAdapter("", null),
-                new ClientWebSocketTransport(ws),
-                CancellationToken.None
-            )
-            .GetAwaiter()
-            .GetResult();
+        var pump = await WebSocketSessionPump.StartConnectedAsync(
+            new SmallestAiWebSocketAdapter("", null),
+            new ClientWebSocketTransport(ws),
+            CancellationToken.None
+        );
         return new SmallestAiStreamingSession(pump);
     }
 

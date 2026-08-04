@@ -10,6 +10,12 @@ public enum PluginStateCorruptFilePolicy
 
 public sealed record PluginStateStoreOptions
 {
+    /// <summary>
+    ///     Reopening the same state path compares this by reference, not by configuration: pass
+    ///     the <em>same instance</em> every time (cache it in a static or field). Two separately
+    ///     constructed but identically configured <see cref="JsonSerializerOptions" /> count as a
+    ///     conflict and the second open throws <see cref="InvalidOperationException" />.
+    /// </summary>
     public JsonSerializerOptions JsonOptions { get; init; } = new();
     public bool KeepLastKnownGoodBackup { get; init; }
     public PluginStateCorruptFilePolicy CorruptFilePolicy { get; init; }

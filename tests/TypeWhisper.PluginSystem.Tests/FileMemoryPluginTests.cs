@@ -98,7 +98,7 @@ public sealed class FileMemoryPluginTests : IDisposable
     [Fact]
     public async Task FailedSave_LeavesCacheAndFileUnchangedWithoutTempFiles()
     {
-        if (!OperatingSystem.IsLinux() || Environment.UserName == "root")
+        if (!OperatingSystem.IsLinux() || Environment.IsPrivilegedProcess)
         {
             // Root can bypass directory write permissions, so chmod cannot force this failure.
             return;
@@ -131,7 +131,7 @@ public sealed class FileMemoryPluginTests : IDisposable
     [Fact]
     public async Task UnreadableFile_SurfacesAndRefusesToOverwrite()
     {
-        if (!OperatingSystem.IsLinux() || Environment.UserName == "root")
+        if (!OperatingSystem.IsLinux() || Environment.IsPrivilegedProcess)
         {
             // Root can read a mode-000 file, so this cannot exercise the unreadable-file path.
             return;

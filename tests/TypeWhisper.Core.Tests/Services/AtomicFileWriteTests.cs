@@ -183,7 +183,12 @@ public sealed class AtomicFileWriteTests
                         {
                             // ReSharper disable once AccessToDisposedClosure -- Task.WhenAll below
                             // awaits every task before `using var start` is disposed at scope end.
-                            start.SignalAndWait();
+                            // Bounded: a thread-pool starvation stall would otherwise hang the
+                            // whole run instead of failing this test.
+                            Assert.True(
+                                start.SignalAndWait(TimeSpan.FromSeconds(30)),
+                                "The concurrent writers did not all reach the barrier."
+                            );
                             try
                             {
                                 AtomicFileWrite.WriteAllBytesCreateNew(

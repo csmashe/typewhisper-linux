@@ -16,21 +16,21 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
 
     private readonly WebSocketSessionPump _pump;
 
-    internal ElevenLabsStreamingSession(WebSocket ws)
-        : this(
-            WebSocketSessionPump
-                .StartConnectedAsync(
-                    new ElevenLabsWebSocketAdapter("", "scribe_v2_realtime", null),
-                    new ClientWebSocketTransport(ws),
-                    CancellationToken.None
-                )
-                .GetAwaiter()
-                .GetResult()
-        ) { }
-
     private ElevenLabsStreamingSession(WebSocketSessionPump pump)
     {
         _pump = pump;
+    }
+
+    internal static async Task<ElevenLabsStreamingSession> CreateConnectedSessionForTests(
+        WebSocket ws
+    )
+    {
+        var pump = await WebSocketSessionPump.StartConnectedAsync(
+            new ElevenLabsWebSocketAdapter("", "scribe_v2_realtime", null),
+            new ClientWebSocketTransport(ws),
+            CancellationToken.None
+        );
+        return new ElevenLabsStreamingSession(pump);
     }
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived

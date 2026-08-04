@@ -79,6 +79,20 @@ public sealed class DictionaryServiceCorrectionsTests : IDisposable
     }
 
     [Fact]
+    public void UpsertCorrection_IdenticalReupsert_DoesNotRaiseEntriesChanged()
+    {
+        _sut.UpsertCorrection("teh", "the", caseSensitive: false);
+        var changes = 0;
+        _sut.EntriesChanged += () => changes++;
+
+        _sut.UpsertCorrection("teh", "the", caseSensitive: false);
+        Assert.Equal(0, changes);
+
+        _sut.UpsertCorrection("teh", "THE", caseSensitive: false);
+        Assert.Equal(1, changes);
+    }
+
+    [Fact]
     public void DeleteCorrection_Match()
     {
         _sut.UpsertCorrection("teh", "the", false);
