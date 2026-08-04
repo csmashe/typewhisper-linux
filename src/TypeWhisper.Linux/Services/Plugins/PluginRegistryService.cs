@@ -24,6 +24,12 @@ public sealed class PluginRegistryService
     private const long MaxExtractedBytes = 2L * 1024 * 1024 * 1024;
     private const int MaxArchiveEntries = 4096;
 
+    // The registry is a JSON index of a few dozen plugins — kilobytes in practice, so both
+    // ceilings are deliberately generous. Two of them, not one: 8 MB of "{}" still deserializes
+    // into millions of objects, which is what would exhaust memory in the first-run bootstrap.
+    private const long MaxRegistryBytes = 8L * 1024 * 1024;
+    private const int MaxRegistryEntries = 1024;
+
     private const string TransactionDirectoryName = ".typewhisper-plugin-transactions";
     private static readonly TimeSpan s_cacheDuration = TimeSpan.FromMinutes(5);
 
@@ -117,11 +123,16 @@ public sealed class PluginRegistryService
         {
             using var fetchCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             fetchCts.CancelAfter(s_registryFetchTimeout);
-            var json = await _httpClient
-                .GetStringAsync(RegistryUrl, fetchCts.Token)
+            using var response = await _httpClient
+                .GetAsync(
+                    RegistryUrl,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    fetchCts.Token
+                )
                 .ConfigureAwait(false);
-            var allPlugins =
-                JsonSerializer.Deserialize<List<RegistryPlugin>>(json, s_jsonOptions) ?? [];
+            response.EnsureSuccessStatusCode();
+            var allPlugins = await ReadBoundedRegistryAsync(response, fetchCts.Token)
+                .ConfigureAwait(false);
 
             _cachedRegistry = allPlugins.Where(IsCompatible).ToList();
             _cacheTimestamp = DateTime.UtcNow;
@@ -142,6 +153,74 @@ public sealed class PluginRegistryService
             Trace.WriteLine($"[PluginRegistry] Failed to fetch registry: {ex.Message}");
             return (_cachedRegistry ?? [], false);
         }
+    }
+
+    /// <summary>
+    ///     Reads the registry body under a hard ceiling instead of buffering whatever the endpoint
+    ///     sends: a declared Content-Length is rejected up front, a chunked one cut off mid-stream.
+    /// </summary>
+    private static async Task<List<RegistryPlugin>> ReadBoundedRegistryAsync(
+        HttpResponseMessage response,
+        CancellationToken ct
+    )
+    {
+        if (response.Content.Headers.ContentLength > MaxRegistryBytes)
+        {
+            throw new InvalidDataException(
+                $"Plugin registry exceeds the {MaxRegistryBytes}-byte limit."
+            );
+        }
+
+        await using var stream = await response
+            .Content.ReadAsStreamAsync(ct)
+            .ConfigureAwait(false);
+        using var bounded = new MemoryStream();
+        var buffer = new byte[64 * 1024];
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer, ct).ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+
+            if (bounded.Length + read > MaxRegistryBytes)
+            {
+                throw new InvalidDataException(
+                    $"Plugin registry exceeds the {MaxRegistryBytes}-byte limit."
+                );
+            }
+
+            bounded.Write(buffer, 0, read);
+        }
+
+        bounded.Position = 0;
+        var plugins = new List<RegistryPlugin>();
+        // Streamed rather than deserialized whole: the cap has to stop allocating at the limit,
+        // not discover afterwards that it already materialized millions of entries.
+        var entries = 0;
+        await foreach (
+            var plugin in JsonSerializer
+                .DeserializeAsyncEnumerable<RegistryPlugin>(bounded, s_jsonOptions, ct)
+                .ConfigureAwait(false)
+        )
+        {
+            // Counts every element, not just the kept ones: JSON nulls would otherwise slip past
+            // the cap, and dropping them silently would let a malformed registry mark first-run
+            // complete.
+            if (++entries > MaxRegistryEntries)
+            {
+                throw new InvalidDataException(
+                    $"Plugin registry declares more than {MaxRegistryEntries} entries."
+                );
+            }
+
+            plugins.Add(
+                plugin ?? throw new InvalidDataException("Plugin registry contains a null entry.")
+            );
+        }
+
+        return plugins;
     }
 
     public PluginInstallState GetInstallState(RegistryPlugin registryPlugin)

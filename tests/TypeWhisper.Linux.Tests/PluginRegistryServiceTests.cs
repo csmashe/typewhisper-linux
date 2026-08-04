@@ -229,6 +229,123 @@ public sealed class PluginRegistryServiceTests : IDisposable
         Assert.True(savedSettings!.PluginFirstRunCompleted);
     }
 
+    [Fact]
+    public async Task FirstRunAutoInstallAsync_OversizedRegistry_DoesNotComplete()
+    {
+        _settings
+            .Setup(settings => settings.Current)
+            .Returns(new AppSettings { PluginFirstRunCompleted = false });
+
+        // Fails closed on the declared length alone, so the body stays small rather than
+        // transferring the 8 MB it stands in for.
+        var content = new StringContent("[]");
+        content.Headers.ContentLength = 8L * 1024 * 1024 + 1;
+        var handler = new Mock<HttpMessageHandler>();
+        handler
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>()
+            )
+            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+
+        var service = new PluginRegistryService(
+            CreateManager(),
+            _loader,
+            _settings.Object,
+            new HttpClient(handler.Object)
+        )
+        {
+            RuntimeRid = "linux-x64",
+        };
+
+        var result = await service.FetchRegistryAsync();
+        await service.FirstRunAutoInstallAsync();
+
+        Assert.Empty(result);
+        _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task FirstRunAutoInstallAsync_TooManyRegistryEntries_DoesNotComplete()
+    {
+        _settings
+            .Setup(settings => settings.Current)
+            .Returns(new AppSettings { PluginFirstRunCompleted = false });
+
+        var json = "[" + string.Join(",", Enumerable.Repeat("{}", 1025)) + "]";
+        var handler = new Mock<HttpMessageHandler>();
+        handler
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>()
+            )
+            .ReturnsAsync(
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) }
+            );
+
+        var service = new PluginRegistryService(
+            CreateManager(),
+            _loader,
+            _settings.Object,
+            new HttpClient(handler.Object)
+        )
+        {
+            RuntimeRid = "linux-x64",
+        };
+
+        var result = await service.FetchRegistryAsync();
+        await service.FirstRunAutoInstallAsync();
+
+        // A few KB of "{}" sits under the byte ceiling but past the entry cap — the amplification
+        // a byte limit on its own does not catch.
+        Assert.True(json.Length < 8L * 1024 * 1024);
+        Assert.Empty(result);
+        _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+    }
+
+    [Theory]
+    // A null entry is malformed, not "zero plugins": it must retry rather than complete first run.
+    [InlineData("[null]")]
+    [InlineData("[null,null,null]")]
+    public async Task FirstRunAutoInstallAsync_NullRegistryEntry_DoesNotComplete(string json)
+    {
+        _settings
+            .Setup(settings => settings.Current)
+            .Returns(new AppSettings { PluginFirstRunCompleted = false });
+
+        var handler = new Mock<HttpMessageHandler>();
+        handler
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>()
+            )
+            .ReturnsAsync(
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) }
+            );
+
+        var service = new PluginRegistryService(
+            CreateManager(),
+            _loader,
+            _settings.Object,
+            new HttpClient(handler.Object)
+        )
+        {
+            RuntimeRid = "linux-x64",
+        };
+
+        var result = await service.FetchRegistryAsync();
+        await service.FirstRunAutoInstallAsync();
+
+        Assert.Empty(result);
+        _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+    }
+
     private PluginManager CreateManager()
     {
         _manager = new PluginManager(
