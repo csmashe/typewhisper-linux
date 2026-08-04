@@ -80,8 +80,12 @@ public sealed partial class AtSpiUrlExtractor
         _isGdbusAvailable = CheckCommandAvailable("gdbus", ["help"]);
     }
 
-    internal AtSpiUrlExtractor(IErrorLogService? errorLog, Func<string, string?>? walkOverride)
-        : this(new ProcessRunner(), errorLog)
+    internal AtSpiUrlExtractor(
+        IProcessRunner processRunner,
+        IErrorLogService? errorLog,
+        Func<string, string?>? walkOverride
+    )
+        : this(processRunner, errorLog)
     {
         _walkOverride = walkOverride;
     }
@@ -203,15 +207,21 @@ public sealed partial class AtSpiUrlExtractor
             }
         }
 
-        LogOnce(
-            BuildDiagnosticLine(
-                browser.CanonicalProcessName,
-                focusedTitle,
-                stats,
-                url,
-                budgetExhausted
-            )
-        );
+        // Guarded here too, not just inside LogOnce: building the line is StringBuilder and
+        // LINQ work on every walk, and this runs in the dictation path.
+        if (s_diagnosticLoggingEnabled)
+        {
+            LogOnce(
+                BuildDiagnosticLine(
+                    browser.CanonicalProcessName,
+                    focusedTitle,
+                    stats,
+                    url,
+                    budgetExhausted
+                )
+            );
+        }
+
         return url;
     }
 

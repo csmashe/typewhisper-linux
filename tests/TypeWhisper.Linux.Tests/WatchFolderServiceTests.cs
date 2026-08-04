@@ -2,6 +2,7 @@
 // ReSharper disable MethodHasAsyncOverload -- synchronous File.Read/WriteAllText is deliberate in these test assertions; the async overload would only add await noise with no benefit off the hot path.
 using System.Collections.Concurrent;
 using System.Text.Json;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Tests;
 using Xunit;
@@ -29,7 +30,7 @@ public sealed class WatchFolderServiceTests : IDisposable
     [Fact]
     public void Construction_WhenHistoryIsUnreadable_DegradesToEmptyWithoutClobberingIt()
     {
-        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
         {
             return;
         }
@@ -45,15 +46,18 @@ public sealed class WatchFolderServiceTests : IDisposable
 
             // History is not essential: an unreadable file must not stop the whole
             // file-transcription section from being constructed.
-            var service = new WatchFolderService(dataPath);
+            using (var service = new WatchFolderService(dataPath))
+            {
+                Assert.Empty(service.History);
+            }
 
-            Assert.Empty(service.History);
-            service.Dispose();
+            File.SetUnixFileMode(historyPath, originalMode);
+            // Outside the finally, so a failed Assert.Empty stays the reported failure.
+            Assert.Equal("[]", File.ReadAllText(historyPath));
         }
         finally
         {
             File.SetUnixFileMode(historyPath, originalMode);
-            Assert.Equal("[]", File.ReadAllText(historyPath));
         }
     }
 
@@ -261,7 +265,20 @@ public sealed class WatchFolderServiceTests : IDisposable
         var service = new WatchFolderService(
             dataPath,
             static (workers, timeout) => workers.WaitAsync(timeout),
-            (_, _) => throw new IOException("Simulated fingerprint atomic-write failure.")
+            // Fail only the fingerprint store: both stores share this writer, and failing every
+            // write would also swallow the history item that carries the failure to FileProcessed.
+            (path, contents) =>
+            {
+                if (
+                    Path.GetFileName(path)
+                        .StartsWith("watch-folder-processed", StringComparison.Ordinal)
+                )
+                {
+                    throw new IOException("Simulated fingerprint atomic-write failure.");
+                }
+
+                AtomicFileWrite.WriteAllText(path, contents);
+            }
         );
         WatchFolderService.WatchFolderRun? firstRun = null;
         WatchFolderService.WatchFolderRun? secondRun = null;

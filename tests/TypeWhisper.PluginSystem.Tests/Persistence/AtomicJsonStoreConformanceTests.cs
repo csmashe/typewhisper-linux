@@ -253,7 +253,7 @@ public sealed class AtomicJsonStoreConformanceTests
     [MemberData(nameof(Adapters))]
     public void UnreadablePrimary_NeverBecomesWritableDefaults(AdapterPolicy policy)
     {
-        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
         {
             return;
         }

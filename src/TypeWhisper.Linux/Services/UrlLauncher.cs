@@ -20,7 +20,7 @@ public sealed class UrlLauncher(IProcessRunner processRunner)
         var result = processRunner.LaunchUri(uri);
         if (!result.Started)
         {
-            Debug.WriteLine(
+            Trace.WriteLine(
                 $"[UrlLauncher] Failed to open {uri.AbsoluteUri}: {result.StartError}"
             );
         }

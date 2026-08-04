@@ -267,6 +267,12 @@ public sealed class XaiPlugin
             return XaiInactiveTtsPlaybackSession.Instance;
         }
 
+        // Resolved before the paid request: a deactivated plugin keeps its API key, so
+        // without this the endpoint is billed and only then does playback throw.
+        var host = _ttsPlaybackFactory is null
+            ? _host ?? throw new InvalidOperationException("xAI plugin is not activated.")
+            : null;
+
         var body = XaiTtsConfiguration.CreateRequestBody(
             text,
             SelectedVoiceId,
@@ -280,17 +286,13 @@ public sealed class XaiPlugin
 
         var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, httpRequest, ct);
         var pcm = await response.Content.ReadAsByteArrayAsync(ct);
-        return _ttsPlaybackFactory?.Invoke(pcm)
-               ?? XaiPcmTtsPlaybackSession.Create(
-                   pcm,
-                   XaiTtsConfiguration.SampleRate,
-                   (
-                       _host
-                       ?? throw new InvalidOperationException(
-                           "xAI plugin is not activated."
-                       )
-                   ).Processes
-               );
+        return _ttsPlaybackFactory is not null
+            ? _ttsPlaybackFactory(pcm)
+            : XaiPcmTtsPlaybackSession.Create(
+                pcm,
+                XaiTtsConfiguration.SampleRate,
+                host!.Processes
+            );
     }
 
     // Settings support

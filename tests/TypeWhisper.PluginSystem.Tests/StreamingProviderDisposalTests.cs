@@ -12,41 +12,41 @@ public sealed class StreamingProviderDisposalTests
 
     [Fact]
     public Task SmallestAi_SendHoldingLock_AbortsWithoutConcurrentClose() =>
-        AssertSendHoldingLockAsync(SmallestAiSession.CreateConnectedSessionForTests);
+        AssertSendHoldingLockAsync(async ws => await SmallestAiSession.CreateConnectedSessionForTests(ws));
 
     [Fact]
     public Task Reson8_SendHoldingLock_AbortsWithoutConcurrentClose() =>
-        AssertSendHoldingLockAsync(Reson8Session.CreateConnectedSessionForTests);
+        AssertSendHoldingLockAsync(async ws => await Reson8Session.CreateConnectedSessionForTests(ws));
 
     [Fact]
     public Task SmallestAi_CloseNeverCompletes_AbortsWithinTeardownBudget() =>
-        AssertCloseNeverCompletesAsync(SmallestAiSession.CreateConnectedSessionForTests);
+        AssertCloseNeverCompletesAsync(async ws => await SmallestAiSession.CreateConnectedSessionForTests(ws));
 
     [Fact]
     public Task Reson8_CloseNeverCompletes_AbortsWithinTeardownBudget() =>
-        AssertCloseNeverCompletesAsync(Reson8Session.CreateConnectedSessionForTests);
+        AssertCloseNeverCompletesAsync(async ws => await Reson8Session.CreateConnectedSessionForTests(ws));
 
     [Fact]
     public Task SmallestAi_GracefulClose_CompletesWithoutAbort() =>
-        AssertGracefulCloseAsync(SmallestAiSession.CreateConnectedSessionForTests);
+        AssertGracefulCloseAsync(async ws => await SmallestAiSession.CreateConnectedSessionForTests(ws));
 
     [Fact]
     public Task Reson8_GracefulClose_CompletesWithoutAbort() =>
-        AssertGracefulCloseAsync(Reson8Session.CreateConnectedSessionForTests);
+        AssertGracefulCloseAsync(async ws => await Reson8Session.CreateConnectedSessionForTests(ws));
 
     [Fact]
     public Task SmallestAi_DeferredCleanup_ObservesLateFaultAndDefersResourceDisposal() =>
-        AssertDeferredCleanupAsync(SmallestAiSession.CreateConnectedSessionForTests);
+        AssertDeferredCleanupAsync(async ws => await SmallestAiSession.CreateConnectedSessionForTests(ws));
 
     [Fact]
     public Task Reson8_DeferredCleanup_ObservesLateFaultAndDefersResourceDisposal() =>
-        AssertDeferredCleanupAsync(Reson8Session.CreateConnectedSessionForTests);
+        AssertDeferredCleanupAsync(async ws => await Reson8Session.CreateConnectedSessionForTests(ws));
 
     private static async Task AssertSendHoldingLockAsync(
-        Func<WebSocket, IStreamingSession> createSession)
+        Func<WebSocket, Task<IStreamingSession>> createSession)
     {
         var socket = new FakeWebSocket(blockSend: true);
-        var session = createSession(socket);
+        var session = await createSession(socket);
         var sendTask = session.SendAudioAsync(new byte[] { 1, 2 }, CancellationToken.None);
         await socket.SendStarted.WaitAsync(s_signalTimeout);
 
@@ -69,10 +69,10 @@ public sealed class StreamingProviderDisposalTests
     }
 
     private static async Task AssertCloseNeverCompletesAsync(
-        Func<WebSocket, IStreamingSession> createSession)
+        Func<WebSocket, Task<IStreamingSession>> createSession)
     {
         var socket = new FakeWebSocket(blockCloseUntilAbort: true);
-        var session = createSession(socket);
+        var session = await createSession(socket);
 
         var disposal = session.DisposeAsync().AsTask();
         await socket.CloseStarted.WaitAsync(s_signalTimeout);
@@ -86,10 +86,10 @@ public sealed class StreamingProviderDisposalTests
     }
 
     private static async Task AssertGracefulCloseAsync(
-        Func<WebSocket, IStreamingSession> createSession)
+        Func<WebSocket, Task<IStreamingSession>> createSession)
     {
         var socket = new FakeWebSocket();
-        var session = createSession(socket);
+        var session = await createSession(socket);
 
         var firstDisposal = session.DisposeAsync().AsTask();
         var secondDisposal = session.DisposeAsync().AsTask();
@@ -103,13 +103,13 @@ public sealed class StreamingProviderDisposalTests
     }
 
     private static async Task AssertDeferredCleanupAsync(
-        Func<WebSocket, IStreamingSession> createSession)
+        Func<WebSocket, Task<IStreamingSession>> createSession)
     {
         var socket = new FakeWebSocket(
             blockSend: true,
             deferReceiveFailure: true
         );
-        var session = createSession(socket);
+        var session = await createSession(socket);
         await socket.ReceiveStarted.WaitAsync(s_signalTimeout);
 
         var sendTask = session.SendAudioAsync(new byte[] { 1, 2 }, CancellationToken.None);

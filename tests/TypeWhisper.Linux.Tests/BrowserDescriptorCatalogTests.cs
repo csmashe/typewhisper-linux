@@ -104,7 +104,11 @@ public sealed class BrowserDescriptorCatalogTests
                 );
             }
 
-            if (descriptor.HasCapability(BrowserCapabilities.TitleOnlyDetection))
+            // No window identity alias means there is no non-opted-in title to reject.
+            if (
+                descriptor.HasCapability(BrowserCapabilities.TitleOnlyDetection)
+                || descriptor.WindowIdentityAliases.Count == 0
+            )
             {
                 continue;
             }

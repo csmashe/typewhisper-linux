@@ -290,7 +290,7 @@ public sealed partial class SnippetService : ISnippetService
                 snippets =>
                 {
                     var changed = false;
-                    var now = DateTime.UtcNow;
+                    var now = _timeProvider.GetUtcNow().UtcDateTime;
                     foreach (var (id, delta) in increments)
                     {
                         if (delta <= 0)

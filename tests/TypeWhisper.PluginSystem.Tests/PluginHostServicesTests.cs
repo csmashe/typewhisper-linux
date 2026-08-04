@@ -8,7 +8,6 @@ using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
-using TypeWhisper.Linux.Services;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Processes;
 using TypeWhisper.Tests;
@@ -379,9 +378,29 @@ public sealed class PluginHostServicesTests : IDisposable
     }
 
     [Fact]
+    public async Task LoadSecret_NonStringSiblingSecretIsTreatedAsAnIntegrityFailure()
+    {
+        // A secret:* entry that is not even a JSON string means the file's shape is wrong, not
+        // that a write failed -- withhold, same as an unauthenticatable sibling.
+        var pluginDirectory = Path.Join(_tempDir, "PluginData", "test-plugin");
+        var settingsPath = Path.Join(pluginDirectory, "settings.json");
+        Directory.CreateDirectory(pluginDirectory);
+        File.WriteAllText(
+            settingsPath,
+            $$"""{"secret:valid":"{{EncryptLegacyGcm("valid-secret")}}","secret:broken":42}"""
+        );
+        var before = File.ReadAllBytes(settingsPath);
+
+        var loaded = await CreateServices().LoadSecretAsync("valid");
+
+        Assert.Null(loaded);
+        Assert.Equal(before, File.ReadAllBytes(settingsPath));
+    }
+
+    [Fact]
     public async Task FailedSave_ThrowsWithoutChangingCacheOrSettingsFile()
     {
-        if (!OperatingSystem.IsLinux() || Environment.UserName == "root")
+        if (!OperatingSystem.IsLinux() || Environment.IsPrivilegedProcess)
         {
             // Root can bypass directory write permissions, so chmod cannot force this failure.
             return;
@@ -448,7 +467,7 @@ public sealed class PluginHostServicesTests : IDisposable
     [Fact]
     public void UnreadableSettingsFile_RefusesToOverwriteExistingFile()
     {
-        if (!OperatingSystem.IsLinux() || Environment.UserName == "root")
+        if (!OperatingSystem.IsLinux() || Environment.IsPrivilegedProcess)
         {
             // Root can read a mode-000 file, so this cannot exercise the unreadable-file path.
             return;
@@ -466,10 +485,11 @@ public sealed class PluginHostServicesTests : IDisposable
             File.SetUnixFileMode(settingsPath, UnixFileMode.None);
             var services = CreateServices();
 
-            Assert.ThrowsAny<Exception>(() =>
+            // Narrow: any-exception would also pass on an unrelated failure and hide it.
+            Assert.ThrowsAny<UnauthorizedAccessException>(() =>
                 services.GetSetting<string>("language")
             );
-            Assert.ThrowsAny<Exception>(() =>
+            Assert.ThrowsAny<UnauthorizedAccessException>(() =>
                 services.SetSetting("language", "new-value")
             );
             Assert.True(File.Exists(settingsPath));
@@ -498,7 +518,7 @@ public sealed class PluginHostServicesTests : IDisposable
     [Fact]
     public async Task DeleteSecret_ThrowsWhenFileUnreadableAndLeavesSecretOnDisk()
     {
-        if (!OperatingSystem.IsLinux() || Environment.UserName == "root")
+        if (!OperatingSystem.IsLinux() || Environment.IsPrivilegedProcess)
         {
             // Root can read a mode-000 file, so this cannot exercise the unreadable-file path.
             return;
@@ -517,7 +537,7 @@ public sealed class PluginHostServicesTests : IDisposable
             File.SetUnixFileMode(settingsPath, UnixFileMode.None);
             var services = CreateServices();
 
-            await Assert.ThrowsAnyAsync<Exception>(() =>
+            await Assert.ThrowsAnyAsync<UnauthorizedAccessException>(() =>
                 services.DeleteSecretAsync("api-key")
             );
         }
@@ -572,22 +592,13 @@ public sealed class PluginHostServicesTests : IDisposable
     [InlineData("sub\\state.json")]
     [InlineData("settings.json")]
     [InlineData("secret-protection.key")]
-    public void OpenStateStore_RejectsNonLeafAndReservedNames(string fileName)
-    {
-        var services = CreateServices();
-
-        Assert.Throws<ArgumentException>(() =>
-            services.OpenStateStore<ImmutableArray<string>>(
-                fileName,
-                static () => []
-            )
-        );
-    }
-
-    [Theory]
     [InlineData(".")]
     [InlineData("..")]
-    public void OpenStateStore_RejectsRelativeDirectoryNames(string fileName)
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("/etc/passwd")]
+    [InlineData("C:\\state.json")]
+    public void OpenStateStore_RejectsNonLeafAndReservedNames(string fileName)
     {
         var services = CreateServices();
 
@@ -715,141 +726,5 @@ public sealed class PluginHostServicesTests : IDisposable
             cipher.Length
         );
         return Convert.ToBase64String(combined);
-    }
-}
-
-internal sealed class RecordingPluginProcessSupervisor : IProcessRunner
-{
-    public ControlledPluginProcessSession? NextSession { get; set; }
-    public List<(ProcessCommand Command, ProcessSessionOptions Options)> Sessions { get; } = [];
-    public List<Uri> Uris { get; } = [];
-    // ReSharper disable once MemberCanBePrivate.Global
-    // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global -- settable knob on the fake, mirroring NextSession; narrowing it would make it unsettable
-    public ProcessRunOutcome OneShotOutcome { get; set; } = new(
-        ProcessRunStatus.Exited,
-        0,
-        [],
-        [],
-        ProcessOutputStatus.Complete,
-        null
-    );
-
-    // Honours the token like the real runner, so scope-lifetime cancellation is observable.
-    public ProcessRunOutcome RunProbe(
-        ProcessCommand command,
-        ProcessOneShotOptions options,
-        CancellationToken cancellationToken = default
-    )
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return OneShotOutcome;
-    }
-
-    public Task<ProcessRunOutcome> RunOneShotAsync(
-        ProcessCommand command,
-        ProcessOneShotOptions options,
-        CancellationToken cancellationToken = default
-    )
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(OneShotOutcome);
-    }
-
-    /// <summary>Fires mid-launch so tests can interleave a scope stop with registration.</summary>
-    public Action? OnStartSession { get; set; }
-
-    public ProcessSessionStartOutcome StartSession(
-        ProcessCommand command,
-        ProcessSessionOptions options
-    )
-    {
-        Sessions.Add((command, options));
-        OnStartSession?.Invoke();
-        return NextSession is { } session
-            ? new ProcessSessionStartOutcome(session, null)
-            : new ProcessSessionStartOutcome(null, "fake start failure");
-    }
-
-    public DetachedLaunchOutcome LaunchDetached(ProcessCommand command) =>
-        new(true, null);
-
-    public DetachedLaunchOutcome LaunchUri(Uri uri)
-    {
-        Uris.Add(uri);
-        return new DetachedLaunchOutcome(true, null);
-    }
-
-    public Task<ProcessRunResult> RunAsync(
-        string fileName,
-        IReadOnlyList<string> args,
-        IReadOnlyDictionary<string, string>? environment = null,
-        string? standardInput = null,
-        TimeSpan? timeout = null,
-        bool detachAfterExit = false,
-        CancellationToken ct = default
-    ) => throw new NotSupportedException();
-}
-
-internal sealed class ControlledPluginProcessSession : IPluginProcessSession
-{
-    private readonly TaskCompletionSource<ProcessExitOutcome> _completion =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    public int TerminateCount { get; private set; }
-    public int ProcessId => 1234;
-    public bool IsRunning => !_completion.Task.IsCompleted;
-    public Task<ProcessExitOutcome> Completion => _completion.Task;
-
-    public async IAsyncEnumerable<ProcessOutputLine> ReadOutputAsync(
-        [System.Runtime.CompilerServices.EnumeratorCancellation]
-        CancellationToken cancellationToken = default
-    )
-    {
-        await Completion.WaitAsync(cancellationToken);
-        yield break;
-    }
-
-    public ValueTask WriteStandardInputAsync(
-        ReadOnlyMemory<byte> data,
-        CancellationToken cancellationToken = default
-    ) => throw new NotSupportedException();
-
-    public ValueTask CompleteStandardInputAsync(
-        CancellationToken cancellationToken = default
-    ) => throw new NotSupportedException();
-
-    public void Terminate()
-    {
-        TerminateCount++;
-    }
-
-    public void Dispose()
-    {
-        Terminate();
-    }
-
-    public ValueTask DisposeAsync()
-    {
-        Dispose();
-        return ValueTask.CompletedTask;
-    }
-
-    public void Complete(ProcessExitOutcome outcome)
-    {
-        _completion.TrySetResult(outcome);
-    }
-}
-
-internal static class ProcessTestWait
-{
-    public static async Task UntilAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-        while (!condition() && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(10);
-        }
-
-        Assert.True(condition(), "Condition was not met before the deadline.");
     }
 }

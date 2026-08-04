@@ -277,7 +277,7 @@ public sealed class ActiveWindowService : IActiveWindowService
             BrowserCapabilities.ActiveWindowDetection
         );
         if (
-            browser?.Id == "zen"
+            browser?.Id == BrowserDescriptorCatalog.ZenId
             && title.Contains(" Mail", StringComparison.OrdinalIgnoreCase)
         )
         {

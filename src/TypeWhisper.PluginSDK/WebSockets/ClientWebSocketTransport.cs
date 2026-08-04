@@ -23,6 +23,10 @@ public sealed class ClientWebSocketTransport : IWebSocketTransport
         _socket = _clientSocket;
     }
 
+    /// <summary>
+    ///     Wraps an already-open socket. The transport takes ownership: <see cref="DisposeAsync" />
+    ///     disposes <paramref name="connectedSocket" />, so the caller must not dispose it too.
+    /// </summary>
     public ClientWebSocketTransport(WebSocket connectedSocket)
     {
         ArgumentNullException.ThrowIfNull(connectedSocket);
@@ -102,7 +106,13 @@ public sealed class ClientWebSocketTransport : IWebSocketTransport
         await _socket.CloseAsync(status, description, ct);
     }
 
-    public void Abort() => _socket.Abort();
+    // Silent no-op rather than the throw the other members use: the pump aborts defensively
+    // during teardown, and a disposed socket is already aborted.
+    public void Abort()
+    {
+        if (Volatile.Read(ref _disposed) == 0)
+            _socket.Abort();
+    }
 
     public ValueTask DisposeAsync()
     {

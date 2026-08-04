@@ -68,12 +68,13 @@ $scanMode = if ($runAll) { 'all' } elseif ($projects.Count -gt 0) { 'changed' } 
 #      strings to fan out over. This was the original bug.
 #   2. Piping a single-element array unwraps it, so `@("a") | ...`
 #      serialises as `"a"`, not `["a"]`.
-# Building the JSON by hand for these flat strings sidesteps both.
+# Assembling the array by hand from per-element scalars sidesteps both.
 $hasProjects = if ($projects.Count -gt 0) { 'true' } else { 'false' }
 if ($projects.Count -gt 0) {
-  $escaped = $projects | ForEach-Object {
-    '"' + ($_ -replace '\\', '\\\\' -replace '"', '\"') + '"'
-  }
+  # Per-element ConvertTo-Json: neither trap applies to a scalar string, and unlike a
+  # quote/backslash replace it escapes control characters — this lands in GITHUB_OUTPUT
+  # as one line, where a raw newline would leak into further outputs.
+  $escaped = $projects | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress }
   $json = '[' + ($escaped -join ',') + ']'
 } else {
   $json = '[]'

@@ -83,10 +83,29 @@ public sealed class LinuxPreferencesService
             options,
             atomicWrite ?? AtomicFileWrite.WriteAllText
         );
-        _ = _store.Current;
+        // Settle corrupt-file recovery now; an unreadable file must not stop startup.
+        _ = ReadCurrent();
     }
 
-    public LinuxPreferences Current => _store.Current;
+    public LinuxPreferences Current => ReadCurrent();
+
+    /// <summary>
+    ///     A read failure degrades to defaults rather than failing the app. Safe: a later
+    ///     <see cref="Save" /> goes through the store, which still refuses to overwrite an
+    ///     unreadable primary.
+    /// </summary>
+    private LinuxPreferences ReadCurrent()
+    {
+        try
+        {
+            return _store.Current;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Debug.WriteLine($"[LinuxPreferencesService] Load failed: {ex.Message}");
+            return LinuxPreferences.Default;
+        }
+    }
 
     // ReSharper disable once UnusedMethodReturnValue.Global -- returns Current so callers that reload on demand get the fresh value.
     // ReSharper disable once MemberCanBePrivate.Global -- public reload entry point mirroring ISettingsService.Load().
@@ -98,6 +117,7 @@ public sealed class LinuxPreferencesService
 
     public void Save(LinuxPreferences next)
     {
+        ArgumentNullException.ThrowIfNull(next);
         Commit(_ => next);
     }
 

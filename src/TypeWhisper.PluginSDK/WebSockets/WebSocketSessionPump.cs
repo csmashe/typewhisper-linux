@@ -191,7 +191,9 @@ public sealed class WebSocketSessionPump : IStreamingSession
     private async Task StartAsync(CancellationToken ct)
     {
         Volatile.Write(ref _state, (int)WebSocketSessionState.Starting);
-        _receiveTask = ReceiveLoopAsync(_lifetimeCts.Token);
+        // Published volatile: a dispose racing startup reads these in BackgroundTasks, and a
+        // stale null there would tear the transport down without awaiting the loop.
+        Volatile.Write(ref _receiveTask, ReceiveLoopAsync(_lifetimeCts.Token));
 
         await _sendGate.WaitAsync(ct);
         try
@@ -212,7 +214,12 @@ public sealed class WebSocketSessionPump : IStreamingSession
         Volatile.Write(ref _state, (int)WebSocketSessionState.Active);
 
         if (_adapter.KeepAlive is not null)
-            _keepAliveTask = KeepAliveLoopAsync(_adapter.KeepAlive, _lifetimeCts.Token);
+        {
+            Volatile.Write(
+                ref _keepAliveTask,
+                KeepAliveLoopAsync(_adapter.KeepAlive, _lifetimeCts.Token)
+            );
+        }
     }
 
     private async Task FinalizeCoreAsync(CancellationToken ct)
@@ -720,10 +727,10 @@ public sealed class WebSocketSessionPump : IStreamingSession
         var tasks = new List<Task>(3);
         if (closeTask is not null)
             tasks.Add(closeTask);
-        if (_receiveTask is not null)
-            tasks.Add(_receiveTask);
-        if (_keepAliveTask is not null)
-            tasks.Add(_keepAliveTask);
+        if (Volatile.Read(ref _receiveTask) is { } receiveTask)
+            tasks.Add(receiveTask);
+        if (Volatile.Read(ref _keepAliveTask) is { } keepAliveTask)
+            tasks.Add(keepAliveTask);
         return tasks.Count == 0 ? Task.CompletedTask : Task.WhenAll(tasks);
     }
 

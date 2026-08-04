@@ -239,19 +239,9 @@ public sealed class ScriptService
             ["TYPEWHISPER_PROFILE"] = context.ProfileName ?? "",
         };
 
-        // Create the 5s watchdog BEFORE the stdin write so a wedged child
-        // (e.g. one that never drains its stdin) can't block WriteAsync
-        // indefinitely. The same token also bounds the concurrent reads.
-        // Read stdout and stderr concurrently to avoid deadlocks. Starting
-        // the reads before stdin is written keeps a chatty script that prints
-        // a prologue before reading from wedging our WriteAsync on a full
-        // output pipe buffer.
         ProcessRunOutcome result;
         try
         {
-            // Inside the watchdog try block: a child that wedges on stdin
-            // (or never exits) must trigger kill, not propagate OCE while
-            // the process keeps running and pipes stay open.
             result = await _host.Processes.RunOneShotAsync(
                 new ProcessCommand(fileName, arguments, environment),
                 new ProcessOneShotOptions(
@@ -263,8 +253,7 @@ public sealed class ScriptService
         }
         catch (OperationCanceledException)
         {
-            // Caller cancelled (ct) — kill the child so it doesn't outlive the
-            // dictation flow as a leaked process, then propagate the cancellation.
+            // The supervisor terminates and reaps the child.
             _host.Log(PluginLogLevel.Info, $"Script '{script.Name}' cancelled by caller.");
             throw;
         }

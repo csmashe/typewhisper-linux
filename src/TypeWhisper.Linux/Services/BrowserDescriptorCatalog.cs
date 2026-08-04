@@ -63,6 +63,9 @@ internal sealed record BrowserDescriptor(
 /// </summary>
 internal static class BrowserDescriptorCatalog
 {
+    /// <summary>Shared by the descriptor below and the callers that special-case Zen.</summary>
+    internal const string ZenId = "zen";
+
     private const BrowserCapabilities DetectionAndSetup =
         BrowserCapabilities.ActiveWindowDetection
         | BrowserCapabilities.AtSpiExtraction
@@ -138,7 +141,7 @@ internal static class BrowserDescriptorCatalog
             FirefoxDetectionAndSetup
         ),
         new(
-            "zen",
+            ZenId,
             "zen",
             BrowserEngineFamily.Firefox,
             ["zen", "zen-browser", "zen-bin"],
