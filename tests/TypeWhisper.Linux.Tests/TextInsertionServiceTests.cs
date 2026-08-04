@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -1918,6 +1919,36 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardRead_StartFailureTracesAndReturnsNull()
+    {
+        var runner = new FakeProcessRunner { Default = FakeProcessRunner.NotStarted() };
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+        await using var traceOutput = new StringWriter();
+        using TraceListener traceListener = new TextWriterTraceListener(traceOutput);
+        Trace.Listeners.Add(traceListener);
+
+        string? result;
+        try
+        {
+            result = await platform.TryGetClipboardTextAsync();
+        }
+        finally
+        {
+            Trace.Listeners.Remove(traceListener);
+        }
+
+        Assert.Null(result);
+        Assert.Contains(
+            "[TextInsertionService] clipboard read failed: fake: process not started",
+            traceOutput.ToString(),
+            StringComparison.Ordinal
+        );
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_ClipboardWrite_UsesFiveSecondTimeout()
     {
         var runner = new FakeProcessRunner();
@@ -1951,6 +1982,36 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardWrite_StartFailureTracesAndReturnsFalse()
+    {
+        var runner = new FakeProcessRunner { Default = FakeProcessRunner.NotStarted() };
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+        await using var traceOutput = new StringWriter();
+        using TraceListener traceListener = new TextWriterTraceListener(traceOutput);
+        Trace.Listeners.Add(traceListener);
+
+        bool result;
+        try
+        {
+            result = await platform.SetClipboardTextAsync("hello");
+        }
+        finally
+        {
+            Trace.Listeners.Remove(traceListener);
+        }
+
+        Assert.False(result);
+        Assert.Contains(
+            "[TextInsertionService] clipboard write failed: fake: process not started",
+            traceOutput.ToString(),
+            StringComparison.Ordinal
+        );
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_ClipboardFormatListing_UsesFiveSecondTimeout()
     {
         var runner = new FakeProcessRunner();
@@ -1980,6 +2041,36 @@ public sealed class TextInsertionServiceTests
 
         Assert.False(result);
         Assert.Single(runner.Invocations);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardFormatListing_StartFailureTracesAndReturnsFalse()
+    {
+        var runner = new FakeProcessRunner { Default = FakeProcessRunner.NotStarted() };
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+        await using var traceOutput = new StringWriter();
+        using TraceListener traceListener = new TextWriterTraceListener(traceOutput);
+        Trace.Listeners.Add(traceListener);
+
+        bool result;
+        try
+        {
+            result = await platform.ClipboardHasNonTextFormatsAsync();
+        }
+        finally
+        {
+            Trace.Listeners.Remove(traceListener);
+        }
+
+        Assert.False(result);
+        Assert.Contains(
+            "[TextInsertionService] clipboard format listing failed: fake: process not started",
+            traceOutput.ToString(),
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]

@@ -1186,11 +1186,19 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 args,
                 timeout: s_clipboardOperationTimeout
             ).ConfigureAwait(false);
-            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
             if (result.TimedOut)
             {
                 Trace.WriteLine(
                     $"[TextInsertionService] clipboard read timed out after {s_clipboardOperationTimeout.TotalSeconds:0} seconds and was killed."
+                );
+                return null;
+            }
+
+            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
+            if (!result.Started)
+            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] clipboard read failed: {result.StandardError}"
                 );
                 return null;
             }
@@ -1218,11 +1226,19 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 args,
                 timeout: s_clipboardOperationTimeout
             ).ConfigureAwait(false);
-            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
             if (result.TimedOut)
             {
                 Trace.WriteLine(
                     $"[TextInsertionService] clipboard format listing timed out after {s_clipboardOperationTimeout.TotalSeconds:0} seconds and was killed."
+                );
+                return false;
+            }
+
+            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
+            if (!result.Started)
+            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] clipboard format listing failed: {result.StandardError}"
                 );
                 return false;
             }
@@ -1267,11 +1283,19 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 // this every clipboard write would block the full timeout (~5 s) draining it.
                 detachAfterExit: true
             ).ConfigureAwait(false);
-            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
             if (result.TimedOut)
             {
                 Trace.WriteLine(
                     $"[TextInsertionService] clipboard write timed out after {s_clipboardOperationTimeout.TotalSeconds:0} seconds and was killed."
+                );
+                return false;
+            }
+
+            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
+            if (!result.Started)
+            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] clipboard write failed: {result.StandardError}"
                 );
                 return false;
             }
