@@ -126,10 +126,11 @@ public sealed class DictationOrchestrator : IDisposable
     private string? _recordingAppUrl;
     private Profile? _recordingProfile;
 
-    // Monotonically incremented per StartAsync. The active-window snapshot task
-    // captures this at start and guards every write behind it; a late snapshot
-    // (after AwaitRecordingSnapshotAsync timed out) drops its writes rather
-    // than corrupting the next dictation's context.
+    // Monotonically incremented when a start reserves ownership, when a stop
+    // relinquishes it, and when session-loss rollback invalidates startup. The
+    // active-window snapshot task captures this at start and guards every write
+    // behind it; a late snapshot (after AwaitRecordingSnapshotAsync timed out)
+    // drops its writes rather than corrupting the next dictation's context.
     private int _recordingSession;
     private Task? _recordingSnapshotTask;
     private DateTime _recordingStart;
@@ -623,6 +624,17 @@ public sealed class DictationOrchestrator : IDisposable
                 goto StartupComplete;
             }
 
+            // Reserve the new generation before publishing its overlay so the predecessor is
+            // already ineligible to mutate the fresh state (PA5). A predecessor callback that
+            // passed its ownership check just before this increment can still write once: fully
+            // closing that check-then-act window requires validating ownership and mutating under
+            // _overlayStateLock, deliberately out of scope here.
+            int sessionId;
+            lock (_recordingSessionLock)
+            {
+                sessionId = ++_recordingSession;
+            }
+
             _audioCaptureSession = captureSession;
             _recordingStart = DateTime.UtcNow;
             _lastSpeechDetectedAtUtc = _recordingStart;
@@ -757,10 +769,12 @@ public sealed class DictationOrchestrator : IDisposable
             // near-immediate StopAsync can observe and await it. The Task.Run
             // only commits results if the session is still active — protecting
             // the next dictation from late writes after the 500ms timeout.
-            int sessionId;
+            // Begin stays late so a post-capture setup exception cannot leave a phantom in-flight
+            // session. That failure still consumes the generation reserved above: ids stay
+            // monotonic (all the gate needs), and a predecessor's overlay feedback stays rejected
+            // past the rollback's hide — matching session-loss rollback, which double-increments.
             lock (_recordingSessionLock)
             {
-                sessionId = ++_recordingSession;
                 _inFlightTracker.Begin(sessionId);
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
@@ -3894,13 +3908,20 @@ public sealed class DictationOrchestrator : IDisposable
     /// </summary>
     private bool IsContextStillOwningOverlay(RecordingContext context)
     {
+        return IsSessionStillOwningOverlay(context.SessionId);
+    }
+
+    // Internal so a test holding only a session id reaches the same arithmetic; keeping one
+    // copy stops a refactor from moving production off the rule the test pins.
+    internal bool IsSessionStillOwningOverlay(int sessionId)
+    {
         int current;
         lock (_recordingSessionLock)
         {
             current = _recordingSession;
         }
 
-        return current <= context.SessionId + 1;
+        return current <= sessionId + 1;
     }
 
     private void RollBackStartedRecording(AudioRecordingService.AudioCaptureSession captureSession)
