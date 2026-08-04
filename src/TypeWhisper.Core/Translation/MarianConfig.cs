@@ -7,7 +7,6 @@ namespace TypeWhisper.Core.Translation;
 /// </summary>
 /// <param name="DecoderStartTokenId">Decoder start token id supplied to the member.</param>
 /// <param name="EosTokenId">Eos token id supplied to the member.</param>
-/// <param name="VocabSize">Vocab size supplied to the member.</param>
 /// <param name="MaxLength">Max length supplied to the member.</param>
 public sealed record MarianConfig(
     int DecoderStartTokenId,

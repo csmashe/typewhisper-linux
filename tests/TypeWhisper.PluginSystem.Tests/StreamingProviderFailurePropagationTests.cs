@@ -19,7 +19,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task AssemblyAi_OneFinalThenTransportFault_SendAndFinalizeRethrow()
     {
         var socket = new FakeWebSocket();
-        await using var session = new AssemblyAiSession(socket);
+        await using var session = await AssemblyAiSession.CreateConnectedSessionForTests(socket);
         var finalReceived = FinalReceived(session);
 
         socket.EnqueueText(
@@ -51,7 +51,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task AssemblyAi_TerminationPath_UsesV3TerminateAndCommitsOnlyFormattedTurn()
     {
         var socket = new FakeWebSocket();
-        await using var session = new AssemblyAiSession(socket);
+        await using var session = await AssemblyAiSession.CreateConnectedSessionForTests(socket);
         var events = new ConcurrentQueue<StreamingTranscriptEvent>();
         session.TranscriptReceived += events.Enqueue;
 
@@ -82,7 +82,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task AssemblyAi_AbnormalCloseBeforeTermination_FaultsFinalize()
     {
         var socket = new FakeWebSocket();
-        await using var session = new AssemblyAiSession(socket);
+        await using var session = await AssemblyAiSession.CreateConnectedSessionForTests(socket);
 
         var finalize = session.FinalizeAsync(CancellationToken.None);
         await socket.NextSentAsync();
@@ -102,7 +102,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task AssemblyAi_ProviderError_FaultsFinalize()
     {
         var socket = new FakeWebSocket();
-        await using var session = new AssemblyAiSession(socket);
+        await using var session = await AssemblyAiSession.CreateConnectedSessionForTests(socket);
 
         var finalize = session.FinalizeAsync(CancellationToken.None);
         await socket.NextSentAsync();
@@ -120,7 +120,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task AssemblyAi_MalformedJson_FaultsFinalize()
     {
         var socket = new FakeWebSocket();
-        await using var session = new AssemblyAiSession(socket);
+        await using var session = await AssemblyAiSession.CreateConnectedSessionForTests(socket);
 
         var finalize = session.FinalizeAsync(CancellationToken.None);
         await socket.NextSentAsync();
@@ -136,7 +136,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task AssemblyAi_FinalizeWait_HonorsCallerCancellation()
     {
         var socket = new FakeWebSocket();
-        await using var session = new AssemblyAiSession(socket);
+        await using var session = await AssemblyAiSession.CreateConnectedSessionForTests(socket);
         using var cts = new CancellationTokenSource();
 
         var finalize = session.FinalizeAsync(cts.Token);
@@ -154,7 +154,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task AssemblyAi_DisposalCancellation_IsClean()
     {
         var socket = new FakeWebSocket();
-        var session = new AssemblyAiSession(socket);
+        var session = await AssemblyAiSession.CreateConnectedSessionForTests(socket);
 
         await session.DisposeAsync().AsTask().WaitAsync(s_testTimeout);
         Assert.Equal(WebSocketState.Closed, socket.State);
@@ -164,7 +164,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task Deepgram_OneFinalThenTransportFault_SendAndFinalizeRethrow()
     {
         var socket = new FakeWebSocket();
-        await using var session = new DeepgramSession(socket);
+        await using var session = await DeepgramSession.CreateConnectedSessionForTests(socket);
         var finalReceived = FinalReceived(session);
 
         socket.EnqueueText(DeepgramResult("A complete prefix.", isFinal: true));
@@ -194,7 +194,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task Deepgram_MetadataPath_AwaitsFinalResults()
     {
         var socket = new FakeWebSocket();
-        await using var session = new DeepgramSession(socket);
+        await using var session = await DeepgramSession.CreateConnectedSessionForTests(socket);
         var finalReceived = FinalReceived(session);
 
         var finalize = session.FinalizeAsync(CancellationToken.None);
@@ -215,7 +215,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task Deepgram_AbnormalCloseBeforeMetadata_FaultsFinalize()
     {
         var socket = new FakeWebSocket();
-        await using var session = new DeepgramSession(socket);
+        await using var session = await DeepgramSession.CreateConnectedSessionForTests(socket);
 
         var finalize = session.FinalizeAsync(CancellationToken.None);
         await socket.NextSentAsync();
@@ -235,7 +235,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task Deepgram_ProviderError_FaultsFinalize()
     {
         var socket = new FakeWebSocket();
-        await using var session = new DeepgramSession(socket);
+        await using var session = await DeepgramSession.CreateConnectedSessionForTests(socket);
 
         var finalize = session.FinalizeAsync(CancellationToken.None);
         await socket.NextSentAsync();
@@ -253,7 +253,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task Deepgram_MalformedResult_FaultsFinalize()
     {
         var socket = new FakeWebSocket();
-        await using var session = new DeepgramSession(socket);
+        await using var session = await DeepgramSession.CreateConnectedSessionForTests(socket);
 
         var finalize = session.FinalizeAsync(CancellationToken.None);
         await socket.NextSentAsync();
@@ -269,7 +269,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task Deepgram_FinalizeWait_HonorsCallerCancellation()
     {
         var socket = new FakeWebSocket();
-        await using var session = new DeepgramSession(socket);
+        await using var session = await DeepgramSession.CreateConnectedSessionForTests(socket);
         using var cts = new CancellationTokenSource();
 
         var finalize = session.FinalizeAsync(cts.Token);
@@ -287,7 +287,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task Deepgram_DisposalCancellation_IsClean()
     {
         var socket = new FakeWebSocket();
-        var session = new DeepgramSession(socket);
+        var session = await DeepgramSession.CreateConnectedSessionForTests(socket);
 
         await session.DisposeAsync().AsTask().WaitAsync(s_testTimeout);
         Assert.Equal(WebSocketState.Closed, socket.State);
@@ -297,7 +297,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task ElevenLabs_OneFinalThenTransportFault_SendAndFinalizeRethrow()
     {
         var socket = new FakeWebSocket();
-        await using var session = new ElevenLabsSession(socket);
+        await using var session = await ElevenLabsSession.CreateConnectedSessionForTests(socket);
         var finalReceived = FinalReceived(session);
 
         socket.EnqueueText(
@@ -329,7 +329,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task ElevenLabs_CommittedResultPath_AwaitsFinalCommitResponse()
     {
         var socket = new FakeWebSocket();
-        await using var session = new ElevenLabsSession(socket);
+        await using var session = await ElevenLabsSession.CreateConnectedSessionForTests(socket);
         var finalReceived = FinalReceived(session);
 
         var finalize = session.FinalizeAsync(CancellationToken.None);
@@ -353,7 +353,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task ElevenLabs_EmptyFinalCommit_CompletesWithoutTranscriptText()
     {
         var socket = new FakeWebSocket();
-        await using var session = new ElevenLabsSession(socket);
+        await using var session = await ElevenLabsSession.CreateConnectedSessionForTests(socket);
         var events = new ConcurrentQueue<StreamingTranscriptEvent>();
         session.TranscriptReceived += events.Enqueue;
 
@@ -370,7 +370,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task ElevenLabs_VadCommitBeforeFinalize_DoesNotSatisfyFinalCommitWait()
     {
         var socket = new FakeWebSocket();
-        await using var session = new ElevenLabsSession(socket);
+        await using var session = await ElevenLabsSession.CreateConnectedSessionForTests(socket);
         var vadFinalReceived = FinalReceived(session);
 
         socket.EnqueueText(
@@ -390,7 +390,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task ElevenLabs_AbnormalCloseBeforeCommittedResult_FaultsFinalize()
     {
         var socket = new FakeWebSocket();
-        await using var session = new ElevenLabsSession(socket);
+        await using var session = await ElevenLabsSession.CreateConnectedSessionForTests(socket);
 
         var finalize = session.FinalizeAsync(CancellationToken.None);
         await socket.NextSentAsync();
@@ -427,7 +427,7 @@ public sealed class StreamingProviderFailurePropagationTests
     )
     {
         var socket = new FakeWebSocket();
-        await using var session = new ElevenLabsSession(socket);
+        await using var session = await ElevenLabsSession.CreateConnectedSessionForTests(socket);
 
         var finalize = session.FinalizeAsync(CancellationToken.None);
         await socket.NextSentAsync();
@@ -451,7 +451,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task ElevenLabs_MalformedJson_FaultsFinalize()
     {
         var socket = new FakeWebSocket();
-        await using var session = new ElevenLabsSession(socket);
+        await using var session = await ElevenLabsSession.CreateConnectedSessionForTests(socket);
 
         var finalize = session.FinalizeAsync(CancellationToken.None);
         await socket.NextSentAsync();
@@ -467,7 +467,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task ElevenLabs_FinalizeWait_HonorsCallerCancellation()
     {
         var socket = new FakeWebSocket();
-        await using var session = new ElevenLabsSession(socket);
+        await using var session = await ElevenLabsSession.CreateConnectedSessionForTests(socket);
         using var cts = new CancellationTokenSource();
 
         var finalize = session.FinalizeAsync(cts.Token);
@@ -485,7 +485,7 @@ public sealed class StreamingProviderFailurePropagationTests
     public async Task ElevenLabs_DisposalCancellation_IsClean()
     {
         var socket = new FakeWebSocket();
-        var session = new ElevenLabsSession(socket);
+        var session = await ElevenLabsSession.CreateConnectedSessionForTests(socket);
 
         await session.DisposeAsync().AsTask().WaitAsync(s_testTimeout);
         Assert.Equal(WebSocketState.Closed, socket.State);

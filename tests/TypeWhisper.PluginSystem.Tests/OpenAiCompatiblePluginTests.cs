@@ -225,6 +225,79 @@ public sealed class OpenAiCompatiblePluginTests
     }
 
     [Fact]
+    public async Task SetItemsAsync_WhenASecretWriteFailsMidUpdate_RollsBackTheEarlierOnes()
+    {
+        var host = new TestPluginHostServices();
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await sut.SetItemsAsync(
+            "profiles",
+            [
+                ProfileItem("First", "http://localhost:11434", apiKey: "first-key"),
+                ProfileItem("Second", "http://localhost:11435", apiKey: "second-key"),
+            ]
+        );
+
+        var saved = await sut.GetItemsAsync("profiles");
+        var firstId = saved[0].Values["__id"]!;
+        var secondId = saved[1].Values["__id"]!;
+        var secretsBefore = new Dictionary<string, string?>(host.Secrets, StringComparer.Ordinal);
+
+        host.FailSecretOperationNumber = 2;
+        await Assert.ThrowsAsync<IOException>(() =>
+            sut.SetItemsAsync(
+                "profiles",
+                [
+                    ProfileItem("First", "http://localhost:11434", apiKey: "first-rotated", id: firstId),
+                    ProfileItem("Second", "http://localhost:11435", apiKey: "second-rotated", id: secondId),
+                ]
+            )
+        );
+        host.FailSecretOperationNumber = 0;
+
+        // The committed first write was compensated.
+        Assert.Equal(secretsBefore, host.Secrets);
+        Assert.Equal("first-key", host.Secrets[$"api-key.{firstId}"]);
+        Assert.Equal("second-key", host.Secrets[$"api-key.{secondId}"]);
+
+        var afterFailure = await sut.GetItemsAsync("profiles");
+        Assert.Equal(2, afterFailure.Count);
+    }
+
+    [Fact]
+    public async Task SetItemsAsync_WhenProfilePersistFailsAfterKeyRotation_DoesNotStrandTheNewKeyOnTheOldUrl()
+    {
+        var host = new TestPluginHostServices();
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await sut.SetItemsAsync(
+            "profiles",
+            [ProfileItem("Server", "http://old.invalid", apiKey: "old-key")]
+        );
+        var profileId = Assert.Single(await sut.GetItemsAsync("profiles")).Values["__id"]!;
+        var profilesBefore = host.GetSetting<JsonElement>("additionalProfiles").GetRawText();
+
+        // Move the endpoint and rotate the key together, failing the metadata write after the
+        // secret landed: the new key must not be left pointing at the old URL.
+        host.FailSettingKey = "additionalProfiles";
+        await Assert.ThrowsAsync<IOException>(() =>
+            sut.SetItemsAsync(
+                "profiles",
+                [ProfileItem("Server", "http://new.invalid", apiKey: "new-key", id: profileId)]
+            )
+        );
+        host.FailSettingKey = null;
+
+        Assert.Equal("old-key", host.Secrets[$"api-key.{profileId}"]);
+        Assert.Equal(profilesBefore, host.GetSetting<JsonElement>("additionalProfiles").GetRawText());
+        Assert.Equal("http://old.invalid", Assert.Single(await sut.GetItemsAsync("profiles")).Values["baseUrl"]);
+    }
+
+    [Fact]
     public async Task AdditionalProfileRole_IsStableAcrossRepeatedGettersAndCapabilityRefresh()
     {
         var host = new TestPluginHostServices();
@@ -979,11 +1052,34 @@ public sealed class OpenAiCompatiblePluginTests
         public List<string> DeletedSecretKeys { get; } = [];
         public int CapabilitiesChangedCount { get; private set; }
 
+        /// <summary>
+        ///     When set, the Nth (1-based) secret write or delete from that point on throws, so a
+        ///     caller's mid-sequence failure handling can be exercised. Assigning resets the count.
+        /// </summary>
+        public int FailSecretOperationNumber
+        {
+            get;
+            set
+            {
+                field = value;
+                _secretOperations = 0;
+            }
+        }
+
+        private int _secretOperations;
+
         public Task StoreSecretAsync(string key, string value)
         {
+            ThrowIfInjectedFailure();
             StoredSecrets.Add((key, value));
             Secrets[key] = value;
             return Task.CompletedTask;
+        }
+
+        private void ThrowIfInjectedFailure()
+        {
+            if (++_secretOperations == FailSecretOperationNumber)
+                throw new IOException("Simulated secret-store failure.");
         }
 
         public Task<string?> LoadSecretAsync(string key) =>
@@ -991,16 +1087,28 @@ public sealed class OpenAiCompatiblePluginTests
 
         public Task DeleteSecretAsync(string key)
         {
+            ThrowIfInjectedFailure();
             DeletedSecretKeys.Add(key);
             Secrets.Remove(key);
             return Task.CompletedTask;
         }
 
+        /// <summary>
+        ///     When set, writing this settings key throws, so a caller's handling of a metadata
+        ///     write that fails after its secret writes succeeded can be exercised.
+        /// </summary>
+        public string? FailSettingKey { get; set; }
+
         public T? GetSetting<T>(string key) =>
             _settings.TryGetValue(key, out var value) ? value.Deserialize<T>(s_jsonOptions) : default;
 
-        public void SetSetting<T>(string key, T value) =>
+        public void SetSetting<T>(string key, T value)
+        {
+            if (key == FailSettingKey)
+                throw new IOException("Simulated settings-store failure.");
+
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
+        }
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;

@@ -1,3 +1,11 @@
+// ReSharper disable UnusedType.Global
+// ReSharper disable UnusedMember.Global
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable ClassNeverInstantiated.Global
+// CliRequestBuilder and CliTranscribeRequest have no callers left: Services/ApiClient.cs and
+// Services/StdinAudioSniffer.cs superseded them on the live command path. Kept as the documented
+// request-shape reference for the HTTP API, so the "unused" family here is rot, not a mistake.
+
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -50,7 +58,10 @@ public sealed record CliTranscribeRequest(
 /// </summary>
 public static class CliConnectionResolver
 {
-    private const int DefaultPort = 8978;
+    // Mirrors AppSettings.ApiServerPort, the port the app's API server binds by default.
+    // Duplicated rather than referenced: the CLI ships as a standalone trimmed single file
+    // and deliberately takes no project references. Keep the two in step.
+    private const int DefaultPort = 9876;
 
     /// <summary>
     /// Resolves the supplied input to a configured value.
@@ -87,11 +98,31 @@ public static class CliConnectionResolver
             if (!File.Exists(path))
                 return null;
 
-            var discovery = JsonSerializer.Deserialize<ApiDiscovery>(
-                File.ReadAllText(path),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            // Read by hand rather than reflect over a type: the CLI publishes with TrimMode=full,
+            // where reflective deserialization is a latent runtime failure (IL2026). Mirrors
+            // DiscoveryFileReader on the live path.
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
 
-            return discovery;
+            return new ApiDiscovery
+            {
+                Version = root.TryGetProperty("version", out var version)
+                    && version.ValueKind == JsonValueKind.Number
+                    && version.TryGetInt32(out var versionValue)
+                        ? versionValue
+                        : 0,
+                Port = root.TryGetProperty("port", out var port)
+                    && port.ValueKind == JsonValueKind.Number
+                    && port.TryGetInt32(out var portValue)
+                        ? portValue
+                        : 0,
+                Token = root.TryGetProperty("token", out var token)
+                    && token.ValueKind == JsonValueKind.String
+                        ? token.GetString()
+                        : null,
+            };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -121,13 +152,16 @@ public static class CliConnectionResolver
         values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
 
     private static int? ValidatePort(int? port) =>
-        port is int value && IsPortInRange(value) ? value : null;
+        port is { } value && IsPortInRange(value) ? value : null;
 
     private sealed record ApiDiscovery
     {
         /// <summary>
         /// Gets or sets the version value.
         /// </summary>
+        // ReSharper disable once UnusedAutoPropertyAccessor.Local -- carried so this record mirrors
+        // the api-discovery.json shape. Resolution accepts any version, matching DiscoveryFileReader
+        // on the live path, so nothing reads it back.
         public int Version { get; init; }
         /// <summary>
         /// Gets or sets the port value.
@@ -177,12 +211,36 @@ public static class CliRequestBuilder
             ["task"] = request.Task,
             ["target_language"] = request.TargetLanguage,
             ["engine"] = request.Engine,
-            ["model"] = request.Model
+            ["model"] = request.Model,
         }
         .Where(pair => pair.Value is not null)
         .ToDictionary(pair => pair.Key, pair => pair.Value);
 
-        var json = JsonSerializer.Serialize(body);
+        // Hand-write rather than reflect over Dictionary<string, object?>, which TrimMode=full
+        // cannot analyze (IL2026). Only strings and string lists ever reach this body.
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            foreach (var (name, value) in body)
+            {
+                if (value is IReadOnlyList<string> list)
+                {
+                    writer.WriteStartArray(name);
+                    foreach (var entry in list)
+                        writer.WriteStringValue(entry);
+                    writer.WriteEndArray();
+                }
+                else
+                {
+                    writer.WriteString(name, (string?)value);
+                }
+            }
+
+            writer.WriteEndObject();
+        }
+
+        var json = Encoding.UTF8.GetString(buffer.ToArray());
         message.Content = new StringContent(json, Encoding.UTF8, "application/json");
         return message;
     }

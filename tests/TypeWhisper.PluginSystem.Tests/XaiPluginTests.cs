@@ -509,6 +509,23 @@ public class XaiPluginTests
     }
 
     [Fact]
+    public async Task StreamingSession_DisposeWithStuckHandshake_CancelsStartupAndReleasesTheSocket()
+    {
+        // The peer never sends transcript.created and never closes, so nothing but disposal can
+        // end the handshake. Disposal must actually tear the socket down, not just stop waiting.
+        var socket = new FakeStreamingWebSocket();
+        var session = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            disposePumpWait: TimeSpan.FromMilliseconds(200)
+        );
+
+        await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.True(socket.DisposeCalled);
+        Assert.NotEqual(WebSocketState.Open, socket.State);
+    }
+
+    [Fact]
     public async Task StreamingSession_ConnectedFactoryWaitsForTranscriptCreated()
     {
         var socket = new FakeStreamingWebSocket();

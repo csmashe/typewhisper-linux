@@ -47,11 +47,34 @@ public sealed partial class DictionaryService : IDictionaryService
                         ? throw new JsonException("Dictionary JSON deserialized to null.")
                         : entries;
                 },
+                Diagnostic = diagnostic =>
+                    Trace.WriteLine(
+                        $"[DictionaryService] {diagnostic.Kind} at '{diagnostic.Path}': "
+                        + (diagnostic.Exception?.Message ?? "invalid JSON")
+                    ),
             }
         );
     }
 
-    public IReadOnlyList<DictionaryEntry> Entries => _store.Current.ToArray();
+    public IReadOnlyList<DictionaryEntry> Entries => ReadEntries().ToArray();
+
+    /// <summary>
+    ///     A read failure must not break dictation, so it degrades to empty — same contract as
+    ///     <c>HistoryService.ReadRecords</c> and <c>ErrorLogService.ReadEntries</c>. Writes still
+    ///     go through the store, which refuses to overwrite an unreadable primary.
+    /// </summary>
+    private ImmutableArray<DictionaryEntry> ReadEntries()
+    {
+        try
+        {
+            return _store.Current;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Trace.WriteLine($"[DictionaryService] Could not load the dictionary: {ex.Message}");
+            return [];
+        }
+    }
 
     public event Action? EntriesChanged;
 
@@ -127,7 +150,7 @@ public sealed partial class DictionaryService : IDictionaryService
 
     private string ApplyCorrectionsCore(string text, bool recordUsage)
     {
-        var corrections = _store.Current
+        var corrections = ReadEntries()
                 .Where(e =>
                     e is { IsEnabled: true, EntryType: DictionaryEntryType.Correction }
                     && !string.IsNullOrEmpty(e.Original)
@@ -230,7 +253,7 @@ public sealed partial class DictionaryService : IDictionaryService
     public IReadOnlyList<string> GetEnabledTerms()
     {
         return NormalizeTerms(
-            _store.Current
+            ReadEntries()
                 .Where(e => e is { IsEnabled: true, EntryType: DictionaryEntryType.Term })
                 .Select(e => e.Original)
         );
@@ -314,7 +337,7 @@ public sealed partial class DictionaryService : IDictionaryService
 
     public IReadOnlyList<DictionaryCorrection> GetCorrections()
     {
-        return _store.Current
+        return ReadEntries()
             .Where(e =>
                 e is { IsEnabled: true, EntryType: DictionaryEntryType.Correction, Replacement: not null }
             )
@@ -344,14 +367,27 @@ public sealed partial class DictionaryService : IDictionaryService
 
             if (existing is not null)
             {
-                var idx = newCache.FindIndex(e => e.Id == existing.Id);
-                if (idx >= 0)
+                // Re-upserting an unchanged correction is a no-op: the store already skips the
+                // write, and reporting it as a change would still fire EntriesChanged.
+                if (
+                    existing.IsEnabled
+                    && existing.CaseSensitive == caseSensitive
+                    && string.Equals(existing.Replacement, replacement, StringComparison.Ordinal)
+                )
                 {
-                    newCache[idx] = existing with
-                    {
-                        Replacement = replacement, CaseSensitive = caseSensitive, IsEnabled = true,
-                    };
+                    return false;
                 }
+
+                var idx = newCache.FindIndex(e => e.Id == existing.Id);
+                if (idx < 0)
+                {
+                    return false;
+                }
+
+                newCache[idx] = existing with
+                {
+                    Replacement = replacement, CaseSensitive = caseSensitive, IsEnabled = true,
+                };
             }
             else
             {

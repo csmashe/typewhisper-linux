@@ -50,7 +50,7 @@ public sealed class ErrorLogServiceTests : IDisposable
     [Fact]
     public void Construction_WhenLogIsUnreadable_DegradesToEmptyWithoutClobberingIt()
     {
-        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
         {
             return;
         }
@@ -68,11 +68,14 @@ public sealed class ErrorLogServiceTests : IDisposable
             Assert.Empty(service.Entries);
             Assert.Null(Record.Exception(() => service.AddEntry("dropped")));
             Assert.Empty(service.Entries);
+
+            File.SetUnixFileMode(path, originalMode);
+            // Outside the finally, so a failure above stays the reported failure.
+            Assert.Equal("[]", File.ReadAllText(path));
         }
         finally
         {
             File.SetUnixFileMode(path, originalMode);
-            Assert.Equal("[]", File.ReadAllText(path));
             TestPaths.DeleteDirectory(directory);
         }
     }
@@ -80,16 +83,18 @@ public sealed class ErrorLogServiceTests : IDisposable
     [Fact]
     public void AddEntry_WhenPersistenceFails_IsBestEffortWithoutPublishingOrEvent()
     {
+        // Recreate a path whose destination name itself is at the filesystem limit.
+        // ErrorLogService appends a fixed leaf, so make the directory read-only instead —
+        // which root ignores, so skip there too rather than assert a write that succeeds.
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+        {
+            return;
+        }
+
         using var failurePath = new AtomicWriteFailureTestPath("[]");
         var directory = Path.GetDirectoryName(failurePath.FilePath)!;
         var expectedPath = Path.Join(directory, "error-log.json");
         File.Move(failurePath.FilePath, expectedPath);
-        // Recreate a path whose destination name itself is at the filesystem limit.
-        // ErrorLogService appends a fixed leaf, so make the directory read-only instead.
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
 
         var originalMode = File.GetUnixFileMode(directory);
         try

@@ -92,6 +92,11 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
 
         // In-vault link targets are allowed, outside ones refused. Checked before
         // CreateDirectory, or an escaping link's directories would exist by the time we refuse.
+        //
+        // Path-based, so a window ahead of the write rather than atomic with it. Deliberate: the
+        // vault is the user's own directory, so anyone who could swap in an escaping link already
+        // has write access to what this protects. Closing the window needs handle-based
+        // O_NOFOLLOW traversal, which .NET does not expose.
         if (!IsResolvedTargetContained(vaultRoot, targetDir))
             return new ActionResult(false, Loc.L("Settings.SubfolderOutsideVault"));
 

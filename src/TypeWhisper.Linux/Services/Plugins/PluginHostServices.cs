@@ -260,10 +260,25 @@ public sealed class PluginHostServices : IPluginHostServices
             );
             return Task.FromResult(requested.PlainText);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is InvalidDataException or JsonException)
         {
+            // A sibling secret failed to authenticate, or is not even a JSON string, so the
+            // file's integrity is in doubt. Withhold this one too rather than serve a secret
+            // out of a file that may have been tampered with -- and leave it intact for recovery.
             LogSecretUnavailable(key, $"migration failed: {ex.Message}");
             return Task.FromResult<string?>(null);
+        }
+        catch (Exception ex)
+        {
+            // Only the write failed. The re-encryption is opportunistic and this secret
+            // authenticated fine, so hand it back rather than reporting a configured plugin
+            // as unconfigured; the next read retries the migration.
+            var message =
+                $"Plugin '{_pluginDisplayName}' ({_pluginId}) secret '{key}' could not be "
+                + $"re-encrypted to the current format: {ex.Message}.";
+            Trace.WriteLine($"[Plugin:{_pluginId}] {message}");
+            AddSettingsError(message);
+            return Task.FromResult(requested.PlainText);
         }
     }
 
@@ -565,7 +580,13 @@ public sealed class PluginHostServices : IPluginHostServices
         public ValueTask<T> ReadAsync(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return ValueTask.FromResult(store.Current);
+
+            // An already-loaded snapshot is a field read, so keep it synchronous; only an
+            // actual load goes to the pool, where the disk I/O and the per-path lock belong
+            // rather than on a plugin's (often UI) calling thread.
+            return store.IsLoaded
+                ? ValueTask.FromResult(store.Current)
+                : new ValueTask<T>(Task.Run(() => store.Current, cancellationToken));
         }
 
         public ValueTask<T> UpdateAsync(
@@ -576,14 +597,19 @@ public sealed class PluginHostServices : IPluginHostServices
             ArgumentNullException.ThrowIfNull(update);
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Rechecked inside the transaction: this call may have waited for another one to
-            // finish, and cancellation during that wait must not still commit.
-            return ValueTask.FromResult(
-                store.Update(current =>
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    return update(current);
-                })
+            // Always off-thread: an update writes the file and may wait on the per-path lock.
+            // Cancellation is rechecked inside the transaction because this call may have
+            // waited for another one to finish, and cancelling during that wait must not commit.
+            return new ValueTask<T>(
+                Task.Run(
+                    () =>
+                        store.Update(current =>
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            return update(current);
+                        }),
+                    cancellationToken
+                )
             );
         }
     }

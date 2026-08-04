@@ -355,6 +355,13 @@ public class Reson8PluginTests
         Assert.DoesNotContain("language=", localUri.Query);
         Assert.DoesNotContain("custom_model_id=", localUri.Query);
 
+        // An explicitly plaintext base URL must not be silently upgraded to wss, or a
+        // self-hosted ws:// endpoint becomes unreachable.
+        var plaintextWs = Reson8StreamingSession.BuildRealtimeUri("ws://localhost:8080", null, null);
+        Assert.Equal("ws", plaintextWs.Scheme);
+        var secureWs = Reson8StreamingSession.BuildRealtimeUri("wss://localhost:8080", null, null);
+        Assert.Equal("wss", secureWs.Scheme);
+
         var headers = Reson8StreamingSession.CreateStreamingHeaders("reson-key", "Authorization");
         Assert.Equal("ApiKey reson-key", headers["Authorization"]);
         var customHeaders = Reson8StreamingSession.CreateStreamingHeaders("reson-key", "X-Api-Key");
