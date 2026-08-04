@@ -81,7 +81,7 @@ public static class OpenAiTranscriptionHelper
             && !languageHint.Equals("auto", StringComparison.OrdinalIgnoreCase)
         )
         {
-            content.Add(new StringContent(language!), "language");
+            content.Add(new StringContent(languageHint), "language");
         }
 
         if (!string.IsNullOrWhiteSpace(prompt))

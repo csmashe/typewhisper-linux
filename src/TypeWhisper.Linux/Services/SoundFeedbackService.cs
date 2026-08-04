@@ -15,6 +15,7 @@ public sealed class SoundFeedbackService
     private static readonly string s_soundsDir =
         Path.Join(AppContext.BaseDirectory, "Resources", "Sounds");
 
+    // ReSharper disable once ReplaceWithFieldKeyword -- PlayerPath would then have a setter meaning "the override" and a getter meaning "override or live resolve"; the two names keep those apart.
     private readonly string? _overriddenPlayerPath;
     private readonly IProcessRunner _processRunner;
     private readonly string _soundsDir;

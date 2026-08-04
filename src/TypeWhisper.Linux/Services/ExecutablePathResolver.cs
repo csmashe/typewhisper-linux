@@ -22,6 +22,15 @@ internal static class ExecutablePathResolver
             return null;
         }
 
+        // Bare names only, like execvp: a separator would let Path.Join escape the PATH directory.
+        if (
+            commandName.Contains(Path.DirectorySeparatorChar)
+            || commandName.Contains(Path.AltDirectorySeparatorChar)
+        )
+        {
+            return null;
+        }
+
         foreach (
             var directory in pathValue.Split(
                 Path.PathSeparator,

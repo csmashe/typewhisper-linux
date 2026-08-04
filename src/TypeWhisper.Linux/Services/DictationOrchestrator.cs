@@ -781,10 +781,10 @@ public sealed class DictationOrchestrator : IDisposable
                 Profile? matchedProfile = null;
                 // Applied before the snapshot attempt: a manual override bypasses window/URL
                 // context entirely, so it must survive a snapshot timeout or provider failure.
-                if (startupForcedMatch is { } forcedMatch)
+                if (startupForcedMatch is not null)
                 {
-                    initialMatch = forcedMatch;
-                    matchedProfile = forcedMatch.Profile;
+                    initialMatch = startupForcedMatch;
+                    matchedProfile = startupForcedMatch.Profile;
                 }
 
                 try

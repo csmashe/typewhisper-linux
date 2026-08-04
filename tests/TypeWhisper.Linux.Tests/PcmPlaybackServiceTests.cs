@@ -278,6 +278,7 @@ public sealed partial class PcmPlaybackServiceTests
         );
 
         var playTask = sut.PlayAsync(ValidRequest(), cancellation.Token);
+        // ReSharper disable once MethodSupportsCancellation -- s_guard is the test's own deadline; the only token in scope is the one under test, and tying the wait to it would abort the very handshake this test cancels afterwards.
         await probeEntered.Task.WaitAsync(s_guard);
         await cancellation.CancelAsync();
         releaseProbe.TrySetResult();
@@ -421,6 +422,7 @@ public sealed partial class PcmPlaybackServiceTests
             CancellationToken.None
         );
         var early = 0;
+        // ReSharper disable once AccessToModifiedClosure -- early is deliberately shared between the completion handler and the test body (read via Volatile.Read); interlocked/volatile access is the intended synchronization.
         playback.Completed += (_, _) => Interlocked.Increment(ref early);
 
         process.Complete(new ProcessExitOutcome(ProcessExitReason.Exited, 0));

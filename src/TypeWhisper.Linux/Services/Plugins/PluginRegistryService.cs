@@ -109,6 +109,7 @@ public sealed class PluginRegistryService
     {
         if (_cachedRegistry is not null && DateTime.UtcNow - _cacheTimestamp < s_cacheDuration)
         {
+            ct.ThrowIfCancellationRequested();
             return (_cachedRegistry, true);
         }
 
@@ -129,6 +130,12 @@ public sealed class PluginRegistryService
                 $"[PluginRegistry] Fetched {_cachedRegistry.Count} compatible Linux plugin(s) from registry"
             );
             return (_cachedRegistry, true);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Only the caller's own token aborts. The 15s fetch deadline surfaces as an
+            // OperationCanceledException too, and that one is an ordinary fetch failure.
+            throw;
         }
         catch (Exception ex)
         {
@@ -197,7 +204,7 @@ public sealed class PluginRegistryService
                 {
                     await DownloadArchiveAsync(registryPlugin, downloadPath, progress, ct)
                         .ConfigureAwait(false);
-                    ExtractAndValidateArchive(downloadPath, stage, registryPlugin);
+                    ExtractAndValidateArchive(downloadPath, stage, registryPlugin, ct);
                 },
                 ct
             );
@@ -391,7 +398,8 @@ public sealed class PluginRegistryService
     private void ExtractAndValidateArchive(
         string archivePath,
         string stage,
-        RegistryPlugin registryPlugin
+        RegistryPlugin registryPlugin,
+        CancellationToken ct
     )
     {
         using var archive = ZipFile.OpenRead(archivePath);
@@ -408,6 +416,7 @@ public sealed class PluginRegistryService
         var buffer = new byte[64 * 1024];
         foreach (var entryInfo in entries)
         {
+            ct.ThrowIfCancellationRequested();
             var destination = Path.GetFullPath(
                 Path.Join(stage, entryInfo.Path.Replace('/', Path.DirectorySeparatorChar))
             );
@@ -435,6 +444,9 @@ public sealed class PluginRegistryService
             long written = 0;
             while (true)
             {
+                // One entry can be most of the 2 GB budget, so the per-entry check above
+                // is not enough on its own.
+                ct.ThrowIfCancellationRequested();
                 var read = input.Read(buffer, 0, buffer.Length);
                 if (read == 0)
                 {
@@ -735,6 +747,11 @@ public sealed class PluginRegistryService
             try
             {
                 await InstallPluginAsync(plugin, ct: ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Shutdown, not a failed install: don't log one failure per remaining plugin.
+                throw;
             }
             catch (Exception ex)
             {

@@ -28,6 +28,7 @@ public interface ISettingsService
     /// </summary>
     // ReSharper disable once UnusedMemberInSuper.Global -- default interface method is a fallback for other implementers; the sole in-tree implementer overrides it.
     // ReSharper disable once UnusedMethodReturnValue.Global -- returns the reloaded settings for caller convenience; part of the public API contract.
+    // ReSharper disable once UnusedMember.Global -- no in-tree caller goes through the interface; implementers reload their own store directly.
     AppSettings Reload()
     {
         var loaded = Load();
