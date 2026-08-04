@@ -600,6 +600,7 @@
   "ProfilesContext.Title": "Contexto en vivo",
   "ProfilesContext.UseCurrentApp": "Usar app actual",
   "ProfilesContext.UseCurrentDomain": "Usar dominio actual",
+  "PromptPalette.ActionPluginUnavailable": "El plugin de acción configurado «{0}» no está disponible. Es posible que se haya deshabilitado, eliminado o cambiado de nombre.",
   "PromptPalette.NoActions": "No se encontraron acciones",
   "PromptPalette.SearchPlaceholder": "Buscar acciones de prompt",
   "PromptPalette.Title": "Paleta de prompts",

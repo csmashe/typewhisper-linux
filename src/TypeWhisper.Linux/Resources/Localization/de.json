@@ -600,6 +600,7 @@
   "ProfilesContext.Title": "Live-Kontext",
   "ProfilesContext.UseCurrentApp": "Aktuelle App uebernehmen",
   "ProfilesContext.UseCurrentDomain": "Aktuelle Domain uebernehmen",
+  "PromptPalette.ActionPluginUnavailable": "Das konfigurierte Aktions-Plugin „{0}“ ist nicht verfügbar. Es wurde möglicherweise deaktiviert, entfernt oder umbenannt.",
   "PromptPalette.NoActions": "Keine Aktionen gefunden",
   "PromptPalette.SearchPlaceholder": "Prompt-Aktionen durchsuchen",
   "PromptPalette.Title": "Prompt-Palette",
