@@ -74,8 +74,18 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
             var classification = await _managedFiles
                 .ProbeAsync(BuildManagedSpec(shortcutId, []), ct)
                 .ConfigureAwait(false);
-            return classification is ManagedFileClassification.CurrentOwned
-                or ManagedFileClassification.StaleOwned;
+            if (
+                classification is ManagedFileClassification.CurrentOwned
+                    or ManagedFileClassification.StaleOwned
+            )
+            {
+                return true;
+            }
+
+            // CustomizedOwned is reached without consulting the ownership probe, so a file
+            // replaced outright lands here too. The markers decide whether it is still ours.
+            return classification == ManagedFileClassification.CustomizedOwned
+                && DestinationCarriesMarkers(shortcutId);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -99,7 +109,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
                 );
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return new DeShortcutWriteResult(
                 false,
@@ -147,7 +157,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
                 [target]
             );
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return new DeShortcutWriteResult(
                 false,
@@ -157,12 +167,34 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
         }
     }
 
+    private static bool DestinationCarriesMarkers(string shortcutId)
+    {
+        try
+        {
+            // The transaction already refused symlinks and non-regular entries before this
+            // classification, so a plain read is safe here.
+            return IsOwnedByTypeWhisper(
+                File.ReadAllBytes(ResolveTargetPath(shortcutId)),
+                shortcutId
+            );
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
     private static string ResolveTargetPath(string shortcutId)
     {
         return Path.Join(XdgPaths.ResolveDataHome(), "kglobalaccel", FileName(shortcutId));
     }
 
     private static string FileName(string shortcutId)
+    {
+        return $"{SanitizeId(shortcutId)}.desktop";
+    }
+
+    private static string SanitizeId(string shortcutId)
     {
         // KGlobalAccel uses the basename as the identifier; sanitize to guard against ids like "foo/bar".
         var safe = new StringBuilder();
@@ -178,7 +210,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
             }
         }
 
-        return $"{safe}.desktop";
+        return safe.ToString();
     }
 
     private static string BuildDesktopFile(DeShortcutSpec spec)
@@ -240,9 +272,13 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
         return lineSet.Contains(managedLine) && lineSet.Contains(idLine);
     }
 
+    // Hashes the sanitized id, not the raw one: "foo/bar" and "foo-bar" resolve to the same
+    // destination file, so they must also resolve to the same managed-artifact identity.
     private static string ArtifactSuffix(string shortcutId)
     {
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(shortcutId)))
+        return Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(SanitizeId(shortcutId)))
+            )
             .ToLowerInvariant();
     }
 

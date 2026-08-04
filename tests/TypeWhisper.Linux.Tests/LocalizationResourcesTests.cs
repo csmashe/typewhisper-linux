@@ -189,7 +189,7 @@ public sealed class LocalizationResourcesTests
             "Setup.GlobalHotkeyOptedOut",
             "Setup.GlobalHotkeyOptedOutRuleInstalled",
             "Setup.GlobalHotkeyOptedOutRuleInstalledDetail",
-            "Setup.GlobalHotkeyRevokeButton"
+            "Setup.GlobalHotkeyRevokeButton",
         };
 
         foreach (var key in keys)

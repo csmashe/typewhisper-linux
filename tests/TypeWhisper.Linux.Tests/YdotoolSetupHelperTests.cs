@@ -257,10 +257,14 @@ public sealed class YdotoolSetupHelperTests
             YdotoolSetupHelper.ModulesLoadConflictExitCode,
             runner.LastPrivilegedResult?.ExitCode
         );
-        var modulesContent = File.ReadAllText(env.ModulesLoadPath);
-        Assert.Contains("old modules content", modulesContent);
-        var ruleContent = File.ReadAllText(env.UdevRulePath);
-        Assert.Contains("old rule content", ruleContent);
+        Assert.Equal(
+            "# Installed by TypeWhisper — old header\nold modules content\n",
+            File.ReadAllText(env.ModulesLoadPath)
+        );
+        Assert.Equal(
+            "# Installed by TypeWhisper — old header\nold rule content\n",
+            File.ReadAllText(env.UdevRulePath)
+        );
     }
 
     [Fact]

@@ -137,7 +137,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
                 var (key, value) in new[]
                 {
                     ("name", spec.DisplayName), ("command", spec.OnPressCommand),
-                    ("binding", FormatGnomeAccel(spec.Trigger))
+                    ("binding", FormatGnomeAccel(spec.Trigger)),
                 }
             )
             {

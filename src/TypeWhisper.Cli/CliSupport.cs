@@ -11,6 +11,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace TypeWhisper.Cli;
 
@@ -58,12 +59,9 @@ public sealed record CliTranscribeRequest(
 /// <summary>
 /// Provides cli connection resolver behavior.
 /// </summary>
-public static class CliConnectionResolver
+public static partial class CliConnectionResolver
 {
     private const int DefaultPort = 8978;
-
-    private static readonly JsonSerializerOptions s_discoveryJsonOptions =
-        new() { PropertyNameCaseInsensitive = true };
 
     /// <summary>
     /// Resolves the supplied input to a configured value.
@@ -100,9 +98,9 @@ public static class CliConnectionResolver
             if (!File.Exists(path))
                 return null;
 
-            var discovery = JsonSerializer.Deserialize<ApiDiscovery>(
+            var discovery = JsonSerializer.Deserialize(
                 File.ReadAllText(path),
-                s_discoveryJsonOptions);
+                DiscoveryJsonContext.Default.ApiDiscovery);
 
             return discovery;
         }
@@ -151,6 +149,12 @@ public static class CliConnectionResolver
         /// </summary>
         public string? Token { get; init; }
     }
+
+    // Source-generated so the published CLI can be trimmed: the reflection-based
+    // serializer roots types the linker can't see and warns (IL2026).
+    [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]
+    [JsonSerializable(typeof(ApiDiscovery))]
+    private partial class DiscoveryJsonContext : JsonSerializerContext;
 }
 
 /// <summary>
@@ -195,7 +199,12 @@ public static class CliRequestBuilder
         .Where(pair => pair.Value is not null)
         .ToDictionary(pair => pair.Key, pair => pair.Value);
 
+        // Source-generating this would fail at runtime, not build time: the boxed
+        // IReadOnlyList<string> value makes it polymorphic. Nothing ships through here —
+        // TranscribeCommand posts a typed record through its own generated context.
+#pragma warning disable IL2026
         var json = JsonSerializer.Serialize(body);
+#pragma warning restore IL2026
         message.Content = new StringContent(json, Encoding.UTF8, "application/json");
         return message;
     }

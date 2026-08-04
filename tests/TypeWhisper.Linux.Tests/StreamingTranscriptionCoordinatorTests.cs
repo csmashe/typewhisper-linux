@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.WebSockets;
 using TypeWhisper.Linux.Services;
@@ -317,7 +318,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
                 await Task.Delay(Timeout.InfiniteTimeSpan, ct);
             },
         };
-        var faults = new List<Exception>();
+        var faults = new ConcurrentBag<Exception>();
         var plugin = new FakePlugin
         {
             OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session),
@@ -349,7 +350,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
                 throw new HttpRequestException("provider failed during cancellation");
             },
         };
-        var faults = new List<Exception>();
+        var faults = new ConcurrentBag<Exception>();
         var plugin = new FakePlugin
         {
             OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session),

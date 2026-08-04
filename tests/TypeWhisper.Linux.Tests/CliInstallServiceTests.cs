@@ -311,8 +311,9 @@ public sealed class CliInstallServiceTests : IDisposable
         WriteBundle(installDir, "foreign");
         var service = CreateService(sourceDir, installDir, launcherDir);
 
-        service.Install();
+        var state = service.Install();
 
+        Assert.False(state.Installed);
         Assert.Equal("apphost-foreign", File.ReadAllText(installPath));
     }
 

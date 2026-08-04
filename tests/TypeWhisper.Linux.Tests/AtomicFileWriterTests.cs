@@ -257,6 +257,38 @@ public sealed class AtomicFileWriterTests
     }
 
     [Fact]
+    public async Task DeleteIfUnchangedAsync_RefusesToDeleteThroughASymlink()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dir = CreateTempDir();
+        try
+        {
+            var target = Path.Join(dir, "target.js");
+            var link = Path.Join(dir, "user.js");
+            await File.WriteAllTextAsync(target, "foreign content");
+            File.CreateSymbolicLink(link, target);
+            var snapshot = await AtomicFileWriter.CaptureAsync(link, CancellationToken.None);
+
+            Assert.False(
+                await AtomicFileWriter.DeleteIfUnchangedAsync(
+                    snapshot,
+                    CancellationToken.None
+                )
+            );
+            Assert.NotNull(new FileInfo(link).LinkTarget);
+            Assert.Equal("foreign content", await File.ReadAllTextAsync(target));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
     public async Task WriteAsync_TargetIsSymlinkToRegularFile_PreservesLinkAndUpdatesRealFile()
     {
         var dir = CreateTempDir();

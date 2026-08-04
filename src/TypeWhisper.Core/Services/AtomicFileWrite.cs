@@ -316,14 +316,13 @@ public static partial class AtomicFileWrite
 
             FlushToDisk(tempPath);
 
+            stagedWriteObserver?.Invoke(tempPath);
             if (replaceExisting)
             {
-                stagedWriteObserver?.Invoke(tempPath);
                 PublishReplace(tempPath, path);
             }
             else
             {
-                stagedWriteObserver?.Invoke(tempPath);
                 PublishCreateNew(tempPath, path, attemptHardLink);
             }
         }

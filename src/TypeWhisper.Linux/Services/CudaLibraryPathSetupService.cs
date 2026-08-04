@@ -154,13 +154,36 @@ public sealed class CudaLibraryPathSetupService
             );
         }
 
-        var profileChanged = await UpsertProfileFragmentAsync(
+        bool? profileChanged;
+        try
+        {
+            profileChanged = await UpsertProfileFragmentAsync(
+                    profilePath,
+                    cudaLibraryPath,
+                    profileSnapshot,
+                    ct
+                )
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The environment file is already published, so report what changed rather
+            // than letting a read-only profile throw out of the command.
+            if (environmentInstall.Changed)
+            {
+                InstalledChangesChanged?.Invoke(this, EventArgs.Empty);
+            }
+
+            return CudaLibraryPathSetupResult.Failed(
+                CudaLibraryPathSetupFailure.ShellProfileRefused,
+                ex.Message,
+                environmentInstall.Classification,
                 profilePath,
-                cudaLibraryPath,
-                profileSnapshot,
-                ct
-            )
-            .ConfigureAwait(false);
+                environmentSpec.DestinationPath,
+                environmentInstall.Changed
+            );
+        }
+
         if (profileChanged is null)
         {
             if (environmentInstall.Changed)
@@ -292,12 +315,28 @@ public sealed class CudaLibraryPathSetupService
         var changed = environmentRemoval.Changed;
         foreach (var (profilePath, initialSnapshot) in snapshots)
         {
-            var profileChanged = await RemoveProfileFragmentAsync(
+            bool? profileChanged;
+            try
+            {
+                profileChanged = await RemoveProfileFragmentAsync(
+                        profilePath,
+                        initialSnapshot,
+                        ct
+                    )
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return CudaLibraryPathSetupResult.Failed(
+                    CudaLibraryPathSetupFailure.ShellProfileRefused,
+                    ex.Message,
+                    environmentRemoval.Classification,
                     profilePath,
-                    initialSnapshot,
-                    ct
-                )
-                .ConfigureAwait(false);
+                    environmentSpec.DestinationPath,
+                    changed
+                );
+            }
+
             if (profileChanged is null)
             {
                 return CudaLibraryPathSetupResult.Failed(
@@ -369,9 +408,12 @@ public sealed class CudaLibraryPathSetupService
                            || FindLegacyFragment(SplitLines(snapshot.Contents)) >= 0);
             });
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       or InvalidDataException)
         {
             // An unreadable or unsafe entry is not a removal affordance the UI can complete.
+            // Narrow on purpose: a journal conflict arrives as an IOException, while anything
+            // else here is a defect that must not be reported as "nothing installed".
             return false;
         }
     }
@@ -498,7 +540,9 @@ public sealed class CudaLibraryPathSetupService
     private ManagedFileSpec BuildEnvironmentSpec(string home, string cudaLibraryPath)
     {
         var configHome = _xdgConfigHomeProvider();
-        if (string.IsNullOrWhiteSpace(configHome))
+        // The XDG spec says a relative value must be ignored. Honoring that also keeps a
+        // badly-set variable from throwing out of the spec validator during view-model creation.
+        if (string.IsNullOrWhiteSpace(configHome) || !Path.IsPathFullyQualified(configHome))
         {
             configHome = Path.Join(home, ".config");
         }
@@ -715,10 +759,22 @@ public sealed class CudaLibraryPathSetupService
     ///     path: removal runs after the runtime may already be gone, and a pair carrying our
     ///     own comment is ours whatever path it names.
     /// </summary>
-    private static int FindLegacyFragment(List<string> lines)
+    private static int FindLegacyFragment(List<string> lines, FragmentScan? managedBlock = null)
     {
         for (var i = 0; i + 1 < lines.Count; i++)
         {
+            // Our own managed block repeats the legacy comment/export pair verbatim, so a
+            // scan that counted it would strip the block's body and leave the real
+            // pre-manifest pair further down the profile untouched.
+            if (
+                managedBlock is { OpenLine: { } open, CloseLine: { } close }
+                && i >= open
+                && i <= close
+            )
+            {
+                continue;
+            }
+
             var next = lines[i + 1].TrimEnd();
             if (
                 string.Equals(lines[i].TrimEnd(), LegacyComment, StringComparison.Ordinal)
@@ -736,7 +792,8 @@ public sealed class CudaLibraryPathSetupService
     private static string RemoveLegacyFragment(string contents)
     {
         var lines = SplitLines(contents);
-        var index = FindLegacyFragment(lines);
+        var scan = ScanFragment(contents);
+        var index = FindLegacyFragment(lines, scan.Mismatched ? null : scan);
         if (index < 0)
         {
             return contents;

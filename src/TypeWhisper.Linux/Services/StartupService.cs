@@ -61,21 +61,48 @@ public static class StartupService
 
     public static StartupOperationResult Enable()
     {
-        var result = CreateTransaction().InstallAsync(BuildManagedSpec())
-            .GetAwaiter()
-            .GetResult();
-        return result.OwnsDestination ? SuccessResult(isEnabled: true) : RefusedResult();
+        try
+        {
+            var result = CreateTransaction().InstallAsync(BuildManagedSpec())
+                .GetAwaiter()
+                .GetResult();
+            return result.OwnsDestination ? SuccessResult(isEnabled: true) : RefusedResult();
+        }
+        catch (Exception ex) when (IsReportableFailure(ex))
+        {
+            return FailedResult(ex.Message);
+        }
     }
 
     public static StartupOperationResult Disable()
     {
-        var result = CreateTransaction().RemoveAsync(BuildManagedSpec())
-            .GetAwaiter()
-            .GetResult();
-        return result.Classification is ManagedFileClassification.Absent
-            || result.Changed
-            ? SuccessResult(isEnabled: false)
-            : RefusedResult();
+        try
+        {
+            var result = CreateTransaction().RemoveAsync(BuildManagedSpec())
+                .GetAwaiter()
+                .GetResult();
+            return result.Classification is ManagedFileClassification.Absent
+                || result.Changed
+                ? SuccessResult(isEnabled: false)
+                : RefusedResult();
+        }
+        catch (Exception ex) when (IsReportableFailure(ex))
+        {
+            return FailedResult(ex.Message);
+        }
+    }
+
+    /// <summary>
+    ///     Both operations run from a bound property setter, so an unresolvable executable
+    ///     path, a journal conflict (an <see cref="IOException" /> subclass) or a corrupt
+    ///     manifest has to come back as a result rather than fault the binding.
+    /// </summary>
+    private static bool IsReportableFailure(Exception ex)
+    {
+        return ex is IOException
+            or UnauthorizedAccessException
+            or InvalidDataException
+            or InvalidOperationException;
     }
 
     internal static string BuildDesktopFile(
@@ -166,6 +193,13 @@ public static class StartupService
             isEnabled,
             Loc.Instance["General.AutostartHint"]
         );
+    }
+
+    private static StartupOperationResult FailedResult(string detail)
+    {
+        // IsEnabled swallows its own inspection failures, so it is safe here and reports the
+        // entry's real state rather than assuming the operation left it off.
+        return new StartupOperationResult(false, IsEnabled, detail);
     }
 
     private static StartupOperationResult RefusedResult()

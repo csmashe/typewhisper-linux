@@ -124,7 +124,9 @@ jobs:
       - name: Run unit tests
         timeout-minutes: 30
         run: |
-          dotnet restore TypeWhisper.slnx
+          # Locked: a release must build the reviewed dependency graph, and unlike PR CI
+          # this job has no lock-file drift gate to catch a silently updated lock file.
+          dotnet restore TypeWhisper.slnx --locked-mode
           dotnet build TypeWhisper.slnx -c Release --no-restore -p:Version=${VERSION}
           dotnet test tests/TypeWhisper.Core.Tests/TypeWhisper.Core.Tests.csproj -c Release --no-build --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
           dotnet test tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj -c Release --no-build --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini

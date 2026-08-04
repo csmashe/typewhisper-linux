@@ -79,33 +79,21 @@ public sealed class InputAccessSetupHelperTests
     // The manual command can't rely on the pkexec-script guards, so it fronts its
     // own write with the same symlink / non-regular / foreign-marker checks. These
     // tests execute it against a temp path to prove it refuses foreign targets.
+    // The rewrite path has its own test (write_block_writes_an_absent_rule); every case
+    // here is a refusal.
     [Theory]
-    [InlineData("# Managed by another application\nfoo\n", false)] // foreign header
-    [InlineData("# Installed by TypeWhisperer\nfoo\n", false)] // prefix-only, not ours
-    [InlineData("# Installed by TypeWhisper — old header\nold\n", false)] // customized-owned
-    public void ManualInstallCommand_write_block_refuses_foreign_targets(
-        string existing,
-        bool shouldRewrite
-    )
+    [InlineData("# Managed by another application\nfoo\n")] // foreign header
+    [InlineData("# Installed by TypeWhisperer\nfoo\n")] // prefix-only, not ours
+    [InlineData("# Installed by TypeWhisper — old header\nold\n")] // customized-owned
+    public void ManualInstallCommand_write_block_refuses_foreign_targets(string existing)
     {
         using var env = new SysConfEnvironment();
         SysConfEnvironment.WriteRule(existing);
 
         var exit = RunManualWriteBlock();
 
-        if (shouldRewrite)
-        {
-            Assert.Equal(0, exit);
-            Assert.Equal(
-                InputAccessSetupHelper.UdevRuleContent,
-                File.ReadAllText(InputAccessSetupHelper.UdevRulePath)
-            );
-        }
-        else
-        {
-            Assert.NotEqual(0, exit);
-            Assert.Equal(existing, File.ReadAllText(InputAccessSetupHelper.UdevRulePath));
-        }
+        Assert.NotEqual(0, exit);
+        Assert.Equal(existing, File.ReadAllText(InputAccessSetupHelper.UdevRulePath));
     }
 
     [Fact]

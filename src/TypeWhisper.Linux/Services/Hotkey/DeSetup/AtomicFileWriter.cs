@@ -371,9 +371,14 @@ internal static partial class AtomicFileWriter
         }
 
         var error = Marshal.GetLastPInvokeError();
+        // Anything past ENOENT/ENOTDIR (EACCES, ELOOP…) is a real failure, and callers filter
+        // on IOException — a bare Win32Exception would sail past every one of them.
         return error is 2 or 20
             ? AtomicPathKind.Absent
-            : throw new Win32Exception(error, $"Could not inspect '{path}'.");
+            : throw new IOException(
+                $"Could not inspect '{path}'.",
+                new Win32Exception(error)
+            );
     }
 
     private enum AtomicPathKind

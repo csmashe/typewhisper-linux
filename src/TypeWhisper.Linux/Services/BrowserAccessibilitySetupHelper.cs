@@ -391,7 +391,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 .ConfigureAwait(false);
             var removedEnv = envRemoval.Classification == ManagedFileClassification.Absent
                 || envRemoval.Changed;
-            SweepLegacyEnvFile(ct);
+            await SweepLegacyEnvFileAsync(ct).ConfigureAwait(false);
             var removedLaunchers = await RemoveOwnedLaunchers(ct).ConfigureAwait(false);
             var cleanedProfiles = RemoveOwnedFirefoxAccessibilityEntries();
 
@@ -658,6 +658,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
         }
     }
 
+    // Classified the way removal classifies, so the confirmation dialog lists exactly what
+    // RemoveOwnedLaunchers would touch — a marker check answers a different question.
     private static IEnumerable<string> EnumerateOwnedLauncherPaths()
     {
         var dir = UserApplicationsDir();
@@ -666,20 +668,26 @@ public sealed partial class BrowserAccessibilitySetupHelper
             yield break;
         }
 
-        var launcherNames = GetLauncherNames(BrowserLauncherPatchMode.FirefoxEnvironment)
-            .Concat(
-                GetLauncherNames(
-                    BrowserLauncherPatchMode.ChromiumRendererAccessibility
-                )
-            );
-        foreach (var name in launcherNames)
+        foreach (var (name, transform) in EnumerateLauncherPatchTargets())
         {
-            var path = Path.Join(dir, name);
-            if (File.Exists(path) && FileStartsWithOwnershipMarker(path))
+            if (LauncherIsManaged(name, transform))
             {
-                yield return path;
+                yield return Path.Join(dir, name);
             }
         }
+    }
+
+    private static IEnumerable<(string Name, Func<string, string> Transform)>
+        EnumerateLauncherPatchTargets()
+    {
+        return GetLauncherNames(BrowserLauncherPatchMode.FirefoxEnvironment)
+            .Select(name => (name, transform: (Func<string, string>)PrependEnvWrapperToExecLines))
+            .Concat(
+                GetLauncherNames(BrowserLauncherPatchMode.ChromiumRendererAccessibility)
+                    .Select(name =>
+                        (name, transform: (Func<string, string>)AddAccessibilityFlagToExecLines)
+                    )
+            );
     }
 
     private static bool UserJsHasOwnedAccessibilityEntry(string userJsPath)
@@ -862,7 +870,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
         // leave nothing exporting the variable.
         if (result.OwnsDestination)
         {
-            SweepLegacyEnvFile(CancellationToken.None);
+            SweepLegacyEnvFileAsync(CancellationToken.None).GetAwaiter().GetResult();
         }
 
         return result;
@@ -900,7 +908,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
     ///     Failures are swallowed: a legacy file we cannot read must not fail the whole
     ///     operation, matching the skip-and-continue rule for removals.
     /// </summary>
-    private static void SweepLegacyEnvFile(CancellationToken ct)
+    private static async Task SweepLegacyEnvFileAsync(CancellationToken ct)
     {
         if (BuildLegacyEnvFileSpec() is not { } spec)
         {
@@ -909,7 +917,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
         try
         {
-            CreateManagedTransaction().RemoveAsync(spec, ct).GetAwaiter().GetResult();
+            await CreateManagedTransaction().RemoveAsync(spec, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                                        or InvalidDataException)
@@ -1310,13 +1318,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
     {
         var dir = UserApplicationsDir();
         var removed = new List<string>();
-        var launchers = GetLauncherNames(BrowserLauncherPatchMode.FirefoxEnvironment)
-            .Select(name => (name, transform: (Func<string, string>)PrependEnvWrapperToExecLines))
-            .Concat(
-                GetLauncherNames(BrowserLauncherPatchMode.ChromiumRendererAccessibility)
-                    .Select(name => (name, transform: (Func<string, string>)AddAccessibilityFlagToExecLines))
-            );
-        foreach (var (name, transform) in launchers)
+        foreach (var (name, transform) in EnumerateLauncherPatchTargets())
         {
             var file = Path.Join(dir, name);
             var backupPath = Path.Join(LauncherBackupDir(), name);
