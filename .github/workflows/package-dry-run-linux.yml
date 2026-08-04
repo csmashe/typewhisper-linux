@@ -50,7 +50,10 @@ jobs:
         run: bash scripts/build-linux-packages.sh "${{ steps.meta.outputs.version }}" dist
 
       - name: Smoke test all Linux packages
-        timeout-minutes: 30
+        # Covers building the two prepared images as well as the smoke runs
+        # themselves; a throttled distro mirror has pushed the dependency
+        # download alone past twenty minutes.
+        timeout-minutes: 45
         run: bash scripts/smoke-test-linux-packages.sh "${{ steps.meta.outputs.version }}" dist
 
       - uses: actions/upload-artifact@v7

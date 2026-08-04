@@ -187,8 +187,29 @@ run_gui_probe() {
   echo "    GUI remained alive for the full 20-second health window."
 }
 
+# Written by --install-runtime once the dependencies are baked into the smoke
+# image, so the per-format containers can skip the package manager entirely.
+RUNTIME_READY_MARKER=/var/lib/typewhisper-smoke/runtime-ready
+
+runtime_already_installed() {
+  if [ -f "$RUNTIME_READY_MARKER" ]; then
+    echo "==> Runtime dependencies preinstalled in the smoke image."
+    return 0
+  fi
+  return 1
+}
+
+mark_runtime_installed() {
+  mkdir -p "$(dirname "$RUNTIME_READY_MARKER")"
+  printf 'typewhisper smoke runtime dependencies installed\n' >"$RUNTIME_READY_MARKER"
+}
+
 install_ubuntu_runtime() {
+  runtime_already_installed && return 0
   export DEBIAN_FRONTEND=noninteractive
+  # A flaky or throttled mirror otherwise fails the whole smoke run on a single
+  # dropped connection.
+  printf 'Acquire::Retries "3";\n' >/etc/apt/apt.conf.d/99-typewhisper-smoke-retries
   apt-get update
   # libjack/libasound back the bundled libportaudio.so. A desktop gets them via
   # pipewire-jack; a bare container does not, and without them PortAudio fails to
@@ -222,8 +243,9 @@ install_ubuntu_runtime() {
 }
 
 install_fedora_runtime() {
+  runtime_already_installed && return 0
   # See install_ubuntu_runtime: alsa-lib/jack back the bundled libportaudio.so.
-  dnf install -y \
+  dnf install -y --setopt=retries=3 \
     alsa-lib \
     dbus-daemon \
     fontconfig \
@@ -435,6 +457,20 @@ container_smoke_rpm() {
   assert_removed /opt/typewhisper
 }
 
+# Runs inside `docker build`, so the dependency download happens once per smoke
+# run instead of once per package format.
+if [ "${1:-}" = "--install-runtime" ]; then
+  [ "$#" -eq 2 ] || fail "internal runtime mode requires a distribution."
+  case "$2" in
+    ubuntu) install_ubuntu_runtime ;;
+    fedora) install_fedora_runtime ;;
+    *) fail "unknown internal runtime distribution '$2'." ;;
+  esac
+  mark_runtime_installed
+  echo "==> Smoke runtime dependencies installed for $2."
+  exit 0
+fi
+
 if [ "${1:-}" = "--container" ]; then
   [ "$#" -eq 4 ] \
     || fail "internal container mode requires a format, package path, and CLI version."
@@ -536,6 +572,11 @@ rpm -qip "$EXPECTED_RPM"
 EXTRACT_ROOT="$(mktemp -d)"
 cleanup_host() {
   rm -rf "$EXTRACT_ROOT"
+  # Defined further down, once the container stage is reached; a --validate-only
+  # run exits before then.
+  if declare -F cleanup_images >/dev/null; then
+    cleanup_images
+  fi
 }
 trap cleanup_host EXIT
 
@@ -550,7 +591,12 @@ tar -xzf "$EXPECTED_TARBALL" --no-same-owner -C "$TARBALL_EXTRACT"
 dpkg-deb --extract "$EXPECTED_DEB" "$DEB_EXTRACT"
 (
   cd "$RPM_EXTRACT"
-  rpm2cpio "$EXPECTED_RPM" | cpio --quiet -idmu --no-absolute-filenames
+  # Staged through a file rather than piped: cpio stops at the archive trailer
+  # and closes the pipe while rpm2cpio is still writing padding, so rpm2cpio
+  # takes SIGPIPE and pipefail fails the run even though extraction succeeded.
+  rpm2cpio "$EXPECTED_RPM" >"$EXTRACT_ROOT/rpm-payload.cpio"
+  cpio --quiet -idmu --no-absolute-filenames <"$EXTRACT_ROOT/rpm-payload.cpio"
+  rm -f "$EXTRACT_ROOT/rpm-payload.cpio"
 )
 if ! (
   cd "$APPIMAGE_EXTRACT"
@@ -690,8 +736,45 @@ if ! docker info >/dev/null 2>&1; then
   fail "Docker is installed but its daemon is unavailable; container package smoke tests cannot run."
 fi
 
-UBUNTU_IMAGE="ubuntu:24.04"
-FEDORA_IMAGE="fedora:43"
+UBUNTU_BASE_IMAGE="ubuntu:24.04"
+FEDORA_BASE_IMAGE="fedora:43"
+UBUNTU_IMAGE="typewhisper-smoke-ubuntu:$$"
+FEDORA_IMAGE="typewhisper-smoke-fedora:$$"
+BUILT_IMAGES=()
+
+cleanup_images() {
+  local image
+  for image in "${BUILT_IMAGES[@]+"${BUILT_IMAGES[@]}"}"; do
+    docker image rm --force "$image" >/dev/null 2>&1 || true
+  done
+}
+
+# Bake the runtime dependencies into one image per distribution up front. Three
+# Ubuntu formats otherwise download the same ~95 MB three times, and because that
+# used to happen inside the per-format timeout a slow mirror killed the run
+# before a single assertion executed.
+build_smoke_image() {
+  local distribution="$1"
+  local base_image="$2"
+  local image="$3"
+  local context
+
+  echo "==> Building $distribution smoke image from $base_image"
+  context="$(mktemp -d)"
+  cp "$SCRIPT_PATH" "$context/smoke-test-linux-packages.sh"
+  {
+    printf 'FROM %s\n' "$base_image"
+    printf 'COPY smoke-test-linux-packages.sh /smoke-test-linux-packages.sh\n'
+    printf 'RUN bash /smoke-test-linux-packages.sh --install-runtime %s\n' "$distribution"
+  } >"$context/Dockerfile"
+
+  if ! docker build --pull --tag "$image" "$context"; then
+    rm -rf "$context"
+    fail "failed to build the $distribution smoke image."
+  fi
+  rm -rf "$context"
+  BUILT_IMAGES+=("$image")
+}
 
 run_container_smoke() {
   local format="$1"
@@ -700,10 +783,12 @@ run_container_smoke() {
   local container_name="typewhisper-package-smoke-${format}-$$"
   local status
 
-  echo "==> Running $format smoke test in pinned image $image"
+  echo "==> Running $format smoke test in prepared image $image"
+  # The dependencies are already baked in, so this budget now covers only the
+  # install/execute assertions, which take well under a minute.
   set +e
   timeout --signal=INT --kill-after=30s 10m \
-    docker run --name "$container_name" --rm --pull=always \
+    docker run --name "$container_name" --rm \
     --mount "type=bind,src=$SCRIPT_PATH,dst=/smoke-test-linux-packages.sh,readonly" \
     --mount "type=bind,src=$PACKAGE_DIR,dst=/packages,readonly" \
     "$image" \
@@ -717,6 +802,9 @@ run_container_smoke() {
     fail "$format container smoke test failed or timed out (status $status)."
   fi
 }
+
+build_smoke_image ubuntu "$UBUNTU_BASE_IMAGE" "$UBUNTU_IMAGE"
+build_smoke_image fedora "$FEDORA_BASE_IMAGE" "$FEDORA_IMAGE"
 
 # Keep these sequential so logs identify the failing format and package-manager
 # operations never overlap on the runner.
