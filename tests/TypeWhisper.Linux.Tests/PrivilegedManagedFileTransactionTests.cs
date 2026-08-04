@@ -311,10 +311,25 @@ public sealed class PrivilegedManagedFileTransactionTests : IDisposable
             },
         };
         using var process = Process.Start(start)!;
-        await process.StandardInput.WriteAsync(script);
-        process.StandardInput.Close();
+
+        // Drain before writing. The script arrives on stdin, so a guard that fails closed exits
+        // the shell while the write is still in flight; the pipe then breaks under the writer.
+        // That is the behaviour under test, not a failure, so the EPIPE is swallowed and the
+        // assertions read the exit code and stderr the script actually produced. Reading first
+        // also keeps a script that outruns the pipe buffer from deadlocking against us.
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
+
+        try
+        {
+            await process.StandardInput.WriteAsync(script);
+            process.StandardInput.Close();
+        }
+        catch (IOException)
+        {
+            // Shell exited before consuming the whole script; its exit code is the verdict.
+        }
+
         await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
         return new ScriptResult(process.ExitCode, await stdout, await stderr);
     }
