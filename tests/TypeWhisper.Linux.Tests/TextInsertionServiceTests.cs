@@ -767,6 +767,209 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task InsertTextAsync_recording_active_suppresses_focus_and_falls_back_to_clipboard()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "successor-window",
+        };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => true
+        );
+
+        var result = await sut.InsertTextAsync("new text", targetWindowId: "predecessor-window");
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal("new text", platform.Clipboard);
+        Assert.Equal(0, platform.ActivationAttemptCount);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("successor-window", platform.ActiveWindowId);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_recording_active_with_target_already_active_inserts_normally()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "target",
+        };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => true
+        );
+
+        var result = await sut.InsertTextAsync("new text", targetWindowId: "target");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(0, platform.ActivationAttemptCount);
+        Assert.True(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_recording_inactive_activates_target_as_before()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "other",
+        };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => false
+        );
+
+        var result = await sut.InsertTextAsync("new text", targetWindowId: "target");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(1, platform.ActivationAttemptCount);
+        Assert.Equal("target", platform.ActiveWindowId);
+        Assert.True(platform.PasteSent);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_recording_active_with_direct_typing_fails_closed()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "successor-window",
+        };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => true
+        );
+
+        var result = await sut.InsertTextAsync(
+            "new text",
+            targetWindowId: "predecessor-window",
+            strategy: TextInsertionStrategy.DirectTyping
+        );
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.Equal(0, platform.ActivationAttemptCount);
+        Assert.Null(platform.TypedText);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal("successor-window", platform.ActiveWindowId);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_recording_active_with_terminal_multiline_fails_closed()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "successor-window",
+        };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => true
+        );
+
+        var result = await sut.InsertTextAsync(
+            "line1\nline2",
+            targetWindowId: "predecessor-window",
+            targetProcessName: "konsole"
+        );
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.Equal(0, platform.ActivationAttemptCount);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal("successor-window", platform.ActiveWindowId);
+    }
+
+    [Fact]
+    public async Task FocusWindowAsync_recording_active_suppresses_activation()
+    {
+        var platform = new FakeTextInsertionPlatform { ActiveWindowId = "successor-window" };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => true
+        );
+
+        var focused = await sut.FocusWindowAsync("predecessor-window");
+
+        Assert.False(focused);
+        Assert.Equal(0, platform.ActivationAttemptCount);
+        Assert.Equal("successor-window", platform.ActiveWindowId);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_recording_active_with_enter_only_command_fails_closed()
+    {
+        var platform = new FakeTextInsertionPlatform { ActiveWindowId = "successor-window" };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => true
+        );
+
+        var result = await sut.InsertTextAsync(
+            "",
+            targetWindowId: "predecessor-window",
+            autoEnter: true
+        );
+
+        Assert.Equal(InsertionResult.ActionFailed, result);
+        Assert.False(platform.EnterSent);
+        Assert.Equal(0, platform.ActivationAttemptCount);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_without_target_window_never_consults_recording_predicate()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "successor-window",
+        };
+        var predicateCalls = 0;
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: () =>
+            {
+                predicateCalls++;
+                return true;
+            }
+        );
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(0, predicateCalls);
+        Assert.True(platform.PasteSent);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_recording_active_without_active_window_still_activates()
+    {
+        // Wayland without xdotool: the active window is unknowable and activation is a no-op,
+        // so suppression must not fire — it would only degrade a benign insertion.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = null,
+        };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => true
+        );
+
+        var result = await sut.InsertTextAsync("new text", targetWindowId: "predecessor-window");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(1, platform.ActivationAttemptCount);
+        Assert.True(platform.PasteSent);
+    }
+
+    [Fact]
     public async Task InsertTextAsync_partial_typing_failure_does_not_retry_via_clipboard_paste()
     {
         // Regression: once direct typing has already delivered part of the text
@@ -2757,6 +2960,7 @@ public sealed class TextInsertionServiceTests
         public Queue<bool>? PasteResults { get; init; }
         public bool PasteSent { get; private set; }
         public int PasteAttemptCount { get; private set; }
+        public int ActivationAttemptCount { get; private set; }
         public bool LastPasteUsedTerminalShortcut { get; private set; }
         public bool EnterSent { get; private set; }
         public string? TypedText { get; private set; }
@@ -2821,6 +3025,7 @@ public sealed class TextInsertionServiceTests
 
         public Task<bool> ActivateWindowAsync(string windowId)
         {
+            ActivationAttemptCount++;
             if (ActivateSucceeds)
             {
                 ActiveWindowId = windowId;

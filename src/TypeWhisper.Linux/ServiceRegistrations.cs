@@ -175,12 +175,17 @@ internal static class ServiceRegistrations
         services.AddSingleton<IDeShortcutWriter, HyprlandShortcutWriter>();
         services.AddSingleton<IDeShortcutWriter, SwayShortcutWriter>();
 
-        services.AddSingleton(sp => new TextInsertionService(
-            sp.GetRequiredService<IErrorLogService>(),
-            sp.GetRequiredService<SystemCommandAvailabilityService>(),
-            sp.GetRequiredService<IPasteConfirmationSource>(),
-            sp.GetRequiredService<IProcessRunner>()
-        ));
+        services.AddSingleton(sp =>
+        {
+            var audioRecording = sp.GetRequiredService<AudioRecordingService>();
+            return new TextInsertionService(
+                sp.GetRequiredService<IErrorLogService>(),
+                sp.GetRequiredService<SystemCommandAvailabilityService>(),
+                sp.GetRequiredService<IPasteConfirmationSource>(),
+                sp.GetRequiredService<IProcessRunner>(),
+                isAnotherSessionRecording: () => audioRecording.IsRecording
+            );
+        });
         services.AddSingleton<YdotoolSetupHelper>();
         services.AddSingleton<InputAccessSetupHelper>();
         services.AddSingleton<BrowserAccessibilitySetupHelper>();

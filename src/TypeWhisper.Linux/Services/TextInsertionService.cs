@@ -102,6 +102,7 @@ public sealed class TextInsertionService
         Environment.GetEnvironmentVariable("TW_PASTE_DIAG") == "1";
 
     private readonly IErrorLogService? _errorLog;
+    private readonly Func<bool> _isRecording;
     private readonly IPasteConfirmationSource? _pasteConfirmation;
 
     private readonly ITextInsertionPlatform _platform;
@@ -113,12 +114,14 @@ public sealed class TextInsertionService
         IErrorLogService errorLog,
         SystemCommandAvailabilityService commands,
         IPasteConfirmationSource? pasteConfirmation = null,
-        IProcessRunner? processRunner = null
+        IProcessRunner? processRunner = null,
+        Func<bool>? isAnotherSessionRecording = null
     )
         : this(
             new LinuxTextInsertionPlatform(commands, processRunner),
             errorLog,
-            pasteConfirmation
+            pasteConfirmation,
+            isAnotherSessionRecording
         )
     {
     }
@@ -126,12 +129,14 @@ public sealed class TextInsertionService
     internal TextInsertionService(
         ITextInsertionPlatform platform,
         IErrorLogService? errorLog = null,
-        IPasteConfirmationSource? pasteConfirmation = null
+        IPasteConfirmationSource? pasteConfirmation = null,
+        Func<bool>? isAnotherSessionRecording = null
     )
     {
         _platform = platform;
         _errorLog = errorLog;
         _pasteConfirmation = pasteConfirmation;
+        _isRecording = isAnotherSessionRecording ?? (static () => false);
     }
 
     /// <summary>
@@ -494,11 +499,26 @@ public sealed class TextInsertionService
 
     private async Task<bool> FocusTargetWindowAsync(string? targetWindowId)
     {
-        if (string.IsNullOrWhiteSpace(targetWindowId)
-            || _platform.GetActiveWindowId() == targetWindowId)
+        var activeWindowId = _platform.GetActiveWindowId();
+        if (string.IsNullOrWhiteSpace(targetWindowId) || activeWindowId == targetWindowId)
         {
             await _platform.DelayAsync(s_focusDelay);
             return true;
+        }
+
+        // Activating a predecessor's target while another session is recording would corrupt that
+        // session's window snapshot/profile match (PA4). A null active id means Wayland without
+        // xdotool, where activation is a no-op — suppressing there would only degrade benign
+        // insertions. Residual: the predicate reads false for a session that is STARTING, and the
+        // whole start cue (prior-speech stop, start sound/TTS) runs before capture opens, so an
+        // activation landing in that interval is missed; closing it needs a shared focus/start
+        // arbiter, deliberately out of scope.
+        if (activeWindowId is not null && _isRecording())
+        {
+            Trace.WriteLine(
+                $"Suppressed focus activation for target window '{targetWindowId}' because another session is recording."
+            );
+            return false;
         }
 
         var focusRequested = await _platform.ActivateWindowAsync(targetWindowId);
