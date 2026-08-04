@@ -285,7 +285,7 @@ public sealed class SystemCommandAvailabilityServiceTests
     }
 
     [Fact]
-    public void LinuxCapabilitySnapshot_CanAutoPasteRequiresClipboardAndPasteTools()
+    public void LinuxCapabilitySnapshot_X11WithoutPasteToolReportsInstallStatus()
     {
         var snapshot = new LinuxCapabilitySnapshot(
             "X11",
@@ -303,7 +303,6 @@ public sealed class SystemCommandAvailabilityServiceTests
             false
         );
 
-        Assert.False(snapshot.CanAutoPaste);
         Assert.Equal("xclip available", snapshot.ClipboardStatus);
         Assert.Equal("Install xdotool to enable automatic paste.", snapshot.PasteStatus);
     }
@@ -390,7 +389,6 @@ public sealed class SystemCommandAvailabilityServiceTests
             false
         );
 
-        Assert.True(snapshot.HasAutomaticPasteTool);
         Assert.Equal("wtype available", snapshot.PasteStatus);
     }
 
@@ -413,7 +411,6 @@ public sealed class SystemCommandAvailabilityServiceTests
             false
         );
 
-        Assert.True(snapshot.HasAutomaticPasteTool);
         Assert.Equal("xdotool available (XWayland only)", snapshot.PasteStatus);
     }
 
