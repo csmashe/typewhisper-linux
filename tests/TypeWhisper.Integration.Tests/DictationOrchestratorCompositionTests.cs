@@ -67,7 +67,22 @@ public sealed class DictationOrchestratorCompositionTests
             Assert.False(fixture.Orchestrator.IsRecording);
             Assert.Equal("idle", fixture.Orchestrator.CurrentStateLabel);
             Assert.Equal(0, fixture.AudioBoundary.ActiveStreams);
-            Assert.Equal(0, fixture.ProcessRunner.RequestCount);
+
+            // A dictation cycle resolves the focused window to pick a profile, which probes
+            // gdbus and xdotool by design; the boundary intercepts them, so nothing executes.
+            // The contract worth asserting is that NOTHING ELSE reaches the runner — any other
+            // command means a service escaped the injected boundary. (ServiceGraphLifecycleTests
+            // asserts the stricter "zero requests", which holds there because it only builds and
+            // disposes the graph without dictating.)
+            string[] activeWindowProbes = ["gdbus", "xdotool"];
+            Assert.Equal(
+                [],
+                fixture
+                    .ProcessRunner.Requests.Where(request =>
+                        !activeWindowProbes.Contains(request.Split(' ')[1])
+                    )
+                    .ToArray()
+            );
         });
     }
 
