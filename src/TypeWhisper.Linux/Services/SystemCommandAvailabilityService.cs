@@ -739,12 +739,6 @@ public sealed record LinuxCapabilitySnapshot(
     string? YdotoolSocketPath = null
 )
 {
-    public bool HasAutomaticPasteTool =>
-        SessionType == "Wayland"
-            ? HasWtype || HasXdotool || (HasYdotool && HasYdotoolSocket)
-            : HasXdotool;
-
-    public bool CanAutoPaste => HasClipboardTool && HasAutomaticPasteTool;
     public bool CanUseCuda => HasCudaGpu && HasCudaRuntimeLibraries;
 
     /// <summary>
