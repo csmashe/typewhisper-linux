@@ -434,20 +434,23 @@ public sealed class OpenAiPlugin
             return OpenAiInactiveTtsPlaybackSession.Instance;
         }
 
+        // Resolved before the paid request: a deactivated plugin keeps its API key, so
+        // without this the endpoint is billed and only then does playback throw.
+        var host = _ttsPlaybackFactory is null
+            ? _host
+              ?? throw new InvalidOperationException("OpenAI plugin is not activated.")
+            : null;
+
         using var httpRequest = CreateTtsRequest(text);
         var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, httpRequest, ct);
         var pcm = await response.Content.ReadAsByteArrayAsync(ct);
-        return _ttsPlaybackFactory?.Invoke(pcm)
-               ?? OpenAiPcmTtsPlaybackSession.Create(
-                   pcm,
-                   OpenAiTtsConfiguration.SampleRate,
-                   (
-                       _host
-                       ?? throw new InvalidOperationException(
-                           "OpenAI plugin is not activated."
-                       )
-                   ).Processes
-               );
+        return _ttsPlaybackFactory is not null
+            ? _ttsPlaybackFactory(pcm)
+            : OpenAiPcmTtsPlaybackSession.Create(
+                pcm,
+                OpenAiTtsConfiguration.SampleRate,
+                host!.Processes
+            );
     }
 
     // LLM model catalog

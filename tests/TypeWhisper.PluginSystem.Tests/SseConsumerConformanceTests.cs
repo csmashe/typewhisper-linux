@@ -90,7 +90,24 @@ public sealed class SseConsumerConformanceTests
         else
         {
             Assert.Equal(["partial-secret"], observed);
+            // Proves the structured provider-error branch ran, not a generic abort.
+            Assert.Contains("provider-secret", exception.Message, StringComparison.Ordinal);
         }
+    }
+
+    // The shared error case above now sends Anthropic's structured error frame, so the
+    // unparseable-payload fallback keeps its own coverage here.
+    [Fact]
+    public async Task ClaudeErrorEventWithUnparseablePayload_StillAborts()
+    {
+        var wire = DataEvent(DeltaPayload(Consumer.ClaudeMessages, "partial"))
+                   + "event: error\ndata: not-json\n\n"
+                   + TerminalEvent(Consumer.ClaudeMessages);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => RunConsumerAsync(Consumer.ClaudeMessages, wire));
+
+        Assert.IsNotType<IncompleteSseStreamException>(exception);
     }
 
     [Theory]
@@ -174,7 +191,8 @@ public sealed class SseConsumerConformanceTests
             DataEvent("{\"error\":{\"message\":\"provider-secret\"}}"),
         Consumer.XaiResponses =>
             DataEvent("{\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"message\":\"provider-secret\"}}}"),
-        Consumer.ClaudeMessages => "event: error\ndata: not-json\n\n",
+        Consumer.ClaudeMessages =>
+            "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"provider-secret\"}}\n\n",
         Consumer.BufferedChatGpt =>
             DataEvent("{\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"message\":\"provider-secret\"}}}"),
         _ => throw new ArgumentOutOfRangeException(nameof(consumer)),

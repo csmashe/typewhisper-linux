@@ -87,7 +87,7 @@ public sealed class AudioFileService
                 StandardError: ProcessCaptureMode.Utf8Text
             ),
             cancellationToken
-        );
+        ).ConfigureAwait(false);
 
         if (result.Status == ProcessRunStatus.StartFailed)
         {

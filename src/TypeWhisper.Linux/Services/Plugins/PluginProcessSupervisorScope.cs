@@ -102,6 +102,9 @@ public sealed class PluginProcessSupervisorScope(
             // Started while the scope was being torn down, so it missed the termination
             // sweep; stopping it here is what keeps it from outliving the plugin.
             scoped.Terminate();
+            // The caller never receives this session, so nobody else can observe its
+            // completion task; leaving it unobserved would strand the fault.
+            scoped.ObserveCompletion();
             return new ProcessSessionStartOutcome(
                 null,
                 retired ? RetiredMessage : StoppedWhileStartingMessage

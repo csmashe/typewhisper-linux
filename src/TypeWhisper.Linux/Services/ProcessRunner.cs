@@ -741,6 +741,13 @@ public sealed class ProcessRunner : IProcessRunner
         private Task? _terminationTask;
         private int _disposed;
 
+        // Set before _process.Dispose(), which runs in ObserveCompletionAsync's finally —
+        // before Completion itself transitions. Guarding on Completion.IsCompleted would
+        // leave that window throwing the raw ObjectDisposedException.
+        private int _processDisposed;
+
+        private bool IsProcessDisposed => Volatile.Read(ref _processDisposed) == 1;
+
         public ProcessSession(Process process, ProcessSessionOptions options)
         {
             _process = process;
@@ -776,15 +783,29 @@ public sealed class ProcessRunner : IProcessRunner
             }
         }
 
+        // A write racing the exit hits either a broken pipe or an already-disposed Process
+        // depending only on timing; both normalize to IOException — see IPluginProcessSession.
         public async ValueTask WriteStandardInputAsync(
             ReadOnlyMemory<byte> data,
             CancellationToken cancellationToken = default
         )
         {
-            await _process.StandardInput.BaseStream.WriteAsync(data, cancellationToken)
-                .ConfigureAwait(false);
-            await _process.StandardInput.BaseStream.FlushAsync(cancellationToken)
-                .ConfigureAwait(false);
+            try
+            {
+                await _process.StandardInput.BaseStream.WriteAsync(data, cancellationToken)
+                    .ConfigureAwait(false);
+                await _process.StandardInput.BaseStream.FlushAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (
+                ex is InvalidOperationException or ObjectDisposedException
+                && IsProcessDisposed
+            )
+            {
+                // Gated on disposal so "stdin was never redirected" still surfaces as the
+                // caller error it is, rather than being reported as a late write.
+                throw new IOException("The process session has already exited.", ex);
+            }
         }
 
         public ValueTask CompleteStandardInputAsync(
@@ -792,7 +813,18 @@ public sealed class ProcessRunner : IProcessRunner
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _process.StandardInput.Close();
+            try
+            {
+                _process.StandardInput.Close();
+            }
+            catch (Exception ex) when (
+                ex is InvalidOperationException or ObjectDisposedException
+                && IsProcessDisposed
+            )
+            {
+                // Already closed with the exited session; nothing left to complete.
+            }
+
             return ValueTask.CompletedTask;
         }
 
@@ -818,7 +850,16 @@ public sealed class ProcessRunner : IProcessRunner
                 await EnsureTerminationTask().ConfigureAwait(false);
             }
 
-            await Completion.ConfigureAwait(false);
+            try
+            {
+                await Completion.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Disposal reaps; it must not replace the caller's exception with a drain
+                // failure. Completion stays faulted for anyone who awaits it directly.
+                Trace.WriteLine($"[ProcessRunner] Session completion faulted: {ex.Message}");
+            }
         }
 
         private Task EnsureTerminationTask()
@@ -850,6 +891,7 @@ public sealed class ProcessRunner : IProcessRunner
             finally
             {
                 _output.Writer.TryComplete();
+                Volatile.Write(ref _processDisposed, 1);
                 _process.Dispose();
             }
         }

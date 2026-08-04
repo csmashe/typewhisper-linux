@@ -401,17 +401,22 @@ internal sealed class GatedCueProcessRunner : HeadlessProcessRunner
         CancellationToken ct = default
     )
     {
+        // Captured before the check so an overlapping cue clearing the fields mid-await
+        // can't leave this call signalling or waiting on a null gate.
+        var started = _cueStarted;
+        var release = _cueRelease;
+
         // ReSharper disable once InvertIf -- inverting duplicates the success return and negates
         // a four-clause condition; the positive form states when the gate applies.
         if (
             args.Count > 0
             && string.Equals(Path.GetFileName(args[0]), "start.wav", StringComparison.Ordinal)
-            && _cueStarted is not null
-            && _cueRelease is not null
+            && started is not null
+            && release is not null
         )
         {
-            _cueStarted.TrySetResult();
-            await _cueRelease.Task
+            started.TrySetResult();
+            await release.Task
                 .WaitAsync(BoundedTest.s_innerTimeout, ct)
                 .ConfigureAwait(false);
             _cueStarted = null;

@@ -181,9 +181,26 @@ public sealed class ServiceGraphLifecycleTests
                 ));
                 Assert.True(watch.IsRunning);
 
+                // The port was picked before the whole graph was built, so another process
+                // can take it in between. A bind failure surfaces through StatusText, not
+                // an exception.
                 var api = provider.GetRequiredService<HttpApiService>();
-                await BoundedTest.WaitAsync(Task.Run(api.ApplySettings));
-                Assert.StartsWith("Local API is running", api.StatusText, StringComparison.Ordinal);
+                for (var attempt = 0; ; attempt++)
+                {
+                    await BoundedTest.WaitAsync(Task.Run(api.ApplySettings));
+                    if (api.StatusText.StartsWith("Local API is running", StringComparison.Ordinal))
+                    {
+                        break;
+                    }
+
+                    Assert.True(
+                        attempt < 4,
+                        $"The local API never bound a free port: {api.StatusText}"
+                    );
+                    port = GetFreeTcpPort();
+                    settings.Save(settings.Current with { ApiServerPort = port });
+                }
+
                 using (var client = new HttpClient())
                 {
                     client.BaseAddress = new Uri($"http://127.0.0.1:{port}");
