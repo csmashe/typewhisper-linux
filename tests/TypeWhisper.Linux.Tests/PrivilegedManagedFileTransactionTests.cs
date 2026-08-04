@@ -427,10 +427,13 @@ public sealed class PrivilegedManagedFileTransactionTests : IDisposable
             try
             {
                 process.Kill(entireProcessTree: true);
+                // Kill only signals; the reap is what releases the lock.
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
             }
-            catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+            catch (Exception ex)
+                when (ex is InvalidOperationException or NotSupportedException or TimeoutException)
             {
-                // Already gone; the timeout below is still the verdict.
+                // Already gone, or refusing to die; the original timeout is still the verdict.
             }
 
             throw;

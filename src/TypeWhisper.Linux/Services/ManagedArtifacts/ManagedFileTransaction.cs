@@ -1085,12 +1085,19 @@ public sealed partial class ManagedFileTransaction
         }
         catch
         {
-            if (stream is not null)
+            // Same reason as ArtifactLock.DisposeAsync: a throwing close must not strand the permit.
+            try
             {
-                await stream.DisposeAsync().ConfigureAwait(false);
+                if (stream is not null)
+                {
+                    await stream.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                processLock.Release();
             }
 
-            processLock.Release();
             throw;
         }
     }
