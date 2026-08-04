@@ -13,20 +13,30 @@ internal static class LinuxDictationReadbackLanguagePolicy
     ///     Resolves the spoken language of the final transcription text, or
     ///     <c>null</c> when no language context is available.
     /// </summary>
-    /// <param name="detectedLanguage">Language reported by the transcription engine.</param>
+    /// <param name="effectiveSourceLanguage">
+    ///     Effective language of the engine output entering post-processing; already "en"
+    ///     when the engine performed a translation, not the raw audio language.
+    /// </param>
     /// <param name="configuredSourceLanguage">Effective input language; "auto"/blank = no preference.</param>
-    /// <param name="engineTranslatedToEnglish">True when the engine ran a translate task (always emits English).</param>
+    /// <param name="engineTranslatedToEnglish">
+    ///     True only when a translate task was requested AND the selected engine supports
+    ///     translation — callers must gate on SupportsTranslation (a bare request flag
+    ///     reintroduces the PA6 bug). When true, <paramref name="effectiveSourceLanguage" />
+    ///     is already "en" at the production call site, so this flag is a defensive
+    ///     redundancy for standalone callers rather than live production logic.
+    /// </param>
     /// <param name="translationTarget">Post-processing translation target language, if configured.</param>
     /// <param name="postProcessingSteps">Pipeline step results in execution order.</param>
     public static string? Resolve(
-        string? detectedLanguage,
+        string? effectiveSourceLanguage,
         string? configuredSourceLanguage,
         bool engineTranslatedToEnglish,
         string? translationTarget,
         IReadOnlyList<PostProcessingStepResult> postProcessingSteps
     )
     {
-        var sourceLanguage = Normalize(detectedLanguage) ?? Normalize(configuredSourceLanguage);
+        var sourceLanguage =
+            Normalize(effectiveSourceLanguage) ?? Normalize(configuredSourceLanguage);
         var target = Normalize(translationTarget);
 
         // Translation is a no-op when source == target, so it only establishes
