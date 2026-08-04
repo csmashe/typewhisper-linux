@@ -2124,17 +2124,16 @@ public sealed class DictationOrchestrator : IDisposable
             var finalText = ApplyProfileStyleFormatting(context, commandResult.Text);
 
             TranscriptionCompleted?.Invoke(this, finalText);
-            // The orchestrator has full language context (detection, profile /
-            // global input language, translate task, and the actual
-            // post-processing step outcomes), so it resolves the readback
-            // language itself and opts out of SpeechFeedbackService's
-            // configured-language fallback.
+            // The orchestrator has the effective language entering post-processing,
+            // the capability-gated translate task, and the actual step outcomes,
+            // so it resolves the readback language itself and opts out of
+            // SpeechFeedbackService's configured-language fallback.
             _speechFeedback.AnnounceTranscriptionComplete(
                 finalText,
                 LinuxDictationReadbackLanguagePolicy.Resolve(
-                    result?.DetectedLanguage,
+                    postProcessingLanguage,
                     configuredLanguage,
-                    translate,
+                    translate && engineSupportsTranslation,
                     translationTarget,
                     pipelineResult.Steps
                 ),
