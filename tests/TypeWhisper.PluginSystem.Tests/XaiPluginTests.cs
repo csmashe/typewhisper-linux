@@ -519,7 +519,7 @@ public class XaiPluginTests
             disposePumpWait: TimeSpan.FromMilliseconds(200)
         );
 
-        await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30));
+        await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.True(socket.DisposeCalled);
         Assert.NotEqual(WebSocketState.Open, socket.State);
