@@ -7,6 +7,16 @@
         <LangVersion>latest</LangVersion>
         <RootNamespace>TypeWhisper.Cli</RootNamespace>
         <AssemblyName>typewhisper-cli</AssemblyName>
+        <!-- The CLI ships inside every Linux package as one self-contained file, because
+             CliInstallService copies that single file out to ~/.local/share and runs it
+             (the AppImage mount it was bundled in is gone by then). Self-contained means
+             it carries its own copy of the runtime, next to the app's — 70 MB of pure
+             duplication. Trimming cuts that to ~17 MB. TrimmerSingleWarn is off so a
+             future reflection-based dependency shows up as a warning per call site at
+             publish rather than one aggregate line that is easy to skim past. -->
+        <PublishTrimmed>true</PublishTrimmed>
+        <TrimMode>full</TrimMode>
+        <TrimmerSingleWarn>false</TrimmerSingleWarn>
     </PropertyGroup>
     <ItemGroup>
         <InternalsVisibleTo Include="TypeWhisper.Cli.Tests"/>

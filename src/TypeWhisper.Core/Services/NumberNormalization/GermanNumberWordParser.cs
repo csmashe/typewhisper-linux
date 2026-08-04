@@ -112,9 +112,10 @@ internal static class GermanNumberWordParser
 
             if (word is "tausend" or "million" or "millionen")
             {
-                // A plural scale word ("millionen") is a count noun without a leading number
-                // ("Millionen von Menschen"); only treat it as a number when a count precedes it.
-                if (word == "millionen" && current == 0)
+                // Without a leading count these are nouns, not numbers ("Millionen von
+                // Menschen", "eine halbe Million"). "eine Million" still converts:
+                // AllowsArticleOne consumes the article as 1 before this branch is reached.
+                if (word is "million" or "millionen" && current == 0)
                     break;
 
                 var scale = word == "tausend" ? 1_000 : 1_000_000;

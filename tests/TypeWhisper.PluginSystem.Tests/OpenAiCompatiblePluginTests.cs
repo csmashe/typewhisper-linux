@@ -1722,6 +1722,114 @@ public sealed class OpenAiCompatiblePluginTests
         Assert.Equal(["Hel", "lo"], chunks);
     }
 
+    [Fact]
+    public async Task ActivateAsync_PersistedProfilesContainNulls_SkipsThemAndKeepsValidOnes()
+    {
+        // Hand-edited or partially-written settings can carry nulls the declared types forbid.
+        var host = new TestPluginHostServices();
+        host.SetSetting(
+            "additionalProfiles",
+            JsonSerializer.Deserialize<JsonElement>(
+                """
+                [
+                  null,
+                  {"id":"profile-a","name":"A","baseUrl":null,"fetchedModels":null},
+                  {"id":"profile-b","name":"B","baseUrl":"http://localhost:11434",
+                   "fetchedModels":[null,{"id":"m1","ownedBy":null},{"id":"  "}]}
+                ]
+                """));
+        using var httpClient = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+
+        await sut.ActivateAsync(host);
+
+        var roles = sut.AdditionalLlmProviders;
+        Assert.Equal(2, roles.Count);
+        Assert.Equal(["A", "B"], roles.Select(r => r.ProviderName));
+        // Only the null base URL was unusable, so only that profile is unconfigured.
+        Assert.Equal([false, true], roles.Select(r => r.IsAvailable || r.SupportedModels.Count > 0));
+        Assert.Equal(["m1"], roles[1].SupportedModels.Select(m => m.Id));
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_TokenCancelledMidStream_StopsConsumingResponse()
+    {
+        // The token reaches the enumerator as a plain parameter rather than through
+        // WithCancellation, so pin that it still interrupts an unfinished stream.
+        using var cts = new CancellationTokenSource();
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(
+                new StalledSseStream("data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n")),
+        });
+
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "http://localhost:11434");
+        host.SetSetting("selectedLlmModel", "llama3");
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var consume = Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync("sys", "user", "llama3", cts.Token))
+            {
+                chunks.Add(chunk);
+                await cts.CancelAsync();
+            }
+        });
+
+        // Bounded independently of the token under test, so a propagation regression fails here
+        // instead of hanging the run.
+        // ReSharper disable once MethodSupportsCancellation -- the cancellation-aware overload takes the token under test, the one dependency this bound must not have.
+        await consume.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(["Hel"], chunks);
+    }
+
+    /// <summary>Serves one SSE frame, then stalls like a server still generating tokens.</summary>
+    private sealed class StalledSseStream(string firstFrame) : Stream
+    {
+        private readonly byte[] _frame = Encoding.UTF8.GetBytes(firstFrame);
+        private int _offset;
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_offset < _frame.Length)
+            {
+                var count = Math.Min(buffer.Length, _frame.Length - _offset);
+                _frame.AsSpan(_offset, count).CopyTo(buffer.Span);
+                _offset += count;
+                return count;
+            }
+
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return 0;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+    }
+
     private sealed class CapturingHandler(Func<HttpRequestMessage, string?, HttpResponseMessage> responder)
         : HttpMessageHandler
     {

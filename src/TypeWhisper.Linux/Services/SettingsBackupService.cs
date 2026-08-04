@@ -889,29 +889,20 @@ public sealed class SettingsBackupService
         BackupManifest? manifest;
         try
         {
-            // The declared length above is archive-controlled and can understate the
-            // real size, so cap the bytes actually decompressed before deserializing.
+            // The declared Length above is only the zip's own claim; the deflate stream can expand
+            // far past it, so enforce the cap on the bytes actually read before deserializing.
             using var stream = manifestEntry.Open();
-            using var buffer = new MemoryStream();
-            var chunk = new byte[4096];
-            int read;
-            while ((read = stream.Read(chunk, 0, chunk.Length)) > 0)
-            {
-                if (buffer.Length + read > MaxManifestBytes)
-                {
-                    throw new InvalidDataException(Loc.Instance["About.BackupInvalidManifest"]);
-                }
-
-                buffer.Write(chunk, 0, read);
-            }
-
-            manifest = JsonSerializer.Deserialize<BackupManifest>(buffer.ToArray());
+            using var bounded = ReadBounded(stream, MaxManifestBytes);
+            manifest = JsonSerializer.Deserialize<BackupManifest>(bounded);
         }
         catch (Exception ex) when (ex is JsonException or IOException or InvalidDataException)
         {
             throw new InvalidDataException(Loc.Instance["About.BackupInvalidManifest"], ex);
         }
 
+        // The exact Includes/Excludes match is the manifest's only cross-version gate (there is no
+        // schema version): it stops an older build restoring a newer archive over live data whose
+        // per-file schemas it can't read. Don't relax it without adding a real version field.
         if (
             manifest is null
             || !string.Equals(manifest.App, ManifestApp, StringComparison.Ordinal)
@@ -925,6 +916,27 @@ public sealed class SettingsBackupService
         {
             throw new InvalidDataException(Loc.Instance["About.BackupInvalidManifest"]);
         }
+    }
+
+    // Copies at most maxBytes from source, throwing once a byte beyond the cap arrives.
+    private static MemoryStream ReadBounded(Stream source, long maxBytes)
+    {
+        var buffer = new MemoryStream();
+        var chunk = new byte[8192];
+        int read;
+        while ((read = source.Read(chunk, 0, chunk.Length)) > 0)
+        {
+            if (buffer.Length + read > maxBytes)
+            {
+                buffer.Dispose();
+                throw new InvalidDataException(Loc.Instance["About.BackupInvalidManifest"]);
+            }
+
+            buffer.Write(chunk, 0, read);
+        }
+
+        buffer.Position = 0;
+        return buffer;
     }
 
     private static bool IsAllowedEntry(string entryName, bool isDirectory)

@@ -51,6 +51,11 @@ public sealed partial class YdotoolSetupHelper
     private const string UdevRuleSymlinkToken = "TYPEWHISPER_UDEV_RULE_SYMLINK";
     private const string ActivationFailureToken = "TYPEWHISPER_YDOTOOL_ACTIVATION_FAILED";
 
+    // Shared with BuildPrivilegedInstallScript, which greps for this exact line to detect a foreign
+    // rules file that already grants the access; a copy there would silently stop matching.
+    private const string UdevRuleLine =
+        "KERNEL==\"uinput\", TAG+=\"uaccess\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"";
+
     private const string UdevRuleContent =
         "# "
         + OwnershipMarker
@@ -61,7 +66,8 @@ public sealed partial class YdotoolSetupHelper
         + "# active seat read/write without group membership or logout.\n"
         + "# The GROUP=\"input\" fallback covers init systems without\n"
         + "# logind (Devuan, Alpine without elogind, etc.).\n"
-        + "KERNEL==\"uinput\", TAG+=\"uaccess\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"\n";
+        + UdevRuleLine
+        + "\n";
 
     // The udev rule above can only grant access to a device whose kernel
     // module is actually loaded. Distros like Arch / Omarchy do NOT auto-load

@@ -111,7 +111,14 @@ internal static partial class SocketPathResolver
     {
         try
         {
-            Directory.CreateDirectory(directory);
+            // Create owner-only in the mkdir itself so a newly created directory is never
+            // briefly world-traversable between creation and the chmod below.
+#pragma warning disable CA1416 // TypeWhisper.Linux is a Linux-only assembly.
+            Directory.CreateDirectory(
+                directory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            );
+#pragma warning restore CA1416
         }
         catch (Exception ex)
         {
@@ -121,6 +128,8 @@ internal static partial class SocketPathResolver
             );
         }
 
+        // Still required for a directory that already existed — CreateDirectory only applies
+        // the mode to directories it creates.
         TryChmod(directory, 0b111_000_000); // 0700
         if (!IsDirectoryPrivateAndOwned(directory, uid))
         {

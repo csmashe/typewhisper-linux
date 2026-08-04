@@ -20,7 +20,7 @@ public partial class CancellationOriginGuardTests
             "WatchFolderService.ProcessQueueAsync",
             "src/TypeWhisper.Linux/Services/WatchFolderService.cs",
             "private async Task ProcessQueueAsync(WatchFolderRun run)",
-            "private async Task ObserveQueueWorkerAsync"
+            "private async Task ObserveWorkerAsync"
         ),
         new(
             "WatchFolderService.ProcessFileAsync",

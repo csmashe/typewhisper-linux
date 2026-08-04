@@ -163,6 +163,22 @@ public sealed class AtomicJsonStore<T>
         }
     }
 
+    /// <summary>
+    ///     Whether a current snapshot is already in memory, so reading <see cref="Current" /> will
+    ///     not touch the disk. Lets callers keep a synchronous fast path instead of offloading a
+    ///     load that has already happened.
+    /// </summary>
+    internal bool IsLoaded
+    {
+        get
+        {
+            lock (_coordinator.Gate)
+            {
+                return _loaded && _loadedRevision == _coordinator.Revision;
+            }
+        }
+    }
+
     public T Reload()
     {
         lock (_coordinator.Gate)

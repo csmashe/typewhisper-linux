@@ -261,6 +261,7 @@ Priority: optional
 Architecture: amd64
 Maintainer: Excel on the Web <noreply@excelontheweb.com>
 Installed-Size: $INSTALLED_SIZE
+Depends: libasound2t64 | libasound2, libjack-jackd2-0 | libjack0 | pipewire-jack
 Recommends: libpulse0, pulseaudio-utils, playerctl, xdotool
 Description: Speech-to-text dictation for Linux desktop
  TypeWhisper provides global dictation, file transcription, recorder,
@@ -348,6 +349,12 @@ URL:            https://github.com/csmashe/typewhisper-linux
 Source0:        %{name}-%{version}.tar.gz
 BuildArch:      x86_64
 AutoReqProv:    no
+# AutoReqProv is off (it would scan every bundled .NET/native lib), so the audio
+# stack the bundled libportaudio.so links against has to be declared by hand.
+# Soname form, not a package name: pipewire-jack and jack-audio-connection-kit
+# both satisfy it, and the app cannot capture a microphone without them.
+Requires:       libjack.so.0()(64bit)
+Requires:       libasound.so.2()(64bit)
 Recommends:     pulseaudio-libs, pulseaudio-utils, playerctl, xdotool
 
 %description

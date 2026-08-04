@@ -350,6 +350,7 @@ public sealed partial class SystemCommandAvailabilityService
         }
 
         var stopwatch = Stopwatch.StartNew();
+        Process? process = null;
         try
         {
             var result = await _processRunner.RunOneShotAsync(
@@ -414,6 +415,31 @@ public sealed partial class SystemCommandAvailabilityService
                 $"CUDA benchmark failed: {ex.Message}",
                 stopwatch.Elapsed
             );
+        }
+        finally
+        {
+            if (process is not null)
+            {
+                // Disposing a Process does not stop the child, so every early exit —
+                // cancellation, the 3 s timeout, an I/O failure — would orphan nvidia-smi.
+                TryKillProcessTree(process);
+                process.Dispose();
+            }
+        }
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(true);
+            }
+        }
+        catch
+        {
+            /* best effort */
         }
     }
 

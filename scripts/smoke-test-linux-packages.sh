@@ -190,6 +190,9 @@ run_gui_probe() {
 install_ubuntu_runtime() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
+  # libjack/libasound back the bundled libportaudio.so. A desktop gets them via
+  # pipewire-jack; a bare container does not, and without them PortAudio fails to
+  # load and the GUI probe can only ever prove the no-audio path.
   apt-get install -y --no-install-recommends \
     dbus-x11 \
     gzip \
@@ -200,6 +203,8 @@ install_ubuntu_runtime() {
     libgl1 \
     libice6 \
     libicu74 \
+    libjack-jackd2-0 \
+    libasound2t64 \
     libsm6 \
     libx11-6 \
     libx11-xcb1 \
@@ -217,11 +222,14 @@ install_ubuntu_runtime() {
 }
 
 install_fedora_runtime() {
+  # See install_ubuntu_runtime: alsa-lib/jack back the bundled libportaudio.so.
   dnf install -y \
+    alsa-lib \
     dbus-daemon \
     fontconfig \
     freetype \
     gzip \
+    jack-audio-connection-kit \
     libICE \
     libSM \
     libX11 \
@@ -268,8 +276,15 @@ container_smoke_tarball() {
 
   echo "==> Installing tarball into isolated HOME/XDG roots"
   env "${SMOKE_PROFILE_ENV[@]}" bash "$install_script"
-  env "${SMOKE_PROFILE_ENV[@]}" bash "$install_script"
   app_root="$SMOKE_DATA_ROOT/typewhisper-app"
+
+  # The app writes its user data INTO the install root, so the installer's KEEP list is
+  # all that stands between a reinstall/uninstall and permanent data loss.
+  mkdir -p "$app_root/Data"
+  printf 'preserve user data\n' >"$app_root/Data/smoke-user-data"
+
+  env "${SMOKE_PROFILE_ENV[@]}" bash "$install_script"
+  require_file "$app_root/Data/smoke-user-data"
   require_executable "$SMOKE_HOME_ROOT/.local/bin/typewhisper"
   require_executable "$app_root/Cli/typewhisper-cli"
   require_file "$SMOKE_DATA_ROOT/applications/typewhisper.desktop"
@@ -295,8 +310,19 @@ container_smoke_tarball() {
   assert_removed "$SMOKE_HOME_ROOT/.local/bin/typewhisper"
   assert_removed "$SMOKE_DATA_ROOT/applications/typewhisper.desktop"
   assert_removed "$SMOKE_DATA_ROOT/icons/hicolor/128x128/apps/typewhisper.png"
-  assert_removed "$app_root"
+  # Not assert_removed "$app_root": a plain --uninstall preserves user data, and in
+  # this layout INSTALL_ROOT is also where the app writes it. Plugins/ is on the
+  # installer's KEEP list (it holds user-installed plugins alongside the bundled
+  # ones), so the root legitimately survives. Assert the program payload is gone.
+  assert_removed "$app_root/typewhisper"
+  assert_removed "$app_root/Cli/typewhisper-cli"
+  require_file "$app_root/Data/smoke-user-data"
   require_file "$SMOKE_DATA_ROOT/TypeWhisper/smoke-sentinel"
+
+  # --purge is the path that must leave nothing behind.
+  echo "==> Purging tarball install from isolated HOME/XDG roots"
+  env "${SMOKE_PROFILE_ENV[@]}" bash "$install_script" --uninstall --purge
+  assert_removed "$app_root"
 }
 
 container_smoke_appimage() {

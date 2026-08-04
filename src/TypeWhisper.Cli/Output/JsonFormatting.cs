@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Text;
 using System.Text.Json;
 
 namespace TypeWhisper.Cli.Output;
@@ -8,7 +10,7 @@ namespace TypeWhisper.Cli.Output;
 /// </summary>
 internal static class JsonFormatting
 {
-    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+    private static readonly JsonWriterOptions s_writerOptions = new() { Indented = true };
 
     /// <summary>Re-serializes <paramref name="json" /> indented, returning the input unchanged if it isn't valid JSON.</summary>
     public static string PrettyJson(string json)
@@ -16,7 +18,15 @@ internal static class JsonFormatting
         try
         {
             using var doc = JsonDocument.Parse(json);
-            return JsonSerializer.Serialize(doc.RootElement, s_jsonOptions);
+            // WriteTo rather than JsonSerializer.Serialize: writing an already-parsed
+            // document needs no reflection, so this survives trimming (IL2026).
+            var buffer = new ArrayBufferWriter<byte>();
+            using (var writer = new Utf8JsonWriter(buffer, s_writerOptions))
+            {
+                doc.RootElement.WriteTo(writer);
+            }
+
+            return Encoding.UTF8.GetString(buffer.WrittenSpan);
         }
         catch
         {

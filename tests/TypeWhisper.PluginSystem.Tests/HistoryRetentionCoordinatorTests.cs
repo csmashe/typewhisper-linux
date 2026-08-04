@@ -171,6 +171,9 @@ public class HistoryRetentionCoordinatorTests
 
     private sealed class FakeSettingsService(AppSettings initialSettings) : ISettingsService
     {
+        // ISettingsService.Update must read and persist under the same gate as Save.
+        private readonly Lock _gate = new();
+
         public AppSettings Current { get; private set; } = initialSettings;
         public event Action<AppSettings>? SettingsChanged;
 
@@ -181,15 +184,21 @@ public class HistoryRetentionCoordinatorTests
 
         public void Save(AppSettings settings)
         {
-            Current = settings;
-            SettingsChanged?.Invoke(settings);
+            lock (_gate)
+            {
+                Current = settings;
+                SettingsChanged?.Invoke(settings);
+            }
         }
 
         public AppSettings Update(Func<AppSettings, AppSettings> mutate)
         {
-            var updated = mutate(Current);
-            Save(updated);
-            return updated;
+            lock (_gate)
+            {
+                var updated = mutate(Current);
+                Save(updated);
+                return updated;
+            }
         }
     }
 

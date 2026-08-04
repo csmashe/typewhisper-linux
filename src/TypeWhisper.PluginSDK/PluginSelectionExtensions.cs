@@ -71,7 +71,7 @@ public static class PluginSelectionExtensions
             return false;
         }
 
-        // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- LINQ would swap string's struct char enumerator for the boxing IEnumerable<char> one.
+        // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- the loop indexes the string directly; the LINQ form allocates an enumerator and a delegate per call.
         foreach (var character in selectionId)
         {
             if (

@@ -387,7 +387,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
         if (session is not null)
         {
-            using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             Task? sessionFinalizeTask = null;
             try
             {
@@ -466,6 +466,27 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
                 // batch fallback. Without this, a partial transcript is silently treated as success.
                 Trace.WriteLine($"[StreamingCoordinator] FinalizeAsync session fault: {ex.Message}");
                 sessionFinalizeFault = ex;
+            }
+            finally
+            {
+                // Both abandonment paths (deadline win, caller cancel) leave the finalize task
+                // running with this token. Disposing now would turn its next Register /
+                // Task.Delay(token) into an ObjectDisposedException instead of the cancellation we
+                // just requested, so defer until it settles.
+                if (sessionFinalizeTask is null || sessionFinalizeTask.IsCompleted)
+                {
+                    sessionCts.Dispose();
+                }
+                else
+                {
+                    _ = sessionFinalizeTask.ContinueWith(
+                        static (_, state) => ((CancellationTokenSource)state!).Dispose(),
+                        sessionCts,
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default
+                    );
+                }
             }
         }
 

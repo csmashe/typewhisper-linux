@@ -61,7 +61,12 @@ internal static class SpanishNumberWordParser
                 return null;
         }
 
-        var integer = ParseInteger(normalizedWords, index, isNegative);
+        // isNegative only decides the sign: "menos" also means "except/less", so it is not a
+        // number context that licenses the articles "un"/"una". Telling the two senses apart
+        // needs the token LEFT of "menos", which Parse(words) does not receive. Accepted cost:
+        // "menos un grado" stays spoken, which beats rewriting "todos menos un estudiante"
+        // into "todos -1 estudiante". "menos uno"/"menos un millón" are unaffected.
+        var integer = ParseInteger(normalizedWords, index);
         if (integer is null)
             return null;
 
@@ -84,10 +89,7 @@ internal static class SpanishNumberWordParser
         return new NumberWordNormalizer.ParsedWords(replacement, index);
     }
 
-    private static (int Value, int NextIndex)? ParseInteger(
-        IReadOnlyList<string> words,
-        int startIndex,
-        bool allowLeadingArticleOne)
+    private static (int Value, int NextIndex)? ParseInteger(IReadOnlyList<string> words, int startIndex)
     {
         if (startIndex >= words.Count)
             return null;
@@ -104,9 +106,10 @@ internal static class SpanishNumberWordParser
 
             if (word is "millon" or "millones")
             {
-                // A plural scale word ("millones") is a count noun without a leading number
-                // ("millones de personas"); only treat it as a number when a count precedes it.
-                if (word == "millones" && current == 0 && total == 0)
+                // Without a leading count these are nouns, not numbers ("millones de
+                // personas", "medio millón"). "un millón" still converts: AllowsArticleOne
+                // consumes the article as 1 before this branch is reached.
+                if (word is "millon" or "millones" && current == 0 && total == 0)
                     break;
 
                 total += Math.Max(current, 1) * 1_000_000;
@@ -136,7 +139,7 @@ internal static class SpanishNumberWordParser
                 continue;
             }
 
-            var allowArticleOne = AllowsArticleOne(index, words, startIndex, allowLeadingArticleOne, current, total);
+            var allowArticleOne = AllowsArticleOne(index, words, current, total);
             var segment = ParseUnderHundred(words, index, allowArticleOne);
             if (segment is null)
                 break;
@@ -241,14 +244,9 @@ internal static class SpanishNumberWordParser
     private static bool AllowsArticleOne(
         int index,
         IReadOnlyList<string> words,
-        int startIndex,
-        bool allowLeadingArticleOne,
         int current,
         int total)
     {
-        if (index == startIndex && allowLeadingArticleOne)
-            return true;
-
         if (current >= 100 || total > 0)
             return true;
 

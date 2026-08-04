@@ -117,8 +117,10 @@ internal sealed class SherpaDecodeCoordinator
                 energy += audioSamples[i] * audioSamples[i];
 
             energy /= Math.Max(1, windowEnd - windowStart);
-            // ReSharper disable once InvertIf -- the positive form states the "found a quieter cut" case.
-            if (energy < bestEnergy)
+            // <= so a tie (digital silence across the search window) keeps the
+            // latest candidate, producing the longest chunk instead of the shortest.
+            // ReSharper disable once InvertIf -- inverting would add a `continue` to a two-line accumulator body.
+            if (energy <= bestEnergy)
             {
                 bestEnergy = energy;
                 bestCut = candidate;
@@ -184,13 +186,21 @@ internal sealed class SherpaDecodeCoordinator
             if (json.RootElement.ValueKind != JsonValueKind.Object)
                 return new SherpaDecodeResult(rawText.Trim(), null);
 
+            // GetString() throws InvalidOperationException on a number or boolean,
+            // which the JsonException handler below would not catch.
             var text = rawText.Trim();
-            if (json.RootElement.TryGetProperty("text", out var textNode))
+            if (json.RootElement.TryGetProperty("text", out var textNode)
+                && textNode.ValueKind is JsonValueKind.String or JsonValueKind.Null)
+            {
                 text = textNode.GetString()?.Trim() ?? string.Empty;
+            }
 
             string? language = null;
             // ReSharper disable once InvertIf -- the positive TryGetProperty form reads better than an inverted skip.
-            if (json.RootElement.TryGetProperty("lang", out var languageNode))
+            // ValueKind guard: GetString() throws on a non-string element, so a canary payload
+            // with a numeric or boolean "lang" must fall back rather than fault the decode.
+            if (json.RootElement.TryGetProperty("lang", out var languageNode)
+                && languageNode.ValueKind == JsonValueKind.String)
             {
                 var parsed = languageNode.GetString();
                 if (!string.IsNullOrWhiteSpace(parsed))

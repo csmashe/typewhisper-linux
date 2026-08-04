@@ -93,6 +93,7 @@ public sealed class FileTranscriptionProcessor(
         // the post-processing pipeline would block a concurrent dictation or
         // watch-folder transcription from loading a different model.
         PluginTranscriptionResult pluginResult;
+        bool engineSupportsTranslation;
         await using (
             var lease = await modelManager.AcquireTranscriptionAsync(
                 modelId,
@@ -100,6 +101,7 @@ public sealed class FileTranscriptionProcessor(
             )
         )
         {
+            engineSupportsTranslation = lease.Plugin.SupportsTranslation;
             pluginResult = await lease.Plugin.TranscribeAsync(
                 wav,
                 languageSelection,
@@ -108,6 +110,13 @@ public sealed class FileTranscriptionProcessor(
                 cancellationToken
             );
         }
+
+        // An engine that ignores the translate task returns source-language text; reporting
+        // Translate downstream would make number normalization treat it as English.
+        var effectiveTask =
+            task == TranscriptionTask.Translate && engineSupportsTranslation
+                ? TranscriptionTask.Translate
+                : TranscriptionTask.Transcribe;
 
         var result = new TranscriptionResult
         {
@@ -133,7 +142,7 @@ public sealed class FileTranscriptionProcessor(
                     ? vocabularyBoosting.Apply
                     : null,
                 DictionaryCorrector = dictionary.ApplyCorrections,
-                TranscriptionTask = task,
+                TranscriptionTask = effectiveTask,
                 DetectedLanguage = result.DetectedLanguage,
                 ConfiguredLanguage = configuredLanguage,
                 TranscriptionNumberNormalizationEnabled =

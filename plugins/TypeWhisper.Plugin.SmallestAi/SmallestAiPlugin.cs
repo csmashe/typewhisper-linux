@@ -151,17 +151,19 @@ public sealed class SmallestAiPlugin
             var wasConfigured = IsConfigured;
             var changed = !string.Equals(ApiKey, normalized, StringComparison.Ordinal);
 
-            ApiKey = normalized;
+            // Persist first: a failed write must not leave a key in memory that won't survive restart.
             if (_host is not null)
             {
                 if (normalized is null)
                     await _host.DeleteSecretAsync(ApiKeySecretName);
                 else
                     await _host.StoreSecretAsync(ApiKeySecretName, normalized);
-
-                if (changed && wasConfigured != IsConfigured)
-                    hostToNotify = _host;
             }
+
+            ApiKey = normalized;
+
+            if (_host is not null && changed && wasConfigured != IsConfigured)
+                hostToNotify = _host;
         }
         finally
         {

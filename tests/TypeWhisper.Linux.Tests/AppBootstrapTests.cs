@@ -228,6 +228,7 @@ public sealed class AppBootstrapTests
         Assert.Equal("B", Outcome("C").SkippedDueTo);
         return;
 
+        // ReSharper disable once SeparateLocalFunctionsWithJumpStatement -- a trailing `return;` added purely to separate the local function is noise.
         App.BootstrapStageOutcome Outcome(string name)
         {
             return Assert.Single(report.Outcomes, outcome => outcome.Name == name);

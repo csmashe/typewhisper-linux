@@ -41,19 +41,16 @@ public sealed class AudioRecordingServiceTests
     }
 
     [Theory]
-    [InlineData(480, 48000, 16000)]
-    [InlineData(441, 44100, 16000)]
+    [InlineData(480, 48000, 16000, 160)]
+    [InlineData(441, 44100, 16000, 160)]
     public void ResampleToSampleRate_DownsamplesToRoundedTargetLength(
         int inputLength,
         int sourceSampleRate,
-        int targetSampleRate
+        int targetSampleRate,
+        int expectedLength
     )
     {
         var samples = new float[inputLength];
-        var expectedLength = Math.Max(
-            1,
-            (int)Math.Round(inputLength * (double)targetSampleRate / sourceSampleRate)
-        );
 
         var processed = AudioRecordingService.ResampleToSampleRate(
             samples,
@@ -1126,6 +1123,9 @@ public sealed class AudioRecordingServiceTests
 
     private sealed class FakeSettingsService(AppSettings current) : ISettingsService
     {
+        // ISettingsService.Update must read and persist under the same gate as Save.
+        private readonly Lock _gate = new();
+
         public int SaveCount { get; private set; }
         public AppSettings Current { get; private set; } = current;
 
@@ -1136,16 +1136,22 @@ public sealed class AudioRecordingServiceTests
 
         public void Save(AppSettings settings)
         {
-            SaveCount++;
-            Current = settings;
-            SettingsChanged?.Invoke(settings);
+            lock (_gate)
+            {
+                SaveCount++;
+                Current = settings;
+                SettingsChanged?.Invoke(settings);
+            }
         }
 
         public AppSettings Update(Func<AppSettings, AppSettings> mutate)
         {
-            var updated = mutate(Current);
-            Save(updated);
-            return updated;
+            lock (_gate)
+            {
+                var updated = mutate(Current);
+                Save(updated);
+                return updated;
+            }
         }
 
         public event Action<AppSettings>? SettingsChanged;
