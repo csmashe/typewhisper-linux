@@ -22,14 +22,18 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services;
 
-internal sealed class HttpApiRequestDispatcher
+internal sealed class HttpApiRequestDispatcher : IDisposable
 {
+    private static readonly TimeSpan s_drainTimeout = TimeSpan.FromSeconds(1);
+
+    private readonly int _capacity;
     private readonly Action<Exception> _reportException;
     private readonly SemaphoreSlim _slots;
 
     public HttpApiRequestDispatcher(int capacity, Action<Exception>? reportException = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
+        _capacity = capacity;
         _slots = new SemaphoreSlim(capacity, capacity);
         _reportException = reportException ?? (ex =>
             Trace.WriteLine($"[HttpApiService] Dispatched request failed: {ex}"));
@@ -39,6 +43,31 @@ internal sealed class HttpApiRequestDispatcher
     {
         ArgumentNullException.ThrowIfNull(handler);
         return _slots.Wait(0) ? RunAsync(handler) : null;
+    }
+
+    /// <summary>
+    ///     Reclaims every slot first, proving no admitted handler is still in flight: a handler
+    ///     releases its slot in a finally block, so disposing underneath one would surface an
+    ///     <see cref="ObjectDisposedException" /> as an unobserved fault. A handler that outlasts
+    ///     the drain leaves the semaphore undisposed, which is harmless — the Wait(0) path never
+    ///     allocates a wait handle.
+    /// </summary>
+    public void Dispose()
+    {
+        for (var acquired = 0; acquired < _capacity; acquired++)
+        {
+            if (_slots.Wait(s_drainTimeout))
+            {
+                continue;
+            }
+
+            Trace.WriteLine(
+                "[HttpApiService] Request slots still in use at dispose; leaving them undisposed."
+            );
+            return;
+        }
+
+        _slots.Dispose();
     }
 
     private async Task RunAsync(Func<Task> handler)
@@ -79,6 +108,10 @@ public sealed partial class HttpApiService : IDisposable
 {
     internal const int MaxConcurrentRequests = 2;
     internal const long MaxTranscribeRequestBytes = 100 * 1024 * 1024;
+
+    // Applies to every JSON endpoint, including bulk PUT /v1/dictionary/terms uploads. A body
+    // over this limit is rejected with 413 "Request body too large" rather than truncated, so
+    // clients with a larger dictionary must split it across requests.
     internal const long MaxJsonRequestBytes = 1 * 1024 * 1024;
 
     private const string AllowedCorsHeaders =
@@ -202,6 +235,9 @@ public sealed partial class HttpApiService : IDisposable
         }
 
         Stop();
+        // Stop() only tears down the host; admitted handlers run detached, so the dispatcher
+        // does its own bounded drain before releasing the semaphore.
+        _requestDispatcher.Dispose();
         _disposed = true;
     }
 
@@ -499,7 +535,19 @@ public sealed partial class HttpApiService : IDisposable
                 listenOptions.Use(next => async connection =>
                 {
                     var socket = connection.Features.Get<IConnectionSocketFeature>()?.Socket;
-                    if (socket is null || !_validateUnixPeer(socket))
+                    bool owned;
+                    try
+                    {
+                        // A credential read that fails tells us nothing about the peer,
+                        // so it must fail closed here rather than unwind into Kestrel.
+                        owned = socket is not null && _validateUnixPeer(socket);
+                    }
+                    catch (IOException)
+                    {
+                        owned = false;
+                    }
+
+                    if (!owned)
                     {
                         connection.Abort();
                         return;
@@ -919,6 +967,7 @@ public sealed partial class HttpApiService : IDisposable
         PluginTranscriptionResult result;
         string engineProviderId;
         string? selectedModelId;
+        bool engineSupportsTranslation;
 
         ModelManagerService.TranscriptionLease lease;
         try
@@ -942,7 +991,15 @@ public sealed partial class HttpApiService : IDisposable
             );
             engineProviderId = plugin.ProviderId;
             selectedModelId = plugin.SelectedModelId;
+            engineSupportsTranslation = plugin.SupportsTranslation;
         }
+
+        // An engine that ignores the translate task returns source-language text; reporting
+        // Translate downstream would make number normalization treat it as English.
+        var effectiveTask =
+            opts.Task == TranscriptionTask.Translate && engineSupportsTranslation
+                ? TranscriptionTask.Translate
+                : TranscriptionTask.Transcribe;
 
         var processed = await _pipeline.ProcessAsync(
             result.Text,
@@ -952,7 +1009,7 @@ public sealed partial class HttpApiService : IDisposable
                     ? _vocabularyBoosting.Apply
                     : null,
                 DictionaryCorrector = _dictionary.ApplyCorrections,
-                TranscriptionTask = opts.Task,
+                TranscriptionTask = effectiveTask,
                 DetectedLanguage = result.DetectedLanguage,
                 ConfiguredLanguage = language,
                 ConfiguredLanguageCandidates = opts.LanguageHints,

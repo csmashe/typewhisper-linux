@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text.Json;
@@ -16,7 +17,16 @@ public sealed partial class DictionaryService : IDictionaryService
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
+    private const int MaxCachedCorrectionPatterns = 512;
+
     private readonly AtomicJsonStore<ImmutableArray<DictionaryEntry>> _store;
+
+    // A correction's pattern is a pure function of its original text and case sensitivity, so
+    // this needs no invalidation when entries change — an edited original just maps to a new key.
+    // Reusing the instances keeps the dictation path off Regex's static cache, which holds only
+    // 15 patterns and thrashes once a user has more corrections than that.
+    private readonly ConcurrentDictionary<(string Original, bool CaseSensitive), Regex>
+        _correctionPatterns = new();
 
     public DictionaryService(string filePath)
     {
@@ -142,31 +152,17 @@ public sealed partial class DictionaryService : IDictionaryService
                 continue;
             }
 
-            var pattern = Regex.Escape(entry.Original);
-            var options = entry.CaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
-            // \b silently fails for originals like "C#" or ".NET" whose ends are non-word chars.
-            // Anchor each side based on what the original starts/ends with: \b on word-chars,
-            // lookaround on symbol-chars.
-            var prefix = char.IsLetterOrDigit(entry.Original[0]) || entry.Original[0] == '_'
-                ? @"\b"
-                : @"(?<=\W|^)";
-            var lastChar = entry.Original[^1];
-            var suffix = char.IsLetterOrDigit(lastChar) || lastChar == '_'
-                ? @"\b"
-                : @"(?=\W|$)";
             // MatchEvaluator overload: prevents "$1"/"$&" in user replacements from being
             // interpreted as regex substitution tokens; also counts each match individually.
             var replacement = entry.Replacement!;
             var matchCount = 0;
-            var replaced = Regex.Replace(
+            var replaced = GetCorrectionRegex(entry.Original, entry.CaseSensitive).Replace(
                 text,
-                prefix + pattern + suffix,
                 _ =>
                 {
                     matchCount++;
                     return replacement;
-                },
-                options
+                }
             );
             if (matchCount == 0 || string.Equals(replaced, text, StringComparison.Ordinal))
             {
@@ -185,6 +181,43 @@ public sealed partial class DictionaryService : IDictionaryService
         }
 
         return text;
+    }
+
+    private Regex GetCorrectionRegex(string original, bool caseSensitive)
+    {
+        // Bounded only against a pathological session that edits thousands of distinct originals;
+        // a clear costs nothing but a rebuild on next use.
+        if (_correctionPatterns.Count > MaxCachedCorrectionPatterns)
+        {
+            _correctionPatterns.Clear();
+        }
+
+        return _correctionPatterns.GetOrAdd(
+            (original, caseSensitive),
+            static key =>
+            {
+                var (text, isCaseSensitive) = key;
+                // \b silently fails for originals like "C#" or ".NET" whose ends are non-word
+                // chars. Anchor each side based on what the original starts/ends with: \b on
+                // word-chars, lookaround on symbol-chars.
+                var prefix = char.IsLetterOrDigit(text[0]) || text[0] == '_'
+                    ? @"\b"
+                    : @"(?<=\W|^)";
+                var lastChar = text[^1];
+                var suffix = char.IsLetterOrDigit(lastChar) || lastChar == '_'
+                    ? @"\b"
+                    : @"(?=\W|$)";
+                // CultureInvariant to match the culture-free OrdinalIgnoreCase pre-filter, and
+                // because a cached instance would otherwise pin the culture current when it was
+                // built (Turkish dotless-i being the classic divergence).
+                return new Regex(
+                    prefix + Regex.Escape(text) + suffix,
+                    isCaseSensitive
+                        ? RegexOptions.None
+                        : RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
+                );
+            }
+        );
     }
 
     public string? GetTermsForPrompt()

@@ -317,9 +317,17 @@ public sealed class EvdevGlobalShortcutBackendTests
     private static async Task WaitUntilAsync(Func<bool> predicate)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        while (!predicate())
+        try
         {
-            await Task.Delay(10, timeout.Token);
+            while (!predicate())
+            {
+                await Task.Delay(10, timeout.Token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // A bare "task was canceled" says nothing about which condition never held.
+            Assert.Fail("Timed out after 2s waiting for the predicate to become true.");
         }
     }
 
@@ -327,7 +335,11 @@ public sealed class EvdevGlobalShortcutBackendTests
     {
         private EventHandler? _inputAllowedChanged;
 
-        public bool IsInputAllowed { get; private set; } = inputAllowed;
+        // Written by the test thread, read by the backend's reader threads and WaitUntilAsync's
+        // polling loop, so both sides go through Volatile.
+        private bool _isInputAllowed = inputAllowed;
+
+        public bool IsInputAllowed => Volatile.Read(ref _isInputAllowed);
 
         public int SubscriberCount => _inputAllowedChanged?.GetInvocationList().Length ?? 0;
 
@@ -354,7 +366,7 @@ public sealed class EvdevGlobalShortcutBackendTests
                 return;
             }
 
-            IsInputAllowed = allowed;
+            Volatile.Write(ref _isInputAllowed, allowed);
             _inputAllowedChanged?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -458,8 +470,11 @@ public sealed class EvdevGlobalShortcutBackendTests
     )
         : IEvdevDeviceReader
     {
+        // Set on whichever thread tears the backend down, polled from the test thread.
+        private bool _isDisposed;
+
         public string Path { get; } = path;
-        public bool IsDisposed { get; private set; }
+        public bool IsDisposed => Volatile.Read(ref _isDisposed);
 
         public bool TryStart()
         {
@@ -468,7 +483,7 @@ public sealed class EvdevGlobalShortcutBackendTests
 
         public ValueTask DisposeAsync()
         {
-            IsDisposed = true;
+            Volatile.Write(ref _isDisposed, true);
             return ValueTask.CompletedTask;
         }
 

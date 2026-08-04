@@ -179,6 +179,27 @@ public sealed class LocalizationResourcesTests
     }
 
     [Fact]
+    public void CanonicalCatalog_HasGlobalHotkeyOptOutMessages()
+    {
+        // GlobalHotkeySetupTaskTests assert through Loc.Instance, which returns the key itself
+        // when it is missing — so the catalog needs its own explicit coverage.
+        var en = Load(CanonicalLanguage);
+        var keys = new[]
+        {
+            "Setup.GlobalHotkeyOptedOut",
+            "Setup.GlobalHotkeyOptedOutRuleInstalled",
+            "Setup.GlobalHotkeyOptedOutRuleInstalledDetail",
+            "Setup.GlobalHotkeyRevokeButton"
+        };
+
+        foreach (var key in keys)
+        {
+            Assert.True(en.TryGetValue(key, out var value), $"Missing canonical key: {key}");
+            Assert.False(string.IsNullOrWhiteSpace(value), $"Canonical key is empty: {key}");
+        }
+    }
+
+    [Fact]
     public void CanonicalCatalog_HasDesktopIntegrationStaleAndRefreshMessages()
     {
         var en = Load(CanonicalLanguage);
@@ -255,13 +276,24 @@ public sealed class LocalizationResourcesTests
     {
         var catalog = Load(language);
 
-        Assert.Equal(local, catalog["Plugins.BadgeLocal"]);
-        Assert.Equal(network, catalog["Plugins.BadgeCloud"]);
-        Assert.Equal(mixed, catalog["Plugins.BadgeMixed"]);
-        Assert.Equal(userControlled, catalog["Plugins.BadgeUserControlled"]);
-        Assert.Equal(tts, catalog["Plugins.CategoryTts"]);
-        Assert.Equal(integration, catalog["Plugins.CategoryIntegration"]);
-        Assert.Equal(unknown, catalog["Plugins.CategoryUnknown"]);
+        AssertCatalogValue(catalog, language, "Plugins.BadgeLocal", local);
+        AssertCatalogValue(catalog, language, "Plugins.BadgeCloud", network);
+        AssertCatalogValue(catalog, language, "Plugins.BadgeMixed", mixed);
+        AssertCatalogValue(catalog, language, "Plugins.BadgeUserControlled", userControlled);
+        AssertCatalogValue(catalog, language, "Plugins.CategoryTts", tts);
+        AssertCatalogValue(catalog, language, "Plugins.CategoryIntegration", integration);
+        AssertCatalogValue(catalog, language, "Plugins.CategoryUnknown", unknown);
+    }
+
+    private static void AssertCatalogValue(
+        Dictionary<string, string> catalog,
+        string language,
+        string key,
+        string expected
+    )
+    {
+        Assert.True(catalog.TryGetValue(key, out var actual), $"Missing {language} key: {key}");
+        Assert.Equal(expected, actual);
     }
 
     [Theory]

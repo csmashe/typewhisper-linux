@@ -18,13 +18,25 @@ public sealed class AudioPlaybackService : IDisposable
     private static readonly Lock s_paInitLock = new();
 
     private readonly Lock _gate = new();
+    private readonly bool _portAudioReady;
     private int _position;
     private float[] _samples = [];
     private PaStream? _stream;
 
     public AudioPlaybackService()
     {
-        EnsurePortAudioInitialized();
+        // DI resolves this during startup, so a missing native audio stack must not throw
+        // here: the exception would unwind out of the app before a window ever shows. Play
+        // already treats PortAudio failing at call time as a no-op with a trace line.
+        try
+        {
+            EnsurePortAudioInitialized();
+            _portAudioReady = true;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            Trace.WriteLine($"[AudioPlaybackService] PortAudio unavailable: {ex.Message}");
+        }
     }
 
     public string? CurrentFile { get; private set; }
@@ -33,7 +45,11 @@ public sealed class AudioPlaybackService : IDisposable
     public void Dispose()
     {
         Stop();
-        EnsurePortAudioTerminated();
+        // Only balance the reference count we actually took.
+        if (_portAudioReady)
+        {
+            EnsurePortAudioTerminated();
+        }
     }
 
     // ReSharper disable once UnusedMember.Global — public API (pre-flight playback check); not currently called in-tree.

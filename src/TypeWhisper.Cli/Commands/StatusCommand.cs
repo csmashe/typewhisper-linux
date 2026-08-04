@@ -66,21 +66,12 @@ internal static class StatusCommand
         catch (OperationCanceledException)
         {
             return ConsoleOutput.Error(
-                $"The API did not respond within {FormatBudget(requestBudget)}."
+                $"The API did not respond within {ConsoleOutput.FormatBudget(requestBudget)}."
             );
         }
         catch (JsonException)
         {
             return ConsoleOutput.Error("Received malformed JSON from the API.");
         }
-    }
-
-    private static string FormatBudget(TimeSpan budget)
-    {
-        var seconds = budget.TotalSeconds.ToString(
-            "0.###",
-            System.Globalization.CultureInfo.InvariantCulture
-        );
-        return seconds == "1" ? "1 second" : $"{seconds} seconds";
     }
 }

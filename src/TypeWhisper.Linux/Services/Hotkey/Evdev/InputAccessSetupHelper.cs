@@ -223,6 +223,9 @@ public sealed class InputAccessSetupHelper
                + $"    exit {UdevRuleConflictExitCode}\n"
                + "  fi\n"
                + "fi\n"
+               // Deliberately NO mkdir -p: a missing rules.d means no systemd-udev, so the udevadm
+               // calls below would fail anyway, and aborting on the redirect keeps this
+               // all-or-nothing instead of leaving a root-owned rule behind after a reported failure.
                + "cat > \"$udev_path\" <<'EOF'\n"
                + UdevRuleContent
                + "EOF\n"

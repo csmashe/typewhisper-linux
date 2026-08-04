@@ -1,3 +1,4 @@
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
@@ -17,6 +18,11 @@ public partial class GeneralSectionViewModel : ObservableObject
     private readonly TrayIconService _tray;
     private bool _updatingStartWithSystem;
     private bool _autostartStatusIsHint = true;
+
+    // Set while Refresh hydrates from persisted settings so the generated On<Property>Changed
+    // hooks don't write the value straight back. Delivery is deferred to the UI thread, so
+    // without this a refresh could persist its snapshot over a newer commit.
+    private bool _hydratingFromSettings;
 
     [ObservableProperty]
     private string _apiBearerToken = "";
@@ -70,7 +76,12 @@ public partial class GeneralSectionViewModel : ObservableObject
         Refresh(settings.Current);
         _startWithSystem = StartupService.IsEnabled;
         CloseToTray = _linuxPrefs.Current.CloseToTray;
-        _settings.SettingsChanged += Refresh;
+        // Both fire on whichever thread wrote — a background Save, or the teardown continuation
+        // left on the pool by the awaited model unload — so hop to the UI thread rather than
+        // mutating bound properties off it. Re-read Current when the post runs instead of
+        // capturing the payload, so queued refreshes coalesce onto the newest commit.
+        _settings.SettingsChanged += _ =>
+            Dispatcher.UIThread.Post(() => Refresh(_settings.Current));
         Loc.Instance.LanguageChanged += (_, _) =>
         {
             if (_autostartStatusIsHint)
@@ -78,7 +89,8 @@ public partial class GeneralSectionViewModel : ObservableObject
                 AutostartStatusText = Loc.Instance["General.AutostartHint"];
             }
         };
-        _api.StateChanged += () => ApiStatusText = _api.StatusText;
+        _api.StateChanged += () =>
+            Dispatcher.UIThread.Post(() => ApiStatusText = _api.StatusText);
         ApiStatusText = _api.StatusText;
         RefreshCliState();
     }
@@ -124,12 +136,20 @@ public partial class GeneralSectionViewModel : ObservableObject
 
     private void Refresh(AppSettings s)
     {
-        UiLanguage = s.UiLanguage;
-        ApiServerEnabled = s.ApiServerEnabled;
-        ApiServerPort = s.ApiServerPort;
-        ApiBearerToken = HttpApiService.ReadBearerToken(s);
-        RefreshExamples(s.ApiServerPort);
-        OnPropertyChanged(nameof(SelectedUiLanguageOption));
+        _hydratingFromSettings = true;
+        try
+        {
+            UiLanguage = s.UiLanguage;
+            ApiServerEnabled = s.ApiServerEnabled;
+            ApiServerPort = s.ApiServerPort;
+            ApiBearerToken = HttpApiService.ReadBearerToken(s);
+            RefreshExamples(s.ApiServerPort);
+            OnPropertyChanged(nameof(SelectedUiLanguageOption));
+        }
+        finally
+        {
+            _hydratingFromSettings = false;
+        }
     }
 
     [RelayCommand]
@@ -139,14 +159,19 @@ public partial class GeneralSectionViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void InstallCli()
+    private async Task InstallCliAsync()
     {
         try
         {
-            ApplyCliState(_cliInstall.Install());
+            // Install copies the ~17 MB CLI and runs it once to verify, on a 10-second
+            // deadline — far too long to hold the UI thread.
+            ApplyCliState(await Task.Run(_cliInstall.Install));
         }
         catch (Exception ex)
-            when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+            when (ex is InvalidOperationException
+                or IOException
+                or UnauthorizedAccessException
+                or TimeoutException)
         {
             CliStatusText = ex.Message;
         }
@@ -183,7 +208,12 @@ public partial class GeneralSectionViewModel : ObservableObject
 
     partial void OnUiLanguageChanged(string? value)
     {
-        _settings.Save(_settings.Current with { UiLanguage = value });
+        // Applying the language still runs while hydrating; only the write-back is suppressed.
+        if (!_hydratingFromSettings)
+        {
+            _settings.Save(_settings.Current with { UiLanguage = value });
+        }
+
         Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(value);
         OnPropertyChanged(nameof(SelectedUiLanguageOption));
     }
@@ -218,7 +248,7 @@ public partial class GeneralSectionViewModel : ObservableObject
 
     partial void OnApiServerEnabledChanged(bool value)
     {
-        if (_settings.Current.ApiServerEnabled == value)
+        if (_hydratingFromSettings || _settings.Current.ApiServerEnabled == value)
         {
             return;
         }
@@ -228,7 +258,10 @@ public partial class GeneralSectionViewModel : ObservableObject
 
     partial void OnApiServerPortChanged(int value)
     {
-        if (value <= 0 || value > 65535 || _settings.Current.ApiServerPort == value)
+        if (_hydratingFromSettings
+            || value <= 0
+            || value > 65535
+            || _settings.Current.ApiServerPort == value)
         {
             return;
         }
@@ -243,7 +276,23 @@ public partial class GeneralSectionViewModel : ObservableObject
             return;
         }
 
-        _linuxPrefs.Update(current => current with { CloseToTray = value });
+        try
+        {
+            _linuxPrefs.Update(current => current with { CloseToTray = value });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A read-only or full disk must not throw out of a property setter into the binding.
+            System.Diagnostics.Trace.WriteLine(
+                $"[General] Could not persist the close-to-tray preference: {ex.Message}"
+            );
+
+            // The generated setter already published `value`, but the close handler reads
+            // LinuxPreferences.Current, which a failed write leaves untouched — roll the toggle
+            // back so it can't advertise behavior the app won't honor. The re-entrant call stops
+            // at the equality guard above.
+            CloseToTray = _linuxPrefs.Current.CloseToTray;
+        }
     }
 }
 

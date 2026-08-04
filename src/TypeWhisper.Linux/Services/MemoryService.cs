@@ -126,7 +126,9 @@ public sealed class MemoryService
         }
 
         var providerId = provider.GetLlmSelectionId();
-        var plugin = _pluginManager.GetPlugin(providerId);
+        // Look the plugin up by its owning plugin ID: a profile-backed role's
+        // selection ID is the profile's, which matches no manifest ID.
+        var plugin = _pluginManager.GetPlugin(provider.PluginId);
         var ranLocally = plugin?.Metadata.RanLocally ?? false;
 
         var provenance = new LlmCallProvenance

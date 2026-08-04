@@ -14,7 +14,14 @@ public sealed class RecorderFileNamerTests : IDisposable
 
     public void Dispose()
     {
-        TestPaths.DeleteDirectory(_tempDir);
+        try
+        {
+            TestPaths.DeleteDirectory(_tempDir);
+        }
+        catch (IOException)
+        {
+            // best-effort temp cleanup — must not replace the test's own result
+        }
     }
 
     [Fact]

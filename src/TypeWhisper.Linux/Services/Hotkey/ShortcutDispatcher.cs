@@ -27,8 +27,10 @@ internal sealed class ShortcutDispatcher
     private readonly Dictionary<KeyCode, (string ProfileId, RecordingMode Mode, DateTime DownAt)>
         _profileDictationKeyDown = new();
 
-    private readonly Dictionary<KeyCode, PendingSelectionWorkflow> _pendingSelectionWorkflows =
-        new();
+    // Keyed by the complete workflow identity, not the physical key alone: two workflows can share
+    // one key under different modifiers (Ctrl+Shift+P vs Ctrl+Alt+P), and a KeyCode key would let
+    // the first claim swallow the second. The value is the trigger-released flag.
+    private readonly Dictionary<SelectionWorkflowId, bool> _pendingSelectionWorkflows = new();
     private bool _cancelKeyDown;
     private bool _copyLastKeyDown;
     private (KeyCode Key, RecordingMode Mode, DateTime DownAt)? _mainDictationHeld;
@@ -45,13 +47,17 @@ internal sealed class ShortcutDispatcher
     {
         Volatile.Write(ref _shortcuts, null);
 
-        // Drop any release-gated selection workflow that was queued before the unregister.
-        // Handle ignores releases while the set is null, so a pending entry would otherwise
-        // survive into the next registration and either suppress the rebound key (stale TryAdd)
-        // or dispatch its pre-unregister payload against the current selection on release.
+        // Drop every press-time guard queued before the unregister. Handle ignores releases while
+        // the set is null, so surviving state would carry into the next registration and suppress
+        // the rebound keys — or dispatch a pending workflow's pre-unregister payload.
         lock (_lock)
         {
             _pendingSelectionWorkflows.Clear();
+            _profileDictationKeyDown.Clear();
+            _cancelKeyDown = false;
+            _copyLastKeyDown = false;
+            _mainDictationHeld = null;
+            _recentKeyDown = false;
         }
     }
 
@@ -298,36 +304,44 @@ internal sealed class ShortcutDispatcher
 
     private void HandleRelease(KeyCode key, ModifierMask mods, GlobalShortcutSet set)
     {
-        List<PendingSelectionWorkflow>? readySelectionWorkflows = null;
+        List<SelectionWorkflowId>? readySelectionWorkflows = null;
 
         lock (_lock)
         {
-            if (_pendingSelectionWorkflows.TryGetValue(key, out var releasedWorkflow))
+            List<SelectionWorkflowId>? justReleased = null;
+            // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- explicit loop keeps the Dictionary enumerator (no boxing) and reads clearly under _lock; the LINQ form would switch enumerators for no gain.
+            foreach (var (workflow, triggerReleased) in _pendingSelectionWorkflows)
             {
-                _pendingSelectionWorkflows[key] = releasedWorkflow with
+                if (!triggerReleased && workflow.TriggerKey == key)
                 {
-                    TriggerReleased = true,
-                };
+                    (justReleased ??= []).Add(workflow);
+                }
+            }
+
+            if (justReleased is not null)
+            {
+                foreach (var workflow in justReleased)
+                {
+                    _pendingSelectionWorkflows[workflow] = true;
+                }
             }
 
             if (ShortcutMatcher.ModifiersMatch(mods, ModifierMask.None))
             {
-                // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- explicit loop keeps the Dictionary.ValueCollection enumerator (no boxing) and reads clearly under _lock; the LINQ form would switch enumerators for no gain.
-                foreach (var pending in _pendingSelectionWorkflows.Values)
+                // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- see above; the explicit loop keeps the non-boxing enumerator.
+                foreach (var (workflow, triggerReleased) in _pendingSelectionWorkflows)
                 {
-                    if (!pending.TriggerReleased)
+                    if (triggerReleased)
                     {
-                        continue;
+                        (readySelectionWorkflows ??= []).Add(workflow);
                     }
-
-                    (readySelectionWorkflows ??= []).Add(pending);
                 }
 
                 if (readySelectionWorkflows is not null)
                 {
-                    foreach (var pending in readySelectionWorkflows)
+                    foreach (var workflow in readySelectionWorkflows)
                     {
-                        _pendingSelectionWorkflows.Remove(pending.TriggerKey);
+                        _pendingSelectionWorkflows.Remove(workflow);
                     }
                 }
             }
@@ -354,9 +368,9 @@ internal sealed class ShortcutDispatcher
 
         if (readySelectionWorkflows is not null)
         {
-            foreach (var pending in readySelectionWorkflows)
+            foreach (var workflow in readySelectionWorkflows)
             {
-                DispatchSelectionWorkflow(pending);
+                DispatchSelectionWorkflow(workflow);
             }
         }
 
@@ -453,28 +467,40 @@ internal sealed class ShortcutDispatcher
     {
         lock (_lock)
         {
+            // One physical press claims one workflow: dropping a modifier mid-hold makes the
+            // auto-repeat presses match a different binding on the same key, and the release would
+            // dispatch both. A genuine second press is allowed — the first entry is released by then.
+            // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- explicit loop keeps the Dictionary enumerator (no boxing) and reads clearly under _lock.
+            foreach (var (workflow, triggerReleased) in _pendingSelectionWorkflows)
+            {
+                if (!triggerReleased && workflow.TriggerKey == key)
+                {
+                    return false;
+                }
+            }
+
             return _pendingSelectionWorkflows.TryAdd(
-                key,
-                new PendingSelectionWorkflow(key, kind, payload, false)
+                new SelectionWorkflowId(key, kind, payload),
+                false
             );
         }
     }
 
-    private void DispatchSelectionWorkflow(PendingSelectionWorkflow pending)
+    private void DispatchSelectionWorkflow(SelectionWorkflowId workflow)
     {
         // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined SelectionWorkflowKind values are handled; the default (out-of-range) branch is intentionally omitted.
-        switch (pending.Kind)
+        switch (workflow.Kind)
         {
             case SelectionWorkflowKind.PromptPalette:
                 Raise(PromptPaletteRequested, nameof(PromptPaletteRequested));
                 break;
             case SelectionWorkflowKind.PromptAction:
-                RaisePromptAction(pending.Payload!);
+                RaisePromptAction(workflow.Payload!);
                 break;
             case SelectionWorkflowKind.ProfileTextProcessing:
                 RaiseProfile(
                     ProfileTextProcessingRequested,
-                    pending.Payload!,
+                    workflow.Payload!,
                     nameof(ProfileTextProcessingRequested)
                 );
                 break;
@@ -546,10 +572,9 @@ internal sealed class ShortcutDispatcher
         TransformSelection,
     }
 
-    private readonly record struct PendingSelectionWorkflow(
+    private readonly record struct SelectionWorkflowId(
         KeyCode TriggerKey,
         SelectionWorkflowKind Kind,
-        string? Payload,
-        bool TriggerReleased
+        string? Payload
     );
 }

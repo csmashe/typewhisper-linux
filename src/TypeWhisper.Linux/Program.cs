@@ -131,6 +131,7 @@ public static class Program
                 break;
 
             case StartupRestoreStatus.Applied:
+                Console.WriteLine("Applied the staged settings restore.");
                 Trace.WriteLine("[Program] Applied the staged settings restore.");
                 BootTrace.Stage("staged settings restore applied");
                 break;

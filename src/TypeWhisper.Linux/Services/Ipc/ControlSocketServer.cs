@@ -292,6 +292,7 @@ internal sealed class ControlSocketServer : IDisposable
         return new SocketException((int)SocketError.AddressAlreadyInUse);
     }
 
+    /// <summary>Callers must hold <c>_lifecycleGate</c>.</summary>
     private void CleanupFailedStart(
         ControlSocketOwnership ownership,
         Socket? listener,

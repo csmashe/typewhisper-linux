@@ -234,6 +234,28 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
     private object? _runToken;
     private int _disposed;
 
+    // The callback Start() was given, kept so a reconnect after the sound server restarts
+    // can re-arm the same pipeline, and the caller's "watching requested" intent. Stop()
+    // clears the intent so a subscription ending concurrently is not reconnected.
+    private Action? _callback;
+    private bool _wantRunning;
+    private int _autoRestarts;
+
+    // Bumped by Stop(). A delayed retry worker captures it and exits if it changed, so a
+    // Stop()/Start() cycle during a backoff window cannot leave workers from the previous
+    // session running alongside the new one's — repeated toggles would otherwise accumulate
+    // them, collapsing the backoff and overrunning MaxAutoRestarts between them.
+    private long _session;
+
+    // pactl exits whenever the sound server does (a PipeWire/PulseAudio restart), and the
+    // caller latches "started", so without reconnecting here the watcher would stay dead for
+    // the rest of the session. A run that survived _minRunBeforeRestart reconnects at once;
+    // one that died young (server not back yet, or none at all) backs off, bounded by
+    // MaxAutoRestarts so a permanently broken server cannot respawn pactl forever.
+    private const int MaxAutoRestarts = 10;
+    private readonly TimeSpan _minRunBeforeRestart;
+    private readonly TimeSpan _retryBackoff;
+
     public PactlDefaultDeviceWatcher(SystemCommandAvailabilityService commands)
         : this(() => commands.HasPactl)
     {
@@ -252,12 +274,16 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
     // after the loop exits on EOF/error — is verifiable without spawning 'pactl subscribe'.
     internal PactlDefaultDeviceWatcher(
         Func<bool> isPactlAvailable,
-        Func<PactlSubscription> subscriptionFactory
+        Func<PactlSubscription> subscriptionFactory,
+        TimeSpan? minRunBeforeRestart = null,
+        TimeSpan? retryBackoff = null
     )
     {
         _isPactlAvailable = isPactlAvailable;
         _subscriptionFactory = subscriptionFactory;
         _debounce = TimeSpan.FromMilliseconds(350);
+        _minRunBeforeRestart = minRunBeforeRestart ?? TimeSpan.FromSeconds(5);
+        _retryBackoff = retryBackoff ?? TimeSpan.FromSeconds(1);
     }
 
     // True while a subscription run is active. Test-only: lets a test wait for the read
@@ -352,46 +378,79 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
 
             if (_subscription is not null)
             {
-                // Already running — idempotent.
+                // Already running — idempotent. Returning BEFORE touching _callback matters:
+                // the live dispatcher keeps invoking the original one, so overwriting it here
+                // would swap the callback at the next reconnect.
                 return;
             }
 
-            _dispatcher = new DefaultDeviceChangeDispatcher(onDefaultDeviceChanged, _debounce);
-
-            PactlSubscription subscription;
-            try
+            _callback = onDefaultDeviceChanged;
+            _wantRunning = true;
+            _autoRestarts = 0;
+            // A new session retires any retry worker still sleeping from the previous one, so
+            // the one scheduled below is the only one that can exist for it.
+            _session++;
+            if (SpawnLocked() is null)
             {
-                subscription = _subscriptionFactory();
+                // pactl was reported available but would not launch. Retry on the same bounded
+                // schedule as a runtime failure instead of silently staying down forever.
+                ScheduleRetryLocked(_session);
             }
-            catch (Exception ex)
-            {
-                // Launch failure is non-fatal: log, drop the dispatcher, stay stopped.
-                Trace.WriteLine(
-                    $"[PactlDefaultDeviceWatcher] Failed to start 'pactl subscribe': {ex.Message}"
-                );
-                _dispatcher.Dispose();
-                _dispatcher = null;
-                return;
-            }
-
-            var runToken = new object();
-            var dispatcher = _dispatcher;
-            var cts = new CancellationTokenSource();
-            var token = cts.Token;
-            _subscription = subscription;
-            _runToken = runToken;
-            _cts = cts;
-            // Capture locals (not fields) into the loop so a concurrent Stop() nulling the
-            // fields can't turn a field read on the task thread into a NullReferenceException.
-            // ReSharper disable once MethodSupportsCancellation
-            // Deliberately do NOT pass `token` to Task.Run: if it were already cancelled the
-            // delegate would never run, so ReadLoopAsync's finally (ClearRunState) would not
-            // execute and _subscription would stay set. The token is honored INSIDE the loop
-            // instead, which still lets teardown run.
-            _readerTask = Task.Run(
-                () => ReadLoopAsync(subscription, dispatcher, runToken, token)
-            );
         }
+    }
+
+    // Launch one subscription run; returns its dispatcher, or null if nothing was launched.
+    // The caller MUST hold _gate and must have already validated the intent, so that a
+    // reconnect checks _wantRunning and publishes its replacement without releasing the lock
+    // in between — otherwise a Stop() landing in that window could be undone afterwards.
+    private DefaultDeviceChangeDispatcher? SpawnLocked()
+    {
+        if (_subscription is not null || _callback is null)
+        {
+            // Already running — idempotent.
+            return null;
+        }
+
+        _dispatcher = new DefaultDeviceChangeDispatcher(_callback, _debounce);
+
+        PactlSubscription subscription;
+        try
+        {
+            subscription = _subscriptionFactory();
+        }
+        catch (Exception ex)
+        {
+            // Launch failure is non-fatal: log, drop the dispatcher, stay stopped.
+            Trace.WriteLine(
+                $"[PactlDefaultDeviceWatcher] Failed to start 'pactl subscribe': {ex.Message}"
+            );
+            _dispatcher.Dispose();
+            _dispatcher = null;
+            return null;
+        }
+
+        var runToken = new object();
+        var dispatcher = _dispatcher;
+        var cts = new CancellationTokenSource();
+        var token = cts.Token;
+        // Carried through so this run's eventual reconnect can be rejected if the session
+        // was replaced while it was ending.
+        var session = _session;
+        _subscription = subscription;
+        _runToken = runToken;
+        _cts = cts;
+        // Capture locals (not fields) into the loop so a concurrent Stop() nulling the
+        // fields can't turn a field read on the task thread into a NullReferenceException.
+        // ReSharper disable once MethodSupportsCancellation
+        // Deliberately do NOT pass `token` to Task.Run: if it were already cancelled the
+        // delegate would never run, so ReadLoopAsync's finally (ClearRunState) would not
+        // execute and _subscription would stay set. The token is honored INSIDE the loop
+        // instead, which still lets teardown run.
+        _readerTask = Task.Run(
+            () => ReadLoopAsync(subscription, dispatcher, runToken, session, token)
+        );
+
+        return dispatcher;
     }
 
     private static PactlSubscription LaunchPactlSubscribe()
@@ -399,9 +458,11 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
         var psi = new ProcessStartInfo("pactl")
         {
             RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            // Deliberately NOT redirected: nothing here drains it, so a chatty pactl would
+            // fill the pipe buffer and block the child, stalling the event stream.
+            RedirectStandardError = false,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
         };
         psi.ArgumentList.Add("subscribe");
         // Force a stable, parseable locale for the event lines.
@@ -417,14 +478,16 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
 
     // Thin, untested shell: read subscribe stdout line by line and forward relevant
     // lines to the (tested) dispatcher. Any failure just ends the loop — the watcher
-    // then clears its own state (see ClearRunState) so a later Start() can restart it.
+    // then clears its own state (ClearRunState) and reconnects (TryReconnect).
     private async Task ReadLoopAsync(
         PactlSubscription subscription,
         DefaultDeviceChangeDispatcher dispatcher,
         object runToken,
+        long session,
         CancellationToken ct
     )
     {
+        var startedAt = Stopwatch.GetTimestamp();
         try
         {
             var reader = subscription.Output;
@@ -458,10 +521,119 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
             // Self-teardown: the subscription ended (EOF, read error, or cancellation).
             // Clear the watcher's run state so a subsequent Start() is not rejected as
             // "already running" and can spawn a fresh subscription. Identity-guarded so a
-            // concurrent Stop()/Start() that already replaced this run is never clobbered.
-            ClearRunState(runToken, subscription, dispatcher);
+            // concurrent Stop()/Start() that already replaced this run is never clobbered;
+            // only the run that actually owned the state reconnects.
+            if (ClearRunState(runToken, subscription, dispatcher))
+            {
+                TryReconnect(Stopwatch.GetElapsedTime(startedAt), session);
+            }
         }
     }
+
+    // Reconnect after the subscription ended on its own. The caller (AudioRecordingService)
+    // latches "watcher started" and never calls Start() again, so without this a sound-server
+    // restart would silently end live default-device following for the rest of the session —
+    // leaving only the lazy re-resolve at the next recording start.
+    private void TryReconnect(TimeSpan runDuration, long session)
+    {
+        lock (_gate)
+        {
+            // Disposing, Stop() cleared the intent, something already reconnected, or this
+            // run belongs to a session that has since been replaced.
+            if (Volatile.Read(ref _disposed) == 1
+                || !_wantRunning
+                || _session != session
+                || _subscription is not null)
+            {
+                return;
+            }
+
+            if (runDuration >= _minRunBeforeRestart)
+            {
+                // The subscription was healthy and then ended — the sound server restarted
+                // under a working watcher. Reconnect at once and refresh the budget; if even
+                // the launch failed, fall through and retry it on the backoff schedule.
+                _autoRestarts = 0;
+                if (Reconnect())
+                {
+                    return;
+                }
+            }
+
+            // It died young: the server is probably still coming back up. Back off rather
+            // than either respawning in a tight loop or abandoning recovery, since the first
+            // reconnect after a restart routinely lands before the server is listening again.
+            ScheduleRetryLocked(session);
+        }
+    }
+
+    // Caller holds _gate. One task owns the whole backoff sequence for this session: it keeps
+    // trying until a subscription is launched (from then on that run's own exit drives any
+    // further recovery) or the budget runs out. Driving it from the read loop instead would end
+    // recovery silently whenever the launch itself failed, since no loop would exist to retry.
+    private void ScheduleRetryLocked(long session)
+    {
+        if (_autoRestarts >= MaxAutoRestarts)
+        {
+            Trace.WriteLine(
+                $"[PactlDefaultDeviceWatcher] giving up after {MaxAutoRestarts} attempts; "
+                + "falling back to lazy re-resolve at the next recording start."
+            );
+            return;
+        }
+
+        var attempt = ++_autoRestarts;
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                await Task.Delay(BackoffFor(attempt)).ConfigureAwait(false);
+                lock (_gate)
+                {
+                    // Re-validate: Stop()/Dispose() or another run may have intervened.
+                    if (Volatile.Read(ref _disposed) == 1
+                        || !_wantRunning
+                        || _session != session
+                        || _subscription is not null)
+                    {
+                        return;
+                    }
+
+                    if (Reconnect())
+                    {
+                        return;
+                    }
+
+                    if (_autoRestarts >= MaxAutoRestarts)
+                    {
+                        Trace.WriteLine(
+                            $"[PactlDefaultDeviceWatcher] giving up after {MaxAutoRestarts} "
+                            + "attempts; falling back to lazy re-resolve at the next recording start."
+                        );
+                        return;
+                    }
+
+                    attempt = ++_autoRestarts;
+                }
+            }
+        });
+    }
+
+    // Caller holds _gate. Relaunches and asks the fresh run to reconcile once: pactl does not
+    // replay events, so a default that changed while the subscription was down would otherwise
+    // go unnoticed until the next event or recording start. Signal() is debounced and the
+    // callback no-ops when the device is unchanged, so a spurious one costs nothing.
+    private bool Reconnect()
+    {
+        Trace.WriteLine("[PactlDefaultDeviceWatcher] subscription ended; reconnecting.");
+        var dispatcher = SpawnLocked();
+        dispatcher?.Signal();
+        return dispatcher is not null;
+    }
+
+    // 1s, 2s, 4s, 8s, then 16s for every further attempt.
+    private TimeSpan BackoffFor(int attempt) =>
+        _retryBackoff * (1 << Math.Min(attempt - 1, 4));
 
     // Clear the state for a specific run (identified by runToken) and release its
     // subscription + dispatcher. Called from the read loop's finally block when the
@@ -469,20 +641,25 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
     // Stop()/Dispose() or a newer Start() already took over — so it never disposes a
     // subscription (or dispatcher) that a newer run owns, and never double-disposes one
     // Stop() is already tearing down.
-    private void ClearRunState(
+    // Returns true when this run was still the current one and its state was cleared here.
+    private bool ClearRunState(
         object runToken,
         PactlSubscription subscription,
         DefaultDeviceChangeDispatcher? dispatcher
     )
     {
+        CancellationTokenSource? cts;
         lock (_gate)
         {
             if (!ReferenceEquals(_runToken, runToken))
             {
                 // A newer run (or an explicit Stop) already owns/cleared the state.
-                return;
+                return false;
             }
 
+            // Captured, not just nulled: Stop() disposes the source it tears down, so this
+            // path has to as well or every self-teardown leaks one.
+            cts = _cts;
             _subscription = null;
             _runToken = null;
             _cts = null;
@@ -494,6 +671,18 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
         // reader must not run under _gate.
         try
         {
+            // Kill first, as Stop() does: on a read error pactl can still be alive, and the
+            // production Dispose is Process.Dispose, which releases the handle without
+            // terminating the child — reconnecting on that would orphan one process per failure.
+            subscription.Kill();
+        }
+        catch
+        {
+            /* best effort: process may already be gone */
+        }
+
+        try
+        {
             subscription.Dispose();
         }
         catch
@@ -501,7 +690,9 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
             /* best effort: process may already be gone */
         }
 
+        cts?.Dispose();
         dispatcher?.Dispose();
+        return true;
     }
 
     public void Stop()
@@ -513,6 +704,12 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
 
         lock (_gate)
         {
+            // Clear the intent FIRST and unconditionally: a read loop that is ending right
+            // now may reach TryReconnect after this method has already returned, and must
+            // not resurrect a watcher the caller just stopped.
+            _wantRunning = false;
+            _autoRestarts = 0;
+            _session++;
             subscription = _subscription;
             cts = _cts;
             readerTask = _readerTask;

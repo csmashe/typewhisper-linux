@@ -979,19 +979,31 @@ public sealed class OpenAiCompatiblePlugin
         _additionalProfiles.Clear();
         _additionalApiKeys.Clear();
 
-        var stored = host.GetSetting<List<OpenAiCompatibleProfile>>(AdditionalProfilesSettingKey) ?? [];
+        // Nullable elements deliberately: the persisted JSON is user-editable and the deserializer
+        // ignores the declared types, so nulls reach us — and an NRE here fails activation with no
+        // way back through the UI.
+        var stored = host.GetSetting<List<OpenAiCompatibleProfile?>>(AdditionalProfilesSettingKey) ?? [];
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var profile in stored)
         {
+            if (profile is null)
+                continue;
+
             profile.Id = NormalizeProfileId(profile.Id, seen);
 
             profile.Name = string.IsNullOrWhiteSpace(profile.Name) ? "Custom Server" : profile.Name.Trim();
-            profile.BaseUrl = NormalizeBaseUrl(profile.BaseUrl);
+            // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- the annotation states the C# contract; the deserializer that produced this value ignores it.
+            profile.BaseUrl = NormalizeBaseUrl(profile.BaseUrl ?? "");
+
             profile.SelectedModelId = NullIfWhiteSpace(profile.SelectedModelId);
             profile.SelectedLlmModelId = NullIfWhiteSpace(profile.SelectedLlmModelId);
-            profile.FetchedModels = profile.FetchedModels
-                .Where(m => !string.IsNullOrWhiteSpace(m.Id))
+
+            // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- same reason as BaseUrl above.
+            IEnumerable<FetchedModel?> fetched = profile.FetchedModels ?? [];
+            profile.FetchedModels = fetched
+                .Where(m => !string.IsNullOrWhiteSpace(m?.Id))
+                .Select(m => m!)
                 .ToList();
 
             _additionalProfiles.Add(profile);

@@ -142,8 +142,11 @@ public sealed class CliInstallService
             );
         }
 
-        File.WriteAllText(state.LauncherPath, BuildLauncherScript(state.InstallPath));
-        MarkExecutable(state.LauncherPath);
+        WriteLauncherAtomically(
+            state.LauncherPath,
+            launcherDirectory,
+            BuildLauncherScript(state.InstallPath)
+        );
         RemoveLegacyLauncher(launcherDirectory, installDirectory);
 
         return GetState();
@@ -192,6 +195,32 @@ public sealed class CliInstallService
             SetExecutableAndVerify(tempPath);
             VerifyCliIdentityAndVersion(tempPath);
             File.Move(tempPath, installPath, true);
+        }
+        finally
+        {
+            TryDeleteTemporaryFile(tempPath);
+        }
+    }
+
+    // Commit by rename, like the binary above, so an interrupted install can't leave a
+    // truncated script at the name users type. The mode is verified before the rename:
+    // a fresh temp file starts non-executable, and committing one whose chmod failed
+    // would replace a working launcher with a broken one.
+    private void WriteLauncherAtomically(
+        string launcherPath,
+        string launcherDirectory,
+        string script
+    )
+    {
+        var tempPath = Path.Join(
+            launcherDirectory,
+            $".{CliFileName}.{Guid.NewGuid():N}.tmp"
+        );
+        try
+        {
+            File.WriteAllText(tempPath, script);
+            SetExecutableAndVerify(tempPath);
+            File.Move(tempPath, launcherPath, true);
         }
         finally
         {
@@ -249,7 +278,23 @@ public sealed class CliInstallService
             CreateNoWindow = true,
         };
         process.StartInfo.ArgumentList.Add("--version");
-        if (!process.Start())
+        bool started;
+        try
+        {
+            started = process.Start();
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            // exec fails here rather than at chmod when the install directory is mounted
+            // noexec or the copy is not a valid binary. Normalized because callers only
+            // filter on this type.
+            throw new InvalidOperationException(
+                $"Could not start CLI verification: {ex.Message}",
+                ex
+            );
+        }
+
+        if (!started)
         {
             throw new InvalidOperationException("Could not start CLI verification.");
         }
@@ -556,27 +601,6 @@ public sealed class CliInstallService
     {
         return Path.GetFullPath(directory)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-    }
-
-    private static void MarkExecutable(string path)
-    {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-        {
-            return;
-        }
-
-        try
-        {
-            File.SetUnixFileMode(
-                path,
-                CliExecutableMode
-            );
-        }
-        catch (Exception ex)
-            when (ex is PlatformNotSupportedException or IOException or UnauthorizedAccessException)
-        {
-            Trace.WriteLine($"[CliInstallService] chmod failed for {path}: {ex.Message}");
-        }
     }
 
     private void SetExecutableAndVerify(string path)

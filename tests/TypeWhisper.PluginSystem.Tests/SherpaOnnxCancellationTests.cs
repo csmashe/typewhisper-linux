@@ -166,6 +166,31 @@ public sealed class SherpaOnnxCancellationTests
         Assert.Empty(payloads);
     }
 
+    // A non-string "text"/"lang" must fall back to the raw payload rather than
+    // throwing InvalidOperationException out of JsonElement.GetString().
+    [Theory]
+    [InlineData("""{"text":42,"lang":"en"}""", """{"text":42,"lang":"en"}""", "en")]
+    [InlineData("""{"text":true,"lang":"en"}""", """{"text":true,"lang":"en"}""", "en")]
+    [InlineData("""{"text":"hello","lang":42}""", "hello", null)]
+    [InlineData("""{"text":"hello","lang":false}""", "hello", null)]
+    public void Decode_CanaryPayloadWithNonStringFields_FallsBackWithoutThrowing(
+        string payload,
+        string expectedText,
+        string? expectedLanguage
+    )
+    {
+        var coordinator = new SherpaDecodeCoordinator(_ => payload);
+
+        var result = coordinator.Decode(
+            new float[16],
+            parseCanaryPayload: true,
+            CancellationToken.None
+        );
+
+        Assert.Equal(expectedText, result.Text);
+        Assert.Equal(expectedLanguage, result.DetectedLanguage);
+    }
+
     private static Mock<IPluginHostServices> CreateHost(string assetDirectory)
     {
         var host = new Mock<IPluginHostServices>();

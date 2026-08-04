@@ -326,6 +326,9 @@ public sealed class RecorderSectionViewModelTests : IDisposable
 
     private sealed class FakeSettingsService(AppSettings current) : ISettingsService
     {
+        // ISettingsService.Update must read and persist under the same gate as Save.
+        private readonly Lock _gate = new();
+
         public AppSettings Current { get; private set; } = current;
 
         public AppSettings Load()
@@ -335,15 +338,21 @@ public sealed class RecorderSectionViewModelTests : IDisposable
 
         public void Save(AppSettings settings)
         {
-            Current = settings;
-            SettingsChanged?.Invoke(settings);
+            lock (_gate)
+            {
+                Current = settings;
+                SettingsChanged?.Invoke(settings);
+            }
         }
 
         public AppSettings Update(Func<AppSettings, AppSettings> mutate)
         {
-            var updated = mutate(Current);
-            Save(updated);
-            return updated;
+            lock (_gate)
+            {
+                var updated = mutate(Current);
+                Save(updated);
+                return updated;
+            }
         }
 
         public event Action<AppSettings>? SettingsChanged;

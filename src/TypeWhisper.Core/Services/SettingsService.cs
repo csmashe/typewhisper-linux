@@ -18,6 +18,12 @@ public sealed class SettingsService : ISettingsService
     };
 
     private readonly Lock _commitGate = new();
+
+    // Publication happens outside _commitGate (handlers must not run under the commit lock) but
+    // still in commit order, or a preempted publisher could deliver its older snapshot after a
+    // newer commit. Both fields are guarded by _commitGate; see PublishPendingChanges.
+    private readonly Queue<AppSettings> _pendingNotifications = new();
+    private bool _publishing;
     private readonly AtomicJsonStore<AppSettings> _store;
 
     public SettingsService(string filePath)
@@ -72,16 +78,86 @@ public sealed class SettingsService : ISettingsService
         // AppSettings by reference here, which would miss real changes and announce false ones.
         // The store commits atomically but releases before returning, so without this lock
         // two concurrent saves could notify out of order and leave a subscriber applying
-        // superseded settings.
+        // superseded settings. Queue rather than raise here: handlers must never run under the
+        // commit lock, or a subscriber that saves (or waits on a thread that saves) deadlocks.
+        AppSettings committed;
         lock (_commitGate)
         {
-            var committed = _store.Update(update, out var changed);
+            committed = _store.Update(update, out var changed);
             if (changed)
             {
-                SettingsChanged?.Invoke(committed);
+                _pendingNotifications.Enqueue(committed);
+            }
+        }
+
+        PublishPendingChanges();
+        return committed;
+    }
+
+    /// <summary>
+    ///     Drains committed snapshots to <see cref="SettingsChanged" /> in commit order. No lock is
+    ///     held while a subscriber runs — a handler that saves, or waits on a thread that saves,
+    ///     must not deadlock — so a single active drainer is elected instead. A writer that finds a
+    ///     drain already running (another thread, or this thread re-entering from a handler) leaves
+    ///     its snapshot queued and returns, keeping delivery ordered and non-recursive.
+    /// </summary>
+    private void PublishPendingChanges()
+    {
+        lock (_commitGate)
+        {
+            if (_publishing)
+            {
+                return;
             }
 
-            return committed;
+            _publishing = true;
+        }
+
+        try
+        {
+            while (true)
+            {
+                AppSettings next;
+                lock (_commitGate)
+                {
+                    if (_pendingNotifications.Count == 0)
+                    {
+                        // Resign in the same acquisition that observes the empty queue. Clearing
+                        // later leaves a window where a writer enqueues, sees _publishing still
+                        // true, declines to drain, and strands its notification.
+                        _publishing = false;
+                        return;
+                    }
+
+                    next = _pendingNotifications.Dequeue();
+                }
+
+                // Per subscriber, not per multicast invoke: one throwing handler would otherwise
+                // starve every handler after it. The drainer may also be carrying another writer's
+                // snapshot, so a failure must not escape and fail that already-succeeded Save.
+                foreach (var subscriber in SettingsChanged?.GetInvocationList() ?? [])
+                {
+                    try
+                    {
+                        ((Action<AppSettings>)subscriber)(next);
+                    }
+                    catch (Exception ex)
+                    {
+                        LogWarning($"A SettingsChanged subscriber threw: {ex}");
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Backstop for an abnormal exit (the subscriber chain is already guarded above):
+            // never leave the flag set, or publication stops for the process lifetime.
+            lock (_commitGate)
+            {
+                _publishing = false;
+            }
+
+            throw;
         }
     }
 
