@@ -15,17 +15,23 @@ public sealed class UnixSocketApiClientTests
         await using var stub = new UnixHttpStub();
         var api = new ApiClient(stub.SocketPath, "socket-secret");
 
-        using var response = await api.Http.GetAsync($"{api.BaseUrl}/v1/status");
-        var request = await stub.FirstRequest.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            using var response = await api.Http.GetAsync($"{api.BaseUrl}/v1/status");
+            var request = await stub.FirstRequest.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Contains("GET /v1/status HTTP/1.1", request, StringComparison.Ordinal);
-        Assert.Contains(
-            "Authorization: Bearer socket-secret",
-            request,
-            StringComparison.Ordinal
-        );
-        Dispose(api);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Contains("GET /v1/status HTTP/1.1", request, StringComparison.Ordinal);
+            Assert.Contains(
+                "Authorization: Bearer socket-secret",
+                request,
+                StringComparison.Ordinal
+            );
+        }
+        finally
+        {
+            Dispose(api);
+        }
     }
 
     [Fact]
@@ -36,12 +42,18 @@ public sealed class UnixSocketApiClientTests
         );
         var api = new ApiClient(stub.SocketPath, null);
 
-        using var response = await api.Http.GetAsync($"{api.BaseUrl}/v1/status");
-        await Task.Delay(100);
+        try
+        {
+            using var response = await api.Http.GetAsync($"{api.BaseUrl}/v1/status");
+            await Task.Delay(100);
 
-        Assert.Equal(HttpStatusCode.Found, response.StatusCode);
-        Assert.Equal(1, stub.RequestCount);
-        Dispose(api);
+            Assert.Equal(HttpStatusCode.Found, response.StatusCode);
+            Assert.Equal(1, stub.RequestCount);
+        }
+        finally
+        {
+            Dispose(api);
+        }
     }
 
     [Fact]
@@ -55,10 +67,11 @@ public sealed class UnixSocketApiClientTests
             BypassProxyOnLocal = false,
         };
 
+        ApiClient? api = null;
         try
         {
             // ReSharper disable once UseObjectOrCollectionInitializer -- a nested Http initializer would strip the comment explaining the timeout.
-            var api = new ApiClient(stub.SocketPath, "socket-secret");
+            api = new ApiClient(stub.SocketPath, "socket-secret");
             // Bound the test failure in case proxy bypass regresses.
             api.Http.Timeout = TimeSpan.FromSeconds(3);
 
@@ -67,10 +80,14 @@ public sealed class UnixSocketApiClientTests
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.StartsWith("GET /v1/status HTTP/1.1", request, StringComparison.Ordinal);
-            Dispose(api);
         }
         finally
         {
+            if (api is not null)
+            {
+                Dispose(api);
+            }
+
             HttpClient.DefaultProxy = originalProxy;
         }
     }
@@ -81,19 +98,25 @@ public sealed class UnixSocketApiClientTests
         await using var stub = new UnixHttpStub();
         var api = new ApiClient(stub.SocketPath, "must-not-leak", _ => false);
 
-        await Assert.ThrowsAsync<HttpRequestException>(() =>
-            api.TranscribeHttp.PostAsync(
-                $"{api.BaseUrl}/v1/transcribe",
-                new ByteArrayContent("private-audio"u8.ToArray())
-            )
-        );
+        try
+        {
+            await Assert.ThrowsAsync<HttpRequestException>(() =>
+                api.TranscribeHttp.PostAsync(
+                    $"{api.BaseUrl}/v1/transcribe",
+                    new ByteArrayContent("private-audio"u8.ToArray())
+                )
+            );
 
-        var bytes = await stub.FirstConnectionBytes.Task.WaitAsync(
-            TimeSpan.FromSeconds(2)
-        );
-        Assert.Empty(bytes);
-        Assert.Equal(0, stub.RequestCount);
-        Dispose(api);
+            var bytes = await stub.FirstConnectionBytes.Task.WaitAsync(
+                TimeSpan.FromSeconds(2)
+            );
+            Assert.Empty(bytes);
+            Assert.Equal(0, stub.RequestCount);
+        }
+        finally
+        {
+            Dispose(api);
+        }
     }
 
     [Fact]
@@ -109,13 +132,19 @@ public sealed class UnixSocketApiClientTests
         );
         var api = new ApiClient(discovery.SocketPath!, discovery.Token);
 
-        using var response = await api.Http.GetAsync($"{api.BaseUrl}/v1/status");
-        await stub.FirstRequest.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        await Task.Delay(100);
+        try
+        {
+            using var response = await api.Http.GetAsync($"{api.BaseUrl}/v1/status");
+            await stub.FirstRequest.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await Task.Delay(100);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.False(hostileTcp.Pending());
-        Dispose(api);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.False(hostileTcp.Pending());
+        }
+        finally
+        {
+            Dispose(api);
+        }
     }
 
     private static void Dispose(ApiClient api)
@@ -178,11 +207,18 @@ public sealed class UnixSocketApiClientTests
             {
                 // Expected while ending the accept loop.
             }
-
-            _cts.Dispose();
-            if (Directory.Exists(_tempDirectory))
+            // Teardown faults must not replace whatever the test was actually asserting.
+            catch (SocketException ex) when (SocketShutdown.IsShutdownError(ex))
             {
-                Directory.Delete(_tempDirectory, recursive: true);
+                // Expected when a client resets its connection during shutdown.
+            }
+            finally
+            {
+                _cts.Dispose();
+                if (Directory.Exists(_tempDirectory))
+                {
+                    Directory.Delete(_tempDirectory, recursive: true);
+                }
             }
         }
 

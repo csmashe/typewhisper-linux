@@ -63,9 +63,9 @@ public static partial class AtomicFileWrite
             {
                 File.Delete(tempPath);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch
             {
-                // Best-effort: an extra hard link is harmless, the content is already published.
+                // Best-effort and deliberately unfiltered: an extra hard link is harmless.
             }
 
             return;
@@ -118,6 +118,36 @@ public static partial class AtomicFileWrite
             $"Could not atomically create '{path}' without replacing an existing file "
             + $"(renameat2 errno {renameError})."
         );
+    }
+
+    /// <summary>
+    ///     Publishes a temporary file over <paramref name="path" />, existing or not.
+    /// </summary>
+    private static void PublishReplace(string tempPath, string path)
+    {
+        if (!File.Exists(path))
+        {
+            try
+            {
+                PublishCreateNew(tempPath, path, attemptHardLink: true);
+                return;
+            }
+            catch (IOException) when (File.Exists(path))
+            {
+                // A concurrent writer created the destination between the check and the link.
+                // Replacement is unconditional here, so fall through rather than surfacing the
+                // create-new path's "already exists" failure.
+            }
+        }
+
+        // File.Replace brings the temp file's inode (and mode) into the destination, so copy the
+        // destination's mode over first to preserve its permissions.
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(tempPath, File.GetUnixFileMode(path));
+        }
+
+        File.Replace(tempPath, path, null);
     }
 
     public static void WriteAllText(string path, string contents)
@@ -284,17 +314,12 @@ public static partial class AtomicFileWrite
                 writeTemporaryFile(tempPath);
             }
 
-            if (replaceExisting && File.Exists(path))
-            {
-                // File.Replace brings the temp file's inode (and mode) into the destination, so
-                // copy the destination's mode over first to preserve its permissions.
-                if (!OperatingSystem.IsWindows())
-                {
-                    File.SetUnixFileMode(tempPath, File.GetUnixFileMode(path));
-                }
+            FlushToDisk(tempPath);
 
+            if (replaceExisting)
+            {
                 stagedWriteObserver?.Invoke(tempPath);
-                File.Replace(tempPath, path, null);
+                PublishReplace(tempPath, path);
             }
             else
             {
@@ -320,5 +345,15 @@ public static partial class AtomicFileWrite
 
             throw;
         }
+    }
+
+    /// <summary>
+    ///     Forces the finished temporary file out of the page cache before it becomes the
+    ///     destination, so a crash cannot leave a renamed-but-empty file behind.
+    /// </summary>
+    private static void FlushToDisk(string tempPath)
+    {
+        using var handle = File.OpenHandle(tempPath, FileMode.Open, FileAccess.Write);
+        RandomAccess.FlushToDisk(handle);
     }
 }

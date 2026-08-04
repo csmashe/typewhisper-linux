@@ -6,6 +6,11 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class LinuxStreamingTranscriptStateTests
 {
+    // The concurrency tests below hand off through TaskCompletionSources; bound every
+    // coordination await so a regression fails the test instead of hanging the run.
+    private static readonly TimeSpan s_testTimeout = TimeSpan.FromSeconds(5);
+
+
     [Fact]
     public void StopSession_ReturnsConfirmedPollingText()
     {
@@ -104,7 +109,7 @@ public sealed class LinuxStreamingTranscriptStateTests
             )
         );
 
-        await aEntered.Task;
+        await aEntered.Task.WaitAsync(s_testTimeout);
         var appliedB = sut.TryApplyPolling(
             session,
             "hello world how are you",
@@ -112,7 +117,7 @@ public sealed class LinuxStreamingTranscriptStateTests
             out var displayB
         );
         releaseA.SetResult();
-        var appliedA = await callA;
+        var appliedA = await callA.WaitAsync(s_testTimeout);
 
         Assert.True(appliedB);
         Assert.Equal("hello world how are you", displayB);
@@ -148,14 +153,14 @@ public sealed class LinuxStreamingTranscriptStateTests
         );
 
         // The stale corrector has snapshotted _confirmedText="" at the first session's version.
-        await staleEntered.Task;
+        await staleEntered.Task.WaitAsync(s_testTimeout);
 
         // After Stop/Start the new confirmed buffer is also "", so only the version check can
         // reject the stale write — release and await it before any session-2 commit.
         sut.StopSession();
         var secondSession = sut.StartSession();
         releaseStale.SetResult();
-        var staleApplied = await staleCall;
+        var staleApplied = await staleCall.WaitAsync(s_testTimeout);
 
         Assert.False(staleApplied);
         Assert.Equal("", staleDisplay);

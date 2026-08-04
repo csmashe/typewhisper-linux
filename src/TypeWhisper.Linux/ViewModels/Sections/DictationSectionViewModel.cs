@@ -26,6 +26,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private readonly Func<IReadOnlyList<AudioInputDevice>> _getInputDevices;
     private readonly SystemCommandAvailabilityService _commands;
     private readonly DictationOrchestrator _dictation;
+    private readonly IErrorLogService? _errorLog;
     private readonly ModelManagerService _models;
     private readonly PluginManager _pluginManager;
     private readonly ISettingsService _settings;
@@ -174,6 +175,7 @@ public partial class DictationSectionViewModel : ObservableObject
     // True when the Dictation page is visible; restarts mic preview after recording
     // ends so the level meter doesn't go dark while the page is still open.
     private bool _previewAttached;
+    private bool _reportedAudioUnavailable;
 
     [ObservableProperty]
     private double _previewLevel;
@@ -216,7 +218,8 @@ public partial class DictationSectionViewModel : ObservableObject
         PluginManager pluginManager,
         SystemCommandAvailabilityService commands,
         // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym mirroring org.a11y.Bus; ReSharper's camelCase splitter mis-reads "11y".
-        IAccessibilityBusActivation a11yBus
+        IAccessibilityBusActivation a11yBus,
+        IErrorLogService? errorLog = null
     )
         : this(
             dictation,
@@ -226,7 +229,8 @@ public partial class DictationSectionViewModel : ObservableObject
             pluginManager,
             commands,
             a11yBus,
-            AudioRecordingService.GetInputDevices
+            AudioRecordingService.GetInputDevices,
+            errorLog
         )
     {
     }
@@ -240,12 +244,14 @@ public partial class DictationSectionViewModel : ObservableObject
         SystemCommandAvailabilityService commands,
         // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym mirroring org.a11y.Bus; ReSharper's camelCase splitter mis-reads "11y".
         IAccessibilityBusActivation a11yBus,
-        Func<IReadOnlyList<AudioInputDevice>> getInputDevices
+        Func<IReadOnlyList<AudioInputDevice>> getInputDevices,
+        IErrorLogService? errorLog = null
     )
     {
         _dictation = dictation;
         _models = models;
         _audio = audio;
+        _errorLog = errorLog;
         _getInputDevices = getInputDevices;
         _settings = settings;
         _pluginManager = pluginManager;
@@ -651,6 +657,22 @@ public partial class DictationSectionViewModel : ObservableObject
         foreach (var d in _getInputDevices())
         {
             Devices.Add(d);
+        }
+
+        // Enumeration yields an empty table rather than throwing when the native audio
+        // stack is missing, so say why in the error log — otherwise an empty microphone
+        // list looks like the app simply found no hardware. Once per session: this also
+        // runs from the refresh command.
+        if (
+            !_reportedAudioUnavailable
+            && AudioRecordingService.NativeAudioUnavailableReason is { } audioFailure
+        )
+        {
+            _reportedAudioUnavailable = true;
+            _errorLog?.AddEntry(
+                $"Audio device enumeration unavailable: {audioFailure}",
+                ErrorCategory.Recording
+            );
         }
 
         SelectedDevice = ResolveSelectedDeviceOption(
@@ -1613,6 +1635,17 @@ public partial class DictationSectionViewModel : ObservableObject
                     _settings.Current with { AccessibilityBridgeEnabledByApp = false }
                 );
             }
+        }
+
+        if (ok)
+        {
+            // A confirmed write is authoritative — the follow-up read applies nothing when it
+            // returns null (bus timeout), leaving Setup/Remove on the pre-toggle state after a
+            // toggle that succeeded. Claiming the newest generation stops a slower refresh undoing it.
+            _accessibilityBridgeAppliedGeneration = ++_accessibilityBridgeRefreshGeneration;
+            _accessibilityBridgeStateKnown = true;
+            AccessibilityBridgeActivated = enable;
+            OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
         }
 
         await RefreshAccessibilityBridgeStateAsync();

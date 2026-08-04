@@ -13,15 +13,21 @@ public sealed class ProfileService : IProfileService
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
+    private readonly IErrorLogService? _errorLog;
     private readonly string _filePath;
     private readonly AtomicJsonStore<ImmutableArray<Profile>> _store;
 
-    public ProfileService(string filePath)
-        : this(filePath, AtomicFileWrite.WriteAllText) { }
+    public ProfileService(string filePath, IErrorLogService? errorLog = null)
+        : this(filePath, AtomicFileWrite.WriteAllText, errorLog) { }
 
-    internal ProfileService(string filePath, Action<string, string>? atomicWrite)
+    internal ProfileService(
+        string filePath,
+        Action<string, string>? atomicWrite,
+        IErrorLogService? errorLog = null
+    )
     {
         _filePath = Path.GetFullPath(filePath);
+        _errorLog = errorLog;
         var options = new AtomicJsonStoreOptions<ImmutableArray<Profile>>
         {
             JsonOptions = s_jsonOptions,
@@ -291,14 +297,25 @@ public sealed class ProfileService : IProfileService
     private void Commit(Func<ImmutableArray<Profile>, ImmutableArray<Profile>> update)
     {
         var changed = false;
-        _store.Update(
-            current =>
-            {
-                var next = Sort(update(current));
-                changed = !next.Equals(current);
-                return next;
-            }
-        );
+        try
+        {
+            _store.Update(
+                current =>
+                {
+                    var next = Sort(update(current));
+                    changed = !next.Equals(current);
+                    return next;
+                }
+            );
+        }
+        catch (Exception ex)
+        {
+            // The store refuses to publish over a file it could not load, so surface *why* the
+            // user's edit did not stick; callers still see the exception.
+            _errorLog?.AddEntry($"Could not save profiles to {_filePath}: {ex.Message}");
+            throw;
+        }
+
         if (changed)
         {
             ProfilesChanged?.Invoke();

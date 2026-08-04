@@ -27,7 +27,17 @@ public sealed class StreamingProviderFailurePropagationTests
         );
         await finalReceived.Task.WaitAsync(s_testTimeout);
         socket.EnqueueFault(new WebSocketException("AssemblyAI transport failed."));
-        await socket.LastReceiveConsumed.WaitAsync(s_testTimeout);
+
+        // FinalizeAsync cannot return until the fault is captured, but its own
+        // terminal send may lose the race to the abort and surface the raw transport
+        // error. Drive it once to land the fault, then assert the session-visible type.
+        var driveFault = await Record.ExceptionAsync(
+            () => session.FinalizeAsync(CancellationToken.None).WaitAsync(s_testTimeout)
+        );
+        Assert.NotNull(driveFault);
+        // A regression that never completes the terminal waiter must fail here,
+        // not hang, and its timeout must not pass for the provider fault.
+        Assert.IsNotType<TimeoutException>(driveFault);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => session.SendAudioAsync(new byte[1600], CancellationToken.None)
@@ -160,7 +170,17 @@ public sealed class StreamingProviderFailurePropagationTests
         socket.EnqueueText(DeepgramResult("A complete prefix.", isFinal: true));
         await finalReceived.Task.WaitAsync(s_testTimeout);
         socket.EnqueueFault(new WebSocketException("Deepgram transport failed."));
-        await socket.LastReceiveConsumed.WaitAsync(s_testTimeout);
+
+        // FinalizeAsync cannot return until the fault is captured, but its own
+        // terminal send may lose the race to the abort and surface the raw transport
+        // error. Drive it once to land the fault, then assert the session-visible type.
+        var driveFault = await Record.ExceptionAsync(
+            () => session.FinalizeAsync(CancellationToken.None).WaitAsync(s_testTimeout)
+        );
+        Assert.NotNull(driveFault);
+        // A regression that never completes the terminal waiter must fail here,
+        // not hang, and its timeout must not pass for the provider fault.
+        Assert.IsNotType<TimeoutException>(driveFault);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => session.SendAudioAsync(new byte[] { 1, 2 }, CancellationToken.None)
@@ -285,7 +305,17 @@ public sealed class StreamingProviderFailurePropagationTests
         );
         await finalReceived.Task.WaitAsync(s_testTimeout);
         socket.EnqueueFault(new WebSocketException("ElevenLabs transport failed."));
-        await socket.LastReceiveConsumed.WaitAsync(s_testTimeout);
+
+        // FinalizeAsync cannot return until the fault is captured, but its own
+        // terminal send may lose the race to the abort and surface the raw transport
+        // error. Drive it once to land the fault, then assert the session-visible type.
+        var driveFault = await Record.ExceptionAsync(
+            () => session.FinalizeAsync(CancellationToken.None).WaitAsync(s_testTimeout)
+        );
+        Assert.NotNull(driveFault);
+        // A regression that never completes the terminal waiter must fail here,
+        // not hang, and its timeout must not pass for the provider fault.
+        Assert.IsNotType<TimeoutException>(driveFault);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => session.SendAudioAsync(new byte[3200], CancellationToken.None)
@@ -512,19 +542,28 @@ public sealed class StreamingProviderFailurePropagationTests
             Channel.CreateUnbounded<ReceiveItem>();
         private readonly Channel<SentFrame> _sends =
             Channel.CreateUnbounded<SentFrame>();
-        private TaskCompletionSource _lastReceiveConsumed =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Guards the mutable state below: it is written on the session's receive
+        // and teardown paths and read from the test thread. Volatile.Read cannot
+        // be used here — the fields are enums and structs, not reference types.
+        private readonly Lock _stateLock = new();
         private WebSocketState _state = WebSocketState.Open;
         private WebSocketCloseStatus? _closeStatus;
         private string? _closeDescription;
 
-        public Task LastReceiveConsumed => _lastReceiveConsumed.Task;
-        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- WebSocket declares these get-only, so an override cannot add a private setter.
-        public override WebSocketCloseStatus? CloseStatus => _closeStatus;
-        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- WebSocket declares these get-only, so an override cannot add a private setter.
-        public override string? CloseStatusDescription => _closeDescription;
-        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- WebSocket declares these get-only, so an override cannot add a private setter.
-        public override WebSocketState State => _state;
+        public override WebSocketCloseStatus? CloseStatus
+        {
+            get { lock (_stateLock) { return _closeStatus; } }
+        }
+
+        public override string? CloseStatusDescription
+        {
+            get { lock (_stateLock) { return _closeDescription; } }
+        }
+
+        public override WebSocketState State
+        {
+            get { lock (_stateLock) { return _state; } }
+        }
         public override string? SubProtocol => null;
 
         public void EnqueueText(string json) =>
@@ -554,17 +593,15 @@ public sealed class StreamingProviderFailurePropagationTests
         public async Task<SentFrame> NextSentAsync() =>
             await _sends.Reader.ReadAsync().AsTask().WaitAsync(s_testTimeout);
 
-        private void Enqueue(ReceiveItem item)
-        {
-            _lastReceiveConsumed = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously
-            );
+        private void Enqueue(ReceiveItem item) =>
             Assert.True(_receives.Writer.TryWrite(item));
-        }
 
         public override void Abort()
         {
-            _state = WebSocketState.Aborted;
+            lock (_stateLock)
+            {
+                _state = WebSocketState.Aborted;
+            }
         }
 
         public override Task CloseAsync(
@@ -574,9 +611,7 @@ public sealed class StreamingProviderFailurePropagationTests
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _closeStatus = closeStatus;
-            _closeDescription = statusDescription;
-            _state = WebSocketState.Closed;
+            SetClosed(closeStatus, statusDescription, WebSocketState.Closed);
             return Task.CompletedTask;
         }
 
@@ -587,15 +622,31 @@ public sealed class StreamingProviderFailurePropagationTests
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _closeStatus = closeStatus;
-            _closeDescription = statusDescription;
-            _state = WebSocketState.CloseSent;
+            SetClosed(closeStatus, statusDescription, WebSocketState.CloseSent);
             return Task.CompletedTask;
+        }
+
+        private void SetClosed(
+            WebSocketCloseStatus? closeStatus,
+            string? closeDescription,
+            WebSocketState state
+        )
+        {
+            lock (_stateLock)
+            {
+                _closeStatus = closeStatus;
+                _closeDescription = closeDescription;
+                _state = state;
+            }
         }
 
         public override void Dispose()
         {
-            _state = WebSocketState.Closed;
+            lock (_stateLock)
+            {
+                _state = WebSocketState.Closed;
+            }
+
             _receives.Writer.TryComplete();
             _sends.Writer.TryComplete();
         }
@@ -606,20 +657,21 @@ public sealed class StreamingProviderFailurePropagationTests
         )
         {
             var item = await _receives.Reader.ReadAsync(cancellationToken);
-            _lastReceiveConsumed.TrySetResult();
 
             if (item is ReceiveItem.Fault fault)
             {
-                _state = WebSocketState.Aborted;
+                Abort();
                 ExceptionDispatchInfo.Capture(fault.Exception).Throw();
             }
 
             var frame = Assert.IsType<ReceiveItem.Frame>(item);
             if (frame.MessageType == WebSocketMessageType.Close)
             {
-                _closeStatus = frame.CloseStatus;
-                _closeDescription = frame.CloseDescription;
-                _state = WebSocketState.CloseReceived;
+                SetClosed(
+                    frame.CloseStatus,
+                    frame.CloseDescription,
+                    WebSocketState.CloseReceived
+                );
                 return new WebSocketReceiveResult(
                     0,
                     WebSocketMessageType.Close,
@@ -649,7 +701,7 @@ public sealed class StreamingProviderFailurePropagationTests
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (_state != WebSocketState.Open)
+            if (State != WebSocketState.Open)
                 throw new WebSocketException("The fake WebSocket is not open.");
 
             Assert.True(endOfMessage);

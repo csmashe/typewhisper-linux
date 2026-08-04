@@ -76,10 +76,17 @@ public partial class AdvancedSectionViewModel : ObservableObject
         _speechFeedback = speechFeedback;
         _pluginManager = pluginManager;
         _post = post;
-        _speechFeedback.ProvidersChanged += (_, _) => PostPluginStateRefresh();
         RefreshSpokenFeedbackProviders();
         Refresh(settings.Current);
-        _settings.SettingsChanged += Refresh;
+
+        // Subscribe only once hydration has run: RefreshSpokenFeedbackProviders falls back to the
+        // default provider when the selected one is absent, and firing that against an un-hydrated
+        // selection would persist the default over the user's saved provider.
+        _speechFeedback.ProvidersChanged += (_, _) => PostPluginStateRefresh();
+
+        // SettingsChanged can fire off the UI thread (HTTP API, model manager), and
+        // Refresh mutates the provider/voice collections.
+        _settings.SettingsChanged += changed => _post(() => Refresh(changed));
         _pluginManager.PluginStateChanged += (_, _) => PostPluginStateRefresh();
         Loc.Instance.LanguageChanged += OnInterfaceLanguageChanged;
     }

@@ -131,16 +131,17 @@ public sealed class GeminiPlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
     internal async Task SetApiKeyAsync(string apiKey)
     {
         var trimmed = apiKey.Trim();
-        ApiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
+        // Persist first: a failed write must not leave a key in memory that won't survive restart.
         if (_host is not null)
         {
             if (string.IsNullOrEmpty(trimmed))
                 await _host.DeleteSecretAsync("api-key");
             else
                 await _host.StoreSecretAsync("api-key", trimmed);
-
-            _host.NotifyCapabilitiesChanged();
         }
+
+        ApiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
+        _host?.NotifyCapabilitiesChanged();
     }
 
     internal async Task<bool> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)

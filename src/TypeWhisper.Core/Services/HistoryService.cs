@@ -53,9 +53,17 @@ public sealed partial class HistoryService : IHistoryService
     public int TotalWords => _store.Current.Sum(r => r.WordCount);
     public double TotalDuration => _store.Current.Sum(r => r.DurationSeconds);
 
-    public async Task EnsureLoadedAsync()
+    public Task EnsureLoadedAsync()
     {
-        _ = await Task.Run(() => _store.Current).ConfigureAwait(false);
+        // Keep the completed-synchronously fast path the cached implementation had: reading an
+        // already-loaded snapshot costs nothing, and callers that refresh straight after awaiting
+        // (HistorySectionViewModel's constructor) must not be pushed onto a later turn.
+        if (_store.IsLoaded)
+        {
+            return Task.CompletedTask;
+        }
+
+        return Task.Run(() => _ = _store.Current);
     }
 
     public IReadOnlyList<string> GetDistinctApps()

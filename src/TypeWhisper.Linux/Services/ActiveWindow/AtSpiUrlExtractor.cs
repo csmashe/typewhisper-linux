@@ -53,6 +53,10 @@ public sealed partial class AtSpiUrlExtractor
     private string? _missDescriptorId;
     private string? _missTitle;
 
+    // Test seam standing in for the AT-SPI tree walk, so the cache/miss-backoff state machine
+    // can be exercised without busctl, gdbus, or a live a11y bus. Always null in production.
+    private readonly Func<string, string?>? _walkOverride;
+
     public AtSpiUrlExtractor()
         : this(new ProcessRunner())
     {
@@ -74,6 +78,12 @@ public sealed partial class AtSpiUrlExtractor
         // gdbus has no --version flag (exits 1 with "Unknown command"). Probe
         // with `help`, which exits 0 and proves the binary is runnable.
         _isGdbusAvailable = CheckCommandAvailable("gdbus", ["help"]);
+    }
+
+    internal AtSpiUrlExtractor(IErrorLogService? errorLog, Func<string, string?>? walkOverride)
+        : this(new ProcessRunner(), errorLog)
+    {
+        _walkOverride = walkOverride;
     }
 
     public string? TryGetBrowserUrl(
@@ -142,22 +152,33 @@ public sealed partial class AtSpiUrlExtractor
             }
         }
 
-        if (!_isBusctlAvailable || !_isGdbusAvailable)
-        {
-            LogOnce("AT-SPI URL walk skipped: busctl/gdbus not on PATH.");
-            return null;
-        }
-
-        var address = GetAtSpiBusAddress();
-        if (string.IsNullOrWhiteSpace(address))
-        {
-            LogOnce("AT-SPI URL walk skipped: a11y bus address not resolvable via gdbus.");
-            return null;
-        }
-
-        using var cts = new CancellationTokenSource(s_walkBudget);
+        string? url;
         var stats = new WalkStats();
-        var url = WalkForUrl(address, browser, stats, cts.Token);
+        var budgetExhausted = false;
+
+        if (_walkOverride is not null)
+        {
+            url = _walkOverride(browser.CanonicalProcessName);
+        }
+        else
+        {
+            if (!_isBusctlAvailable || !_isGdbusAvailable)
+            {
+                LogOnce("AT-SPI URL walk skipped: busctl/gdbus not on PATH.");
+                return null;
+            }
+
+            var address = GetAtSpiBusAddress();
+            if (string.IsNullOrWhiteSpace(address))
+            {
+                LogOnce("AT-SPI URL walk skipped: a11y bus address not resolvable via gdbus.");
+                return null;
+            }
+
+            using var cts = new CancellationTokenSource(s_walkBudget);
+            url = WalkForUrl(address, browser, stats, cts.Token);
+            budgetExhausted = cts.IsCancellationRequested;
+        }
 
         lock (_cacheLock)
         {
@@ -188,7 +209,7 @@ public sealed partial class AtSpiUrlExtractor
                 focusedTitle,
                 stats,
                 url,
-                cts.IsCancellationRequested
+                budgetExhausted
             )
         );
         return url;

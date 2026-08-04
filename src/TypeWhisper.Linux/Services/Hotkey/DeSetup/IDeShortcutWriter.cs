@@ -60,6 +60,9 @@ public interface IDeShortcutWriter
     ///     <paramref name="shortcutId" />, regardless of its current trigger or commands. Unlike
     ///     <see cref="IsInstalledAsync" />, this detects stale managed entries. Never mutates;
     ///     normal absence, malformed ownership markers, and read errors return false.
+    ///     GNOME and KDE store one entry per id and scope the lookup to it. Hyprland and Sway
+    ///     store a single unscoped sentinel block carrying no id, so they answer for the one
+    ///     shortcut they can hold; scoping them would break already-installed blocks.
     /// </summary>
     Task<bool> IsManagedShortcutPresentAsync(string shortcutId, CancellationToken ct);
 

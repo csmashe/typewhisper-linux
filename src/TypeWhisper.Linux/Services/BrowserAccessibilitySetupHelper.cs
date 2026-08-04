@@ -41,10 +41,16 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
     private const string UserJsOwnedSeparatorSuffix = "; separator newline owned";
 
-    private static readonly string[] s_systemLauncherDirectories =
+    // Launcher names and Firefox profile roots now come from BrowserDescriptorCatalog; only the
+    // export roots stay here.
+    //
+    // Appended even when XDG_DATA_DIRS omits them: Flatpak's profile.d snippet and
+    // systemd generator do not reach every session type, so an absent export root means
+    // a propagation gap. System roots get no such treatment — one the session left out
+    // is one whose launchers the desktop does not read at all.
+    private static readonly string[] s_flatpakExportRoots =
     [
-        "/usr/share/applications",
-        "/var/lib/flatpak/exports/share/applications",
+        "/var/lib/flatpak/exports/share",
     ];
 
     /// <summary>
@@ -898,9 +904,48 @@ public sealed partial class BrowserAccessibilitySetupHelper
         return -1;
     }
 
-    private static string? FindSystemLauncher(string name)
+    /// <summary>
+    ///     Launcher source directories in XDG_DATA_DIRS precedence order; the spec
+    ///     defaults apply only when that variable is unset. The per-user Flatpak export
+    ///     dir leads because <c>flatpak install --user</c> writes there and that copy is
+    ///     the one the application menu launches — sourcing a lower-precedence duplicate
+    ///     would shadow the launcher with a different browser's Exec line.
+    /// </summary>
+    internal static IEnumerable<string> LauncherSourceDirectories()
     {
-        return s_systemLauncherDirectories
+        var dataDirs = Environment.GetEnvironmentVariable("XDG_DATA_DIRS");
+        var roots = new List<string>
+        {
+            Path.Join(XdgPaths.ResolveDataHome(), "flatpak", "exports", "share"),
+        };
+        roots.AddRange(
+            string.IsNullOrEmpty(dataDirs)
+                ? ["/usr/local/share", "/usr/share"]
+                : dataDirs.Split(':', StringSplitOptions.RemoveEmptyEntries)
+        );
+        roots.AddRange(s_flatpakExportRoots);
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- only the guard is convertible; the body still mutates `seen` and yields.
+        foreach (var root in roots)
+        {
+            // The XDG spec says relative entries are invalid and must be ignored.
+            if (!Path.IsPathRooted(root))
+            {
+                continue;
+            }
+
+            var dir = Path.Join(root, "applications");
+            if (seen.Add(dir.TrimEnd('/')))
+            {
+                yield return dir;
+            }
+        }
+    }
+
+    internal static string? FindSystemLauncher(string name)
+    {
+        return LauncherSourceDirectories()
             .Select(dir => Path.Join(dir, name))
             .FirstOrDefault(File.Exists);
     }
@@ -1093,14 +1138,12 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
     private static string UserApplicationsDir()
     {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Join(home, ".local", "share", "applications");
+        return Path.Join(XdgPaths.ResolveDataHome(), "applications");
     }
 
     private static string LauncherBackupDir()
     {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Join(home, ".local", "share", "typewhisper", "launcher-backups");
+        return Path.Join(XdgPaths.ResolveDataHome(), "typewhisper", "launcher-backups");
     }
 
     public sealed record Status(
@@ -1127,8 +1170,10 @@ public sealed partial class BrowserAccessibilitySetupHelper
     }
 
     // accessibility.force_disabled = -1 pref line, matched per-line across full user.js content
-    // (Multiline so the line is recognized even when our attribution comment precedes it).
-    [GeneratedRegex("""^\s*user_pref\(\s*"accessibility\.force_disabled"\s*,\s*-1\s*\)\s*;""", RegexOptions.Multiline)]
+    // (Multiline so the line is recognized even when our attribution comment precedes it). Accepts
+    // either quote style, like ForceDisabledAnyValueLineRegex: Firefox's pref parser takes both, so
+    // a single-quoted user-authored -1 is already effective and must not be rewritten/preserved.
+    [GeneratedRegex("""^\s*user_pref\(\s*(?<quote>["'])accessibility\.force_disabled\k<quote>\s*,\s*-1\s*\)\s*;""", RegexOptions.Multiline)]
     private static partial Regex ForceDisabledNegOneMultilineRegex();
 
     // Any live accessibility.force_disabled line, captured verbatim (minus its

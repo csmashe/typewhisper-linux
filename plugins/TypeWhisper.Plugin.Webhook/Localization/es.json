@@ -18,6 +18,7 @@
   "Settings.MethodInvalid": "el método debe ser POST o PUT.",
   "Settings.HeaderMissingSeparator": "a la línea de cabecera '{0}' le falta un separador ':'.",
   "Settings.HeaderEmptyName": "la línea de cabecera '{0}' tiene un nombre vacío.",
+  "Settings.HeaderPlaceholderWithoutStoredValue": "la cabecera '{0}' no tiene ningún valor almacenado que conservar; introduzca su valor real.",
   "Settings.FailedToSaveSettings": "No se pudieron guardar los ajustes: {0}",
   "Settings.Saved": "Guardado.",
   "Manifest.Name": "Webhook",

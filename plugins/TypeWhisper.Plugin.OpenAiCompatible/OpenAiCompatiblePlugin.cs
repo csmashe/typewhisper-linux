@@ -979,7 +979,10 @@ public sealed class OpenAiCompatiblePlugin
         _additionalProfiles.Clear();
         _additionalApiKeys.Clear();
 
-        var stored = host.GetSetting<List<OpenAiCompatibleProfile>>(AdditionalProfilesSettingKey) ?? [];
+        // Nullable elements deliberately: the persisted JSON is user-editable and the deserializer
+        // ignores the declared types, so nulls reach us — and an NRE here fails activation with no
+        // way back through the UI.
+        var stored = host.GetSetting<List<OpenAiCompatibleProfile?>>(AdditionalProfilesSettingKey) ?? [];
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var repaired = false;
         var secretMigrations = new List<(string OldId, string NewId)>();
@@ -993,7 +996,7 @@ public sealed class OpenAiCompatiblePlugin
         // endpoint. Order within the file must not decide who keeps an exact ID.
         for (var i = 0; i < stored.Count; i++)
         {
-            var storedId = stored[i].Id;
+            var storedId = stored[i]?.Id;
             // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- profiles are JSON-deserialized from persisted settings, so Id arrives null despite its non-nullable annotation.
             if (storedId is not null
                 && string.Equals(storedId, storedId.Trim(), StringComparison.Ordinal)
@@ -1005,11 +1008,19 @@ public sealed class OpenAiCompatiblePlugin
         }
 
         for (var i = 0; i < stored.Count; i++)
-            assignedIds[i] ??= NormalizeProfileId(stored[i].Id, seen);
+        {
+            // A null element is dropped below, so it must not consume an ID another
+            // profile could keep.
+            if (stored[i] is not null)
+                assignedIds[i] ??= NormalizeProfileId(stored[i]!.Id, seen);
+        }
 
         for (var i = 0; i < stored.Count; i++)
         {
             var profile = stored[i];
+            if (profile is null)
+                continue;
+
             var oldRawId = profile.Id;
             var normalizedId = assignedIds[i]!;
 
@@ -1037,11 +1048,17 @@ public sealed class OpenAiCompatiblePlugin
             profile.Id = normalizedId;
 
             profile.Name = string.IsNullOrWhiteSpace(profile.Name) ? "Custom Server" : profile.Name.Trim();
-            profile.BaseUrl = NormalizeBaseUrl(profile.BaseUrl);
+            // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- the annotation states the C# contract; the deserializer that produced this value ignores it.
+            profile.BaseUrl = NormalizeBaseUrl(profile.BaseUrl ?? "");
+
             profile.SelectedModelId = NullIfWhiteSpace(profile.SelectedModelId);
             profile.SelectedLlmModelId = NullIfWhiteSpace(profile.SelectedLlmModelId);
-            profile.FetchedModels = profile.FetchedModels
-                .Where(m => !string.IsNullOrWhiteSpace(m.Id))
+
+            // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- same reason as BaseUrl above.
+            IEnumerable<FetchedModel?> fetched = profile.FetchedModels ?? [];
+            profile.FetchedModels = fetched
+                .Where(m => !string.IsNullOrWhiteSpace(m?.Id))
+                .Select(m => m!)
                 .ToList();
 
             _additionalProfiles.Add(profile);

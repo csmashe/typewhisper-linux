@@ -96,6 +96,30 @@ public class HttpApiRequestDispatcherTests
     }
 
     [Fact]
+    public async Task Dispose_WhileHandlerInFlight_LeavesTheHandlerAbleToReleaseItsSlot()
+    {
+        var dispatcher = new HttpApiRequestDispatcher(HttpApiService.MaxConcurrentRequests);
+        var entered = NewSignal();
+        var release = NewSignal();
+        var inFlight = dispatcher.TryRun(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+
+        Assert.NotNull(inFlight);
+        await entered.Task;
+
+        // The drain can't reclaim the busy slot, so disposal backs off rather than pulling the
+        // semaphore out from under the handler's finally block.
+        dispatcher.Dispose();
+        release.SetResult();
+        await inFlight;
+
+        Assert.True(inFlight.IsCompletedSuccessfully);
+    }
+
+    [Fact]
     public void OverCapacityResponseMetadata_IsPinned()
     {
         var response = HttpApiService.CreateOverCapacityResponse();

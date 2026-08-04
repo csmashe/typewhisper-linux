@@ -79,6 +79,8 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
         return inner is not null && inner.SequenceEqual(expected);
     }
 
+    // The sway config holds one managed sentinel block carrying no shortcut id, so this answers
+    // for the only shortcut this writer installs.
     public async Task<bool> IsManagedShortcutPresentAsync(
         string shortcutId,
         CancellationToken ct

@@ -85,7 +85,7 @@ public sealed class ProfileServiceTests : IDisposable
         var secondCompletion = new TaskCompletionSource<Profile?>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var firstToggle = Task.Run(() => service.ToggleProfileEnabled(original.Id));
+        var firstToggle = RunOnDedicatedThread(() => service.ToggleProfileEnabled(original.Id));
         Thread? secondThread = null;
         bool secondReachedGateOrWriter;
 
@@ -174,7 +174,7 @@ public sealed class ProfileServiceTests : IDisposable
         var secondCompletion = new TaskCompletionSource<Profile?>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var firstToggle = Task.Run(() => service.ToggleProfileEnabled(profileA.Id));
+        var firstToggle = RunOnDedicatedThread(() => service.ToggleProfileEnabled(profileA.Id));
         Thread? secondThread = null;
         bool secondReachedGateOrWriter;
 
@@ -241,6 +241,38 @@ public sealed class ProfileServiceTests : IDisposable
         Assert.Equal(2, writer.InvocationCount);
         Assert.Equal(1, writer.MaximumConcurrency);
         Assert.False(writer.SecondEnteredBeforeFirstRelease);
+    }
+
+    [Fact]
+    public void AddProfile_WhenExistingFileIsUnreadable_PreservesItAndKeepsTheServiceUsable()
+    {
+        // The store's PreserveAndReset policy replaces the older "refuse every save while the
+        // file is corrupt" contract: the unreadable bytes are copied aside verbatim rather than
+        // held hostage at the original path, so a corrupt file can no longer strand profiles.
+        File.WriteAllText(_filePath, "{ not valid profile json");
+        var sut = new ProfileService(_filePath);
+
+        sut.AddProfile(new Profile { Id = "added", Name = "New" });
+
+        var preserved = Assert.Single(
+            Directory.EnumerateFiles(
+                Path.GetDirectoryName(_filePath)!,
+                Path.GetFileName(_filePath) + ".broken-*"
+            )
+        );
+        Assert.Equal("{ not valid profile json", File.ReadAllText(preserved));
+        Assert.Contains(new ProfileService(_filePath).Profiles, p => p.Id == "added");
+    }
+
+    [Fact]
+    public void AddProfile_WhenExistingFileIsBlank_StillSaves()
+    {
+        File.WriteAllText(_filePath, "   ");
+        var sut = new ProfileService(_filePath);
+
+        sut.AddProfile(new Profile { Id = "blank-file", Name = "New" });
+
+        Assert.Contains(new ProfileService(_filePath).Profiles, p => p.Id == "blank-file");
     }
 
     [Fact]
@@ -531,6 +563,34 @@ public sealed class ProfileServiceTests : IDisposable
     private static TaskCompletionSource CreateCompletionSource()
     {
         return new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    // The first toggle blocks inside BlockingAfterCommitWriter while holding the service
+    // gate, so it must not run on a thread-pool thread. On a loaded CI runner the pool adds
+    // threads roughly once per second, so a queued work item can sit unstarted past
+    // s_testGuard and the test times out waiting for a commit that never got a thread to
+    // happen on. A dedicated thread starts regardless of pool pressure, matching how the
+    // second caller already runs.
+    private static Task<Profile?> RunOnDedicatedThread(Func<Profile?> toggle)
+    {
+        var completion = new TaskCompletionSource<Profile?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        new Thread(() =>
+        {
+            try
+            {
+                completion.TrySetResult(toggle());
+            }
+            catch (Exception ex)
+            {
+                completion.TrySetException(ex);
+            }
+        })
+        {
+            IsBackground = true,
+        }.Start();
+        return completion.Task;
     }
 
     private static bool IsWaiting(Thread thread)

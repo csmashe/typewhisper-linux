@@ -69,7 +69,10 @@ internal sealed class DictationInsertionOrderGate
         TaskCompletionSource tcs;
         lock (_lock)
         {
-            if (_pending.Count == 0 || _pending.Min == sessionId)
+            // An unreserved (or already-released) session has nothing to wait behind: no
+            // predecessor's Release would ever target its waiter, so registering one would
+            // stall it until the backstop instead of returning now.
+            if (!_pending.Contains(sessionId) || _pending.Min == sessionId)
             {
                 return;
             }

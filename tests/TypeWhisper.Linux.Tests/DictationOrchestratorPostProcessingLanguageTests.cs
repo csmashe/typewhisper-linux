@@ -73,9 +73,11 @@ public sealed class DictationOrchestratorPostProcessingLanguageTests
     [Fact]
     public void Returns_SourceLanguage_WhenTranslateRequested_ButEngineDoesNotSupportTranslation()
     {
+        // Distinct codes so the assertion pins down *which* input wins: no engine translation
+        // happened, so the detected language is the source, not the configured hint.
         var result = DictationOrchestrator.ResolvePostProcessingSourceLanguage(
             "de",
-            "de",
+            "fr",
             translateRequested: true,
             engineSupportsTranslation: false
         );
