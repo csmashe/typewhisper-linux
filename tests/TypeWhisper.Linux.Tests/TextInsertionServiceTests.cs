@@ -1399,13 +1399,42 @@ public sealed class TextInsertionServiceTests
     [Fact]
     public async Task TypeStreamChunkAsync_terminal_multiline_never_reaches_direct_typing()
     {
-        var platform = new FakeTextInsertionPlatform();
+        var platform = new FakeTextInsertionPlatform
+        {
+            LastTypingDeliveredPartialText = true,
+        };
         var sut = new TextInsertionService(platform);
 
         var result = await sut.TypeStreamChunkAsync("line one\nline two", "kitty");
 
-        Assert.False(result);
+        Assert.False(result.Succeeded);
+        Assert.False(result.DeliveredPartialText);
         Assert.Null(platform.TypedText);
+    }
+
+    [Theory]
+    [InlineData(false, true, false, true)]
+    [InlineData(false, false, false, false)]
+    [InlineData(true, true, true, false)]
+    public async Task TypeStreamChunkAsync_reports_platform_delivery_outcome(
+        bool platformSucceeded,
+        bool platformDeliveredPartialText,
+        bool expectedSucceeded,
+        bool expectedDeliveredPartialText
+    )
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            TypeSucceeds = platformSucceeded,
+            LastTypingDeliveredPartialText = platformDeliveredPartialText,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.TypeStreamChunkAsync("streamed text");
+
+        Assert.Equal(expectedSucceeded, result.Succeeded);
+        Assert.Equal(expectedDeliveredPartialText, result.DeliveredPartialText);
+        Assert.Equal("streamed text", platform.TypedText);
     }
 
     [Theory]

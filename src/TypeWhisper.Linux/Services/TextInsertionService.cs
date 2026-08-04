@@ -390,14 +390,18 @@ public sealed class TextInsertionService
     ///     orchestrator normally keeps recognized terminals out of streaming entirely so their
     ///     completed result can use the content-aware one-shot policy.
     /// </summary>
-    public Task<bool> TypeStreamChunkAsync(string text, string? targetProcessName = null)
+    public async Task<(bool Succeeded, bool DeliveredPartialText)> TypeStreamChunkAsync(
+        string text,
+        string? targetProcessName = null
+    )
     {
         if (IsTerminalApp(targetProcessName) && ContainsLineBreak(text))
         {
-            return Task.FromResult(false);
+            return (false, false);
         }
 
-        return _platform.TypeTextAsync(text);
+        var ok = await _platform.TypeTextAsync(text);
+        return (ok, !ok && _platform.LastTypingDeliveredPartialText);
     }
 
     /// <summary>

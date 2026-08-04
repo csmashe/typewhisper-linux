@@ -33,7 +33,12 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
     > _resultWaiters = new();
     private int _disposed;
 
-    internal OrchestratorCompositionFixture(bool soundFeedbackEnabled = false)
+    // focusedApp names the app the headless active-window chain must report as focused; leave it
+    // null (no snapshot, as on a headless box) unless the test depends on the resolved target.
+    internal OrchestratorCompositionFixture(
+        bool soundFeedbackEnabled = false,
+        (string Process, string Title)? focusedApp = null
+    )
     {
         IntegrationEnvironment.ResetApplicationState();
         TypeWhisperEnvironment.EnsureDirectories();
@@ -99,6 +104,18 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
                 new SoundFeedbackService(CueProcessRunner, "integration-player", soundsDirectory)
             )
         );
+        if (focusedApp is { } focused)
+        {
+            // First in the chain, so the production providers' blocked compositor probes can't
+            // decide the snapshot before the scripted one is reached.
+            services.Insert(
+                0,
+                ServiceDescriptor.Singleton<IActiveWindowProvider>(
+                    new ScriptedActiveWindowProvider(focused.Process, focused.Title)
+                )
+            );
+        }
+
         services.Replace(
             ServiceDescriptor.Singleton<SpeechFeedbackService>(sp =>
                 new SpeechFeedbackService(
@@ -114,8 +131,10 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
         );
 
         Plugin = new RecordingTranscriptionPlugin();
+        Llm = new ScriptedLlmProvider();
         PluginManager = Provider.GetRequiredService<PluginManager>();
         InjectTranscriptionEngine(PluginManager, Plugin);
+        InjectLlmProvider(PluginManager, Llm);
 
         EventBus = Provider.GetRequiredService<PluginEventBus>();
         RecordingStarted = new TaskCompletionSource<RecordingStartedEvent>(
@@ -162,6 +181,7 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
     internal PluginManager PluginManager { get; }
     internal PluginEventBus EventBus { get; }
     internal RecordingTranscriptionPlugin Plugin { get; }
+    internal ScriptedLlmProvider Llm { get; }
     internal RecordingTextInsertionPlatform InsertionPlatform { get; }
     internal RecordingSystemAudio SystemAudio { get; }
     internal RecordingAudioBoundary AudioBoundary { get; }
@@ -296,5 +316,14 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
             "_transcriptionEngines"
         );
         field.SetValue(pluginManager, new List<ITranscriptionEngineRole> { plugin });
+    }
+
+    private static void InjectLlmProvider(PluginManager pluginManager, ILlmProviderRole provider)
+    {
+        var field = typeof(PluginManager).GetField(
+            "_llmProviders",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        ) ?? throw new MissingFieldException(typeof(PluginManager).FullName, "_llmProviders");
+        field.SetValue(pluginManager, new List<ILlmProviderRole> { provider });
     }
 }

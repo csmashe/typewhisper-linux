@@ -7,13 +7,25 @@ internal sealed class RecordingTextInsertionPlatform : ITextInsertionPlatform
     private readonly Lock _gate = new();
     private readonly List<string> _typed = [];
     private readonly List<string> _clipboardWrites = [];
+    private readonly Queue<(bool Succeeds, bool DeliveredPartial)> _scriptedTyping = new();
+    private bool _lastTypingDeliveredPartialText;
 
     public bool IsClipboardSetAvailable => true;
     public bool IsPasteAvailable => true;
     public bool IsKdePlasma => false;
     public bool PrefersDirectTypingForUnknownTarget => true;
     public InsertionFailureReason LastFailureReason => InsertionFailureReason.None;
-    public bool LastTypingDeliveredPartialText => false;
+
+    public bool LastTypingDeliveredPartialText
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastTypingDeliveredPartialText;
+            }
+        }
+    }
 
     internal IReadOnlyList<string> Typed
     {
@@ -77,14 +89,27 @@ internal sealed class RecordingTextInsertionPlatform : ITextInsertionPlatform
         return Task.FromResult(true);
     }
 
+    // Scripts the outcome of one upcoming TypeTextAsync call, in enqueue order. Calls past the
+    // scripted ones (and every call when nothing is scripted) succeed and deliver nothing partial.
+    internal void EnqueueTypingOutcome(bool succeeds, bool deliveredPartial)
+    {
+        lock (_gate)
+        {
+            _scriptedTyping.Enqueue((succeeds, deliveredPartial));
+        }
+    }
+
     public Task<bool> TypeTextAsync(string text)
     {
         lock (_gate)
         {
             _typed.Add(text);
+            var outcome = _scriptedTyping.Count > 0
+                ? _scriptedTyping.Dequeue()
+                : (Succeeds: true, DeliveredPartial: false);
+            _lastTypingDeliveredPartialText = outcome.DeliveredPartial;
+            return Task.FromResult(outcome.Succeeds);
         }
-
-        return Task.FromResult(true);
     }
 
     public Task<bool> SendCopyAsync(bool useTerminalShortcut)
