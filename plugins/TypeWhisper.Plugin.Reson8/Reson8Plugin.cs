@@ -522,8 +522,15 @@ public sealed class Reson8Plugin
         }
     }
 
-    internal static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) ? null : language.Trim();
+    // The typed invoker maps "auto" to null already; this only catches direct/legacy callers.
+    internal static string? NormalizeLanguage(string? language)
+    {
+        var trimmed = language?.Trim();
+        return string.IsNullOrEmpty(trimmed)
+            || trimmed.Equals("auto", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : trimmed;
+    }
 
     internal static void AddAuthHeader(HttpRequestMessage request, string apiKey, string authHeader)
     {

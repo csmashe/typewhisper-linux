@@ -44,7 +44,6 @@ public sealed class PluginRegistryService
 
     private List<RegistryPlugin>? _cachedRegistry;
     private DateTime _cacheTimestamp;
-    private bool _lastFetchSucceeded;
     private DateTime _lastUpdateCheck;
 
     public PluginRegistryService(
@@ -96,10 +95,21 @@ public sealed class PluginRegistryService
         CancellationToken ct = default
     )
     {
+        var (plugins, _) = await FetchRegistryWithOutcomeAsync(ct).ConfigureAwait(false);
+        return plugins;
+    }
+
+    /// <summary>
+    ///     Fetches the registry and reports whether <em>this</em> call succeeded. Returned rather
+    ///     than stored: first-run auto-install and the periodic update check can overlap, and a
+    ///     shared field would let one caller read the other's result.
+    /// </summary>
+    private async Task<(IReadOnlyList<RegistryPlugin> Plugins, bool Succeeded)>
+        FetchRegistryWithOutcomeAsync(CancellationToken ct)
+    {
         if (_cachedRegistry is not null && DateTime.UtcNow - _cacheTimestamp < s_cacheDuration)
         {
-            _lastFetchSucceeded = true;
-            return _cachedRegistry;
+            return (_cachedRegistry, true);
         }
 
         try
@@ -114,18 +124,16 @@ public sealed class PluginRegistryService
 
             _cachedRegistry = allPlugins.Where(IsCompatible).ToList();
             _cacheTimestamp = DateTime.UtcNow;
-            _lastFetchSucceeded = true;
 
             Trace.WriteLine(
                 $"[PluginRegistry] Fetched {_cachedRegistry.Count} compatible Linux plugin(s) from registry"
             );
-            return _cachedRegistry;
+            return (_cachedRegistry, true);
         }
         catch (Exception ex)
         {
-            _lastFetchSucceeded = false;
             Trace.WriteLine($"[PluginRegistry] Failed to fetch registry: {ex.Message}");
-            return _cachedRegistry ?? [];
+            return (_cachedRegistry ?? [], false);
         }
     }
 
@@ -569,7 +577,7 @@ public sealed class PluginRegistryService
 
         if (
             !string.Equals(manifest.Version, registryPlugin.Version, StringComparison.Ordinal)
-            || !AppVersion.TryCompareStrict(manifest.Version, registryPlugin.Version, out _)
+            || !AppVersion.IsValidStrict(manifest.Version)
         )
         {
             throw new InvalidDataException(
@@ -714,12 +722,8 @@ public sealed class PluginRegistryService
         // Deliberately no ConfigureAwait(false) in this method: the bootstrap runner calls it
         // on the UI thread and _settings.Save raises SettingsChanged synchronously into
         // settings view models that mutate bound collections without dispatching.
-        var anyFailed = false;
-        var registry = await FetchRegistryAsync(ct);
-        if (!_lastFetchSucceeded)
-        {
-            anyFailed = true;
-        }
+        var (registry, fetchSucceeded) = await FetchRegistryWithOutcomeAsync(ct);
+        var anyFailed = !fetchSucceeded;
 
         foreach (var plugin in registry)
         {
@@ -766,7 +770,7 @@ public sealed class PluginRegistryService
         {
             reason = $"SDK ABI '{plugin.SdkAbi}' is not '{HostSdkAbi}'";
         }
-        else if (!AppVersion.TryCompareStrict(plugin.Version, plugin.Version, out _))
+        else if (!AppVersion.IsValidStrict(plugin.Version))
         {
             reason = $"version '{plugin.Version}' is not valid SemVer";
         }

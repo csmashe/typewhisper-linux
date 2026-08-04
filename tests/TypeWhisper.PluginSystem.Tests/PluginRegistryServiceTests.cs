@@ -59,7 +59,10 @@ public sealed class PluginRegistryServiceTests : IDisposable
         var json = JsonSerializer.Serialize(plugins);
         var httpClient = CreateMockHttpClient(json);
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         var result = await service.FetchRegistryAsync();
 
@@ -111,7 +114,10 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var httpClient = new HttpClient(handler.Object);
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         await service.FetchRegistryAsync();
         await service.FetchRegistryAsync();
@@ -159,7 +165,10 @@ public sealed class PluginRegistryServiceTests : IDisposable
         var json = JsonSerializer.Serialize(plugins);
         var httpClient = CreateMockHttpClient(json);
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         var result = await service.FetchRegistryAsync();
 
@@ -224,6 +233,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
         var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
         {
             HostVersion = "0.13.0-rc.2",
+            RuntimeRid = "linux-x64",
         };
 
         var result = await service.FetchRegistryAsync();
@@ -274,6 +284,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
         var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
         {
             HostVersion = "0.13.0",
+            RuntimeRid = "linux-x64",
         };
 
         var result = await service.FetchRegistryAsync();
@@ -287,7 +298,10 @@ public sealed class PluginRegistryServiceTests : IDisposable
     {
         var httpClient = CreateMockHttpClient("", HttpStatusCode.InternalServerError);
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         var result = await service.FetchRegistryAsync();
 
@@ -298,7 +312,10 @@ public sealed class PluginRegistryServiceTests : IDisposable
     public void GetInstallState_NotInstalled_WhenPluginNotLoaded()
     {
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         var registryPlugin = new RegistryPlugin
         {
@@ -327,7 +344,10 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var httpClient = CreateMockHttpClient("[]");
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         await service.FirstRunAutoInstallAsync();
 
@@ -342,7 +362,10 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var httpClient = CreateMockHttpClient("[]");
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         await service.FirstRunAutoInstallAsync();
 

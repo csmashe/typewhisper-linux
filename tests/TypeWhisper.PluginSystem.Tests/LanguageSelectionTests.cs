@@ -47,8 +47,20 @@ public sealed class LanguageSelectionTests
     [InlineData("en-x")]
     [InlineData("en-x-")]
     [InlineData("en-abcdefghi")]
-    [InlineData("en-u-ca-gregory")]
     public void TryParse_InvalidOrBlankInput_ReturnsFalse(string? raw)
+    {
+        Assert.False(LanguageSelection.TryParse(raw, out var selection));
+        Assert.Null(selection);
+    }
+
+    /// <summary>
+    ///     Well-formed BCP-47, rejected on purpose: extension singletons carry calendar and
+    ///     transform preferences no transcription provider consumes.
+    /// </summary>
+    [Theory]
+    [InlineData("en-u-ca-gregory")]
+    [InlineData("en-t-de")]
+    public void TryParse_ExtensionSubtag_IsOutOfSupportedSubset(string raw)
     {
         Assert.False(LanguageSelection.TryParse(raw, out var selection));
         Assert.Null(selection);

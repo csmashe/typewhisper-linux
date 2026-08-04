@@ -49,6 +49,11 @@ public sealed record LanguageSelection
     ///     Parses the case-insensitive <c>auto</c> sentinel or a pragmatic BCP-47 tag.
     ///     Blank input is not a language selection.
     /// </summary>
+    /// <remarks>
+    ///     Deliberately a subset of BCP-47: language, script, region, variants, and the private-use
+    ///     <c>x-</c> singleton. Extension singletons (<c>en-u-ca-gregory</c>, <c>en-t-…</c>) are
+    ///     well-formed but rejected — no transcription provider consumes them.
+    /// </remarks>
     public static bool TryParse(
         string? value,
         [NotNullWhen(true)] out LanguageSelection? selection

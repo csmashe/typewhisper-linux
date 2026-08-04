@@ -105,7 +105,8 @@ public sealed partial class PcmPlaybackServiceTests
         var playback = await playTask.WaitAsync(s_guard);
         await process.WriteStarted.Task.WaitAsync(s_guard);
 
-        Assert.True(playTask.IsCompletedSuccessfully);
+        // The --raw probe runs off-thread, so the task may yield. What must still hold is that the
+        // session copied the payload before returning — overwriting the caller's buffer proves it.
         source.AsSpan().Fill(99);
         var invocation = Assert.Single(supervisor.Starts);
         Assert.Equal(path, invocation.Command.FileName);
@@ -253,6 +254,39 @@ public sealed partial class PcmPlaybackServiceTests
     }
 
     [Fact]
+    public async Task Cancelling_during_the_raw_flag_probe_starts_no_player()
+    {
+        var supervisor = new RecordingPcmSupervisor();
+        using var cancellation = new CancellationTokenSource();
+        var probeEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseProbe = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        // The probe deliberately ignores its token, standing in for one already blocked inside
+        // RunProbe: cancellation has to be caught after it returns, not only before it starts.
+        var sut = new PcmPlaybackService(
+            supervisor,
+            () => new ResolvedPcmPlayer(PcmPlayerKind.PwPlay, "/validated/pw-play"),
+            (_, _) =>
+            {
+                probeEntered.TrySetResult();
+                releaseProbe.Task.GetAwaiter().GetResult();
+                return true;
+            }
+        );
+
+        var playTask = sut.PlayAsync(ValidRequest(), cancellation.Token);
+        await probeEntered.Task.WaitAsync(s_guard);
+        await cancellation.CancelAsync();
+        releaseProbe.TrySetResult();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => playTask);
+        Assert.Empty(supervisor.Starts);
+    }
+
+    [Fact]
     public async Task Cancellation_during_feed_cancels_feeder_and_terminates_once()
     {
         var process = new ControlledPcmProcessSession { BlockWrites = true };
@@ -377,6 +411,29 @@ public sealed partial class PcmPlaybackServiceTests
         Assert.Equal(1, completed);
     }
 
+    [Fact]
+    public async Task Subscribing_after_completion_replays_it_to_the_late_subscriber()
+    {
+        var process = new ControlledPcmProcessSession();
+        var supervisor = new RecordingPcmSupervisor { NextSession = process };
+        var playback = await CreateService(supervisor).PlayAsync(
+            ValidRequest(),
+            CancellationToken.None
+        );
+        var early = 0;
+        playback.Completed += (_, _) => Interlocked.Increment(ref early);
+
+        process.Complete(new ProcessExitOutcome(ProcessExitReason.Exited, 0));
+        // Waiting on the early subscriber proves completion has already been dispatched.
+        await WaitUntilAsync(() => Volatile.Read(ref early) == 1);
+
+        var late = 0;
+        playback.Completed += (_, _) => late++;
+
+        Assert.Equal(1, late);
+        Assert.Equal(1, Volatile.Read(ref early));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -391,7 +448,7 @@ public sealed partial class PcmPlaybackServiceTests
         var sut = new PcmPlaybackService(
             scope,
             () => new ResolvedPcmPlayer(PcmPlayerKind.PwPlay, "/validated/pw-play"),
-            _ => true
+            (_, _) => true
         );
         var playback = await sut.PlayAsync(ValidRequest(), CancellationToken.None);
 
@@ -419,7 +476,7 @@ public sealed partial class PcmPlaybackServiceTests
         return new PcmPlaybackService(
             supervisor,
             () => new ResolvedPcmPlayer(kind, path),
-            _ => supportsRawFlag
+            (_, _) => supportsRawFlag
         );
     }
 
@@ -604,8 +661,13 @@ public sealed partial class PcmPlaybackServiceTests
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         public List<byte> StandardInput { get; } = [];
-        public int CompleteInputCount { get; private set; }
-        public int TerminateCount { get; private set; }
+
+        // Written from the feeder and the cancellation callback, read from the test thread.
+        // Atomic writes with acquire reads so a WaitUntilAsync poll cannot cache a stale value.
+        private int _completeInputCount;
+        private int _terminateCount;
+        public int CompleteInputCount => Volatile.Read(ref _completeInputCount);
+        public int TerminateCount => Volatile.Read(ref _terminateCount);
         public int ProcessId => 1234;
         public bool IsRunning => !_completion.Task.IsCompleted;
         public Task<ProcessExitOutcome> Completion => _completion.Task;
@@ -647,14 +709,14 @@ public sealed partial class PcmPlaybackServiceTests
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
-            CompleteInputCount++;
+            Interlocked.Increment(ref _completeInputCount);
             InputCompleted.TrySetResult();
             return ValueTask.CompletedTask;
         }
 
         public void Terminate()
         {
-            TerminateCount++;
+            Interlocked.Increment(ref _terminateCount);
         }
 
         public void Dispose()

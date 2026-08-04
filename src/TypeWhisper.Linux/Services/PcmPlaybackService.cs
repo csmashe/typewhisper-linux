@@ -19,7 +19,7 @@ public sealed class PcmPlaybackService : IPluginPcmPlaybackService
 
     private readonly IPluginProcessSupervisor _processes;
     private readonly Func<ResolvedPcmPlayer?> _resolvePlayer;
-    private readonly Func<ResolvedPcmPlayer, bool> _supportsRawFlag;
+    private readonly Func<ResolvedPcmPlayer, CancellationToken, bool> _supportsRawFlag;
 
     public PcmPlaybackService(PluginProcessSupervisorScope processes)
         : this(processes, PcmPlayerResolver.Resolve)
@@ -29,7 +29,7 @@ public sealed class PcmPlaybackService : IPluginPcmPlaybackService
     internal PcmPlaybackService(
         IPluginProcessSupervisor processes,
         Func<ResolvedPcmPlayer?> resolvePlayer,
-        Func<ResolvedPcmPlayer, bool>? supportsRawFlag = null
+        Func<ResolvedPcmPlayer, CancellationToken, bool>? supportsRawFlag = null
     )
     {
         _processes = processes;
@@ -39,7 +39,7 @@ public sealed class PcmPlaybackService : IPluginPcmPlaybackService
 
     public bool IsAvailable => _resolvePlayer() is not null;
 
-    public Task<ITtsPlaybackSession> PlayAsync(
+    public async Task<ITtsPlaybackSession> PlayAsync(
         PcmPlaybackRequest request,
         CancellationToken cancellationToken
     )
@@ -47,20 +47,31 @@ public sealed class PcmPlaybackService : IPluginPcmPlaybackService
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Preparation is intentionally synchronous. The session owns these bytes before this
-        // method returns, so a provider may immediately reuse or mutate its response buffer.
+        // Kept ahead of the first await so preparation still runs on the caller's thread: the
+        // session owns these bytes before control returns, so a provider may reuse its buffer.
         var pcm16 = PreparePcm16(request);
         var player = _resolvePlayer();
         if (player is null)
         {
-            return Task.FromResult<ITtsPlaybackSession>(InactivePlaybackSession.Instance);
+            return InactivePlaybackSession.Instance;
         }
+
+        // The probe spawns pw-play and waits up to two seconds for its usage screen; inline that
+        // would stall the caller — the UI thread, for a cue raised from the dictation path.
+        var pwPlaySupportsRawFlag =
+            player.Kind == PcmPlayerKind.PwPlay
+            && await Task.Run(() => _supportsRawFlag(player, cancellationToken), cancellationToken)
+                .ConfigureAwait(false);
+
+        // Re-checked after the probe: cancelling mid-probe must not still launch a player that
+        // the caller's already-cancelled token would immediately terminate.
+        cancellationToken.ThrowIfCancellationRequested();
 
         var arguments = BuildArguments(
             player.Kind,
             request.SampleRate,
             request.Channels,
-            player.Kind == PcmPlayerKind.PwPlay && _supportsRawFlag(player)
+            pwPlaySupportsRawFlag
         );
         var started = _processes.StartSession(
             new ProcessCommand(player.AbsolutePath, arguments),
@@ -75,7 +86,7 @@ public sealed class PcmPlaybackService : IPluginPcmPlaybackService
                 $"[PcmPlayback] {player.Kind} ({player.AbsolutePath}) failed to start: "
                 + Bound(started.StartError)
             );
-            return Task.FromResult<ITtsPlaybackSession>(InactivePlaybackSession.Instance);
+            return InactivePlaybackSession.Instance;
         }
 
         Trace.WriteLine(
@@ -83,9 +94,7 @@ public sealed class PcmPlaybackService : IPluginPcmPlaybackService
             + $"{request.SampleRate.ToString(CultureInfo.InvariantCulture)} Hz, "
             + $"{request.Channels.ToString(CultureInfo.InvariantCulture)} channel(s)."
         );
-        return Task.FromResult<ITtsPlaybackSession>(
-            new PcmPlaybackSession(processSession, pcm16, player, cancellationToken)
-        );
+        return new PcmPlaybackSession(processSession, pcm16, player, cancellationToken);
     }
 
     private static byte[] PreparePcm16(PcmPlaybackRequest request)
@@ -234,7 +243,10 @@ public sealed class PcmPlaybackService : IPluginPcmPlaybackService
     ///     unreadable usage screen falls back to the pre-1.4 vector, which is what the
     ///     long-lived distribution releases ship.
     /// </summary>
-    private bool ProbeRawFlagSupport(ResolvedPcmPlayer player)
+    private bool ProbeRawFlagSupport(
+        ResolvedPcmPlayer player,
+        CancellationToken cancellationToken
+    )
     {
         lock (s_rawFlagGate)
         {
@@ -249,12 +261,19 @@ public sealed class PcmPlaybackService : IPluginPcmPlaybackService
         {
             var probe = _processes.RunProbe(
                 new ProcessCommand(player.AbsolutePath, ["--help"]),
-                new ProcessOneShotOptions(Timeout: TimeSpan.FromSeconds(2))
+                new ProcessOneShotOptions(Timeout: TimeSpan.FromSeconds(2)),
+                cancellationToken
             );
             // Usage goes to stdout on success and stderr on older builds, so scan both.
             supported =
                 probe.StandardOutputText.Contains("--raw", StringComparison.Ordinal)
                 || probe.StandardErrorText.Contains("--raw", StringComparison.Ordinal);
+        }
+        catch (OperationCanceledException)
+        {
+            // A cancelled probe learned nothing about this binary. Rethrow without caching so
+            // the next playback probes again instead of inheriting a false "unsupported".
+            throw;
         }
         catch (Exception ex)
         {
@@ -288,6 +307,7 @@ public sealed class PcmPlaybackService : IPluginPcmPlaybackService
         private const int StderrLimit = 2_048;
 
         private readonly CancellationTokenRegistration _cancellationRegistration;
+        private readonly Lock _completionGate = new();
         private readonly CancellationTokenSource _feederCancellation = new();
         private readonly Task _feeder;
         private readonly ResolvedPcmPlayer _player;
@@ -295,6 +315,7 @@ public sealed class PcmPlaybackService : IPluginPcmPlaybackService
         private readonly StringBuilder _stderr = new();
         private readonly Task _stderrCapture;
         private int _completed;
+        private EventHandler? _completedHandlers;
         private int _stopRequested;
 
         public PcmPlaybackSession(
@@ -321,7 +342,46 @@ public sealed class PcmPlaybackService : IPluginPcmPlaybackService
         public bool IsActive =>
             Volatile.Read(ref _completed) == 0 && _session.IsRunning;
 
-        public event EventHandler? Completed;
+        /// <summary>
+        ///     Replays completion to a late subscriber, like <see cref="InactivePlaybackSession" />
+        ///     and the system TTS sessions: the player can exit before the caller that awaited
+        ///     <see cref="PlayAsync" /> subscribes, and a dropped notification strands that caller.
+        /// </summary>
+        public event EventHandler? Completed
+        {
+            add
+            {
+                if (value is null)
+                {
+                    return;
+                }
+
+                var alreadyCompleted = false;
+                lock (_completionGate)
+                {
+                    if (Volatile.Read(ref _completed) != 0)
+                    {
+                        alreadyCompleted = true;
+                    }
+                    else
+                    {
+                        _completedHandlers += value;
+                    }
+                }
+
+                if (alreadyCompleted)
+                {
+                    InvokeCompletedHandler(value);
+                }
+            }
+            remove
+            {
+                lock (_completionGate)
+                {
+                    _completedHandlers -= value;
+                }
+            }
+        }
 
         public void Stop()
         {
@@ -449,9 +509,31 @@ public sealed class PcmPlaybackService : IPluginPcmPlaybackService
 
             _cancellationRegistration.Dispose();
             _feederCancellation.Dispose();
+
+            EventHandler? handlers;
+            lock (_completionGate)
+            {
+                handlers = _completedHandlers;
+                _completedHandlers = null;
+            }
+
+            if (handlers is null)
+            {
+                return;
+            }
+
+            // ReSharper disable once PossibleInvalidCastExceptionInForeachLoop -- handlers is an EventHandler-typed multicast delegate, so its invocation list contains only EventHandler instances; the cast cannot fail.
+            foreach (EventHandler handler in handlers.GetInvocationList())
+            {
+                InvokeCompletedHandler(handler);
+            }
+        }
+
+        private void InvokeCompletedHandler(EventHandler handler)
+        {
             try
             {
-                Completed?.Invoke(this, EventArgs.Empty);
+                handler(this, EventArgs.Empty);
             }
             catch (Exception ex)
             {

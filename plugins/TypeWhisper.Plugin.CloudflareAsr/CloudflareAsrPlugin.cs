@@ -94,6 +94,17 @@ public sealed class CloudflareAsrPlugin
                 "Translation is not supported by the Cloudflare ASR plugin."
             );
 
+        // Defense in depth for direct/legacy callers; the typed host invoker rejects explicit
+        // selection before entering the plugin. "auto" is the sentinel for "no explicit language".
+        var normalized = language?.Trim();
+        if (
+            !string.IsNullOrEmpty(normalized)
+            && !normalized.Equals("auto", StringComparison.OrdinalIgnoreCase)
+        )
+            throw new NotSupportedException(
+                "Cloudflare ASR does not support explicit language selection. Use automatic detection for this profile."
+            );
+
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.EnterAccountIdAndApiToken"));
 

@@ -22,7 +22,10 @@ public static class OpenAiTranscriptionHelper
     /// <param name="apiKey">Bearer token for authentication.</param>
     /// <param name="model">Model identifier (e.g. "whisper-1").</param>
     /// <param name="wavAudio">WAV-encoded audio bytes.</param>
-    /// <param name="language">Language hint (ISO code) or null for auto-detection.</param>
+    /// <param name="language">
+    ///     Language hint (ISO code). Null, blank, or the <c>"auto"</c> sentinel omits the field
+    ///     so the provider detects the language itself.
+    /// </param>
     /// <param name="translate">If true, uses the translations endpoint (audio to English).</param>
     /// <param name="responseFormat">
     ///     Response format. Supported values are <c>"verbose_json"</c>, <c>"json"</c>,
@@ -71,9 +74,14 @@ public static class OpenAiTranscriptionHelper
         content.Add(new StringContent(model), "model");
         content.Add(new StringContent(responseFormat), "response_format");
 
-        if (!string.IsNullOrEmpty(language))
+        // "auto" is a sentinel, not a language code: Whisper-compatible endpoints reject it.
+        var languageHint = language?.Trim();
+        if (
+            !string.IsNullOrEmpty(languageHint)
+            && !languageHint.Equals("auto", StringComparison.OrdinalIgnoreCase)
+        )
         {
-            content.Add(new StringContent(language), "language");
+            content.Add(new StringContent(language!), "language");
         }
 
         if (!string.IsNullOrWhiteSpace(prompt))

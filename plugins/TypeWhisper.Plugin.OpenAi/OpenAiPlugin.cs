@@ -1021,8 +1021,15 @@ public sealed class OpenAiPlugin
     private static string? NormalizeApiKey(string? apiKey) =>
         string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
 
-    private static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) ? null : language;
+    // The typed invoker maps "auto" to null already; this only catches direct/legacy callers.
+    private static string? NormalizeLanguage(string? language)
+    {
+        var trimmed = language?.Trim();
+        return string.IsNullOrEmpty(trimmed)
+            || trimmed.Equals("auto", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : language;
+    }
 
     private static string NormalizeReasoningEffort(string? effort) =>
         effort is "low" or "medium" or "high" or "xhigh" ? effort : "medium";

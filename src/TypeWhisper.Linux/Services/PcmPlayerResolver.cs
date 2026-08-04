@@ -11,9 +11,6 @@ internal sealed record ResolvedPcmPlayer(PcmPlayerKind Kind, string AbsolutePath
 
 internal static class PcmPlayerResolver
 {
-    private const UnixFileMode ExecutableModeMask =
-        UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
-
     private static readonly (string Name, PcmPlayerKind Kind)[] s_candidates =
     [
         ("pw-play", PcmPlayerKind.PwPlay),
@@ -28,36 +25,13 @@ internal static class PcmPlayerResolver
 
     internal static ResolvedPcmPlayer? Resolve(string? pathValue)
     {
-        if (string.IsNullOrWhiteSpace(pathValue))
-        {
-            return null;
-        }
-
-        var directories = pathValue.Split(
-            Path.PathSeparator,
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
-        );
+        // Candidate order, not PATH order, decides: pw-play anywhere on PATH beats an aplay
+        // that happens to sit in an earlier directory.
         foreach (var (name, kind) in s_candidates)
         {
-            foreach (var directory in directories)
+            if (ExecutablePathResolver.Find(name, pathValue) is { } absolutePath)
             {
-                try
-                {
-                    var candidate = Path.GetFullPath(Path.Join(directory, name));
-#pragma warning disable CA1416 // TypeWhisper.Linux is a Linux-only assembly.
-                    if (
-                        File.Exists(candidate)
-                        && (File.GetUnixFileMode(candidate) & ExecutableModeMask) != 0
-                    )
-#pragma warning restore CA1416
-                    {
-                        return new ResolvedPcmPlayer(kind, candidate);
-                    }
-                }
-                catch
-                {
-                    // Invalid, inaccessible, or stale PATH entry: continue discovery.
-                }
+                return new ResolvedPcmPlayer(kind, absolutePath);
             }
         }
 

@@ -45,12 +45,14 @@ internal sealed class SpeechmaticsStreamingSession : IStreamingSession
 
     internal static string BuildStartRecognition(string? language, int sampleRate)
     {
-        var normalizedLanguage = !string.IsNullOrWhiteSpace(language)
-            ? language
-            : throw new ArgumentException(
-                "Speechmatics requires an explicit language.",
-                nameof(language)
-            );
+        var normalizedLanguage =
+            !string.IsNullOrWhiteSpace(language)
+            && !language.Trim().Equals("auto", StringComparison.OrdinalIgnoreCase)
+                ? language
+                : throw new ArgumentException(
+                    "Speechmatics requires an explicit language.",
+                    nameof(language)
+                );
 
         return JsonSerializer.Serialize(
             new Dictionary<string, object>

@@ -36,11 +36,12 @@ jobs:
         shell: pwsh
         run: |
           $matrix = & ./scripts/plugin-catalog.ps1 -View ReleaseMatrix | ConvertFrom-Json
-          $matches = @($matrix.include | Where-Object { $_.releaseSlug -ceq $env:PLUGIN_NAME })
-          if ($matches.Count -ne 1) {
+          # Not $matches: that is PowerShell's automatic -match capture variable.
+          $slugMatches = @($matrix.include | Where-Object { $_.releaseSlug -ceq $env:PLUGIN_NAME })
+          if ($slugMatches.Count -ne 1) {
             throw "Unknown plugin: $env:PLUGIN_NAME"
           }
-          $entry = $matches[0]
+          $entry = $slugMatches[0]
           if (@($entry.platforms).Count -ne 1 -or @($entry.rids).Count -ne 1) {
             throw "Plugin releases currently require exactly one platform and RID."
           }

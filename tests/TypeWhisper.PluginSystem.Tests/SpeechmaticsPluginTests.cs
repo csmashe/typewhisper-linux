@@ -103,6 +103,8 @@ public class SpeechmaticsPluginTests
     [Theory]
     [InlineData(null)]
     [InlineData("")]
+    [InlineData("auto")]
+    [InlineData(" AUTO ")]
     public void BuildStartRecognition_RejectsUnspecifiedLanguage(string? language)
     {
         Assert.Throws<ArgumentException>(

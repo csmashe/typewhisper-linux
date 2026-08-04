@@ -108,14 +108,15 @@ function Assert-ExactRelativePath {
             throw "Catalog projectPath is not canonical: $RelativePath"
         }
 
-        $matches = @(
+        # Not $matches: that is PowerShell's automatic -match capture variable.
+        $segmentMatches = @(
             Get-ChildItem -LiteralPath $current -Force |
                 Where-Object { $_.Name -ceq $segment }
         )
-        if ($matches.Count -ne 1) {
+        if ($segmentMatches.Count -ne 1) {
             throw "Catalog projectPath does not exist with exact casing: $RelativePath"
         }
-        $current = $matches[0].FullName
+        $current = $segmentMatches[0].FullName
     }
 
     return $current

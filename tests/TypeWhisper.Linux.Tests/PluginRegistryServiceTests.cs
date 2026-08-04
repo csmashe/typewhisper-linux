@@ -74,7 +74,10 @@ public sealed class PluginRegistryServiceTests : IDisposable
         var json = JsonSerializer.Serialize(plugins);
         var httpClient = CreateMockHttpClient(json);
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         var result = await service.FetchRegistryAsync();
 
@@ -125,7 +128,10 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var httpClient = new HttpClient(handler.Object);
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         await service.FetchRegistryAsync();
         await service.FetchRegistryAsync();
@@ -146,7 +152,10 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var httpClient = CreateMockHttpClient("[]");
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         await service.FirstRunAutoInstallAsync();
 
@@ -161,7 +170,10 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var httpClient = CreateMockHttpClient("[]");
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         await service.FirstRunAutoInstallAsync();
 
@@ -202,7 +214,10 @@ public sealed class PluginRegistryServiceTests : IDisposable
             _loader,
             _settings.Object,
             new HttpClient(handler.Object)
-        );
+        )
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         await service.FirstRunAutoInstallAsync();
         Assert.Null(savedSettings);

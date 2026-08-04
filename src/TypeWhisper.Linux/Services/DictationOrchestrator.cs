@@ -652,6 +652,11 @@ public sealed class DictationOrchestrator : IDisposable
                 }
             );
 
+            // Declared out here because the snapshot task that reuses it starts after this try
+            // block. Matching twice could let the startup decisions and the recorded match
+            // disagree if the profile set changes mid-start.
+            MatchResult? startupForcedMatch = null;
+
             try
             {
                 if (startupSettings.AudioDuckingEnabled)
@@ -680,6 +685,7 @@ public sealed class DictationOrchestrator : IDisposable
                     var forcedMatch = _profiles.MatchProfile(null, null, forcedProfileId);
                     if (forcedMatch.Kind == MatchKind.ManualOverride)
                     {
+                        startupForcedMatch = forcedMatch;
                         startupProfile = forcedMatch.Profile;
                     }
                 }
@@ -773,17 +779,12 @@ public sealed class DictationOrchestrator : IDisposable
                 string? appUrl = null;
                 var initialMatch = MatchResult.NoMatch;
                 Profile? matchedProfile = null;
-                if (forcedProfileId is not null)
+                // Applied before the snapshot attempt: a manual override bypasses window/URL
+                // context entirely, so it must survive a snapshot timeout or provider failure.
+                if (startupForcedMatch is { } forcedMatch)
                 {
-                    // Resolve the forced profile before the snapshot attempt: a manual
-                    // override bypasses window/URL context entirely, so it must survive
-                    // a snapshot timeout or provider failure.
-                    var forcedMatch = _profiles.MatchProfile(null, null, forcedProfileId);
-                    if (forcedMatch.Kind == MatchKind.ManualOverride)
-                    {
-                        initialMatch = forcedMatch;
-                        matchedProfile = forcedMatch.Profile;
-                    }
+                    initialMatch = forcedMatch;
+                    matchedProfile = forcedMatch.Profile;
                 }
 
                 try

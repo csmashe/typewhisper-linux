@@ -67,7 +67,7 @@ public sealed class SpeechmaticsPlugin
         // Defense in depth for direct/legacy callers; the typed host invoker rejects
         // automatic selection before entering the plugin.
         var normalized = language?.Trim().ToLowerInvariant();
-        if (string.IsNullOrEmpty(normalized))
+        if (string.IsNullOrEmpty(normalized) || normalized == "auto")
             throw new NotSupportedException(
                 "Speechmatics does not support automatic language detection. Choose an explicit language for this profile."
             );
@@ -97,7 +97,7 @@ public sealed class SpeechmaticsPlugin
         // Defense in depth for direct/legacy callers; the typed host invoker rejects
         // automatic selection before entering the plugin.
         var normalized = language?.Trim().ToLowerInvariant();
-        if (string.IsNullOrEmpty(normalized))
+        if (string.IsNullOrEmpty(normalized) || normalized == "auto")
             throw new NotSupportedException(
                 "Speechmatics does not support automatic language detection. Choose an explicit language for this profile."
             );

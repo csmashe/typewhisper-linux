@@ -44,6 +44,14 @@ public sealed class BundledTranscriptionLanguageConformanceTests
             Assert.Equal(19, roles.Count);
             Assert.Equal(19, roles.Select(role => role.ProviderId).Distinct().Count());
 
+            // Role-independent, so assert once rather than 19 times inside the loop below.
+            Assert.False(LanguageSelection.TryParse("", out _));
+            Assert.False(LanguageSelection.TryParse("   ", out _));
+            foreach (var raw in s_invalidInputs)
+            {
+                Assert.False(LanguageSelection.TryParse(raw, out _));
+            }
+
             foreach (var role in roles)
             {
                 var capabilities = Assert.IsType<ITranscriptionLanguageSelectionCapabilities>(
@@ -58,14 +66,6 @@ public sealed class BundledTranscriptionLanguageConformanceTests
                     LanguageSelectionSupport.Unknown,
                     capabilities.ExplicitSelectionSupport
                 );
-
-                Assert.False(LanguageSelection.TryParse("", out _));
-                Assert.False(LanguageSelection.TryParse("   ", out _));
-
-                foreach (var raw in s_invalidInputs)
-                {
-                    Assert.False(LanguageSelection.TryParse(raw, out _));
-                }
 
                 foreach (var raw in s_automaticInputs)
                 {

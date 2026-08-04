@@ -201,9 +201,9 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
             var float32 = new byte[checked(synthesis.Samples.Length * sizeof(float))];
             for (var i = 0; i < synthesis.Samples.Length; i++)
             {
-                BinaryPrimitives.WriteInt32LittleEndian(
+                BinaryPrimitives.WriteSingleLittleEndian(
                     float32.AsSpan(i * sizeof(float), sizeof(float)),
-                    BitConverter.SingleToInt32Bits(synthesis.Samples[i])
+                    synthesis.Samples[i]
                 );
             }
 

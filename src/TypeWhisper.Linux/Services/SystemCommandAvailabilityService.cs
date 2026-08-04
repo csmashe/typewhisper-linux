@@ -10,8 +10,6 @@ public sealed partial class SystemCommandAvailabilityService
 {
     private const int RtldNow = 2;
     private const int RtldGlobal = 0x100;
-    private const UnixFileMode ExecutableModeMask =
-        UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
     private static readonly TimeSpan s_ydotoolSocketConnectTimeout =
         TimeSpan.FromMilliseconds(250);
 
@@ -445,39 +443,7 @@ public sealed partial class SystemCommandAvailabilityService
 
     public static bool IsCommandAvailable(string commandName)
     {
-        var pathValue = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrWhiteSpace(pathValue))
-        {
-            return false;
-        }
-
-        foreach (
-            var directory in pathValue.Split(
-                Path.PathSeparator,
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
-            )
-        )
-        {
-            try
-            {
-                var candidate = Path.Join(directory, commandName);
-#pragma warning disable CA1416 // TypeWhisper.Linux is a Linux-only assembly.
-                if (
-                    File.Exists(candidate)
-                    && (File.GetUnixFileMode(candidate) & ExecutableModeMask) != 0
-                )
-#pragma warning restore CA1416
-                {
-                    return true;
-                }
-            }
-            catch
-            {
-                // Ignore invalid PATH entries.
-            }
-        }
-
-        return false;
+        return ExecutablePathResolver.Find(commandName) is not null;
     }
 
     /// <summary>

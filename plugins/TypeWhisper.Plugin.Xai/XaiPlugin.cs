@@ -596,8 +596,16 @@ public sealed class XaiPlugin
     private static string NormalizeVoiceId(string? voiceId) =>
         string.IsNullOrWhiteSpace(voiceId) ? XaiTtsConfiguration.DefaultVoiceId : voiceId.Trim();
 
-    private static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) ? null : language.Trim();
+    // The typed invoker maps "auto" to null already; this only catches direct/legacy callers.
+    // Forwarding it would also make ParseSttResponse report "auto" as the detected language.
+    private static string? NormalizeLanguage(string? language)
+    {
+        var trimmed = language?.Trim();
+        return string.IsNullOrEmpty(trimmed)
+            || trimmed.Equals("auto", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : trimmed;
+    }
 
     private static string NormalizeTtsLanguage(string? language) =>
         string.IsNullOrWhiteSpace(language) ? "auto" : language.Trim();

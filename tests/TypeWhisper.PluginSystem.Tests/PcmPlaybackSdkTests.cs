@@ -10,8 +10,7 @@ public sealed class PcmPlaybackSdkTests
     {
         IPluginHostServices oldHost = new OldHostServices();
 
-        var preflight = Record.Exception(() => Assert.False(oldHost.PcmPlayback.IsAvailable));
-        Assert.Null(preflight);
+        Assert.False(oldHost.PcmPlayback.IsAvailable);
 
         var session = await oldHost.PcmPlayback.PlayAsync(
             new PcmPlaybackRequest(

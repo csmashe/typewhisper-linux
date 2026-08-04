@@ -33,7 +33,10 @@ $filesystemProjectPaths = @(
   }
 )
 $catalogProjectPaths = @($catalog.plugins | ForEach-Object { [string] $_.projectPath } | Sort-Object)
-$uniqueCatalogProjectPaths = @($catalogProjectPaths | Select-Object -Unique)
+# Case-sensitive, matching the -CaseSensitive parity comparison below: paths differing only in
+# casing are two distinct entries there, so they must count as two here as well. Pin the comparer
+# explicitly rather than depending on a default that differs between the -Unique implementations.
+$uniqueCatalogProjectPaths = @($catalogProjectPaths | Sort-Object -CaseSensitive -Unique)
 if ($catalogProjectPaths.Count -ne $uniqueCatalogProjectPaths.Count) {
   throw 'Plugin catalog contains duplicate projectPath values.'
 }
