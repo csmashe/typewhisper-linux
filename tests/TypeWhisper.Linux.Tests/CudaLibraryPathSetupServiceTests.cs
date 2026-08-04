@@ -343,6 +343,53 @@ public sealed class CudaLibraryPathSetupServiceTests : IDisposable
         );
     }
 
+    // The default configuration: XDG_CONFIG_HOME unset, so the canonical environment.d
+    // path IS the pre-XDG one. The legacy sweep must recognize the collision, or setup
+    // would delete the file it had just published.
+    [Fact]
+    public async Task Setup_does_not_sweep_the_environment_file_it_just_published_at_the_legacy_path()
+    {
+        var collidingConfigHome = Path.Join(Home, ".config");
+
+        var result = await CreateService(configHome: collidingConfigHome).SetUpAsync();
+
+        Assert.True(result.Success, result.Detail);
+        Assert.Null(result.LegacyEnvironmentNotice);
+        Assert.True(File.Exists(LegacyEnvironmentPath));
+        Assert.Equal(
+            CudaLibraryPathSetupService.EnvironmentFileContent(CudaPath),
+            await File.ReadAllTextAsync(LegacyEnvironmentPath)
+        );
+    }
+
+    // A profile that still carries the pre-manifest pair below our sentinel block: the
+    // block repeats that same comment/export shape, so a sweep that matched inside it
+    // would strip its body and leave the stray pair exporting the path forever.
+    [Fact]
+    public async Task Setup_strips_a_stray_pre_manifest_fragment_below_an_existing_block()
+    {
+        var service = CreateService();
+        Assert.True((await service.SetUpAsync()).Success);
+        await File.AppendAllTextAsync(
+            BashProfile,
+            "\n# TypeWhisper CUDA 12 runtime libraries\n"
+            + "export LD_LIBRARY_PATH=/opt/cuda-12/lib64:${LD_LIBRARY_PATH:-}\n"
+        );
+
+        var result = await service.SetUpAsync();
+
+        Assert.True(result.Success, result.Detail);
+        var profile = await File.ReadAllTextAsync(BashProfile);
+        Assert.Equal(
+            1,
+            CountOccurrences(profile, "# TypeWhisper CUDA 12 runtime libraries")
+        );
+        Assert.Equal(
+            1,
+            CountOccurrences(profile, "export LD_LIBRARY_PATH=/opt/cuda-12/lib64")
+        );
+    }
+
     // Upgrading from the pre-manifest release and going straight to Remove: the shell
     // profile still carries only the old unsentinelized pair. Leaving it would keep
     // LD_LIBRARY_PATH exported after the environment.d file is gone.
@@ -383,13 +430,14 @@ public sealed class CudaLibraryPathSetupServiceTests : IDisposable
         string shell = "/bin/bash",
         ManagedFileTransaction? transaction = null,
         Func<AtomicFileSnapshot, string, CancellationToken, Task<bool>>? conditionalWrite = null,
-        Func<string>? shellProvider = null
+        Func<string>? shellProvider = null,
+        string? configHome = null
     )
     {
         return new CudaLibraryPathSetupService(
             transaction ?? new ManagedFileTransaction(StateRoot),
             () => Home,
-            () => ConfigHome,
+            () => configHome ?? ConfigHome,
             shellProvider ?? (() => shell),
             () => CudaPath,
             conditionalWrite

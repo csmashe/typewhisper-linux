@@ -53,11 +53,9 @@ public sealed class CliInstallService
             DefaultInstallDirectory,
             DefaultLauncherDirectory,
             path => RunCliVerification(processRunner, path, s_verificationTimeout),
-            ReadUnixFileMode
-        )
-    {
-        _managedFiles = new ManagedFileTransaction();
-    }
+            ReadUnixFileMode,
+            ManagedFileTransaction.DefaultStateRoot
+        ) { }
 
     internal CliInstallService(
         Func<string?> bundledPathProvider,
@@ -73,11 +71,17 @@ public sealed class CliInstallService
         _launcherDirectoryProvider = launcherDirectoryProvider;
         _verificationRunner = verificationRunner ?? RunCliVerification;
         _unixFileModeReader = unixFileModeReader ?? ReadUnixFileMode;
-        var installDirectory = Path.GetFullPath(installDirectoryProvider());
-        var testStateParent = Path.GetDirectoryName(installDirectory) ?? installDirectory;
         _managedFiles = new ManagedFileTransaction(
-            managedArtifactStateRoot ?? Path.Join(testStateParent, "managed-artifacts-test")
+            managedArtifactStateRoot ?? TestStateRoot(installDirectoryProvider())
         );
+    }
+
+    // Only reached from tests, which install into a temp tree and want the manifest to live
+    // beside it rather than in the real per-user state directory.
+    private static string TestStateRoot(string installDirectory)
+    {
+        var full = Path.GetFullPath(installDirectory);
+        return Path.Join(Path.GetDirectoryName(full) ?? full, "managed-artifacts-test");
     }
 
     public CliInstallState GetState()

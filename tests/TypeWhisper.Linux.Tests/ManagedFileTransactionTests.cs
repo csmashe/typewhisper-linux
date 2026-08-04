@@ -183,6 +183,7 @@ public sealed class ManagedFileTransactionTests : IDisposable
     }
 
     [Theory]
+    [InlineData((int)ManagedFileCheckpoint.InstallAfterStage, false)]
     [InlineData((int)ManagedFileCheckpoint.InstallAfterJournal, false)]
     [InlineData((int)ManagedFileCheckpoint.InstallAfterPublish, true)]
     [InlineData((int)ManagedFileCheckpoint.InstallAfterState, true)]
@@ -221,6 +222,14 @@ public sealed class ManagedFileTransactionTests : IDisposable
         Assert.Equal(expectsPublished, File.Exists(spec.DestinationPath));
         Assert.False(
             File.Exists(Path.Join(StateRoot, spec.ArtifactId, "pending.json"))
+        );
+
+        // The stage is a sibling of the destination, so a crash must not leave one behind.
+        Assert.Empty(
+            Directory.EnumerateFiles(
+                Path.GetDirectoryName(spec.DestinationPath)!,
+                ".*.tmp"
+            )
         );
     }
 
@@ -311,13 +320,13 @@ public sealed class ManagedFileTransactionTests : IDisposable
         );
 
         var firstTask = first.InstallAsync(firstSpec);
-        await entered.Task;
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
         var secondTask = CreateTransaction().InstallAsync(secondSpec);
         await Task.Delay(50);
         Assert.False(secondTask.IsCompleted);
 
         release.TrySetResult();
-        await Task.WhenAll(firstTask, secondTask);
+        await Task.WhenAll(firstTask, secondTask).WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("# owned\nsecond\n", File.ReadAllText(firstSpec.DestinationPath));
         Assert.Equal(ManagedFileClassification.CurrentOwned, CreateTransaction().Probe(secondSpec));

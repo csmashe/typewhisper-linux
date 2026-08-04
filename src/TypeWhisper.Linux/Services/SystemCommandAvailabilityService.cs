@@ -240,10 +240,7 @@ public sealed partial class SystemCommandAvailabilityService
     public static bool TryPreloadCuda12RuntimeLibraries(out string message)
     {
         var processRunner = new ProcessRunner();
-        if (
-            IsLibraryAvailable("libcudart.so.12", processRunner)
-            && IsLibraryAvailable("libcublas.so.12", processRunner)
-        )
+        if (AreCuda12LibrariesVisible(processRunner))
         {
             message = "CUDA 12 runtime libraries are already visible.";
             return true;
@@ -567,10 +564,8 @@ public sealed partial class SystemCommandAvailabilityService
             hasPlayerCtl,
             hasAudioPlayer,
             IsCommandAvailable("nvidia-smi") || File.Exists("/dev/nvidiactl"),
-            (
-                IsLibraryAvailable("libcudart.so.12", _processRunner)
-                && IsLibraryAvailable("libcublas.so.12", _processRunner)
-            ) || FindCuda12RuntimeDirectory() is not null,
+            AreCuda12LibrariesVisible(_processRunner)
+            || FindCuda12RuntimeDirectory() is not null,
             DesktopDetector.DetectId(),
             hasYdotool,
             ydotoolSocket is not null,
@@ -618,12 +613,18 @@ public sealed partial class SystemCommandAvailabilityService
         return IsCommandAvailable("spd-say") ? "spd-say" : null;
     }
 
-    private static bool IsLibraryAvailable(
-        string libraryName,
-        IProcessRunner processRunner
-    )
+    // One `ldconfig -p` for the pair: probing each library separately spawned the process
+    // twice on every snapshot build, and startup pays for that.
+    private static bool AreCuda12LibrariesVisible(IProcessRunner processRunner)
     {
-        if (FindInLdCache(libraryName, processRunner))
+        var ldCache = ReadLdCache(processRunner);
+        return IsLibraryAvailable("libcudart.so.12", ldCache)
+               && IsLibraryAvailable("libcublas.so.12", ldCache);
+    }
+
+    private static bool IsLibraryAvailable(string libraryName, string ldCache)
+    {
+        if (ldCache.Contains(libraryName, StringComparison.Ordinal))
         {
             return true;
         }
@@ -684,10 +685,8 @@ public sealed partial class SystemCommandAvailabilityService
         return false;
     }
 
-    private static bool FindInLdCache(
-        string libraryName,
-        IProcessRunner processRunner
-    )
+    /// <summary>The <c>ldconfig -p</c> listing, or empty when it can't be read.</summary>
+    private static string ReadLdCache(IProcessRunner processRunner)
     {
         try
         {
@@ -698,15 +697,11 @@ public sealed partial class SystemCommandAvailabilityService
                     StandardError: ProcessCaptureMode.Discard
                 )
             );
-            return result.Succeeded
-                   && result.StandardOutputText.Contains(
-                       libraryName,
-                       StringComparison.Ordinal
-                   );
+            return result.Succeeded ? result.StandardOutputText : "";
         }
         catch
         {
-            return false;
+            return "";
         }
     }
 

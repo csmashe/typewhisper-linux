@@ -156,7 +156,7 @@ public sealed class AtomicJsonStoreTests
     [Fact]
     public void Current_PreserveAndReset_PreservedCopyKeepsOriginalPermissions()
     {
-        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
         {
             return;
         }
@@ -376,7 +376,7 @@ public sealed class AtomicJsonStoreTests
     [Fact]
     public void Update_PreservesExistingUnixMode()
     {
-        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
         {
             return;
         }
@@ -403,7 +403,7 @@ public sealed class AtomicJsonStoreTests
     [Fact]
     public void Update_UnreadablePrimary_DoesNotPublishWritableDefaults()
     {
-        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
         {
             return;
         }

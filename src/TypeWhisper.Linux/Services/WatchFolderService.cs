@@ -155,7 +155,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
                         : [.. history.Take(100)];
                 },
             },
-            AtomicFileWrite.WriteAllText
+            atomicWriteAllText
         );
         // Settle corrupt-file recovery now, but neither file is essential: the pre-store loaders
         // both degraded to empty rather than failing construction.

@@ -1225,10 +1225,14 @@ public partial class DictationSectionViewModel : ObservableObject
             // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault -- only the two failures with a dedicated message are handled here; the rest fall through to the generic !Success branch below.
             switch (result.Failure)
             {
+                // Clear the detail line in both: a stale "saved" note from an earlier run
+                // would otherwise stay on screen contradicting the failure below it.
                 case CudaLibraryPathSetupFailure.HomeDirectoryUnavailable:
+                    CudaSetupStatus = "";
                     StatusText = Loc.Instance["Dictation.NoHomeDirectory"];
                     return;
                 case CudaLibraryPathSetupFailure.CudaLibrariesUnavailable:
+                    CudaSetupStatus = "";
                     StatusText = Loc.Instance["Dictation.CudaLibsMissingRetry"];
                     return;
             }

@@ -31,6 +31,10 @@ public sealed partial class YdotoolSetupHelper
     internal static string? ManagedArtifactStateRootOverride { get; set; }
     internal static string? RootManagedArtifactStateRootOverride { get; set; }
 
+    // Matches InputAccessSetupHelper: long enough for the user to type a password at the
+    // polkit prompt, short enough that an unanswered dialog can't wedge setup forever.
+    private static readonly TimeSpan s_privilegedAuthorizationTimeout = TimeSpan.FromMinutes(2);
+
     private static string SysConfDir => SysConfDirOverride ?? "/etc";
 
     private static string UdevRulePath => Path.Join(SysConfDir, "udev/rules.d/60-ydotool.rules");
@@ -387,9 +391,18 @@ public sealed partial class YdotoolSetupHelper
                     "pkexec",
                     ["/bin/sh"],
                     standardInput: BuildPrivilegedRemoveScript(),
+                    timeout: s_privilegedAuthorizationTimeout,
                     ct: ct
                 )
                 .ConfigureAwait(false);
+            if (rm.TimedOut)
+            {
+                return new SetupResult(
+                    false,
+                    "Removing ydotool's root-owned config timed out waiting for admin authorization."
+                );
+            }
+
             if (!rm.Succeeded)
             {
                 // Conflict exit codes carry their explanation in stderr, so every failure
@@ -686,8 +699,22 @@ public sealed partial class YdotoolSetupHelper
         var script = BuildPrivilegedInstallScript();
 
         var run = await _runner
-            .RunAsync("pkexec", ["/bin/sh"], standardInput: script, ct: ct)
+            .RunAsync(
+                "pkexec",
+                ["/bin/sh"],
+                standardInput: script,
+                timeout: s_privilegedAuthorizationTimeout,
+                ct: ct
+            )
             .ConfigureAwait(false);
+
+        if (run.TimedOut)
+        {
+            return new SetupResult(
+                false,
+                "Installing the udev rule timed out waiting for admin authorization."
+            );
+        }
 
         if (run.Succeeded)
         {
@@ -941,6 +968,8 @@ public sealed partial class YdotoolSetupHelper
         };
     }
 
+    // Remove-only: removal probes with empty desired bytes, so this spec must never reach
+    // InstallAsync — that would publish an empty unit file.
     private static ManagedFileSpec BuildUserUnitRemovalSpec(string unitPath)
     {
         return new ManagedFileSpec

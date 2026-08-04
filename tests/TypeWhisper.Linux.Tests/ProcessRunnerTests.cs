@@ -717,7 +717,12 @@ public sealed class ProcessRunnerTests
             );
             childId = await WaitForProcessIdAsync(pidFile);
 
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1));
+            // Under the grandchild's 3 s pipe hold, so a regression to full draining still
+            // trips, with margin for dotnet startup and CI scheduling noise.
+            Assert.True(
+                stopwatch.Elapsed < TimeSpan.FromSeconds(2),
+                $"The abandon path drained the inherited pipes; elapsed {stopwatch.Elapsed}."
+            );
             Assert.True(result.Succeeded);
             Assert.Equal(
                 ProcessOutputStatus.AbandonedAfterExit,
@@ -797,12 +802,21 @@ public sealed class ProcessRunnerTests
         {
             var stopwatch = Stopwatch.StartNew();
             var result = new ProcessRunner().LaunchDetached(
-                ChildCommand("detached-marker", marker, "300")
+                ChildCommand("detached-marker", marker, "1500")
             );
 
             Assert.True(result.Started, result.StartError);
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromMilliseconds(250));
-            var contents = await WaitForFileContentsAsync(marker);
+            // Half the child's delay, so a runner that waited for it can't pass while
+            // dotnet startup on a loaded machine still has room.
+            Assert.True(
+                stopwatch.Elapsed < TimeSpan.FromMilliseconds(750),
+                $"LaunchDetached did not return promptly; elapsed {stopwatch.Elapsed}."
+            );
+            var contents = await WaitForFileContentsAsync(
+                marker,
+                static text => SplitMarker(text) is [_, "continued"] parts
+                               && int.TryParse(parts[0], out _)
+            );
             var parts = contents.Split(':');
             processId = int.Parse(parts[0]);
             Assert.Equal("continued", parts[1]);
@@ -864,7 +878,12 @@ public sealed class ProcessRunnerTests
         return lines;
     }
 
-    private static async Task<string> WaitForFileContentsAsync(string path)
+    // isComplete guards against reading a marker the child is still writing: "1234:" parses
+    // as a truncated child id, so keep polling until the whole expected shape is there.
+    private static async Task<string> WaitForFileContentsAsync(
+        string path,
+        Func<string, bool> isComplete
+    )
     {
         var stopwatch = Stopwatch.StartNew();
         while (stopwatch.Elapsed < s_testGuard)
@@ -874,7 +893,7 @@ public sealed class ProcessRunnerTests
                 if (File.Exists(path))
                 {
                     var contents = await File.ReadAllTextAsync(path);
-                    if (!string.IsNullOrWhiteSpace(contents))
+                    if (!string.IsNullOrWhiteSpace(contents) && isComplete(contents))
                     {
                         return contents;
                     }
@@ -893,9 +912,19 @@ public sealed class ProcessRunnerTests
 
     private static async Task<FakeProcessIds> WaitForColonProcessIdsAsync(string path)
     {
-        var contents = await WaitForFileContentsAsync(path);
+        var contents = await WaitForFileContentsAsync(
+            path,
+            static text => SplitMarker(text) is [_, _] parts
+                           && int.TryParse(parts[0], out _)
+                           && int.TryParse(parts[1], out _)
+        );
         var parts = contents.Split(':');
         return new FakeProcessIds(int.Parse(parts[0]), int.Parse(parts[1]));
+    }
+
+    private static string[] SplitMarker(string contents)
+    {
+        return contents.Split(':', StringSplitOptions.RemoveEmptyEntries);
     }
 
     // Closes the read end of the stdin pipe and stays alive, so the supervisor's pending

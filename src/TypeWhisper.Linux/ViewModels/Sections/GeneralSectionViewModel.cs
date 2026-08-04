@@ -1,4 +1,3 @@
-// ReSharper disable UnusedParameterInPartialMethod
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
@@ -54,9 +53,11 @@ public partial class GeneralSectionViewModel : ObservableObject
     private bool _closeToTray;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowCudaPathRemovalSurface))]
     private bool _cudaPathRemovalAvailable;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowCudaPathRemovalSurface))]
     private string _cudaPathRemovalStatusText = "";
 
     [ObservableProperty]
@@ -198,14 +199,32 @@ public partial class GeneralSectionViewModel : ObservableObject
     [RelayCommand]
     private async Task RemoveCudaLibraryPathAsync()
     {
-        var result = await _cudaLibraryPathSetup.RemoveAsync(CancellationToken.None);
-        CudaPathRemovalStatusText = result.Success
-            ? Loc.Instance["General.CudaPathRemoved"]
-            : Loc.Instance.GetString(
+        try
+        {
+            var result = await _cudaLibraryPathSetup.RemoveAsync(CancellationToken.None);
+            CudaPathRemovalStatusText = result.Success
+                ? Loc.Instance["General.CudaPathRemoved"]
+                : Loc.Instance.GetString(
+                    "General.CudaPathRemoveFailed",
+                    result.Detail ?? string.Empty
+                );
+        }
+        catch (Exception ex)
+            when (ex is InvalidOperationException
+                or IOException
+                or UnauthorizedAccessException
+                or InvalidDataException)
+        {
+            CudaPathRemovalStatusText = Loc.Instance.GetString(
                 "General.CudaPathRemoveFailed",
-                result.Detail ?? string.Empty
+                ex.Message
             );
-        CudaPathRemovalAvailable = _cudaLibraryPathSetup.HasInstalledChanges();
+        }
+        finally
+        {
+            // Refresh either way: a partial removal still changes what is left to revert.
+            CudaPathRemovalAvailable = _cudaLibraryPathSetup.HasInstalledChanges();
+        }
     }
 
     private void ApplyCliState(CliInstallState state)
@@ -247,16 +266,6 @@ public partial class GeneralSectionViewModel : ObservableObject
 
         Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(value);
         OnPropertyChanged(nameof(SelectedUiLanguageOption));
-    }
-
-    partial void OnCudaPathRemovalAvailableChanged(bool value)
-    {
-        OnPropertyChanged(nameof(ShowCudaPathRemovalSurface));
-    }
-
-    partial void OnCudaPathRemovalStatusTextChanged(string value)
-    {
-        OnPropertyChanged(nameof(ShowCudaPathRemovalSurface));
     }
 
     partial void OnStartWithSystemChanged(bool value)

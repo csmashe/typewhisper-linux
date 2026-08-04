@@ -631,7 +631,12 @@ public sealed class AudioRecordingService : IDisposable
             );
         }
 
-        UpdateLevel(stoppedPreviewGeneration, 0f, allowClosingGeneration: true);
+        // Only zero the meter when nothing is still feeding it. A recording that outlives the
+        // preview keeps publishing its own levels, and a 0 here would blank the meter mid-take.
+        if (!stoppedPreviewGeneration.AcceptsFrameUpdates)
+        {
+            UpdateLevel(stoppedPreviewGeneration, 0f, allowClosingGeneration: true);
+        }
     }
 
     public AudioInputDevice? ResolveConfiguredDevice(int? preferredIndex, string? preferredDeviceId)
@@ -964,6 +969,9 @@ public sealed class AudioRecordingService : IDisposable
         return StreamCallbackResult.Continue;
     }
 
+    // Seqlock-style read: re-reading _levelDeliveryGeneration after the session proves the two
+    // came from the same publication under _captureLock, rather than straddling one. This holds
+    // only because every session change publishes a matching generation — keep that invariant.
     private CaptureCallbackContext CaptureCurrentCallbackContext()
     {
         while (true)

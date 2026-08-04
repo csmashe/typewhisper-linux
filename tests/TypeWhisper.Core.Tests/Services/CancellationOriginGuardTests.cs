@@ -181,8 +181,10 @@ public partial class CancellationOriginGuardTests
         );
     }
 
+    // Matches the derived TaskCanceledException too — catching it unfiltered swallows
+    // cancellation the same way. The prefix is left open so no qualified spelling slips past.
     [GeneratedRegex(
-        @"catch\s*\(\s*OperationCanceledException(?:\s+\w+)?\s*\)(?!\s*when)"
+        @"catch\s*\(\s*(?:[\w.]+\.)?(?:Operation|Task)CanceledException(?:\s+\w+)?\s*\)(?!\s*when)"
     )]
     private static partial Regex UnfilteredOperationCanceledCatchRegex();
 

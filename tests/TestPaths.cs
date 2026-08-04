@@ -1,3 +1,8 @@
+// Linked into each test project rather than owned by one, so solution-wide analysis reports
+// the linked-in copies as unused. Every member here is called from the suites that link it.
+// ReSharper disable UnusedType.Global
+// ReSharper disable UnusedMember.Global
+
 using TypeWhisper.Core;
 
 namespace TypeWhisper.Tests;

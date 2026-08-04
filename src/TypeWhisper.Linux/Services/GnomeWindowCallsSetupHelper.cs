@@ -1,4 +1,3 @@
-using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
@@ -48,15 +47,10 @@ public sealed class GnomeWindowCallsSetupHelper
         return lower.Contains("gnome") || lower.Contains("ubuntu");
     }
 
-    // kept instance: injected as a DI/test seam by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
-    // ReSharper disable once MemberCanBeMadeStatic.Global
     public bool IsCurrentlyInstalled()
     {
-        if (!DesktopDetector.BinaryExists("gdbus"))
-        {
-            return false;
-        }
+        // No PATH check for gdbus: a missing binary already comes back as a not-started
+        // probe below, and routing it through the seam keeps tests off the host.
 
         // Don't use `gdbus introspect`: org.gnome.Shell answers it on any path
         // (empty node), giving a false positive. Actually CALL List — a missing
@@ -92,9 +86,6 @@ public sealed class GnomeWindowCallsSetupHelper
         return false;
     }
 
-    // kept instance: injected as a DI/test seam by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
-    // ReSharper disable once MemberCanBeMadeStatic.Global
     public bool TryOpenInstallPage()
     {
         return _processRunner.LaunchUri(new Uri(ExtensionInstallUrl)).Started;

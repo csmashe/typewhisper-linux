@@ -1432,7 +1432,7 @@ public class OpenAiPluginTests
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var socket = new FakeRealtimeWebSocket();
         await using var session =
-            OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+            await OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
 
         await session.SendAudioAsync(new byte[] { 1, 0, 2, 0 }, timeoutCts.Token);
 
@@ -1492,7 +1492,7 @@ public class OpenAiPluginTests
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var socket = new FakeRealtimeWebSocket();
         await using var session =
-            OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+            await OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
 
         await session.SendAudioAsync(new byte[] { 1, 0, 2, 0 }, timeoutCts.Token);
 
@@ -1524,7 +1524,7 @@ public class OpenAiPluginTests
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var socket = new FakeRealtimeWebSocket();
         await using var session =
-            OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+            await OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
 
         // No server-VAD commit arrives in manual mode. Finalize retains the
         // existing batch behavior of sending exactly one explicit commit.
@@ -1564,7 +1564,7 @@ public class OpenAiPluginTests
         using var finalizeCts = new CancellationTokenSource();
         var socket = new FakeRealtimeWebSocket();
         await using var session =
-            OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+            await OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
 
         await session.SendAudioAsync(new byte[] { 1, 0, 2, 0 }, testTimeoutCts.Token);
 

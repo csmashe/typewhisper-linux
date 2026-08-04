@@ -1,6 +1,7 @@
-// Shared JSON contract for the Premium Cloud Folder Sync wire format. The serializer options and
-// the Serialize/Deserialize pair are the public entry points for that feature; no in-tree caller
-// exists yet, so they read as unused and privatisable. Keep them public.
+// Shared JSON contract for the Premium Cloud Folder Sync wire format, carried over from upstream
+// alongside UserDataSync.cs. The serializer options and the Serialize/Deserialize pair are the
+// public entry points for that feature, but its consumers were not ported to Linux, so the
+// "unused" family below reports a feature that has not landed rather than a mistake. Keep public.
 // ReSharper disable UnusedType.Global
 // ReSharper disable UnusedMember.Global
 // ReSharper disable MemberCanBePrivate.Global
@@ -55,6 +56,11 @@ internal sealed class CloudFolderSyncDateTimeConverter : JsonConverter<DateTime>
     /// </summary>
     public override DateTime Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
+        // GetString throws InvalidOperationException on a number/bool/object token, which would
+        // escape the deserializer instead of surfacing as the JsonException callers expect.
+        if (reader.TokenType is not (JsonTokenType.String or JsonTokenType.Null))
+            throw new JsonException($"Expected an ISO-8601 date string, got {reader.TokenType}.");
+
         var value = reader.GetString();
         if (string.IsNullOrWhiteSpace(value))
             throw new JsonException("Expected an ISO-8601 date string.");

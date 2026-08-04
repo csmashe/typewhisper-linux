@@ -124,6 +124,15 @@ public sealed record WebSocketSessionPumpOptions(
 
 // ReSharper disable UnusedParameter.Global -- `ct` is part of the async adapter contract;
 // no in-tree adapter has an awaitable step yet, but out-of-tree ones may.
+
+/// <summary>
+///     Threading contract: <see cref="GetConnectionOptionsAsync" />, <see cref="OnConnectedAsync" />,
+///     <see cref="EncodeAudioAsync" /> and <see cref="BeginFinalizeAsync" /> are serialized against
+///     each other by the pump's send gate, so an adapter never sees two of them at once.
+///     <see cref="HandleMessage" /> runs on the receive loop and may execute concurrently with any
+///     of them. Implementations must therefore synchronize (lock, <c>volatile</c>, or interlocked)
+///     every field that <see cref="HandleMessage" /> shares with a send-side callback.
+/// </summary>
 public interface IWebSocketSessionAdapter
 {
     string ProviderName { get; }

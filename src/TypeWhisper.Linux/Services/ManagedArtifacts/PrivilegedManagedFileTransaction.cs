@@ -57,6 +57,10 @@ internal static class PrivilegedManagedFileTransaction
         foreach (var index in Enumerable.Range(0, specs.Count))
         {
             script.Append($"  rm -f \"${{stage_{index}:-}}\" 2>/dev/null || true\n");
+            script.Append(
+                $"  drop_created_dir \"${{created_dir_{index}:-}}\" "
+                + $"\"${{created_top_{index}:-}}\"\n"
+            );
         }
 
         script.Append("  exit \"$status\"\n");
@@ -145,6 +149,10 @@ internal static class PrivilegedManagedFileTransaction
         foreach (var index in Enumerable.Range(0, specs.Count))
         {
             script.Append($"  rm -f \"${{stage_{index}:-}}\" 2>/dev/null || true\n");
+            script.Append(
+                $"  drop_created_dir \"${{created_dir_{index}:-}}\" "
+                + $"\"${{created_top_{index}:-}}\"\n"
+            );
         }
 
         script.Append("  exit \"$status\"\n");
@@ -222,12 +230,24 @@ internal static class PrivilegedManagedFileTransaction
         foreach (var index in Enumerable.Range(0, specs.Count))
         {
             script.Append($"stage_{index}=\n");
+            script.Append($"created_dir_{index}=\n");
+            script.Append($"created_top_{index}=\n");
         }
 
         script.Append("cleanup_stages() {\n");
         foreach (var index in Enumerable.Range(0, specs.Count))
         {
             script.Append($"  rm -f \"${{stage_{index}:-}}\" 2>/dev/null || true\n");
+        }
+
+        // After the stages are gone, so a directory holding nothing but a stage is reclaimed
+        // too. Runs on the committed path as well, where the published file keeps it.
+        foreach (var index in Enumerable.Range(0, specs.Count))
+        {
+            script.Append(
+                $"  drop_created_dir \"${{created_dir_{index}:-}}\" "
+                + $"\"${{created_top_{index}:-}}\"\n"
+            );
         }
 
         script.Append("}\n");
@@ -250,6 +270,14 @@ internal static class PrivilegedManagedFileTransaction
             // A SIGKILL can leave the previous attempt's sibling stage behind. Clean
             // its recorded path before replacing the record with this attempt's stage.
             script.Append($"clear_staging \"$artifact_{index}\" \"$path_{index}\" ''\n");
+            // The stage is a sibling of the destination so publication is a rename, so a
+            // distribution shipping no /etc/modules-load.d would abort inside mktemp.
+            script.Append(
+                $"ensure_destination_dir \"$path_{index}\" {spec.ConflictExitCode} "
+                + $"{ShellQuote(spec.ConflictToken)}\n"
+            );
+            script.Append($"created_dir_{index}=$created_dir\n");
+            script.Append($"created_top_{index}=$created_top\n");
             script.Append($"stage_{index}=$(mktemp \"${{path_{index}}}.typewhisper.XXXXXX\")\n");
             script.Append(
                 $"printf '%s\\n' \"$stage_{index}\" > \"$state_root/$artifact_{index}/staging.path\"\n"
@@ -274,6 +302,9 @@ internal static class PrivilegedManagedFileTransaction
     {
         var header =
             "set -eu\n"
+            // pkexec does not reset the umask, so root inherits the caller's. Without this,
+            // a permissive one leaves anything not explicitly chmod'd world-writable.
+            + "umask 022\n"
             + "if ! command -v flock >/dev/null 2>&1; then\n"
             + $"  echo '{FlockUnavailableToken}: flock is required for TypeWhisper managed root files' >&2\n"
             + $"  exit {FlockUnavailableExitCode}\n"
@@ -319,6 +350,64 @@ internal static class PrivilegedManagedFileTransaction
               chmod 0644 "$1"
               [ "$(mode_of "$1")" = 644 ]
               sync_file "$1"
+            }
+
+            # Records the chain this call made (empty when the parent was already there) so a
+            # transaction that publishes nothing can undo it. mkdir -p can create several
+            # components, and every one of them is ours to secure and to reclaim.
+            ensure_destination_dir() {
+              created_dir=
+              created_top=
+              dir=$(dirname "$1")
+              if [ -d "$dir" ]; then
+                return 0
+              fi
+              if [ -e "$dir" ] || [ -L "$dir" ]; then
+                echo "$3" >&2
+                exit "$2"
+              fi
+              top=$dir
+              while :; do
+                parent=$(dirname "$top")
+                if [ "$parent" = "$top" ]; then
+                  break
+                fi
+                if [ -d "$parent" ]; then
+                  break
+                fi
+                top=$parent
+              done
+              mkdir -p "$dir"
+              cur=$dir
+              while :; do
+                chown root:root "$cur"
+                chmod 0755 "$cur"
+                [ "$(mode_of "$cur")" = 755 ]
+                if [ "$cur" = "$top" ]; then
+                  break
+                fi
+                cur=$(dirname "$cur")
+              done
+              created_dir=$dir
+              created_top=$top
+            }
+
+            # rmdir only succeeds on an empty directory, so this unwinds the created chain and
+            # stops at the first one still holding anything. Never climbs above $2.
+            drop_created_dir() {
+              leaf=${1:-}
+              boundary=${2:-}
+              if [ -z "$leaf" ]; then
+                return 0
+              fi
+              cur=$leaf
+              while :; do
+                rmdir "$cur" 2>/dev/null || return 0
+                if [ "$cur" = "$boundary" ]; then
+                  return 0
+                fi
+                cur=$(dirname "$cur")
+              done
             }
 
             ensure_artifact_dir() {
@@ -630,6 +719,17 @@ internal static class PrivilegedManagedFileTransaction
         )
         {
             throw new ArgumentException("Privileged artifact specification is unsafe.");
+        }
+
+        // Two specs sharing an id would share one state directory, so the second one's
+        // journal would overwrite the first's and leave recovery unable to replay either.
+        if (
+            specs.Select(spec => spec.ArtifactId)
+                .Distinct(StringComparer.Ordinal)
+                .Count() != specs.Count
+        )
+        {
+            throw new ArgumentException("Privileged artifact ids must be unique.");
         }
     }
 }

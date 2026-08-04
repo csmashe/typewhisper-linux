@@ -1,7 +1,8 @@
 // Documented public helper surface for the CLI (connection resolution and request building).
 // The shipped commands now go through Services/DiscoveryFileReader, Services/ApiClient and
 // Services/StdinAudioSniffer, so nothing in-tree calls these any more and every member reads as
-// unused or privatisable. Kept public as the documented helper API rather than trimmed.
+// unused or privatisable. Kept public as the documented request-shape reference for the HTTP API,
+// so the "unused" family below is rot, not a mistake.
 // ReSharper disable UnusedType.Global
 // ReSharper disable UnusedMember.Global
 // ReSharper disable ClassNeverInstantiated.Global
@@ -11,6 +12,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace TypeWhisper.Cli;
 
@@ -58,12 +60,12 @@ public sealed record CliTranscribeRequest(
 /// <summary>
 /// Provides cli connection resolver behavior.
 /// </summary>
-public static class CliConnectionResolver
+public static partial class CliConnectionResolver
 {
-    private const int DefaultPort = 8978;
-
-    private static readonly JsonSerializerOptions s_discoveryJsonOptions =
-        new() { PropertyNameCaseInsensitive = true };
+    // Mirrors AppSettings.ApiServerPort, the port the app's API server binds by default.
+    // Duplicated rather than referenced: the CLI ships as a standalone trimmed single file
+    // and deliberately takes no project references. Keep the two in step.
+    private const int DefaultPort = 9876;
 
     /// <summary>
     /// Resolves the supplied input to a configured value.
@@ -100,11 +102,11 @@ public static class CliConnectionResolver
             if (!File.Exists(path))
                 return null;
 
-            var discovery = JsonSerializer.Deserialize<ApiDiscovery>(
+            // Source-generated rather than reflective: the CLI publishes with TrimMode=full,
+            // where reflection-based deserialization is a latent runtime failure (IL2026).
+            return JsonSerializer.Deserialize(
                 File.ReadAllText(path),
-                s_discoveryJsonOptions);
-
-            return discovery;
+                DiscoveryJsonContext.Default.ApiDiscovery);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -141,6 +143,9 @@ public static class CliConnectionResolver
         /// <summary>
         /// Gets or sets the version value.
         /// </summary>
+        // ReSharper disable once UnusedAutoPropertyAccessor.Local -- carried so this record mirrors
+        // the api-discovery.json shape. Resolution accepts any version, matching DiscoveryFileReader
+        // on the live path, so nothing reads it back.
         public int Version { get; init; }
         /// <summary>
         /// Gets or sets the port value.
@@ -151,6 +156,12 @@ public static class CliConnectionResolver
         /// </summary>
         public string? Token { get; init; }
     }
+
+    // Source-generated so the published CLI can be trimmed: the reflection-based
+    // serializer roots types the linker can't see and warns (IL2026).
+    [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]
+    [JsonSerializable(typeof(ApiDiscovery))]
+    private partial class DiscoveryJsonContext : JsonSerializerContext;
 }
 
 /// <summary>
@@ -195,7 +206,33 @@ public static class CliRequestBuilder
         .Where(pair => pair.Value is not null)
         .ToDictionary(pair => pair.Key, pair => pair.Value);
 
-        var json = JsonSerializer.Serialize(body);
+        // Hand-write rather than reflect over Dictionary<string, object?>, which TrimMode=full
+        // cannot analyze (IL2026). Source-generating it is not an option either: the boxed
+        // IReadOnlyList<string> value makes the dictionary polymorphic. Only strings and string
+        // lists ever reach this body.
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            foreach (var (name, value) in body)
+            {
+                if (value is IReadOnlyList<string> list)
+                {
+                    writer.WriteStartArray(name);
+                    foreach (var entry in list)
+                        writer.WriteStringValue(entry);
+                    writer.WriteEndArray();
+                }
+                else
+                {
+                    writer.WriteString(name, (string?)value);
+                }
+            }
+
+            writer.WriteEndObject();
+        }
+
+        var json = Encoding.UTF8.GetString(buffer.ToArray());
         message.Content = new StringContent(json, Encoding.UTF8, "application/json");
         return message;
     }

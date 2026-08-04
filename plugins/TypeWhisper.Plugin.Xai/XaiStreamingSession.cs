@@ -10,15 +10,30 @@ internal sealed class XaiStreamingSession : IStreamingSession
 {
     private static readonly TimeSpan s_providerReadinessTimeout =
         TimeSpan.FromSeconds(10);
+    // Matches WebSocketClosePolicy.Default: disposal is trying to leave, not to finish a
+    // handshake, so it waits only as long as the pump's own teardown budget.
+    private static readonly TimeSpan s_disposePumpWait = TimeSpan.FromSeconds(2);
 
     private readonly Task<WebSocketSessionPump> _pumpTask;
+
+    // Non-null only while a handshake this session owns may still be in flight. Cancelling it
+    // routes through StartConnectedAsync's own failure path, which aborts and disposes the
+    // transport -- a bare WaitAsync would return from disposal with the socket still live.
+    private readonly CancellationTokenSource? _startupCts;
+    private readonly TimeSpan _disposePumpWait;
     private readonly Lock _subscriberGate = new();
     private Action<StreamingTranscriptEvent>? _pendingSubscribers;
     private bool _subscribersAttached;
 
-    private XaiStreamingSession(Task<WebSocketSessionPump> pumpTask)
+    private XaiStreamingSession(
+        Task<WebSocketSessionPump> pumpTask,
+        CancellationTokenSource? startupCts = null,
+        TimeSpan? disposePumpWait = null
+    )
     {
         _pumpTask = pumpTask;
+        _startupCts = startupCts;
+        _disposePumpWait = disposePumpWait ?? s_disposePumpWait;
         _ = AttachPendingSubscribersAsync();
     }
 
@@ -94,17 +109,25 @@ internal sealed class XaiStreamingSession : IStreamingSession
         }
     }
 
-    internal static XaiStreamingSession CreateConnectedSessionForTests(WebSocket ws)
+    // disposePumpWait shortens the teardown budget so a test covering the stuck-handshake path
+    // does not hold a worker for the full production wait.
+    internal static XaiStreamingSession CreateConnectedSessionForTests(
+        WebSocket ws,
+        TimeSpan? disposePumpWait = null
+    )
     {
         if (ws.State != WebSocketState.Open)
             throw new InvalidOperationException("The test WebSocket must already be open.");
 
+        // No readiness deadline here by design, so disposal is the only thing that can end a
+        // handshake the peer never answers -- hand it the token it needs to do that.
+        var startupCts = new CancellationTokenSource();
         var pumpTask = WebSocketSessionPump.StartConnectedAsync(
             new XaiWebSocketAdapter("", null),
             new ClientWebSocketTransport(ws),
-            CancellationToken.None
+            startupCts.Token
         );
-        return new XaiStreamingSession(pumpTask);
+        return new XaiStreamingSession(pumpTask, startupCts, disposePumpWait);
     }
 
     internal static async Task<XaiStreamingSession> CreateConnectedSessionForTests(
@@ -186,12 +209,28 @@ internal sealed class XaiStreamingSession : IStreamingSession
     {
         try
         {
-            var pump = await _pumpTask;
+            WebSocketSessionPump pump;
+            try
+            {
+                pump = await _pumpTask.WaitAsync(_disposePumpWait);
+            }
+            catch (TimeoutException) when (_startupCts is not null)
+            {
+                // Cancel rather than just stop waiting: StartConnectedAsync's failure path aborts
+                // and disposes the socket, so the second wait returns once teardown has run.
+                await _startupCts.CancelAsync();
+                pump = await _pumpTask.WaitAsync(_disposePumpWait);
+            }
+
             await pump.DisposeAsync();
         }
         catch
         {
             _ = _pumpTask.Exception;
+        }
+        finally
+        {
+            _startupCts?.Dispose();
         }
     }
 

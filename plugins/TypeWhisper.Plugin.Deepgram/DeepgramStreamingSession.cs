@@ -9,21 +9,21 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
 {
     private readonly WebSocketSessionPump _pump;
 
-    internal DeepgramStreamingSession(WebSocket ws)
-        : this(
-            WebSocketSessionPump
-                .StartConnectedAsync(
-                    new DeepgramWebSocketAdapter("", "nova-3", null),
-                    new ClientWebSocketTransport(ws),
-                    CancellationToken.None
-                )
-                .GetAwaiter()
-                .GetResult()
-        ) { }
-
     private DeepgramStreamingSession(WebSocketSessionPump pump)
     {
         _pump = pump;
+    }
+
+    internal static async Task<DeepgramStreamingSession> CreateConnectedSessionForTests(
+        WebSocket ws
+    )
+    {
+        var pump = await WebSocketSessionPump.StartConnectedAsync(
+            new DeepgramWebSocketAdapter("", "nova-3", null),
+            new ClientWebSocketTransport(ws),
+            CancellationToken.None
+        );
+        return new DeepgramStreamingSession(pump);
     }
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived

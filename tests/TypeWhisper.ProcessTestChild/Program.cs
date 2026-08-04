@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Text;
 
 namespace TypeWhisper.ProcessTestChild;
 
@@ -112,6 +111,8 @@ internal static class Program
         var startInfo = CreateSelfStartInfo(
             ["delay-exit", delayMilliseconds.ToString(), "0"]
         );
+        // Stated even though CreateSelfStartInfo already leaves them off: the grandchild
+        // inheriting our pipes and holding them past our exit is the whole scenario.
         startInfo.RedirectStandardOutput = false;
         startInfo.RedirectStandardError = false;
         var child = System.Diagnostics.Process.Start(startInfo)!;
@@ -124,7 +125,7 @@ internal static class Program
         await Task.Delay(delayMilliseconds);
         await File.WriteAllTextAsync(
             path,
-            $"{Environment.ProcessId}:{Encoding.UTF8.GetString("continued"u8)}"
+            $"{Environment.ProcessId}:continued"
         );
         return 0;
     }

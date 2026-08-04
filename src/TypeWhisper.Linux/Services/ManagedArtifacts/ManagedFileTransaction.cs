@@ -42,8 +42,12 @@ public sealed partial class ManagedFileTransaction
     private readonly string _stateRoot;
     private readonly Func<ManagedFileCheckpoint, CancellationToken, Task>? _checkpoint;
 
+    /// <summary>Where installed artifacts are recorded outside tests.</summary>
+    public static string DefaultStateRoot =>
+        Path.Join(TypeWhisperEnvironment.BasePath, "ManagedArtifacts");
+
     public ManagedFileTransaction()
-        : this(Path.Join(TypeWhisperEnvironment.BasePath, "ManagedArtifacts")) { }
+        : this(DefaultStateRoot) { }
 
     public ManagedFileTransaction(string stateRoot)
         : this(stateRoot, checkpoint: null) { }
@@ -297,19 +301,6 @@ public sealed partial class ManagedFileTransaction
                 false,
                 false,
                 "No recorded TypeWhisper publication exists."
-            );
-        }
-
-        if (
-            spec.LegacyPreimagePath is not null
-            && (!Path.IsPathFullyQualified(spec.LegacyPreimagePath)
-                || spec.ExistingPolicy
-                    != ManagedFileExistingPolicy.BackupTransformAndRestore)
-        )
-        {
-            throw new ArgumentException(
-                "LegacyPreimagePath must be absolute and belongs only to backup/transform artifacts.",
-                nameof(spec)
             );
         }
 
@@ -1094,12 +1085,19 @@ public sealed partial class ManagedFileTransaction
         }
         catch
         {
-            if (stream is not null)
+            // Same reason as ArtifactLock.DisposeAsync: a throwing close must not strand the permit.
+            try
             {
-                await stream.DisposeAsync().ConfigureAwait(false);
+                if (stream is not null)
+                {
+                    await stream.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                processLock.Release();
             }
 
-            processLock.Release();
             throw;
         }
     }
@@ -1201,6 +1199,20 @@ public sealed partial class ManagedFileTransaction
 
         ArgumentNullException.ThrowIfNull(spec.DesiredBytes);
         ArgumentNullException.ThrowIfNull(spec.OwnershipProbe);
+        // Validated for every operation, not just removal: classification reads this path too,
+        // and a relative one would resolve against the process working directory.
+        if (
+            spec.LegacyPreimagePath is not null
+            && (!Path.IsPathFullyQualified(spec.LegacyPreimagePath)
+                || spec.ExistingPolicy != ManagedFileExistingPolicy.BackupTransformAndRestore)
+        )
+        {
+            throw new ArgumentException(
+                "LegacyPreimagePath must be absolute and belongs only to backup/transform artifacts.",
+                nameof(spec)
+            );
+        }
+
         if (
             spec.ExistingPolicy == ManagedFileExistingPolicy.BackupTransformAndRestore
             && (spec.BackupTransform is null
@@ -1231,8 +1243,16 @@ public sealed partial class ManagedFileTransaction
     {
         public async ValueTask DisposeAsync()
         {
-            await stream.DisposeAsync().ConfigureAwait(false);
-            processLock.Release();
+            // A throwing close must not strand the semaphore: every later operation on this
+            // artifact would wait on a permit nobody can release.
+            try
+            {
+                await stream.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                processLock.Release();
+            }
         }
     }
 

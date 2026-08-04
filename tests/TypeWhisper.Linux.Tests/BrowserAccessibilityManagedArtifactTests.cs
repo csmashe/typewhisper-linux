@@ -209,8 +209,13 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
         await File.WriteAllTextAsync(target, "[Desktop Entry]\nName=Target\n");
         File.CreateSymbolicLink(UserChromePath, target);
 
-        await new BrowserAccessibilitySetupHelper().SetUpAsync(CancellationToken.None);
+        var result = await new BrowserAccessibilitySetupHelper().SetUpAsync(
+            CancellationToken.None
+        );
 
+        // The symlinked launcher must not be claimed as patched, whatever the rest of the
+        // run managed to do.
+        Assert.DoesNotContain(ChromeDesktopId, result.Detail ?? string.Empty);
         Assert.Equal("[Desktop Entry]\nName=Target\n", File.ReadAllText(target));
         Assert.NotNull(new FileInfo(UserChromePath).LinkTarget);
     }

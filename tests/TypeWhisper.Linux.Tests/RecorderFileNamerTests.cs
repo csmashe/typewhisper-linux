@@ -66,7 +66,7 @@ public sealed class RecorderFileNamerTests : IDisposable
                 Path.Join(_tempDir, "recording-2026-07-15-134207 (1).wav"),
                 Path.Join(_tempDir, "recording-2026-07-15-134207.wav"),
             ],
-            committedPaths.Order().ToArray()
+            committedPaths.Order(StringComparer.Ordinal).ToArray()
         );
         for (var index = 0; index < recordings.Length; index++)
         {

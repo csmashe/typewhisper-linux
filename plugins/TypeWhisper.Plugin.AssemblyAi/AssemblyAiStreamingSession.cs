@@ -9,21 +9,21 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
 {
     private readonly WebSocketSessionPump _pump;
 
-    internal AssemblyAiStreamingSession(WebSocket ws)
-        : this(
-            WebSocketSessionPump
-                .StartConnectedAsync(
-                    new AssemblyAiWebSocketAdapter("", null),
-                    new ClientWebSocketTransport(ws),
-                    CancellationToken.None
-                )
-                .GetAwaiter()
-                .GetResult()
-        ) { }
-
     private AssemblyAiStreamingSession(WebSocketSessionPump pump)
     {
         _pump = pump;
+    }
+
+    internal static async Task<AssemblyAiStreamingSession> CreateConnectedSessionForTests(
+        WebSocket ws
+    )
+    {
+        var pump = await WebSocketSessionPump.StartConnectedAsync(
+            new AssemblyAiWebSocketAdapter("", null),
+            new ClientWebSocketTransport(ws),
+            CancellationToken.None
+        );
+        return new AssemblyAiStreamingSession(pump);
     }
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived

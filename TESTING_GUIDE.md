@@ -24,6 +24,8 @@ Vor einem `v1.0.0-rc1` Tag müssen diese Checks abgeschlossen sein:
 - [ ] `dotnet build TypeWhisper.slnx -c Release --no-restore`
 - [ ] `dotnet test tests/TypeWhisper.Core.Tests/TypeWhisper.Core.Tests.csproj -c Release --no-build`
 - [ ] `dotnet test tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj -c Release --no-build`
+- [ ] `dotnet test tests/TypeWhisper.Linux.Tests/TypeWhisper.Linux.Tests.csproj -c Release --no-build`
+- [ ] `dotnet test tests/TypeWhisper.Cli.Tests/TypeWhisper.Cli.Tests.csproj -c Release --no-build`
 - [ ] Alle Plugin-Projekte unter `plugins/` in `Release` bauen.
 - [ ] GitHub `Package Dry Run` mit Channel `rc` für `win-x64` und `win-arm64` prüfen.
 - [ ] Release-Artefakte enthalten `Setup.exe`, `Portable.zip`, `.nupkg`, `RELEASES-*`, `assets.*.json` und `releases.*.json` für beide Architekturen.
@@ -81,9 +83,12 @@ $auth = "Authorization: Bearer $env:TYPEWHISPER_API_TOKEN"
 $json = "Content-Type: application/json"
 curl.exe "$base/v1/status"
 curl.exe -H $auth "$base/v1/models"
-curl.exe -i -X OPTIONS "$base/v1/models"
+curl.exe -i -X OPTIONS "$base/v1/models" `
+  -H "Origin: http://localhost:$($discovery.port)" `
+  -H "Access-Control-Request-Method: GET" `
+  -H "Access-Control-Request-Headers: authorization,content-type"
 ```
-→ `api-discovery.json` enthält `version`, `port`, `token`; `api-port` existiert weiter. `OPTIONS` antwortet mit `204` ohne JSON-Body.
+→ `api-discovery.json` enthält `version`, `port`, `token`; `api-port` existiert weiter. `OPTIONS` antwortet mit `204` ohne JSON-Body. Der Preflight muss `Access-Control-Allow-Origin`, `-Allow-Methods` und `-Allow-Headers` zurückgeben — ohne einen erlaubten Loopback-`Origin` sendet die API bewusst keine CORS-Header.
 
 ### 2.2 History
 ```powershell
@@ -97,7 +102,7 @@ curl.exe -X DELETE -H $auth "$base/v1/history?id=SOME_ID"
 curl.exe -H $auth "$base/v1/rules"
 curl.exe -H $auth "$base/v1/profiles"
 curl.exe -X PUT -H $auth "$base/v1/rules/toggle?id=SOME_WORKFLOW_ID"
-curl.exe -X PUT -H $auth "$base/v1/profiles/toggle?id=SOME_WORKFLOW_ID"
+curl.exe -X PUT -H $auth "$base/v1/profiles/toggle?id=SOME_PROFILE_ID"
 ```
 → Windows liefert im Feld `bundle_identifiers` die vorhandenen Prozessnamen.
 

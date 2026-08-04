@@ -181,6 +181,7 @@ public sealed class StartupServiceTests : IDisposable
 
         Assert.False(enableResult.Success);
         Assert.False(enableResult.IsEnabled);
+        AssertRefusalStatus(enableResult);
         Assert.Equal(staleContent, File.ReadAllText(TargetPath));
         Assert.False(StartupService.IsEnabled);
 
@@ -188,6 +189,7 @@ public sealed class StartupServiceTests : IDisposable
 
         Assert.False(disableResult.Success);
         Assert.False(disableResult.IsEnabled);
+        AssertRefusalStatus(disableResult);
         Assert.True(File.Exists(TargetPath));
         Assert.Equal(staleContent, File.ReadAllText(TargetPath));
         Assert.False(StartupService.IsEnabled);

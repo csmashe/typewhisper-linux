@@ -156,8 +156,8 @@ public static partial class AtomicFileWrite
     }
 
     /// <summary>
-    ///     Test-only overload whose observer runs after the unique sibling is complete and has
-    ///     inherited the destination mode, but before it is published.
+    ///     Test-only overload whose observer runs once the unique sibling is complete, but
+    ///     before it is published and before the destination's mode is copied onto it.
     /// </summary>
     internal static void WriteAllText(
         string path,

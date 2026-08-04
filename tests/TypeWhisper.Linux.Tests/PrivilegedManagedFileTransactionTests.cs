@@ -48,6 +48,87 @@ public sealed class PrivilegedManagedFileTransactionTests : IDisposable
         Assert.False(File.Exists(StatePath("one", "current")));
     }
 
+    // A distribution that ships no /etc/modules-load.d must not abort the transaction: the
+    // stage is a sibling of the destination, so mktemp needs the parent to exist.
+    [Fact]
+    public async Task Install_creates_a_missing_destination_directory()
+    {
+        var spec = Spec("absent-parent", "managed\n");
+
+        var install = await RunAsync(
+            BuildInstall([spec]),
+            createDestinationDirectory: false
+        );
+
+        Assert.Equal(0, install.ExitCode);
+        Assert.Equal("managed\n", File.ReadAllText(spec.DestinationPath));
+    }
+
+    // pkexec hands root the caller's umask, so a directory this creates under /etc must be
+    // pinned rather than left at whatever the inherited mask allows.
+    [Fact]
+    public async Task Created_destination_directory_is_secured_against_a_permissive_umask()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        // Nested, so mkdir -p has to create an intermediate directory too: that one is
+        // covered by the script's own umask rather than by the explicit chmod.
+        var intermediate = Path.Join(_root, "destinations", "nested");
+        var spec = Spec("umask-parent", "managed\n") with
+        {
+            DestinationPath = Path.Join(intermediate, "deep", "umask-parent.conf"),
+        };
+
+        var install = await RunAsync(
+            "umask 000\n" + BuildInstall([spec]),
+            createDestinationDirectory: false
+        );
+
+        Assert.Equal(0, install.ExitCode);
+        Assert.Equal("755", Mode(Path.GetDirectoryName(spec.DestinationPath)!));
+        Assert.Equal("755", Mode(intermediate));
+        Assert.Equal("644", Mode(spec.DestinationPath));
+    }
+
+    // Staging is shared by both scripts, so a removal that finds nothing must not leave the
+    // root-owned parent it had to create in order to stage the comparison image.
+    [Fact]
+    public async Task Removal_reclaims_a_destination_directory_it_had_to_create()
+    {
+        // Nested, because mkdir -p creates the whole missing chain and unwinding only the
+        // leaf would still leave the transaction having mutated the root filesystem.
+        var spec = Spec("absent-remove", "managed\n") with
+        {
+            DestinationPath = Path.Join(
+                _root,
+                "destinations",
+                "nested",
+                "deep",
+                "absent-remove.conf"
+            ),
+        };
+
+        var removal = await RunAsync(
+            BuildRemove([spec]),
+            createDestinationDirectory: false
+        );
+
+        Assert.Equal(0, removal.ExitCode);
+        Assert.False(Directory.Exists(Path.Join(_root, "destinations")));
+    }
+
+    [Fact]
+    public void Duplicate_artifact_ids_are_rejected()
+    {
+        var spec = Spec("duplicate", "managed\n");
+
+        Assert.Throws<ArgumentException>(() => BuildInstall([spec, spec]));
+        Assert.Throws<ArgumentException>(() => BuildRemove([spec, spec]));
+    }
+
     [Fact]
     public async Task Foreign_customized_and_symlink_destinations_are_preserved()
     {
@@ -281,10 +362,15 @@ public sealed class PrivilegedManagedFileTransactionTests : IDisposable
 
     private async Task<ScriptResult> RunAsync(
         string script,
-        bool includeSystemPath = true
+        bool includeSystemPath = true,
+        bool createDestinationDirectory = true
     )
     {
-        Directory.CreateDirectory(Path.Join(_root, "destinations"));
+        if (createDestinationDirectory)
+        {
+            Directory.CreateDirectory(Path.Join(_root, "destinations"));
+        }
+
         var shim = Path.Join(_root, "shim");
         Directory.CreateDirectory(shim);
         var chown = Path.Join(shim, "chown");
@@ -330,7 +416,29 @@ public sealed class PrivilegedManagedFileTransactionTests : IDisposable
             // Shell exited before consuming the whole script; its exit code is the verdict.
         }
 
-        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        try
+        {
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch (TimeoutException)
+        {
+            // Leaving the shell alive would keep its flock on the state root and wedge
+            // every later case in this class behind it.
+            try
+            {
+                process.Kill(entireProcessTree: true);
+                // Kill only signals; the reap is what releases the lock.
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception ex)
+                when (ex is InvalidOperationException or NotSupportedException or TimeoutException)
+            {
+                // Already gone, or refusing to die; the original timeout is still the verdict.
+            }
+
+            throw;
+        }
+
         return new ScriptResult(process.ExitCode, await stdout, await stderr);
     }
 

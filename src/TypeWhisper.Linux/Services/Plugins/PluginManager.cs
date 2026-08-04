@@ -744,14 +744,14 @@ public sealed class PluginManager : IDisposable
 
     private async Task<bool> ActivatePluginAsync(LoadedPlugin plugin)
     {
-        PluginHostServices? hostServices = null;
+        PluginProcessSupervisorScope? processScope = null;
         try
         {
-            var processScope = new PluginProcessSupervisorScope(
+            processScope = new PluginProcessSupervisorScope(
                 plugin.Manifest.Id,
                 _processRunner
             );
-            hostServices = new PluginHostServices(
+            var hostServices = new PluginHostServices(
                 plugin.Manifest.Id,
                 plugin.PluginDirectory,
                 _activeWindow,
@@ -781,7 +781,9 @@ public sealed class PluginManager : IDisposable
         }
         catch (Exception ex)
         {
-            hostServices?.ProcessScope?.Retire();
+            // The local scope, not hostServices.ProcessScope: this also covers a
+            // PluginHostServices constructor that threw before it was assigned.
+            processScope?.Retire();
             Trace.WriteLine(
                 $"[PluginManager] Failed to activate plugin {plugin.Manifest.Id}: {ex.Message}"
             );

@@ -12,11 +12,17 @@ public interface IPluginProcessSession : IDisposable, IAsyncDisposable
         CancellationToken cancellationToken = default
     );
 
+    /// <summary>
+    ///     Throws <see cref="IOException" /> once the child has exited, whether the pipe broke
+    ///     (EPIPE) or the session was already reaped — callers race the exit, so the outcome
+    ///     must not depend on which side won.
+    /// </summary>
     ValueTask WriteStandardInputAsync(
         ReadOnlyMemory<byte> data,
         CancellationToken cancellationToken = default
     );
 
+    /// <summary>Closing an already-exited session's stdin is a no-op, not an error.</summary>
     ValueTask CompleteStandardInputAsync(
         CancellationToken cancellationToken = default
     );

@@ -1,6 +1,8 @@
 // Public contract surface for the Premium Cloud Folder Sync feature: the store interface, the
-// wire records it exchanges, and the item-id scheme. Nothing in-tree implements or calls it yet,
-// so every member reads as unused; the shapes are the agreed contract and must not be trimmed.
+// wire records it exchanges, and the item-id scheme. Its consumers (CloudFolderSyncEngine,
+// TypeWhisperUserDataSyncStore, the Windows PremiumSection view) were not ported to Linux, so
+// everything here reads as unused until the feature lands. Kept verbatim so a later port diffs
+// cleanly against upstream; the shapes are the agreed contract and must not be trimmed.
 // ReSharper disable UnusedType.Global
 // ReSharper disable UnusedMember.Global
 // ReSharper disable NotAccessedPositionalProperty.Global

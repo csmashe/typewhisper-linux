@@ -7,13 +7,17 @@ namespace TypeWhisper.Core.Tests.Services;
 public sealed class SnippetServiceTests : IDisposable
 {
     private static readonly TimeSpan s_frozenOffset = TimeSpan.FromHours(2);
+
+    // Just past local midnight, so the UTC instant is still 2039-12-31 and the local-field
+    // placeholders ({date}, {day}, {year}) differ from their UTC equivalents. A same-date
+    // instant could not tell the two apart.
     private static readonly DateTimeOffset s_frozenLocalNow = new(
-        2039,
-        12,
-        31,
-        23,
-        59,
-        59,
+        2040,
+        1,
+        1,
+        0,
+        30,
+        0,
         s_frozenOffset
     );
     private static readonly TimeZoneInfo s_frozenTimeZone = TimeZoneInfo.CreateCustomTimeZone(
@@ -208,7 +212,9 @@ public sealed class SnippetServiceTests : IDisposable
                 + s_frozenLocalNow.Year,
             result
         );
-        Assert.Equal(1, _timeProvider.UtcNowReadCount);
+        // Two reads, not five: one shared instant for every placeholder in the expansion,
+        // plus the LastUsedAt stamp. Per-placeholder reads would show up as six.
+        Assert.Equal(2, _timeProvider.UtcNowReadCount);
     }
 
     [Fact]
@@ -249,9 +255,11 @@ public sealed class SnippetServiceTests : IDisposable
     }
 
     [Theory]
-    [InlineData("u", "2039-12-31 23:59:59Z")]
-    [InlineData("R", "Sat, 31 Dec 2039 23:59:59 GMT")]
-    [InlineData("r", "Sat, 31 Dec 2039 23:59:59 GMT")]
+    // The Z/GMT suffix is the format's, not a conversion: these are the local fields
+    // (2040-01-01 00:30), whereas the UTC instant is 2039-12-31 22:30.
+    [InlineData("u", "2040-01-01 00:30:00Z")]
+    [InlineData("R", "Sun, 01 Jan 2040 00:30:00 GMT")]
+    [InlineData("r", "Sun, 01 Jan 2040 00:30:00 GMT")]
     public void ApplySnippets_WallClockStandardFormats_KeepLocalFields(
         string format,
         string expected

@@ -152,6 +152,38 @@ public sealed class KdeShortcutWriterTests : IDisposable
         Assert.Contains("X-User-Customization=true", File.ReadAllText(TargetPath));
     }
 
+    // Drift from the recorded publication alone does not make a file ours: a shortcut we
+    // published and the user then replaced outright must read as absent, not stale.
+    [Fact]
+    public async Task Recorded_file_replaced_by_a_foreign_one_is_not_reported_as_present()
+    {
+        var writer = CreateWriter();
+        Assert.True((await writer.WriteAsync(CreateSpec(), CancellationToken.None)).Success);
+
+        await File.WriteAllTextAsync(
+            TargetPath,
+            "[Desktop Entry]\nName=Foreign replacement\n"
+        );
+
+        Assert.False(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+    }
+
+    // Whereas an edit that keeps our markers is still ours, and the UI has to offer it.
+    [Fact]
+    public async Task Recorded_file_customized_but_still_marked_is_reported_as_present()
+    {
+        var writer = CreateWriter();
+        Assert.True((await writer.WriteAsync(CreateSpec(), CancellationToken.None)).Success);
+
+        await File.AppendAllTextAsync(TargetPath, "X-User-Customization=true\n");
+
+        Assert.True(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+    }
+
     [Fact]
     public async Task WriteAsync_refuses_symlink_and_preserves_its_target()
     {
@@ -166,9 +198,18 @@ public sealed class KdeShortcutWriterTests : IDisposable
         await File.WriteAllTextAsync(target, targetContent);
         File.CreateSymbolicLink(TargetPath, target);
 
-        var result = await CreateWriter().WriteAsync(CreateSpec(), CancellationToken.None);
+        var writer = CreateWriter();
+        var result = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
 
         Assert.False(result.Success);
+        Assert.NotNull(new FileInfo(TargetPath).LinkTarget);
+        Assert.Equal(targetContent, File.ReadAllText(target));
+
+        // Removal must refuse before deleting, or the symlink itself would go even though
+        // its target was never ours. Like every other refusal here, that is a warning.
+        var removal = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
+
+        Assert.NotNull(removal.Warning);
         Assert.NotNull(new FileInfo(TargetPath).LinkTarget);
         Assert.Equal(targetContent, File.ReadAllText(target));
     }
