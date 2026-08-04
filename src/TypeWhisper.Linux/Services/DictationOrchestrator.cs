@@ -2927,8 +2927,9 @@ public sealed class DictationOrchestrator : IDisposable
 
     // Outcome of streaming a spoken-command result onto the page. Text is the full accumulated LLM
     // output (useful even when typing failed); TypingFailed marks a chunk-injection failure and
-    // TypedAnything whether any chunk landed before that failure; Faulted marks the provider stream
-    // breaking mid-way after partial output already landed, so the accumulated text is incomplete.
+    // TypedAnything whether a successful chunk or part of a failed chunk landed; Faulted marks the
+    // provider stream breaking mid-way after partial output already landed, so the accumulated text
+    // is incomplete.
     private sealed record StreamCommandResult(
         string Text,
         bool TypingFailed,
@@ -3036,18 +3037,14 @@ public sealed class DictationOrchestrator : IDisposable
                 }
             }
 
-            if (
-                await _textInsertion
-                    .TypeStreamChunkAsync(text, targetProcessName)
-                    .ConfigureAwait(false)
-            )
-            {
-                typedAnything = true;
-            }
-            else
-            {
-                typingFailed = true;
-            }
+            var chunk = await _textInsertion
+                .TypeStreamChunkAsync(text, targetProcessName)
+                .ConfigureAwait(false);
+            (typingFailed, typedAnything) = ApplyStreamChunkTypingOutcome(
+                typedAnything,
+                chunk.Succeeded,
+                chunk.DeliveredPartialText
+            );
         }
 
         async Task FlushAsync()
@@ -3088,6 +3085,21 @@ public sealed class DictationOrchestrator : IDisposable
 
             return true;
         }
+    }
+
+    // TypingFailed is assigned, not OR'd: the flush guards early-return once it is set, so this only
+    // ever runs while no chunk has failed and the write cannot clear a sticky failure. Callers must
+    // not invoke it after a failed chunk.
+    internal static (bool TypingFailed, bool TypedAnything) ApplyStreamChunkTypingOutcome(
+        bool typedAnythingSoFar,
+        bool chunkSucceeded,
+        bool chunkDeliveredPartialText
+    )
+    {
+        return (
+            !chunkSucceeded,
+            typedAnythingSoFar || chunkSucceeded || chunkDeliveredPartialText
+        );
     }
 
     internal static async Task<bool> RecoverSpokenCommandStreamFaultAsync(
