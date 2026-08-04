@@ -502,6 +502,11 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
+            // Rethrown for callers passing a real token; traced first so an internal probe
+            // timeout doesn't fault ScheduleDesktopIntegrationRefresh's task silently.
+            System.Diagnostics.Trace.WriteLine(
+                "[Shortcuts] Desktop integration status probe was canceled."
+            );
             throw;
         }
         catch (Exception ex)

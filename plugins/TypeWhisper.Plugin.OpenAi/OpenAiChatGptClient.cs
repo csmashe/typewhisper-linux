@@ -206,10 +206,13 @@ internal sealed class OpenAiChatGptClient
 
         if (type == "response.completed")
         {
-            if (!string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase))
+            // The event type is itself the success signal, so only an explicitly
+            // contradictory status is a failure — a missing one must not be.
+            if (status is not null
+                && !string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase))
             {
                 return $"ChatGPT SSE event 'response.completed' had non-completed status "
-                    + $"'{status ?? "missing"}'.";
+                    + $"'{status}'.";
             }
 
             return null;

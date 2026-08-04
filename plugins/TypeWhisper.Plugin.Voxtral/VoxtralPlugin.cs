@@ -24,6 +24,7 @@ public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginSettingsP
     {
     }
 
+    // The plugin takes ownership of the supplied client and disposes it.
     internal VoxtralPlugin(HttpClient httpClient)
     {
         _httpClient = httpClient;

@@ -604,7 +604,10 @@ public sealed class SpeechFeedbackServiceTests
                 _calls.Enqueue(call);
                 if (!_controlResponses)
                 {
-                    session = _sessions.Dequeue();
+                    Assert.True(
+                        _sessions.TryDequeue(out session),
+                        $"No playback session was queued for the SpeakAsync request '{request.Text}'."
+                    );
                 }
             }
 

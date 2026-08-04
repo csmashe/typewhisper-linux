@@ -174,7 +174,7 @@ public sealed class GlobalHotkeySetupTaskTests
     public async Task RunAction_when_opted_out_but_rule_still_installed_revokes_it_via_the_helper()
     {
         using var env = new PkexecOnPath();
-        PkexecOnPath.WriteOwnedRule();
+        env.WriteOwnedRule();
         var runner = new FakeProcessRunner();
         var task = Build(
             isWayland: true,
@@ -391,8 +391,11 @@ public sealed class GlobalHotkeySetupTaskTests
             }
         }
 
-        public static void WriteOwnedRule()
+        // Instance method asserting on this instance's temp dir, so the rule can only ever be
+        // written under the redirect the constructor installed — never the real system path.
+        public void WriteOwnedRule()
         {
+            Assert.Equal(_sysConfDir, InputAccessSetupHelper.SysConfDirOverride);
             Directory.CreateDirectory(Path.GetDirectoryName(InputAccessSetupHelper.UdevRulePath)!);
             File.WriteAllText(
                 InputAccessSetupHelper.UdevRulePath,

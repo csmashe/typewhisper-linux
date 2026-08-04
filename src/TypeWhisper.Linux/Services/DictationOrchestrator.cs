@@ -965,8 +965,27 @@ public sealed class DictationOrchestrator : IDisposable
             if (!_sessionActivityMonitor.IsInputAllowed)
             {
                 Trace.WriteLine("[Dictation] Session locked during start; rolling back recording.");
-                RollBackStartedRecording(captureSession);
-                _ = await StopPartialTranscriptionSessionAsync();
+
+                // Every step is isolated (as in Dispose): a throw from one must not skip the rest.
+                // Clearing the session id with a coordinator still attached would report the
+                // dictation finished while buffered audio kept flowing behind the lock screen.
+                try
+                {
+                    RollBackStartedRecording(captureSession);
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Dictation] Recording rollback on lock failed: {ex.Message}");
+                }
+
+                try
+                {
+                    _ = await StopPartialTranscriptionSessionAsync();
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Dictation] Partial-loop stop on lock failed: {ex.Message}");
+                }
 
                 StreamingTranscriptionCoordinator? rolledBackCoordinator;
                 CancellationTokenSource? rolledBackStartupCts;
@@ -984,12 +1003,21 @@ public sealed class DictationOrchestrator : IDisposable
                     _streamingLanguageHint = null;
                 }
 
-                _ = await TeardownStreamingSessionAsync(
-                    rolledBackCoordinator,
-                    rolledBackStartupCts,
-                    false,
-                    CancellationToken.None
-                );
+                // No explicit live-frame-sink detach here: the sink is session-scoped and
+                // StopRecording above already cleared it during the rollback.
+                try
+                {
+                    _ = await TeardownStreamingSessionAsync(
+                        rolledBackCoordinator,
+                        rolledBackStartupCts,
+                        false,
+                        CancellationToken.None
+                    );
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Dictation] Streaming teardown on lock failed: {ex.Message}");
+                }
 
                 _hotkey.IsCancelShortcutEnabled = false;
                 _activeDictationCts?.Dispose();
@@ -2056,9 +2084,13 @@ public sealed class DictationOrchestrator : IDisposable
                     RequireTranslationSuccess = !string.IsNullOrWhiteSpace(translationTarget),
                     EffectiveSourceLanguage = postProcessingLanguage,
                     DetectedLanguage = postProcessingLanguage,
-                    TranscriptionTask = translate
-                        ? TranscriptionTask.Translate
-                        : TranscriptionTask.Transcribe,
+                    // Same rule as postProcessingLanguage above: an engine that ignores the
+                    // translate task returns source-language text, and reporting Translate
+                    // would make number normalization treat it as English.
+                    TranscriptionTask =
+                        translate && engineSupportsTranslation
+                            ? TranscriptionTask.Translate
+                            : TranscriptionTask.Transcribe,
                     ConfiguredLanguage = languageHint,
                     TranscriptionNumberNormalizationEnabled =
                         _settings.Current.TranscriptionNumberNormalizationEnabled,
@@ -2139,6 +2171,15 @@ public sealed class DictationOrchestrator : IDisposable
                 );
             }
 
+            // Wait for every earlier-started session to finish inserting first
+            // (audit §2 H3) — but only around the delivery call itself, not the
+            // transcription/post-processing above, which stays concurrent. Ahead of the
+            // status/focus handoff below so a queued session doesn't announce "Inserting…" and
+            // take focus minutes before it can deliver. Cancellation here flows to the pipeline's
+            // own handler, and the terminal safety net still releases this session's slot.
+            await _insertionOrder.WaitForTurnAsync(context.SessionId, cancelToken)
+                .ConfigureAwait(false);
+
             // Yield focus before any synthesized keystroke: on Wayland a
             // visible overlay can still hold keyboard focus, and ydotool's
             // virtual keyboard fires Ctrl+V to whatever has focus. wtype on
@@ -2167,12 +2208,6 @@ public sealed class DictationOrchestrator : IDisposable
             var insertionThrew = false;
             try
             {
-                // Wait for every earlier-started session to finish inserting first
-                // (audit §2 H3) — but only around the delivery call itself, not the
-                // transcription/post-processing above, which stays concurrent.
-                await _insertionOrder.WaitForTurnAsync(context.SessionId, cancelToken)
-                    .ConfigureAwait(false);
-
                 // Final lock check before synthesizing any keystroke, re-evaluated
                 // AFTER the insertion-order wait above. A normal stop nulls
                 // _activeDictationCts and releases the gate before transcription

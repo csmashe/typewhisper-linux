@@ -345,35 +345,47 @@ public sealed class HotkeyService : IDisposable
         // collisions), but the raw setter is reachable from tests and any
         // future direct caller. Silently no-op rather than throw so call
         // sites don't need try/catch.
-        if (HotkeyMatchesAny(key, modifiers, GetBoundHotkeys(HotkeyBinding.Dictation)))
+        // Check and assignment share one critical section with dynamic reconciliation, so a
+        // concurrent rebuild can't validate against bindings this setter is about to replace.
+        lock (_lock)
         {
-            Trace.WriteLine(
-                "[HotkeyService] Refusing dictation hotkey that collides with another shortcut."
-            );
-            return;
-        }
+            if (HotkeyMatchesAny(key, modifiers, GetBoundHotkeys(HotkeyBinding.Dictation)))
+            {
+                Trace.WriteLine(
+                    "[HotkeyService] Refusing dictation hotkey that collides with another shortcut."
+                );
+                return;
+            }
 
-        _key = key;
-        _modifiers = modifiers;
-        PushShortcutsIfRunning();
+            _key = key;
+            _modifiers = modifiers;
+            PushShortcutsIfRunning();
+        }
     }
 
     public void SetPromptPaletteHotkey(KeyCode? key, ModifierMask modifiers)
     {
-        if (
-            key is not null
-            && HotkeyMatchesAny(key.Value, modifiers, GetBoundHotkeys(HotkeyBinding.PromptPalette))
-        )
+        lock (_lock)
         {
-            Trace.WriteLine(
-                "[HotkeyService] Refusing prompt palette hotkey that collides with another shortcut."
-            );
-            return;
-        }
+            if (
+                key is not null
+                && HotkeyMatchesAny(
+                    key.Value,
+                    modifiers,
+                    GetBoundHotkeys(HotkeyBinding.PromptPalette)
+                )
+            )
+            {
+                Trace.WriteLine(
+                    "[HotkeyService] Refusing prompt palette hotkey that collides with another shortcut."
+                );
+                return;
+            }
 
-        _promptPaletteKey = key;
-        _promptPaletteModifiers = key is null ? ModifierMask.None : modifiers;
-        PushShortcutsIfRunning();
+            _promptPaletteKey = key;
+            _promptPaletteModifiers = key is null ? ModifierMask.None : modifiers;
+            PushShortcutsIfRunning();
+        }
     }
 
     /// <summary>
@@ -392,14 +404,18 @@ public sealed class HotkeyService : IDisposable
 
         // Don't let the dictation hotkey collide with another configured
         // binding — the matcher orders cancel/palette/etc. ahead of dictation
-        // so a collision would shadow this key.
-        if (HotkeyMatchesAny(key!.Value, modifiers, GetBoundHotkeys(HotkeyBinding.Dictation)))
+        // so a collision would shadow this key. SetHotkey re-checks under _lock,
+        // which is where the check-and-set is actually made atomic.
+        lock (_lock)
         {
-            return false;
-        }
+            if (HotkeyMatchesAny(key!.Value, modifiers, GetBoundHotkeys(HotkeyBinding.Dictation)))
+            {
+                return false;
+            }
 
-        SetHotkey(key.Value, modifiers);
-        return true;
+            SetHotkey(key.Value, modifiers);
+            return true;
+        }
     }
 
     public bool TrySetPromptPaletteHotkeyFromString(string? text)
@@ -415,22 +431,35 @@ public sealed class HotkeyService : IDisposable
             return false;
         }
 
-        if (HotkeyMatchesAny(key!.Value, modifiers, GetBoundHotkeys(HotkeyBinding.PromptPalette)))
+        lock (_lock)
         {
-            return false;
-        }
+            if (
+                HotkeyMatchesAny(
+                    key!.Value,
+                    modifiers,
+                    GetBoundHotkeys(HotkeyBinding.PromptPalette)
+                )
+            )
+            {
+                return false;
+            }
 
-        SetPromptPaletteHotkey(key, modifiers);
-        return true;
+            SetPromptPaletteHotkey(key, modifiers);
+            return true;
+        }
     }
 
     public bool TrySetRecentTranscriptionsHotkeyFromString(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
-            _recentTranscriptionsKey = null;
-            _recentTranscriptionsModifiers = ModifierMask.None;
-            PushShortcutsIfRunning();
+            lock (_lock)
+            {
+                _recentTranscriptionsKey = null;
+                _recentTranscriptionsModifiers = ModifierMask.None;
+                PushShortcutsIfRunning();
+            }
+
             return true;
         }
 
@@ -439,30 +468,37 @@ public sealed class HotkeyService : IDisposable
             return false;
         }
 
-        if (
-            HotkeyMatchesAny(
-                key!.Value,
-                modifiers,
-                GetBoundHotkeys(HotkeyBinding.RecentTranscriptions)
-            )
-        )
+        lock (_lock)
         {
-            return false;
-        }
+            if (
+                HotkeyMatchesAny(
+                    key!.Value,
+                    modifiers,
+                    GetBoundHotkeys(HotkeyBinding.RecentTranscriptions)
+                )
+            )
+            {
+                return false;
+            }
 
-        _recentTranscriptionsKey = key;
-        _recentTranscriptionsModifiers = modifiers;
-        PushShortcutsIfRunning();
-        return true;
+            _recentTranscriptionsKey = key;
+            _recentTranscriptionsModifiers = modifiers;
+            PushShortcutsIfRunning();
+            return true;
+        }
     }
 
     public bool TrySetCopyLastTranscriptionHotkeyFromString(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
-            _copyLastTranscriptionKey = null;
-            _copyLastTranscriptionModifiers = ModifierMask.None;
-            PushShortcutsIfRunning();
+            lock (_lock)
+            {
+                _copyLastTranscriptionKey = null;
+                _copyLastTranscriptionModifiers = ModifierMask.None;
+                PushShortcutsIfRunning();
+            }
+
             return true;
         }
 
@@ -471,30 +507,37 @@ public sealed class HotkeyService : IDisposable
             return false;
         }
 
-        if (
-            HotkeyMatchesAny(
-                key!.Value,
-                modifiers,
-                GetBoundHotkeys(HotkeyBinding.CopyLastTranscription)
-            )
-        )
+        lock (_lock)
         {
-            return false;
-        }
+            if (
+                HotkeyMatchesAny(
+                    key!.Value,
+                    modifiers,
+                    GetBoundHotkeys(HotkeyBinding.CopyLastTranscription)
+                )
+            )
+            {
+                return false;
+            }
 
-        _copyLastTranscriptionKey = key;
-        _copyLastTranscriptionModifiers = modifiers;
-        PushShortcutsIfRunning();
-        return true;
+            _copyLastTranscriptionKey = key;
+            _copyLastTranscriptionModifiers = modifiers;
+            PushShortcutsIfRunning();
+            return true;
+        }
     }
 
     public bool TrySetTransformSelectionHotkeyFromString(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
-            _transformSelectionKey = null;
-            _transformSelectionModifiers = ModifierMask.None;
-            PushShortcutsIfRunning();
+            lock (_lock)
+            {
+                _transformSelectionKey = null;
+                _transformSelectionModifiers = ModifierMask.None;
+                PushShortcutsIfRunning();
+            }
+
             return true;
         }
 
@@ -503,21 +546,24 @@ public sealed class HotkeyService : IDisposable
             return false;
         }
 
-        if (
-            HotkeyMatchesAny(
-                key!.Value,
-                modifiers,
-                GetBoundHotkeys(HotkeyBinding.TransformSelection)
-            )
-        )
+        lock (_lock)
         {
-            return false;
-        }
+            if (
+                HotkeyMatchesAny(
+                    key!.Value,
+                    modifiers,
+                    GetBoundHotkeys(HotkeyBinding.TransformSelection)
+                )
+            )
+            {
+                return false;
+            }
 
-        _transformSelectionKey = key;
-        _transformSelectionModifiers = modifiers;
-        PushShortcutsIfRunning();
-        return true;
+            _transformSelectionKey = key;
+            _transformSelectionModifiers = modifiers;
+            PushShortcutsIfRunning();
+            return true;
+        }
     }
 
     /// <summary>
@@ -684,8 +730,11 @@ public sealed class HotkeyService : IDisposable
     {
         ArgumentNullException.ThrowIfNull(entries);
 
-        _promptActionHotkeyCandidates = entries.ToArray();
-        return ReconcileDynamicHotkeys();
+        lock (_lock)
+        {
+            _promptActionHotkeyCandidates = entries.ToArray();
+            return ReconcileDynamicHotkeysLocked();
+        }
     }
 
     /// <summary>
@@ -733,8 +782,11 @@ public sealed class HotkeyService : IDisposable
     {
         ArgumentNullException.ThrowIfNull(entries);
 
-        _profileHotkeyCandidates = entries.ToArray();
-        return ReconcileDynamicHotkeys();
+        lock (_lock)
+        {
+            _profileHotkeyCandidates = entries.ToArray();
+            return ReconcileDynamicHotkeysLocked();
+        }
     }
 
     /// <summary>
@@ -748,22 +800,25 @@ public sealed class HotkeyService : IDisposable
         ArgumentNullException.ThrowIfNull(promptActions);
         ArgumentNullException.ThrowIfNull(profiles);
 
-        _promptActionHotkeyCandidates = promptActions.ToArray();
-        _profileHotkeyCandidates = profiles.ToArray();
-        return ReconcileDynamicHotkeys();
+        lock (_lock)
+        {
+            _promptActionHotkeyCandidates = promptActions.ToArray();
+            _profileHotkeyCandidates = profiles.ToArray();
+            return ReconcileDynamicHotkeysLocked();
+        }
     }
 
     /// <summary>
     ///     Rebuilds accepted dynamic bindings under one deterministic priority: existing fixed
     ///     bindings first, then prompt actions in source order, then profiles in source order.
     /// </summary>
-    private List<string> ReconcileDynamicHotkeys()
+    /// <remarks>Callers must hold <c>_lock</c>.</remarks>
+    private List<string> ReconcileDynamicHotkeysLocked()
     {
-        // Exclude both previously accepted dynamic lists before capturing fixed bindings. This
-        // prevents unchanged candidates from colliding with themselves during a rebuild.
-        _promptActionHotkeys = [];
-        _profileHotkeys = [];
-        var fixedBindings = GetBoundHotkeys().ToArray();
+        // Capture fixed bindings only, so unchanged candidates can't collide with themselves
+        // during a rebuild. Reading them directly rather than clearing the published dynamic
+        // lists first keeps a concurrent BuildShortcutSet from seeing an empty dynamic set.
+        var fixedBindings = GetFixedHotkeys().ToArray();
         var acceptedActions = new List<PromptActionHotkey>(
             _promptActionHotkeyCandidates.Length
         );
@@ -1039,7 +1094,17 @@ public sealed class HotkeyService : IDisposable
     private GlobalShortcutSet BuildShortcutSet()
     {
         var nativeDictationBindingActive = _nativeDictationBindingActive;
-        var suppressCancel = nativeDictationBindingActive && _mode == RecordingMode.PushToTalk;
+        // A native PushToTalk binding owns cancel only when the desktop spec could derive a
+        // distinct accelerator. DictationShortcutSpecFactory drops that bind when the trigger
+        // already ends in Escape, so keep the app's own cancel key — else there is no cancel.
+        var nativeOwnsCancel = _key != CancelKey;
+        // ...unless the trigger IS the app's bare cancel chord. Nothing distinguishes the two
+        // routes then, so one press would start a native recording and cancel it at once.
+        var nativeTriggerIsCancelChord =
+            _key == CancelKey && ShortcutMatcher.ModifiersMatch(_modifiers, CancelModifiers);
+        var suppressCancel = nativeDictationBindingActive
+                             && _mode == RecordingMode.PushToTalk
+                             && (nativeOwnsCancel || nativeTriggerIsCancelChord);
         return new GlobalShortcutSet(
             nativeDictationBindingActive ? KeyCode.VcUndefined : _key,
             nativeDictationBindingActive ? ModifierMask.None : _modifiers,
@@ -1228,7 +1293,7 @@ public sealed class HotkeyService : IDisposable
 
         // Dynamic prompt-action bindings make collision detection symmetric: fixed-binding
         // changes that would shadow a prompt-action chord are also rejected. Dynamic
-        // reconciliation clears both accepted lists before it captures fixed bindings.
+        // reconciliation reads GetFixedHotkeys directly so it never collides with itself.
         foreach (var entry in _promptActionHotkeys)
         {
             yield return (entry.Key, entry.Modifiers);

@@ -14,9 +14,23 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
     private static readonly IReadOnlyDictionary<string, string> s_playerctlEnvironment =
         new Dictionary<string, string>(StringComparer.Ordinal) { ["LC_ALL"] = "C" };
 
+    // A player that never resumes would otherwise pin _pausedPlayers non-empty and disable
+    // pausing for the rest of the session, so each one is dropped after this many failures.
+    private const int MaxResumeAttempts = 3;
+
     private readonly IProcessRunner _processRunner;
     private readonly IErrorLogService _errorLog;
-    private readonly HashSet<string> _pausedPlayers = new(StringComparer.OrdinalIgnoreCase);
+
+    // Paused player name -> consecutive failed resume attempts. Guarded by _playersGate;
+    // playerctl itself is always invoked outside the lock.
+    private readonly Dictionary<string, int> _pausedPlayers =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly Lock _playersGate = new();
+
+    // True between a completed pause scan and the next resume. Kept separate from
+    // _pausedPlayers so a player we still owe a resume can't suppress future pause scans.
+    private bool _pauseActive;
 
     public MediaPauseService(IProcessRunner processRunner, IErrorLogService errorLog)
     {
@@ -26,9 +40,14 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
 
     public void PauseMedia()
     {
-        if (_pausedPlayers.Count > 0)
+        lock (_playersGate)
         {
-            return;
+            if (_pauseActive)
+            {
+                return;
+            }
+
+            _pauseActive = true;
         }
 
         try
@@ -64,48 +83,101 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
                     continue;
                 }
 
-                if (RunPlayerctl(["-p", parts[0], "pause"]).Succeeded)
+                if (!RunPlayerctl(["-p", parts[0], "pause"]).Succeeded)
                 {
-                    _pausedPlayers.Add(parts[0]);
+                    continue;
+                }
+
+                lock (_playersGate)
+                {
+                    _pausedPlayers[parts[0]] = 0;
                 }
             }
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[MediaPauseService] Pause failed: {ex.Message}");
-            _pausedPlayers.Clear();
+            lock (_playersGate)
+            {
+                _pausedPlayers.Clear();
+                _pauseActive = false;
+            }
         }
     }
 
     public void ResumeMedia()
     {
-        if (_pausedPlayers.Count == 0)
+        string[] players;
+        lock (_playersGate)
         {
-            return;
+            _pauseActive = false;
+            if (_pausedPlayers.Count == 0)
+            {
+                return;
+            }
+
+            players = [.. _pausedPlayers.Keys];
         }
 
-        foreach (var player in _pausedPlayers.ToArray())
+        foreach (var player in players)
         {
+            string failure;
             try
             {
                 var result = RunPlayerctl(["-p", player, "play"]);
                 if (result.Succeeded)
                 {
-                    _pausedPlayers.Remove(player);
+                    lock (_playersGate)
+                    {
+                        _pausedPlayers.Remove(player);
+                    }
+
                     continue;
                 }
 
-                ReportResumeFailure(
-                    $"Failed to resume media player {player}: {DescribeFailure(result)}"
-                );
+                failure = DescribeFailure(result);
             }
             catch (Exception ex)
             {
-                ReportResumeFailure(
-                    $"Failed to resume media player {player}: exception: {ex.Message}"
-                );
+                failure = $"exception: {ex.Message}";
+            }
+
+            RecordResumeFailure(player, failure);
+        }
+    }
+
+    /// <summary>
+    ///     Reports the failure and stops retrying the player after <see cref="MaxResumeAttempts" />
+    ///     attempts — typically one that exited while paused, which would otherwise cost a
+    ///     playerctl round trip on every later recording.
+    /// </summary>
+    private void RecordResumeFailure(string player, string failure)
+    {
+        bool retired;
+        lock (_playersGate)
+        {
+            if (!_pausedPlayers.TryGetValue(player, out var attempts))
+            {
+                return;
+            }
+
+            attempts++;
+            retired = attempts >= MaxResumeAttempts;
+            if (retired)
+            {
+                _pausedPlayers.Remove(player);
+            }
+            else
+            {
+                _pausedPlayers[player] = attempts;
             }
         }
+
+        ReportResumeFailure(
+            retired
+                ? $"Failed to resume media player {player}: {failure}. Giving up after {MaxResumeAttempts} attempts."
+                : $"Failed to resume media player {player}: {failure}"
+        );
     }
 
     public void Dispose()

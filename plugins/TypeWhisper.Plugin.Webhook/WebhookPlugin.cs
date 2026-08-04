@@ -889,11 +889,19 @@ public sealed class WebhookPlugin
                         );
 
                     string reference;
-                    if (
-                        header.Value == StoredHeaderPlaceholder
-                        && hasExistingReference
-                    )
+                    if (header.Value == StoredHeaderPlaceholder)
                     {
+                        // GetItems renders stored values as this placeholder, so untouched
+                        // headers return it unchanged. With nothing stored behind it — a
+                        // duplicated row, a renamed header — it would be sent as the value.
+                        if (!hasExistingReference)
+                        {
+                            return Fail(
+                                parsedItem.Config.Name,
+                                Loc.L("Settings.HeaderPlaceholderWithoutStoredValue", header.Key)
+                            );
+                        }
+
                         reference = existingReference!;
                     }
                     else

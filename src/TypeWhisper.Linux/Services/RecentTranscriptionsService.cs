@@ -375,10 +375,14 @@ public sealed class RecentTranscriptionsService
 
     private static bool IsError(InsertionResult result)
     {
+        // Inverted so an unrecognized result reports failure instead of claiming the text landed.
+        // ActionHandled is a success: a plugin action consumed the text in place of insertion.
         return result
-            is InsertionResult.Failed
-            or InsertionResult.MissingClipboardTool
-            or InsertionResult.MissingPasteTool;
+            is not (InsertionResult.Typed
+                or InsertionResult.Pasted
+                or InsertionResult.CopiedToClipboard
+                or InsertionResult.NoText
+                or InsertionResult.ActionHandled);
     }
 
     private string StatusTextFor(InsertionResult result)
