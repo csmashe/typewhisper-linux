@@ -600,6 +600,7 @@
   "ProfilesContext.Title": "Живой контекст",
   "ProfilesContext.UseCurrentApp": "Использовать текущее приложение",
   "ProfilesContext.UseCurrentDomain": "Использовать текущий домен",
+  "PromptPalette.ActionPluginUnavailable": "Настроенный плагин действия «{0}» недоступен. Возможно, он был отключён, удалён или переименован.",
   "PromptPalette.NoActions": "Действия не найдены",
   "PromptPalette.SearchPlaceholder": "Поиск действий промптов",
   "PromptPalette.Title": "Палитра промптов",
