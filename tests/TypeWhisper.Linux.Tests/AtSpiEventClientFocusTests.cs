@@ -81,6 +81,104 @@ public sealed class AtSpiEventClientFocusTests
         Assert.Equal([element], notifications);
     }
 
+    [Fact]
+    public void BootstrapSeed_FocusLossAfterObservation_DoesNotRestoreLostElement()
+    {
+        using var client = CreateClient();
+        var observedElement = new AtSpiElementRef("app-bootstrap-lost", "/field/bootstrap-lost");
+        var capturedGeneration = client.CaptureFocusGenerationForTest();
+
+        RaiseFocus(client, observedElement, detail1: 0);
+        var seeded = client.SeedFocusForTest([observedElement], capturedGeneration);
+
+        Assert.Null(seeded);
+        Assert.Null(client.CurrentFocusedElement);
+        Assert.DoesNotContain(observedElement, client.GetRecentFocusedElements());
+    }
+
+    [Fact]
+    public void BootstrapSeed_NoInterveningFocusEvent_SeedsObservedElement()
+    {
+        using var client = CreateClient();
+        var observedElement = new AtSpiElementRef("app-bootstrap-current", "/field/bootstrap-current");
+        var capturedGeneration = client.CaptureFocusGenerationForTest();
+
+        var seeded = client.SeedFocusForTest([observedElement], capturedGeneration);
+
+        Assert.Equal(observedElement, seeded);
+        Assert.Equal(observedElement, client.CurrentFocusedElement);
+        Assert.Equal([observedElement], client.GetRecentFocusedElements());
+    }
+
+    [Fact]
+    public void BootstrapSeed_InterveningGainReturnsEventFocusWithoutAddingScannedElement()
+    {
+        using var client = CreateClient();
+        var observedElement = new AtSpiElementRef("app-bootstrap-scanned", "/field/bootstrap-scanned");
+        var eventElement = new AtSpiElementRef("app-bootstrap-event", "/field/bootstrap-event");
+        var capturedGeneration = client.CaptureFocusGenerationForTest();
+
+        RaiseFocus(client, eventElement, detail1: 1);
+        var seeded = client.SeedFocusForTest([observedElement], capturedGeneration);
+
+        Assert.Equal(eventElement, seeded);
+        Assert.Equal(eventElement, client.CurrentFocusedElement);
+        Assert.DoesNotContain(observedElement, client.GetRecentFocusedElements());
+        Assert.Contains(eventElement, client.GetRecentFocusedElements());
+    }
+
+    [Fact]
+    public void BootstrapSeed_FenceRejection_DoesNotLatch()
+    {
+        using var client = CreateClient();
+        var observedElement = new AtSpiElementRef("app-bootstrap-retry", "/field/bootstrap-retry");
+        var staleGeneration = client.CaptureFocusGenerationForTest();
+
+        RaiseFocus(client, observedElement, detail1: 0);
+        Assert.Null(client.SeedFocusForTest([observedElement], staleGeneration));
+
+        var freshGeneration = client.CaptureFocusGenerationForTest();
+        var seeded = client.SeedFocusForTest([observedElement], freshGeneration);
+
+        Assert.Equal(observedElement, seeded);
+        Assert.Equal(observedElement, client.CurrentFocusedElement);
+        Assert.Contains(observedElement, client.GetRecentFocusedElements());
+    }
+
+    [Fact]
+    public void BootstrapSeed_StaleScan_RejectsAllScannedElements()
+    {
+        using var client = CreateClient();
+        var window = new AtSpiElementRef("app-bootstrap-multi", "/window/bootstrap-multi");
+        var field = new AtSpiElementRef("app-bootstrap-multi", "/field/bootstrap-multi");
+        var capturedGeneration = client.CaptureFocusGenerationForTest();
+
+        RaiseFocus(client, field, detail1: 0);
+        var seeded = client.SeedFocusForTest([window, field], capturedGeneration);
+
+        Assert.Null(seeded);
+        Assert.Null(client.CurrentFocusedElement);
+        Assert.Empty(client.GetRecentFocusedElements());
+    }
+
+    [Fact]
+    public void BootstrapSeed_GainThenLossDuringScan_SeedsNothing()
+    {
+        using var client = CreateClient();
+        var observedElement = new AtSpiElementRef("app-bootstrap-scan", "/field/bootstrap-scan");
+        var eventElement = new AtSpiElementRef("app-bootstrap-churn", "/field/bootstrap-churn");
+        var capturedGeneration = client.CaptureFocusGenerationForTest();
+
+        RaiseFocus(client, eventElement, detail1: 1);
+        RaiseFocus(client, eventElement, detail1: 0);
+        var seeded = client.SeedFocusForTest([observedElement], capturedGeneration);
+
+        Assert.Null(seeded);
+        Assert.Null(client.CurrentFocusedElement);
+        Assert.DoesNotContain(observedElement, client.GetRecentFocusedElements());
+        Assert.Contains(eventElement, client.GetRecentFocusedElements());
+    }
+
     private static AtSpiEventClient CreateClient()
     {
         return new AtSpiEventClient(new NullErrorLogService());
