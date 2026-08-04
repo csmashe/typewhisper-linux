@@ -571,6 +571,25 @@ public sealed class StreamingProviderAdapterConformanceTests
             .StartConnectedAsync(adapter, transport, CancellationToken.None)
             .WaitAsync(s_timeout);
 
+    // A start that faults disposes the transport, and disposal completes its sent channel — so
+    // awaiting the first send reports "the channel has been closed" and buries the reason the
+    // start failed. Surface the start's own exception whenever it has one.
+    private static async Task FirstSentOrStartFailureAsync(
+        Task<WebSocketSessionPump> starting,
+        ScriptedWebSocketTransport transport
+    )
+    {
+        try
+        {
+            await transport.NextSentAsync();
+        }
+        catch (ChannelClosedException)
+        {
+            await starting.WaitAsync(s_timeout);
+            throw;
+        }
+    }
+
     private static async Task<WebSocketSessionPump> StartAdditionalProviderAsync(
         string provider,
         ScriptedWebSocketTransport transport
@@ -579,7 +598,10 @@ public sealed class StreamingProviderAdapterConformanceTests
         IWebSocketSessionAdapter adapter = provider switch
         {
             "Soniox" => new SonioxWebSocketAdapter("key", null),
-            "Speechmatics" => new SpeechmaticsWebSocketAdapter("key", null),
+            // Speechmatics rejects a null language at StartRecognition; passing null made
+            // every Speechmatics case fault during start and tear the transport down, which
+            // surfaced as "the channel has been closed" from the first NextSentAsync.
+            "Speechmatics" => new SpeechmaticsWebSocketAdapter("key", "en"),
             "Gladia" => new GladiaWebSocketAdapter(new HttpClient(), "key", null),
             "xAI" => new XaiWebSocketAdapter("key", null),
             _ => new OpenAiRealtimeWebSocketAdapter(
@@ -602,7 +624,7 @@ public sealed class StreamingProviderAdapterConformanceTests
                     transport,
                     CancellationToken.None
                 );
-                await transport.NextSentAsync();
+                await FirstSentOrStartFailureAsync(starting, transport);
                 transport.EnqueueText("""{"message":"RecognitionStarted"}""");
                 return await starting.WaitAsync(s_timeout);
             }

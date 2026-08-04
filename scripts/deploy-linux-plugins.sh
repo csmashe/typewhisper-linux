@@ -15,11 +15,14 @@
 # PluginAssemblyLoadContext redirects PluginSDK references to the host's copy
 # and the version doesn't satisfy the bind.
 #
-# Requires PowerShell 7 (pwsh): plugins/catalog.json is the authoritative plugin
-# list and scripts/plugin-catalog.ps1 is what validates it and turns it into this
-# script's deploy map. TypeWhisper.Linux runs this from an AfterTargets="Build"
-# target, so `dotnet build` needs pwsh too; build with
-# -p:DeployBundledLinuxPlugins=false to skip plugin bundling instead.
+# plugins/catalog.json is the authoritative plugin list;
+# scripts/plugin-catalog-deploy-map.py renders this script's deploy map from it.
+# That renderer is Python because TypeWhisper.Linux runs this from an
+# AfterTargets="Build" target — requiring PowerShell 7 would put pwsh in the path
+# of every `dotnet build` on a Linux desktop. python3 is in the base install of
+# the distributions this app targets. The exhaustive catalog validation still
+# lives in scripts/plugin-catalog.ps1 and runs in CI.
+# Build with -p:DeployBundledLinuxPlugins=false to skip plugin bundling entirely.
 #
 # Environment:
 #   TYPEWHISPER_PLUGIN_PUBLISH_JOBS=<n>  Max concurrent plugin publishes.
@@ -75,18 +78,18 @@ cleanup() {
 trap cleanup EXIT
 
 # Generate the Linux deployment view from the canonical catalog. Write it to a
-# real file before sourcing so a pwsh/validation failure propagates reliably;
+# real file before sourcing so a generation failure propagates reliably;
 # process-substitution exit codes are otherwise easy for bash to miss.
-if ! command -v pwsh > /dev/null 2>&1; then
-  echo "ERROR: pwsh is required to validate and read plugins/catalog.json." >&2
-  echo "       Install PowerShell 7, or build without bundled plugins:" >&2
+if ! command -v python3 > /dev/null 2>&1; then
+  echo "ERROR: python3 is required to read plugins/catalog.json." >&2
+  echo "       Install python3, or build without bundled plugins:" >&2
   echo "       dotnet build -p:DeployBundledLinuxPlugins=false" >&2
   exit 1
 fi
 
 CATALOG_MAP="$TMP_DIR/plugin-deploy-map.sh"
-if ! pwsh -NoProfile -File "$ROOT/scripts/plugin-catalog.ps1" \
-  -View DeployMap -Platform linux -Rid "$RID" > "$CATALOG_MAP"; then
+if ! python3 "$ROOT/scripts/plugin-catalog-deploy-map.py" \
+  --platform linux --rid "$RID" --root "$ROOT" > "$CATALOG_MAP"; then
   echo "ERROR: plugin catalog validation or deploy-map generation failed." >&2
   exit 1
 fi

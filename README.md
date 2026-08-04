@@ -61,10 +61,16 @@ Whichever format you install, the first-run [Setup Wizard](https://github.com/cs
 
 ### Build from source
 
-Requires the **.NET 10 SDK** and **PowerShell 7** (`pwsh`). The build bundles the Linux
-plugins, and `plugins/catalog.json` — the authoritative plugin list — is read through
-`scripts/plugin-catalog.ps1`. Without `pwsh`, build with `-p:DeployBundledLinuxPlugins=false`
-to skip plugin bundling.
+Requires the **.NET 10 SDK** and `python3`. `global.json` pins a 10.0.100 floor so CI is reproducible, and rolls forward from there — your distribution's package is enough:
+
+```bash
+sudo dnf install dotnet-sdk-10.0      # Fedora / RHEL
+sudo apt install dotnet-sdk-10.0      # Debian / Ubuntu
+```
+
+The floor is deliberately on the `10.0.1xx` feature band. Fedora, RHEL and Debian ship *source-built* .NET, which only ever tracks that band, so pinning one of Microsoft's `10.0.2xx`/`10.0.3xx` bands would lock every distro contributor out — `rollForward` only rolls forward, never back. Microsoft's own builds are newer bands and satisfy the pin too, if you prefer one.
+
+The build bundles the Linux plugins, reading the authoritative list in `plugins/catalog.json` via `scripts/plugin-catalog-deploy-map.py`. Skip that step with `-p:DeployBundledLinuxPlugins=false`.
 
 ```bash
 git clone https://github.com/csmashe/typewhisper-linux.git
