@@ -275,13 +275,25 @@ internal sealed class HeadlessAtSpiClient : IAtSpiEventClient
 
 internal class HeadlessProcessRunner : IProcessRunner
 {
+    private readonly System.Collections.Concurrent.ConcurrentQueue<string> _requests = new();
     private int _requestCount;
 
     internal int RequestCount => Volatile.Read(ref _requestCount);
 
+    // Recorded so a boundary violation names the command that crossed it; a bare count leaves
+    // the reader guessing which service shelled out.
+    internal IReadOnlyList<string> Requests => _requests.ToArray();
+
     internal void Reset()
     {
+        _requests.Clear();
         Volatile.Write(ref _requestCount, 0);
+    }
+
+    private void Record(string what)
+    {
+        _requests.Enqueue(what);
+        Interlocked.Increment(ref _requestCount);
     }
 
     public virtual Task<ProcessRunResult> RunAsync(
@@ -295,7 +307,7 @@ internal class HeadlessProcessRunner : IProcessRunner
     )
     {
         ct.ThrowIfCancellationRequested();
-        Interlocked.Increment(ref _requestCount);
+        Record($"RunAsync {fileName} {string.Join(' ', args)}".TrimEnd());
         return Task.FromResult(
             new ProcessRunResult(false, false, -1, "", "Blocked by the headless boundary.")
         );
@@ -308,7 +320,7 @@ internal class HeadlessProcessRunner : IProcessRunner
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Interlocked.Increment(ref _requestCount);
+        Record($"RunProbe {command.FileName} {string.Join(' ', command.Arguments)}".TrimEnd());
         return Failed(command.FileName);
     }
 
@@ -326,19 +338,19 @@ internal class HeadlessProcessRunner : IProcessRunner
         ProcessSessionOptions options
     )
     {
-        Interlocked.Increment(ref _requestCount);
+        Record($"StartSession {command.FileName}");
         return new ProcessSessionStartOutcome(null, $"Blocked {command.FileName}.");
     }
 
     public DetachedLaunchOutcome LaunchDetached(ProcessCommand command)
     {
-        Interlocked.Increment(ref _requestCount);
+        Record($"LaunchDetached {command.FileName}");
         return new DetachedLaunchOutcome(false, $"Blocked {command.FileName}.");
     }
 
     public DetachedLaunchOutcome LaunchUri(Uri uri)
     {
-        Interlocked.Increment(ref _requestCount);
+        Record($"LaunchUri {uri.Scheme}");
         return new DetachedLaunchOutcome(false, $"Blocked {uri.Scheme} URI launch.");
     }
 
