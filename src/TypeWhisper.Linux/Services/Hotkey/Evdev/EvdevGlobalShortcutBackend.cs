@@ -609,8 +609,8 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
 
         if (readers is not null)
         {
-            // DisposeAsync on a real reader closes its FileStream synchronously before its first
-            // await. Start every disposal now so one slow read loop cannot delay another fd close.
+            // Start every disposal now so each reader signals its native poll wakeup promptly;
+            // one slow read-loop shutdown must not delay another reader's fd cleanup.
             _ = DisposeReadersAsync(readers);
         }
 
