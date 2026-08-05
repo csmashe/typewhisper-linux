@@ -1069,6 +1069,7 @@ public sealed class TextInsertionServiceTests
         Assert.Null(platform.TypedText);
         // The aborted insert restores the user's clipboard rather than leaving dictated text behind.
         Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal(2, platform.SetClipboardCount);
     }
 
     [Fact]
@@ -1103,7 +1104,7 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
-    public async Task InsertTextAsync_terminal_multiline_fail_closed_keeps_staged_text_when_no_prior_clipboard()
+    public async Task InsertTextAsync_terminal_multiline_paste_failure_keeps_staged_text_when_no_prior_clipboard()
     {
         // The staged dictated text stays on the clipboard as a manual-paste fallback.
         var platform = new FakeTextInsertionPlatform
@@ -1116,7 +1117,7 @@ public sealed class TextInsertionServiceTests
 
         var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
 
-        Assert.Equal(InsertionResult.Failed, result);
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
         Assert.False(platform.PasteSent);
         Assert.Null(platform.TypedText);
         Assert.Equal("line1\nline2", platform.Clipboard);
@@ -1128,7 +1129,7 @@ public sealed class TextInsertionServiceTests
     {
         var platform = new FakeTextInsertionPlatform
         {
-            Clipboard = null,
+            Clipboard = "formatted previous text",
             ClipboardHasNonTextFormats = true,
             ActiveWindowId = "other",
             ActivateSucceeds = false,
@@ -1138,7 +1139,7 @@ public sealed class TextInsertionServiceTests
 
         var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
 
-        Assert.Equal(InsertionResult.Failed, result);
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
         Assert.False(platform.PasteSent);
         Assert.Equal("line1\nline2", platform.Clipboard);
         Assert.Equal(1, platform.SetClipboardCount);
@@ -1146,7 +1147,7 @@ public sealed class TextInsertionServiceTests
             errorLog.AddedEntries,
             entry =>
                 entry.Category == ErrorCategory.Insertion
-                && entry.Message.Contains("could not be restored", StringComparison.Ordinal)
+                && entry.Message.Contains("was not restored", StringComparison.Ordinal)
         );
     }
 
@@ -1163,7 +1164,11 @@ public sealed class TextInsertionServiceTests
             ClipboardReadResults = new Queue<string?>(
                 [
                     "previous", // snapshot before staging
-                    "user-copied-this-later", // ownership check during fail-closed restore
+                    // ownership check during fail-closed restore — every retry sees the newer copy
+                    "user-copied-this-later",
+                    "user-copied-this-later",
+                    "user-copied-this-later",
+                    "user-copied-this-later",
                 ]
             ),
         };
@@ -1176,6 +1181,134 @@ public sealed class TextInsertionServiceTests
         // Clipboard was last set to the staged text; the ownership check saw the newer copy
         // and declined to restore, so no further clipboard write occurred.
         Assert.Equal("line1\nline2", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_restore_failure_reports_retained_staged_text()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "other",
+            ActivateSucceeds = false,
+            ClipboardSetResults = new Queue<bool>([true, false]),
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("line1\nline2", platform.Clipboard);
+        Assert.Equal(2, platform.SetClipboardCount);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_restore_failure_without_staged_text_fails()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "other",
+            ActivateSucceeds = false,
+            ClipboardSetResults = new Queue<bool>([true, false]),
+            ClipboardReadResults = new Queue<string?>(
+                [
+                    "previous", // snapshot before staging
+                    "line1\nline2", // ownership check before the restore attempt
+                    "user-copied-this-later", // readback after the restore failed
+                ]
+            ),
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.False(platform.PasteSent);
+        Assert.Equal(2, platform.SetClipboardCount);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_predecessor_equal_to_staged_text_reports_clipboard_delivery()
+    {
+        // Restoring a predecessor identical to the dictated text leaves that text on the
+        // clipboard, so the user can still paste it — that is a clipboard delivery, not a failure.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "line1\nline2",
+            ActiveWindowId = "other",
+            ActivateSucceeds = false,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("line1\nline2", platform.Clipboard);
+        Assert.Equal(2, platform.SetClipboardCount);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_ownership_check_tolerates_lagged_clipboard_read()
+    {
+        // The ownership check is the first read after the staging write, so wl-paste can still
+        // report the pre-staging content; retrying settles on our text instead of declaring loss.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = null,
+            ActiveWindowId = "other",
+            ActivateSucceeds = false,
+            ClipboardReadResults = new Queue<string?>(
+                [
+                    null, // snapshot before staging
+                    "stale-pre-staging-content", // lagged first read of the ownership check
+                    "line1\nline2", // the staging write has settled
+                ]
+            ),
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("line1\nline2", platform.Clipboard);
+        Assert.Equal(1, platform.SetClipboardCount);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_uncapturable_nontext_clipboard_keeps_staged_text_and_logs()
+    {
+        // Previous clipboard held only a non-text format, so there is nothing to restore over
+        // the staged text.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = null,
+            ClipboardHasNonTextFormats = true,
+            ActiveWindowId = "other",
+            ActivateSucceeds = false,
+        };
+        var errorLog = new RecordingErrorLogService();
+        var sut = new TextInsertionService(platform, errorLog);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("line1\nline2", platform.Clipboard);
+        Assert.Equal(1, platform.SetClipboardCount);
+        Assert.Contains(
+            errorLog.AddedEntries,
+            entry =>
+                entry.Category == ErrorCategory.Insertion
+                && entry.Message.Contains(
+                    "could not be restored",
+                    StringComparison.Ordinal
+                )
+        );
     }
 
     [Fact]
@@ -3094,6 +3227,7 @@ public sealed class TextInsertionServiceTests
         // (models wl-paste racing wl-copy: reads that lag behind what was just set).
         // An exhausted queue falls back to the live Clipboard value.
         public Queue<string?>? ClipboardReadResults { get; init; }
+        public Queue<bool>? ClipboardSetResults { get; init; }
         public int SetClipboardCount { get; private set; }
 
         // Every DelayAsync is recorded so tests can assert which waits ran
@@ -3122,8 +3256,14 @@ public sealed class TextInsertionServiceTests
         public Task<bool> SetClipboardTextAsync(string text)
         {
             SetClipboardCount++;
-            Clipboard = text;
-            return Task.FromResult(true);
+            var succeeds =
+                ClipboardSetResults is not { Count: > 0 } || ClipboardSetResults.Dequeue();
+            if (succeeds)
+            {
+                Clipboard = text;
+            }
+
+            return Task.FromResult(succeeds);
         }
 
         public Task<bool> ClipboardHasNonTextFormatsAsync()

@@ -877,6 +877,7 @@
   "TextInsertion.SetupFailed": "Не удалось настроить: {0}",
   "TextInsertion.StatusRefreshed": "Статус обновлён.",
   "TextInsertion.Subtitle": "Управляйте тем, как продиктованный текст попадает в активное приложение. Сеансы GNOME и KDE Wayland требуют ydotool для автовставки; композиторы wlroots (Hyprland, Sway) используют wtype; X11 использует xdotool.",
+  "TextInsertion.TerminalClipboardFallback": "Текст скопирован в буфер обмена. Вставьте его в терминал с помощью Ctrl+Shift+V.",
   "TextInsertion.Title": "Вставка текста",
   "TextInsertion.WtypeInstalledWaylandOnly": "Установлено (только Wayland).",
   "TextInsertion.WtypeUnsupportedCompositor": "Установлено, но этот композитор не поддерживает протокол виртуальной клавиатуры wtype.",

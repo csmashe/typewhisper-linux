@@ -877,6 +877,7 @@
   "TextInsertion.SetupFailed": "Error en la configuración: {0}",
   "TextInsertion.StatusRefreshed": "Estado actualizado.",
   "TextInsertion.Subtitle": "Controla cómo llega el texto dictado a tu app en primer plano. Las sesiones de GNOME y KDE en Wayland necesitan ydotool para el pegado automático; los compositores wlroots (Hyprland, Sway) usan wtype; X11 usa xdotool.",
+  "TextInsertion.TerminalClipboardFallback": "Texto copiado al portapapeles. Pégalo en la terminal con Ctrl+Mayús+V.",
   "TextInsertion.Title": "Inserción de texto",
   "TextInsertion.WtypeInstalledWaylandOnly": "Instalado (solo Wayland).",
   "TextInsertion.WtypeUnsupportedCompositor": "Instalado, pero este compositor no admite el protocolo de teclado virtual de wtype.",

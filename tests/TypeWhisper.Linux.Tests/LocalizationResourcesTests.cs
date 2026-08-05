@@ -121,6 +121,25 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    public void Catalogs_HaveTerminalClipboardFallback(string language)
+    {
+        var catalog = Load(language);
+
+        Assert.True(
+            catalog.TryGetValue("TextInsertion.TerminalClipboardFallback", out var value),
+            $"Missing {language} key: TextInsertion.TerminalClipboardFallback"
+        );
+        Assert.False(
+            string.IsNullOrWhiteSpace(value),
+            $"{language} key is empty: TextInsertion.TerminalClipboardFallback"
+        );
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
     public void Catalogs_HaveRecentTranscriptionFeedbackStringsWithRequiredPlaceholders(
         string language
     )
