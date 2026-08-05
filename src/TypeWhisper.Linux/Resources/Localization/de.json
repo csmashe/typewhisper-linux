@@ -877,6 +877,7 @@
   "TextInsertion.SetupFailed": "Einrichtung fehlgeschlagen: {0}",
   "TextInsertion.StatusRefreshed": "Status aktualisiert.",
   "TextInsertion.Subtitle": "Legen Sie fest, wie diktierter Text Ihre fokussierte App erreicht. GNOME- und KDE-Wayland-Sitzungen benötigen ydotool für Auto-Einfügen; wlroots-Compositors (Hyprland, Sway) verwenden wtype; X11 verwendet xdotool.",
+  "TextInsertion.TerminalClipboardFallback": "In die Zwischenablage kopiert. Mit Strg+Umschalt+V in das Terminal einfügen.",
   "TextInsertion.Title": "Texteinfügung",
   "TextInsertion.WtypeInstalledWaylandOnly": "Installiert (nur Wayland).",
   "TextInsertion.WtypeUnsupportedCompositor": "Installiert, aber dieser Compositor unterstützt das Virtual-Keyboard-Protokoll von wtype nicht.",

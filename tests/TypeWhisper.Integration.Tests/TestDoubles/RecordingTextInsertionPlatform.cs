@@ -8,13 +8,36 @@ internal sealed class RecordingTextInsertionPlatform : ITextInsertionPlatform
     private readonly List<string> _typed = [];
     private readonly List<string> _clipboardWrites = [];
     private readonly Queue<(bool Succeeds, bool DeliveredPartial)> _scriptedTyping = new();
+    private readonly Queue<bool> _scriptedPaste = new();
+    private string? _clipboard;
     private bool _lastTypingDeliveredPartialText;
+    private int _pasteAttemptCount;
+    private InsertionFailureReason _lastFailureReason = InsertionFailureReason.None;
 
     public bool IsClipboardSetAvailable => true;
     public bool IsPasteAvailable => true;
     public bool IsKdePlasma => false;
     public bool PrefersDirectTypingForUnknownTarget => true;
-    public InsertionFailureReason LastFailureReason => InsertionFailureReason.None;
+
+    public InsertionFailureReason LastFailureReason
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastFailureReason;
+            }
+        }
+    }
+
+    // Scripts the structural diagnosis the platform reports for failed paste/type attempts.
+    internal void SetFailureReason(InsertionFailureReason reason)
+    {
+        lock (_gate)
+        {
+            _lastFailureReason = reason;
+        }
+    }
 
     public bool LastTypingDeliveredPartialText
     {
@@ -49,9 +72,34 @@ internal sealed class RecordingTextInsertionPlatform : ITextInsertionPlatform
         }
     }
 
+    internal string? Clipboard
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _clipboard;
+            }
+        }
+    }
+
+    internal int PasteAttemptCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _pasteAttemptCount;
+            }
+        }
+    }
+
     public Task<string?> TryGetClipboardTextAsync()
     {
-        return Task.FromResult<string?>(null);
+        lock (_gate)
+        {
+            return Task.FromResult(_clipboard);
+        }
     }
 
     public Task<bool> SetClipboardTextAsync(string text)
@@ -59,6 +107,7 @@ internal sealed class RecordingTextInsertionPlatform : ITextInsertionPlatform
         lock (_gate)
         {
             _clipboardWrites.Add(text);
+            _clipboard = text;
         }
 
         return Task.FromResult(true);
@@ -86,7 +135,19 @@ internal sealed class RecordingTextInsertionPlatform : ITextInsertionPlatform
 
     public Task<bool> SendPasteAsync(bool useTerminalShortcut = false)
     {
-        return Task.FromResult(true);
+        lock (_gate)
+        {
+            _pasteAttemptCount++;
+            return Task.FromResult(_scriptedPaste.Count == 0 || _scriptedPaste.Dequeue());
+        }
+    }
+
+    internal void EnqueuePasteOutcome(bool succeeds)
+    {
+        lock (_gate)
+        {
+            _scriptedPaste.Enqueue(succeeds);
+        }
     }
 
     // Scripts the outcome of one upcoming TypeTextAsync call, in enqueue order. Calls past the

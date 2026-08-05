@@ -2323,7 +2323,8 @@ public sealed class DictationOrchestrator : IDisposable
                         "Pressed Enter.",
                     InsertionResult.Pasted or InsertionResult.Typed =>
                         $"Typed {finalText.Length} char(s).",
-                    InsertionResult.CopiedToClipboard => ClipboardFallbackMessage(),
+                    InsertionResult.CopiedToClipboard =>
+                        ClipboardFallbackMessage(context.AppProcess),
                     InsertionResult.ActionHandled => "Action completed.",
                     InsertionResult.ActionFailed => "Action failed.",
                     InsertionResult.ActionUnavailable => "Action destination unavailable.",
@@ -3145,7 +3146,8 @@ public sealed class DictationOrchestrator : IDisposable
         {
             InsertionResult.Pasted or InsertionResult.Typed =>
                 Localization.Loc.Instance["Command.Done"],
-            InsertionResult.CopiedToClipboard => ClipboardFallbackMessage(),
+            InsertionResult.CopiedToClipboard =>
+                ClipboardFallbackMessage(context.AppProcess),
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             InsertionResult.MissingPasteTool =>
                 $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
@@ -3293,9 +3295,22 @@ public sealed class DictationOrchestrator : IDisposable
     ///     which the service sets on the same call that produced this result —
     ///     so we can guide the user to the actual setup gap (e.g. ydotool not
     ///     running) instead of the generic "paste with Ctrl+V" line.
+    ///     Reason-specific guidance wins even in a terminal; the terminal hint
+    ///     (which names the terminal's Ctrl+Shift+V chord) only covers the cases
+    ///     with no actionable diagnosis behind them.
     /// </summary>
-    private string ClipboardFallbackMessage()
+    private string ClipboardFallbackMessage(string? targetProcessName)
     {
+        if (
+            TextInsertionService.IsTerminalApp(targetProcessName)
+            && _textInsertion.LastFailureReason
+                is InsertionFailureReason.None
+                or InsertionFailureReason.PasteRetriesExhausted
+        )
+        {
+            return Localization.Loc.Instance["TextInsertion.TerminalClipboardFallback"];
+        }
+
         return _textInsertion.LastFailureReason switch
         {
             InsertionFailureReason.WtypeCompositorUnsupported =>

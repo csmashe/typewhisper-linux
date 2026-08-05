@@ -280,7 +280,7 @@ public sealed class TextInsertionService
                 "Auto paste fell back to clipboard: target window could not be focused."
             );
             return requiresSafeTerminalPaste
-                ? await FailTerminalMultilineAsync(
+                ? await HandleTerminalMultilinePasteFailureAsync(
                     text,
                     previousClipboard,
                     previousClipboardHasNonTextFormats
@@ -295,7 +295,7 @@ public sealed class TextInsertionService
                 + $"so {pasteShortcut} was not sent (it would have pasted nothing or stale content)."
             );
             return requiresSafeTerminalPaste
-                ? await FailTerminalMultilineAsync(
+                ? await HandleTerminalMultilinePasteFailureAsync(
                     text,
                     previousClipboard,
                     previousClipboardHasNonTextFormats
@@ -334,7 +334,7 @@ public sealed class TextInsertionService
                     $"Auto paste fell back to clipboard: {pasteShortcut} could not be sent after retries."
                 );
                 return requiresSafeTerminalPaste
-                    ? await FailTerminalMultilineAsync(
+                    ? await HandleTerminalMultilinePasteFailureAsync(
                         text,
                         previousClipboard,
                         previousClipboardHasNonTextFormats
@@ -580,29 +580,27 @@ public sealed class TextInsertionService
     }
 
     /// <summary>
-    ///     Fail-closed exit for terminal multiline auto-paste. The clipboard already holds our
+    ///     Failure exit for terminal multiline auto-paste. The clipboard already holds our
     ///     staged text but no keystroke was sent, so — unlike the paste path — there is no
     ///     in-flight transfer to protect. Restore a faithfully captured plain-text predecessor;
     ///     otherwise retain the staged text as a manual-paste fallback. Ownership-checked like
     ///     the post-paste restore: if the user copied something newer while the insert was
     ///     failing, leave their copy alone rather than clobbering it with the stale snapshot.
+    ///     The result classifies the FINAL clipboard state:
+    ///     <see cref="InsertionResult.CopiedToClipboard" /> when the staged text is still
+    ///     reliably on the clipboard for the user to paste by hand,
+    ///     <see cref="InsertionResult.Failed" /> when it is not.
     /// </summary>
-    private async Task<InsertionResult> FailTerminalMultilineAsync(
+    private async Task<InsertionResult> HandleTerminalMultilinePasteFailureAsync(
         string stagedText,
         string? previousClipboard,
         bool previousClipboardHasNonTextFormats
     )
     {
-        var current = await _platform.TryGetClipboardTextAsync();
-        var stillOurs =
-            current is not null
-            && string.Equals(
-                current.TrimEnd('\n'),
-                stagedText.TrimEnd('\n'),
-                StringComparison.Ordinal
-            );
-
-        if (!stillOurs)
+        // First read after the staging write — the widest wl-paste lag window there is, so use
+        // the same retrying read as the pre-paste verify rather than a single shot that would
+        // mistake a lagged read for the user having copied something newer.
+        if (!await WaitForClipboardToServeAsync(stagedText))
         {
             return InsertionResult.Failed;
         }
@@ -618,19 +616,49 @@ public sealed class TextInsertionService
                 );
             }
 
-            return InsertionResult.Failed;
+            return InsertionResult.CopiedToClipboard;
         }
 
         try
         {
-            await _platform.SetClipboardTextAsync(previousClipboard);
+            if (await _platform.SetClipboardTextAsync(previousClipboard))
+            {
+                // A predecessor equal to what we staged leaves our text on the clipboard,
+                // so the restore succeeding is still a clipboard delivery.
+                return string.Equals(
+                    previousClipboard.TrimEnd('\n'),
+                    stagedText.TrimEnd('\n'),
+                    StringComparison.Ordinal
+                )
+                    ? InsertionResult.CopiedToClipboard
+                    : InsertionResult.Failed;
+            }
         }
         catch
         {
-            /* best effort restore */
+            /* verify the final clipboard state below */
         }
 
-        return InsertionResult.Failed;
+        // Single-shot on purpose, unlike the wait above: the restore write already ran and
+        // returned (or threw), so there is no in-flight backend left to catch up with —
+        // retrying here would just wait around for the staged text to reappear and could
+        // report a delivery over what is actually a lost restore.
+        try
+        {
+            var current = await _platform.TryGetClipboardTextAsync();
+            return current is not null
+                   && string.Equals(
+                       current.TrimEnd('\n'),
+                       stagedText.TrimEnd('\n'),
+                       StringComparison.Ordinal
+                   )
+                ? InsertionResult.CopiedToClipboard
+                : InsertionResult.Failed;
+        }
+        catch
+        {
+            return InsertionResult.Failed;
+        }
     }
 
     private async Task RestorePreviousClipboardAsync(

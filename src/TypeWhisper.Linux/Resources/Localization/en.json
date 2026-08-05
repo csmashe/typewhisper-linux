@@ -877,6 +877,7 @@
   "TextInsertion.SetupFailed": "Setup failed: {0}",
   "TextInsertion.StatusRefreshed": "Status refreshed.",
   "TextInsertion.Subtitle": "Control how dictated text reaches your focused app. GNOME and KDE Wayland sessions need ydotool for auto-paste; wlroots compositors (Hyprland, Sway) use wtype; X11 uses xdotool.",
+  "TextInsertion.TerminalClipboardFallback": "Copied to clipboard. Paste into the terminal with Ctrl+Shift+V.",
   "TextInsertion.Title": "Text insertion",
   "TextInsertion.WtypeInstalledWaylandOnly": "Installed (Wayland only).",
   "TextInsertion.WtypeUnsupportedCompositor": "Installed, but this compositor doesn't support wtype's virtual-keyboard protocol.",
