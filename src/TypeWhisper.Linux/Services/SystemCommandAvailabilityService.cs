@@ -58,7 +58,6 @@ public sealed partial class SystemCommandAvailabilityService
         _snapshot = BuildSnapshot();
     }
 
-    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool IsWaylandSession
     {
         get
