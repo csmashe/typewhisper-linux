@@ -23,7 +23,6 @@ namespace TypeWhisper.Linux.Services.Setup;
 /// </summary>
 public sealed class GlobalHotkeySetupTask : ISetupTask
 {
-    private readonly IProcessRunner _runner;
     private readonly InputAccessSetupHelper _accessHelper;
 
     // Seams kept behind an internal constructor so the production wiring uses the
@@ -34,26 +33,26 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
     private readonly Func<bool> _hasKeyboardAccess;
     private readonly Func<bool> _isSeatManagerPresent;
     private readonly Func<bool> _userListedInInputGroupFile;
-    private readonly Func<bool> _ruleInstalled;
+    private readonly Func<bool> _ownedRuleInstalled;
+    private readonly Func<bool> _managedGroupGrantPresent;
     private readonly Func<CancellationToken, Task> _onAccessGranted;
     private readonly Func<bool> _evdevOptedIn;
 
     // ReSharper disable once UnusedMember.Global -- resolved by the DI container (AddSingleton<ISetupTask, GlobalHotkeySetupTask>), which SWEA cannot see.
     public GlobalHotkeySetupTask(
         SystemCommandAvailabilityService commands,
-        IProcessRunner runner,
         InputAccessSetupHelper accessHelper,
         HotkeyService hotkey,
         ISettingsService settings
     )
         : this(
             () => commands.GetSnapshot().SessionType == "Wayland",
-            runner,
             accessHelper,
             InputDeviceAccessCheck.HasKeyboardAccess,
             InputAccessSetupHelper.IsSeatManagerPresent,
             UserListedInInputGroupFile,
-            InputAccessSetupHelper.IsRuleInstalled,
+            InputAccessSetupHelper.IsOwnedRuleInstalled,
+            InputAccessSetupHelper.HasMatchingInputGroupGrantProvenance,
             hotkey.SwitchBackendAsync,
             () => settings.Current.WaylandEvdevHotkeysEnabled
         )
@@ -62,30 +61,28 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
 
     internal GlobalHotkeySetupTask(
         Func<bool> isWayland,
-        IProcessRunner runner,
         InputAccessSetupHelper accessHelper,
         Func<bool> hasKeyboardAccess,
         Func<bool> isSeatManagerPresent,
         Func<bool> userListedInInputGroupFile,
-        Func<bool> ruleInstalled,
+        Func<bool> ownedRuleInstalled,
+        Func<bool> managedGroupGrantPresent,
         Func<CancellationToken, Task> onAccessGranted,
         Func<bool> evdevOptedIn
     )
     {
         _isWayland = isWayland;
-        _runner = runner;
         _accessHelper = accessHelper;
         _hasKeyboardAccess = hasKeyboardAccess;
         _isSeatManagerPresent = isSeatManagerPresent;
         _userListedInInputGroupFile = userListedInInputGroupFile;
-        _ruleInstalled = ruleInstalled;
+        _ownedRuleInstalled = ownedRuleInstalled;
+        _managedGroupGrantPresent = managedGroupGrantPresent;
         _onAccessGranted = onAccessGranted;
         _evdevOptedIn = evdevOptedIn;
     }
 
     private bool IsWayland => _isWayland();
-
-    private static string CurrentUser => Environment.UserName;
 
     public string Id => "global-hotkey";
     public string Title => Loc.Instance["Setup.GlobalHotkeyTitle"];
@@ -98,18 +95,12 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
 
     public Task<SetupTaskState> EvaluateAsync(CancellationToken ct)
     {
-        // X11: in-app hook captures global keys with press/release — no setup needed.
-        if (!IsWayland)
-        {
-            return Satisfied(Loc.Instance["Setup.GlobalHotkeyActiveX11"]);
-        }
-
         // Opting out is a valid focused-only choice and must never block setup or
-        // prompt for privileged keyboard access. If a rule remains from an earlier
-        // opt-in, keep the task satisfied while offering an explicit revoke action.
+        // prompt for privileged keyboard access. Revocation is session-independent:
+        // the udev rule and supplementary group grant also apply from X11.
         if (!_evdevOptedIn())
         {
-            if (_ruleInstalled())
+            if (_ownedRuleInstalled() || _managedGroupGrantPresent())
             {
                 return Task.FromResult(
                     new SetupTaskState(
@@ -122,6 +113,12 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
             }
 
             return Satisfied(Loc.Instance["Setup.GlobalHotkeyOptedOut"]);
+        }
+
+        // X11: in-app hook captures global keys with press/release — no setup needed.
+        if (!IsWayland)
+        {
+            return Satisfied(Loc.Instance["Setup.GlobalHotkeyActiveX11"]);
         }
 
         // Wayland: gate on actual openability of a keyboard node, NOT input-group
@@ -139,7 +136,7 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
         // with *stale* group membership from the old usermod flow (rule not yet
         // installed) should instead be offered the new rule, which can grant access
         // immediately on logind rather than forcing a logout.
-        if (_userListedInInputGroupFile() && _ruleInstalled())
+        if (_userListedInInputGroupFile() && _ownedRuleInstalled())
         {
             return Task.FromResult(
                 new SetupTaskState(
@@ -164,15 +161,54 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
     {
         // Re-check the setting here so direct callers cannot bypass the opt-out
         // and fall through into either privileged installation path.
-        if (IsWayland && !_evdevOptedIn())
+        if (!_evdevOptedIn())
         {
-            if (!_ruleInstalled())
+            if (!_ownedRuleInstalled() && !_managedGroupGrantPresent())
             {
                 return new SetupActionOutcome(true, Loc.Instance["Setup.GlobalHotkeyOptedOut"]);
             }
 
             var removal = await _accessHelper.RemoveAsync(ct).ConfigureAwait(false);
-            return new SetupActionOutcome(removal.Success, removal.Message, removal.Detail);
+            if (removal.Success)
+            {
+                return new SetupActionOutcome(
+                    true,
+                    Loc.Instance["Setup.GlobalHotkeyAccessRevoked"],
+                    removal.RequiresRelogin
+                        ? Loc.Instance["Setup.GlobalHotkeyReloginToRevoke"]
+                        : null
+                );
+            }
+
+            if (removal.Refused)
+            {
+                var detail = removal.Detail;
+                if (removal.GroupRevocationCompleted)
+                {
+                    detail = AppendDetail(
+                        detail,
+                        Loc.Instance["Setup.GlobalHotkeyGroupRevokedDetail"]
+                    );
+                }
+                else if (removal.GroupRevocationFailure is not null)
+                {
+                    detail = AppendDetail(
+                        detail,
+                        Loc.Instance["Setup.GlobalHotkeyGroupRevokeFailedDetail"]
+                    );
+                    detail = AppendDetail(detail, removal.GroupRevocationFailure);
+                }
+
+                return new SetupActionOutcome(false, removal.Message, detail);
+            }
+
+            return new SetupActionOutcome(
+                false,
+                Loc.Instance["Setup.GlobalHotkeyRevokeFailed"],
+                removal.Detail is null
+                    ? removal.Message
+                    : AppendDetail(removal.Message, removal.Detail)
+            );
         }
 
         if (!IsWayland || _hasKeyboardAccess())
@@ -180,8 +216,9 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
             return new SetupActionOutcome(true, Loc.Instance["Setup.GlobalHotkeyAlreadyActive"]);
         }
 
-        // ManualInstallCommand() already carries the non-logind input-group fallback
-        // as a trailing comment, so the copyable command is complete on every system.
+        // ManualInstallCommand() carries the non-logind input-group fallback as a
+        // seat-manager-guarded shell branch; when the current identity cannot be
+        // represented safely it degrades to the rule-only script.
         var manual = InputAccessSetupHelper.ManualInstallCommand();
         if (!DesktopDetector.BinaryExists("pkexec"))
         {
@@ -257,27 +294,25 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
     /// </summary>
     private async Task<SetupActionOutcome> AddToInputGroupFallbackAsync(CancellationToken ct)
     {
-        var manual = $"sudo usermod -aG input {CurrentUser}";
-
-        var result = await _runner
-            .RunAsync(
-                "pkexec",
-                ["usermod", "-aG", "input", CurrentUser],
-                timeout: TimeSpan.FromMinutes(2),
-                ct: ct
-            )
+        var manual = InputAccessSetupHelper.ManualInstallCommand();
+        var result = await _accessHelper
+            .AddToInputGroupFallbackAsync(ct)
             .ConfigureAwait(false);
 
-        if (result.Succeeded)
+        if (result.Success)
         {
             return new SetupActionOutcome(
                 true,
-                Loc.Instance["Setup.GlobalHotkeyAddedToGroup"],
-                Loc.Instance["Setup.GlobalHotkeyReloginToActivate"]
+                result.GroupMembershipAdded
+                    ? Loc.Instance["Setup.GlobalHotkeyAddedToGroup"]
+                    : Loc.Instance["Setup.GlobalHotkeyAddedRelogin"],
+                result.GroupMembershipAdded
+                    ? Loc.Instance["Setup.GlobalHotkeyReloginToActivate"]
+                    : null
             );
         }
 
-        if (result.ExitCode is 126 or 127)
+        if (result.Cancelled)
         {
             return new SetupActionOutcome(
                 false,
@@ -288,9 +323,15 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
 
         return new SetupActionOutcome(
             false,
-            Loc.Instance.GetString("Setup.GlobalHotkeyAddFailed", result.ExitCode),
+            Loc.Instance["Setup.GlobalHotkeyAccessFailed"],
             Loc.Instance.GetString("Setup.RunInTerminalInstead", manual)
         );
+    }
+
+
+    private static string AppendDetail(string? detail, string addition)
+    {
+        return string.IsNullOrWhiteSpace(detail) ? addition : detail + "\n\n" + addition;
     }
 
     private static Task<SetupTaskState> Satisfied(string summary)
@@ -324,7 +365,7 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
                     ',',
                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
                 );
-                return Array.Exists(members, m => m == CurrentUser);
+                return Array.Exists(members, m => m == InputAccessSetupHelper.CurrentUserName);
             }
         }
         catch

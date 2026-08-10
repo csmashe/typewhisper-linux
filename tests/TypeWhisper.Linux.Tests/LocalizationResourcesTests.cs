@@ -299,6 +299,36 @@ public sealed class LocalizationResourcesTests
         }
     }
 
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
+    public void Catalogs_HaveGlobalHotkeyRevocationMessages(string language)
+    {
+        var catalog = Load(language);
+        var keys = new[]
+        {
+            "Setup.GlobalHotkeyAccessRevoked",
+            "Setup.GlobalHotkeyAddedRelogin",
+            "Setup.GlobalHotkeyGroupRevokeFailedDetail",
+            "Setup.GlobalHotkeyGroupRevokedDetail",
+            "Setup.GlobalHotkeyOptedOutRuleInstalled",
+            "Setup.GlobalHotkeyOptedOutRuleInstalledDetail",
+            "Setup.GlobalHotkeyReloginToRevoke",
+            "Setup.GlobalHotkeyRevokeFailed",
+        };
+
+        foreach (var key in keys)
+        {
+            Assert.True(
+                catalog.TryGetValue(key, out var value),
+                $"Missing {language} key: {key}"
+            );
+            Assert.False(string.IsNullOrWhiteSpace(value), $"{language} key is empty: {key}");
+        }
+    }
+
     [Fact]
     public void CanonicalCatalog_HasDesktopIntegrationStaleAndRefreshMessages()
     {
