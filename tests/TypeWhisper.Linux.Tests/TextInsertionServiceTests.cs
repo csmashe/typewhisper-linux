@@ -2021,6 +2021,73 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_WaylandSessionWithXclipRoute_UsesXclipForAllClipboardOperations()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, args) =>
+                file == "xclip" && args.SequenceEqual(["-selection", "clipboard", "-o"]),
+            "clipboard text"
+        );
+        runner.RespondWith(
+            (file, args) =>
+                file == "xclip"
+                && args.SequenceEqual(
+                    ["-selection", "clipboard", "-o", "-t", "TARGETS"]
+                ),
+            "TARGETS\nUTF8_STRING\ntext/html\n"
+        );
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "xclip"),
+            runner
+        );
+
+        Assert.Equal("clipboard text", await platform.TryGetClipboardTextAsync());
+        Assert.True(await platform.ClipboardHasNonTextFormatsAsync());
+        Assert.True(await platform.SetClipboardTextAsync("replacement"));
+
+        Assert.Collection(
+            runner.Invocations,
+            call =>
+            {
+                Assert.Equal("xclip", call.FileName);
+                Assert.Equal(["-selection", "clipboard", "-o"], call.Args);
+            },
+            call =>
+            {
+                Assert.Equal("xclip", call.FileName);
+                Assert.Equal(
+                    ["-selection", "clipboard", "-o", "-t", "TARGETS"],
+                    call.Args
+                );
+            },
+            call =>
+            {
+                Assert.Equal("xclip", call.FileName);
+                Assert.Equal(["-selection", "clipboard"], call.Args);
+                Assert.Equal("replacement", call.StandardInput);
+            }
+        );
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_WaylandSessionWithXclipRoute_DoesNotUseXdotoolPaste()
+    {
+        // Deliberate degradation: a Wayland session whose only clipboard tool is
+        // xclip still never pastes via xdotool — XTEST can't reach native-Wayland
+        // surfaces, so the clipboard fallback covers delivery instead.
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", true, false, "xclip"),
+            runner.Run
+        );
+
+        Assert.False(platform.IsPasteAvailable);
+        Assert.False(await platform.SendPasteAsync());
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_ClipboardRead_UsesFiveSecondTimeout()
     {
         var runner = new FakeProcessRunner();
@@ -3059,20 +3126,22 @@ public sealed class TextInsertionServiceTests
     private static LinuxCapabilitySnapshot SnapshotFor(
         string sessionType,
         bool hasXdotool,
-        bool hasWtype
+        bool hasWtype,
+        string? clipboardToolName = null
     )
     {
-        // ReSharper disable once IntroduceOptionalParameters.Local — keeping the
-        // 3-arg X11 convenience overload separate reads clearer than three optional
-        // positional params on the 6-arg form; merging would also turn the existing
-        // "…, false, false" 6-arg call sites into redundant-argument warnings.
+        // ReSharper disable once IntroduceOptionalParameters.Local — keeping this
+        // 4-arg convenience overload separate reads clearer than defaulting the
+        // compositor/ydotool params on the 7-arg form; merging would also turn the
+        // existing "…, false, false" call sites into redundant-argument warnings.
         return SnapshotFor(
             sessionType,
             hasXdotool,
             hasWtype,
             "unknown",
             false,
-            false
+            false,
+            clipboardToolName
         );
     }
 
@@ -3082,13 +3151,14 @@ public sealed class TextInsertionServiceTests
         bool hasWtype,
         string compositor,
         bool hasYdotool,
-        bool hasYdotoolSocket
+        bool hasYdotoolSocket,
+        string? clipboardToolName = null
     )
     {
         return new LinuxCapabilitySnapshot(
             sessionType,
             true,
-            sessionType == "Wayland" ? "wl-clipboard" : "xclip",
+            clipboardToolName ?? (sessionType == "Wayland" ? "wl-clipboard" : "xclip"),
             hasXdotool,
             hasWtype,
             false,

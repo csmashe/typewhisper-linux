@@ -3283,7 +3283,7 @@ public sealed class DictationOrchestrator : IDisposable
 
     private static string ClipboardToolMissingMessage()
     {
-        return Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+        return WaylandSessionDetector.HasWaylandDisplay()
             ? "Text insertion failed. Install wl-clipboard to enable clipboard insertion."
             : "Text insertion failed. Install xclip to enable clipboard insertion.";
     }

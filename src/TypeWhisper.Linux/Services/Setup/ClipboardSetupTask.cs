@@ -5,9 +5,9 @@ namespace TypeWhisper.Linux.Services.Setup;
 /// <summary>
 ///     Ensures a clipboard helper is installed — the universal fallback path
 ///     for getting transcribed text into a window when automatic paste isn't
-///     available. The required package is session-derived: <c>wl-clipboard</c>
-///     on Wayland, <c>xclip</c> on X11 (the capability snapshot already names
-///     the right one for this machine).
+///     available. The required package follows socket reachability:
+///     <c>wl-clipboard</c> when <c>WAYLAND_DISPLAY</c> is available, otherwise
+///     <c>xclip</c> (the capability snapshot already names the right route).
 /// </summary>
 public sealed class ClipboardSetupTask : ISetupTask
 {

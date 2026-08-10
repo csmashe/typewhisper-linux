@@ -485,7 +485,7 @@ public sealed class TransformSelectionService
 
     private static string ClipboardToolMissingMessage()
     {
-        return Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+        return WaylandSessionDetector.HasWaylandDisplay()
             ? "Install wl-clipboard to copy transformed text."
             : "Install xclip to copy transformed text.";
     }
