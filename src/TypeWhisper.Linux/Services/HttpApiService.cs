@@ -126,6 +126,7 @@ public sealed partial class HttpApiService : IDisposable
     };
 
     private readonly AudioFileService _audioFiles;
+    private readonly HotkeyService _hotkeys;
     private readonly DictationOrchestrator _dictation;
     private readonly IDictionaryService _dictionary;
     private readonly ApiDiscoveryFile _discoveryFile;
@@ -133,6 +134,7 @@ public sealed partial class HttpApiService : IDisposable
     private readonly ModelManagerService _models;
     private readonly IPostProcessingPipeline _pipeline;
     private readonly IProfileService _profiles;
+    private readonly IPromptActionService _promptActions;
     private readonly HttpApiRequestDispatcher _requestDispatcher = new(MaxConcurrentRequests);
     private readonly DictationSessionResultStore _sessionResults;
     private readonly ISettingsService _settings;
@@ -154,6 +156,8 @@ public sealed partial class HttpApiService : IDisposable
         AudioFileService audioFiles,
         IHistoryService history,
         IProfileService profiles,
+        IPromptActionService promptActions,
+        HotkeyService hotkeys,
         IDictionaryService dictionary,
         IVocabularyBoostingService vocabularyBoosting,
         IPostProcessingPipeline pipeline,
@@ -169,6 +173,8 @@ public sealed partial class HttpApiService : IDisposable
             audioFiles,
             history,
             profiles,
+            promptActions,
+            hotkeys,
             dictionary,
             vocabularyBoosting,
             pipeline,
@@ -189,6 +195,8 @@ public sealed partial class HttpApiService : IDisposable
         AudioFileService audioFiles,
         IHistoryService history,
         IProfileService profiles,
+        IPromptActionService promptActions,
+        HotkeyService hotkeys,
         IDictionaryService dictionary,
         IVocabularyBoostingService vocabularyBoosting,
         IPostProcessingPipeline pipeline,
@@ -206,6 +214,8 @@ public sealed partial class HttpApiService : IDisposable
         _audioFiles = audioFiles;
         _history = history;
         _profiles = profiles;
+        _promptActions = promptActions;
+        _hotkeys = hotkeys;
         _dictionary = dictionary;
         _vocabularyBoosting = vocabularyBoosting;
         _pipeline = pipeline;
@@ -1210,6 +1220,34 @@ public sealed partial class HttpApiService : IDisposable
             return (400, Serialize(new { error = "Missing id parameter" }));
         }
 
+        var profiles = _profiles.Profiles;
+        var current = profiles.FirstOrDefault(profile => profile.Id == id);
+        if (current is null)
+        {
+            return (404, Serialize(new { error = "Profile not found" }));
+        }
+
+        if (!current.IsEnabled)
+        {
+            var hotkeyValidation = _hotkeys.ValidateProfileHotkeyCandidate(
+                current.HotkeyData,
+                current.HotkeyBehavior,
+                current.PromptActionId,
+                current.Id,
+                _promptActions.Actions,
+                profiles
+            );
+            if (!hotkeyValidation.IsValid)
+            {
+                var (reason, error) = GetProfileToggleValidationFailure(
+                    hotkeyValidation.Status
+                );
+                return (409, Serialize(new { error, reason }));
+            }
+        }
+
+        // Snapshot-then-toggle: a concurrent enable can slip through; dynamic
+        // reconciliation rejects the loser and logs it.
         var profile = _profiles.ToggleProfileEnabled(id);
         if (profile is null)
         {
@@ -1218,6 +1256,27 @@ public sealed partial class HttpApiService : IDisposable
 
         var isEnabled = profile.IsEnabled;
         return (200, Serialize(new { id, isEnabled }));
+    }
+
+    private static (string Reason, string Error) GetProfileToggleValidationFailure(
+        HotkeyCandidateValidationStatus status
+    )
+    {
+        return status switch
+        {
+            HotkeyCandidateValidationStatus.Malformed =>
+                ("hotkey-malformed", "Profile hotkey cannot be enabled because it is malformed."),
+            HotkeyCandidateValidationStatus.MissingEnabledPromptAction =>
+                (
+                    "prompt-action-required",
+                    "Profile hotkey cannot be enabled because its selected-text prompt action is missing or disabled."
+                ),
+            _ =>
+                (
+                    "hotkey-collision",
+                    "Profile hotkey cannot be enabled because it conflicts with an enabled shortcut."
+                ),
+        };
     }
 
     private async Task<(int, string)> HandleDictationStartAsync()

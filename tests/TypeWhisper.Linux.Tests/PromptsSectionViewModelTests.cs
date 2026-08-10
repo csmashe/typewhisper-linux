@@ -214,6 +214,147 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void SaveAction_DisabledExistingWithCollidingRetainedHotkey_PersistsNonHotkeyEdits()
+    {
+        _profiles.AddProfile(
+            new Profile
+            {
+                Id = "enabled-profile",
+                Name = "Enabled profile",
+                HotkeyData = "Alt+F8",
+            }
+        );
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "disabled-action",
+                Name = "Before",
+                SystemPrompt = "x",
+                HotkeyKey = "Alt+F8",
+                IsEnabled = false,
+            }
+        );
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+        sut.SelectedAction = Assert.Single(sut.Actions);
+        sut.EditName = "After";
+
+        sut.SaveActionCommand.Execute(null);
+
+        var updated = Assert.Single(prompts.Actions);
+        Assert.Equal("After", updated.Name);
+        Assert.Equal("Alt+F8", updated.HotkeyKey);
+        Assert.False(updated.IsEnabled);
+        Assert.Null(sut.HotkeyValidationMessage);
+    }
+
+    [Fact]
+    public void ToggleEnabled_DisabledActionWithCollidingHotkey_DoesNotPersistAndShowsEditorFeedback()
+    {
+        _profiles.AddProfile(
+            new Profile
+            {
+                Id = "enabled-profile",
+                Name = "Enabled profile",
+                HotkeyData = "Alt+F8",
+            }
+        );
+        var disabled = new PromptAction
+        {
+            Id = "disabled-action",
+            Name = "Disabled action",
+            SystemPrompt = "x",
+            HotkeyKey = "Alt+F8",
+            IsEnabled = false,
+        };
+        var prompts = new Mock<IPromptActionService>();
+        prompts.SetupGet(service => service.Actions).Returns([disabled]);
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts.Object,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+
+        sut.ToggleEnabledCommand.Execute(disabled);
+
+        prompts.Verify(service => service.UpdateAction(It.IsAny<PromptAction>()), Times.Never);
+        Assert.Equal(disabled, sut.SelectedAction);
+        Assert.True(sut.ShowEditor);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
+    }
+
+    [Fact]
+    public void ToggleEnabled_EnabledActionWithMalformedHotkey_StillDisables()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "enabled-action",
+                Name = "Enabled action",
+                SystemPrompt = "x",
+                HotkeyKey = "Ctrl+NoSuchKey",
+                IsEnabled = true,
+            }
+        );
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+
+        sut.ToggleEnabledCommand.Execute(Assert.Single(sut.Actions));
+
+        Assert.False(Assert.Single(prompts.Actions).IsEnabled);
+        Assert.Null(sut.HotkeyValidationMessage);
+    }
+
+    [Fact]
+    public void ToggleEnabled_DisabledActionWithValidHotkey_Enables()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "disabled-action",
+                Name = "Disabled action",
+                SystemPrompt = "x",
+                HotkeyKey = "Alt+F8",
+                IsEnabled = false,
+            }
+        );
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+
+        sut.ToggleEnabledCommand.Execute(Assert.Single(sut.Actions));
+
+        Assert.True(Assert.Single(prompts.Actions).IsEnabled);
+    }
+
+    [Fact]
     public void SaveAction_CrossDynamicPrefixCollisionDoesNotPersist()
     {
         _profiles.AddProfile(
