@@ -187,6 +187,190 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task ExternalToggleHotkeySave_ReprobesDesktopIntegrationAndMarksStale()
+    {
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var installed = CreateToggleSpec("Ctrl+Shift+Space");
+        var writer = new FakeDeShortcutWriter { InstalledSpec = installed };
+        using var sut = new ShortcutsSectionViewModel(
+            hotkey,
+            settings,
+            [writer],
+            post: action => action()
+        );
+
+        settings.Save(settings.Current with { ToggleHotkey = "Alt+F8" });
+        await sut.PendingDesktopIntegrationRefresh;
+
+        Assert.Equal(1, writer.IsInstalledCallCount);
+        Assert.Equal("Alt+F8", writer.LastInstalledSpec?.Trigger);
+        Assert.Equal(1, writer.IsManagedShortcutPresentCallCount);
+        Assert.Equal(ManagedDesktopIntegrationState.Stale, sut.DesktopIntegrationState);
+        Assert.True(sut.ShowStaleIntegrationBanner);
+        Assert.Equal(0, writer.WriteCallCount);
+        Assert.Equal(installed, writer.InstalledSpec);
+        Assert.NotEqual("Alt+F8", sut.HotkeyText);
+    }
+
+    [Fact]
+    public async Task ExternalModeSave_ReprobesDesktopIntegration()
+    {
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter
+        {
+            SupportsPushToTalk = true,
+            InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space"),
+        };
+        using var sut = new ShortcutsSectionViewModel(
+            hotkey,
+            settings,
+            [writer],
+            post: action => action()
+        );
+
+        settings.Save(settings.Current with { Mode = RecordingMode.PushToTalk });
+        await sut.PendingDesktopIntegrationRefresh;
+
+        Assert.Equal(1, writer.IsInstalledCallCount);
+        Assert.NotNull(writer.LastInstalledSpec?.OnReleaseCommand);
+        Assert.Equal(1, writer.IsManagedShortcutPresentCallCount);
+        Assert.Equal(ManagedDesktopIntegrationState.Stale, sut.DesktopIntegrationState);
+        Assert.Equal(0, writer.WriteCallCount);
+        Assert.Equal(RecordingMode.Toggle, sut.Mode);
+    }
+
+    [Fact]
+    public void UnrelatedSettingsSave_DoesNotProbe()
+    {
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter();
+        var dispatchCount = 0;
+        using var sut = new ShortcutsSectionViewModel(
+            hotkey,
+            settings,
+            [writer],
+            post: _ => dispatchCount++
+        );
+
+        settings.Save(settings.Current with { AutoPaste = !settings.Current.AutoPaste });
+
+        Assert.Equal(0, dispatchCount);
+        Assert.Equal(0, writer.IsInstalledCallCount);
+        Assert.Equal(0, writer.IsManagedShortcutPresentCallCount);
+        Assert.Same(Task.CompletedTask, sut.PendingDesktopIntegrationRefresh);
+    }
+
+    [Fact]
+    public async Task LocalApplyHotkey_DoesNotDoubleProbe()
+    {
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter
+        {
+            InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space"),
+        };
+        var dispatchCount = 0;
+        using var sut = new ShortcutsSectionViewModel(
+            hotkey,
+            settings,
+            [writer],
+            post: _ => dispatchCount++
+        );
+        sut.HotkeyText = "Alt+F8";
+
+        await sut.ApplyHotkeyCommand.ExecuteAsync(null);
+
+        Assert.Equal(0, dispatchCount);
+        Assert.Equal(1, writer.IsInstalledCallCount);
+        Assert.Equal("Alt+F8", writer.LastInstalledSpec?.Trigger);
+        Assert.Equal(1, writer.IsManagedShortcutPresentCallCount);
+    }
+
+    [Fact]
+    public async Task OffThreadNotification_MarshalsThroughDispatchSeam()
+    {
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter
+        {
+            InstalledSpec = CreateToggleSpec("Ctrl+Shift+Space"),
+        };
+        var queued = new List<Action>();
+        var dispatchThreadIds = new List<int>();
+        using var sut = new ShortcutsSectionViewModel(
+            hotkey,
+            settings,
+            [writer],
+            post: action =>
+            {
+                dispatchThreadIds.Add(Environment.CurrentManagedThreadId);
+                queued.Add(action);
+            }
+        );
+        var notificationThreadId = 0;
+
+        await Task.Run(() =>
+        {
+            notificationThreadId = Environment.CurrentManagedThreadId;
+            settings.Save(settings.Current with { ToggleHotkey = "Alt+F8" });
+        });
+        settings.Save(settings.Current with { ToggleHotkey = "Ctrl+Alt+F9" });
+
+        Assert.Equal(2, queued.Count);
+        Assert.NotEqual(Environment.CurrentManagedThreadId, notificationThreadId);
+        Assert.Equal(notificationThreadId, dispatchThreadIds[0]);
+        Assert.Equal(0, writer.IsInstalledCallCount);
+
+        queued[0]();
+        await sut.PendingDesktopIntegrationRefresh;
+
+        Assert.Equal(1, writer.IsInstalledCallCount);
+        Assert.Equal("Ctrl+Alt+F9", writer.LastInstalledSpec?.Trigger);
+
+        queued[1]();
+        await sut.PendingDesktopIntegrationRefresh;
+
+        Assert.Equal(1, writer.IsInstalledCallCount);
+    }
+
+    [Fact]
+    public async Task Dispose_UnsubscribesAndFencesLateResults()
+    {
+        var probeGate = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter
+        {
+            IsInstalledHandler = (_, _) => probeGate.Task,
+        };
+        var sut = new ShortcutsSectionViewModel(
+            hotkey,
+            settings,
+            [writer],
+            post: action => action()
+        );
+        var inFlight = sut.RefreshDesktopIntegrationStateAsync(CancellationToken.None);
+
+        Assert.Equal(1, writer.IsInstalledCallCount);
+        sut.Dispose();
+        sut.Dispose();
+        settings.Save(settings.Current with { ToggleHotkey = "Alt+F8" });
+        Assert.Equal(1, writer.IsInstalledCallCount);
+
+        probeGate.SetResult(true);
+        await inFlight;
+
+        Assert.Equal(ManagedDesktopIntegrationState.Unknown, sut.DesktopIntegrationState);
+        Assert.False(sut.ShowStaleIntegrationBanner);
+        Assert.Equal(0, writer.WriteCallCount);
+    }
+
+    [Fact]
     public async Task ApplyHotkey_MarksInstalledOldSpecStaleWithoutAutomaticWriteAndPreservesOwnership()
     {
         var settings = CreateToggleSettings();
