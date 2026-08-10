@@ -79,6 +79,79 @@ public sealed class RecorderSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task ToggleRecordingCommand_WhenAudioAlreadyOwned_ShowsNoMicrophoneAndDoesNotClaimRecording()
+    {
+        using var audio = CreateAudioService();
+        var foreignSession = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            audio.TryStartRecording(whisperModeEnabled: false)
+        );
+        var sut = CreateViewModel(audio, _tempDir, _ => Task.FromResult<string?>(null));
+
+        await sut.ToggleRecordingCommand.ExecuteAsync(null);
+
+        Assert.Equal(Loc.Instance["Recorder.StatusNoMicrophone"], sut.StatusText);
+        Assert.False(sut.IsRecording);
+        Assert.Equal(Loc.Instance["Recorder.Record"], sut.RecordButtonText);
+        Assert.True(audio.IsRecordingOwnedBy(foreignSession));
+
+        audio.ProcessAudioBufferForTest([0.1f, -0.1f]);
+        // ReSharper disable once MethodHasAsyncOverload -- synchronous teardown keeps this focused on ownership; StopRecordingAsync would add its 120ms drain for nothing.
+        Assert.True(audio.StopRecording(foreignSession).Length > 44);
+    }
+
+    [Fact]
+    public async Task ToggleRecordingCommand_WhenCaptureSessionBecomesStale_ShowsNoAudioAndResetsState()
+    {
+        var transcriptionInvocations = 0;
+        using var audio = CreateAudioService();
+        var sut = CreateViewModel(
+            audio,
+            _tempDir,
+            _ =>
+            {
+                transcriptionInvocations++;
+                return Task.FromResult<string?>("must not be returned");
+            }
+        );
+        await StartRecordingWithFramesAsync(sut, audio);
+        // ReSharper disable once DisposeOnUsingVariable -- disposing mid-recording is what makes the capture session stale, the behavior under test; the using re-dispose at scope end is idempotent.
+        audio.Dispose();
+
+        await sut.ToggleRecordingCommand.ExecuteAsync(null);
+
+        Assert.Equal(Loc.Instance["Recorder.StatusNoAudio"], sut.StatusText);
+        Assert.False(sut.IsRecording);
+        Assert.False(sut.IsTranscribing);
+        Assert.Equal(0, sut.AudioLevel);
+        Assert.Equal("0:00", sut.DurationText);
+        Assert.Equal(Loc.Instance["Recorder.Record"], sut.RecordButtonText);
+        Assert.Empty(Directory.GetFiles(_tempDir, "recording-*.wav"));
+        Assert.Equal(0, transcriptionInvocations);
+    }
+
+    [Fact]
+    public async Task ToggleRecordingCommand_WhenTranscriptionThrows_KeepsWavAndReportsSavedNoModel()
+    {
+        using var audio = CreateAudioService();
+        var sut = CreateViewModel(
+            audio,
+            _tempDir,
+            _ => Task.FromException<string?>(new InvalidOperationException("model failed"))
+        );
+        await StartRecordingWithFramesAsync(sut, audio);
+
+        await sut.ToggleRecordingCommand.ExecuteAsync(null);
+
+        var recording = Assert.Single(sut.Recordings);
+        Assert.True(File.Exists(recording.FilePath));
+        Assert.False(File.Exists(Path.ChangeExtension(recording.FilePath, ".txt")));
+        Assert.Null(recording.Transcript);
+        Assert.Equal(Loc.Instance["Recorder.StatusSavedNoModel"], sut.StatusText);
+        Assert.False(sut.IsRecording);
+        Assert.False(sut.IsTranscribing);
+    }
+
+    [Fact]
     public async Task ToggleRecordingCommand_WhenWavCommitFails_ShowsSaveFailureAndRecovers()
     {
         var poisonedParent = Path.Join(_tempDir, "poisoned-parent");
