@@ -166,7 +166,8 @@ public sealed class SpeechFeedbackServiceTests
         sut.SpeakAutomaticTranscription("prior playback");
         await priorSession.HandlerAttached.Task.WaitAsync(s_testGuard);
 
-        var stop = sut.StopCurrentPlaybackBeforeCaptureAsync();
+        using var reservation = sut.ReserveStartupFeedback();
+        var stop = reservation.StopPriorPlaybackAsync();
 
         Assert.Equal(1, priorSession.StopCount);
         Assert.False(stop.IsCompleted);
@@ -194,7 +195,8 @@ public sealed class SpeechFeedbackServiceTests
         sut.SpeakAutomaticTranscription("prior playback");
         await priorSession.HandlerAttached.Task.WaitAsync(s_testGuard);
 
-        var stop = sut.StopCurrentPlaybackBeforeCaptureAsync();
+        using var reservation = sut.ReserveStartupFeedback();
+        var stop = reservation.StopPriorPlaybackAsync();
         var timeout = await delay.NextRequestAsync();
 
         Assert.Equal(SpeechFeedbackService.s_stopPlaybackTimeout, timeout.Duration);
@@ -220,7 +222,11 @@ public sealed class SpeechFeedbackServiceTests
             delay.WaitAsync
         );
 
-        var announcement = sut.AnnounceRecordingStartedAsync(spokenFeedbackEnabled: true);
+        using var reservation = sut.ReserveStartupFeedback();
+        var announcement = sut.AnnounceRecordingStartedAsync(
+            spokenFeedbackEnabled: true,
+            reservation: reservation
+        );
         await session.HandlerAttached.Task.WaitAsync(s_testGuard);
 
         Assert.False(announcement.IsCompleted);
@@ -246,7 +252,11 @@ public sealed class SpeechFeedbackServiceTests
             delay.WaitAsync
         );
 
-        var announcement = sut.AnnounceRecordingStartedAsync(spokenFeedbackEnabled: true);
+        using var reservation = sut.ReserveStartupFeedback();
+        var announcement = sut.AnnounceRecordingStartedAsync(
+            spokenFeedbackEnabled: true,
+            reservation: reservation
+        );
         await session.HandlerAttached.Task.WaitAsync(s_testGuard);
         var timeout = await delay.NextRequestAsync();
 
@@ -278,14 +288,19 @@ public sealed class SpeechFeedbackServiceTests
         sut.SpeakAutomaticTranscription("older playback");
         await olderSession.HandlerAttached.Task.WaitAsync(s_testGuard);
 
+        using var reservation = sut.ReserveStartupFeedback();
+        var stopOlder = reservation.StopPriorPlaybackAsync();
         var newerAnnouncement = sut.AnnounceRecordingStartedAsync(
-            spokenFeedbackEnabled: true
+            spokenFeedbackEnabled: true,
+            reservation: reservation
         );
         await newerSession.HandlerAttached.Task.WaitAsync(s_testGuard);
         Assert.Equal(1, olderSession.StopCount);
 
         olderSession.Complete();
-        var stopNewer = sut.StopCurrentPlaybackBeforeCaptureAsync();
+        await stopOlder.WaitAsync(s_testGuard);
+        using var replacementReservation = sut.ReserveStartupFeedback();
+        var stopNewer = replacementReservation.StopPriorPlaybackAsync();
 
         Assert.Equal(1, newerSession.StopCount);
         Assert.False(newerAnnouncement.IsCompleted);
@@ -407,8 +422,10 @@ public sealed class SpeechFeedbackServiceTests
             delay.WaitAsync
         );
 
+        var reservation = sut.ReserveStartupFeedback();
         var announcement = sut.AnnounceRecordingStartedAsync(
-            spokenFeedbackEnabled: true
+            spokenFeedbackEnabled: true,
+            reservation: reservation
         );
         var announcementCall = await provider.NextRequestAsync();
         var announcementTimeout = await delay.NextRequestAsync();
@@ -434,6 +451,7 @@ public sealed class SpeechFeedbackServiceTests
 
         cleanupTimeout.Complete();
         await announcement.WaitAsync(s_testGuard);
+        reservation.Dispose();
 
         sut.ReadBack("manual readback");
         var readBackCall = await provider.NextRequestAsync();
@@ -464,8 +482,10 @@ public sealed class SpeechFeedbackServiceTests
             delay.WaitAsync
         );
 
+        var reservation = sut.ReserveStartupFeedback();
         var announcement = sut.AnnounceRecordingStartedAsync(
-            spokenFeedbackEnabled: true
+            spokenFeedbackEnabled: true,
+            reservation: reservation
         );
         var announcementCall = await provider.NextRequestAsync();
         var announcementTimeout = await delay.NextRequestAsync();
@@ -484,6 +504,7 @@ public sealed class SpeechFeedbackServiceTests
         Assert.True(announcementCall.CancellationToken.IsCancellationRequested);
         cleanupTimeout.Complete();
         await announcement.WaitAsync(s_testGuard);
+        reservation.Dispose();
 
         Assert.Single(provider.Requests);
         sut.ReadBack("manual readback after hung announcement");
@@ -497,6 +518,286 @@ public sealed class SpeechFeedbackServiceTests
         readBackCall.Return(readBackSession);
         await readBackSession.HandlerAttached.Task.WaitAsync(s_testGuard);
         readBackSession.Complete();
+    }
+
+    [Fact]
+    public async Task Reservation_cancels_pending_provider_and_waits_only_to_the_stop_bound()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        var delay = new ControlledDelay();
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            provider,
+            delay.WaitAsync
+        );
+        sut.SpeakAutomaticTranscription("pending readback");
+        var pendingCall = await provider.NextRequestAsync();
+
+        using var reservation = sut.ReserveStartupFeedback();
+        var stop = reservation.StopPriorPlaybackAsync();
+        var timeout = await delay.NextRequestAsync();
+
+        Assert.True(pendingCall.CancellationToken.IsCancellationRequested);
+        Assert.Equal(SpeechFeedbackService.s_stopPlaybackTimeout, timeout.Duration);
+        timeout.Complete();
+        await stop.WaitAsync(s_testGuard);
+
+        var lateSession = new ControlledPlaybackSession();
+        pendingCall.Return(lateSession);
+        await lateSession.StopCalled.Task.WaitAsync(s_testGuard);
+        Assert.Equal(1, lateSession.StopCount);
+        Assert.Equal(0, lateSession.SubscriberCount);
+        lateSession.Complete();
+    }
+
+    [Fact]
+    public async Task Reservation_blocks_publication_reentered_from_prior_session_stop()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        var allocations = new ConcurrentQueue<(long Version, bool LockHeld)>();
+        SpeechFeedbackService? service = null;
+        var priorSession = new ControlledPlaybackSession(
+            // ReSharper disable once AccessToModifiedClosure -- deliberate late binding: the session must call back into the service that is constructed below it.
+            onStop: () => service!.AnnounceError("reentered during stop")
+        );
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            provider,
+            playbackVersionAllocated: (version, lockHeld) =>
+                allocations.Enqueue((version, lockHeld))
+        );
+        service = sut;
+        sut.SpeakAutomaticTranscription("prior playback");
+        var priorCall = await provider.NextRequestAsync();
+        priorCall.Return(priorSession);
+        await priorSession.HandlerAttached.Task.WaitAsync(s_testGuard);
+
+        using var reservation = sut.ReserveStartupFeedback();
+
+        Assert.Equal(1, priorSession.StopCount);
+        Assert.Single(provider.Requests);
+        Assert.Equal([(1, true)], allocations.ToArray());
+
+        priorSession.Complete();
+        await reservation.StopPriorPlaybackAsync().WaitAsync(s_testGuard);
+    }
+
+    [Fact]
+    public void Ordinary_readback_and_error_are_rejected_without_allocating_while_reserved()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        var allocations = new ConcurrentQueue<(long Version, bool LockHeld)>();
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            provider,
+            playbackVersionAllocated: (version, lockHeld) =>
+                allocations.Enqueue((version, lockHeld))
+        );
+        using var reservation = sut.ReserveStartupFeedback();
+
+        sut.SpeakAutomaticTranscription("late readback");
+        sut.AnnounceError("late error");
+        sut.ReadBack("late manual readback");
+
+        Assert.Empty(provider.Requests);
+        Assert.Empty(allocations);
+    }
+
+    [Fact]
+    public async Task Only_matching_current_lease_can_bypass_reservation_for_start_cue()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var session = new ControlledPlaybackSession();
+        var provider = new ControlledTtsProvider(session);
+        var delay = new ControlledDelay();
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            provider,
+            delay.WaitAsync
+        );
+        var reservation = sut.ReserveStartupFeedback();
+
+        var matchingAnnouncement = sut.AnnounceRecordingStartedAsync(
+            spokenFeedbackEnabled: true,
+            reservation: reservation
+        );
+        await session.HandlerAttached.Task.WaitAsync(s_testGuard);
+
+        sut.AnnounceError("must not supersede start cue");
+        sut.ReadBack("must not stop start cue");
+        var foreignAnnouncement = sut.AnnounceRecordingStartedAsync(
+            spokenFeedbackEnabled: true,
+            reservation: new ForeignStartupFeedbackReservation()
+        );
+
+        Assert.True(foreignAnnouncement.IsCompletedSuccessfully);
+        Assert.Single(provider.Requests);
+        Assert.Equal(0, session.StopCount);
+
+        session.Complete();
+        await matchingAnnouncement.WaitAsync(s_testGuard);
+        reservation.Dispose();
+
+        var staleAnnouncement = sut.AnnounceRecordingStartedAsync(
+            spokenFeedbackEnabled: true,
+            reservation: reservation
+        );
+
+        Assert.True(staleAnnouncement.IsCompletedSuccessfully);
+        Assert.Single(provider.Requests);
+    }
+
+    [Fact]
+    public async Task Release_does_not_replay_suppressed_speech_and_later_request_plays()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var provider = new FakeTtsProvider("linux-system", "Linux system", true);
+        using var sut = new SpeechFeedbackService(settings.Object, manager, provider);
+        var reservation = sut.ReserveStartupFeedback();
+
+        sut.AnnounceError("suppressed");
+        reservation.Dispose();
+
+        Assert.Empty(provider.Requests);
+
+        sut.AnnounceError("explicit later request");
+        await provider.RequestReceived.Task.WaitAsync(s_testGuard);
+
+        var request = Assert.Single(provider.Requests);
+        Assert.Contains("explicit later request", request.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Stale_dispose_cannot_release_newer_reservation_and_dispose_is_idempotent()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var provider = new FakeTtsProvider("linux-system", "Linux system", true);
+        using var sut = new SpeechFeedbackService(settings.Object, manager, provider);
+        var staleReservation = sut.ReserveStartupFeedback();
+        var currentReservation = sut.ReserveStartupFeedback();
+
+        staleReservation.Dispose();
+        staleReservation.Dispose();
+        sut.AnnounceError("still suppressed");
+
+        Assert.Empty(provider.Requests);
+
+        currentReservation.Dispose();
+        currentReservation.Dispose();
+        sut.AnnounceError("released");
+        await provider.RequestReceived.Task.WaitAsync(s_testGuard);
+
+        Assert.Single(provider.Requests);
+    }
+
+    [Fact]
+    public async Task Concurrent_allocation_and_reservation_are_linearized_by_same_lock()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        var allocations = new ConcurrentQueue<(long Version, bool LockHeld)>();
+        var allocationReached = NewSignal();
+        var releaseAllocation = NewSignal();
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            provider,
+            playbackVersionAllocated: (version, lockHeld) =>
+            {
+                allocations.Enqueue((version, lockHeld));
+                allocationReached.TrySetResult();
+                releaseAllocation.Task.WaitAsync(s_testGuard).GetAwaiter().GetResult();
+            }
+        );
+
+        var ordinaryStart = Task.Run(() =>
+            // ReSharper disable once AccessToDisposedClosure -- both tasks finish before sut disposal
+            sut.SpeakAutomaticTranscription("allocation winner")
+        );
+        await allocationReached.Task.WaitAsync(s_testGuard);
+
+        var reserveAttempted = NewSignal();
+        var reserveTask = Task.Run(() =>
+        {
+            reserveAttempted.TrySetResult();
+            // ReSharper disable once AccessToDisposedClosure -- both tasks finish before sut disposal
+            return sut.ReserveStartupFeedback();
+        });
+        await reserveAttempted.Task.WaitAsync(s_testGuard);
+
+        releaseAllocation.TrySetResult();
+        var reservation = await reserveTask.WaitAsync(s_testGuard);
+        await ordinaryStart.WaitAsync(s_testGuard);
+
+        Assert.Equal([(1, true)], allocations.ToArray());
+        var providerCall = await provider.NextRequestAsync();
+        Assert.True(providerCall.CancellationToken.IsCancellationRequested);
+
+        sut.AnnounceError("reserved loser");
+        Assert.Equal([(1, true)], allocations.ToArray());
+        Assert.Single(provider.Requests);
+
+        var lateSession = new ControlledPlaybackSession();
+        providerCall.Return(lateSession);
+        await lateSession.StopCalled.Task.WaitAsync(s_testGuard);
+        reservation.Dispose();
+        lateSession.Complete();
+    }
+
+    [Fact]
+    public void Terminal_feedback_is_suppressed_during_reservation_and_released_on_dispose()
+    {
+        // start.wav's bypass is structural — it never enters TryRunOrdinaryFeedback —
+        // and is pinned by the orchestrator helper tests, not simulated here.
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var manager = TestPluginManagerFactory.Create();
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            new FakeTtsProvider("linux-system", "Linux system", true)
+        );
+        var reservation = sut.ReserveStartupFeedback();
+        var terminalCount = 0;
+
+        Assert.False(sut.TryRunOrdinaryFeedback(() => terminalCount++));
+        Assert.Equal(0, terminalCount);
+
+        reservation.Dispose();
+        Assert.True(sut.TryRunOrdinaryFeedback(() => terminalCount++));
+        Assert.Equal(1, terminalCount);
+    }
+
+    private static TaskCompletionSource NewSignal()
+    {
+        return new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     private sealed class ControlledDelay
@@ -649,7 +950,10 @@ public sealed class SpeechFeedbackServiceTests
         }
     }
 
-    private sealed class ControlledPlaybackSession(bool completeOnStop = false)
+    private sealed class ControlledPlaybackSession(
+        bool completeOnStop = false,
+        Action? onStop = null
+    )
         : ITtsPlaybackSession
     {
         private readonly Lock _sync = new();
@@ -727,6 +1031,7 @@ public sealed class SpeechFeedbackServiceTests
         {
             Interlocked.Increment(ref _stopCount);
             StopCalled.TrySetResult();
+            onStop?.Invoke();
             if (completeOnStop)
             {
                 Complete();
@@ -750,6 +1055,16 @@ public sealed class SpeechFeedbackServiceTests
 
             handlers?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    private sealed class ForeignStartupFeedbackReservation : IStartupFeedbackReservation
+    {
+        public Task StopPriorPlaybackAsync()
+        {
+            return Task.CompletedTask;
+        }
+
+        public void Dispose() { }
     }
 
     private sealed class FakeTtsProvider(string providerId, string displayName, bool configured)
