@@ -112,6 +112,21 @@ public sealed class GlobalHotkeySetupTaskTests
     }
 
     [Fact]
+    public async Task EvaluateAsync_uses_a_rule_only_manual_command_when_identity_lookup_fails()
+    {
+        using var env = new PkexecOnPath();
+        InputAccessSetupHelper.CurrentIdentityOverride = () =>
+            throw new InvalidOperationException("identity unavailable");
+        var task = Build(isWayland: true, hasAccess: () => false);
+
+        var state = await task.EvaluateAsync(CancellationToken.None);
+
+        Assert.Equal(SetupTaskStatusKind.NeedsAction, state.Kind);
+        Assert.Contains("udevadm control --reload", state.CopyCommand);
+        Assert.DoesNotContain("usermod -aG input", state.CopyCommand);
+    }
+
+    [Fact]
     public async Task EvaluateAsync_when_opted_out_and_no_rule_installed_is_satisfied_with_no_action()
     {
         var task = Build(
@@ -146,6 +161,54 @@ public sealed class GlobalHotkeySetupTaskTests
             Loc.Instance["Setup.GlobalHotkeyOptedOutRuleInstalledDetail"],
             state.Detail
         );
+        Assert.Equal(Loc.Instance["Setup.GlobalHotkeyRevokeButton"], state.ActionLabel);
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_when_opted_out_on_X11_and_owned_rule_exists_offers_revoke()
+    {
+        var task = Build(
+            isWayland: false,
+            ruleInstalled: () => true,
+            evdevOptedIn: () => false
+        );
+
+        var state = await task.EvaluateAsync(CancellationToken.None);
+
+        Assert.Equal(SetupTaskStatusKind.Satisfied, state.Kind);
+        Assert.Equal(Loc.Instance["Setup.GlobalHotkeyRevokeButton"], state.ActionLabel);
+        Assert.Equal(Loc.Instance["Setup.GlobalHotkeyOptedOutRuleInstalled"], state.Summary);
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_when_opted_out_and_foreign_rule_exists_has_no_revoke_action()
+    {
+        using var env = new PkexecOnPath();
+        env.WriteForeignRule();
+        var task = Build(
+            ruleInstalled: InputAccessSetupHelper.IsOwnedRuleInstalled,
+            evdevOptedIn: () => false
+        );
+
+        var state = await task.EvaluateAsync(CancellationToken.None);
+
+        Assert.Equal(SetupTaskStatusKind.Satisfied, state.Kind);
+        Assert.Equal(Loc.Instance["Setup.GlobalHotkeyOptedOut"], state.Summary);
+        Assert.Null(state.ActionLabel);
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_when_opted_out_and_only_managed_group_grant_exists_offers_revoke()
+    {
+        var task = Build(
+            ruleInstalled: () => false,
+            managedGroupGrantPresent: () => true,
+            evdevOptedIn: () => false
+        );
+
+        var state = await task.EvaluateAsync(CancellationToken.None);
+
+        Assert.Equal(SetupTaskStatusKind.Satisfied, state.Kind);
         Assert.Equal(Loc.Instance["Setup.GlobalHotkeyRevokeButton"], state.ActionLabel);
     }
 
@@ -191,6 +254,180 @@ public sealed class GlobalHotkeySetupTaskTests
             runner.Invocations,
             i => i.FileName == "pkexec" && i.Args.Contains("/bin/sh")
         );
+        Assert.Contains(runner.Invocations, i => i.StandardInput?.Contains("rm -f") == true);
+    }
+
+    [Fact]
+    public async Task RunAction_surfaces_a_revoke_refusal_without_collapsing_its_message()
+    {
+        using var env = new PkexecOnPath();
+        var runner = new FakeProcessRunner
+        {
+            Default = new ProcessRunResult(
+                true,
+                false,
+                InputAccessSetupHelper.UdevRuleConflictExitCode,
+                string.Empty,
+                "TYPEWHISPER_INPUT_UDEV_RULE_CONFLICT"
+            ),
+        };
+        var task = Build(
+            ruleInstalled: () => true,
+            runner: runner,
+            evdevOptedIn: () => false
+        );
+
+        var outcome = await task.RunActionAsync(CancellationToken.None);
+
+        Assert.False(outcome.Success);
+        Assert.Equal(
+            Loc.Instance.GetString(
+                "Shortcuts.KeyboardAccessForeignConfigRefused",
+                InputAccessSetupHelper.UdevRulePath
+            ),
+            outcome.Message
+        );
+        Assert.Equal(
+            Loc.Instance["Shortcuts.KeyboardAccessForeignConfigRefusedDetail"],
+            outcome.Detail
+        );
+    }
+
+    [Fact]
+    public async Task RunAction_localizes_successful_independent_group_revoke_detail()
+    {
+        using var env = new PkexecOnPath();
+        env.WriteOwnedRule();
+        env.WriteGroupProvenance();
+        var runner = new SequencedProcessRunner(
+            new ProcessRunResult(
+                true,
+                false,
+                InputAccessSetupHelper.UdevRuleConflictExitCode,
+                string.Empty,
+                "TYPEWHISPER_INPUT_UDEV_RULE_CONFLICT"
+            ),
+            new ProcessRunResult(true, false, 0, string.Empty, string.Empty)
+        );
+        var task = Build(
+            ruleInstalled: () => true,
+            managedGroupGrantPresent: () => true,
+            runner: runner,
+            evdevOptedIn: () => false
+        );
+
+        var outcome = await task.RunActionAsync(CancellationToken.None);
+
+        Assert.False(outcome.Success);
+        Assert.Equal(
+            Loc.Instance["Shortcuts.KeyboardAccessForeignConfigRefusedDetail"]
+            + "\n\n"
+            + Loc.Instance["Setup.GlobalHotkeyGroupRevokedDetail"],
+            outcome.Detail
+        );
+    }
+
+    [Fact]
+    public async Task RunAction_localizes_failed_independent_group_revoke_detail()
+    {
+        using var env = new PkexecOnPath();
+        env.WriteOwnedRule();
+        env.WriteGroupProvenance();
+        var runner = new SequencedProcessRunner(
+            new ProcessRunResult(
+                true,
+                false,
+                InputAccessSetupHelper.UdevRuleConflictExitCode,
+                string.Empty,
+                "TYPEWHISPER_INPUT_UDEV_RULE_CONFLICT"
+            ),
+            new ProcessRunResult(true, false, 9, string.Empty, "gpasswd failed")
+        );
+        var task = Build(
+            ruleInstalled: () => true,
+            managedGroupGrantPresent: () => true,
+            runner: runner,
+            evdevOptedIn: () => false
+        );
+
+        var outcome = await task.RunActionAsync(CancellationToken.None);
+
+        Assert.False(outcome.Success);
+        Assert.Equal(
+            Loc.Instance["Shortcuts.KeyboardAccessForeignConfigRefusedDetail"]
+            + "\n\n"
+            + Loc.Instance["Setup.GlobalHotkeyGroupRevokeFailedDetail"]
+            + "\n\n"
+            + "The independent input-group revoke failed: gpasswd failed",
+            outcome.Detail
+        );
+    }
+
+    [Fact]
+    public async Task RunAction_keeps_an_ordinary_revoke_failure_message_as_detail()
+    {
+        using var env = new PkexecOnPath();
+        var runner = new FakeProcessRunner
+        {
+            Default = new ProcessRunResult(
+                true,
+                false,
+                1,
+                string.Empty,
+                "root-side revoke failed"
+            ),
+        };
+        var task = Build(
+            ruleInstalled: () => true,
+            runner: runner,
+            evdevOptedIn: () => false
+        );
+
+        var outcome = await task.RunActionAsync(CancellationToken.None);
+
+        Assert.False(outcome.Success);
+        Assert.Equal(Loc.Instance["Setup.GlobalHotkeyRevokeFailed"], outcome.Message);
+        Assert.Contains("root-side revoke failed", outcome.Detail);
+    }
+
+    [Fact]
+    public async Task RunAction_revoke_without_pkexec_preserves_the_reason_and_manual_commands()
+    {
+        using var env = new PkexecOnPath(installPkexec: false);
+        env.WriteOwnedRule();
+        env.WriteGroupProvenance();
+        var task = Build(
+            ruleInstalled: () => true,
+            managedGroupGrantPresent: () => true,
+            runner: new FakeProcessRunner(),
+            evdevOptedIn: () => false
+        );
+
+        var outcome = await task.RunActionAsync(CancellationToken.None);
+
+        Assert.False(outcome.Success);
+        Assert.Equal(Loc.Instance["Setup.GlobalHotkeyRevokeFailed"], outcome.Message);
+        Assert.Contains("pkexec is not available", outcome.Detail);
+        Assert.Contains("sudo sh -c", outcome.Detail);
+    }
+
+    [Fact]
+    public async Task RunAction_when_opted_out_on_X11_revokes_instead_of_reporting_already_active()
+    {
+        using var env = new PkexecOnPath();
+        env.WriteOwnedRule();
+        var runner = new FakeProcessRunner();
+        var task = Build(
+            isWayland: false,
+            ruleInstalled: () => true,
+            runner: runner,
+            evdevOptedIn: () => false
+        );
+
+        var outcome = await task.RunActionAsync(CancellationToken.None);
+
+        Assert.True(outcome.Success);
+        Assert.Equal(Loc.Instance["Setup.GlobalHotkeyAccessRevoked"], outcome.Message);
         Assert.Contains(runner.Invocations, i => i.StandardInput?.Contains("rm -f") == true);
     }
 
@@ -263,6 +500,10 @@ public sealed class GlobalHotkeySetupTaskTests
     {
         using var env = new PkexecOnPath();
         var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, _) => file == "pkexec",
+            "TYPEWHISPER_INPUT_GROUP_ADDED\n"
+        );
         var granted = false;
 
         // No logind: access stays false even after the rule install, so the task
@@ -284,7 +525,10 @@ public sealed class GlobalHotkeySetupTaskTests
         Assert.True(outcome.Success);
         Assert.Equal(Loc.Instance["Setup.GlobalHotkeyAddedToGroup"], outcome.Message);
         Assert.Equal(Loc.Instance["Setup.GlobalHotkeyReloginToActivate"], outcome.Detail);
-        Assert.Contains(runner.Invocations, i => i.FileName == "pkexec" && i.Args.Contains("usermod"));
+        Assert.Contains(
+            runner.Invocations,
+            i => i.StandardInput?.Contains("usermod -aG input") == true
+        );
         // Access never became available, so the backend is not hot-swapped.
         Assert.False(granted);
     }
@@ -332,6 +576,42 @@ public sealed class GlobalHotkeySetupTaskTests
         Assert.Empty(runner.Invocations);
     }
 
+    [Fact]
+    public async Task RunAction_without_pkexec_uses_rule_only_manual_detail_when_identity_lookup_fails()
+    {
+        using var env = new PkexecOnPath(installPkexec: false);
+        InputAccessSetupHelper.CurrentIdentityOverride = () =>
+            throw new InvalidOperationException("identity unavailable");
+        var task = Build(isWayland: true, hasAccess: () => false);
+
+        var outcome = await task.RunActionAsync(CancellationToken.None);
+
+        Assert.False(outcome.Success);
+        Assert.Equal(Loc.Instance["Setup.PkexecUnavailable"], outcome.Message);
+        Assert.Contains("udevadm control --reload", outcome.Detail);
+        Assert.DoesNotContain("usermod -aG input", outcome.Detail);
+    }
+
+    [Fact]
+    public async Task RunAction_group_fallback_uses_rule_only_manual_detail_when_identity_lookup_fails()
+    {
+        using var env = new PkexecOnPath();
+        InputAccessSetupHelper.CurrentIdentityOverride = () =>
+            throw new InvalidOperationException("identity unavailable");
+        var task = Build(
+            isWayland: true,
+            hasAccess: () => false,
+            seatManagerPresent: () => false
+        );
+
+        var outcome = await task.RunActionAsync(CancellationToken.None);
+
+        Assert.False(outcome.Success);
+        Assert.Equal(Loc.Instance["Setup.GlobalHotkeyAccessFailed"], outcome.Message);
+        Assert.Contains("udevadm control --reload", outcome.Detail);
+        Assert.DoesNotContain("usermod -aG input", outcome.Detail);
+    }
+
     // --- helpers ----------------------------------------------------------
 
     private static GlobalHotkeySetupTask Build(
@@ -340,6 +620,7 @@ public sealed class GlobalHotkeySetupTaskTests
         Func<bool>? seatManagerPresent = null,
         Func<bool>? listedInGroup = null,
         Func<bool>? ruleInstalled = null,
+        Func<bool>? managedGroupGrantPresent = null,
         IProcessRunner? runner = null,
         Func<CancellationToken, Task>? onGranted = null,
         Func<bool>? evdevOptedIn = null
@@ -349,12 +630,12 @@ public sealed class GlobalHotkeySetupTaskTests
         var helper = new InputAccessSetupHelper(runner);
         return new GlobalHotkeySetupTask(
             () => isWayland,
-            runner,
             helper,
             hasAccess ?? (() => false),
             seatManagerPresent ?? (() => true),
             listedInGroup ?? (() => false),
             ruleInstalled ?? (() => false),
+            managedGroupGrantPresent ?? (() => false),
             onGranted ?? (_ => Task.CompletedTask),
             evdevOptedIn ?? (() => true)
         );
@@ -376,8 +657,16 @@ public sealed class GlobalHotkeySetupTaskTests
     {
         private readonly string? _originalPath = Environment.GetEnvironmentVariable("PATH");
         private readonly string? _originalSysConf = InputAccessSetupHelper.SysConfDirOverride;
+        private readonly string? _originalGrantState =
+            InputAccessSetupHelper.InputGroupGrantStateDirectoryOverride;
+        private readonly Func<(uint Uid, string UserName)>? _originalIdentity =
+            InputAccessSetupHelper.CurrentIdentityOverride;
         private readonly string _pathDir = Path.Join(Path.GetTempPath(), $"tw-path-{Guid.NewGuid():N}");
         private readonly string _sysConfDir = Path.Join(Path.GetTempPath(), $"tw-etc-{Guid.NewGuid():N}");
+        private readonly string _grantStateDir = Path.Join(
+            Path.GetTempPath(),
+            $"tw-grants-{Guid.NewGuid():N}"
+        );
 
         public PkexecOnPath(bool installPkexec = true)
         {
@@ -385,6 +674,8 @@ public sealed class GlobalHotkeySetupTaskTests
             Directory.CreateDirectory(_sysConfDir);
             Environment.SetEnvironmentVariable("PATH", _pathDir);
             InputAccessSetupHelper.SysConfDirOverride = _sysConfDir;
+            InputAccessSetupHelper.InputGroupGrantStateDirectoryOverride = _grantStateDir;
+            InputAccessSetupHelper.CurrentIdentityOverride = () => (4242, "typewhisper-test");
             if (installPkexec)
             {
                 File.WriteAllText(Path.Join(_pathDir, "pkexec"), "#!/bin/sh\n");
@@ -403,12 +694,35 @@ public sealed class GlobalHotkeySetupTaskTests
             );
         }
 
+        public void WriteForeignRule()
+        {
+            Assert.Equal(_sysConfDir, InputAccessSetupHelper.SysConfDirOverride);
+            Directory.CreateDirectory(Path.GetDirectoryName(InputAccessSetupHelper.UdevRulePath)!);
+            File.WriteAllText(
+                InputAccessSetupHelper.UdevRulePath,
+                "# Managed by another application\n"
+            );
+        }
+
+        public void WriteGroupProvenance()
+        {
+            Directory.CreateDirectory(_grantStateDir);
+            File.WriteAllText(
+                InputAccessSetupHelper.CurrentInputGroupGrantRecordPath,
+                "state=owned\nuid=4242\nusername=typewhisper-test"
+            );
+        }
+
         public void Dispose()
         {
             Environment.SetEnvironmentVariable("PATH", _originalPath);
             InputAccessSetupHelper.SysConfDirOverride = _originalSysConf;
+            InputAccessSetupHelper.InputGroupGrantStateDirectoryOverride =
+                _originalGrantState;
+            InputAccessSetupHelper.CurrentIdentityOverride = _originalIdentity;
             TryDelete(_pathDir);
             TryDelete(_sysConfDir);
+            TryDelete(_grantStateDir);
         }
 
         private static void TryDelete(string dir)
@@ -421,6 +735,27 @@ public sealed class GlobalHotkeySetupTaskTests
             {
                 /* best effort */
             }
+        }
+    }
+
+    private sealed class SequencedProcessRunner(params ProcessRunResult[] results)
+        : IProcessRunner
+    {
+        private readonly Queue<ProcessRunResult> _results = new(results);
+
+        public Task<ProcessRunResult> RunAsync(
+            string fileName,
+            IReadOnlyList<string> args,
+            IReadOnlyDictionary<string, string>? environment = null,
+            string? standardInput = null,
+            TimeSpan? timeout = null,
+            bool detachAfterExit = false,
+            CancellationToken ct = default
+        )
+        {
+            Assert.Equal("pkexec", fileName);
+            Assert.NotEmpty(_results);
+            return Task.FromResult(_results.Dequeue());
         }
     }
 }

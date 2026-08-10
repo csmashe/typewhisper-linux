@@ -1,6 +1,7 @@
 // ReSharper disable MethodHasAsyncOverload -- synchronous File.Read/WriteAllText is deliberate in these test assertions; the async overload would only add await noise with no benefit off the hot path.
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
+using TypeWhisper.Linux.Services.ManagedArtifacts;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
@@ -41,6 +42,26 @@ public sealed class InputAccessSetupHelperTests
     }
 
     [Fact]
+    public void IsOwnedRuleInstalled_rejects_foreign_regular_file()
+    {
+        using var env = new SysConfEnvironment();
+        SysConfEnvironment.WriteRule("# Managed by another application\n");
+
+        Assert.False(InputAccessSetupHelper.IsOwnedRuleInstalled());
+    }
+
+    [Fact]
+    public void IsOwnedRuleInstalled_rejects_symlink_even_when_target_has_marker()
+    {
+        using var env = new SysConfEnvironment();
+        var target = Path.Join(env.Dir, "owned-target.rules");
+        File.WriteAllText(target, InputAccessSetupHelper.UdevRuleContent);
+        File.CreateSymbolicLink(InputAccessSetupHelper.UdevRulePath, target);
+
+        Assert.False(InputAccessSetupHelper.IsOwnedRuleInstalled());
+    }
+
+    [Fact]
     public void ManualInstallCommand_writes_the_rule_and_reloads_and_triggers_udev()
     {
         using var env = new SysConfEnvironment();
@@ -58,6 +79,72 @@ public sealed class InputAccessSetupHelperTests
         Assert.Contains("usermod -aG input", cmd);
         Assert.Contains("/run/systemd/seats", cmd);
         Assert.Contains("/run/elogind/seats", cmd);
+    }
+
+    [Theory]
+    [InlineData("bad\nname")]
+    [InlineData("-bad-name")]
+    public void ManualInstallCommand_with_unrepresentable_identity_is_non_throwing_and_rule_only(
+        string userName
+    )
+    {
+        using var env = new SysConfEnvironment();
+        InputAccessSetupHelper.CurrentIdentityOverride = () => (4242, userName);
+
+        var command = InputAccessSetupHelper.ManualInstallCommand();
+
+        Assert.Contains(InputAccessSetupHelper.UdevRulePath, command);
+        Assert.Contains("udevadm control --reload", command);
+        Assert.Contains(
+            "udevadm trigger --subsystem-match=input --action=change",
+            command
+        );
+        Assert.DoesNotContain("usermod -aG input", command);
+        Assert.DoesNotContain("gpasswd", command);
+    }
+
+    [Fact]
+    public void BuildLockPrefix_matches_the_pre_extraction_transaction_prefix()
+    {
+        const string stateRoot = "/var/lib/typewhisper/managed-artifacts";
+        const string expected =
+            "set -eu\n"
+            + "umask 022\n"
+            + "if ! command -v flock >/dev/null 2>&1; then\n"
+            + "  echo 'TYPEWHISPER_FLOCK_UNAVAILABLE: flock is required for TypeWhisper managed root files' >&2\n"
+            + "  exit 72\n"
+            + "fi\n"
+            + "state_root='/var/lib/typewhisper/managed-artifacts'\n"
+            + "if [ -L \"$state_root\" ] || { [ -e \"$state_root\" ] && [ ! -d \"$state_root\" ]; }; then\n"
+            + "  echo 'TYPEWHISPER_ROOT_STATE_UNSAFE' >&2\n"
+            + "  exit 72\n"
+            + "fi\n"
+            + "mkdir -p \"$state_root\"\n"
+            + "chmod 0700 \"$state_root\"\n"
+            + "if [ -L \"$state_root\" ] || [ ! -d \"$state_root\" ]; then\n"
+            + "  echo 'TYPEWHISPER_ROOT_STATE_UNSAFE' >&2\n"
+            + "  exit 72\n"
+            + "fi\n"
+            + "exec 9>\"$state_root/transaction.lock\"\n"
+            + "chmod 0600 \"$state_root/transaction.lock\"\n"
+            + "flock -x 9\n\n";
+
+        Assert.Equal(expected, PrivilegedManagedFileTransaction.BuildLockPrefix(stateRoot));
+    }
+
+    [Fact]
+    public void ManualInstallCommand_records_the_non_logind_group_grant()
+    {
+        using var env = new SysConfEnvironment();
+        env.ForceNoSeatManager();
+
+        var exit = RunManualWriteBlock();
+
+        Assert.Equal(0, exit);
+        Assert.Equal(
+            "state=owned\nuid=4242\nusername=typewhisper-test",
+            File.ReadAllText(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath)
+        );
     }
 
     [Theory]
@@ -139,6 +226,7 @@ public sealed class InputAccessSetupHelperTests
             WriteShim(shimDir, "sudo", "exec \"$@\"\n");
             WriteShim(shimDir, "udevadm", "exit 0\n");
             WriteShim(shimDir, "usermod", "exit 0\n");
+            WriteShim(shimDir, "id", "printf '%s\\n' users\n");
             WriteShim(shimDir, "chown", "exit 0\n");
 
             var cmd = InputAccessSetupHelper.ManualInstallCommand();
@@ -316,7 +404,10 @@ public sealed class InputAccessSetupHelperTests
 
         var remove = await helper.RemoveAsync(CancellationToken.None);
 
-        Assert.True(remove.Success);
+        Assert.True(
+            remove.Success,
+            $"{remove.Message}\n{remove.Detail}\n{runner.LastPrivilegedResult?.StandardError}"
+        );
         Assert.Equal(0, runner.LastPrivilegedResult?.ExitCode);
         Assert.False(File.Exists(InputAccessSetupHelper.UdevRulePath));
     }
@@ -380,6 +471,106 @@ public sealed class InputAccessSetupHelperTests
     }
 
     [Fact]
+    public async Task InputGroupFallback_records_provenance_only_when_membership_was_absent()
+    {
+        using var env = new SysConfEnvironment();
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        var runner = env.CreateGroupScriptRunner(alreadyMember: false, usermodLog);
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.AddToInputGroupFallbackAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.True(result.GroupMembershipAdded);
+        Assert.Contains("-aG input -- typewhisper-test", File.ReadAllText(usermodLog));
+        Assert.Equal(
+            "state=owned\nuid=4242\nusername=typewhisper-test",
+            File.ReadAllText(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath)
+        );
+    }
+
+    [Fact]
+    public async Task InputGroupFallback_definitive_add_failure_clears_pending_provenance()
+    {
+        using var env = new SysConfEnvironment();
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        var runner = env.CreateGroupScriptRunner(
+            alreadyMember: false,
+            usermodLog,
+            usermodExitCode: 9,
+            memberAfterUsermodFailure: false
+        );
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.AddToInputGroupFallbackAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(9, runner.LastPrivilegedResult?.ExitCode);
+        Assert.False(File.Exists(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath));
+    }
+
+    [Fact]
+    public async Task InputGroupFallback_ambiguous_add_failure_retains_pending_provenance()
+    {
+        using var env = new SysConfEnvironment();
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        var runner = env.CreateGroupScriptRunner(
+            alreadyMember: false,
+            usermodLog,
+            usermodExitCode: 9,
+            memberAfterUsermodFailure: true
+        );
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.AddToInputGroupFallbackAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(9, runner.LastPrivilegedResult?.ExitCode);
+        Assert.Equal(
+            "state=pending-add\nuid=4242\nusername=typewhisper-test",
+            File.ReadAllText(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath)
+        );
+    }
+
+    [Fact]
+    public async Task InputGroupFallback_does_not_claim_preexisting_membership()
+    {
+        using var env = new SysConfEnvironment();
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        var runner = env.CreateGroupScriptRunner(alreadyMember: true, usermodLog);
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.AddToInputGroupFallbackAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.False(result.GroupMembershipAdded);
+        Assert.False(File.Exists(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath));
+        Assert.False(File.Exists(usermodLog));
+    }
+
+    [Fact]
+    public async Task InputGroupFallback_succeeds_even_when_a_foreign_rule_occupies_the_rule_path()
+    {
+        using var env = new SysConfEnvironment();
+        const string foreignRule = "# Managed by another application\n";
+        SysConfEnvironment.WriteRule(foreignRule);
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        var runner = env.CreateGroupScriptRunner(alreadyMember: false, usermodLog);
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.AddToInputGroupFallbackAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.True(result.GroupMembershipAdded);
+        Assert.Contains("-aG input -- typewhisper-test", File.ReadAllText(usermodLog));
+        Assert.Equal(
+            "state=owned\nuid=4242\nusername=typewhisper-test",
+            File.ReadAllText(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath)
+        );
+        Assert.Equal(foreignRule, File.ReadAllText(InputAccessSetupHelper.UdevRulePath));
+    }
+
+    [Fact]
     public async Task RemoveAsync_deletes_a_TypeWhisper_owned_rule_and_retriggers_udev()
     {
         using var env = new SysConfEnvironment();
@@ -392,6 +583,297 @@ public sealed class InputAccessSetupHelperTests
         Assert.True(result.Success);
         Assert.Equal(0, runner.LastPrivilegedResult?.ExitCode);
         Assert.False(File.Exists(InputAccessSetupHelper.UdevRulePath));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_with_matching_provenance_uses_gpasswd_and_requires_relogin()
+    {
+        using var env = new SysConfEnvironment();
+        SysConfEnvironment.WriteRule(InputAccessSetupHelper.UdevRuleContent);
+        env.WriteGroupProvenance("owned");
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        var gpasswdLog = Path.Join(env.Dir, "gpasswd.log");
+        var runner = env.CreateGroupScriptRunner(
+            alreadyMember: true,
+            usermodLog,
+            gpasswdLog: gpasswdLog
+        );
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.True(result.RequiresRelogin);
+        Assert.True(File.Exists(gpasswdLog));
+        Assert.Contains("-d typewhisper-test input", File.ReadAllText(gpasswdLog));
+        Assert.False(File.Exists(usermodLog));
+        Assert.False(File.Exists(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_without_gpasswd_falls_back_to_usermod_rG()
+    {
+        using var env = new SysConfEnvironment();
+        env.WriteGroupProvenance("owned");
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        var runner = env.CreateGroupScriptRunner(
+            alreadyMember: true,
+            usermodLog,
+            installGpasswd: false
+        );
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.True(result.RequiresRelogin);
+        Assert.Contains("-rG input -- typewhisper-test", File.ReadAllText(usermodLog));
+        Assert.False(File.Exists(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_without_provenance_never_removes_preexisting_membership()
+    {
+        using var env = new SysConfEnvironment();
+        SysConfEnvironment.WriteRule(InputAccessSetupHelper.UdevRuleContent);
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        var runner = env.CreateGroupScriptRunner(alreadyMember: true, usermodLog);
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.False(result.RequiresRelogin);
+        Assert.False(File.Exists(usermodLog));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_with_rule_absent_but_provenance_present_still_revokes_group()
+    {
+        using var env = new SysConfEnvironment();
+        env.WriteGroupProvenance("owned");
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        var gpasswdLog = Path.Join(env.Dir, "gpasswd.log");
+        var runner = env.CreateGroupScriptRunner(
+            alreadyMember: true,
+            usermodLog,
+            gpasswdLog: gpasswdLog
+        );
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.True(result.RequiresRelogin);
+        Assert.Contains("-d typewhisper-test input", File.ReadAllText(gpasswdLog));
+        Assert.False(File.Exists(usermodLog));
+        Assert.False(File.Exists(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_group_removal_failure_preserves_provenance()
+    {
+        using var env = new SysConfEnvironment();
+        env.WriteGroupProvenance("owned");
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        var gpasswdLog = Path.Join(env.Dir, "gpasswd.log");
+        var runner = env.CreateGroupScriptRunner(
+            alreadyMember: true,
+            usermodLog,
+            gpasswdLog: gpasswdLog,
+            gpasswdExitCode: 9
+        );
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("-d typewhisper-test input", File.ReadAllText(gpasswdLog));
+        Assert.False(File.Exists(usermodLog));
+        Assert.True(File.Exists(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_recovers_pending_add_provenance()
+    {
+        using var env = new SysConfEnvironment();
+        env.WriteGroupProvenance("pending-add");
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        var gpasswdLog = Path.Join(env.Dir, "gpasswd.log");
+        var runner = env.CreateGroupScriptRunner(
+            alreadyMember: true,
+            usermodLog,
+            gpasswdLog: gpasswdLog
+        );
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.True(result.RequiresRelogin);
+        Assert.Contains("-d typewhisper-test input", File.ReadAllText(gpasswdLog));
+        Assert.False(File.Exists(usermodLog));
+        Assert.False(File.Exists(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_clears_pending_add_when_membership_was_not_applied()
+    {
+        using var env = new SysConfEnvironment();
+        env.WriteGroupProvenance("pending-add");
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        var runner = env.CreateGroupScriptRunner(alreadyMember: false, usermodLog);
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.True(result.RequiresRelogin);
+        Assert.False(File.Exists(usermodLog));
+        Assert.False(File.Exists(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_without_pkexec_offers_only_a_provenance_guarded_group_revoke()
+    {
+        using var env = new SysConfEnvironment();
+        env.WriteGroupProvenance("owned");
+        var helper = new InputAccessSetupHelper(new FakeProcessRunner());
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.False(result.RequiresRelogin);
+        Assert.Contains("gpasswd -d", result.Detail);
+        Assert.Contains("usermod -rG input", result.Detail);
+        Assert.Contains("state=owned", result.Detail);
+        Assert.StartsWith("sudo sh -c", result.Detail!);
+        Assert.False(result.Detail!.StartsWith("sudo usermod", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_without_pkexec_offers_independent_rule_and_group_commands()
+    {
+        using var env = new SysConfEnvironment();
+        SysConfEnvironment.WriteRule(InputAccessSetupHelper.UdevRuleContent);
+        env.WriteGroupProvenance("owned");
+        var helper = new InputAccessSetupHelper(new FakeProcessRunner());
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        var detail = Assert.IsType<string>(result.Detail);
+        var secondCommand = detail.IndexOf("\nsudo sh -c ", StringComparison.Ordinal);
+        Assert.True(secondCommand > 0);
+        var ruleCommand = detail[..secondCommand];
+        var groupCommand = detail[(secondCommand + 1)..];
+        Assert.StartsWith("sudo sh -c ", ruleCommand);
+        Assert.Contains("udevadm control --reload", ruleCommand);
+        Assert.DoesNotContain("gpasswd -d", ruleCommand);
+        Assert.StartsWith("sudo sh -c ", groupCommand);
+        Assert.Contains("gpasswd -d", groupCommand);
+        Assert.Contains("state=owned", groupCommand);
+        Assert.DoesNotContain("udevadm control --reload", groupCommand);
+    }
+
+    [Fact]
+    public async Task RemoveAsync_group_only_manual_fallback_survives_identity_failure()
+    {
+        using var env = new SysConfEnvironment();
+        env.WriteGroupProvenance("owned");
+        var identityCalls = 0;
+        InputAccessSetupHelper.CurrentIdentityOverride = () =>
+            ++identityCalls == 1 ? (4242u, "typewhisper-test") : (4242u, "bad\nname");
+        var helper = new InputAccessSetupHelper(new FakeProcessRunner());
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("Manual input-group revocation is unavailable", result.Detail);
+    }
+
+    [Fact]
+    public async Task RemoveAsync_refuses_group_revoke_when_provenance_was_swapped_before_the_privileged_run()
+    {
+        using var env = new SysConfEnvironment();
+        env.WriteGroupProvenance("owned");
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        const string foreignRecord = "state=owned\nuid=4242\nusername=someone-else";
+        var runner = new SwapProvenanceBeforePrivilegedRunner(
+            env.CreateGroupScriptRunner(alreadyMember: true, usermodLog),
+            foreignRecord
+        );
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(
+            InputAccessSetupHelper.InputGroupGrantUnsafeExitCode,
+            runner.LastPrivilegedResult?.ExitCode
+        );
+        Assert.False(File.Exists(usermodLog));
+        Assert.Equal(
+            foreignRecord,
+            File.ReadAllText(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath)
+        );
+    }
+
+    [Fact]
+    public async Task RemoveAsync_with_edited_owned_rule_and_provenance_still_revokes_group()
+    {
+        using var env = new SysConfEnvironment();
+        var editedRule = InputAccessSetupHelper.UdevRuleContent + "# administrator edit\n";
+        SysConfEnvironment.WriteRule(editedRule);
+        env.WriteGroupProvenance("owned");
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        var gpasswdLog = Path.Join(env.Dir, "gpasswd.log");
+        var runner = env.CreateGroupScriptRunner(
+            alreadyMember: true,
+            usermodLog,
+            gpasswdLog: gpasswdLog
+        );
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.True(result.Refused);
+        Assert.True(result.RequiresRelogin);
+        Assert.True(result.GroupRevocationCompleted);
+        Assert.Null(result.GroupRevocationFailure);
+        Assert.DoesNotContain("provenance record was cleared", result.Detail);
+        Assert.Contains("-d typewhisper-test input", File.ReadAllText(gpasswdLog));
+        Assert.False(File.Exists(usermodLog));
+        Assert.False(File.Exists(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath));
+        Assert.Equal(editedRule, File.ReadAllText(InputAccessSetupHelper.UdevRulePath));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_with_edited_owned_rule_reports_independent_group_failure()
+    {
+        using var env = new SysConfEnvironment();
+        var editedRule = InputAccessSetupHelper.UdevRuleContent + "# administrator edit\n";
+        SysConfEnvironment.WriteRule(editedRule);
+        env.WriteGroupProvenance("owned");
+        var usermodLog = Path.Join(env.Dir, "usermod.log");
+        var gpasswdLog = Path.Join(env.Dir, "gpasswd.log");
+        var runner = env.CreateGroupScriptRunner(
+            alreadyMember: true,
+            usermodLog,
+            gpasswdLog: gpasswdLog,
+            gpasswdExitCode: 9
+        );
+        var helper = new InputAccessSetupHelper(runner);
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.True(result.Refused);
+        Assert.False(result.GroupRevocationCompleted);
+        Assert.Contains("gpasswd", result.GroupRevocationFailure);
+        Assert.True(File.Exists(InputAccessSetupHelper.CurrentInputGroupGrantRecordPath));
+        Assert.Equal(editedRule, File.ReadAllText(InputAccessSetupHelper.UdevRulePath));
     }
 
     [Fact]
@@ -464,18 +946,22 @@ public sealed class InputAccessSetupHelperTests
     }
 
     [Fact]
-    public async Task RemoveAsync_is_a_noop_when_no_rule_exists()
+    public async Task RemoveAsync_with_nothing_on_disk_but_pkexec_available_still_reactivates_udev()
     {
         using var env = new SysConfEnvironment();
         env.PutFakeBinaryOnPath("pkexec");
+        var udevadmLog = Path.Join(env.Dir, "udevadm.log");
 
-        var runner = env.CreatePrivilegedScriptRunner();
+        var runner = env.CreatePrivilegedScriptRunner(udevadmLog);
         var helper = new InputAccessSetupHelper(runner);
 
         var result = await helper.RemoveAsync(CancellationToken.None);
 
         Assert.True(result.Success);
         Assert.Equal(0, runner.LastPrivilegedResult?.ExitCode);
+        var invocations = File.ReadAllText(udevadmLog);
+        Assert.Contains("control --reload", invocations);
+        Assert.Contains("trigger --subsystem-match=input --action=change", invocations);
     }
 
     /// <summary>
@@ -490,6 +976,12 @@ public sealed class InputAccessSetupHelperTests
         private readonly string? _originalSysConf = InputAccessSetupHelper.SysConfDirOverride;
         private readonly string? _originalRootManagedState =
             InputAccessSetupHelper.RootManagedArtifactStateRootOverride;
+        private readonly string? _originalGrantState =
+            InputAccessSetupHelper.InputGroupGrantStateDirectoryOverride;
+        private readonly Func<(uint Uid, string UserName)>? _originalIdentity =
+            InputAccessSetupHelper.CurrentIdentityOverride;
+        private readonly string[]? _originalSeatManagerPaths =
+            InputAccessSetupHelper.SeatManagerDirectoryPathsOverride;
         private readonly string _pathDir = Path.Join(Path.GetTempPath(), $"tw-path-{Guid.NewGuid():N}");
 
         public SysConfEnvironment()
@@ -503,6 +995,11 @@ public sealed class InputAccessSetupHelperTests
                 Dir,
                 "managed-root-state"
             );
+            InputAccessSetupHelper.InputGroupGrantStateDirectoryOverride = Path.Join(
+                Dir,
+                "input-group-grants"
+            );
+            InputAccessSetupHelper.CurrentIdentityOverride = () => (4242, "typewhisper-test");
             Directory.CreateDirectory(
                 Path.GetDirectoryName(InputAccessSetupHelper.UdevRulePath)!
             );
@@ -516,6 +1013,11 @@ public sealed class InputAccessSetupHelperTests
             InputAccessSetupHelper.SysConfDirOverride = _originalSysConf;
             InputAccessSetupHelper.RootManagedArtifactStateRootOverride =
                 _originalRootManagedState;
+            InputAccessSetupHelper.InputGroupGrantStateDirectoryOverride =
+                _originalGrantState;
+            InputAccessSetupHelper.CurrentIdentityOverride = _originalIdentity;
+            InputAccessSetupHelper.SeatManagerDirectoryPathsOverride =
+                _originalSeatManagerPaths;
             TryDelete(_pathDir);
             TryDelete(Dir);
         }
@@ -525,13 +1027,111 @@ public sealed class InputAccessSetupHelperTests
             File.WriteAllText(Path.Join(_pathDir, name), "#!/bin/sh\n");
         }
 
-        public PrivilegedScriptRunner CreatePrivilegedScriptRunner()
+        public PrivilegedScriptRunner CreatePrivilegedScriptRunner(string? udevadmLog = null)
         {
             PutFakeBinaryOnPath("pkexec");
-            PutExecutableSuccessBinaryOnPath("udevadm");
+            if (udevadmLog is null)
+            {
+                PutExecutableSuccessBinaryOnPath("udevadm");
+            }
+            else
+            {
+                Assert.DoesNotContain('\'', udevadmLog);
+                WriteShim(
+                    _pathDir,
+                    "udevadm",
+                    $"printf '%s\\n' \"$*\" >> '{udevadmLog}'\nexit 0\n"
+                );
+            }
+
             PutExecutableSuccessBinaryOnPath("chown");
             return new PrivilegedScriptRunner(
                 $"{_pathDir}{Path.PathSeparator}/usr/bin{Path.PathSeparator}/bin"
+            );
+        }
+
+        public PrivilegedScriptRunner CreateGroupScriptRunner(
+            bool alreadyMember,
+            string usermodLog,
+            int usermodExitCode = 0,
+            string? gpasswdLog = null,
+            int gpasswdExitCode = 0,
+            bool installGpasswd = true,
+            bool? memberAfterUsermodFailure = null
+        )
+        {
+            _ = CreatePrivilegedScriptRunner();
+            string idBody;
+            if (memberAfterUsermodFailure is null)
+            {
+                idBody = alreadyMember
+                    ? "printf '%s\\n' 'users input'\n"
+                    : "printf '%s\\n' users\n";
+            }
+            else
+            {
+                Assert.False(alreadyMember);
+                var firstLookupMarker = Path.Join(Dir, "id-first-lookup");
+                Assert.DoesNotContain('\'', firstLookupMarker);
+                idBody =
+                    $"if [ -e '{firstLookupMarker}' ]; then\n"
+                    + (memberAfterUsermodFailure.Value
+                        ? "  printf '%s\\n' 'users input'\n"
+                        : "  printf '%s\\n' users\n")
+                    + $"else\n  : > '{firstLookupMarker}'\n  printf '%s\\n' users\nfi\n";
+            }
+
+            WriteShim(
+                _pathDir,
+                "id",
+                idBody
+            );
+            Assert.DoesNotContain('\'', usermodLog);
+            WriteShim(
+                _pathDir,
+                "usermod",
+                $"printf '%s\\n' \"$*\" >> '{usermodLog}'\nexit {usermodExitCode}\n"
+            );
+            if (installGpasswd)
+            {
+                gpasswdLog ??= Path.Join(Dir, "gpasswd.log");
+                Assert.DoesNotContain('\'', gpasswdLog);
+                WriteShim(
+                    _pathDir,
+                    "gpasswd",
+                    $"printf '%s\\n' \"$*\" >> '{gpasswdLog}'\nexit {gpasswdExitCode}\n"
+                );
+                return new PrivilegedScriptRunner(
+                    $"{_pathDir}{Path.PathSeparator}/usr/bin{Path.PathSeparator}/bin"
+                );
+            }
+
+            foreach (var command in new[] { "flock", "mkdir", "chmod", "cat", "rm" })
+            {
+                File.CreateSymbolicLink(
+                    Path.Join(_pathDir, command),
+                    Path.Join("/usr/bin", command)
+                );
+            }
+
+            return new PrivilegedScriptRunner(_pathDir);
+        }
+
+        public void ForceNoSeatManager()
+        {
+            InputAccessSetupHelper.SeatManagerDirectoryPathsOverride =
+            [
+                Path.Join(Dir, "missing-systemd-seats"),
+                Path.Join(Dir, "missing-elogind-seats"),
+            ];
+        }
+
+        public void WriteGroupProvenance(string state)
+        {
+            Directory.CreateDirectory(InputAccessSetupHelper.InputGroupGrantStateDirectory);
+            File.WriteAllText(
+                InputAccessSetupHelper.CurrentInputGroupGrantRecordPath,
+                $"state={state}\nuid=4242\nusername=typewhisper-test"
             );
         }
 
@@ -591,6 +1191,39 @@ public sealed class InputAccessSetupHelperTests
             );
             LastPrivilegedResult = result;
             return result;
+        }
+    }
+
+    // Simulates the same stale-check race for the group-grant provenance record:
+    // the record matched at probe time, but a foreign record replaces it before the
+    // privileged script runs, so the root-side managed-state guard must refuse the
+    // group-removal command rather than trust the earlier probe.
+    private sealed class SwapProvenanceBeforePrivilegedRunner(
+        PrivilegedScriptRunner inner,
+        string foreignContent
+    ) : IProcessRunner
+    {
+        public ProcessRunResult? LastPrivilegedResult => inner.LastPrivilegedResult;
+
+        public Task<ProcessRunResult> RunAsync(
+            string fileName,
+            IReadOnlyList<string> args,
+            IReadOnlyDictionary<string, string>? environment = null,
+            string? standardInput = null,
+            TimeSpan? timeout = null,
+            bool detachAfterExit = false,
+            CancellationToken ct = default
+        )
+        {
+            if (fileName == "pkexec")
+            {
+                File.WriteAllText(
+                    InputAccessSetupHelper.CurrentInputGroupGrantRecordPath,
+                    foreignContent
+                );
+            }
+
+            return inner.RunAsync(fileName, args, environment, standardInput, timeout, ct: ct);
         }
     }
 
