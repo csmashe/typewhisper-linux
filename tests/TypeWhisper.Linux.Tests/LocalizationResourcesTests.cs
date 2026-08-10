@@ -197,6 +197,43 @@ public sealed class LocalizationResourcesTests
         Assert.DoesNotContain("Shortcuts.EvdevStillOffAfterRemoval", en.Keys);
     }
 
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
+    public void Catalogs_HaveDynamicHotkeyRejectionStrings(string language)
+    {
+        var catalog = Load(language);
+        // Loc.GetString swallows FormatException, so a dropped placeholder degrades
+        // silently at runtime — assert the format args survive translation.
+        var blankIdKeys = new[]
+        {
+            "Shortcuts.ProfileHotkeyInactiveBlankId",
+            "Shortcuts.PromptActionHotkeyInactiveBlankId",
+        };
+        var conflictKeys = new[]
+        {
+            "Shortcuts.ProfileHotkeyInactiveConflict",
+            "Shortcuts.PromptActionHotkeyInactiveConflict",
+        };
+
+        foreach (var key in blankIdKeys.Concat(conflictKeys))
+        {
+            Assert.True(
+                catalog.TryGetValue(key, out var value),
+                $"Missing {language} key: {key}"
+            );
+            Assert.False(string.IsNullOrWhiteSpace(value), $"{language} key is empty: {key}");
+            Assert.Contains("{0}", value, StringComparison.Ordinal);
+        }
+
+        foreach (var key in conflictKeys)
+        {
+            Assert.Contains("{1}", catalog[key], StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public void CanonicalCatalog_HasGlobalHotkeyOptOutMessages()
     {

@@ -336,11 +336,13 @@ public class App : Application
             // raises its change event while holding its own gate.
             var reconcileLock = new object();
             var reconcileRevision = 0L;
+            IReadOnlySet<DynamicHotkeyRejection> activeRejections =
+                new HashSet<DynamicHotkeyRejection>();
 
             void ReconcileDynamicHotkeys()
             {
                 var revision = Interlocked.Increment(ref reconcileRevision);
-                IReadOnlyList<string> rejections;
+                IReadOnlyList<DynamicHotkeyRejection> newlyActiveRejections;
                 lock (reconcileLock)
                 {
                     // A reconcile that started later snapshotted at least as fresh a state,
@@ -350,15 +352,25 @@ public class App : Application
                         return;
                     }
 
-                    rejections = hotkey.SetDynamicHotkeys(
-                        HotkeyService.ParsePromptActionHotkeys(promptActions.Actions),
-                        HotkeyService.ParseProfileHotkeys(profileService.Profiles)
+                    var rejections = hotkey.SetDynamicHotkeysDetailed(
+                        HotkeyService.ParsePromptActionHotkeyCandidates(
+                            promptActions.Actions
+                        ),
+                        HotkeyService.ParseProfileHotkeyCandidates(
+                            profileService.Profiles
+                        )
                     );
+                    var transition = TransitionDynamicHotkeyRejections(
+                        activeRejections,
+                        rejections
+                    );
+                    newlyActiveRejections = transition.NewlyActive;
+                    activeRejections = transition.Active;
                 }
 
-                foreach (var message in rejections)
+                foreach (var rejection in newlyActiveRejections)
                 {
-                    errorLog.AddEntry(message);
+                    errorLog.AddEntry(FormatDynamicHotkeyRejection(rejection));
                 }
             }
 
@@ -373,6 +385,11 @@ public class App : Application
             settings.SettingsChanged += s =>
             {
                 hotkey.Mode = s.Mode;
+                var toggleHotkeyChanged = false;
+                var promptPaletteHotkeyChanged = false;
+                var recentTranscriptionsHotkeyChanged = false;
+                var copyLastTranscriptionHotkeyChanged = false;
+                var transformSelectionHotkeyChanged = false;
                 if (
                     !string.IsNullOrWhiteSpace(s.ToggleHotkey)
                     && s.ToggleHotkey != lastApplied
@@ -380,6 +397,7 @@ public class App : Application
                 )
                 {
                     lastApplied = hotkey.CurrentHotkeyString;
+                    toggleHotkeyChanged = true;
                 }
 
                 if (
@@ -388,6 +406,7 @@ public class App : Application
                 )
                 {
                     lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
+                    promptPaletteHotkeyChanged = true;
                 }
 
                 if (
@@ -399,6 +418,7 @@ public class App : Application
                 {
                     lastRecentTranscriptionsApplied =
                         hotkey.CurrentRecentTranscriptionsHotkeyString;
+                    recentTranscriptionsHotkeyChanged = true;
                 }
 
                 if (
@@ -410,6 +430,7 @@ public class App : Application
                 {
                     lastCopyLastTranscriptionApplied =
                         hotkey.CurrentCopyLastTranscriptionHotkeyString;
+                    copyLastTranscriptionHotkeyChanged = true;
                 }
 
                 if (
@@ -418,6 +439,20 @@ public class App : Application
                 )
                 {
                     lastTransformSelectionApplied = hotkey.CurrentTransformSelectionHotkeyString;
+                    transformSelectionHotkeyChanged = true;
+                }
+
+                if (
+                    ShouldReconcileDynamicHotkeys(
+                        toggleHotkeyChanged,
+                        promptPaletteHotkeyChanged,
+                        recentTranscriptionsHotkeyChanged,
+                        copyLastTranscriptionHotkeyChanged,
+                        transformSelectionHotkeyChanged
+                    )
+                )
+                {
+                    ReconcileDynamicHotkeys();
                 }
             };
 
@@ -496,6 +531,83 @@ public class App : Application
         BootTrace.Stage("OnFrameworkInitializationCompleted end (about to call base)");
         base.OnFrameworkInitializationCompleted();
         BootTrace.Stage("base.OnFrameworkInitializationCompleted returned");
+    }
+
+    internal sealed record DynamicHotkeyRejectionTransition(
+        IReadOnlyList<DynamicHotkeyRejection> NewlyActive,
+        IReadOnlySet<DynamicHotkeyRejection> Active
+    );
+
+    internal static DynamicHotkeyRejectionTransition TransitionDynamicHotkeyRejections(
+        IReadOnlySet<DynamicHotkeyRejection> previous,
+        IEnumerable<DynamicHotkeyRejection> current
+    )
+    {
+        var active = new HashSet<DynamicHotkeyRejection>();
+        var newlyActive = new List<DynamicHotkeyRejection>();
+        foreach (var rejection in current)
+        {
+            if (!active.Add(rejection))
+            {
+                continue;
+            }
+
+            if (!previous.Contains(rejection))
+            {
+                newlyActive.Add(rejection);
+            }
+        }
+
+        return new(newlyActive, active);
+    }
+
+    internal static bool ShouldReconcileDynamicHotkeys(
+        bool toggleHotkeyChanged,
+        bool promptPaletteHotkeyChanged,
+        bool recentTranscriptionsHotkeyChanged,
+        bool copyLastTranscriptionHotkeyChanged,
+        bool transformSelectionHotkeyChanged
+    )
+    {
+        return toggleHotkeyChanged
+            || promptPaletteHotkeyChanged
+            || recentTranscriptionsHotkeyChanged
+            || copyLastTranscriptionHotkeyChanged
+            || transformSelectionHotkeyChanged;
+    }
+
+    private static string FormatDynamicHotkeyRejection(
+        DynamicHotkeyRejection rejection
+    )
+    {
+        var key = (rejection.Kind, rejection.Reason) switch
+        {
+            (
+                DynamicHotkeyBindingKind.PromptAction,
+                DynamicHotkeyRejectionReason.BlankId
+            ) => "Shortcuts.PromptActionHotkeyInactiveBlankId",
+            (
+                DynamicHotkeyBindingKind.PromptAction,
+                DynamicHotkeyRejectionReason.Conflict
+            ) => "Shortcuts.PromptActionHotkeyInactiveConflict",
+            (
+                DynamicHotkeyBindingKind.Profile,
+                DynamicHotkeyRejectionReason.BlankId
+            ) => "Shortcuts.ProfileHotkeyInactiveBlankId",
+            (
+                DynamicHotkeyBindingKind.Profile,
+                DynamicHotkeyRejectionReason.Conflict
+            ) => "Shortcuts.ProfileHotkeyInactiveConflict",
+            _ => throw new ArgumentOutOfRangeException(nameof(rejection)),
+        };
+
+        return rejection.Reason == DynamicHotkeyRejectionReason.BlankId
+            ? Loc.Instance.GetString(key, rejection.NormalizedChord)
+            : Loc.Instance.GetString(
+                key,
+                rejection.DisplayName,
+                rejection.NormalizedChord
+            );
     }
 
     private static void ReconcileHotkeyOnStartup(HotkeyService hotkey, ISettingsService settings)
