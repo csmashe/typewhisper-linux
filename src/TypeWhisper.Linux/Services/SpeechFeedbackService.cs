@@ -12,6 +12,11 @@ public sealed record TtsProviderOption(string Id, string DisplayName);
 // ReSharper disable once NotAccessedPositionalProperty.Global  LocaleIdentifier carried in the voice-option record's data shape
 public sealed record TtsVoiceOption(string Id, string DisplayName, string? LocaleIdentifier = null);
 
+internal interface IStartupFeedbackReservation : IDisposable
+{
+    Task StopPriorPlaybackAsync();
+}
+
 public sealed class SpeechFeedbackService : IDisposable
 {
     public const string DefaultVoiceOptionId = "__typewhisper_default_voice__";
@@ -62,6 +67,34 @@ public sealed class SpeechFeedbackService : IDisposable
         }
     }
 
+    private sealed class StartupFeedbackReservation(
+        SpeechFeedbackService owner,
+        PlaybackRequest? priorRequest
+    ) : IStartupFeedbackReservation
+    {
+        private readonly Lock _stopLock = new();
+        private int _disposed;
+        private Task? _stopTask;
+
+        public Task StopPriorPlaybackAsync()
+        {
+            lock (_stopLock)
+            {
+                return _stopTask ??= owner.WaitForPriorPlaybackBeforeCaptureAsync(priorRequest);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            owner.ReleaseStartupFeedback(this);
+        }
+    }
+
     private readonly Func<TimeSpan, Task> _delay;
     private readonly Lock _lock = new();
     private readonly Action<long, bool>? _playbackVersionAllocated;
@@ -74,6 +107,7 @@ public sealed class SpeechFeedbackService : IDisposable
     private PlaybackRequest? _playbackRequest;
     private ITtsPlaybackSession? _playbackSession;
     private long _playbackVersion;
+    private StartupFeedbackReservation? _startupFeedbackReservation;
 
     // ReSharper disable once UnusedMember.Global -- resolved by DI (AddSingleton<SpeechFeedbackService>); the analyzer cannot see the reflection-driven construction.
     public SpeechFeedbackService(
@@ -108,17 +142,6 @@ public sealed class SpeechFeedbackService : IDisposable
 
     public bool IsAvailable => ResolveSpeakProvider().IsConfigured;
     public string BackendName => ResolveSpeakProvider().ProviderDisplayName;
-
-    private bool IsSpeaking
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _isPlaybackPending || _playbackSession?.IsActive == true;
-            }
-        }
-    }
 
     public IReadOnlyList<TtsProviderOption> AvailableProviders =>
         AllProviders()
@@ -209,9 +232,32 @@ public sealed class SpeechFeedbackService : IDisposable
     // ReSharper disable once UnusedMember.Global  public API surface (manual TTS read-back entry point); not currently called in-tree
     public void ReadBack(string text, string? language = null)
     {
-        if (IsSpeaking)
+        PlaybackRequest? toggledOffRequest;
+        lock (_lock)
         {
-            Stop();
+            // Manual readback is also a stop-toggle. Keep that stop decision in
+            // the reservation lock so it cannot cancel the matching start cue.
+            if (_startupFeedbackReservation is not null)
+            {
+                return;
+            }
+
+            if (_isPlaybackPending || _playbackSession?.IsActive == true)
+            {
+                toggledOffRequest = _playbackRequest;
+                _playbackRequest = null;
+                _playbackSession = null;
+                _isPlaybackPending = false;
+            }
+            else
+            {
+                toggledOffRequest = null;
+            }
+        }
+
+        if (toggledOffRequest is not null)
+        {
+            toggledOffRequest.CancelAndStop();
             return;
         }
 
@@ -226,9 +272,29 @@ public sealed class SpeechFeedbackService : IDisposable
         Speak(Loc.Instance["Speech.Recording"]);
     }
 
-    internal async Task StopCurrentPlaybackBeforeCaptureAsync()
+    internal IStartupFeedbackReservation ReserveStartupFeedback()
     {
-        var request = StopPlayback();
+        PlaybackRequest? priorRequest;
+        StartupFeedbackReservation reservation;
+        lock (_lock)
+        {
+            // A late readback from the prior dictation must not supersede or
+            // overlap the new start cue. Install the reservation before detaching
+            // the current request so there is no stop-to-reserve publication gap.
+            priorRequest = _playbackRequest;
+            reservation = new StartupFeedbackReservation(this, priorRequest);
+            _startupFeedbackReservation = reservation;
+            _playbackRequest = null;
+            _playbackSession = null;
+            _isPlaybackPending = false;
+        }
+
+        priorRequest?.CancelAndStop();
+        return reservation;
+    }
+
+    private async Task WaitForPriorPlaybackBeforeCaptureAsync(PlaybackRequest? request)
+    {
         if (request is null)
         {
             return;
@@ -245,7 +311,10 @@ public sealed class SpeechFeedbackService : IDisposable
         }
     }
 
-    internal async Task AnnounceRecordingStartedAsync(bool spokenFeedbackEnabled)
+    internal async Task AnnounceRecordingStartedAsync(
+        bool spokenFeedbackEnabled,
+        IStartupFeedbackReservation reservation
+    )
     {
         if (!spokenFeedbackEnabled)
         {
@@ -254,7 +323,8 @@ public sealed class SpeechFeedbackService : IDisposable
 
         var request = StartPlayback(
             new TtsSpeakRequest(Loc.Instance["Speech.Recording"]),
-            requireEnabled: false
+            requireEnabled: false,
+            startupFeedbackReservation: reservation
         );
         if (request is null)
         {
@@ -302,6 +372,22 @@ public sealed class SpeechFeedbackService : IDisposable
         Speak(Loc.Instance.GetString("Speech.Error", reason));
     }
 
+    internal bool TryRunOrdinaryFeedback(Action feedback)
+    {
+        lock (_lock)
+        {
+            if (_startupFeedbackReservation is not null)
+            {
+                // Suppressed terminal cues are intentionally dropped. Replaying
+                // one after release could send it into the microphone we just opened.
+                return false;
+            }
+
+            feedback();
+            return true;
+        }
+    }
+
     private void Stop()
     {
         _ = StopPlayback();
@@ -321,7 +407,8 @@ public sealed class SpeechFeedbackService : IDisposable
     private PlaybackRequest? StartPlayback(
         TtsSpeakRequest request,
         bool requireEnabled,
-        bool useConfiguredLanguageFallback = true
+        bool useConfiguredLanguageFallback = true,
+        IStartupFeedbackReservation? startupFeedbackReservation = null
     )
     {
         if (_disposed || string.IsNullOrWhiteSpace(request.Text))
@@ -347,8 +434,23 @@ public sealed class SpeechFeedbackService : IDisposable
 
         lock (_lock)
         {
-            supersededRequest = _playbackRequest;
+            // Ordinary speech is dropped while startup owns this lane. Only the
+            // exact lease may publish the spoken "Recording" cue; stale and
+            // foreign leases cannot allocate a version or reach a provider.
+            if (
+                startupFeedbackReservation is null
+                    ? _startupFeedbackReservation is not null
+                    : !ReferenceEquals(
+                        _startupFeedbackReservation,
+                        startupFeedbackReservation
+                    )
+            )
+            {
+                return null;
+            }
+
             var version = AllocatePlaybackVersion();
+            supersededRequest = _playbackRequest;
             playbackRequest = new PlaybackRequest(version);
             _playbackRequest = playbackRequest;
             _playbackSession = null;
@@ -358,6 +460,17 @@ public sealed class SpeechFeedbackService : IDisposable
         supersededRequest?.CancelAndStop();
         _ = SpeakAsync(request, playbackRequest);
         return playbackRequest;
+    }
+
+    private void ReleaseStartupFeedback(StartupFeedbackReservation reservation)
+    {
+        lock (_lock)
+        {
+            if (ReferenceEquals(_startupFeedbackReservation, reservation))
+            {
+                _startupFeedbackReservation = null;
+            }
+        }
     }
 
     private long AllocatePlaybackVersion()
