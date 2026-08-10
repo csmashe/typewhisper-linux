@@ -24,19 +24,25 @@ internal sealed class ShortcutDispatcher
     // Profile dictation dedup, keyed by physical KeyCode at press time. Also records the
     // recording mode and timestamp so the release path can compute hold duration for
     // PushToTalk/Hybrid using the press-time mode (mirrors _mainDictationHeld).
-    private readonly Dictionary<KeyCode, (string ProfileId, RecordingMode Mode, DateTime DownAt)>
+    private readonly Dictionary<KeyCode, (string ProfileId, RecordingMode Mode, long DownTimestamp)>
         _profileDictationKeyDown = new();
 
     // Keyed by the complete workflow identity, not the physical key alone: two workflows can share
     // one key under different modifiers (Ctrl+Shift+P vs Ctrl+Alt+P), and a KeyCode key would let
     // the first claim swallow the second. The value is the trigger-released flag.
     private readonly Dictionary<SelectionWorkflowId, bool> _pendingSelectionWorkflows = new();
+    private readonly TimeProvider _timeProvider;
     private bool _cancelKeyDown;
     private bool _copyLastKeyDown;
-    private (KeyCode Key, RecordingMode Mode, DateTime DownAt)? _mainDictationHeld;
+    private (KeyCode Key, RecordingMode Mode, long DownTimestamp)? _mainDictationHeld;
     private bool _recentKeyDown;
 
     private GlobalShortcutSet? _shortcuts;
+
+    internal ShortcutDispatcher(TimeProvider? timeProvider = null)
+    {
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public void UpdateShortcuts(GlobalShortcutSet shortcuts)
     {
@@ -215,7 +221,11 @@ internal sealed class ShortcutDispatcher
 
                     // Capture mode at press time so a mid-hold mode change can't
                     // affect the release path.
-                    _profileDictationKeyDown[key] = (profileId, set.Mode, DateTime.UtcNow);
+                    _profileDictationKeyDown[key] = (
+                        profileId,
+                        set.Mode,
+                        _timeProvider.GetTimestamp()
+                    );
                 }
 
                 // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined RecordingMode values are handled; the default (out-of-range) branch is intentionally omitted.
@@ -280,7 +290,7 @@ internal sealed class ShortcutDispatcher
                         return;
                     }
 
-                    _mainDictationHeld = (key, set.Mode, DateTime.UtcNow);
+                    _mainDictationHeld = (key, set.Mode, _timeProvider.GetTimestamp());
                 }
 
                 // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined RecordingMode values are handled; the default (out-of-range) branch is intentionally omitted.
@@ -375,7 +385,7 @@ internal sealed class ShortcutDispatcher
         }
 
         // Profile dictation release mirrors main dictation key semantics.
-        (string ProfileId, RecordingMode Mode, DateTime DownAt) profileHeld;
+        (string ProfileId, RecordingMode Mode, long DownTimestamp) profileHeld;
         bool hadProfileDictation;
         lock (_lock)
         {
@@ -384,7 +394,9 @@ internal sealed class ShortcutDispatcher
 
         if (hadProfileDictation)
         {
-            var profileHeldMs = (DateTime.UtcNow - profileHeld.DownAt).TotalMilliseconds;
+            var profileHeldMs = _timeProvider
+                .GetElapsedTime(profileHeld.DownTimestamp)
+                .TotalMilliseconds;
             // Use press-time mode; a mid-hold mode switch must not fire a Stop the press never set up.
             // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined RecordingMode values are handled; the default (out-of-range) branch is intentionally omitted.
             switch (profileHeld.Mode)
@@ -411,7 +423,7 @@ internal sealed class ShortcutDispatcher
             }
         }
 
-        (KeyCode Key, RecordingMode Mode, DateTime DownAt) held;
+        (KeyCode Key, RecordingMode Mode, long DownTimestamp) held;
         lock (_lock)
         {
             var current = _mainDictationHeld;
@@ -424,7 +436,7 @@ internal sealed class ShortcutDispatcher
             _mainDictationHeld = null;
         }
 
-        var heldMs = (DateTime.UtcNow - held.DownAt).TotalMilliseconds;
+        var heldMs = _timeProvider.GetElapsedTime(held.DownTimestamp).TotalMilliseconds;
         // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined RecordingMode values are handled; the default (out-of-range) branch is intentionally omitted.
         switch (held.Mode)
         {
