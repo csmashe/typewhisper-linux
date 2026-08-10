@@ -45,10 +45,10 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     // probe that finishes late must not clobber the latest result.
     private int _keyboardAccessRefreshVersion;
 
-    // Desktop-integration probes are independent from M5's startup ownership probe: config
-    // presence can identify a stale managed entry, but does not prove that the desktop route is
-    // live. The generation prevents an old spec probe from overwriting a later setting change or
-    // an explicit refresh/removal result.
+    // Desktop-integration and startup ownership probes classify persisted managed specs, not live
+    // desktop routes. Suppressing on a persisted match avoids duplicate routes after re-login, at
+    // the cost of a transient dead route after an app-only KDE restart. The generation prevents an
+    // old spec probe from overwriting a later setting change or explicit refresh/removal result.
     private int _desktopIntegrationRefreshVersion;
     private ManagedDesktopIntegrationState _desktopIntegrationState =
         ManagedDesktopIntegrationState.Unknown;
@@ -576,6 +576,9 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         Interlocked.Increment(ref _desktopIntegrationRefreshVersion);
     }
 
+    // Reconcile suppression with the current persisted managed spec. An exact KDE file match is
+    // deliberately treated as desktop ownership before KGlobalAccel loads it: this avoids duplicate
+    // routes after re-login, but an app-only restart can transiently leave no live dictation route.
     internal async Task RefreshNativeDictationBindingStateAsync(CancellationToken ct)
     {
         try

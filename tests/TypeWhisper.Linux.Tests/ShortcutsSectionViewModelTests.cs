@@ -177,7 +177,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         Assert.True(sut.ShowStaleIntegrationBanner);
         Assert.True(sut.CanRefreshDesktopIntegration);
         Assert.True(sut.CanRemoveDesktopIntegration);
-        Assert.Contains("old desktop shortcut may remain active", sut.StaleIntegrationMessage);
+        Assert.Contains("old desktop shortcut may stay authoritative", sut.StaleIntegrationMessage);
         Assert.Contains("Refresh desktop integration", sut.SetupAutomaticallyLabel);
         Assert.Equal(2, writer.IsInstalledCallCount);
         Assert.Equal(1, writer.IsManagedShortcutPresentCallCount);
@@ -354,7 +354,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         Assert.Equal(priorSuppression, hotkey.NativeDictationBindingActive);
         Assert.Equal(ManagedDesktopIntegrationState.Current, sut.DesktopIntegrationState);
         Assert.False(sut.ShowStaleIntegrationBanner);
-        Assert.Contains("later startup", sut.IntegrationStatusMessage);
+        Assert.Contains("reload or re-login", sut.IntegrationStatusMessage);
     }
 
     [Theory]
@@ -567,7 +567,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
 
         Assert.False(hotkey.NativeDictationBindingActive);
         Assert.Equal(KeyCode.VcSpace, backend.LastSet?.DictationKey);
-        Assert.Contains("later startup", sut.IntegrationStatusMessage);
+        Assert.Contains("reload or re-login", sut.IntegrationStatusMessage);
     }
 
     [Theory]
@@ -649,7 +649,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
 
         Assert.True(hotkey.NativeDictationBindingActive);
         Assert.Equal(KeyCode.VcUndefined, backend.LastSet?.DictationKey);
-        Assert.Contains("next startup", sut.IntegrationStatusMessage);
+        Assert.Contains("reload or re-login", sut.IntegrationStatusMessage);
     }
 
     [Theory]

@@ -105,9 +105,9 @@ public class App : Application
                 _ = uiOperations.ReportDispatcherFailureAsync(args.Exception, "TypeWhisper");
             };
 
-            // Reconcile configured state and verify native ownership before DictationOrchestrator
-            // starts HotkeyService. This keeps the first backend snapshot free of a duplicate
-            // app-owned dictation route when the current desktop spec is installed.
+            // Reconcile configured state and infer native ownership from the persisted spec before
+            // DictationOrchestrator starts HotkeyService. A matching deferred KDE entry is treated
+            // as desktop-owned even before KGlobalAccel loads it.
             var hotkey = services.GetRequiredService<HotkeyService>();
             ReconcileHotkeyOnStartup(hotkey, settings);
             var shortcuts = services.GetRequiredService<ShortcutsSectionViewModel>();
