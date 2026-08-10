@@ -1179,7 +1179,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     }
 
     public bool IsClipboardSetAvailable =>
-        _isWayland ? IsCommandAvailable("wl-copy") : IsCommandAvailable("xclip");
+        UsesWaylandClipboard ? IsCommandAvailable("wl-copy") : IsCommandAvailable("xclip");
 
     public bool IsPasteAvailable => _chain.Count > 0;
 
@@ -1200,10 +1200,13 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public bool LastTypingDeliveredPartialText { get; private set; }
 
+    private bool UsesWaylandClipboard => _snapshot.ClipboardToolName == "wl-clipboard";
+
     public async Task<string?> TryGetClipboardTextAsync()
     {
-        var fileName = _isWayland ? "wl-paste" : "xclip";
-        IReadOnlyList<string> args = _isWayland
+        var useWaylandClipboard = UsesWaylandClipboard;
+        var fileName = useWaylandClipboard ? "wl-paste" : "xclip";
+        IReadOnlyList<string> args = useWaylandClipboard
             ? ["--no-newline"]
             : ["-selection", "clipboard", "-o"];
 
@@ -1242,8 +1245,9 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public async Task<bool> ClipboardHasNonTextFormatsAsync()
     {
-        var fileName = _isWayland ? "wl-paste" : "xclip";
-        IReadOnlyList<string> args = _isWayland
+        var useWaylandClipboard = UsesWaylandClipboard;
+        var fileName = useWaylandClipboard ? "wl-paste" : "xclip";
+        IReadOnlyList<string> args = useWaylandClipboard
             ? ["--list-types"]
             : ["-selection", "clipboard", "-o", "-t", "TARGETS"];
 
@@ -1272,7 +1276,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             }
 
             return result.Succeeded
-                   && ListingHasNonTextFormats(result.StandardOutput, _isWayland);
+                   && ListingHasNonTextFormats(result.StandardOutput, useWaylandClipboard);
         }
         catch (Exception ex)
         {
@@ -1297,8 +1301,9 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public async Task<bool> SetClipboardTextAsync(string text)
     {
-        var fileName = _isWayland ? "wl-copy" : "xclip";
-        IReadOnlyList<string> args = _isWayland ? [] : ["-selection", "clipboard"];
+        var useWaylandClipboard = UsesWaylandClipboard;
+        var fileName = useWaylandClipboard ? "wl-copy" : "xclip";
+        IReadOnlyList<string> args = useWaylandClipboard ? [] : ["-selection", "clipboard"];
 
         try
         {

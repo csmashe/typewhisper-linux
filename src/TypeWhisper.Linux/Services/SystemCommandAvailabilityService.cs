@@ -534,7 +534,8 @@ public sealed partial class SystemCommandAvailabilityService
 
     private LinuxCapabilitySnapshot BuildSnapshot()
     {
-        var isWayland = WaylandSessionDetector.IsWaylandSession();
+        var isWaylandSession = WaylandSessionDetector.IsWaylandSession();
+        var hasWaylandDisplay = WaylandSessionDetector.HasWaylandDisplay();
         var isX11 = Environment.GetEnvironmentVariable("DISPLAY") is { Length: > 0 };
         var hasXclip = IsCommandAvailable("xclip");
         var hasWlClipboard = IsCommandAvailable("wl-copy") && IsCommandAvailable("wl-paste");
@@ -549,11 +550,11 @@ public sealed partial class SystemCommandAvailabilityService
         var ydotoolSocket = ResolveYdotoolSocketPath(_processRunner);
 
         return new LinuxCapabilitySnapshot(
-            isWayland ? "Wayland"
+            isWaylandSession ? "Wayland"
             : isX11 ? "X11"
             : "Unknown",
-            isWayland ? hasWlClipboard : hasXclip,
-            isWayland ? "wl-clipboard" : "xclip",
+            hasWaylandDisplay ? hasWlClipboard : hasXclip,
+            hasWaylandDisplay ? "wl-clipboard" : "xclip",
             IsCommandAvailable("xdotool"),
             IsCommandAvailable("wtype"),
             IsCommandAvailable("ffmpeg"),

@@ -8,6 +8,32 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class SystemCommandAvailabilityServiceTests
 {
     [Fact]
+    public void Snapshot_XdgWaylandWithoutWaylandDisplay_ReportsWaylandButSelectsXclip()
+    {
+        var originalWaylandDisplay = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY");
+        var originalSessionType = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("WAYLAND_DISPLAY", null);
+            Environment.SetEnvironmentVariable("XDG_SESSION_TYPE", "wayland");
+
+            var service = new SystemCommandAvailabilityService(new FakeProcessRunner());
+            var snapshot = service.GetSnapshot();
+
+            Assert.Equal("Wayland", snapshot.SessionType);
+            Assert.True(service.IsWaylandSession);
+            Assert.False(service.IsX11Session);
+            Assert.Equal("xclip", snapshot.ClipboardToolName);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("WAYLAND_DISPLAY", originalWaylandDisplay);
+            Environment.SetEnvironmentVariable("XDG_SESSION_TYPE", originalSessionType);
+        }
+    }
+
+    [Fact]
     public void IsCommandAvailable_RequiresExecutePermissionAndContinuesSearchingPath()
     {
         var originalPath = Environment.GetEnvironmentVariable("PATH");
