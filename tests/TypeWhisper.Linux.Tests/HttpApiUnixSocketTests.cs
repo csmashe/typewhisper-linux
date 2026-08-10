@@ -7,6 +7,7 @@ using Microsoft.Extensions.Hosting.Internal;
 using Moq;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Tests;
 using Xunit;
@@ -263,6 +264,74 @@ public sealed class HttpApiUnixSocketTests
         );
     }
 
+    [Fact]
+    public async Task ProfileToggleApi_EnableWithCollidingHotkey_Returns409AndLeavesDisabled()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Profiles.AddProfile(
+            new Profile
+            {
+                Id = "disabled-profile",
+                Name = "Disabled profile",
+                IsEnabled = false,
+                HotkeyData = "Alt+F8",
+            }
+        );
+        fixture.PromptActions.AddAction(
+            new PromptAction
+            {
+                Id = "enabled-action",
+                Name = "Enabled action",
+                SystemPrompt = "x",
+                HotkeyKey = "Alt+F8",
+            }
+        );
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+
+        using var response = await client.PutAsync(
+            "/v1/profiles/toggle?id=disabled-profile",
+            null
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("hotkey-collision", json.RootElement.GetProperty("reason").GetString());
+        Assert.Equal(
+            "Profile hotkey cannot be enabled because it conflicts with an enabled shortcut.",
+            json.RootElement.GetProperty("error").GetString()
+        );
+        Assert.False(Assert.Single(fixture.Profiles.Profiles).IsEnabled);
+    }
+
+    [Fact]
+    public async Task ProfileToggleApi_DisableDoesNotRequireHotkeyValidation()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Profiles.AddProfile(
+            new Profile
+            {
+                Id = "enabled-profile",
+                Name = "Enabled profile",
+                HotkeyData = "Ctrl+NoSuchKey",
+                HotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
+                PromptActionId = "missing-action",
+            }
+        );
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+
+        using var response = await client.PutAsync(
+            "/v1/profiles/toggle?id=enabled-profile",
+            null
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.False(json.RootElement.GetProperty("is_enabled").GetBoolean());
+        Assert.False(Assert.Single(fixture.Profiles.Profiles).IsEnabled);
+    }
+
     private static async Task<string> PostLocalFileForErrorAsync(HttpClient client, string body)
     {
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
@@ -279,7 +348,10 @@ public sealed class HttpApiUnixSocketTests
             Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
         private readonly string _tempDirectory =
             TestPaths.CreateTempDirectory("TypeWhisper.HttpApiUnixSocketTests");
+        private readonly HotkeyService _hotkeys = TestShortcutBackend.CreateHotkeyService();
         private readonly ModelManagerService _models;
+        private readonly ProfileService _profiles;
+        private readonly PromptActionService _promptActions;
         private readonly DictationSessionResultStore _sessionResults = new();
         private AppSettings _current;
 
@@ -318,12 +390,18 @@ public sealed class HttpApiUnixSocketTests
                 Settings.Object
             );
             var historyService = history ?? new Mock<IHistoryService>();
+            _profiles = new ProfileService(Path.Join(_tempDirectory, "profiles.json"));
+            _promptActions = new PromptActionService(
+                Path.Join(_tempDirectory, "prompt-actions.json")
+            );
             Service = new HttpApiService(
                 _models,
                 Settings.Object,
                 null!,
                 historyService.Object,
-                null!,
+                _profiles,
+                _promptActions,
+                _hotkeys,
                 null!,
                 null!,
                 null!,
@@ -342,6 +420,10 @@ public sealed class HttpApiUnixSocketTests
         internal string SocketPath { get; }
 
         internal string DiscoveryPath { get; }
+
+        internal ProfileService Profiles => _profiles;
+
+        internal PromptActionService PromptActions => _promptActions;
 
         private Mock<ISettingsService> Settings { get; }
 
@@ -431,6 +513,7 @@ public sealed class HttpApiUnixSocketTests
             Service.Dispose();
             _sessionResults.Dispose();
             _models.Dispose();
+            _hotkeys.Dispose();
             Environment.SetEnvironmentVariable(
                 "XDG_CONFIG_HOME",
                 _originalConfigHome

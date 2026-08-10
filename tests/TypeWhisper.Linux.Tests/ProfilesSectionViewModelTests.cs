@@ -170,8 +170,119 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     [Fact]
     public void ToggleProfileEnabled_UsesAtomicServiceOperationAndRefreshesProfiles()
     {
-        var profile = CreateEditableProfile() with { IsEnabled = false };
+        var profile = CreateEditableProfile(hotkeyData: "Alt+F8") with { IsEnabled = false };
         var committed = profile with { IsEnabled = true };
+        var profiles = new Mock<IProfileService>();
+        profiles
+            .SetupSequence(service => service.Profiles)
+            .Returns([profile])
+            .Returns([profile])
+            .Returns([committed]);
+        profiles
+            .Setup(service => service.ToggleProfileEnabled(profile.Id))
+            .Returns(committed);
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var sut = new ProfilesSectionViewModel(
+            profiles.Object,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
+        );
+
+        sut.ToggleProfileEnabledCommand.Execute(profile);
+
+        profiles.Verify(service => service.ToggleProfileEnabled(profile.Id), Times.Once);
+        profiles.Verify(service => service.UpdateProfile(It.IsAny<Profile>()), Times.Never);
+        Assert.True(Assert.Single(sut.Profiles).IsEnabled);
+    }
+
+    [Fact]
+    public void ToggleProfileEnabled_CollidingDisabledProfile_DoesNotCallAtomicToggleAndShowsFeedback()
+    {
+        var profile = CreateEditableProfile(hotkeyData: "Alt+F8") with { IsEnabled = false };
+        var profiles = CreateProfileServiceMock(profile);
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        promptActions.AddAction(
+            new PromptAction
+            {
+                Id = "enabled-action",
+                Name = "Enabled action",
+                SystemPrompt = "x",
+                HotkeyKey = "Alt+F8",
+            }
+        );
+        var sut = new ProfilesSectionViewModel(
+            profiles.Object,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
+        );
+
+        sut.ToggleProfileEnabledCommand.Execute(profile);
+
+        profiles.Verify(service => service.ToggleProfileEnabled(profile.Id), Times.Never);
+        Assert.Equal(profile, sut.SelectedProfile);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
+    }
+
+    [Fact]
+    public void ToggleProfileEnabled_ProcessSelectedTextWithoutEnabledAction_DoesNotEnable()
+    {
+        var profile = CreateEditableProfile(hotkeyData: "Meta+F9") with
+        {
+            IsEnabled = false,
+            HotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
+            PromptActionId = "missing-action",
+        };
+        var profiles = CreateProfileServiceMock(profile);
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var sut = new ProfilesSectionViewModel(
+            profiles.Object,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
+        );
+
+        sut.ToggleProfileEnabledCommand.Execute(profile);
+
+        profiles.Verify(service => service.ToggleProfileEnabled(profile.Id), Times.Never);
+        Assert.Equal(profile, sut.SelectedProfile);
+        Assert.Equal(
+            Loc.Instance["Profiles.HotkeyPromptActionRequired"],
+            sut.HotkeyValidationMessage
+        );
+    }
+
+    [Fact]
+    public void ToggleProfileEnabled_DisablingProfile_NeverRunsActivationGate()
+    {
+        var profile = CreateEditableProfile(hotkeyData: "Ctrl+NoSuchKey") with
+        {
+            HotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
+            PromptActionId = "missing-action",
+        };
+        var committed = profile with { IsEnabled = false };
         var profiles = new Mock<IProfileService>();
         profiles
             .SetupSequence(service => service.Profiles)
@@ -198,8 +309,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         sut.ToggleProfileEnabledCommand.Execute(profile);
 
         profiles.Verify(service => service.ToggleProfileEnabled(profile.Id), Times.Once);
-        profiles.Verify(service => service.UpdateProfile(It.IsAny<Profile>()), Times.Never);
-        Assert.True(Assert.Single(sut.Profiles).IsEnabled);
+        Assert.False(Assert.Single(sut.Profiles).IsEnabled);
+        Assert.Null(sut.HotkeyValidationMessage);
     }
 
     [Fact]
@@ -376,6 +487,90 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         profiles.Verify(service => service.UpdateProfile(It.IsAny<Profile>()), Times.Never);
         Assert.Equal("Alt+F8", Assert.Single(profiles.Object.Profiles).HotkeyData);
         Assert.Equal("Ctrl+NoSuchKey", sut.EditHotkeyData);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
+    }
+
+    [Fact]
+    public void SaveProfile_DisabledWithCollidingRetainedHotkey_PersistsNonHotkeyEdits()
+    {
+        var existing = CreateEditableProfile(hotkeyData: "Alt+F8") with { IsEnabled = false };
+        var profiles = CreateProfileServiceMock(existing);
+        Profile? persisted = null;
+        profiles
+            .Setup(service => service.UpdateProfile(It.IsAny<Profile>()))
+            .Callback<Profile>(profile => persisted = profile);
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        promptActions.AddAction(
+            new PromptAction
+            {
+                Id = "enabled-action",
+                Name = "Enabled action",
+                SystemPrompt = "x",
+                HotkeyKey = "Alt+F8",
+            }
+        );
+        var sut = new ProfilesSectionViewModel(
+            profiles.Object,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
+        )
+        {
+            EditName = "Updated profile",
+        };
+
+        sut.SaveProfileCommand.Execute(null);
+
+        profiles.Verify(service => service.UpdateProfile(It.IsAny<Profile>()), Times.Once);
+        Assert.NotNull(persisted);
+        Assert.Equal("Updated profile", persisted.Name);
+        Assert.Equal("Alt+F8", persisted.HotkeyData);
+        Assert.False(persisted.IsEnabled);
+        Assert.Null(sut.HotkeyValidationMessage);
+    }
+
+    [Fact]
+    public void SaveProfile_EnablingDisabledProfileWithCollision_DoesNotUpdate()
+    {
+        var existing = CreateEditableProfile(hotkeyData: "Alt+F8") with { IsEnabled = false };
+        var profiles = CreateProfileServiceMock(existing);
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        promptActions.AddAction(
+            new PromptAction
+            {
+                Id = "enabled-action",
+                Name = "Enabled action",
+                SystemPrompt = "x",
+                HotkeyKey = "Alt+F8",
+            }
+        );
+        var sut = new ProfilesSectionViewModel(
+            profiles.Object,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
+        )
+        {
+            EditIsEnabled = true,
+        };
+
+        sut.SaveProfileCommand.Execute(null);
+
+        profiles.Verify(service => service.UpdateProfile(It.IsAny<Profile>()), Times.Never);
         Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
     }
 
