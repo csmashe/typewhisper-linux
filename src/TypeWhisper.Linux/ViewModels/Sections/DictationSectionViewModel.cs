@@ -680,10 +680,17 @@ public partial class DictationSectionViewModel : ObservableObject
             );
         }
 
-        SelectedDevice = ResolveSelectedDeviceOption(
+        var resolvedDevice = ResolveSelectedDeviceOption(
             _settings.Current.SelectedMicrophoneDevice,
             _settings.Current.SelectedMicrophoneDeviceId
         );
+        SelectedDevice = resolvedDevice;
+        if (resolvedDevice is null)
+        {
+            // Preserve the configured preference; runtime capture falls back to the
+            // system default until the device returns.
+            _audio.SelectedDeviceIndex = null;
+        }
 
         // Devices always contains at least the synthetic follow-default entry, so
         // count the real input devices when reporting availability.
