@@ -216,6 +216,122 @@ public sealed class HttpApiUnixSocketTests
     }
 
     [Fact]
+    public async Task Quiesce_WaitsForParkedRequest_RejectsNewConnections_ThenCompletes()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var history = new Mock<IHistoryService>();
+        history
+            .SetupGet(service => service.Records)
+            // ReSharper disable AccessToDisposedClosure -- the finally block releases and observes the parked request before the gates leave scope.
+            .Returns(() =>
+            {
+                entered.Set();
+                release.Wait(TimeSpan.FromSeconds(5));
+                return [];
+            });
+        // ReSharper restore AccessToDisposedClosure
+
+        using var fixture = new ApiFixture(history: history);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        var parked = client.GetAsync("/v1/history");
+
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(2)));
+            var quiesce = fixture.Service.QuiesceAsync(TimeSpan.FromSeconds(5));
+            Assert.False(quiesce.IsCompleted);
+
+            using var newClient = fixture.CreateTcpClient(withBearer: true);
+            HttpResponseMessage? rejected = null;
+            try
+            {
+                rejected = await newClient.GetAsync("/v1/status");
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, rejected.StatusCode);
+                Assert.Null(rejected.Headers.RetryAfter);
+            }
+            catch (HttpRequestException)
+            {
+                // Kestrel may close the listener before the post-close request connects.
+            }
+            finally
+            {
+                rejected?.Dispose();
+            }
+
+            Assert.False(quiesce.IsCompleted);
+            release.Set();
+            Assert.True(await quiesce);
+            await ObserveRequestCompletionAsync(parked);
+            Assert.False(File.Exists(fixture.SocketPath));
+            Assert.False(File.Exists(fixture.DiscoveryPath));
+        }
+        finally
+        {
+            release.Set();
+            await ObserveRequestCompletionAsync(parked);
+        }
+    }
+
+    [Fact]
+    public async Task ApplySettings_AfterQuiesce_DoesNotRestartListener()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+
+        Assert.True(await fixture.Service.QuiesceAsync(TimeSpan.FromSeconds(5)));
+        fixture.Service.ApplySettings();
+
+        Assert.Null(fixture.Service.HostLifetime);
+        Assert.False(File.Exists(fixture.SocketPath));
+        Assert.False(File.Exists(fixture.DiscoveryPath));
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        await Assert.ThrowsAsync<HttpRequestException>(async () =>
+            await client.GetAsync("/v1/status")
+        );
+    }
+
+    [Fact]
+    public async Task Quiesce_AfterTimedOutDrain_RedrainsCompletedHandler()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var history = new Mock<IHistoryService>();
+        history
+            .SetupGet(service => service.Records)
+            // ReSharper disable AccessToDisposedClosure -- the finally releases and observes the request before the gates leave scope.
+            .Returns(() =>
+            {
+                entered.Set();
+                release.Wait(TimeSpan.FromSeconds(5));
+                return [];
+            });
+        // ReSharper restore AccessToDisposedClosure
+
+        using var fixture = new ApiFixture(history: history);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        var parked = client.GetAsync("/v1/history");
+
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(2)));
+            Assert.False(await fixture.Service.QuiesceAsync(TimeSpan.Zero));
+
+            release.Set();
+            await ObserveRequestCompletionAsync(parked);
+
+            Assert.True(await fixture.Service.QuiesceAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            release.Set();
+            await ObserveRequestCompletionAsync(parked);
+        }
+    }
+
+    [Fact]
     public async Task LocalFileEndpointRejectsUnknownTaskAndFormat()
     {
         using var fixture = new ApiFixture();
@@ -340,6 +456,20 @@ public sealed class HttpApiUnixSocketTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         return json.RootElement.GetProperty("error").GetString()!;
+    }
+
+    private static async Task ObserveRequestCompletionAsync(
+        Task<HttpResponseMessage> request
+    )
+    {
+        try
+        {
+            using var response = await request;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            // Quiesce cancels the admitted request's linked RequestAborted token.
+        }
     }
 
     private sealed class ApiFixture : IDisposable

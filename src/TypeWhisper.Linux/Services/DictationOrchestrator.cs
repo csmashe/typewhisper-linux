@@ -42,6 +42,13 @@ internal sealed record RecordingContext(
     public LlmCallCapture? Capture { get; init; }
 }
 
+internal enum ToggleGateCloseOutcome
+{
+    Unknown,
+    Idle,
+    TimedOut,
+}
+
 public sealed class DictationOrchestrator : IDisposable
 {
     // Treat a second toggle within this gap as spurious, not intentional: covers
@@ -112,7 +119,8 @@ public sealed class DictationOrchestrator : IDisposable
     private EventHandler? _sessionActivityHandler;
     private volatile bool _cancelRequested;
 
-    private bool _disposed;
+    private volatile bool _disposed;
+    private int _disposeStarted;
     private EventHandler<string>? _hookFailedHandler;
     private bool _initialized;
     private string? _lastPublishedPartialText;
@@ -146,6 +154,7 @@ public sealed class DictationOrchestrator : IDisposable
     private CancellationTokenSource? _streamingStartupCts;
 
     private EventHandler? _toggleHandler;
+    private int _toggleGateCloseOutcome;
 
     public DictationOrchestrator(
         HotkeyService hotkey,
@@ -240,12 +249,33 @@ public sealed class DictationOrchestrator : IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposeStarted, 1) != 0)
         {
             return;
         }
 
-        _disposed = true;
+        var toggleGateIdle = CloseToggleGateForDispose(
+            (ToggleGateCloseOutcome)Volatile.Read(ref _toggleGateCloseOutcome),
+            // ReSharper disable once AccessToDisposedClosure -- invoked synchronously here,
+            // strictly before the unconditional gate dispose at the end of this method.
+            () => MarkDisposedThenCloseToggleGate(
+                _toggleGate,
+                s_sessionLossGateTimeout,
+                () => _disposed = true
+            )
+        );
+        Volatile.Write(
+            ref _toggleGateCloseOutcome,
+            toggleGateIdle
+                ? (int)ToggleGateCloseOutcome.Idle
+                : (int)ToggleGateCloseOutcome.TimedOut
+        );
+        if (!toggleGateIdle)
+        {
+            Trace.WriteLine(
+                "[Dictation] Dispose timed out waiting for the toggle gate; proceeding with cleanup and leaving the live gate undisposed."
+            );
+        }
 
         if (_toggleHandler is not null)
         {
@@ -326,7 +356,49 @@ public sealed class DictationOrchestrator : IDisposable
             Trace.WriteLine($"[Dictation] Snapshot shutdown failed: {ex.Message}");
         }
 
+        // The gate's Dispose is self-guarding (idempotent, no-ops while busy), so calling it
+        // unconditionally also covers a gate that went idle during the teardown waits above
+        // after the bounded close had already timed out.
         _toggleGate.Dispose();
+    }
+
+    internal async Task<bool> CloseToggleGateAsync()
+    {
+        return await CloseToggleGateAsync(
+                s_sessionLossGateTimeout,
+                () => _disposed = true,
+                _toggleGate.CloseAsync,
+                outcome => Volatile.Write(ref _toggleGateCloseOutcome, (int)outcome)
+            )
+            .ConfigureAwait(false);
+    }
+
+    internal static async Task<bool> CloseToggleGateAsync(
+        TimeSpan budget,
+        Action markDisposed,
+        Func<TimeSpan, Task<bool>> closeToggleGateAsync,
+        Action<ToggleGateCloseOutcome> recordOutcome
+    )
+    {
+        // This mark must precede the asynchronous wait: the current gate owner may still be in
+        // startup feedback and will revalidate this state before opening the microphone.
+        markDisposed();
+        var idle = await closeToggleGateAsync(budget).ConfigureAwait(false);
+        recordOutcome(idle ? ToggleGateCloseOutcome.Idle : ToggleGateCloseOutcome.TimedOut);
+        return idle;
+    }
+
+    internal static bool CloseToggleGateForDispose(
+        ToggleGateCloseOutcome recordedOutcome,
+        Func<bool> closeWhenUnrecorded
+    )
+    {
+        return recordedOutcome switch
+        {
+            ToggleGateCloseOutcome.Idle => true,
+            ToggleGateCloseOutcome.TimedOut => false,
+            _ => closeWhenUnrecorded(),
+        };
     }
 
     internal static void StopCaptureAndRestoreSystemAudio(
@@ -365,6 +437,23 @@ public sealed class DictationOrchestrator : IDisposable
         {
             Trace.WriteLine($"[Dictation] ResumeMedia during dispose failed: {ex.Message}");
         }
+    }
+
+    private static bool MarkDisposedThenCloseToggleGate(
+        DictationToggleGate toggleGate,
+        TimeSpan budget,
+        Action markDisposed
+    )
+    {
+        // This mark must precede the bounded wait: the current gate owner may still be in
+        // startup feedback and will revalidate this state before opening the microphone.
+        markDisposed();
+        return toggleGate.CloseAsync(budget).GetAwaiter().GetResult();
+    }
+
+    internal static bool IsCaptureStartAllowed(bool disposed, bool inputAllowed)
+    {
+        return !disposed && inputAllowed;
     }
 
     public void Initialize()
@@ -618,7 +707,10 @@ public sealed class DictationOrchestrator : IDisposable
                         // Disposal can restore system audio and stop capture while the
                         // bounded cue is still pending; never open a new capture session
                         // once shutdown has begun.
-                        var allowed = !_disposed && _sessionActivityMonitor.IsInputAllowed;
+                        var allowed = IsCaptureStartAllowed(
+                            _disposed,
+                            _sessionActivityMonitor.IsInputAllowed
+                        );
                         inputRejectedAfterCue = !allowed;
                         return allowed;
                     },
@@ -1141,7 +1233,9 @@ public sealed class DictationOrchestrator : IDisposable
         // than release/reacquire) so a concurrent start can't slip in and record behind the lock.
         if (!await _toggleGate.WaitAsync(s_sessionLossGateTimeout).ConfigureAwait(false))
         {
-            Trace.WriteLine("[Dictation] Session-loss discard timed out waiting for the toggle gate.");
+            Trace.WriteLine(_toggleGate.IsClosed
+                ? "[Dictation] Session-loss discard refused because the toggle gate is closed."
+                : "[Dictation] Session-loss discard timed out waiting for the current toggle-gate owner.");
             return;
         }
 

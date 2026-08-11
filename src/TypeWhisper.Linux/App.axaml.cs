@@ -28,6 +28,8 @@ public class App : Application
     ///     better than any other default on Linux, so we migrate past it.
     /// </summary>
     private const string UpstreamDefaultHotkey = "Ctrl+Shift+F9";
+    private static readonly TimeSpan s_shutdownQuiesceBudget = TimeSpan.FromSeconds(5);
+    private static int s_skipProviderDisposal;
 
     /// <summary>
     ///     Tray-menu Exit flips this; Close-button handler checks it to decide
@@ -778,30 +780,34 @@ public class App : Application
             Debug.WriteLine($"[App] Tray dispose failed: {ex.Message}");
         }
 
-        DisposeDictationBeforeAudio(
-            services.GetService<DictationOrchestrator>(),
-            services.GetService<AudioRecordingService>()
-        );
-
+        var httpApi = services.GetService<HttpApiService>();
+        var httpApiDrained = true;
         try
         {
-            var models = services.GetService<ModelManagerService>();
-            if (models is not null)
+            if (httpApi is not null)
             {
-                await models.UnloadModelAsync().ConfigureAwait(false);
+                httpApiDrained = await httpApi
+                    .QuiesceAsync(s_shutdownQuiesceBudget)
+                    .WaitAsync(s_shutdownQuiesceBudget + TimeSpan.FromSeconds(1))
+                    .ConfigureAwait(false);
             }
+        }
+        catch (TimeoutException ex)
+        {
+            httpApiDrained = false;
+            Debug.WriteLine($"[App] HTTP API quiesce timed out: {ex.Message}");
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[App] Model unload failed: {ex.Message}");
+            httpApiDrained = false;
+            Debug.WriteLine($"[App] HTTP API quiesce failed: {ex.Message}");
         }
 
         try
         {
-            // Kill the pactl subscribe child process if it's still running.
-            // DisposeDictationBeforeAudio already Stop()s it; this is a belt-and-braces
-            // cleanup of the singleton in case follow-default was never active on the
-            // audio service.
+            // Reap the pactl subscribe child even when an HTTP handler outlives the drain budget.
+            // Audio disposal also stops it when follow-default is active; disposing the singleton
+            // here covers every configuration and prevents the child from being orphaned to init.
             var deviceWatcher = services.GetService<IDefaultDeviceChangeWatcher>();
             deviceWatcher?.Dispose();
         }
@@ -820,10 +826,56 @@ public class App : Application
             Debug.WriteLine($"[App] Playback dispose failed: {ex.Message}");
         }
 
+        var shutdownDecision = ApplyHttpApiDrainResult(httpApiDrained);
+        if (!shutdownDecision.DisposeDependencies)
+        {
+            // Fail fast into process exit after reaping the default-device watcher and playback.
+            // Deliberately skip dictation, audio, and model cleanup; Program observes
+            // SkipProviderDisposal and skips the provider too, so those DI-owned dependencies are
+            // not disposed underneath the admitted HTTP handler that outlived the drain budget.
+            Debug.WriteLine(
+                "[App] HTTP API drain timed out; skipping dependent and provider disposal before process exit."
+            );
+            return;
+        }
+
+        var dictation = services.GetService<DictationOrchestrator>();
         try
         {
-            var api = services.GetService<HttpApiService>();
-            api?.Dispose();
+            if (dictation is not null
+                && !await dictation.CloseToggleGateAsync().ConfigureAwait(false))
+            {
+                Debug.WriteLine(
+                    "[App] Dictation toggle gate did not go idle within the close budget."
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Dictation toggle-gate close failed: {ex.Message}");
+        }
+
+        DisposeDictationBeforeAudio(
+            dictation,
+            services.GetService<AudioRecordingService>()
+        );
+
+        try
+        {
+            var models = services.GetService<ModelManagerService>();
+            if (models is not null)
+            {
+                await models.UnloadModelAsync().ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Model unload failed: {ex.Message}");
+        }
+
+        try
+        {
+            httpApi?.Dispose();
         }
         catch (Exception ex)
         {
@@ -840,6 +892,34 @@ public class App : Application
             Debug.WriteLine($"[App] Dictation session result store dispose failed: {ex.Message}");
         }
     }
+
+    internal static bool SkipProviderDisposal =>
+        Volatile.Read(ref s_skipProviderDisposal) != 0;
+
+    internal static ShutdownDisposalDecision ApplyHttpApiDrainResult(bool httpApiDrained)
+    {
+        var decision = new ShutdownDisposalDecision(
+            DisposeDependencies: httpApiDrained,
+            SkipProviderDisposal: !httpApiDrained
+        );
+        Volatile.Write(
+            ref s_skipProviderDisposal,
+            decision.SkipProviderDisposal ? 1 : 0
+        );
+        return decision;
+    }
+
+    internal static void ResetShutdownDisposalDecisionForTests()
+    {
+        Volatile.Write(ref s_skipProviderDisposal, 0);
+    }
+
+    internal readonly record struct ShutdownDisposalDecision(
+        bool DisposeDependencies,
+        // ReSharper disable once MemberHidesStaticFromOuterClass -- deliberately mirrors the
+        // App.SkipProviderDisposal flag this decision component feeds.
+        bool SkipProviderDisposal
+    );
 
     internal static void DisposeDictationBeforeAudio(
         IDisposable? dictation,
