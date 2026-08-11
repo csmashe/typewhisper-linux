@@ -22,11 +22,26 @@ internal sealed class DictationToggleGate : IDisposable
 {
     private readonly Lock _coordinationLock = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private bool _closed;
+    private TaskCompletionSource? _closedAndIdle;
+    private bool _gateDisposed;
     private bool _pendingStop;
     private bool _pendingStopWasCancel;
+    private int _queuedWaiterCount;
     private bool _startupInProgress;
 
     internal int CurrentCount => _gate.CurrentCount;
+
+    internal bool IsClosed
+    {
+        get
+        {
+            lock (_coordinationLock)
+            {
+                return _closed;
+            }
+        }
+    }
 
     internal bool HasPendingStop
     {
@@ -47,7 +62,7 @@ internal sealed class DictationToggleGate : IDisposable
     {
         lock (_coordinationLock)
         {
-            if (!_gate.Wait(0))
+            if (!TryAcquireLocked())
             {
                 return false;
             }
@@ -64,7 +79,7 @@ internal sealed class DictationToggleGate : IDisposable
             catch
             {
                 _startupInProgress = false;
-                _gate.Release();
+                ReleaseLocked();
                 throw;
             }
         }
@@ -80,7 +95,7 @@ internal sealed class DictationToggleGate : IDisposable
         lock (_coordinationLock)
         {
             _startupInProgress = false;
-            _gate.Release();
+            ReleaseLocked();
 
             var deferred = new DictationDeferredStop(_pendingStop, _pendingStopWasCancel);
             _pendingStop = false;
@@ -100,7 +115,7 @@ internal sealed class DictationToggleGate : IDisposable
     {
         lock (_coordinationLock)
         {
-            if (_gate.Wait(0))
+            if (TryAcquireLocked())
             {
                 _pendingStop = false;
                 _pendingStopWasCancel = false;
@@ -120,10 +135,15 @@ internal sealed class DictationToggleGate : IDisposable
 
         lock (_coordinationLock)
         {
+            if (_closed)
+            {
+                return DictationStopGateResult.Busy;
+            }
+
             // Cancel intent is sticky so a later ordinary stop can't downgrade a queued discard to a save.
             _pendingStopWasCancel |= wasCancel;
             _pendingStop = true;
-            if (!_gate.Wait(0))
+            if (!TryAcquireLocked())
             {
                 return DictationStopGateResult.PendingStartupCompletion;
             }
@@ -138,16 +158,48 @@ internal sealed class DictationToggleGate : IDisposable
     ///     Bounded acquisition used by session-loss teardown. Its waiting semantics intentionally
     ///     remain independent of the start/stop pending-request protocol.
     /// </summary>
-    internal Task<bool> WaitAsync(TimeSpan timeout)
+    internal async Task<bool> WaitAsync(TimeSpan timeout)
     {
-        return _gate.WaitAsync(timeout);
+        Task<bool> waitTask;
+        lock (_coordinationLock)
+        {
+            if (_closed)
+            {
+                return false;
+            }
+
+            // Register the transition while CloseAsync is excluded. This covers both a queued
+            // waiter and a synchronously reserved permit until ownership is installed below.
+            waitTask = _gate.WaitAsync(timeout);
+            _queuedWaiterCount++;
+        }
+
+        var acquired = await waitTask.ConfigureAwait(false);
+        lock (_coordinationLock)
+        {
+            _queuedWaiterCount--;
+            if (!acquired)
+            {
+                CompleteCloseIfIdleLocked();
+                return false;
+            }
+
+            if (_closed)
+            {
+                _gate.Release();
+                CompleteCloseIfIdleLocked();
+                return false;
+            }
+
+            return true;
+        }
     }
 
     internal bool TryAcquire()
     {
         lock (_coordinationLock)
         {
-            return _gate.Wait(0);
+            return TryAcquireLocked();
         }
     }
 
@@ -155,12 +207,94 @@ internal sealed class DictationToggleGate : IDisposable
     {
         lock (_coordinationLock)
         {
-            _gate.Release();
+            ReleaseLocked();
         }
+    }
+
+    internal Task<bool> CloseAsync(TimeSpan budget)
+    {
+        Task closedAndIdle;
+        lock (_coordinationLock)
+        {
+            _closed = true;
+            if (IsIdleLocked())
+            {
+                return Task.FromResult(true);
+            }
+
+            _closedAndIdle ??= new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            closedAndIdle = _closedAndIdle.Task;
+        }
+
+        return WaitForClosedAndIdleAsync(closedAndIdle, budget);
     }
 
     public void Dispose()
     {
-        _gate.Dispose();
+        lock (_coordinationLock)
+        {
+            if (_gateDisposed)
+            {
+                return;
+            }
+
+            _closed = true;
+            if (!IsIdleLocked())
+            {
+                return;
+            }
+
+            _gate.Dispose();
+            _gateDisposed = true;
+        }
+    }
+
+    private bool TryAcquireLocked()
+    {
+        // Keep the closed check and semaphore acquisition in this same critical section. Otherwise
+        // CloseAsync could close an apparently idle gate while a pre-checked caller acquires it.
+        if (_closed || !_gate.Wait(0))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private void ReleaseLocked()
+    {
+        _gate.Release();
+        CompleteCloseIfIdleLocked();
+    }
+
+    private void CompleteCloseIfIdleLocked()
+    {
+        if (_closed && IsIdleLocked())
+        {
+            _closedAndIdle?.TrySetResult();
+        }
+    }
+
+    private bool IsIdleLocked()
+    {
+        return _gate.CurrentCount == 1 && _queuedWaiterCount == 0;
+    }
+
+    private static async Task<bool> WaitForClosedAndIdleAsync(
+        Task closedAndIdle,
+        TimeSpan budget
+    )
+    {
+        try
+        {
+            await closedAndIdle.WaitAsync(budget).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
     }
 }
