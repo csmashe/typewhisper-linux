@@ -25,7 +25,10 @@ public sealed class SpeechFeedbackService : IDisposable
 
     private sealed class PlaybackRequest(long version)
     {
-        private int _completed;
+        private readonly Lock _lifetimeLock = new();
+        private bool _cancellationDisposed;
+        private bool _completed;
+        private int _stopWorkerCount;
 
         public CancellationTokenSource Cancellation { get; } = new();
         public TaskCompletionSource Completion { get; } = new(
@@ -44,6 +47,13 @@ public sealed class SpeechFeedbackService : IDisposable
             {
                 // Completion won the race and already released the source.
             }
+            catch (Exception ex)
+            {
+                // A plugin cancellation callback threw. The session stop below must
+                // still be attempted, otherwise the prior speech keeps playing into
+                // the newly opened microphone.
+                Debug.WriteLine($"SpeechFeedback cancellation error: {ex.Message}");
+            }
 
             try
             {
@@ -55,15 +65,86 @@ public sealed class SpeechFeedbackService : IDisposable
             }
         }
 
+        public Task LaunchCancelAndStop()
+        {
+            lock (_lifetimeLock)
+            {
+                _stopWorkerCount++;
+            }
+
+            try
+            {
+                // Cancellation callbacks and synchronous plugin Stop() implementations
+                // cross the host trust boundary on this worker. Startup may advance once
+                // the existing budget expires; PA25's reservation/version checks keep
+                // reentrant publication and late completion safe, and Complete is idempotent.
+                return Task.Run(() =>
+                {
+                    try
+                    {
+                        CancelAndStop();
+                    }
+                    finally
+                    {
+                        StopWorkerCompleted();
+                    }
+                });
+            }
+            catch
+            {
+                StopWorkerCompleted();
+                throw;
+            }
+        }
+
         public void Complete()
         {
-            if (Interlocked.Exchange(ref _completed, 1) != 0)
+            lock (_lifetimeLock)
             {
-                return;
+                if (_completed)
+                {
+                    return;
+                }
+
+                _completed = true;
             }
 
             Completion.TrySetResult();
-            Cancellation.Dispose();
+            DisposeCancellationIfReady();
+        }
+
+        private void StopWorkerCompleted()
+        {
+            lock (_lifetimeLock)
+            {
+                _stopWorkerCount--;
+            }
+
+            DisposeCancellationIfReady();
+        }
+
+        private void DisposeCancellationIfReady()
+        {
+            var dispose = false;
+            lock (_lifetimeLock)
+            {
+                if (
+                    _completed
+                    && _stopWorkerCount == 0
+                    && !_cancellationDisposed
+                )
+                {
+                    _cancellationDisposed = true;
+                    dispose = true;
+                }
+            }
+
+            // A permanently blocked plugin never lets its worker count reach zero and so
+            // deliberately retains this request and its CTS.
+            if (dispose)
+            {
+                Cancellation.Dispose();
+            }
         }
     }
 
@@ -274,14 +355,13 @@ public sealed class SpeechFeedbackService : IDisposable
 
     internal IStartupFeedbackReservation ReserveStartupFeedback()
     {
-        PlaybackRequest? priorRequest;
         StartupFeedbackReservation reservation;
         lock (_lock)
         {
             // A late readback from the prior dictation must not supersede or
             // overlap the new start cue. Install the reservation before detaching
             // the current request so there is no stop-to-reserve publication gap.
-            priorRequest = _playbackRequest;
+            var priorRequest = _playbackRequest;
             reservation = new StartupFeedbackReservation(this, priorRequest);
             _startupFeedbackReservation = reservation;
             _playbackRequest = null;
@@ -289,7 +369,6 @@ public sealed class SpeechFeedbackService : IDisposable
             _isPlaybackPending = false;
         }
 
-        priorRequest?.CancelAndStop();
         return reservation;
     }
 
@@ -300,6 +379,7 @@ public sealed class SpeechFeedbackService : IDisposable
             return;
         }
 
+        var stopWorker = request.LaunchCancelAndStop();
         try
         {
             _ = await WaitForCompletionAsync(request, s_stopPlaybackTimeout)
@@ -308,6 +388,10 @@ public sealed class SpeechFeedbackService : IDisposable
         catch (Exception ex)
         {
             Debug.WriteLine($"SpeechFeedback stop wait error: {ex.Message}");
+        }
+        finally
+        {
+            ObserveStopWorker(stopWorker, "prior playback stop");
         }
     }
 
@@ -331,6 +415,7 @@ public sealed class SpeechFeedbackService : IDisposable
             return;
         }
 
+        Task? stopWorker = null;
         try
         {
             if (
@@ -341,7 +426,7 @@ public sealed class SpeechFeedbackService : IDisposable
                 return;
             }
 
-            request.CancelAndStop();
+            stopWorker = request.LaunchCancelAndStop();
             ReleasePlaybackOwnership(request);
             _ = await WaitForCompletionAsync(request, s_stopPlaybackTimeout)
                 .ConfigureAwait(false);
@@ -351,10 +436,17 @@ public sealed class SpeechFeedbackService : IDisposable
         {
             // Spoken feedback is optional; a failed timeout wait or provider
             // completion must not leave the request's session unstopped.
-            request.CancelAndStop();
+            stopWorker ??= request.LaunchCancelAndStop();
             ReleasePlaybackOwnership(request);
             request.Complete();
             Debug.WriteLine($"SpeechFeedback recording announcement error: {ex.Message}");
+        }
+        finally
+        {
+            if (stopWorker is not null)
+            {
+                ObserveStopWorker(stopWorker, "recording announcement stop");
+            }
         }
     }
 
@@ -655,6 +747,33 @@ public sealed class SpeechFeedbackService : IDisposable
 
         await timeoutTask.ConfigureAwait(false);
         return false;
+    }
+
+    private static void ObserveStopWorker(Task stopWorker, string operation)
+    {
+        if (stopWorker.IsCompleted)
+        {
+            if (stopWorker.Exception is { } exception)
+            {
+                Debug.WriteLine(
+                    $"SpeechFeedback {operation} error: {exception.GetBaseException().Message}"
+                );
+            }
+
+            return;
+        }
+
+        _ = stopWorker.ContinueWith(
+            static (task, state) =>
+                Debug.WriteLine(
+                    $"SpeechFeedback {state} error: {task.Exception!.GetBaseException().Message}"
+                ),
+            operation,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously
+                | TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default
+        );
     }
 
     private IReadOnlyList<ITtsProviderPlugin> AllProviders()
