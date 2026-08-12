@@ -212,6 +212,199 @@ public sealed class AudioDuckingServiceTests
         errorLog.VerifyNoOtherCalls();
     }
 
+    [Fact]
+    public void RestoreAudio_retires_persistently_failed_input_after_three_attempts_and_releases_guard()
+    {
+        const string listing = """
+            Sink Input #55
+                Volume: mono: 48000 / 73% / -8.00 dB
+            """;
+        string[] list = ["list", "sink-inputs"];
+        string[] duck = ["set-sink-input-volume", "55", "24000"];
+        string[] restore = ["set-sink-input-volume", "55", "48000"];
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "pactl" && args.SequenceEqual(list),
+            listing
+        );
+        runner.FailWhen(
+            (fileName, args) => fileName == "pactl" && args.SequenceEqual(restore),
+            "persistent restore failure"
+        );
+        var errorLog = new Mock<IErrorLogService>();
+        var service = new AudioDuckingService(runner, errorLog.Object);
+
+        service.DuckAudio(0.5f);
+        service.RestoreAudio();
+        service.RestoreAudio();
+        service.RestoreAudio();
+        service.RestoreAudio();
+        service.DuckAudio(0.5f);
+
+        Assert.Equal(2, CountInvocations(runner, list));
+        Assert.Equal(2, CountInvocations(runner, duck));
+        Assert.Equal(3, CountInvocations(runner, restore));
+        errorLog.Verify(
+            log =>
+                log.AddEntry(
+                    It.Is<string>(message =>
+                        message.EndsWith(
+                            "Giving up after 3 attempts.",
+                            StringComparison.Ordinal
+                        )
+                    ),
+                    ErrorCategory.General
+                ),
+            Times.Once
+        );
+        errorLog.Verify(
+            log => log.AddEntry(It.IsAny<string>(), ErrorCategory.General),
+            Times.Exactly(3)
+        );
+        errorLog.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public void RestoreAudio_missing_input_is_completed_without_retry_or_error()
+    {
+        const string listing = """
+            Sink Input #56
+                Volume: mono: 40000 / 61% / -12.00 dB
+            """;
+        string[] list = ["list", "sink-inputs"];
+        string[] duck = ["set-sink-input-volume", "56", "20000"];
+        string[] restore = ["set-sink-input-volume", "56", "40000"];
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "pactl" && args.SequenceEqual(list),
+            listing
+        );
+        runner.FailWhen(
+            (fileName, args) => fileName == "pactl" && args.SequenceEqual(restore),
+            "Failure: No such entity\n"
+        );
+        var errorLog = new Mock<IErrorLogService>();
+        var service = new AudioDuckingService(runner, errorLog.Object);
+
+        service.DuckAudio(0.5f);
+        service.RestoreAudio();
+        service.RestoreAudio();
+        service.DuckAudio(0.5f);
+
+        Assert.Equal(2, CountInvocations(runner, list));
+        Assert.Equal(2, CountInvocations(runner, duck));
+        Assert.Equal(1, CountInvocations(runner, restore));
+        errorLog.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public void RestoreAudio_success_clears_state_and_fresh_cycle_starts_at_zero()
+    {
+        const string listing = """
+            Sink Input #57
+                Volume: mono: 36000 / 55% / -14.00 dB
+            """;
+        string[] list = ["list", "sink-inputs"];
+        string[] duck = ["set-sink-input-volume", "57", "18000"];
+        string[] restore = ["set-sink-input-volume", "57", "36000"];
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "pactl" && args.SequenceEqual(list),
+            listing
+        );
+        var service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>());
+
+        service.DuckAudio(0.5f);
+        service.RestoreAudio();
+        service.RestoreAudio();
+        service.DuckAudio(0.5f);
+        service.RestoreAudio();
+        service.RestoreAudio();
+
+        Assert.Equal(2, CountInvocations(runner, list));
+        Assert.Equal(2, CountInvocations(runner, duck));
+        Assert.Equal(2, CountInvocations(runner, restore));
+        Assert.Equal(6, runner.Invocations.Count);
+    }
+
+
+    [Fact]
+    public void RestoreAudio_other_failure_is_not_classified_as_missing()
+    {
+        const string listing = """
+            Sink Input #56
+                Volume: mono: 40000 / 61% / -12.00 dB
+            """;
+        string[] restore = ["set-sink-input-volume", "56", "40000"];
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "pactl" && args.SequenceEqual(["list", "sink-inputs"]),
+            listing
+        );
+        runner.FailWhen(
+            (fileName, args) => fileName == "pactl" && args.SequenceEqual(restore),
+            "Failure: Access denied\n"
+        );
+        var errorLog = new Mock<IErrorLogService>();
+        var service = new AudioDuckingService(runner, errorLog.Object);
+
+        service.DuckAudio(0.5f);
+        service.RestoreAudio();
+        service.RestoreAudio();
+
+        Assert.Equal(2, CountInvocations(runner, restore));
+        errorLog.Verify(
+            log => log.AddEntry(It.IsAny<string>(), ErrorCategory.General),
+            Times.Exactly(2)
+        );
+    }
+
+    [Fact]
+    public void RestoreAudio_counters_are_per_entry()
+    {
+        const string listing = """
+            Sink Input #56
+                Volume: mono: 40000 / 61% / -12.00 dB
+            Sink Input #57
+                Volume: mono: 30000 / 46% / -18.00 dB
+            """;
+        string[] restoreHealthy = ["set-sink-input-volume", "56", "40000"];
+        string[] restoreStuck = ["set-sink-input-volume", "57", "30000"];
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "pactl" && args.SequenceEqual(["list", "sink-inputs"]),
+            listing
+        );
+        runner.FailWhen(
+            (fileName, args) => fileName == "pactl" && args.SequenceEqual(restoreStuck),
+            "persistent restore failure"
+        );
+        var errorLog = new Mock<IErrorLogService>();
+        var service = new AudioDuckingService(runner, errorLog.Object);
+
+        service.DuckAudio(0.5f);
+        service.RestoreAudio();
+        service.RestoreAudio();
+        service.RestoreAudio();
+        service.RestoreAudio();
+
+        // The healthy entry restores once; the stuck one is retried to eviction and a
+        // global counter would have retired it early via the healthy entry's failure-free
+        // passes.
+        Assert.Equal(1, CountInvocations(runner, restoreHealthy));
+        Assert.Equal(3, CountInvocations(runner, restoreStuck));
+        errorLog.Verify(
+            log =>
+                log.AddEntry(
+                    It.Is<string>(message =>
+                        message.EndsWith("Giving up after 3 attempts.", StringComparison.Ordinal)
+                    ),
+                    ErrorCategory.General
+                ),
+            Times.Once
+        );
+    }
+
     private static int CountInvocations(FakeProcessRunner runner, IReadOnlyList<string> args)
     {
         return runner.Invocations.Count(invocation => invocation.Args.SequenceEqual(args));
