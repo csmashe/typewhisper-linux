@@ -729,7 +729,7 @@ public class App : Application
     ///     Runs before desktop.Shutdown() so the Host isn't left racing
     ///     libuiohook / PortAudio on exit.
     /// </summary>
-    private static async Task TearDownAsync(IServiceProvider services)
+    internal static async Task TearDownAsync(IServiceProvider services)
     {
         try
         {
@@ -780,6 +780,35 @@ public class App : Application
             Debug.WriteLine($"[App] Tray dispose failed: {ex.Message}");
         }
 
+        var recorder = services.GetService<RecorderSectionViewModel>();
+        var recorderDrained = true;
+        try
+        {
+            if (recorder is not null)
+            {
+                recorderDrained = await recorder
+                    .QuiesceAsync(s_shutdownQuiesceBudget)
+                    .WaitAsync(s_shutdownQuiesceBudget + TimeSpan.FromSeconds(1))
+                    .ConfigureAwait(false);
+                if (!recorderDrained)
+                {
+                    Debug.WriteLine(
+                        "[App] Recorder quiesce did not settle within the shutdown budget."
+                    );
+                }
+            }
+        }
+        catch (TimeoutException ex)
+        {
+            recorderDrained = false;
+            Debug.WriteLine($"[App] Recorder quiesce timed out: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            recorderDrained = false;
+            Debug.WriteLine($"[App] Recorder quiesce failed: {ex.Message}");
+        }
+
         var httpApi = services.GetService<HttpApiService>();
         var httpApiDrained = true;
         try
@@ -826,15 +855,16 @@ public class App : Application
             Debug.WriteLine($"[App] Playback dispose failed: {ex.Message}");
         }
 
-        var shutdownDecision = ApplyHttpApiDrainResult(httpApiDrained);
+        var shutdownDecision = ApplyHttpApiDrainResult(httpApiDrained, recorderDrained);
         if (!shutdownDecision.DisposeDependencies)
         {
-            // Fail fast into process exit after reaping the default-device watcher and playback.
-            // Deliberately skip dictation, audio, and model cleanup; Program observes
-            // SkipProviderDisposal and skips the provider too, so those DI-owned dependencies are
-            // not disposed underneath the admitted HTTP handler that outlived the drain budget.
+            // Fail fast into process exit after a recorder or HTTP drain failure and after
+            // reaping the default-device watcher and playback. Deliberately skip dictation,
+            // audio, and model cleanup; Program observes SkipProviderDisposal and skips the
+            // provider too, so those DI-owned dependencies are not disposed underneath the
+            // recorder workflow or admitted HTTP handler that outlived its drain budget.
             Debug.WriteLine(
-                "[App] HTTP API drain timed out; skipping dependent and provider disposal before process exit."
+                "[App] Recorder or HTTP API drain failed; skipping dependent and provider disposal before process exit."
             );
             return;
         }
@@ -896,11 +926,15 @@ public class App : Application
     internal static bool SkipProviderDisposal =>
         Volatile.Read(ref s_skipProviderDisposal) != 0;
 
-    internal static ShutdownDisposalDecision ApplyHttpApiDrainResult(bool httpApiDrained)
+    internal static ShutdownDisposalDecision ApplyHttpApiDrainResult(
+        bool httpApiDrained,
+        bool recorderDrained
+    )
     {
+        var drainsSettled = httpApiDrained && recorderDrained;
         var decision = new ShutdownDisposalDecision(
-            DisposeDependencies: httpApiDrained,
-            SkipProviderDisposal: !httpApiDrained
+            DisposeDependencies: drainsSettled,
+            SkipProviderDisposal: !drainsSettled
         );
         Volatile.Write(
             ref s_skipProviderDisposal,
