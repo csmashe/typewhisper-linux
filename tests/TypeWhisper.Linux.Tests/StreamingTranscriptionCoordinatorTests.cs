@@ -63,6 +63,35 @@ public sealed class StreamingTranscriptionCoordinatorTests
     }
 
     [Fact]
+    public async Task FinalizeAsync_TwoResampledFrames_SendBatchEquivalentPcm16()
+    {
+        const int sourceSampleRate = 48000;
+        var session = new FakeStreamingSession();
+        var plugin = new FakePlugin
+        {
+            OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session),
+        };
+        var input = CreateSignal(1024, sourceSampleRate);
+        var expectedSamples = AudioRecordingService.ResampleToSampleRate(
+            input,
+            sourceSampleRate,
+            16000
+        );
+        var expectedPcm16 = ToPcm16(expectedSamples);
+
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
+
+        await coord.StartAsync(CancellationToken.None);
+        coord.AcceptAudioFrame(input[..512], sourceSampleRate);
+        coord.AcceptAudioFrame(input[512..], sourceSampleRate);
+        await coord.FinalizeAsync(CancellationToken.None);
+
+        var actualPcm16 = session.SentChunks.SelectMany(static chunk => chunk).ToArray();
+        Assert.Equal(expectedPcm16, actualPcm16);
+    }
+
+    [Fact]
     public async Task PendingBuffer_AtCapacity_DropsOldest()
     {
         var session = new FakeStreamingSession();
@@ -1137,6 +1166,34 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var hi = chunk[1];
         var s = (short)(lo | (hi << 8));
         return (int)Math.Round(s / 32767f * 1000f) - 1;
+    }
+
+    private static float[] CreateSignal(int sampleCount, int sampleRate)
+    {
+        var samples = new float[sampleCount];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            samples[i] = (float)(
+                0.55 * Math.Sin(2 * Math.PI * 997 * i / sampleRate)
+                + 0.25 * Math.Sin(2 * Math.PI * 5107 * i / sampleRate)
+                + 0.0001 * (i % 29)
+            );
+        }
+
+        return samples;
+    }
+
+    private static byte[] ToPcm16(float[] samples)
+    {
+        var pcm16 = new byte[samples.Length * 2];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var sample = AudioRecordingService.ToPcm16(samples[i]);
+            pcm16[i * 2] = (byte)(sample & 0xFF);
+            pcm16[i * 2 + 1] = (byte)((sample >> 8) & 0xFF);
+        }
+
+        return pcm16;
     }
 
     private static async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)
