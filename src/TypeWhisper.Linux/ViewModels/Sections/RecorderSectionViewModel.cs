@@ -2,6 +2,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Services;
@@ -25,8 +26,12 @@ public partial class RecorderSectionViewModel : ObservableObject
     private readonly AudioRecordingService _audio;
     private readonly string _recordingDirectory;
     private readonly ISettingsService _settings;
-    private readonly Func<byte[], Task<string?>> _transcribeAsync;
+    private readonly Func<byte[], CancellationToken, Task<string?>> _transcribeAsync;
+    private readonly CancellationTokenSource _transcriptionCancellation = new();
+    private readonly Lock _workflowGate = new();
     private AudioRecordingService.AudioCaptureSession? _captureSession;
+    private bool _commandIngressClosed;
+    private Task _publishedWorkflow = Task.CompletedTask;
 
     [ObservableProperty]
     private double _audioLevel;
@@ -65,7 +70,7 @@ public partial class RecorderSectionViewModel : ObservableObject
         AudioRecordingService audio,
         ISettingsService settings,
         string recordingDirectory,
-        Func<byte[], Task<string?>> transcribeAsync
+        Func<byte[], CancellationToken, Task<string?>> transcribeAsync
     )
     {
         ArgumentNullException.ThrowIfNull(audio);
@@ -94,15 +99,130 @@ public partial class RecorderSectionViewModel : ObservableObject
     public bool HasRecordings => Recordings.Count > 0;
 
     [RelayCommand]
-    private async Task ToggleRecording()
+    private Task ToggleRecording()
     {
-        if (IsRecording)
+        TaskCompletionSource publishedWorkflow;
+        Task workflow;
+        bool stopRecording;
+        lock (_workflowGate)
         {
-            await StopRecordingAsync();
+            if (_commandIngressClosed)
+            {
+                return Task.CompletedTask;
+            }
+
+            publishedWorkflow = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            workflow = publishedWorkflow.Task;
+            stopRecording = IsRecording;
+            _publishedWorkflow = workflow;
         }
-        else
+
+        _ = RunToggleRecordingWorkflowAsync(
+            publishedWorkflow,
+            stopRecording,
+            _transcriptionCancellation.Token
+        );
+        return workflow;
+    }
+
+    private async Task RunToggleRecordingWorkflowAsync(
+        TaskCompletionSource publishedWorkflow,
+        bool stopRecording,
+        CancellationToken transcriptionCancellationToken
+    )
+    {
+        try
         {
-            StartRecording();
+            if (stopRecording)
+            {
+                await StopRecordingAsync(transcriptionCancellationToken);
+            }
+            else
+            {
+                StartRecording();
+            }
+        }
+        catch (OperationCanceledException ex)
+        {
+            publishedWorkflow.TrySetCanceled(ex.CancellationToken);
+            return;
+        }
+        catch (Exception ex)
+        {
+            publishedWorkflow.TrySetException(ex);
+            return;
+        }
+
+        publishedWorkflow.TrySetResult();
+    }
+
+    internal async Task<bool> QuiesceAsync(TimeSpan budget)
+    {
+        Task workflow;
+        lock (_workflowGate)
+        {
+            _commandIngressClosed = true;
+            workflow = _publishedWorkflow;
+        }
+
+        // Deliberately do not auto-stop an active recording whose stop workflow
+        // was never initiated. Shutdown cancellation applies only to transcription.
+
+        // Launch the cancel on the pool so a blocking plugin cancellation callback
+        // cannot park the caller before the bounded wait below even starts.
+        var cancelWorker = Task.Run(_transcriptionCancellation.Cancel);
+        _ = cancelWorker.ContinueWith(
+            static task =>
+            {
+                // Read the exception outside the conditional Debug call so the fault
+                // is observed in Release builds too.
+                var observed = task.Exception;
+                Debug.WriteLine(
+                    $"[Recorder] Transcription cancellation callback failed: {observed}"
+                );
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted
+                | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
+
+        try
+        {
+            await workflow.WaitAsync(budget).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException) when (!workflow.IsCompleted)
+        {
+            // Bound stalled disk work and plugins that ignore cancellation. The
+            // intact workflow may still finish, so observe any late fault.
+            _ = workflow.ContinueWith(
+                static task =>
+                {
+                    // Read the exception outside the conditional Debug call so the
+                    // fault is observed in Release builds too.
+                    var observed = task.Exception;
+                    Debug.WriteLine(
+                        $"[Recorder] Workflow failed after quiesce timed out: {observed}"
+                    );
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted
+                    | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default
+            );
+            return false;
+        }
+        catch (Exception ex)
+        {
+            // Any other exception (including a TimeoutException that lost the race to
+            // a completing workflow) means the workflow SETTLED — faulted or canceled —
+            // rather than outlived the budget. The recording lane is quiet, which is
+            // exactly what shutdown needs: a sticky faulted workflow (e.g. a busy mic
+            // making TryStartRecording rethrow) must not force every later shutdown
+            // onto the skip-all-disposal path.
+            Debug.WriteLine($"[Recorder] Workflow settled non-successfully: {ex.Message}");
+            return true;
         }
     }
 
@@ -132,7 +252,7 @@ public partial class RecorderSectionViewModel : ObservableObject
         _timer.Start();
     }
 
-    private async Task StopRecordingAsync()
+    private async Task StopRecordingAsync(CancellationToken transcriptionCancellationToken)
     {
         _timer?.Stop();
         _timer?.Dispose();
@@ -148,7 +268,7 @@ public partial class RecorderSectionViewModel : ObservableObject
         {
             wav = captureSession is null
                 ? []
-                : await _audio.StopRecordingAsync(captureSession);
+                : await _audio.StopRecordingAsync(captureSession, CancellationToken.None);
             if (wav.Length == 0)
             {
                 StatusText = Loc.Instance["Recorder.StatusNoAudio"];
@@ -160,7 +280,8 @@ public partial class RecorderSectionViewModel : ObservableObject
             // CommitRecording touches no UI state.
             var wavBytes = wav;
             filePath = await Task.Run(
-                () => RecorderFileNamer.CommitRecording(_recordingDirectory, DateTime.Now, wavBytes)
+                () => RecorderFileNamer.CommitRecording(_recordingDirectory, DateTime.Now, wavBytes),
+                CancellationToken.None
             );
         }
         catch
@@ -184,7 +305,9 @@ public partial class RecorderSectionViewModel : ObservableObject
         string? transcript;
         try
         {
-            transcript = await _transcribeAsync(wav);
+            // Cancellation is cooperative: a plugin may ignore it and complete a
+            // transcript during shutdown, while the recording remains preserved.
+            transcript = await _transcribeAsync(wav, transcriptionCancellationToken);
         }
         catch
         {
@@ -226,24 +349,29 @@ public partial class RecorderSectionViewModel : ObservableObject
         DurationText = "0:00";
     }
 
-    private static Func<byte[], Task<string?>> CreateTranscriptionDelegate(
+    private static Func<byte[], CancellationToken, Task<string?>> CreateTranscriptionDelegate(
         ModelManagerService models,
         ISettingsService settings
     )
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(settings);
-        return wav => TranscribeAsync(models, settings, wav);
+        return (wav, cancellationToken) =>
+            TranscribeAsync(models, settings, wav, cancellationToken);
     }
 
     private static async Task<string?> TranscribeAsync(
         ModelManagerService models,
         ISettingsService settings,
-        byte[] wav
+        byte[] wav,
+        CancellationToken cancellationToken
     )
     {
         var effectiveModelId = settings.Current.SelectedModelId;
-        await using var lease = await models.AcquireTranscriptionAsync(effectiveModelId);
+        await using var lease = await models.AcquireTranscriptionAsync(
+            effectiveModelId,
+            cancellationToken: cancellationToken
+        );
         try
         {
             var result = await lease.Plugin.TranscribeAsync(
@@ -251,7 +379,7 @@ public partial class RecorderSectionViewModel : ObservableObject
                 LanguageSelection.Automatic,
                 false,
                 null,
-                CancellationToken.None
+                cancellationToken
             );
             return result.Text;
         }

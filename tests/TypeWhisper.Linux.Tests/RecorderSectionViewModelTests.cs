@@ -10,6 +10,7 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class RecorderSectionViewModelTests : IDisposable
 {
+    private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(5);
     private readonly string _tempDir = TestPaths.CreateTempDirectory(
         "TypeWhisper.RecorderSectionViewModelTests"
     );
@@ -40,7 +41,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         var sut = CreateViewModel(
             audio,
             _tempDir,
-            async _ =>
+            async (_, _) =>
             {
                 transcriptionStarted.SetResult();
                 await releaseTranscription.Task;
@@ -79,13 +80,194 @@ public sealed class RecorderSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task QuiesceAsync_CancelsTranscriptionAndAwaitsWorkflow()
+    {
+        var transcriptionStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var cancellationObserved = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseTranscription = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var audio = CreateAudioService();
+        var sut = CreateViewModel(
+            audio,
+            _tempDir,
+            async (_, cancellationToken) =>
+            {
+                transcriptionStarted.TrySetResult();
+                await using var registration = cancellationToken.Register(
+                    cancellationObserved.SetResult
+                );
+                await releaseTranscription.Task;
+                cancellationToken.ThrowIfCancellationRequested();
+                return "shutdown should sacrifice this transcript";
+            }
+        );
+        await StartRecordingWithFramesAsync(sut, audio);
+
+        var stopTask = sut.ToggleRecordingCommand.ExecuteAsync(null);
+        await transcriptionStarted.Task.WaitAsync(s_testGuard);
+        Task<bool> quiesceTask;
+
+        try
+        {
+            Assert.Single(Directory.GetFiles(_tempDir, "recording-*.wav"));
+
+            quiesceTask = sut.QuiesceAsync(s_testGuard);
+            await cancellationObserved.Task.WaitAsync(s_testGuard);
+
+            Assert.False(quiesceTask.IsCompleted);
+            Assert.False(stopTask.IsCompleted);
+        }
+        finally
+        {
+            releaseTranscription.TrySetResult();
+        }
+
+        Assert.True(await quiesceTask.WaitAsync(s_testGuard));
+        await stopTask.WaitAsync(s_testGuard);
+        var recording = Assert.Single(sut.Recordings);
+        Assert.True(File.Exists(recording.FilePath));
+        Assert.False(File.Exists(Path.ChangeExtension(recording.FilePath, ".txt")));
+        Assert.Null(recording.Transcript);
+    }
+
+    [Fact]
+    public async Task QuiesceAsync_ClosesCommandIngress()
+    {
+        using var audio = CreateAudioService();
+        var sut = CreateViewModel(
+            audio,
+            _tempDir,
+            (_, _) => Task.FromResult<string?>(null)
+        );
+
+        Assert.True(await sut.QuiesceAsync(s_testGuard).WaitAsync(s_testGuard));
+
+        await sut.ToggleRecordingCommand.ExecuteAsync(null).WaitAsync(s_testGuard);
+
+        Assert.False(sut.IsRecording);
+        Assert.Equal(Loc.Instance["Recorder.StatusReady"], sut.StatusText);
+        Assert.Empty(Directory.GetFiles(_tempDir, "recording-*.wav"));
+    }
+
+    [Fact]
+    public async Task QuiesceAsync_WhenTranscriberIgnoresCancellation_TimesOut()
+    {
+        var transcriptionStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseTranscription = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var audio = CreateAudioService();
+        var sut = CreateViewModel(
+            audio,
+            _tempDir,
+            async (_, _) =>
+            {
+                transcriptionStarted.TrySetResult();
+                await releaseTranscription.Task;
+                return null;
+            }
+        );
+        await StartRecordingWithFramesAsync(sut, audio);
+
+        var stopTask = sut.ToggleRecordingCommand.ExecuteAsync(null);
+        await transcriptionStarted.Task.WaitAsync(s_testGuard);
+        Task<bool>? quiesceTask = null;
+
+        try
+        {
+            quiesceTask = sut.QuiesceAsync(TimeSpan.FromMilliseconds(25));
+
+            Assert.False(await quiesceTask.WaitAsync(s_testGuard));
+            Assert.False(stopTask.IsCompleted);
+        }
+        finally
+        {
+            releaseTranscription.TrySetResult();
+            await stopTask.WaitAsync(s_testGuard);
+            if (quiesceTask is not null)
+            {
+                await quiesceTask.WaitAsync(s_testGuard);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task TearDownAsync_CancelsAndAwaitsRecorderBeforeAudioDispose()
+    {
+        var transcriptionStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var cancellationObserved = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseTranscription = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var audio = CreateAudioService();
+        var sut = CreateViewModel(
+            audio,
+            _tempDir,
+            async (_, cancellationToken) =>
+            {
+                transcriptionStarted.TrySetResult();
+                await using var registration = cancellationToken.Register(
+                    cancellationObserved.SetResult
+                );
+                await releaseTranscription.Task;
+                cancellationToken.ThrowIfCancellationRequested();
+                return "shutdown should sacrifice this transcript";
+            }
+        );
+        await StartRecordingWithFramesAsync(sut, audio);
+
+        var stopTask = sut.ToggleRecordingCommand.ExecuteAsync(null);
+        await transcriptionStarted.Task.WaitAsync(s_testGuard);
+        Task? tearDownTask = null;
+
+        try
+        {
+            tearDownTask = App.TearDownAsync(new TearDownServiceProvider(sut, audio));
+            await cancellationObserved.Task.WaitAsync(s_testGuard);
+
+            Assert.False(tearDownTask.IsCompleted);
+            var probeSession = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+                audio.TryStartRecording(whisperModeEnabled: false)
+            );
+            audio.ProcessAudioBufferForTest([0.25f, -0.25f]);
+            // ReSharper disable once MethodHasAsyncOverload -- the synchronous probe avoids adding an unrelated tail-drain workflow while teardown is parked.
+            Assert.True(audio.StopRecording(probeSession).Length > 44);
+            Assert.False(tearDownTask.IsCompleted);
+        }
+        finally
+        {
+            releaseTranscription.TrySetResult();
+            await stopTask.WaitAsync(s_testGuard);
+            if (tearDownTask is not null)
+            {
+                await tearDownTask.WaitAsync(s_testGuard);
+            }
+
+            App.ResetShutdownDisposalDecisionForTests();
+        }
+
+        Assert.Null(audio.TryStartRecording(whisperModeEnabled: false));
+    }
+
+    [Fact]
     public async Task ToggleRecordingCommand_WhenAudioAlreadyOwned_ShowsNoMicrophoneAndDoesNotClaimRecording()
     {
         using var audio = CreateAudioService();
         var foreignSession = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
             audio.TryStartRecording(whisperModeEnabled: false)
         );
-        var sut = CreateViewModel(audio, _tempDir, _ => Task.FromResult<string?>(null));
+        var sut = CreateViewModel(audio, _tempDir, (_, _) => Task.FromResult<string?>(null));
 
         await sut.ToggleRecordingCommand.ExecuteAsync(null);
 
@@ -107,7 +289,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         var sut = CreateViewModel(
             audio,
             _tempDir,
-            _ =>
+            (_, _) =>
             {
                 transcriptionInvocations++;
                 return Task.FromResult<string?>("must not be returned");
@@ -136,7 +318,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         var sut = CreateViewModel(
             audio,
             _tempDir,
-            _ => Task.FromException<string?>(new InvalidOperationException("model failed"))
+            (_, _) => Task.FromException<string?>(new InvalidOperationException("model failed"))
         );
         await StartRecordingWithFramesAsync(sut, audio);
 
@@ -162,7 +344,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         var sut = CreateViewModel(
             audio,
             poisonedRecordingDirectory,
-            _ =>
+            (_, _) =>
             {
                 transcriptionInvocations++;
                 return Task.FromResult<string?>("must not be returned");
@@ -196,7 +378,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         var sut = CreateViewModel(
             audio,
             _tempDir,
-            _ =>
+            (_, _) =>
             {
                 var wavPath = Directory.GetFiles(_tempDir, "recording-*.wav").Single();
                 Directory.CreateDirectory(Path.ChangeExtension(wavPath, ".txt"));
@@ -234,7 +416,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         var sut = CreateViewModel(
             audio,
             _tempDir,
-            _ =>
+            (_, _) =>
             {
                 var wavPath = Directory.GetFiles(_tempDir, "recording-*.wav").Single();
                 File.WriteAllBytes(Path.ChangeExtension(wavPath, ".txt"), foreignBytes);
@@ -269,7 +451,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         var sut = CreateViewModel(
             audio,
             _tempDir,
-            _ => Task.FromResult<string?>(expectedTranscript)
+            (_, _) => Task.FromResult<string?>(expectedTranscript)
         );
         await StartRecordingWithFramesAsync(sut, audio);
 
@@ -297,7 +479,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
     )
     {
         using var audio = CreateAudioService();
-        var sut = CreateViewModel(audio, _tempDir, _ => Task.FromResult(transcript));
+        var sut = CreateViewModel(audio, _tempDir, (_, _) => Task.FromResult(transcript));
         await StartRecordingWithFramesAsync(sut, audio);
 
         await sut.ToggleRecordingCommand.ExecuteAsync(null);
@@ -320,7 +502,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         var timeProvider = new ManualTimeProvider();
         var serviceJobs = new List<Action>();
         using var audio = CreateAudioService(serviceJobs.Add, timeProvider);
-        var sut = CreateViewModel(audio, _tempDir, _ => Task.FromResult<string?>(null));
+        var sut = CreateViewModel(audio, _tempDir, (_, _) => Task.FromResult<string?>(null));
         await sut.ToggleRecordingCommand.ExecuteAsync(null);
         Assert.True(sut.IsRecording);
 
@@ -357,10 +539,31 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         );
     }
 
+    [Fact]
+    public async Task QuiesceAsync_TreatsFaultedWorkflowAsDrained()
+    {
+        using var audio = new AudioRecordingService(
+            _ => throw new InvalidOperationException("device busy"),
+            () => 0,
+            () => { }
+        );
+        var sut = CreateViewModel(audio, _tempDir, (_, _) => Task.FromResult<string?>(null));
+
+        // A busy/unopenable microphone makes TryStartRecording rethrow, leaving the
+        // published workflow faulted for the rest of the view-model's lifetime.
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.ToggleRecordingCommand.ExecuteAsync(null)
+        );
+
+        // A settled-faulted workflow is a quiet recording lane: it must classify as
+        // drained, not force shutdown onto the skip-all-disposal path.
+        Assert.True(await sut.QuiesceAsync(TimeSpan.FromSeconds(5)));
+    }
+
     private static RecorderSectionViewModel CreateViewModel(
         AudioRecordingService audio,
         string recordingDirectory,
-        Func<byte[], Task<string?>> transcribeAsync
+        Func<byte[], CancellationToken, Task<string?>> transcribeAsync
     )
     {
         return new RecorderSectionViewModel(
@@ -394,6 +597,22 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         public void Advance(TimeSpan elapsed)
         {
             _timestamp += (long)(elapsed.TotalSeconds * TimestampFrequency);
+        }
+    }
+
+    private sealed class TearDownServiceProvider(
+        RecorderSectionViewModel recorder,
+        AudioRecordingService audio
+    ) : IServiceProvider
+    {
+        public object? GetService(Type serviceType)
+        {
+            if (serviceType == typeof(RecorderSectionViewModel))
+            {
+                return recorder;
+            }
+
+            return serviceType == typeof(AudioRecordingService) ? audio : null;
         }
     }
 
