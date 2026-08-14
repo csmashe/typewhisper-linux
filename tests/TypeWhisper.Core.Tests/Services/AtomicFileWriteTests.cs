@@ -8,6 +8,305 @@ public sealed class AtomicFileWriteTests
 {
     [Fact]
     [SupportedOSPlatform("linux")]
+    public void WriteAllText_ReplaceOrdersModeThenFileSyncThenRenameThenDirectorySync()
+    {
+        var directory = TestPaths.CreateTempDirectory(
+            "TypeWhisper.AtomicFileWriteReplaceSyncOrderTests"
+        );
+        var path = Path.Join(directory, "state.json");
+        var finalMode =
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead;
+        var calls = new List<string>();
+        string? stagedPath = null;
+
+        try
+        {
+            File.WriteAllText(path, "old");
+            File.SetUnixFileMode(path, finalMode);
+
+            // The hooks prove the publication order from observable filesystem state: the final
+            // mode is present while the old destination remains at file-sync time, then the new
+            // destination is present at directory-sync time.
+            AtomicFileWrite.WriteAllText(
+                path,
+                "new",
+                candidate => stagedPath = candidate,
+                new AtomicFileWrite.SyncHooks(
+                    (candidate, _) =>
+                    {
+                        calls.Add("file-sync");
+                        Assert.Equal(stagedPath, candidate);
+                        Assert.Equal("old", File.ReadAllText(path));
+                        Assert.Equal("new", File.ReadAllText(candidate));
+                        Assert.Equal(finalMode, File.GetUnixFileMode(candidate));
+                    },
+                    syncedDirectory =>
+                    {
+                        calls.Add("directory-sync");
+                        Assert.Equal(directory, syncedDirectory);
+                        Assert.Equal("new", File.ReadAllText(path));
+                        Assert.Equal(finalMode, File.GetUnixFileMode(path));
+                        Assert.NotNull(stagedPath);
+                        Assert.False(File.Exists(stagedPath));
+                    }
+                )
+            );
+
+            Assert.Equal(["file-sync", "directory-sync"], calls);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void WriteAllBytes_ReplaceReadOnlyDestination_PreservesModeAndSucceeds()
+    {
+        var directory = TestPaths.CreateTempDirectory(
+            "TypeWhisper.AtomicFileWriteReadOnlyReplaceTests"
+        );
+        var path = Path.Join(directory, "state.bin");
+        byte[] replacement = [0, 1, 2, 255];
+        var readOnlyMode =
+            UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead;
+
+        try
+        {
+            File.WriteAllBytes(path, [9, 8, 7, 6]);
+            File.SetUnixFileMode(path, readOnlyMode);
+
+            AtomicFileWrite.WriteAllBytes(path, replacement);
+
+            Assert.Equal(replacement, File.ReadAllBytes(path));
+            Assert.Equal(readOnlyMode, File.GetUnixFileMode(path));
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void WriteAllText_SymlinkThenDotDot_SyncsKernelResolvedParentPrefix()
+    {
+        var root = TestPaths.CreateTempDirectory(
+            "TypeWhisper.AtomicFileWriteSymlinkParentTests"
+        );
+        var resolvedDirectory = Path.Join(root, "resolved");
+        var symlinkTarget = Path.Join(resolvedDirectory, "nested");
+        Directory.CreateDirectory(symlinkTarget);
+        Directory.CreateSymbolicLink(Path.Join(resolvedDirectory, "link"), symlinkTarget);
+        var rawParent = Path.Join(resolvedDirectory, "link", "..");
+        var rawPath = Path.Join(rawParent, "state.json");
+        var directorySyncObserved = false;
+
+        try
+        {
+            AtomicFileWrite.WriteAllText(
+                rawPath,
+                "new",
+                stagedWriteObserver: null,
+                syncHooks: new AtomicFileWrite.SyncHooks(
+                    (_, _) => { },
+                    syncedDirectory =>
+                    {
+                        directorySyncObserved = true;
+                        Assert.Equal(rawParent, syncedDirectory);
+                    }
+                )
+            );
+
+            Assert.True(directorySyncObserved);
+            Assert.Equal("new", File.ReadAllText(Path.Join(resolvedDirectory, "state.json")));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void WriteAllBytesCreateNew_HardLinkSyncsDirectoryAfterLinkAndTempCleanup()
+    {
+        var directory = TestPaths.CreateTempDirectory(
+            "TypeWhisper.AtomicFileWriteHardLinkSyncOrderTests"
+        );
+        var path = Path.Join(directory, "data.bin");
+        byte[] bytes = [0, 1, 2, 255];
+        var calls = new List<string>();
+        string? stagedPath = null;
+
+        try
+        {
+            // At the hooks, path existence distinguishes pre-link file sync from the directory
+            // sync that must follow both the link and removal of its temporary sibling name.
+            AtomicFileWrite.WriteAllBytesCreateNew(
+                path,
+                bytes,
+                attemptHardLink: true,
+                stagedWriteObserver: candidate => stagedPath = candidate,
+                syncHooks: new AtomicFileWrite.SyncHooks(
+                    (candidate, _) =>
+                    {
+                        calls.Add("file-sync");
+                        Assert.Equal(stagedPath, candidate);
+                        Assert.False(File.Exists(path));
+                        Assert.Equal(bytes, File.ReadAllBytes(candidate));
+                    },
+                    syncedDirectory =>
+                    {
+                        calls.Add("directory-sync");
+                        Assert.Equal(directory, syncedDirectory);
+                        Assert.Equal(bytes, File.ReadAllBytes(path));
+                        Assert.NotNull(stagedPath);
+                        Assert.False(File.Exists(stagedPath));
+                    }
+                )
+            );
+
+            Assert.Equal(["file-sync", "directory-sync"], calls);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void WriteAllBytesCreateNew_RenameAt2FallbackSyncsDirectoryAfterRename()
+    {
+        var directory = TestPaths.CreateTempDirectory(
+            "TypeWhisper.AtomicFileWriteRenameAt2SyncOrderTests"
+        );
+        var path = Path.Join(directory, "data.bin");
+        byte[] bytes = [255, 2, 1, 0];
+        var calls = new List<string>();
+        string? stagedPath = null;
+
+        try
+        {
+            // Disabling hard links selects renameat2; the hooks prove its destination is absent
+            // at file sync and visible, with the temp name consumed, at directory sync.
+            AtomicFileWrite.WriteAllBytesCreateNew(
+                path,
+                bytes,
+                attemptHardLink: false,
+                stagedWriteObserver: candidate => stagedPath = candidate,
+                syncHooks: new AtomicFileWrite.SyncHooks(
+                    (candidate, _) =>
+                    {
+                        calls.Add("file-sync");
+                        Assert.Equal(stagedPath, candidate);
+                        Assert.False(File.Exists(path));
+                        Assert.Equal(bytes, File.ReadAllBytes(candidate));
+                    },
+                    syncedDirectory =>
+                    {
+                        calls.Add("directory-sync");
+                        Assert.Equal(directory, syncedDirectory);
+                        Assert.Equal(bytes, File.ReadAllBytes(path));
+                        Assert.NotNull(stagedPath);
+                        Assert.False(File.Exists(stagedPath));
+                    }
+                )
+            );
+
+            Assert.Equal(["file-sync", "directory-sync"], calls);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void WriteAllText_WhenDirectorySyncFails_ThrowsIndeterminateCommitException()
+    {
+        var directory = TestPaths.CreateTempDirectory(
+            "TypeWhisper.AtomicFileWriteDirectorySyncFailureTests"
+        );
+        var path = Path.Join(directory, "state.json");
+        string? stagedPath = null;
+
+        try
+        {
+            var error = Assert.Throws<AtomicFileWriteIndeterminateCommitException>(() =>
+                AtomicFileWrite.WriteAllText(
+                    path,
+                    "new",
+                    candidate => stagedPath = candidate,
+                    new AtomicFileWrite.SyncHooks(
+                        (_, _) => { },
+                        _ => throw new InjectedDirectorySyncException()
+                    )
+                )
+            );
+
+            Assert.Contains("Indeterminate commit", error.Message, StringComparison.Ordinal);
+            Assert.Contains(path, error.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("already exists", error.Message, StringComparison.Ordinal);
+            Assert.IsType<InjectedDirectorySyncException>(error.InnerException);
+            Assert.Equal("new", File.ReadAllText(path));
+            Assert.NotNull(stagedPath);
+            Assert.False(File.Exists(stagedPath));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void FlushDirectoryToDisk_RealLinuxDirectory_Succeeds()
+    {
+        var directory = TestPaths.CreateTempDirectory(
+            "TypeWhisper.AtomicFileWriteDirectorySyncSmokeTests"
+        );
+
+        try
+        {
+            // Ordering hooks cannot validate libc flags, signatures, or descriptor ownership;
+            // this smoke exercises real open(2)/fsync(2). Actual power-loss durability is not
+            // unit-testable and remains a filesystem/platform guarantee.
+            AtomicFileWrite.FlushDirectoryToDisk(directory);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void FlushDirectoryToDisk_FilePath_Throws()
+    {
+        var directory = TestPaths.CreateTempDirectory(
+            "TypeWhisper.AtomicFileWriteDirectorySyncFilePathTests"
+        );
+        var path = Path.Join(directory, "not-a-directory");
+
+        try
+        {
+            File.WriteAllText(path, "content");
+
+            Assert.Throws<IOException>(() => AtomicFileWrite.FlushDirectoryToDisk(path));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
     public void WriteAllBytesCreateNew_WithUnixMode_PublishesCompleteOwnerOnlyFile()
     {
         var directory = TestPaths.CreateTempDirectory(
@@ -433,6 +732,8 @@ public sealed class AtomicFileWriteTests
 }
 
 internal sealed class InjectedStagedWriteException : Exception;
+
+internal sealed class InjectedDirectorySyncException : Exception;
 
 internal sealed class AtomicWriteFailureTestPath : IDisposable
 {
