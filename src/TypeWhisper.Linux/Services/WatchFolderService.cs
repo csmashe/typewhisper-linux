@@ -879,7 +879,9 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
                 AtomicFileWrite.WriteAllTextCreateNew(outputPath, artifact.Content);
                 return outputPath;
             }
-            catch (IOException) when (PathIsOccupied(outputPath))
+            catch (IOException ex)
+                when (ex is not AtomicFileWriteIndeterminateCommitException
+                      && PathIsOccupied(outputPath))
             {
                 // Another actor claimed the candidate after the fast-path check; try the
                 // next suffix.

@@ -185,9 +185,14 @@ internal static class ApiKeyProtection
                 {
                     AtomicFileWrite.WriteAllBytesCreateNew(path, generated, KeyFileMode);
                 }
-                catch (IOException) when (File.Exists(path))
+                catch (IOException ex)
+                    when (ex is not AtomicFileWriteIndeterminateCommitException
+                        && File.Exists(path))
                 {
-                    // A concurrent creator won. Its file is validated below.
+                    // A concurrent creator won. Its file is validated below. An
+                    // indeterminate commit must propagate instead: this is key material,
+                    // and our own published file would satisfy the exists-check while its
+                    // durability is unknown.
                 }
             }
             finally

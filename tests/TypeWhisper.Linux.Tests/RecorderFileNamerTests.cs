@@ -1,3 +1,4 @@
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Tests;
 using Xunit;
@@ -31,6 +32,26 @@ public sealed class RecorderFileNamerTests : IDisposable
 
         var committedPath = RecorderFileNamer.CommitRecording(_tempDir, s_timestamp, wav);
 
+        Assert.Equal(Path.Join(_tempDir, "recording-2026-07-15-134207.wav"), committedPath);
+        Assert.Equal(wav, File.ReadAllBytes(committedPath));
+        Assert.Empty(Directory.EnumerateFiles(_tempDir, "*.tmp"));
+    }
+
+    [Fact]
+    public void CommitRecording_WhenDirectorySyncFails_PublishesOnceAndPropagatesIndeterminateCommit()
+    {
+        byte[] wav = [0, 1, 2, 255];
+
+        Assert.Throws<AtomicFileWriteIndeterminateCommitException>(() =>
+            RecorderFileNamer.CommitRecording(
+                _tempDir,
+                s_timestamp,
+                wav,
+                _ => throw new IOException("Injected directory-sync failure.")
+            )
+        );
+
+        var committedPath = Assert.Single(Directory.EnumerateFiles(_tempDir, "*.wav"));
         Assert.Equal(Path.Join(_tempDir, "recording-2026-07-15-134207.wav"), committedPath);
         Assert.Equal(wav, File.ReadAllBytes(committedPath));
         Assert.Empty(Directory.EnumerateFiles(_tempDir, "*.tmp"));
