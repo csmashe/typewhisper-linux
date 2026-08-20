@@ -18,6 +18,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     private const string DefaultSelectionId = "__default__";
     private readonly AudioFileService _audioFiles;
 
+    private readonly ModelManagerService _models;
     private readonly IFileTranscriptionProcessor _processor;
     private readonly PluginManager _pluginManager;
     private readonly Action<Action> _postStatus;
@@ -97,6 +98,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         ISettingsService settings,
         AudioFileService audioFiles,
         WatchFolderService watchFolder,
+        ModelManagerService models,
         PluginManager pluginManager,
         Action<Action>? postStatus = null
     )
@@ -106,6 +108,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         _settings = settings;
         _audioFiles = audioFiles;
         _watchFolder = watchFolder;
+        _models = models;
         _pluginManager = pluginManager;
 
         Items.CollectionChanged += (_, _) =>
@@ -604,6 +607,16 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     {
         var engines = _pluginManager.TranscriptionEngines;
         if (engines.Count == 0)
+        {
+            throw new WatchFolderNotReadyException(
+                "Transcription engines are not ready."
+            );
+        }
+
+        if (
+            string.IsNullOrWhiteSpace(options.EngineId)
+            && _models.GetTranscriptionPlugin(_settings.Current.SelectedModelId) is null
+        )
         {
             throw new WatchFolderNotReadyException(
                 "Transcription engines are not ready."
