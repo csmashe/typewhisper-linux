@@ -248,6 +248,48 @@ public class ModelManagerServiceTests
     }
 
     [Fact]
+    public async Task DownloadAndLoadModelAsync_DependencyFaultOce_RecordsFailedNotReady()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out var plugin
+        );
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        // A bare TaskCanceledException with the caller's token NOT requested is a
+        // dependency fault per the SDK cancellation-origin contract (e.g. a stalled
+        // third-party download); it must record Failed, never clear toward Ready.
+        fake.DownloadFault = new TaskCanceledException();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.DownloadAndLoadModelAsync(fullModelId, CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None)
+        );
+
+        Assert.Equal(ModelStatusType.Error, sut.GetStatus(fullModelId).Type);
+        Assert.Equal(0, fake.LoadCallCount);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_DependencyFaultOce_RecordsFailedNotReady()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out var plugin
+        );
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.LoadFault = new TaskCanceledException();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.LoadModelAsync(fullModelId)
+                .WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None)
+        );
+
+        Assert.Equal(ModelStatusType.Error, sut.GetStatus(fullModelId).Type);
+        Assert.Null(sut.ActiveModelId);
+    }
+
+    [Fact]
     public async Task LoadModelAsync_BlockedWhileLeaseHeld_UntilLeaseDisposed()
     {
         var sut = CreateServiceWithLoadableModel(out var fullModelId, out _);
@@ -385,6 +427,94 @@ public class ModelManagerServiceTests
         await sut.DownloadAndLoadModelAsync(fullModelId);
 
         Assert.True(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task DownloadAndLoadModelAsync_ExternalCancellationMidDownload_ResetsStatusAndPropagates()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out var plugin
+        );
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        fake.DownloadGate = new TaskCompletionSource();
+        using var cancellation = new CancellationTokenSource();
+
+        var operation = sut.DownloadAndLoadModelAsync(fullModelId, cancellation.Token);
+        await fake.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        await cancellation.CancelAsync();
+        fake.DownloadGate.SetResult();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            operation.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None)
+        );
+        Assert.Equal(ModelStatusType.NotDownloaded, sut.GetStatus(fullModelId).Type);
+        Assert.Equal(0, fake.LoadCallCount);
+
+        await sut.DownloadAndLoadModelAsync(fullModelId, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        Assert.Equal(2, fake.DownloadCallCount);
+        Assert.Equal(1, fake.LoadCallCount);
+        Assert.Equal(fullModelId, sut.ActiveModelId);
+    }
+
+    [Fact]
+    public async Task AcquireTranscriptionAsync_CancellationIgnoringDownloadCommit_StopsBeforeLoadAndPreservesArtifact()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out var plugin
+        );
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        fake.DownloadObservesCancellation = false;
+        fake.DownloadGate = new TaskCompletionSource();
+        using var cancellation = new CancellationTokenSource();
+
+        var acquire = sut.AcquireTranscriptionAsync(
+            fullModelId,
+            cancellationToken: cancellation.Token
+        );
+        await fake.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        await cancellation.CancelAsync();
+        Assert.False(acquire.IsCompleted);
+        fake.DownloadGate.SetResult();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => acquire);
+        Assert.True(fake.ModelDownloaded);
+        Assert.Equal(0, fake.LoadCallCount);
+        Assert.Equal(0, fake.SelectModelCallCount);
+        Assert.Null(sut.ActiveModelId);
+        Assert.Equal(ModelStatusType.Ready, sut.GetStatus(fullModelId).Type);
+    }
+
+    [Fact]
+    public async Task DownloadAndLoadModelAsync_CancellationIgnoringLoad_DoesNotCommitActiveState()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out var plugin
+        );
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.LoadObservesCancellation = false;
+        fake.LoadGate = new TaskCompletionSource();
+        using var cancellation = new CancellationTokenSource();
+
+        var operation = sut.DownloadAndLoadModelAsync(fullModelId, cancellation.Token);
+        await fake.LoadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        await cancellation.CancelAsync();
+        Assert.False(operation.IsCompleted);
+        fake.LoadGate.SetResult();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            operation.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None)
+        );
+        Assert.Equal(0, fake.DownloadCallCount);
+        Assert.Equal(1, fake.LoadCallCount);
+        Assert.Equal(0, fake.SelectModelCallCount);
+        Assert.Null(sut.ActiveModelId);
+        Assert.Equal(ModelStatusType.Ready, sut.GetStatus(fullModelId).Type);
     }
 
     [Fact]
@@ -1174,11 +1304,31 @@ public class ModelManagerServiceTests
 
         public string? LastLoadedModelId { get; private set; }
 
+        public bool ModelDownloaded { get; set; } = true;
+
+        public int DownloadCallCount { get; private set; }
+
+        /// <summary>Completes once <see cref="DownloadModelAsync" /> has begun.</summary>
+        public TaskCompletionSource DownloadStarted { get; } = new();
+
+        /// <summary>When set, <see cref="DownloadModelAsync" /> parks until it completes.</summary>
+        public TaskCompletionSource? DownloadGate { get; set; }
+        public Exception? DownloadFault { get; set; }
+        public Exception? LoadFault { get; set; }
+
+        public bool DownloadObservesCancellation { get; set; } = true;
+
+        public int LoadCallCount { get; private set; }
+
         /// <summary>Completes once <see cref="LoadModelAsync" /> has begun.</summary>
         public TaskCompletionSource LoadStarted { get; } = new();
 
         /// <summary>When set, <see cref="LoadModelAsync" /> parks until it completes.</summary>
         public TaskCompletionSource? LoadGate { get; set; }
+
+        public bool LoadObservesCancellation { get; set; } = true;
+
+        public int SelectModelCallCount { get; private set; }
 
         /// <summary>Completes once <see cref="UnloadModelAsync" /> has begun.</summary>
         public TaskCompletionSource UnloadStarted { get; } = new();
@@ -1228,15 +1378,70 @@ public class ModelManagerServiceTests
 
         public void SelectModel(string modelId)
         {
+            SelectModelCallCount++;
             SelectedModelId = modelId;
+        }
+
+        public bool IsModelDownloaded(string modelId)
+        {
+            return ModelDownloaded;
+        }
+
+        public async Task DownloadModelAsync(
+            string modelId,
+            IProgress<double>? progress,
+            CancellationToken ct
+        )
+        {
+            DownloadCallCount++;
+            DownloadStarted.TrySetResult();
+            if (DownloadGate is not null)
+            {
+                if (DownloadObservesCancellation)
+                {
+                    await DownloadGate.Task.WaitAsync(ct);
+                }
+                else
+                {
+                    await DownloadGate.Task;
+                }
+            }
+            else if (DownloadObservesCancellation)
+            {
+                ct.ThrowIfCancellationRequested();
+            }
+
+            if (DownloadFault is not null)
+            {
+                throw DownloadFault;
+            }
+
+            ModelDownloaded = true;
         }
 
         public async Task LoadModelAsync(string modelId, CancellationToken ct)
         {
+            LoadCallCount++;
             LoadStarted.TrySetResult();
             if (LoadGate is not null)
             {
-                await LoadGate.Task.WaitAsync(ct);
+                if (LoadObservesCancellation)
+                {
+                    await LoadGate.Task.WaitAsync(ct);
+                }
+                else
+                {
+                    await LoadGate.Task;
+                }
+            }
+            else if (LoadObservesCancellation)
+            {
+                ct.ThrowIfCancellationRequested();
+            }
+
+            if (LoadFault is not null)
+            {
+                throw LoadFault;
             }
 
             LastLoadedModelId = modelId;
