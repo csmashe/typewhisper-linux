@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -15,7 +16,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 {
     private readonly SystemCommandAvailabilityService? _commands;
     private readonly SemaphoreSlim _modelLock = new(1, 1);
-    private readonly Dictionary<string, ModelStatus> _modelStatuses = new();
+    private readonly ConcurrentDictionary<string, ModelStatus> _modelStatuses = new();
     private readonly ISettingsService _settings;
     private TranscriptionAccelerationPreference? _activeModelAccelerationPreference;
     private string? _activeModelId;
@@ -688,12 +689,28 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 {
                     Volatile.Write(ref downloadInProgress, false);
                 }
+
+                // A cancellation-ignoring plugin may have finished writing its artifact;
+                // that work is uninterruptible here, so checkpoint before the service
+                // transitions to loading and leave the artifact in place for GetStatus.
+                cancellationToken.ThrowIfCancellationRequested();
             }
 
             await LoadModelCoreAsync(modelId, cancellationToken);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            // Caller-requested cancellation: drop this operation's transient entry so
+            // GetStatus re-derives from the artifact state.
+            ClearStatus(modelId);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Includes an OperationCanceledException whose caller token is NOT requested:
+            // per the SDK cancellation-origin contract that is a dependency fault (e.g. a
+            // stalled third-party download surfacing as a bare TaskCanceledException) and
+            // must record Failed, never clear to an implied Ready.
             SetStatus(modelId, ModelStatus.Failed(ex.Message));
             throw;
         }
@@ -818,6 +835,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 {
                     Volatile.Write(ref loadInProgress, false);
                 }
+
+                cancellationToken.ThrowIfCancellationRequested();
             }
 
             plugin.SelectModel(pluginModelId);
@@ -825,8 +844,15 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             ActiveModelId = modelId;
             _activeModelAccelerationPreference = requestedPreference;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            ClearStatus(modelId);
+            throw;
+        }
         catch (Exception ex)
         {
+            // Unrequested OperationCanceledException lands here deliberately — a
+            // dependency fault must surface as Failed (cancellation-origin contract).
             SetStatus(modelId, ModelStatus.Failed(ex.Message));
             throw;
         }
@@ -862,8 +888,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
         // Unload succeeded: model is gone from memory but still on disk for download-capable
         // plugins, so drop the tracked status and let GetStatus recompute real availability.
-        _modelStatuses.Remove(modelId);
-        OnPropertyChanged(nameof(GetStatus));
+        ClearStatus(modelId);
         ActiveModelId = null;
         _activeModelAccelerationPreference = null;
     }
@@ -984,6 +1009,14 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     {
         _modelStatuses[modelId] = status;
         OnPropertyChanged(nameof(GetStatus));
+    }
+
+    private void ClearStatus(string modelId)
+    {
+        if (_modelStatuses.TryRemove(modelId, out _))
+        {
+            OnPropertyChanged(nameof(GetStatus));
+        }
     }
 
     private void OnPropertyChanged([CallerMemberName] string? name = null)
