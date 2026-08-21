@@ -31,7 +31,8 @@ public sealed class LanguageSelectionInvokerTests
     {
         var role = new RecordingRole(
             LanguageSelectionSupport.Supported,
-            LanguageSelectionSupport.Supported
+            LanguageSelectionSupport.Supported,
+            ["zh-Hans-CN"]
         );
         Assert.True(LanguageSelection.TryParse(" zh-hANS-cn ", out var selection));
 
@@ -39,6 +40,106 @@ public sealed class LanguageSelectionInvokerTests
 
         Assert.Equal(1, role.CallCount);
         Assert.Equal("zh-Hans-CN", role.ReceivedLanguage);
+    }
+
+    [Fact]
+    public async Task ExplicitLanguageOutsideAdvertisedList_ThrowsBeforeLegacyRoleIsInvoked()
+    {
+        var role = new RecordingRole(
+            LanguageSelectionSupport.Supported,
+            LanguageSelectionSupport.Supported,
+            ["en", "de"]
+        );
+
+        var exception = await Assert.ThrowsAsync<TranscriptionLanguageNotSupportedException>(
+            () =>
+                role.TranscribeAsync(
+                    [],
+                    LanguageSelection.Explicit("fr"),
+                    false,
+                    null,
+                    CancellationToken.None
+                )
+        );
+
+        Assert.Equal("test", exception.ProviderId);
+        Assert.Equal("model", exception.ModelId);
+        Assert.Equal("fr", exception.Selection.LanguageTag);
+        Assert.Equal(["en", "de"], exception.SupportedLanguages);
+        Assert.Equal(0, role.CallCount);
+    }
+
+    [Fact]
+    public async Task EmptySupportedLanguageList_PermitsEveryExplicitLanguage()
+    {
+        var role = new RecordingRole(
+            LanguageSelectionSupport.Supported,
+            LanguageSelectionSupport.Supported,
+            []
+        );
+
+        await role.TranscribeAsync(
+            [],
+            LanguageSelection.Explicit("ja-JP"),
+            false,
+            null,
+            CancellationToken.None
+        );
+
+        Assert.Equal(1, role.CallCount);
+        Assert.Equal("ja-JP", role.ReceivedLanguage);
+    }
+
+    [Fact]
+    public async Task AutomaticSupport_IsIndependentOfExplicitLanguageList()
+    {
+        var role = new RecordingRole(
+            LanguageSelectionSupport.Supported,
+            LanguageSelectionSupport.Supported,
+            ["de"]
+        );
+
+        await role.TranscribeAsync(
+            [],
+            LanguageSelection.Automatic,
+            false,
+            null,
+            CancellationToken.None
+        );
+
+        Assert.Equal(1, role.CallCount);
+        Assert.Null(role.ReceivedLanguage);
+    }
+
+    [Fact]
+    public async Task SupportedLanguageMatch_IsCaseInsensitiveButRequiresTheExactTag()
+    {
+        var role = new RecordingRole(
+            LanguageSelectionSupport.Supported,
+            LanguageSelectionSupport.Supported,
+            ["EN"]
+        );
+
+        await role.TranscribeAsync(
+            [],
+            LanguageSelection.Explicit("en"),
+            false,
+            null,
+            CancellationToken.None
+        );
+        await Assert.ThrowsAsync<TranscriptionLanguageNotSupportedException>(
+            () =>
+                role.TranscribeAsync(
+                    [],
+                    LanguageSelection.Explicit("en-US"),
+                    false,
+                    null,
+                    CancellationToken.None
+                )
+        );
+
+        Assert.Equal(1, role.CallCount);
+        Assert.Equal("en", role.ReceivedLanguage);
     }
 
     [Fact]
@@ -158,10 +259,16 @@ public sealed class LanguageSelectionInvokerTests
 
     private sealed class RecordingRole(
         LanguageSelectionSupport automaticSupport,
-        LanguageSelectionSupport explicitSupport
-    ) : LegacyRecordingRole, ITranscriptionLanguageSelectionCapabilities
+        LanguageSelectionSupport explicitSupport,
+        IReadOnlyList<string>? supportedLanguages = null
+    ) : LegacyRecordingRole, ITranscriptionEngineRole, ITranscriptionLanguageSelectionCapabilities
     {
+        // ITranscriptionEngineRole is re-listed so interface mapping re-runs against this
+        // class: without it, SupportedLanguages below would shadow the interface's default
+        // implementation ([]) instead of implementing it, and the invoker would never see it.
+
         public LanguageSelectionSupport AutomaticDetectionSupport => automaticSupport;
         public LanguageSelectionSupport ExplicitSelectionSupport => explicitSupport;
+        public IReadOnlyList<string> SupportedLanguages => supportedLanguages ?? [];
     }
 }

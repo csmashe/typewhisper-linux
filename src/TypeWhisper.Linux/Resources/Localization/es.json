@@ -247,6 +247,8 @@
   "Dictation.InputDevicesAvailable": "{0} dispositivo(s) de entrada disponible(s).",
   "Dictation.Language": "Idioma",
   "Dictation.LanguageAutoDetect": "Detectar automáticamente",
+  "Dictation.LanguageSelectionRequired": "El idioma guardado no está disponible para el modelo seleccionado. Elige un idioma explícitamente.",
+  "Dictation.LanguageSelectionRequiredAuto": "El idioma guardado no está disponible para el modelo seleccionado. Este modelo solo admite la detección automática: elige Auto.",
   "Dictation.LiveTranscriptionPreview": "Vista previa de la transcripción en vivo",
   "Dictation.LiveTranscriptionPreviewHint": "Muestra el texto parcial en la superposición de grabación mientras hablas.",
   "Dictation.LoadingModel": "Cargando {0}...",
@@ -656,7 +658,8 @@
   "Recorder.StatusReady": "Listo.",
   "Recorder.StatusRecording": "Grabando...",
   "Recorder.StatusSaveFailed": "No se pudo guardar la grabación.",
-  "Recorder.StatusSavedNoModel": "Guardado (ningún modelo cargado)",
+  "Recorder.StatusSavedNoTranscript": "Guardado, pero no se generó ninguna transcripción.",
+  "Recorder.StatusSavedTranscriptionFailed": "Guardado, pero la transcripción falló: {0}",
   "Recorder.StatusSavedTranscribing": "Guardado. Transcribiendo...",
   "Recorder.StatusTranscriptSaveFailed": "Guardado, pero no se pudo escribir la transcripción.",
   "Recorder.Stop": "Detener",
@@ -991,5 +994,6 @@
   "Wizard.YouAreReady": "Ya estás listo",
   "LanguageSelection.Invalid": "El idioma de transcripción «{0}» no es válido. Elige Auto o introduce una etiqueta BCP-47 válida.",
   "LanguageSelection.AutomaticNotSupported": "{0} no puede detectar el idioma automáticamente. Elige un idioma explícito.",
-  "LanguageSelection.ExplicitNotSupported": "{0} no acepta un idioma explícito. Elige Auto."
+  "LanguageSelection.ExplicitNotSupported": "{0} no acepta un idioma explícito. Elige Auto.",
+  "LanguageSelection.LanguageNotSupported": "{0} no admite «{1}». Elige una de estas opciones: {2}."
 }

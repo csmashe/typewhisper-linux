@@ -8,7 +8,6 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
-using TypeWhisper.PluginSDK;
 using Timer = System.Timers.Timer;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
@@ -61,6 +60,21 @@ public partial class RecorderSectionViewModel : ObservableObject
             audio,
             settings,
             TypeWhisperEnvironment.AudioPath,
+            CreateTranscriptionDelegate(models, settings)
+        )
+    {
+    }
+
+    internal RecorderSectionViewModel(
+        AudioRecordingService audio,
+        ModelManagerService models,
+        ISettingsService settings,
+        string recordingDirectory
+    )
+        : this(
+            audio,
+            settings,
+            recordingDirectory,
             CreateTranscriptionDelegate(models, settings)
         )
     {
@@ -303,15 +317,26 @@ public partial class RecorderSectionViewModel : ObservableObject
         IsTranscribing = true;
 
         string? transcript;
+        Exception? transcriptionException = null;
         try
         {
             // Cancellation is cooperative: a plugin may ignore it and complete a
             // transcript during shutdown, while the recording remains preserved.
             transcript = await _transcribeAsync(wav, transcriptionCancellationToken);
         }
-        catch
+        catch (OperationCanceledException)
+            when (transcriptionCancellationToken.IsCancellationRequested)
+        {
+            // Shutdown/teardown cancel: the recording is kept, but a cancel is not a
+            // transcription failure and must not surface as one. An OCE with the token
+            // NOT requested (a plugin HTTP timeout) is a dependency fault and falls
+            // through to the failure arm per the SDK cancellation-origin contract.
+            transcript = null;
+        }
+        catch (Exception ex)
         {
             // Keep the recording even if transcription fails.
+            transcriptionException = ex;
             transcript = null;
         }
 
@@ -343,9 +368,14 @@ public partial class RecorderSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(HasRecordings));
         StatusText = transcriptWriteFailed
             ? Loc.Instance["Recorder.StatusTranscriptSaveFailed"]
+            : transcriptionException is not null
+                ? Loc.Instance.GetString(
+                    "Recorder.StatusSavedTranscriptionFailed",
+                    transcriptionException.Message
+                )
             : transcriptPersisted
                 ? Loc.Instance["Recorder.StatusDone"]
-                : Loc.Instance["Recorder.StatusSavedNoModel"];
+                : Loc.Instance["Recorder.StatusSavedNoTranscript"];
         DurationText = "0:00";
     }
 
@@ -376,7 +406,7 @@ public partial class RecorderSectionViewModel : ObservableObject
         {
             var result = await lease.Plugin.TranscribeAsync(
                 wav,
-                LanguageSelection.Automatic,
+                LanguageSelectionResolver.Resolve(settings.Current.Language),
                 false,
                 null,
                 cancellationToken

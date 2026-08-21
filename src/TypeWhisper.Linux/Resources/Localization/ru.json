@@ -247,6 +247,8 @@
   "Dictation.InputDevicesAvailable": "Доступно устройств ввода: {0}.",
   "Dictation.Language": "Язык",
   "Dictation.LanguageAutoDetect": "Автоопределение",
+  "Dictation.LanguageSelectionRequired": "Сохранённый язык недоступен для выбранной модели. Выберите язык явно.",
+  "Dictation.LanguageSelectionRequiredAuto": "Сохранённый язык недоступен для выбранной модели. Эта модель поддерживает только автоматическое определение — выберите «Авто».",
   "Dictation.LiveTranscriptionPreview": "Предпросмотр транскрипции в реальном времени",
   "Dictation.LiveTranscriptionPreviewHint": "Показывать частичный текст в оверлее записи во время речи.",
   "Dictation.LoadingModel": "Загрузка {0}...",
@@ -656,7 +658,8 @@
   "Recorder.StatusReady": "Готово.",
   "Recorder.StatusRecording": "Запись...",
   "Recorder.StatusSaveFailed": "Не удалось сохранить запись.",
-  "Recorder.StatusSavedNoModel": "Сохранено (модель не загружена)",
+  "Recorder.StatusSavedNoTranscript": "Сохранено, но транскрипт не был создан.",
+  "Recorder.StatusSavedTranscriptionFailed": "Сохранено, но не удалось выполнить транскрипцию: {0}",
   "Recorder.StatusSavedTranscribing": "Сохранено. Транскрибирование...",
   "Recorder.StatusTranscriptSaveFailed": "Сохранено, но не удалось записать транскрипт.",
   "Recorder.Stop": "Стоп",
@@ -991,5 +994,6 @@
   "Wizard.YouAreReady": "Вы готовы",
   "LanguageSelection.Invalid": "Недопустимый язык транскрипции «{0}». Выберите «Авто» или укажите допустимый тег BCP-47.",
   "LanguageSelection.AutomaticNotSupported": "{0} не может определить язык автоматически. Выберите язык явно.",
-  "LanguageSelection.ExplicitNotSupported": "{0} не принимает явно выбранный язык. Выберите «Авто»."
+  "LanguageSelection.ExplicitNotSupported": "{0} не принимает явно выбранный язык. Выберите «Авто».",
+  "LanguageSelection.LanguageNotSupported": "{0} не поддерживает «{1}». Выберите один из вариантов: {2}."
 }

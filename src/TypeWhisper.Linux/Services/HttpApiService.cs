@@ -1274,6 +1274,22 @@ public sealed partial class HttpApiService : IDisposable
                 ct
             );
         }
+        catch (TranscriptionLanguageNotSupportedException ex)
+        {
+            await WriteJsonAsync(
+                response,
+                400,
+                Serialize(
+                    new
+                    {
+                        error = ex.Message,
+                        reason = "language_not_supported",
+                    }
+                ),
+                GetAllowedOrigin(context.Request),
+                ct
+            );
+        }
         catch (LanguageSelectionNotSupportedException ex)
         {
             await WriteJsonAsync(

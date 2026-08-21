@@ -1,8 +1,12 @@
+using System.Reflection;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Models;
 using TypeWhisper.Tests;
 using Xunit;
 
@@ -312,7 +316,34 @@ public sealed class RecorderSectionViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task ToggleRecordingCommand_WhenTranscriptionThrows_KeepsWavAndReportsSavedNoModel()
+    public async Task ToggleRecordingCommand_DependencyFaultCancellation_ReportsFailureNotBlankTranscript()
+    {
+        using var audio = CreateAudioService();
+        // An OCE while the caller's token is NOT requested is a dependency fault
+        // (a plugin HTTP timeout surfaces as TaskCanceledException) and must show
+        // the failure status, never the blank no-transcript one.
+        var sut = CreateViewModel(
+            audio,
+            _tempDir,
+            (_, _) => Task.FromException<string?>(new TaskCanceledException("request timed out"))
+        );
+        await StartRecordingWithFramesAsync(sut, audio);
+
+        await sut.ToggleRecordingCommand.ExecuteAsync(null);
+
+        var recording = Assert.Single(sut.Recordings);
+        Assert.True(File.Exists(recording.FilePath));
+        Assert.Equal(
+            Loc.Instance.GetString(
+                "Recorder.StatusSavedTranscriptionFailed",
+                "request timed out"
+            ),
+            sut.StatusText
+        );
+    }
+
+    [Fact]
+    public async Task ToggleRecordingCommand_WhenTranscriptionThrows_KeepsWavAndReportsActualFailure()
     {
         using var audio = CreateAudioService();
         var sut = CreateViewModel(
@@ -328,9 +359,43 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         Assert.True(File.Exists(recording.FilePath));
         Assert.False(File.Exists(Path.ChangeExtension(recording.FilePath, ".txt")));
         Assert.Null(recording.Transcript);
-        Assert.Equal(Loc.Instance["Recorder.StatusSavedNoModel"], sut.StatusText);
+        Assert.Equal(
+            Loc.Instance.GetString(
+                "Recorder.StatusSavedTranscriptionFailed",
+                "model failed"
+            ),
+            sut.StatusText
+        );
+        Assert.Contains("model failed", sut.StatusText, StringComparison.Ordinal);
         Assert.False(sut.IsRecording);
         Assert.False(sut.IsTranscribing);
+    }
+
+    [Fact]
+    public async Task ToggleRecordingCommand_ForwardsConfiguredLanguageToTranscriptionEngine()
+    {
+        var plugin = new LanguageRecordingPlugin();
+        var settings = new FakeSettingsService(
+            AppSettings.Default with
+            {
+                Language = "de", SelectedModelId = plugin.FullModelId,
+            }
+        );
+        using var pluginManager = TestPluginManagerFactory.Create();
+        SetTranscriptionEngines(pluginManager, [plugin]);
+        using var models = new ModelManagerService(
+            pluginManager,
+            settings,
+            new SystemCommandAvailabilityService()
+        );
+        using var audio = CreateAudioService();
+        var sut = new RecorderSectionViewModel(audio, models, settings, _tempDir);
+        await StartRecordingWithFramesAsync(sut, audio);
+
+        await sut.ToggleRecordingCommand.ExecuteAsync(null);
+
+        Assert.Equal(["de"], plugin.ReceivedLanguages);
+        Assert.Equal(Loc.Instance["Recorder.StatusDone"], sut.StatusText);
     }
 
     [Fact]
@@ -474,7 +539,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
     [Theory]
     [InlineData(null)]
     [InlineData("   ")]
-    public async Task ToggleRecordingCommand_WhenTranscriptBlankOrMissing_ReportsSavedNoModelWithoutSidecar(
+    public async Task ToggleRecordingCommand_WhenTranscriptBlankOrMissing_ReportsNoTranscriptWithoutSidecar(
         string? transcript
     )
     {
@@ -488,7 +553,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         var transcriptPath = Path.ChangeExtension(recording.FilePath, ".txt");
         Assert.True(File.Exists(recording.FilePath));
         Assert.False(File.Exists(transcriptPath));
-        Assert.Equal(Loc.Instance["Recorder.StatusSavedNoModel"], sut.StatusText);
+        Assert.Equal(Loc.Instance["Recorder.StatusSavedNoTranscript"], sut.StatusText);
         Assert.NotEqual(Loc.Instance["Recorder.StatusDone"], sut.StatusText);
         Assert.False(sut.IsTranscribing);
         Assert.Equal("0:00", sut.DurationText);
@@ -574,6 +639,23 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         );
     }
 
+    private static void SetTranscriptionEngines(
+        PluginManager pluginManager,
+        IReadOnlyList<ITranscriptionEngineRole> engines
+    )
+    {
+        var field =
+            typeof(PluginManager).GetField(
+                "_transcriptionEngines",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            )
+            ?? throw new MissingFieldException(
+                typeof(PluginManager).FullName,
+                "_transcriptionEngines"
+            );
+        field.SetValue(pluginManager, engines.ToList());
+    }
+
     private static async Task StartRecordingWithFramesAsync(
         RecorderSectionViewModel sut,
         AudioRecordingService audio
@@ -648,5 +730,62 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         }
 
         public event Action<AppSettings>? SettingsChanged;
+    }
+
+    private sealed class LanguageRecordingPlugin
+        : ITranscriptionEnginePlugin,
+            ITranscriptionLanguageSelectionCapabilities
+    {
+        private const string ModelId = "language-recorder";
+
+        public string FullModelId => ModelManagerService.GetPluginModelId(PluginId, ModelId);
+        public List<string?> ReceivedLanguages { get; } = [];
+        public string PluginId => "com.test.recorder-language";
+        public string PluginName => "Recorder language fake";
+        public string PluginVersion => "1.0.0";
+        public string ProviderId => "recorder-language";
+        public string ProviderDisplayName => "Recorder language";
+        public bool IsConfigured => true;
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
+            [new(ModelId, "Recorder language")];
+        public string? SelectedModelId { get; private set; }
+        public bool SupportsTranslation => false;
+        public LanguageSelectionSupport AutomaticDetectionSupport =>
+            LanguageSelectionSupport.Supported;
+        public LanguageSelectionSupport ExplicitSelectionSupport =>
+            LanguageSelectionSupport.Supported;
+        public IReadOnlyList<string> SupportedLanguages => ["de"];
+
+        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
+        public Task DeactivateAsync() => Task.CompletedTask;
+
+        public void SelectModel(string modelId)
+        {
+            SelectedModelId = modelId;
+        }
+
+        public Task LoadModelAsync(string modelId, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            SelectedModelId = modelId;
+            return Task.CompletedTask;
+        }
+
+        public Task<PluginTranscriptionResult> TranscribeAsync(
+            byte[] wavAudio,
+            string? language,
+            bool translate,
+            string? prompt,
+            CancellationToken ct
+        )
+        {
+            ct.ThrowIfCancellationRequested();
+            ReceivedLanguages.Add(language);
+            return Task.FromResult(
+                new PluginTranscriptionResult("Aufnahme", "de", 1)
+            );
+        }
+
+        public void Dispose() { }
     }
 }
