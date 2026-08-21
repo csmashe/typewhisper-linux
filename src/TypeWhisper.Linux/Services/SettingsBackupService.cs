@@ -1,6 +1,11 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Win32.SafeHandles;
+using TypeWhisper.Core;
 using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services;
@@ -24,9 +29,11 @@ internal sealed record StartupRestoreResult(
 
 internal delegate void RestoreCommitObserver(string relativePath, int committedFileCount);
 
+internal delegate void BackupEntryObserver(string relativePath);
+
 internal sealed class RestoreInterruptionException(string message) : Exception(message);
 
-public sealed class SettingsBackupService
+public sealed partial class SettingsBackupService
 {
     private const string ManifestEntryName = "typewhisper-backup.json";
     private const string PendingDirectoryName = ".typewhisper-restore-pending";
@@ -81,22 +88,38 @@ public sealed class SettingsBackupService
     };
 
     private readonly string _basePath;
+    private readonly string _protectionKeyPath;
     private readonly RestoreCommitObserver? _commitObserver;
     private readonly Action? _cleanupObserver;
     private readonly SecretProtectionMigrationService _secretMigration;
+    private readonly BackupEntryObserver? _backupSkipObserver;
+    private readonly BackupEntryObserver? _backupPreOpenObserver;
+    // Call-scoped: set at the top of each CreateBackup and read during that walk
+    // only. Relies on IsBackupBusy serializing CreateBackup; not concurrency-safe.
+    private FileIdentity? _protectionKeyIdentity;
 
     internal SettingsBackupService(
         string basePath,
         RestoreCommitObserver? commitObserver = null,
         Action? cleanupObserver = null,
-        SecretProtectionMigrationService? secretMigration = null
+        SecretProtectionMigrationService? secretMigration = null,
+        BackupEntryObserver? backupSkipObserver = null,
+        BackupEntryObserver? backupPreOpenObserver = null
     )
     {
         _basePath = Path.GetFullPath(basePath);
+        _protectionKeyPath = Path.GetFullPath(
+            Path.Join(
+                _basePath,
+                Path.GetFileName(TypeWhisperEnvironment.SecretProtectionKeyFilePath)
+            )
+        );
         _commitObserver = commitObserver;
         _cleanupObserver = cleanupObserver;
         _secretMigration =
             secretMigration ?? new SecretProtectionMigrationService(_basePath);
+        _backupSkipObserver = backupSkipObserver;
+        _backupPreOpenObserver = backupPreOpenObserver;
     }
 
     internal string PendingDirectoryPath => Path.Join(_basePath, PendingDirectoryName);
@@ -119,6 +142,10 @@ public sealed class SettingsBackupService
             );
         }
 
+        // Captured AFTER migration: migrating legacy secrets can create the key,
+        // and a pre-migration capture would leave that new key unguarded.
+        _protectionKeyIdentity = NativeFile.GetRegularFileIdentity(_protectionKeyPath);
+
         var destinationDirectory = Path.GetDirectoryName(destinationZipPath);
         if (!string.IsNullOrWhiteSpace(destinationDirectory))
         {
@@ -131,64 +158,95 @@ public sealed class SettingsBackupService
             File.Delete(tempPath);
         }
 
-        var fileCount = 0;
-        long bytes = 0;
-
-        using (var archive = ZipFile.Open(tempPath, ZipArchiveMode.Create))
+        var published = false;
+        try
         {
-            var manifest = new
-            {
-                app = ManifestApp,
-                kind = ManifestKind,
-                createdUtc = DateTimeOffset.UtcNow,
-                includes = s_manifestIncludes,
-                excludes = s_manifestExcludes,
-            };
-            var manifestEntry = archive.CreateEntry(ManifestEntryName, CompressionLevel.Optimal);
-            using (var writer = new StreamWriter(manifestEntry.Open()))
-            {
-                writer.Write(JsonSerializer.Serialize(manifest, s_jsonOptions));
-            }
+            var fileCount = 0;
+            long bytes = 0;
 
-            foreach (var relativeFile in s_rootFiles)
+            using (var archive = ZipFile.Open(tempPath, ZipArchiveMode.Create))
             {
-                var path = Path.Join(_basePath, relativeFile);
-                AddFileIfExists(archive, path, relativeFile, ref fileCount, ref bytes);
-            }
-
-            foreach (var root in s_backupDirectoryRoots)
-            {
-                var rootPath = Path.Join(_basePath, root);
-                if (!Directory.Exists(rootPath))
+                var manifest = new
                 {
-                    continue;
+                    app = ManifestApp,
+                    kind = ManifestKind,
+                    createdUtc = DateTimeOffset.UtcNow,
+                    includes = s_manifestIncludes,
+                    excludes = s_manifestExcludes,
+                };
+                var manifestEntry = archive.CreateEntry(
+                    ManifestEntryName,
+                    CompressionLevel.Optimal
+                );
+                using (var writer = new StreamWriter(manifestEntry.Open()))
+                {
+                    writer.Write(JsonSerializer.Serialize(manifest, s_jsonOptions));
                 }
 
-                foreach (
-                    var path in Directory.EnumerateFiles(rootPath, "*", SearchOption.AllDirectories)
-                )
+                foreach (var relativeFile in s_rootFiles)
                 {
-                    var relativePath = Path.GetRelativePath(_basePath, path);
-                    // Skip model assets and executables (re-downloadable runtimes):
-                    // restore drops executables, so exporting them would bloat the
-                    // archive with files it can never restore.
-                    if (
-                        ShouldSkipPortableEntry(relativePath)
-                        || IsExecutableEntry(NormalizeEntryName(relativePath))
-                    )
-                    {
-                        continue;
-                    }
+                    var path = Path.Join(_basePath, relativeFile);
+                    AddBackupCandidate(
+                        archive,
+                        path,
+                        relativeFile,
+                        ref fileCount,
+                        ref bytes
+                    );
+                }
 
-                    AddFileIfExists(archive, path, relativePath, ref fileCount, ref bytes);
+                foreach (var root in s_backupDirectoryRoots)
+                {
+                    var rootPath = Path.Join(_basePath, root);
+                    var rootKind = NativeFile.GetEntryKind(rootPath);
+                    switch (rootKind)
+                    {
+                        case BackupEntryKind.Absent:
+                            continue;
+                        case BackupEntryKind.Directory:
+                            AddDirectoryEntries(
+                                archive,
+                                rootPath,
+                                ref fileCount,
+                                ref bytes
+                            );
+                            break;
+                        case BackupEntryKind.SymbolicLink:
+                            AddLinkedDirectoryRoot(
+                                archive,
+                                rootPath,
+                                root,
+                                ref fileCount,
+                                ref bytes
+                            );
+                            break;
+                        default:
+                            WarnSkippedEntry(root);
+                            break;
+                    }
+                }
+            }
+
+            // Atomic rename: write to .tmp so a crash mid-backup leaves the previous
+            // archive intact; the orphan .tmp is cleaned up on the next run.
+            File.Move(tempPath, destinationZipPath, true);
+            published = true;
+            return new SettingsBackupResult(fileCount, bytes);
+        }
+        finally
+        {
+            if (!published)
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch
+                {
+                    // Best effort cleanup of only this backup's incomplete archive.
                 }
             }
         }
-
-        // Atomic rename: write to .tmp so a crash mid-backup leaves the previous
-        // archive intact; the orphan .tmp is cleaned up on the next run.
-        File.Move(tempPath, destinationZipPath, true);
-        return new SettingsBackupResult(fileCount, bytes);
     }
 
     public SettingsBackupResult StageRestore(string sourceZipPath)
@@ -754,7 +812,60 @@ public sealed class SettingsBackupService
         destination.Flush(true);
     }
 
-    private static void AddFileIfExists(
+    private void AddDirectoryEntries(
+        ZipArchive archive,
+        string directoryPath,
+        ref int fileCount,
+        ref long bytes
+    )
+    {
+        foreach (var path in Directory.EnumerateFileSystemEntries(directoryPath))
+        {
+            var relativePath = NormalizeEntryName(Path.GetRelativePath(_basePath, path));
+            var kind = NativeFile.GetEntryKind(path);
+            switch (kind)
+            {
+                case BackupEntryKind.Directory:
+                    if (!ShouldSkipPortableEntry(relativePath))
+                    {
+                        // openat2 RESOLVE_BENEATH traversal is deferred; a same-privilege attacker can already read reachable non-key files.
+                        AddDirectoryEntries(archive, path, ref fileCount, ref bytes);
+                    }
+
+                    break;
+                case BackupEntryKind.RegularFile:
+                    if (
+                        !ShouldSkipPortableEntry(relativePath)
+                        && !IsExecutableEntry(relativePath)
+                    )
+                    {
+                        AddRegularFile(
+                            archive,
+                            path,
+                            relativePath,
+                            ref fileCount,
+                            ref bytes
+                        );
+                    }
+
+                    break;
+                case BackupEntryKind.SymbolicLink:
+                    AddLinkedNestedEntry(
+                        archive,
+                        path,
+                        relativePath,
+                        ref fileCount,
+                        ref bytes
+                    );
+                    break;
+                default:
+                    WarnSkippedEntry(relativePath);
+                    break;
+            }
+        }
+    }
+
+    private void AddBackupCandidate(
         ZipArchive archive,
         string path,
         string relativePath,
@@ -762,15 +873,204 @@ public sealed class SettingsBackupService
         ref long bytes
     )
     {
-        if (!File.Exists(path))
+        switch (NativeFile.GetEntryKind(path))
+        {
+            case BackupEntryKind.RegularFile:
+                AddRegularFile(archive, path, relativePath, ref fileCount, ref bytes);
+                break;
+            case BackupEntryKind.SymbolicLink:
+                AddLinkedFile(
+                    archive,
+                    path,
+                    relativePath,
+                    ref fileCount,
+                    ref bytes
+                );
+                break;
+            case BackupEntryKind.Absent:
+                break;
+            default:
+                WarnSkippedEntry(relativePath);
+                break;
+        }
+    }
+
+    private void AddRegularFile(
+        ZipArchive archive,
+        string path,
+        string relativePath,
+        ref int fileCount,
+        ref long bytes
+    )
+    {
+        var entryName = NormalizeEntryName(relativePath);
+        _backupPreOpenObserver?.Invoke(entryName);
+        using var source = NativeFile.OpenRegularFile(
+            path,
+            entryName,
+            _protectionKeyIdentity
+        );
+        var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
+        var lastWriteTime = new DateTimeOffset(
+            File.GetLastWriteTimeUtc(source.SafeFileHandle)
+        );
+        entry.LastWriteTime = lastWriteTime.Year is < 1980 or > 2107
+            ? new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero)
+            : lastWriteTime;
+        using var destination = entry.Open();
+        var buffer = new byte[81920];
+        long written = 0;
+        int read;
+        while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            destination.Write(buffer, 0, read);
+            written += read;
+        }
+
+        fileCount++;
+        bytes += written;
+    }
+
+    private void AddLinkedFile(
+        ZipArchive archive,
+        string path,
+        string relativePath,
+        ref int fileCount,
+        ref long bytes
+    )
+    {
+        ThrowIfProtectionKeyLink(path, relativePath);
+        var resolved = ResolveFinalLinkTarget(path, directoryLink: false);
+        if (
+            resolved is not null
+            && NativeFile.GetEntryKind(resolved.FullName) == BackupEntryKind.RegularFile
+        )
+        {
+            AddRegularFile(
+                archive,
+                resolved.FullName,
+                relativePath,
+                ref fileCount,
+                ref bytes
+            );
+            return;
+        }
+
+        HandleSkippedLink(path, relativePath);
+    }
+
+    private void AddLinkedNestedEntry(
+        ZipArchive archive,
+        string path,
+        string relativePath,
+        ref int fileCount,
+        ref long bytes
+    )
+    {
+        ThrowIfProtectionKeyLink(path, relativePath);
+        var resolved = ResolveFinalLinkTarget(path, directoryLink: false);
+        if (
+            resolved is not null
+            && NativeFile.GetEntryKind(resolved.FullName) == BackupEntryKind.RegularFile
+            && !ShouldSkipPortableEntry(relativePath)
+            && !IsExecutableEntry(relativePath)
+        )
+        {
+            AddRegularFile(
+                archive,
+                resolved.FullName,
+                relativePath,
+                ref fileCount,
+                ref bytes
+            );
+            return;
+        }
+
+        HandleSkippedLink(path, relativePath);
+    }
+
+    private void AddLinkedDirectoryRoot(
+        ZipArchive archive,
+        string path,
+        string relativePath,
+        ref int fileCount,
+        ref long bytes
+    )
+    {
+        ThrowIfProtectionKeyLink(path, relativePath);
+        var resolved = ResolveFinalLinkTarget(path, directoryLink: true);
+        if (
+            resolved is not null
+            && NativeFile.GetEntryKind(resolved.FullName) == BackupEntryKind.Directory
+        )
+        {
+            AddDirectoryEntries(archive, path, ref fileCount, ref bytes);
+            return;
+        }
+
+        HandleSkippedLink(path, relativePath);
+    }
+
+    private void HandleSkippedLink(string path, string relativePath)
+    {
+        ThrowIfProtectionKeyLink(path, relativePath);
+        WarnSkippedEntry(relativePath);
+    }
+
+    private void ThrowIfProtectionKeyLink(string path, string relativePath)
+    {
+        if (!ResolvesToProtectionKey(path))
         {
             return;
         }
 
+        // The key must never share an archive with the secrets it protects.
+        throw new InvalidOperationException(
+            $"Backup entry '{NormalizeEntryName(relativePath)}' resolves to the protection key."
+        );
+    }
+
+    private static FileSystemInfo? ResolveFinalLinkTarget(string path, bool directoryLink)
+    {
+        try
+        {
+            return directoryLink
+                ? Directory.ResolveLinkTarget(path, returnFinalTarget: true)
+                : File.ResolveLinkTarget(path, returnFinalTarget: true);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+    }
+
+    private bool ResolvesToProtectionKey(string path)
+    {
+        try
+        {
+            // ResolveLinkTarget interprets a relative target from the link's containing
+            // directory and, with returnFinalTarget, follows each remaining link in the chain.
+            var resolved = File.ResolveLinkTarget(path, returnFinalTarget: true);
+            return resolved is not null
+                && string.Equals(
+                    Path.GetFullPath(resolved.FullName),
+                    _protectionKeyPath,
+                    StringComparison.Ordinal
+                );
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    private void WarnSkippedEntry(string relativePath)
+    {
         var entryName = NormalizeEntryName(relativePath);
-        archive.CreateEntryFromFile(path, entryName, CompressionLevel.Optimal);
-        fileCount++;
-        bytes += new FileInfo(path).Length;
+        Trace.TraceWarning(
+            $"[SettingsBackupService] Skipped non-regular backup entry '{entryName}'."
+        );
+        _backupSkipObserver?.Invoke(entryName);
     }
 
     /// <summary>
@@ -1020,6 +1320,250 @@ public sealed class SettingsBackupService
     private static string NormalizeEntryName(string path)
     {
         return path.Replace('\\', '/');
+    }
+
+    private enum BackupEntryKind
+    {
+        Absent,
+        RegularFile,
+        Directory,
+        SymbolicLink,
+        Unsupported,
+    }
+
+    private readonly record struct FileIdentity(uint DevMajor, uint DevMinor, ulong Ino);
+
+    private static partial class NativeFile
+    {
+        private const int AtCurrentWorkingDirectory = -100;
+        private const int AtSymlinkNoFollow = 0x100;
+        private const int AtEmptyPath = 0x1000;
+        private const uint StatxType = 0x0001;
+        private const uint StatxIno = 0x0100;
+        private const int OpenReadOnly = 0;
+        private const int OpenCloseOnExec = 0x80000;
+        private const int OpenNoFollow = 0x20000;
+        private const int OpenNonBlock = 0x800;
+        private const ushort FileTypeMask = 0xF000;
+        private const ushort FileTypeRegular = 0x8000;
+        private const ushort FileTypeDirectory = 0x4000;
+        private const ushort FileTypeSymbolicLink = 0xA000;
+
+        internal static BackupEntryKind GetEntryKind(string path)
+        {
+            var info = new FileInfo(path);
+            info.Refresh();
+            if (info.LinkTarget is not null)
+            {
+                return BackupEntryKind.SymbolicLink;
+            }
+
+            if (!OperatingSystem.IsLinux())
+            {
+                throw new PlatformNotSupportedException(
+                    "No-follow settings backup export requires Linux."
+                );
+            }
+
+            var result = statx(
+                AtCurrentWorkingDirectory,
+                path,
+                AtSymlinkNoFollow,
+                StatxType,
+                out var stat
+            );
+            if (result == 0)
+            {
+                return KindFromMode(stat.Mode);
+            }
+
+            var error = Marshal.GetLastPInvokeError();
+            return error is 2 or 20
+                ? BackupEntryKind.Absent
+                : throw new Win32Exception(error, $"Could not inspect '{path}'.");
+        }
+
+        internal static FileIdentity? GetRegularFileIdentity(string path)
+        {
+            if (!OperatingSystem.IsLinux())
+            {
+                throw new PlatformNotSupportedException(
+                    "No-follow settings backup export requires Linux."
+                );
+            }
+
+            // FOLLOW semantics on purpose: the identity to guard is the inode the
+            // key consumers actually read, and they read through symlinks. A
+            // no-follow capture of a symlinked key would stat the link's inode,
+            // yield null, and silently disarm the guard for the whole backup.
+            if (
+                statx(
+                    AtCurrentWorkingDirectory,
+                    path,
+                    0,
+                    StatxType | StatxIno,
+                    out var stat
+                ) == 0
+            )
+            {
+                // A key that exists but is not a regular file must fail closed:
+                // "could not identify the key" and "there is no key" would
+                // otherwise both disable the identity check.
+                return KindFromMode(stat.Mode) == BackupEntryKind.RegularFile
+                    ? GetIdentity(stat)
+                    : throw new InvalidOperationException(
+                        $"Protection key '{Path.GetFileName(path)}' is not a regular file."
+                    );
+            }
+
+            var error = Marshal.GetLastPInvokeError();
+            return error is 2 or 20
+                ? null
+                : throw new Win32Exception(error, $"Could not inspect '{path}'.");
+        }
+
+        internal static FileStream OpenRegularFile(
+            string path,
+            string displayName,
+            FileIdentity? protectionKeyIdentity
+        )
+        {
+            if (!OperatingSystem.IsLinux())
+            {
+                throw new PlatformNotSupportedException(
+                    "No-follow settings backup export requires Linux."
+                );
+            }
+
+            // O_NOFOLLOW cannot prevent swapped-in device side effects before statx rejects it; O_NONBLOCK covers FIFOs.
+            var descriptor = open(
+                path,
+                OpenReadOnly | OpenCloseOnExec | OpenNoFollow | OpenNonBlock,
+                0
+            );
+            if (descriptor < 0)
+            {
+                var error = Marshal.GetLastPInvokeError();
+                if (error is 2 or 20 or 40)
+                {
+                    throw new IOException(
+                        $"Backup entry '{displayName}' changed while it was being opened."
+                    );
+                }
+
+                throw new Win32Exception(
+                    error,
+                    $"Could not safely open backup entry '{displayName}'."
+                );
+            }
+
+            var handle = new SafeFileHandle(descriptor, ownsHandle: true);
+            try
+            {
+                if (
+                    statx(
+                        descriptor,
+                        string.Empty,
+                        AtEmptyPath,
+                        StatxType | StatxIno,
+                        out var stat
+                    ) != 0
+                )
+                {
+                    throw new Win32Exception(
+                        Marshal.GetLastPInvokeError(),
+                        $"Could not inspect open backup entry '{displayName}'."
+                    );
+                }
+
+                if (KindFromMode(stat.Mode) != BackupEntryKind.RegularFile)
+                {
+                    throw new IOException(
+                        $"Backup entry '{displayName}' stopped being a regular file before backup."
+                    );
+                }
+
+                if (
+                    protectionKeyIdentity is { } keyIdentity
+                    && GetIdentity(stat) == keyIdentity
+                )
+                {
+                    throw new InvalidOperationException(
+                        $"Backup entry '{displayName}' resolves to the protection key."
+                    );
+                }
+
+                return new FileStream(handle, FileAccess.Read);
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
+            }
+        }
+
+        private static FileIdentity GetIdentity(StatxBuffer stat)
+        {
+            return new FileIdentity(stat.DevMajor, stat.DevMinor, stat.Ino);
+        }
+
+        private static BackupEntryKind KindFromMode(ushort mode)
+        {
+            return (ushort)(mode & FileTypeMask) switch
+            {
+                FileTypeRegular => BackupEntryKind.RegularFile,
+                FileTypeDirectory => BackupEntryKind.Directory,
+                FileTypeSymbolicLink => BackupEntryKind.SymbolicLink,
+                _ => BackupEntryKind.Unsupported,
+            };
+        }
+
+        [StructLayout(LayoutKind.Sequential, Size = 256)]
+        private struct StatxBuffer
+        {
+            public uint Mask;
+            public uint BlockSize;
+            public ulong Attributes;
+            public uint LinkCount;
+            public uint UserId;
+            public uint GroupId;
+            public ushort Mode;
+            public ushort Spare0;
+            public ulong Ino;
+            public ulong Size;
+            public ulong Blocks;
+            public ulong AttributesMask;
+            public StatxTimestamp Atime;
+            public StatxTimestamp Btime;
+            public StatxTimestamp Ctime;
+            public StatxTimestamp Mtime;
+            public uint RdevMajor;
+            public uint RdevMinor;
+            public uint DevMajor;
+            public uint DevMinor;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct StatxTimestamp
+        {
+            public long Seconds;
+            public uint Nanoseconds;
+            public int Padding;
+        }
+
+        // ReSharper disable once InconsistentNaming -- native libc function name; LibraryImport EntryPoint defaults to the method name.
+        [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+        private static partial int statx(
+            int directoryFileDescriptor,
+            string path,
+            int flags,
+            uint mask,
+            out StatxBuffer buffer
+        );
+
+        // ReSharper disable once InconsistentNaming -- native libc function name; LibraryImport EntryPoint defaults to the method name.
+        [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+        private static partial int open(string path, int flags, uint mode);
     }
 
     private enum RestoreJournalPhase
