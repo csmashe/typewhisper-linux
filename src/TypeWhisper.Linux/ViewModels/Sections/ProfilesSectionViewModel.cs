@@ -1043,6 +1043,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
         OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
+        OnPropertyChanged(nameof(Summary));
+        OnPropertyChanged(nameof(SelectedProfileSummary));
+        OnPropertyChanged(nameof(SelectedProfileDisplayName));
+        OnPropertyChanged(nameof(MatchStatusText));
+        OnPropertyChanged(nameof(EditIsEnabledStatusText));
     }
 
     private static IReadOnlyList<ProfileStylePresetOption> CreateStylePresetOptions()

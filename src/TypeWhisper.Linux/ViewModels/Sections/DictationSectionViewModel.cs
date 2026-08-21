@@ -835,6 +835,13 @@ public partial class DictationSectionViewModel : ObservableObject
             OnPropertyChanged(nameof(SelectedLanguageOption));
             OnPropertyChanged(nameof(SelectedCleanupLevelOption));
             OnPropertyChanged(nameof(SelectedNewInsertionStrategyOption));
+            OnPropertyChanged(nameof(AudioDuckingUnavailableReason));
+            OnPropertyChanged(nameof(MediaPauseUnavailableReason));
+            OnPropertyChanged(nameof(SoundFeedbackUnavailableReason));
+            OnPropertyChanged(nameof(CudaLibraryPathActionText));
+            OnPropertyChanged(nameof(DownloadCudaRuntimeText));
+            OnPropertyChanged(nameof(ClearGpuRuntimeText));
+            OnPropertyChanged(nameof(AccelerationStatusText));
         }
         finally
         {
