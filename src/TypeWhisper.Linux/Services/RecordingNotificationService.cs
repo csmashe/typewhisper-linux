@@ -8,7 +8,7 @@ namespace TypeWhisper.Linux.Services;
 
 internal interface IRecordingNotificationStateSource
 {
-    event EventHandler<DictationOverlayState>? OverlayStateChanged;
+    event EventHandler<OverlayPresentationChangedEventArgs>? PresentationChanged;
 }
 
 /// <summary>
@@ -32,15 +32,16 @@ public sealed partial class RecordingNotificationService : IDisposable
     private uint _desiredVersion;
     private TaskCompletionSource? _idleCompletion;
     private bool _initialized;
+    private long _lastPresentationRevision;
     private bool _workerRunning;
 
     public RecordingNotificationService(
-        DictationOrchestrator dictation,
+        OverlayCoordinator overlayCoordinator,
         ISettingsService settings,
         IProcessRunner runner
     )
         : this(
-            new DictationOverlayStateSource(dictation),
+            new CoordinatorPresentationSource(overlayCoordinator),
             settings,
             runner,
             DesktopDetector.UsesNotificationRecordingIndicator()
@@ -61,6 +62,16 @@ public sealed partial class RecordingNotificationService : IDisposable
         _enabled = enabled;
     }
 
+    internal RecordingNotificationService(
+        OverlayCoordinator overlayCoordinator,
+        ISettingsService settings,
+        IProcessRunner runner,
+        bool enabled
+    )
+        : this(new CoordinatorPresentationSource(overlayCoordinator), settings, runner, enabled)
+    {
+    }
+
     public void Dispose()
     {
         bool startWorker;
@@ -74,7 +85,7 @@ public sealed partial class RecordingNotificationService : IDisposable
             _disposed = true;
             if (_initialized)
             {
-                _stateSource.OverlayStateChanged -= OnOverlayStateChanged;
+                _stateSource.PresentationChanged -= OnPresentationChanged;
                 _initialized = false;
             }
 
@@ -116,7 +127,7 @@ public sealed partial class RecordingNotificationService : IDisposable
                 return;
             }
 
-            _stateSource.OverlayStateChanged += OnOverlayStateChanged;
+            _stateSource.PresentationChanged += OnPresentationChanged;
             _initialized = true;
         }
     }
@@ -129,12 +140,15 @@ public sealed partial class RecordingNotificationService : IDisposable
         }
     }
 
-    private void OnOverlayStateChanged(object? sender, DictationOverlayState state)
+    private void OnPresentationChanged(
+        object? sender,
+        OverlayPresentationChangedEventArgs presented
+    )
     {
         NotificationPresentation? presentation;
         try
         {
-            presentation = ProjectPresentation(state);
+            presentation = ProjectPresentation(presented.State, presented.Requester);
         }
         catch
         {
@@ -145,7 +159,13 @@ public sealed partial class RecordingNotificationService : IDisposable
         bool startWorker;
         lock (_gate)
         {
-            if (_disposed || Equals(_desiredPresentation, presentation))
+            if (_disposed || presented.Revision <= _lastPresentationRevision)
+            {
+                return;
+            }
+
+            _lastPresentationRevision = presented.Revision;
+            if (Equals(_desiredPresentation, presentation))
             {
                 return;
             }
@@ -161,9 +181,15 @@ public sealed partial class RecordingNotificationService : IDisposable
         }
     }
 
-    private NotificationPresentation? ProjectPresentation(DictationOverlayState state)
+    private NotificationPresentation? ProjectPresentation(
+        DictationOverlayState state,
+        OverlayRequester? requester
+    )
     {
-        if (state.IsRecording)
+        // The recording title/body describe DICTATION's capture protocol (push-to-talk
+        // says "release to insert"). Transform is toggle-only, so its recording states
+        // fall through to the status branch, whose text carries the correct protocol.
+        if (state.IsRecording && requester == OverlayRequester.Dictation)
         {
             return new NotificationPresentation(
                 Loc.Instance["Appearance.NotificationRecordingTitle"],
@@ -367,13 +393,13 @@ public sealed partial class RecordingNotificationService : IDisposable
     [GeneratedRegex(@"uint32 (\d+)")]
     private static partial Regex NotificationIdRegex();
 
-    private sealed class DictationOverlayStateSource(DictationOrchestrator dictation)
+    private sealed class CoordinatorPresentationSource(OverlayCoordinator overlayCoordinator)
         : IRecordingNotificationStateSource
     {
-        public event EventHandler<DictationOverlayState>? OverlayStateChanged
+        public event EventHandler<OverlayPresentationChangedEventArgs>? PresentationChanged
         {
-            add => dictation.OverlayStateChanged += value;
-            remove => dictation.OverlayStateChanged -= value;
+            add => overlayCoordinator.PresentationChanged += value;
+            remove => overlayCoordinator.PresentationChanged -= value;
         }
     }
 

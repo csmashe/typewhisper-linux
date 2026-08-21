@@ -56,40 +56,12 @@ public sealed class DictationOrchestratorOverlayOwnershipTests
             var firstStopTask = fixture.Orchestrator.StopAsync();
             await BoundedTest.WaitAsync(provider.EnumerationBegan);
 
-            var latestOverlay = DictationOverlayState.Hidden;
+            var coordinator = fixture.Provider.GetRequiredService<OverlayCoordinator>();
             // -1 until the handler samples it, so the assertion also proves the sample happened.
             var predecessorOwnedOverlayAtClaim = -1;
             var secondOverlayPublished = new TaskCompletionSource<DictationOverlayState>(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
-            EventHandler<DictationOverlayState> overlayHandler = (_, state) =>
-            {
-                // SetOverlayState dispatches under _overlayStateLock: only snapshot and signal;
-                // never mutate orchestrator state from this handler. The ownership read takes
-                // only _recordingSessionLock, the same order production already uses.
-                // ReSharper disable once AccessToModifiedClosure -- the shared sample is the point; the outer scope reads it back under Volatile after the handler runs.
-                Volatile.Write(ref latestOverlay, state);
-                if (!state.IsRecording)
-                {
-                    return;
-                }
-
-                // Sample at the overlay claim itself — the first IsRecording publish of session
-                // two — so the test pins "generation advanced before the claim" rather than the
-                // weaker "before RecordingStateChanged" that a later publish would still satisfy.
-                // ReSharper disable once AccessToModifiedClosure -- same deliberate sample-and-read-back; the -1 sentinel is written from the outer scope on purpose.
-                if (Volatile.Read(ref predecessorOwnedOverlayAtClaim) < 0)
-                {
-                    Volatile.Write(
-                        ref predecessorOwnedOverlayAtClaim,
-                        // ReSharper disable once AccessToDisposedClosure -- the handler is unsubscribed in the outer finally, before the fixture's await-using disposal.
-                        fixture.Orchestrator.IsSessionStillOwningOverlay(firstSessionId) ? 1 : 0
-                    );
-                }
-
-                secondOverlayPublished.TrySetResult(state);
-            };
-
             var secondRecordingCallbackEntered = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
@@ -103,6 +75,16 @@ public sealed class DictationOrchestratorOverlayOwnershipTests
                     return;
                 }
 
+                var state = coordinator.PresentedState;
+                // Sample immediately after the coordinator claim and before the start path can
+                // advance beyond RecordingStateChanged.
+                // ReSharper disable once AccessToModifiedClosure -- the closure deliberately writes the outer local via Volatile for cross-thread visibility; it is read back only after the event completes.
+                Volatile.Write(
+                    ref predecessorOwnedOverlayAtClaim,
+                    // ReSharper disable once AccessToDisposedClosure -- the handler is unsubscribed in the outer finally, before the fixture's await-using disposal.
+                    fixture.Orchestrator.IsSessionStillOwningOverlay(firstSessionId) ? 1 : 0
+                );
+                secondOverlayPublished.TrySetResult(state);
                 secondRecordingCallbackEntered.TrySetResult();
                 BoundedTest.WaitAsync(releaseSecondRecordingCallback.Task)
                     .GetAwaiter()
@@ -127,7 +109,6 @@ public sealed class DictationOrchestratorOverlayOwnershipTests
                 }
             );
 
-            fixture.Orchestrator.OverlayStateChanged += overlayHandler;
             fixture.Orchestrator.RecordingStateChanged += recordingHandler;
             Task<int>? secondStartTask = null;
             var secondSessionId = 0;
@@ -146,7 +127,7 @@ public sealed class DictationOrchestratorOverlayOwnershipTests
                     provider.ReleaseFirstDelta();
                     await BoundedTest.WaitAsync(oldDeltaPublished.Task);
 
-                    var overlayAfterOldDelta = Volatile.Read(ref latestOverlay);
+                    var overlayAfterOldDelta = coordinator.PresentedState;
                     Assert.True(overlayAfterOldDelta.IsOverlayVisible);
                     Assert.True(overlayAfterOldDelta.IsRecording);
                     Assert.False(overlayAfterOldDelta.ShowFeedback);
@@ -178,7 +159,6 @@ public sealed class DictationOrchestratorOverlayOwnershipTests
             finally
             {
                 fixture.Orchestrator.RecordingStateChanged -= recordingHandler;
-                fixture.Orchestrator.OverlayStateChanged -= overlayHandler;
             }
 
             Assert.True(secondSessionId > 0);
