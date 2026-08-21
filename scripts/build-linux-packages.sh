@@ -14,6 +14,7 @@
 #
 # Tooling required: dotnet, ffmpeg-free tools not required, plus:
 #   tar gzip                 (tar.gz)
+#   sha256sum sort           (bundled plugin identity — hard required, checked up front)
 #   wget, appstreamcli       (AppImage helpers — only wget is hard required)
 #   dpkg-deb                 (.deb)
 #   rpmbuild                 (.rpm)
@@ -41,6 +42,33 @@ PUBLISH_DIR="$ROOT/src/TypeWhisper.Linux/bin/$CONFIG/net10.0/$RID/publish"
 CLI_PROJECT="$ROOT/src/TypeWhisper.Cli/TypeWhisper.Cli.csproj"
 CLI_PUBLISH_DIR="$ROOT/src/TypeWhisper.Cli/bin/$CONFIG/net10.0/$RID/publish"
 ICON_SRC="$ROOT/src/TypeWhisper.Linux/Resources/typewhisper-128.png"
+BUNDLE_IDENTITY_FILE_NAME=".typewhisper-bundle-identity.sha256"
+
+# Every format carries the bundled plugin identity, so unlike per-format tooling
+# these are checked before the long publish rather than skipped with a warning.
+for required in sha256sum sort; do
+  command -v "$required" >/dev/null 2>&1 \
+    || { echo "ERROR: $required is required to identify the bundled plugin payload" >&2; exit 1; }
+done
+
+compute_bundle_identity() {
+  local plugin_root="$1"
+  local file_digest relative_path
+
+  (
+    cd "$plugin_root"
+    while IFS= read -r -d '' relative_path; do
+      file_digest="$(sha256sum <"$relative_path")"
+      file_digest="${file_digest%% *}"
+      printf '%s\0%s\n' "${relative_path#./}" "$file_digest"
+    done < <(
+      find . -type f \
+        ! -path "./$BUNDLE_IDENTITY_FILE_NAME" \
+        -print0 \
+        | LC_ALL=C sort -z
+    )
+  ) | sha256sum | cut -d ' ' -f1
+}
 
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
@@ -117,6 +145,15 @@ find "$PUBLISH_DIR" -type d \
 # anchored at the filename start, so it still never matches the managed wrapper,
 # which keeps its Microsoft. prefix.
 find "$PUBLISH_DIR" -type f -iname "onnxruntime*.dll" -delete
+
+# This publish-time marker attests to the final, post-prune Plugins payload. The
+# runtime trusts it as the source identity, so keep path ordering deterministic
+# and exclude only the marker itself from the content-derived fingerprint.
+BUNDLE_IDENTITY_PATH="$PUBLISH_DIR/Plugins/$BUNDLE_IDENTITY_FILE_NAME"
+rm -f "$BUNDLE_IDENTITY_PATH"
+compute_bundle_identity "$PUBLISH_DIR/Plugins" >"$BUNDLE_IDENTITY_PATH"
+# The deployer must read this as any user; don't inherit a restrictive umask.
+chmod 0644 "$BUNDLE_IDENTITY_PATH"
 
 # ---------- tar.gz (the JustWorks fallback) ----------
 echo "==> Building tar.gz"

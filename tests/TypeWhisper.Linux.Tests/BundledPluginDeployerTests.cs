@@ -8,6 +8,7 @@ public sealed class BundledPluginDeployerTests
 {
     private const string PluginName = "sample-plugin";
     private const string StampFileName = ".typewhisper-bundle.sha256";
+    private const string BundleIdentityFileName = ".typewhisper-bundle-identity.sha256";
     private const string ScratchDirectoryName = ".typewhisper-deploy";
 
     [Fact]
@@ -149,6 +150,397 @@ public sealed class BundledPluginDeployerTests
 
             Assert.Equal(0, deployed);
             Assert.Equal(destReplacement, File.ReadAllBytes(destDll));
+            AssertNoScratch(destRoot);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void ChangedPublishedIdentity_WithSameLengthsAndMtimes_ForceRedeploysAll()
+    {
+        var root = TestPaths.CreateTempDirectory("bundled-plugin-published-change");
+        try
+        {
+            var sourceRoot = Path.Join(root, "bundle");
+            var destRoot = Path.Join(root, "installed");
+            var sourcePlugin = CreateBundle(sourceRoot);
+            _ = CreatePlugin(sourceRoot, "second-plugin");
+            var firstIdentity = WritePublishedIdentity(sourceRoot);
+            Assert.Equal(2, BundledPluginDeployer.DeployIfMissing(sourceRoot, destRoot));
+
+            var sourceDll = Path.Join(sourcePlugin, "current.dll");
+            var sourceMtime = File.GetLastWriteTimeUtc(sourceDll);
+            var replacement = "current-v2";
+            Assert.Equal(File.ReadAllBytes(sourceDll).Length, replacement.Length);
+            File.WriteAllText(sourceDll, replacement);
+            File.SetLastWriteTimeUtc(sourceDll, sourceMtime);
+            var secondIdentity = WritePublishedIdentity(sourceRoot);
+            Assert.NotEqual(firstIdentity, secondIdentity);
+
+            var deployed = BundledPluginDeployer.DeployIfMissing(sourceRoot, destRoot);
+
+            Assert.Equal(2, deployed);
+            Assert.Equal(
+                replacement,
+                File.ReadAllText(Path.Join(destRoot, PluginName, "current.dll"))
+            );
+            Assert.Equal(secondIdentity, ReadInstalledIdentity(destRoot));
+            AssertNoScratch(destRoot);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(root);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MissingOrMalformedSourceIdentity_UsesLegacyFingerprinting(bool malformed)
+    {
+        var root = TestPaths.CreateTempDirectory("bundled-plugin-source-identity-fallback");
+        try
+        {
+            var sourceRoot = Path.Join(root, "bundle");
+            var destRoot = Path.Join(root, "installed");
+            var sourcePlugin = CreateBundle(sourceRoot);
+            _ = WritePublishedIdentity(sourceRoot);
+            Assert.Equal(1, BundledPluginDeployer.DeployIfMissing(sourceRoot, destRoot));
+
+            var identityPath = Path.Join(sourceRoot, BundleIdentityFileName);
+            if (malformed)
+            {
+                File.WriteAllText(identityPath, "not-a-sha256");
+            }
+            else
+            {
+                File.Delete(identityPath);
+            }
+
+            var sourceDll = Path.Join(sourcePlugin, "current.dll");
+            File.WriteAllText(sourceDll, "current-v2");
+            File.SetLastWriteTimeUtc(
+                sourceDll,
+                File.GetLastWriteTimeUtc(sourceDll).AddMinutes(5)
+            );
+
+            var deployed = BundledPluginDeployer.DeployIfMissing(sourceRoot, destRoot);
+
+            Assert.Equal(1, deployed);
+            Assert.Equal(
+                "current-v2",
+                File.ReadAllText(Path.Join(destRoot, PluginName, "current.dll"))
+            );
+            AssertNoScratch(destRoot);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(root);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MissingOrMalformedDestinationIdentity_ForcesRedeployment(bool malformed)
+    {
+        var root = TestPaths.CreateTempDirectory("bundled-plugin-destination-identity");
+        try
+        {
+            var sourceRoot = Path.Join(root, "bundle");
+            var destRoot = Path.Join(root, "installed");
+            _ = CreateBundle(sourceRoot);
+            var sourceIdentity = WritePublishedIdentity(sourceRoot);
+            Assert.Equal(1, BundledPluginDeployer.DeployIfMissing(sourceRoot, destRoot));
+
+            var identityPath = Path.Join(destRoot, BundleIdentityFileName);
+            if (malformed)
+            {
+                File.WriteAllText(identityPath, "not-a-sha256");
+            }
+            else
+            {
+                File.Delete(identityPath);
+            }
+
+            var copyCount = 0;
+            var deployed = BundledPluginDeployer.DeployIfMissing(
+                sourceRoot,
+                destRoot,
+                (source, destination) =>
+                {
+                    copyCount++;
+                    File.Copy(source, destination);
+                }
+            );
+
+            Assert.Equal(1, deployed);
+            Assert.True(copyCount > 0);
+            Assert.Equal(sourceIdentity, ReadInstalledIdentity(destRoot));
+            AssertNoScratch(destRoot);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void PluginFailure_DoesNotAdvanceInstalledIdentity_AndRetries()
+    {
+        var root = TestPaths.CreateTempDirectory("bundled-plugin-identity-failure");
+        try
+        {
+            var sourceRoot = Path.Join(root, "bundle");
+            var destRoot = Path.Join(root, "installed");
+            var firstPlugin = CreateBundle(sourceRoot);
+            var failingPlugin = CreatePlugin(sourceRoot, "z-failing-plugin");
+            var firstIdentity = WritePublishedIdentity(sourceRoot);
+            Assert.Equal(2, BundledPluginDeployer.DeployIfMissing(sourceRoot, destRoot));
+
+            File.WriteAllText(Path.Join(firstPlugin, "current.dll"), "current-v2");
+            File.WriteAllText(Path.Join(failingPlugin, "current.dll"), "current-v2");
+            var secondIdentity = WritePublishedIdentity(sourceRoot);
+            var failingPrefix = failingPlugin + Path.DirectorySeparatorChar;
+
+            var deployed = BundledPluginDeployer.DeployIfMissing(
+                sourceRoot,
+                destRoot,
+                (source, destination) =>
+                {
+                    if (source.StartsWith(failingPrefix, StringComparison.Ordinal))
+                    {
+                        throw new IOException("Injected plugin copy failure.");
+                    }
+
+                    File.Copy(source, destination);
+                }
+            );
+
+            Assert.Equal(1, deployed);
+            Assert.Equal(firstIdentity, ReadInstalledIdentity(destRoot));
+            Assert.Equal(
+                "current-v2",
+                File.ReadAllText(Path.Join(destRoot, PluginName, "current.dll"))
+            );
+            Assert.Equal(
+                "current-v1",
+                File.ReadAllText(Path.Join(destRoot, "z-failing-plugin", "current.dll"))
+            );
+
+            Assert.Equal(2, BundledPluginDeployer.DeployIfMissing(sourceRoot, destRoot));
+            Assert.Equal(secondIdentity, ReadInstalledIdentity(destRoot));
+            Assert.Equal(
+                "current-v2",
+                File.ReadAllText(Path.Join(destRoot, "z-failing-plugin", "current.dll"))
+            );
+            AssertNoScratch(destRoot);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void VersionMismatch_PreservesUnbundledPluginDirectory()
+    {
+        var root = TestPaths.CreateTempDirectory("bundled-plugin-preserve-unbundled");
+        try
+        {
+            var sourceRoot = Path.Join(root, "bundle");
+            var destRoot = Path.Join(root, "installed");
+            var sourcePlugin = CreateBundle(sourceRoot);
+            _ = WritePublishedIdentity(sourceRoot);
+            Assert.Equal(1, BundledPluginDeployer.DeployIfMissing(sourceRoot, destRoot));
+
+            var userPlugin = Path.Join(destRoot, "user-installed-plugin");
+            Directory.CreateDirectory(Path.Join(userPlugin, "data"));
+            File.WriteAllText(Path.Join(userPlugin, "manifest.json"), "user manifest");
+            File.WriteAllText(Path.Join(userPlugin, "data", "settings.json"), "user data");
+            var userFiles = SnapshotFiles(userPlugin);
+
+            File.WriteAllText(Path.Join(sourcePlugin, "current.dll"), "current-v2");
+            _ = WritePublishedIdentity(sourceRoot);
+
+            Assert.Equal(1, BundledPluginDeployer.DeployIfMissing(sourceRoot, destRoot));
+            AssertSnapshotsEqual(userFiles, SnapshotFiles(userPlugin));
+            Assert.Equal(
+                "current-v2",
+                File.ReadAllText(Path.Join(destRoot, PluginName, "current.dll"))
+            );
+            AssertNoScratch(destRoot);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void ContentFingerprint_IsContentBasedAndCreationOrderIndependent()
+    {
+        var root = TestPaths.CreateTempDirectory("bundled-plugin-fingerprint");
+        try
+        {
+            var first = Path.Join(root, "first");
+            var second = Path.Join(root, "second");
+            Directory.CreateDirectory(first);
+            Directory.CreateDirectory(second);
+            File.WriteAllText(Path.Join(first, "a.dll"), "AAAA");
+            File.WriteAllText(Path.Join(first, "b.dll"), "BBBB");
+            File.WriteAllText(Path.Join(second, "b.dll"), "BBBB");
+            File.WriteAllText(Path.Join(second, "a.dll"), "AAAA");
+
+            var firstFingerprint = BundledPluginDeployer.ComputeContentFingerprint(first);
+            var secondFingerprint = BundledPluginDeployer.ComputeContentFingerprint(second);
+            Assert.Equal(firstFingerprint, secondFingerprint);
+
+            var changedFile = Path.Join(first, "a.dll");
+            var originalMtime = File.GetLastWriteTimeUtc(changedFile);
+            File.WriteAllText(changedFile, "ZZZZ");
+            File.SetLastWriteTimeUtc(changedFile, originalMtime);
+            var changedFingerprint = BundledPluginDeployer.ComputeContentFingerprint(first);
+
+            Assert.False(firstFingerprint.SequenceEqual(changedFingerprint));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void UnmarkedDeployment_RetractsInstalledIdentity_AndMarkedRelaunchForceRedeploys()
+    {
+        var root = TestPaths.CreateTempDirectory("bundled-plugin-identity-retraction");
+        try
+        {
+            var sourceRoot = Path.Join(root, "bundle");
+            var destRoot = Path.Join(root, "installed");
+            var sourcePlugin = CreateBundle(sourceRoot);
+            _ = WritePublishedIdentity(sourceRoot);
+            Assert.Equal(1, BundledPluginDeployer.DeployIfMissing(sourceRoot, destRoot));
+
+            // An unmarked (dev/legacy) run deploys a different tree and must retract
+            // the marked build's attestation even though it cannot write a new one.
+            File.Delete(Path.Join(sourceRoot, BundleIdentityFileName));
+            var sourceDll = Path.Join(sourcePlugin, "current.dll");
+            File.WriteAllText(sourceDll, "current-v2");
+            File.SetLastWriteTimeUtc(
+                sourceDll,
+                File.GetLastWriteTimeUtc(sourceDll).AddMinutes(5)
+            );
+            Assert.Equal(1, BundledPluginDeployer.DeployIfMissing(sourceRoot, destRoot));
+            Assert.False(File.Exists(Path.Join(destRoot, BundleIdentityFileName)));
+
+            // A marked relaunch finds no installed identity and force-redeploys even
+            // though the destination content already matches the source.
+            var identity = WritePublishedIdentity(sourceRoot);
+            var copyCount = 0;
+            var deployed = BundledPluginDeployer.DeployIfMissing(
+                sourceRoot,
+                destRoot,
+                (source, destination) =>
+                {
+                    copyCount++;
+                    File.Copy(source, destination);
+                }
+            );
+
+            Assert.Equal(1, deployed);
+            Assert.True(copyCount > 0);
+            Assert.Equal(identity, ReadInstalledIdentity(destRoot));
+            AssertNoScratch(destRoot);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void UnreadableSourceIdentity_UsesLegacyFingerprinting()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // The fixture drives Unix file modes.
+        }
+
+        if (Environment.IsPrivilegedProcess)
+        {
+            return; // chmod 000 does not stop a privileged reader.
+        }
+
+        var root = TestPaths.CreateTempDirectory("bundled-plugin-unreadable-identity");
+        try
+        {
+            var sourceRoot = Path.Join(root, "bundle");
+            var destRoot = Path.Join(root, "installed");
+            var sourcePlugin = CreateBundle(sourceRoot);
+            _ = WritePublishedIdentity(sourceRoot);
+            Assert.Equal(1, BundledPluginDeployer.DeployIfMissing(sourceRoot, destRoot));
+
+            var identityPath = Path.Join(sourceRoot, BundleIdentityFileName);
+            File.SetUnixFileMode(identityPath, UnixFileMode.None);
+            try
+            {
+                var sourceDll = Path.Join(sourcePlugin, "current.dll");
+                File.WriteAllText(sourceDll, "current-v2");
+                File.SetLastWriteTimeUtc(
+                    sourceDll,
+                    File.GetLastWriteTimeUtc(sourceDll).AddMinutes(5)
+                );
+
+                var deployed = BundledPluginDeployer.DeployIfMissing(sourceRoot, destRoot);
+
+                Assert.Equal(1, deployed);
+                Assert.Equal(
+                    "current-v2",
+                    File.ReadAllText(Path.Join(destRoot, PluginName, "current.dll"))
+                );
+                AssertNoScratch(destRoot);
+            }
+            finally
+            {
+                File.SetUnixFileMode(
+                    identityPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite
+                );
+            }
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void FailedIdentityAdvance_DoesNotAbortDeployment()
+    {
+        var root = TestPaths.CreateTempDirectory("bundled-plugin-identity-write-failure");
+        try
+        {
+            var sourceRoot = Path.Join(root, "bundle");
+            var destRoot = Path.Join(root, "installed");
+            _ = CreateBundle(sourceRoot);
+            _ = WritePublishedIdentity(sourceRoot);
+
+            // A directory squatting on the marker path makes the identity advance
+            // fail while the plugin deployment itself succeeds.
+            Directory.CreateDirectory(Path.Join(destRoot, BundleIdentityFileName));
+
+            var deployed = BundledPluginDeployer.DeployIfMissing(sourceRoot, destRoot);
+
+            Assert.Equal(1, deployed);
+            Assert.True(Directory.Exists(Path.Join(destRoot, BundleIdentityFileName)));
+            Assert.Equal(
+                "current-v1",
+                File.ReadAllText(Path.Join(destRoot, PluginName, "current.dll"))
+            );
             AssertNoScratch(destRoot);
         }
         finally
@@ -438,13 +830,33 @@ public sealed class BundledPluginDeployerTests
 
     private static string CreateBundle(string sourceRoot)
     {
-        var plugin = Path.Join(sourceRoot, PluginName);
+        return CreatePlugin(sourceRoot, PluginName);
+    }
+
+    private static string CreatePlugin(string sourceRoot, string pluginName)
+    {
+        var plugin = Path.Join(sourceRoot, pluginName);
         Directory.CreateDirectory(Path.Join(plugin, "runtimes"));
         Directory.CreateDirectory(Path.Join(plugin, "empty"));
-        File.WriteAllText(Path.Join(plugin, "manifest.json"), "{\"id\":\"sample-plugin\"}");
+        File.WriteAllText(Path.Join(plugin, "manifest.json"), $"{{\"id\":\"{pluginName}\"}}");
         File.WriteAllText(Path.Join(plugin, "current.dll"), "current-v1");
         File.WriteAllText(Path.Join(plugin, "runtimes", "native.so"), "native-v1");
         return plugin;
+    }
+
+    private static string WritePublishedIdentity(string sourceRoot)
+    {
+        File.Delete(Path.Join(sourceRoot, BundleIdentityFileName));
+        var identity = Convert.ToHexString(
+            BundledPluginDeployer.ComputeContentFingerprint(sourceRoot)
+        );
+        File.WriteAllText(Path.Join(sourceRoot, BundleIdentityFileName), identity);
+        return identity;
+    }
+
+    private static string ReadInstalledIdentity(string destRoot)
+    {
+        return File.ReadAllText(Path.Join(destRoot, BundleIdentityFileName)).TrimEnd('\r', '\n');
     }
 
     private static void AssertSourceFilesMatch(string sourcePlugin, string destPlugin)
