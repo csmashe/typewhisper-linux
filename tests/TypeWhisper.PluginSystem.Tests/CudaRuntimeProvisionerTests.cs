@@ -315,6 +315,136 @@ public class CudaRuntimeProvisionerTests
     }
 
     [Fact]
+    public async Task MissingRecomputedUnderLocks_ClearDuringMetadataResolution_Refetches()
+    {
+        using var temp = new TempDir();
+        var (handler, http) = WhisperCublasFixture(pauseFirstMetadataResponse: true);
+        using var _ = http;
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
+        var clearingProvisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
+        SeedCachedWheel(
+            provisioner,
+            CublasPackage,
+            CublasVersion,
+            "libcublas.so.12",
+            "libcublasLt.so.12"
+        );
+
+        var profileSatisfiedUnderLocks = false;
+        var provisioning = provisioner.DownloadAndExtractAsync(
+            CudaRuntimeProfile.WhisperCublas,
+            null,
+            () =>
+            {
+                profileSatisfiedUnderLocks = provisioner.IsProfileSatisfied(
+                    CudaRuntimeProfile.WhisperCublas
+                );
+                return Task.CompletedTask;
+            },
+            CancellationToken.None
+        );
+        await handler.FirstMetadataResponseStarted.WaitAsync(TimeSpan.FromSeconds(5));
+
+        try
+        {
+            await clearingProvisioner
+                .ClearCacheAsync(CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(Directory.Exists(temp.Path));
+        }
+        finally
+        {
+            handler.ReleaseFirstMetadataResponse();
+        }
+
+        await provisioning.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Only cudart was missing in the initial snapshot. Clear removed the warm
+        // cuBLAS wheel, so it needed fresh metadata and a fetch after recomputation.
+        Assert.Equal(2, handler.JsonRequests);
+        Assert.Equal(2, handler.WheelRequests);
+        Assert.True(profileSatisfiedUnderLocks);
+        Assert.True(provisioner.IsProfileSatisfied(CudaRuntimeProfile.WhisperCublas));
+    }
+
+    [Fact]
+    public async Task AlreadySatisfied_ClearWaitsThroughPreload()
+    {
+        using var temp = new TempDir();
+        var (_, http) = WhisperCublasFixture();
+        using var _ = http;
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
+        var clearingProvisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false
+        );
+        SeedCachedWheel(
+            provisioner,
+            CudartPackage,
+            CudartVersion,
+            "libcudart.so.12"
+        );
+        SeedCachedWheel(
+            provisioner,
+            CublasPackage,
+            CublasVersion,
+            "libcublas.so.12",
+            "libcublasLt.so.12"
+        );
+
+        var preloadStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releasePreload = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var provisioning = provisioner.DownloadAndExtractAsync(
+            CudaRuntimeProfile.WhisperCublas,
+            null,
+            async () =>
+            {
+                preloadStarted.TrySetResult(true);
+                await releasePreload.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            },
+            CancellationToken.None
+        );
+        await preloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var clearing = clearingProvisioner.ClearCacheAsync(CancellationToken.None);
+        try
+        {
+            await Assert.ThrowsAsync<TimeoutException>(
+                () => clearing.WaitAsync(TimeSpan.FromMilliseconds(250))
+            );
+            Assert.True(Directory.Exists(provisioner.CacheDirectory));
+            Assert.True(
+                File.Exists(Path.Join(provisioner.CacheDirectory, "libcudart.so.12"))
+            );
+        }
+        finally
+        {
+            releasePreload.TrySetResult(true);
+        }
+
+        await provisioning.WaitAsync(TimeSpan.FromSeconds(5));
+        await clearing.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(Directory.Exists(temp.Path));
+    }
+
+    [Fact]
     public async Task DownloadAndExtract_TwoProvisioners_ClearWaitsForActiveProvisioning()
     {
         using var temp = new TempDir();
@@ -345,11 +475,11 @@ public class CudaRuntimeProvisionerTests
         Assert.True(File.Exists(cudartSentinel));
 
         var clearing = clearingProvisioner.ClearCacheAsync(CancellationToken.None);
-        bool completedWhileProvisioning;
         try
         {
-            completedWhileProvisioning =
-                await Task.WhenAny(clearing, Task.Delay(500)) == clearing;
+            await Assert.ThrowsAsync<TimeoutException>(
+                () => clearing.WaitAsync(TimeSpan.FromMilliseconds(500))
+            );
         }
         finally
         {
@@ -359,7 +489,6 @@ public class CudaRuntimeProvisionerTests
         await provisioning;
         await clearing;
 
-        Assert.False(completedWhileProvisioning);
         Assert.False(Directory.Exists(temp.Path));
         Assert.True(File.Exists(provisioner.MaintenanceLockPathForTests));
         Assert.True(File.Exists(cudartSentinel));
@@ -393,12 +522,12 @@ public class CudaRuntimeProvisionerTests
         await handler.FirstWheelRequestStarted.WaitAsync(TimeSpan.FromSeconds(5));
 
         var pruning = Task.Run(pruningProvisioner.PruneStaleBundles);
-        bool completedWhileProvisioning;
         bool staleSurvivedWhileProvisioning;
         try
         {
-            completedWhileProvisioning =
-                await Task.WhenAny(pruning, Task.Delay(500)) == pruning;
+            await Assert.ThrowsAsync<TimeoutException>(
+                () => pruning.WaitAsync(TimeSpan.FromMilliseconds(500))
+            );
             staleSurvivedWhileProvisioning = Directory.Exists(staleDir);
         }
         finally
@@ -409,7 +538,6 @@ public class CudaRuntimeProvisionerTests
         await provisioning;
         await pruning;
 
-        Assert.False(completedWhileProvisioning);
         Assert.True(staleSurvivedWhileProvisioning);
         Assert.False(Directory.Exists(staleDir));
     }
@@ -647,6 +775,22 @@ public class CudaRuntimeProvisionerTests
 
     // ---- fixtures / helpers ------------------------------------------------------------
 
+    private static void SeedCachedWheel(
+        CudaRuntimeProvisioner provisioner,
+        string package,
+        string version,
+        params string[] sonames
+    )
+    {
+        Directory.CreateDirectory(provisioner.CacheDirectory);
+        foreach (var soname in sonames)
+            File.WriteAllText(Path.Join(provisioner.CacheDirectory, soname), "cached");
+        File.WriteAllText(
+            Path.Join(provisioner.CacheDirectory, $".{package}-{version}.complete"),
+            version
+        );
+    }
+
     private static CudaRuntimeProvisioner CreateProvisioner(
         string cacheRoot,
         HttpClient http,
@@ -671,7 +815,8 @@ public class CudaRuntimeProvisionerTests
         };
 
     private static (FakePyPiHandler Handler, HttpClient Http) WhisperCublasFixture(
-        bool pauseFirstWheelResponse = false
+        bool pauseFirstWheelResponse = false,
+        bool pauseFirstMetadataResponse = false
     )
     {
         var fixtures = new[]
@@ -683,7 +828,11 @@ public class CudaRuntimeProvisionerTests
                 ("nvidia/cublas/lib/libcublasLt.so.12", 16),
             ]),
         };
-        var handler = new FakePyPiHandler(fixtures, pauseFirstWheelResponse);
+        var handler = new FakePyPiHandler(
+            fixtures,
+            pauseFirstWheelResponse,
+            pauseFirstMetadataResponse
+        );
         return (handler, new HttpClient(handler));
     }
 
@@ -760,30 +909,41 @@ public class CudaRuntimeProvisionerTests
         private readonly Dictionary<string, WheelFixture> _byPackage;
         private readonly Dictionary<string, WheelFixture> _byUrl;
         private readonly bool _pauseFirstWheelResponse;
+        private readonly bool _pauseFirstMetadataResponse;
         private readonly TaskCompletionSource<bool> _firstWheelRequestStarted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _releaseFirstWheelResponse =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _firstMetadataResponseStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _releaseFirstMetadataResponse =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _json;
         private int _wheel;
 
         public FakePyPiHandler(
             IEnumerable<WheelFixture> wheels,
-            bool pauseFirstWheelResponse = false
+            bool pauseFirstWheelResponse = false,
+            bool pauseFirstMetadataResponse = false
         )
         {
             var list = wheels.ToList();
             _byPackage = list.ToDictionary(w => w.Package, StringComparer.Ordinal);
             _byUrl = list.ToDictionary(w => w.WheelUrl, StringComparer.Ordinal);
             _pauseFirstWheelResponse = pauseFirstWheelResponse;
+            _pauseFirstMetadataResponse = pauseFirstMetadataResponse;
         }
 
         public int JsonRequests => Volatile.Read(ref _json);
         public int WheelRequests => Volatile.Read(ref _wheel);
         public Task FirstWheelRequestStarted => _firstWheelRequestStarted.Task;
+        public Task FirstMetadataResponseStarted => _firstMetadataResponseStarted.Task;
 
         public void ReleaseFirstWheelResponse() =>
             _releaseFirstWheelResponse.TrySetResult(true);
+
+        public void ReleaseFirstMetadataResponse() =>
+            _releaseFirstMetadataResponse.TrySetResult(true);
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -793,7 +953,16 @@ public class CudaRuntimeProvisionerTests
             var uri = request.RequestUri!;
             if (uri.Host == "pypi.org")
             {
-                Interlocked.Increment(ref _json);
+                var metadataRequest = Interlocked.Increment(ref _json);
+                if (_pauseFirstMetadataResponse && metadataRequest == 1)
+                {
+                    _firstMetadataResponseStarted.TrySetResult(true);
+                    await _releaseFirstMetadataResponse.Task.WaitAsync(
+                        TimeSpan.FromSeconds(5),
+                        cancellationToken
+                    );
+                }
+
                 // /pypi/{package}/{version}/json
                 var parts = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
                 var package = parts[1];
@@ -808,7 +977,10 @@ public class CudaRuntimeProvisionerTests
             if (_pauseFirstWheelResponse && wheelRequest == 1)
             {
                 _firstWheelRequestStarted.TrySetResult(true);
-                await _releaseFirstWheelResponse.Task.WaitAsync(cancellationToken);
+                await _releaseFirstWheelResponse.Task.WaitAsync(
+                    TimeSpan.FromSeconds(5),
+                    cancellationToken
+                );
             }
 
             return
