@@ -32,6 +32,65 @@ public sealed class CliInstallServiceTests : IDisposable
     }
 
     [Fact]
+    public void FindBundledCliPath_prefers_packaged_candidate_over_development_publish()
+    {
+        var baseDirectory = Path.Join(_tempDir, "app");
+        var sourceDirectory = Path.Join(_tempDir, "src");
+        var packagedPath = Path.Join(baseDirectory, "Cli", "typewhisper-cli");
+        var publishPath = DevelopmentPublishPath(sourceDirectory, "Debug");
+        WriteCliFile(packagedPath);
+        WriteCliFile(publishPath);
+
+        var result = CliInstallService.FindBundledCliPath(baseDirectory, sourceDirectory);
+
+        Assert.Equal(packagedPath, result);
+    }
+
+    [Theory]
+    [InlineData("Debug")]
+    [InlineData("Release")]
+    public void FindBundledCliPath_finds_single_file_development_publish(string configuration)
+    {
+        var baseDirectory = Path.Join(_tempDir, "app");
+        var sourceDirectory = Path.Join(_tempDir, "src");
+        var publishPath = DevelopmentPublishPath(sourceDirectory, configuration);
+        WriteCliFile(publishPath);
+
+        var result = CliInstallService.FindBundledCliPath(baseDirectory, sourceDirectory);
+
+        Assert.Equal(publishPath, result);
+    }
+
+    [Fact]
+    public void FindBundledCliPath_ignores_framework_dependent_development_outputs()
+    {
+        var baseDirectory = Path.Join(_tempDir, "app", "bin");
+        var sourceDirectory = Path.Join(_tempDir, "src");
+        WriteFrameworkDependentCli(Path.Join(baseDirectory, "..", "TypeWhisper.Cli"));
+        WriteFrameworkDependentCli(
+            Path.Join(sourceDirectory, "TypeWhisper.Cli", "bin", "Debug", "net10.0")
+        );
+        WriteFrameworkDependentCli(
+            Path.Join(sourceDirectory, "TypeWhisper.Cli", "bin", "Release", "net10.0")
+        );
+        WriteFrameworkDependentCli(
+            Path.Join(
+                sourceDirectory,
+                "TypeWhisper.Cli",
+                "bin",
+                "Debug",
+                "net10.0",
+                "linux-x64",
+                "publish"
+            )
+        );
+
+        var result = CliInstallService.FindBundledCliPath(baseDirectory, sourceDirectory);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
     public void GetState_reports_missing_bundle()
     {
         var service = new CliInstallService(
@@ -883,6 +942,37 @@ public sealed class CliInstallServiceTests : IDisposable
     {
         Directory.CreateDirectory(sourceDir);
         File.WriteAllText(Path.Join(sourceDir, "typewhisper-cli"), $"apphost-{version}");
+    }
+
+    private static string DevelopmentPublishPath(string sourceDirectory, string configuration)
+    {
+        return Path.Join(
+            sourceDirectory,
+            "TypeWhisper.Cli",
+            "bin",
+            configuration,
+            "net10.0",
+            "linux-x64",
+            "publish",
+            "typewhisper-cli"
+        );
+    }
+
+    private static void WriteCliFile(string path)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "apphost");
+    }
+
+    private static void WriteFrameworkDependentCli(string directory)
+    {
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Join(directory, "typewhisper-cli"), "apphost");
+        File.WriteAllText(Path.Join(directory, "typewhisper-cli.dll"), "assembly");
+        File.WriteAllText(
+            Path.Join(directory, "typewhisper-cli.runtimeconfig.json"),
+            "{}"
+        );
     }
 
     private static CliInstallService.CliVerificationResult SuccessfulVerification(string path)

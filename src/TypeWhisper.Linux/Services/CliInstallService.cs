@@ -321,32 +321,36 @@ public sealed class CliInstallService
 
     private static string? FindBundledCliPath()
     {
-        var baseDirectory = AppContext.BaseDirectory;
+        var sourceDirectory = Path.Join(AppContext.BaseDirectory, "..", "..", "..", "..");
+        return FindBundledCliPath(AppContext.BaseDirectory, sourceDirectory);
+    }
+
+    // Parameterized only so tests can probe isolated package and source trees.
+    internal static string? FindBundledCliPath(string baseDirectory, string sourceDirectory)
+    {
+        // For local development, prepare the CLI with:
+        // dotnet publish src/TypeWhisper.Cli/TypeWhisper.Cli.csproj -c Debug -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false
         var candidates = new[]
         {
             Path.Join(baseDirectory, "Cli", CliFileName),
-            Path.Join(baseDirectory, "..", "TypeWhisper.Cli", CliFileName), Path.Join(
-                baseDirectory,
-                "..",
-                "..",
-                "..",
-                "..",
+            Path.Join(
+                sourceDirectory,
                 "TypeWhisper.Cli",
                 "bin",
                 "Debug",
                 "net10.0",
+                "linux-x64",
+                "publish",
                 CliFileName
             ),
             Path.Join(
-                baseDirectory,
-                "..",
-                "..",
-                "..",
-                "..",
+                sourceDirectory,
                 "TypeWhisper.Cli",
                 "bin",
                 "Release",
                 "net10.0",
+                "linux-x64",
+                "publish",
                 CliFileName
             ),
         };
@@ -356,7 +360,12 @@ public sealed class CliInstallService
 
     private static bool IsCliAppHost(string path)
     {
-        return FileExistsWithExactName(path);
+        // A single-file publish never has the managed assembly beside the apphost;
+        // every framework-dependent layout does. Rejecting the sibling keeps the
+        // single-file installer from staging an apphost whose DLLs stay behind.
+        // path already ends in the CliFileName segment, so path + ".dll" names the
+        // sibling managed assembly a single-file publish never leaves behind.
+        return FileExistsWithExactName(path) && !File.Exists(path + ".dll");
     }
 
     private static CliInstallState CreateState(
