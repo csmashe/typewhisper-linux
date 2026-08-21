@@ -186,6 +186,44 @@ public sealed class PluginManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task MigratedOldCiphertextDoesNotClearConcurrentReplacement()
+    {
+        var keyPath = Path.Join(_pluginSearchDir, "secret-protection.key");
+        var oldCiphertext = ApiKeyProtection.Encrypt("old-provider-secret", keyPath);
+        var concurrentReplacement = ApiKeyProtection.Encrypt(
+            "replacement-provider-secret",
+            keyPath
+        );
+        var snapshot = new AppSettings { GroqApiKey = oldCiphertext };
+        var committed = snapshot;
+        _settings.Setup(settings => settings.Current).Returns(snapshot);
+        _settings
+            .Setup(settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Returns((Func<AppSettings, AppSettings> mutate) =>
+            {
+                committed = mutate(
+                    snapshot with { GroqApiKey = concurrentReplacement }
+                );
+                return committed;
+            });
+        var manager = CreateManager();
+        AddPluginHost(manager, "com.typewhisper.groq", keyPath);
+
+        await InvokeRootKeyMigration(manager);
+
+        Assert.Equal(concurrentReplacement, committed.GroqApiKey);
+        Assert.Equal(
+            "old-provider-secret",
+            await GetPluginHosts(manager)["com.typewhisper.groq"]
+                .LoadSecretAsync("api-key")
+        );
+        _settings.Verify(
+            settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
+            Times.Once
+        );
+    }
+
+    [Fact]
     public async Task LegacyRootKey_Undecryptable_DoesNotClearOrPersistCiphertext()
     {
         var keyPath = Path.Join(_pluginSearchDir, "secret-protection.key");
