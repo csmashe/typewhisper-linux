@@ -169,8 +169,12 @@ public sealed class PluginManagerTests : IDisposable
         var current = new AppSettings { GroqApiKey = protectedValue };
         _settings.Setup(settings => settings.Current).Returns(() => current);
         _settings
-            .Setup(settings => settings.Save(It.IsAny<AppSettings>()))
-            .Callback<AppSettings>(saved => current = saved);
+            .Setup(settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Returns((Func<AppSettings, AppSettings> mutate) =>
+            {
+                current = mutate(current);
+                return current;
+            });
         var manager = CreateManager();
         AddPluginHost(manager, "com.typewhisper.groq", keyPath);
 
@@ -192,8 +196,12 @@ public sealed class PluginManagerTests : IDisposable
         var current = new AppSettings { GroqApiKey = stored };
         _settings.Setup(settings => settings.Current).Returns(() => current);
         _settings
-            .Setup(settings => settings.Save(It.IsAny<AppSettings>()))
-            .Callback<AppSettings>(saved => current = saved);
+            .Setup(settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Returns((Func<AppSettings, AppSettings> mutate) =>
+            {
+                current = mutate(current);
+                return current;
+            });
         var manager = CreateManager();
         AddPluginHost(manager, "com.typewhisper.groq", keyPath);
 
@@ -204,7 +212,7 @@ public sealed class PluginManagerTests : IDisposable
             await GetPluginHosts(manager)["com.typewhisper.groq"]
                 .LoadSecretAsync("api-key")
         );
-        _settings.Verify(settings => settings.Save(It.IsAny<AppSettings>()), Times.Never);
+        _settings.Verify(settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     private PluginManager CreateManager()
@@ -325,10 +333,17 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
     [Fact]
     public async Task DisablePluginAsync_NotActivated_PersistsDisabledState()
     {
+        var current = _settings.Object.Current;
         AppSettings? savedSettings = null;
+        _settings.Setup(s => s.Current).Returns(() => current);
         _settings
-            .Setup(s => s.Save(It.IsAny<AppSettings>()))
-            .Callback<AppSettings>(s => savedSettings = s);
+            .Setup(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Returns((Func<AppSettings, AppSettings> mutate) =>
+            {
+                current = mutate(current);
+                savedSettings = current;
+                return current;
+            });
 
         _manager = new PluginManager(
             new PluginLoader(TestPaths.NewTempPath("TypeWhisper.PluginManagerData")),

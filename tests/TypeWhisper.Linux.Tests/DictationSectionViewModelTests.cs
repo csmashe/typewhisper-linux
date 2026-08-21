@@ -43,7 +43,7 @@ public sealed class DictationSectionViewModelTests
         Assert.Equal(pinnedIndex, context.Settings.Object.Current.SelectedMicrophoneDevice);
         Assert.Equal(pinnedId, context.Settings.Object.Current.SelectedMicrophoneDeviceId);
         context.Settings.Verify(
-            service => service.Save(It.IsAny<AppSettings>()),
+            service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
             Times.Never
         );
 

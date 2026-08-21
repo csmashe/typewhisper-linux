@@ -25,8 +25,11 @@ public sealed class AppearanceSectionViewModelTests
         _ = new AppearanceSectionViewModel(settings.Object, post: action => action()) { PreviewBubbleAutoHideSeconds = 3.75 };
 
         settings.Verify(
-            s => s.Save(It.Is<AppSettings>(a => a.PreviewBubbleAutoHideMilliseconds == 3750)),
+            s => s.Update(
+                It.Is<Func<AppSettings, AppSettings>>(mutate =>
+                    mutate(AppSettings.Default).PreviewBubbleAutoHideMilliseconds == 3750)),
             Times.Once);
+        Assert.Equal(3750, settings.Object.Current.PreviewBubbleAutoHideMilliseconds);
     }
 
     [Fact]
@@ -36,8 +39,11 @@ public sealed class AppearanceSectionViewModelTests
         _ = new AppearanceSectionViewModel(settings.Object, post: action => action()) { PreviewBubbleAutoHideSeconds = 7.0 };
 
         settings.Verify(
-            s => s.Save(It.Is<AppSettings>(a => a.PreviewBubbleAutoHideMilliseconds == 5000)),
+            s => s.Update(
+                It.Is<Func<AppSettings, AppSettings>>(mutate =>
+                    mutate(AppSettings.Default).PreviewBubbleAutoHideMilliseconds == 5000)),
             Times.Once);
+        Assert.Equal(5000, settings.Object.Current.PreviewBubbleAutoHideMilliseconds);
     }
 
     [Theory]
@@ -76,9 +82,9 @@ public sealed class AppearanceSectionViewModelTests
         sut.ResetOverlayPositionCommand.Execute(null);
 
         settings.Verify(
-            s => s.Save(
-                It.Is<AppSettings>(a =>
-                    a.OverlayCustomLeft == null && a.OverlayCustomTop == null)),
+            s => s.Update(
+                It.Is<Func<AppSettings, AppSettings>>(mutate =>
+                    ClearsOverlayPosition(mutate(AppSettings.Default)))),
             Times.Once);
     }
 
@@ -130,16 +136,23 @@ public sealed class AppearanceSectionViewModelTests
         // Both refreshes read Current, so the superseded 2000 is never applied, and hydrating
         // the view model must not write anything back.
         Assert.Equal(4.0, sut.PreviewBubbleAutoHideSeconds);
-        settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     private static Mock<ISettingsService> CreateSettingsMock(AppSettings current)
     {
         var settings = new Mock<ISettingsService>();
-        settings.SetupGet(s => s.Current).Returns(current);
+        settings.SetupGet(s => s.Current).Returns(() => current);
         settings
-            .Setup(s => s.Save(It.IsAny<AppSettings>()))
-            .Callback<AppSettings>(saved => settings.SetupGet(s => s.Current).Returns(saved));
+            .Setup(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Returns((Func<AppSettings, AppSettings> mutate) =>
+            {
+                current = mutate(current);
+                return current;
+            });
         return settings;
     }
+
+    private static bool ClearsOverlayPosition(AppSettings settings) =>
+        settings.OverlayCustomLeft is null && settings.OverlayCustomTop is null;
 }

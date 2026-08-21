@@ -774,8 +774,8 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(
-            _settings.Current with
+        _settings.Update(current =>
+            current with
             {
                 FileTranscriptionEngineOverride = CleanSettingValue(
                     FileTranscriptionEngineOverride
@@ -792,8 +792,8 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(
-            _settings.Current with
+        _settings.Update(current =>
+            current with
             {
                 WatchFolderPath = CleanSettingValue(WatchFolderPath),
                 WatchFolderOutputPath = CleanSettingValue(WatchFolderOutputPath),

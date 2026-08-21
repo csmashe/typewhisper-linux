@@ -1049,10 +1049,15 @@ public sealed class PluginManager : IDisposable
     {
         try
         {
-            var current = _settings.Current;
-            var updatedState = new Dictionary<string, bool>(current.PluginEnabledState) { [pluginId] = enabled };
-
-            _settings.Save(current with { PluginEnabledState = updatedState });
+            _settings.Update(current =>
+                current with
+                {
+                    PluginEnabledState = new Dictionary<string, bool>(current.PluginEnabledState)
+                    {
+                        [pluginId] = enabled,
+                    },
+                }
+            );
         }
         catch (Exception ex)
         {
@@ -1093,12 +1098,15 @@ public sealed class PluginManager : IDisposable
 
         if (migratedGroq || migratedOpenAi)
         {
-            var current = _settings.Current;
-            _settings.Save(
+            _settings.Update(current =>
                 current with
                 {
-                    GroqApiKey = migratedGroq ? "" : current.GroqApiKey,
-                    OpenAiApiKey = migratedOpenAi ? "" : current.OpenAiApiKey,
+                    GroqApiKey = migratedGroq && current.GroqApiKey == settings.GroqApiKey
+                        ? ""
+                        : current.GroqApiKey,
+                    OpenAiApiKey = migratedOpenAi && current.OpenAiApiKey == settings.OpenAiApiKey
+                        ? ""
+                        : current.OpenAiApiKey,
                 }
             );
         }

@@ -538,34 +538,18 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     /// </summary>
     public void MigrateSettings()
     {
-        var current = _settings.Current;
-        var changed = false;
-
-        var migratedModelId = MigrateModelId(current.SelectedModelId);
-        if (migratedModelId != current.SelectedModelId)
-        {
-            current = current with { SelectedModelId = migratedModelId };
-            changed = true;
-        }
-
-        var migratedFileOverride = MigrateOverrideModelId(current.FileTranscriptionModelOverride);
-        if (migratedFileOverride != current.FileTranscriptionModelOverride)
-        {
-            current = current with { FileTranscriptionModelOverride = migratedFileOverride };
-            changed = true;
-        }
-
-        var migratedWatchOverride = MigrateOverrideModelId(current.WatchFolderModelOverride);
-        if (migratedWatchOverride != current.WatchFolderModelOverride)
-        {
-            current = current with { WatchFolderModelOverride = migratedWatchOverride };
-            changed = true;
-        }
-
-        if (changed)
-        {
-            _settings.Save(current);
-        }
+        _settings.Update(current =>
+            current with
+            {
+                SelectedModelId = MigrateModelId(current.SelectedModelId),
+                FileTranscriptionModelOverride = MigrateOverrideModelId(
+                    current.FileTranscriptionModelOverride
+                ),
+                WatchFolderModelOverride = MigrateOverrideModelId(
+                    current.WatchFolderModelOverride
+                ),
+            }
+        );
     }
 
     private static string? MigrateModelId(string? modelId)

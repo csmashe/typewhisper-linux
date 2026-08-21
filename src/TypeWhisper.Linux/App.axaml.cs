@@ -630,13 +630,13 @@ public class App : Application
 
         if (shouldMigrate)
         {
-            settings.Save(s with { ToggleHotkey = linuxDefault });
+            settings.Update(current => current with { ToggleHotkey = linuxDefault });
         }
         else if (!hotkey.TrySetHotkeyFromString(persisted))
         {
             // User-set but unparseable — keep the service default and fix
             // settings so UI/state agree.
-            settings.Save(s with { ToggleHotkey = linuxDefault });
+            settings.Update(current => current with { ToggleHotkey = linuxDefault });
         }
     }
 
@@ -1457,8 +1457,8 @@ public class App : Application
 
             if (resolved.Index != configuredIndex || resolved.PersistentId != configuredId)
             {
-                settings.Save(
-                    settings.Current with
+                settings.Update(current =>
+                    current with
                     {
                         SelectedMicrophoneDevice = resolved.Index,
                         SelectedMicrophoneDeviceId = resolved.PersistentId,

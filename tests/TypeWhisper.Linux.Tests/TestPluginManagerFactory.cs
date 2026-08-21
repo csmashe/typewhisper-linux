@@ -58,12 +58,14 @@ internal static class TestPluginManagerFactory
     public static Mock<ISettingsService> CreateSettings(AppSettings current)
     {
         var settings = new Mock<ISettingsService>();
-        settings.SetupGet(service => service.Current).Returns(current);
+        settings.SetupGet(service => service.Current).Returns(() => current);
         settings
-            .Setup(service => service.Save(It.IsAny<AppSettings>()))
-            .Callback<AppSettings>(saved =>
-                settings.SetupGet(service => service.Current).Returns(saved)
-            );
+            .Setup(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Returns((Func<AppSettings, AppSettings> mutate) =>
+            {
+                current = mutate(current);
+                return current;
+            });
         return settings;
     }
 

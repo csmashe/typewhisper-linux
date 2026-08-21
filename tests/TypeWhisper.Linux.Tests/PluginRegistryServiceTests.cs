@@ -142,13 +142,19 @@ public sealed class PluginRegistryServiceTests : IDisposable
     [Fact]
     public async Task FirstRunAutoInstallAsync_SetsFlag()
     {
+        var current = new AppSettings { PluginFirstRunCompleted = false };
         AppSettings? savedSettings = null;
         _settings
-            .Setup(s => s.Save(It.IsAny<AppSettings>()))
-            .Callback<AppSettings>(s => savedSettings = s);
+            .Setup(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Returns((Func<AppSettings, AppSettings> mutate) =>
+            {
+                current = mutate(current);
+                savedSettings = current;
+                return current;
+            });
         _settings
             .Setup(s => s.Current)
-            .Returns(new AppSettings { PluginFirstRunCompleted = false });
+            .Returns(() => current);
 
         var httpClient = CreateMockHttpClient("[]");
         var manager = CreateManager();
@@ -177,19 +183,25 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         await service.FirstRunAutoInstallAsync();
 
-        _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+        _settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     [Fact]
     public async Task FirstRunAutoInstallAsync_OfflineFetch_DoesNotCompleteAndRetries()
     {
+        var current = new AppSettings { PluginFirstRunCompleted = false };
         AppSettings? savedSettings = null;
         _settings
             .Setup(settings => settings.Current)
-            .Returns(new AppSettings { PluginFirstRunCompleted = false });
+            .Returns(() => current);
         _settings
-            .Setup(settings => settings.Save(It.IsAny<AppSettings>()))
-            .Callback<AppSettings>(settings => savedSettings = settings);
+            .Setup(settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Returns((Func<AppSettings, AppSettings> mutate) =>
+            {
+                current = mutate(current);
+                savedSettings = current;
+                return current;
+            });
         var requests = 0;
         var handler = new Mock<HttpMessageHandler>();
         handler
@@ -264,7 +276,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
         await service.FirstRunAutoInstallAsync();
 
         Assert.Empty(result);
-        _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+        _settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     [Fact]
@@ -304,7 +316,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
         // a byte limit on its own does not catch.
         Assert.True(json.Length < 8L * 1024 * 1024);
         Assert.Empty(result);
-        _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+        _settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     [Theory]
@@ -343,7 +355,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
         await service.FirstRunAutoInstallAsync();
 
         Assert.Empty(result);
-        _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+        _settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     private PluginManager CreateManager()

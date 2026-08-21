@@ -146,7 +146,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                 return;
             }
 
-            _settings.Save(_settings.Current with { DefaultLlmProvider = value });
+            _settings.Update(current => current with { DefaultLlmProvider = value });
             OnPropertyChanged();
         }
     }
@@ -197,7 +197,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                 return;
             }
 
-            _settings.Save(_settings.Current with { SpokenCommandLlmProvider = value?.Value });
+            _settings.Update(current => current with { SpokenCommandLlmProvider = value?.Value });
             OnPropertyChanged();
         }
     }
@@ -236,7 +236,7 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { CommandModeEnabled = value });
+        _settings.Update(current => current with { CommandModeEnabled = value });
     }
 
     partial void OnCommandKeyphraseChanged(string value)
@@ -262,7 +262,7 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { CommandKeyphrase = normalized });
+        _settings.Update(current => current with { CommandKeyphrase = normalized });
     }
 
     partial void OnSelectedActionChanged(PromptAction? value)
