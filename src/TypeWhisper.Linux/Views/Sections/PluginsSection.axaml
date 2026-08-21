@@ -206,14 +206,6 @@
                                                                 <StackPanel Orientation="Horizontal"
                                                                             Spacing="6">
                                                                     <Border Classes="badge"
-                                                                            Background="#1A3453"
-                                                                            BorderBrush="#2E5B89"
-                                                                            BorderThickness="1">
-                                                                        <TextBlock Text="{Binding CategoryLabel}"
-                                                                                FontSize="11"
-                                                                                Foreground="#D6E7FF" />
-                                                                    </Border>
-                                                                    <Border Classes="badge"
                                                                             Background="{Binding LocationBadgeBackground}"
                                                                             BorderBrush="{Binding LocationBadgeBorder}"
                                                                             BorderThickness="1">

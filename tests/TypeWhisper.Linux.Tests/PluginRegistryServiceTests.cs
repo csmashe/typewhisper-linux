@@ -5,6 +5,7 @@ using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.PluginSDK.Models;
 using TypeWhisper.Tests;
 using Xunit;
 
@@ -83,6 +84,82 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         Assert.Single(result);
         Assert.Equal("com.typewhisper.openai", result[0].Id);
+    }
+
+    [Fact]
+    public async Task FetchRegistryAsync_NewSchemaMetadata_DeserializesTypedFields()
+    {
+        var plugin = await FetchRegistryPluginAsync(
+            new Dictionary<string, object?>
+            {
+                ["categories"] = new[] { "transcription", "llm" },
+                ["networkAccess"] = "userControlled",
+            }
+        );
+
+        Assert.Equal(
+            [PluginCategory.Transcription, PluginCategory.Llm],
+            plugin.Categories
+        );
+        Assert.Equal(PluginNetworkAccess.UserControlled, plugin.NetworkAccess);
+        Assert.Null(plugin.Category);
+        Assert.Null(plugin.IsLocal);
+    }
+
+    [Fact]
+    public async Task FetchRegistryAsync_LegacyMetadata_ProjectsTypedFields()
+    {
+        var plugin = await FetchRegistryPluginAsync(
+            new Dictionary<string, object?>
+            {
+                ["category"] = "post-processor",
+                ["isLocal"] = true,
+            }
+        );
+
+        Assert.Equal([PluginCategory.PostProcessing], plugin.Categories);
+        Assert.Equal(PluginNetworkAccess.Local, plugin.NetworkAccess);
+        Assert.Equal("post-processor", plugin.Category);
+        Assert.True(plugin.IsLocal);
+    }
+
+    [Fact]
+    public async Task FetchRegistryAsync_DualSchemaMetadata_TypedFieldsTakePrecedence()
+    {
+        var plugin = await FetchRegistryPluginAsync(
+            new Dictionary<string, object?>
+            {
+                ["categories"] = new[] { "llm" },
+                ["networkAccess"] = "network",
+                ["category"] = "utility",
+                ["isLocal"] = true,
+            }
+        );
+
+        Assert.Equal([PluginCategory.Llm], plugin.Categories);
+        Assert.Equal(PluginNetworkAccess.Network, plugin.NetworkAccess);
+        Assert.Equal("utility", plugin.Category);
+        Assert.True(plugin.IsLocal);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task FetchRegistryAsync_NullOrEmptyLegacyCategory_DoesNotProjectCategory(
+        string? category
+    )
+    {
+        var plugin = await FetchRegistryPluginAsync(
+            new Dictionary<string, object?>
+            {
+                ["category"] = category,
+            }
+        );
+
+        Assert.Null(plugin.Categories);
+        Assert.Null(plugin.NetworkAccess);
+        Assert.Equal(category, plugin.Category);
+        Assert.Null(plugin.IsLocal);
     }
 
     [Fact]
@@ -369,6 +446,41 @@ public sealed class PluginRegistryServiceTests : IDisposable
             []
         );
         return _manager;
+    }
+
+    private async Task<RegistryPlugin> FetchRegistryPluginAsync(
+        Dictionary<string, object?> metadata
+    )
+    {
+        var entry = new Dictionary<string, object?>
+        {
+            ["id"] = "com.typewhisper.metadata-test",
+            ["name"] = "Metadata Test",
+            ["version"] = "1.0.0",
+            ["author"] = "Tester",
+            ["description"] = "Registry metadata compatibility fixture",
+            ["size"] = 1024L,
+            ["downloadUrl"] = "https://example.com/plugin.zip",
+            ["platform"] = "linux",
+            ["rid"] = "linux-x64",
+            ["sdkAbi"] = "net10.0",
+        };
+        foreach (var (name, value) in metadata)
+        {
+            entry[name] = value;
+        }
+
+        var service = new PluginRegistryService(
+            CreateManager(),
+            _loader,
+            _settings.Object,
+            CreateMockHttpClient(JsonSerializer.Serialize(new[] { entry }))
+        )
+        {
+            RuntimeRid = "linux-x64",
+        };
+
+        return Assert.Single(await service.FetchRegistryAsync());
     }
 
     private static HttpClient CreateMockHttpClient(
