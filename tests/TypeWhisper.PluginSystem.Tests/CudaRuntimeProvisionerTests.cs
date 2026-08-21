@@ -589,6 +589,281 @@ public class CudaRuntimeProvisionerTests
     }
 
     [Fact]
+    public async Task ClearCache_AfterFailedLegacyMigration_NewInstanceDownloadsFresh()
+    {
+        using var temp = new TempDir();
+        var legacyRoot = Path.Join(temp.Path, "legacy", "cuda");
+        var configuredRoot = Path.Join(temp.Path, "selected", "Runtimes", "cuda");
+        var legacyArtifact = Path.Join(
+            legacyRoot,
+            CudaRuntimeProvisioner.BundleVersion,
+            "legacy-artifact.so"
+        );
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyArtifact)!);
+        await File.WriteAllTextAsync(legacyArtifact, "legacy");
+
+        var (handler, http) = WhisperCublasFixture();
+        using var _ = http;
+        var failedMigrator = CreateProvisioner(
+            configuredRoot,
+            http,
+            systemLibraryProbe: _ => true,
+            legacyCacheRoot: legacyRoot,
+            moveDirectory: (_, _) =>
+                throw new IOException("simulated cross-device move failure")
+        );
+
+        await failedMigrator
+            .DownloadAndExtractAsync(
+                CudaRuntimeProfile.WhisperCublas,
+                null,
+                CancellationToken.None
+            )
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        await failedMigrator
+            .ClearCacheAsync(CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(
+            Path.Join(temp.Path, "legacy", "cuda.legacy-migration-disabled"),
+            failedMigrator.LegacyMigrationDisabledPathForTests
+        );
+        Assert.True(File.Exists(failedMigrator.LegacyMigrationDisabledPathForTests));
+        Assert.False(Directory.Exists(configuredRoot));
+
+        var restartedProvisioner = CreateProvisioner(
+            configuredRoot,
+            http,
+            systemLibraryProbe: _ => false,
+            legacyCacheRoot: legacyRoot
+        );
+        await restartedProvisioner
+            .DownloadAndExtractAsync(
+                CudaRuntimeProfile.WhisperCublas,
+                null,
+                CancellationToken.None
+            )
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(2, handler.JsonRequests);
+        Assert.Equal(2, handler.WheelRequests);
+        Assert.True(File.Exists(legacyArtifact));
+        Assert.False(
+            File.Exists(Path.Join(restartedProvisioner.CacheDirectory, "legacy-artifact.so"))
+        );
+        Assert.True(
+            restartedProvisioner.IsProfileSatisfied(CudaRuntimeProfile.WhisperCublas)
+        );
+    }
+
+    [Fact]
+    public async Task ClearCache_MissingConfiguredRoot_StillDisablesLegacyMigration()
+    {
+        using var temp = new TempDir();
+        var legacyRoot = Path.Join(temp.Path, "legacy", "cuda");
+        var configuredRoot = Path.Join(temp.Path, "selected", "Runtimes", "cuda");
+        var legacyArtifact = Path.Join(
+            legacyRoot,
+            CudaRuntimeProvisioner.BundleVersion,
+            "legacy-artifact.so"
+        );
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyArtifact)!);
+        await File.WriteAllTextAsync(legacyArtifact, "legacy");
+
+        var (_, http) = WhisperCublasFixture();
+        using var _ = http;
+        var clearingProvisioner = CreateProvisioner(
+            configuredRoot,
+            http,
+            legacyCacheRoot: legacyRoot
+        );
+
+        await clearingProvisioner
+            .ClearCacheAsync(CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(Directory.Exists(configuredRoot));
+        Assert.True(File.Exists(clearingProvisioner.LegacyMigrationDisabledPathForTests));
+
+        var moveAttempts = 0;
+        var restartedProvisioner = CreateProvisioner(
+            configuredRoot,
+            http,
+            systemLibraryProbe: _ => true,
+            legacyCacheRoot: legacyRoot,
+            moveDirectory: (_, _) => moveAttempts++
+        );
+        await restartedProvisioner
+            .DownloadAndExtractAsync(
+                CudaRuntimeProfile.WhisperCublas,
+                null,
+                CancellationToken.None
+            )
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, moveAttempts);
+        Assert.True(File.Exists(legacyArtifact));
+        Assert.False(
+            File.Exists(Path.Join(restartedProvisioner.CacheDirectory, "legacy-artifact.so"))
+        );
+    }
+
+    [Fact]
+    public async Task ClearCache_TombstoneCreationFails_DoesNotDeleteConfiguredCache()
+    {
+        using var temp = new TempDir();
+        var legacyRoot = Path.Join(temp.Path, "legacy", "cuda");
+        var configuredRoot = Path.Join(temp.Path, "selected", "Runtimes", "cuda");
+        var (_, http) = WhisperCublasFixture();
+        using var _ = http;
+        var logs = new List<string>();
+        var provisioner = CreateProvisioner(
+            configuredRoot,
+            http,
+            logs.Add,
+            legacyCacheRoot: legacyRoot
+        );
+        var configuredArtifact = Path.Join(
+            provisioner.CacheDirectory,
+            "configured-artifact.so"
+        );
+        Directory.CreateDirectory(provisioner.CacheDirectory);
+        await File.WriteAllTextAsync(configuredArtifact, "configured");
+        Directory.CreateDirectory(provisioner.LegacyMigrationDisabledPathForTests);
+
+        var exception = await Record.ExceptionAsync(
+            () =>
+                provisioner
+                    .ClearCacheAsync(CancellationToken.None)
+                    .WaitAsync(TimeSpan.FromSeconds(5))
+        );
+
+        Assert.NotNull(exception);
+        Assert.True(
+            exception is IOException or UnauthorizedAccessException,
+            $"Unexpected exception type: {exception.GetType().FullName}"
+        );
+        Assert.True(File.Exists(configuredArtifact));
+        Assert.Contains(
+            logs,
+            message =>
+                message.Contains(
+                    "failed to disable legacy cache adoption",
+                    StringComparison.Ordinal
+                )
+                && message.Contains(
+                    "configured cache was not cleared",
+                    StringComparison.OrdinalIgnoreCase
+                )
+        );
+    }
+
+    [Fact]
+    public async Task LegacyMigration_WaitingBehindClear_ObservesTombstoneUnderLease()
+    {
+        using var temp = new TempDir();
+        var legacyRoot = Path.Join(temp.Path, "legacy", "cuda");
+        var configuredRoot = Path.Join(temp.Path, "selected", "Runtimes", "cuda");
+        var legacyArtifact = Path.Join(
+            legacyRoot,
+            CudaRuntimeProvisioner.BundleVersion,
+            "legacy-artifact.so"
+        );
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyArtifact)!);
+        await File.WriteAllTextAsync(legacyArtifact, "legacy");
+
+        var (_, http) = WhisperCublasFixture();
+        using var _ = http;
+        var warmProvisioner = CreateProvisioner(
+            configuredRoot,
+            http,
+            systemLibraryProbe: _ => false,
+            legacyCacheRoot: legacyRoot
+        );
+        SeedCachedWheel(
+            warmProvisioner,
+            CudartPackage,
+            CudartVersion,
+            "libcudart.so.12"
+        );
+        SeedCachedWheel(
+            warmProvisioner,
+            CublasPackage,
+            CublasVersion,
+            "libcublas.so.12",
+            "libcublasLt.so.12"
+        );
+
+        var leaseHeld = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseLease = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var warming = warmProvisioner.DownloadAndExtractAsync(
+            CudaRuntimeProfile.WhisperCublas,
+            null,
+            async () =>
+            {
+                leaseHeld.TrySetResult(true);
+                await releaseLease.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            },
+            CancellationToken.None
+        );
+        await leaseHeld.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Directory.Delete(configuredRoot, recursive: true);
+
+        var clearingProvisioner = CreateProvisioner(
+            configuredRoot,
+            http,
+            legacyCacheRoot: legacyRoot
+        );
+        var moveAttempts = 0;
+        var migratingProvisioner = CreateProvisioner(
+            configuredRoot,
+            http,
+            systemLibraryProbe: _ => true,
+            legacyCacheRoot: legacyRoot,
+            moveDirectory: (_, _) => moveAttempts++
+        );
+        var clearing = clearingProvisioner.ClearCacheAsync(CancellationToken.None);
+        var migrating = Task.CompletedTask;
+
+        try
+        {
+            await Assert.ThrowsAsync<TimeoutException>(
+                () => clearing.WaitAsync(TimeSpan.FromMilliseconds(250))
+            );
+            Assert.False(
+                File.Exists(clearingProvisioner.LegacyMigrationDisabledPathForTests)
+            );
+
+            migrating = migratingProvisioner.DownloadAndExtractAsync(
+                CudaRuntimeProfile.WhisperCublas,
+                null,
+                CancellationToken.None
+            );
+            await Assert.ThrowsAsync<TimeoutException>(
+                () => migrating.WaitAsync(TimeSpan.FromMilliseconds(250))
+            );
+        }
+        finally
+        {
+            releaseLease.TrySetResult(true);
+            await warming.WaitAsync(TimeSpan.FromSeconds(5));
+            await clearing.WaitAsync(TimeSpan.FromSeconds(5));
+            await migrating.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.True(File.Exists(clearingProvisioner.LegacyMigrationDisabledPathForTests));
+        Assert.Equal(0, moveAttempts);
+        Assert.True(File.Exists(legacyArtifact));
+        Assert.False(
+            File.Exists(Path.Join(migratingProvisioner.CacheDirectory, "legacy-artifact.so"))
+        );
+    }
+
+    [Fact]
     public async Task DownloadAndExtract_LegacyCacheAndMissingConfiguredRoot_MovesCacheAtomically()
     {
         using var temp = new TempDir();
@@ -805,7 +1080,7 @@ public class CudaRuntimeProvisionerTests
             http,
             log,
             // Keep every existing unit test isolated from the real per-user default.
-            legacyCacheRoot ?? Path.Join(cacheRoot, ".test-legacy-cuda"),
+            legacyCacheRoot ?? cacheRoot + ".test-legacy-cuda",
             moveDirectory ?? Directory.Move
         )
         {
@@ -1067,6 +1342,13 @@ public class CudaRuntimeProvisionerTests
                 );
                 if (File.Exists(maintenanceLock))
                     File.Delete(maintenanceLock);
+
+                var legacyMigrationMarker = System.IO.Path.Join(
+                    parent.FullName,
+                    cacheName + ".test-legacy-cuda.legacy-migration-disabled"
+                );
+                if (File.Exists(legacyMigrationMarker))
+                    File.Delete(legacyMigrationMarker);
             }
             catch
             {
