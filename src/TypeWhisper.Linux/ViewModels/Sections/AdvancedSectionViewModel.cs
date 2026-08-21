@@ -415,6 +415,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
             // The voices list carries a localized "System default voice" entry, so it
             // must be rebuilt too or the dropdown stays in the previous language.
             RefreshSpokenFeedbackVoices();
+
+            OnPropertyChanged(nameof(SpokenFeedbackHint));
+            OnPropertyChanged(nameof(MemoryHint));
         });
     }
 

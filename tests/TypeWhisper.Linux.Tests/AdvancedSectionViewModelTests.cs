@@ -406,8 +406,16 @@ public sealed class AdvancedSectionViewModelTests
                 voice => voice.Id == SpeechFeedbackService.DefaultVoiceOptionId
             );
             var selectedVoiceIdBefore = harness.ViewModel.SelectedSpokenFeedbackVoiceId;
+            HashSet<string?> expectedPropertyChanges =
+            [
+                nameof(AdvancedSectionViewModel.SpokenFeedbackHint),
+                nameof(AdvancedSectionViewModel.MemoryHint),
+            ];
+            HashSet<string?> propertyChanges = [];
             harness.ViewModel.PropertyChanged += (_, args) =>
             {
+                propertyChanges.Add(args.PropertyName);
+
                 // ReSharper disable once ConvertIfStatementToSwitchStatement -- independent property-name checks, each with its own suppression comment.
                 if (args.PropertyName == nameof(AdvancedSectionViewModel.AutoUnloadOptions))
                 {
@@ -424,6 +432,7 @@ public sealed class AdvancedSectionViewModelTests
 
             Loc.Instance.CurrentLanguage = "de";
 
+            Assert.Superset(expectedPropertyChanges, propertyChanges);
             Assert.NotEqual(
                 autoUnloadBefore.DisplayName,
                 harness.ViewModel.SelectedAutoUnloadOption?.DisplayName
