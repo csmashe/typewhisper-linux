@@ -152,6 +152,7 @@ public class CudaRuntimeProvisioner
     private readonly string _maintenanceLockPath;
     private readonly string _wheelLockDirectory;
     private readonly string _legacyCacheRoot;
+    private readonly string _legacyMigrationDisabledPath;
     private readonly Action<string, string> _moveDirectory;
     private readonly Func<IPluginProcessSupervisor>? _processSupervisor;
     private bool _legacyMigrationAttempted;
@@ -191,10 +192,15 @@ public class CudaRuntimeProvisioner
         _maintenanceLockPath = cachePaths.MaintenanceLockPath;
         _wheelLockDirectory = cachePaths.WheelLockDirectory;
         CacheDirectory = Path.Join(_cacheRoot, BundleVersion);
-        _legacyCacheRoot = ResolveCachePaths(
+        var legacyCachePaths = ResolveCachePaths(
             legacyCacheRoot,
             nameof(legacyCacheRoot)
-        ).CacheRoot;
+        );
+        _legacyCacheRoot = legacyCachePaths.CacheRoot;
+        _legacyMigrationDisabledPath = Path.Join(
+            Directory.GetParent(_legacyCacheRoot)!.FullName,
+            Path.GetFileName(_legacyCacheRoot) + ".legacy-migration-disabled"
+        );
     }
 
     /// <summary>Directory holding the downloaded CUDA <c>.so</c> files for this bundle version.</summary>
@@ -205,6 +211,9 @@ public class CudaRuntimeProvisioner
     internal string MaintenanceLockPathForTests => _maintenanceLockPath;
     // ReSharper disable once ConvertToAutoPropertyWhenPossible -- the backing field is the real member, read throughout this class; these are read-only test seams over it.
     internal string WheelLockDirectoryForTests => _wheelLockDirectory;
+    // ReSharper disable once ConvertToAutoPropertyWhenPossible -- the backing field is the real member, read throughout this class; this is a read-only test seam over it.
+    internal string LegacyMigrationDisabledPathForTests =>
+        _legacyMigrationDisabledPath;
     internal TimeSpan MaintenanceLockTimeoutForTests { get; init; } =
         s_defaultMaintenanceLockTimeout;
 
@@ -421,8 +430,20 @@ public class CudaRuntimeProvisioner
         if (_legacyMigrationAttempted)
             return;
 
-        if (PathsEqual(_legacyCacheRoot, _cacheRoot)
-            || !Directory.Exists(_legacyCacheRoot)
+        if (PathsEqual(_legacyCacheRoot, _cacheRoot))
+        {
+            _legacyMigrationAttempted = true;
+            return;
+        }
+
+        if (File.Exists(_legacyMigrationDisabledPath))
+        {
+            LogLegacyMigrationDisabled();
+            _legacyMigrationAttempted = true;
+            return;
+        }
+
+        if (!Directory.Exists(_legacyCacheRoot)
             || Directory.Exists(_cacheRoot))
         {
             _legacyMigrationAttempted = true;
@@ -443,6 +464,16 @@ public class CudaRuntimeProvisioner
                     ct
                 )
                 .ConfigureAwait(false);
+
+            // Clear may have published the tombstone while migration waited for the
+            // destination lease. Check before waiting on any legacy-root locks.
+            if (File.Exists(_legacyMigrationDisabledPath))
+            {
+                LogLegacyMigrationDisabled();
+                _legacyMigrationAttempted = true;
+                return;
+            }
+
             await using var legacyLocks = await AcquireMaintenanceLocksAsync(
                     legacyPaths.MaintenanceLockPath,
                     legacyPaths.WheelLockDirectory,
@@ -1069,11 +1100,13 @@ public class CudaRuntimeProvisioner
     ///     The per-instance gate is layered with a bounded, cross-process maintenance
     ///     lock outside the deleted tree. Maintenance owns root -> every external wheel
     ///     sentinel through the full delete window, so it cannot unlink a live sentinel
-    ///     or race another provisioner. A missing cache is a no-op (already clear); a
-    ///     timeout or delete failure is logged and rethrown so the caller can surface it
-    ///     rather than report a corrupt runtime as repaired. Note: libraries already
-    ///     dlopen'd this process are held until exit, so a restart is required for a fresh
-    ///     re-provision to take effect.
+    ///     or race another provisioner. When the configured and legacy roots differ,
+    ///     clearing also durably disables future adoption of the deliberately-retained
+    ///     legacy tree. A missing configured cache is otherwise a no-op (already clear);
+    ///     a timeout, marker failure, or delete failure is logged and rethrown so the
+    ///     caller can surface it rather than report a corrupt runtime as repaired. Note:
+    ///     libraries already dlopen'd this process are held until exit, so a restart is
+    ///     required for a fresh re-provision to take effect.
     /// </summary>
     public async Task ClearCacheAsync(CancellationToken ct)
     {
@@ -1088,6 +1121,34 @@ public class CudaRuntimeProvisioner
                     .ConfigureAwait(false)
             )
             {
+                if (!PathsEqual(_legacyCacheRoot, _cacheRoot))
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(
+                            Directory.GetParent(_legacyMigrationDisabledPath)!.FullName
+                        );
+                        await File.WriteAllTextAsync(
+                                _legacyMigrationDisabledPath,
+                                string.Empty,
+                                ct
+                            )
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _log?.Invoke(
+                            "CUDA runtime: failed to disable legacy cache adoption at "
+                                + $"{_legacyMigrationDisabledPath}: {ex.Message} "
+                                + "The configured cache was not cleared."
+                        );
+                        throw;
+                    }
+
+                    _legacyMigrationAttempted = true;
+                    LogLegacyMigrationDisabled();
+                }
+
                 if (!Directory.Exists(_cacheRoot))
                     return;
 
@@ -1108,6 +1169,16 @@ public class CudaRuntimeProvisioner
         {
             _gate.Release();
         }
+    }
+
+    private void LogLegacyMigrationDisabled()
+    {
+        var retention = Directory.Exists(_legacyCacheRoot)
+            ? $"; the old legacy cache tree at {_legacyCacheRoot} was deliberately retained"
+            : "";
+        _log?.Invoke(
+            $"CUDA runtime: legacy cache adoption is disabled via {_legacyMigrationDisabledPath}{retention}."
+        );
     }
 
     // Remove sibling bundle dirs from earlier BundleVersions so superseded caches
