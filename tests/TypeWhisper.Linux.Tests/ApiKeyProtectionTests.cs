@@ -153,9 +153,47 @@ public sealed class ApiKeyProtectionTests : IDisposable
     }
 
     [Fact]
-    public void Encrypt_KeyWithoutExact0600Mode_FailsClosed()
+    public void EnsureKeyFile_OverlengthKey_FailsClosed()
     {
-        File.WriteAllBytes(_keyFilePath, RandomNumberGenerator.GetBytes(32));
+        var overlength = RandomNumberGenerator.GetBytes(33);
+        File.WriteAllBytes(_keyFilePath, overlength);
+        File.SetUnixFileMode(
+            _keyFilePath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite
+        );
+
+        var exception = Assert.Throws<SecretProtectionException>(() =>
+            ApiKeyProtection.EnsureKeyFile(_keyFilePath)
+        );
+
+        Assert.Contains("exactly", exception.Message);
+        Assert.Equal(overlength, File.ReadAllBytes(_keyFilePath));
+    }
+
+    [Fact]
+    public void EnsureKeyFile_SymlinkToValidKey_FailsClosedWithoutChangingEither()
+    {
+        var targetPath = Path.Join(_tempDir, "target.key");
+        var targetBytes = RandomNumberGenerator.GetBytes(32);
+        File.WriteAllBytes(targetPath, targetBytes);
+        File.SetUnixFileMode(
+            targetPath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite
+        );
+        File.CreateSymbolicLink(_keyFilePath, targetPath);
+
+        Assert.Throws<SecretProtectionException>(() =>
+            ApiKeyProtection.EnsureKeyFile(_keyFilePath)
+        );
+        Assert.Equal(targetBytes, File.ReadAllBytes(targetPath));
+        Assert.Equal(targetPath, new FileInfo(_keyFilePath).LinkTarget);
+    }
+
+    [Fact]
+    public void EnsureKeyFile_KeyWithoutExact0600Mode_FailsClosed()
+    {
+        var keyBytes = RandomNumberGenerator.GetBytes(32);
+        File.WriteAllBytes(_keyFilePath, keyBytes);
         File.SetUnixFileMode(
             _keyFilePath,
             UnixFileMode.UserRead
@@ -163,9 +201,88 @@ public sealed class ApiKeyProtectionTests : IDisposable
                 | UnixFileMode.GroupRead
         );
 
-        Assert.Throws<SecretProtectionException>(() =>
-            ApiKeyProtection.Encrypt("secret", _keyFilePath)
+        var exception = Assert.Throws<SecretProtectionException>(() =>
+            ApiKeyProtection.EnsureKeyFile(_keyFilePath)
         );
+        Assert.Contains("0600", exception.Message);
+        Assert.Equal(keyBytes, File.ReadAllBytes(_keyFilePath));
+    }
+
+    [Fact]
+    public void EnsureKeyFile_DirectoryWith0600Mode_FailsRegularFileValidation()
+    {
+        Directory.CreateDirectory(_keyFilePath);
+        try
+        {
+            File.SetUnixFileMode(
+                _keyFilePath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite
+            );
+            var exception = Assert.Throws<SecretProtectionException>(() =>
+                ApiKeyProtection.EnsureKeyFile(_keyFilePath)
+            );
+            Assert.Contains("regular file", exception.Message);
+        }
+        finally
+        {
+            File.SetUnixFileMode(
+                _keyFilePath,
+                UnixFileMode.UserRead
+                    | UnixFileMode.UserWrite
+                    | UnixFileMode.UserExecute
+            );
+        }
+    }
+
+    [Fact]
+    public void EnsureKeyFile_PathReplacedAfterOpen_ReadsValidatedDescriptor()
+    {
+        var originalPath = Path.Join(_tempDir, "opened-original.key");
+        var originalBytes = RandomNumberGenerator.GetBytes(32);
+        var replacementBytes = RandomNumberGenerator.GetBytes(32);
+        File.WriteAllBytes(_keyFilePath, originalBytes);
+        File.SetUnixFileMode(
+            _keyFilePath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite
+        );
+
+        var loaded = ApiKeyProtection.EnsureKeyFileForTests(
+            _keyFilePath,
+            () =>
+            {
+                File.Move(_keyFilePath, originalPath);
+                File.WriteAllBytes(_keyFilePath, replacementBytes);
+                File.SetUnixFileMode(
+                    _keyFilePath,
+                    UnixFileMode.UserRead
+                        | UnixFileMode.UserWrite
+                        | UnixFileMode.GroupRead
+                );
+            }
+        );
+
+        Assert.Equal(originalBytes, loaded);
+        Assert.Equal(originalBytes, File.ReadAllBytes(originalPath));
+        Assert.Equal(replacementBytes, File.ReadAllBytes(_keyFilePath));
+        Assert.Equal(
+            UnixFileMode.UserRead
+                | UnixFileMode.UserWrite
+                | UnixFileMode.GroupRead,
+            File.GetUnixFileMode(_keyFilePath)
+        );
+    }
+
+    [Fact]
+    public void Decrypt_CurrentEnvelopeWithDeletedKey_ReturnsFailureWithoutRecreatingKey()
+    {
+        var encrypted = ApiKeyProtection.Encrypt("secret", _keyFilePath);
+        File.Delete(_keyFilePath);
+
+        var decrypted = ApiKeyProtection.Decrypt(encrypted, _keyFilePath);
+
+        Assert.Equal(SecretProtectionFormat.Failure, decrypted.Format);
+        Assert.Null(decrypted.PlainText);
+        Assert.False(File.Exists(_keyFilePath));
     }
 
     internal static string EncryptLegacyGcm(string plainText)
