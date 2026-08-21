@@ -396,6 +396,65 @@ public sealed class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Update_GatedTwoWriters_SerializesDelegatesAndPersistsBothChanges()
+    {
+        var sut = new SettingsService(_filePath);
+        var timeout = TimeSpan.FromSeconds(5);
+        var writerAEntered = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseWriterA = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var writerBAttempting = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var writerBEntered = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var writerARuns = 0;
+        string? writerBSawLanguage = null;
+
+        var writerA = Task.Run(() =>
+            sut.Update(current =>
+            {
+                // ReSharper disable once AccessToModifiedClosure -- the counter is deliberately shared with the outer scope (Interlocked-written here, Volatile-read after both writers complete).
+                Interlocked.Increment(ref writerARuns);
+                writerAEntered.TrySetResult(true);
+                releaseWriterA.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+                return current with { Language = "writer-a" };
+            })
+        );
+
+        await writerAEntered.Task.WaitAsync(timeout);
+        var writerB = Task.Run(() =>
+        {
+            writerBAttempting.TrySetResult(true);
+            return sut.Update(current =>
+            {
+                writerBEntered.TrySetResult(true);
+                writerBSawLanguage = current.Language;
+                return current with { HasCompletedOnboarding = true };
+            });
+        });
+
+        await writerBAttempting.Task.WaitAsync(timeout);
+        var writerBInterleaved = writerBEntered.Task.IsCompleted;
+        releaseWriterA.TrySetResult(true);
+        await Task.WhenAll(writerA, writerB).WaitAsync(timeout);
+
+        Assert.False(writerBInterleaved);
+        Assert.Equal(1, Volatile.Read(ref writerARuns));
+        Assert.Equal("writer-a", writerBSawLanguage);
+        Assert.Equal("writer-a", sut.Current.Language);
+        Assert.True(sut.Current.HasCompletedOnboarding);
+
+        var reloaded = new SettingsService(_filePath);
+        Assert.Equal("writer-a", reloaded.Current.Language);
+        Assert.True(reloaded.Current.HasCompletedOnboarding);
+    }
+
+    [Fact]
     public void Load_LegacyHistoryRetentionDays_MigratesToMinutes()
     {
         File.WriteAllText(

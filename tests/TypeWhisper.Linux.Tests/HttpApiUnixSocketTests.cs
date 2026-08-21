@@ -512,8 +512,12 @@ public sealed class HttpApiUnixSocketTests
             Settings = new Mock<ISettingsService>();
             Settings.SetupGet(service => service.Current).Returns(() => _current);
             Settings
-                .Setup(service => service.Save(It.IsAny<AppSettings>()))
-                .Callback<AppSettings>(saved => _current = saved);
+                .Setup(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+                .Returns((Func<AppSettings, AppSettings> mutate) =>
+                {
+                    _current = mutate(_current);
+                    return _current;
+                });
 
             _models = new ModelManagerService(
                 TestPluginManagerFactory.Create(),

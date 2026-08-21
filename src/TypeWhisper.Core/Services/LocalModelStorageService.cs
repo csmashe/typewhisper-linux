@@ -118,7 +118,7 @@ public sealed class LocalModelStorageService
                 }, ct);
             }
 
-            _settings.Save(_settings.Current with { LocalModelStoragePath = targetRoot });
+            _settings.Update(current => current with { LocalModelStoragePath = targetRoot });
 
             if (currentIsDefault)
             {
@@ -174,7 +174,7 @@ public sealed class LocalModelStorageService
             CopyPluginAssets(pluginAssetSourceRoot, targetRoot, migrated, ct);
         }, ct);
 
-        _settings.Save(_settings.Current with { LocalModelStoragePath = targetRoot });
+        _settings.Update(current => current with { LocalModelStoragePath = targetRoot });
 
         // Best-effort cleanup after the commit above — see comment in the currentIsDefault branch.
         await Task.Run(() =>
@@ -189,7 +189,7 @@ public sealed class LocalModelStorageService
     /// Resets local model storage to the default app data path.
     /// </summary>
     public void ResetToDefault() =>
-        _settings.Save(_settings.Current with { LocalModelStoragePath = null });
+        _settings.Update(current => current with { LocalModelStoragePath = null });
 
     private static string PrepareWritableTarget(string targetPath)
     {

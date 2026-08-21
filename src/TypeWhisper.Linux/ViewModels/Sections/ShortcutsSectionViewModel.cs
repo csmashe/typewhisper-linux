@@ -598,9 +598,9 @@ public partial class ShortcutsSectionViewModel : ObservableObject, IDisposable
         Action? beforeSchedule = null
     )
     {
-        // The cache advances BEFORE beforeSchedule runs its Save so the resulting
+        // The cache advances BEFORE beforeSchedule runs its Update so the resulting
         // SettingsChanged echo compares equal at the pre-filter and cannot double-probe;
-        // a Save failure rolls the cache back below.
+        // an Update failure rolls the cache back below.
         var inputs = GetManagedSpecInputs(settings);
         (string ToggleHotkey, RecordingMode Mode) previousInputs;
         bool changed;
@@ -768,8 +768,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject, IDisposable
     {
         if (_hotkey.TrySetRecentTranscriptionsHotkeyFromString(RecentTranscriptionsHotkeyText))
         {
-            _settings.Save(
-                _settings.Current with { RecentTranscriptionsHotkey = _hotkey.CurrentRecentTranscriptionsHotkeyString }
+            _settings.Update(current =>
+                current with { RecentTranscriptionsHotkey = _hotkey.CurrentRecentTranscriptionsHotkeyString }
             );
             StatusMessage = string.IsNullOrWhiteSpace(
                 _hotkey.CurrentRecentTranscriptionsHotkeyString
@@ -793,8 +793,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject, IDisposable
     {
         if (_hotkey.TrySetCopyLastTranscriptionHotkeyFromString(CopyLastTranscriptionHotkeyText))
         {
-            _settings.Save(
-                _settings.Current with
+            _settings.Update(current =>
+                current with
                 {
                     CopyLastTranscriptionHotkey = _hotkey.CurrentCopyLastTranscriptionHotkeyString,
                 }
@@ -821,8 +821,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject, IDisposable
     {
         if (_hotkey.TrySetTransformSelectionHotkeyFromString(TransformSelectionHotkeyText))
         {
-            _settings.Save(
-                _settings.Current with { TransformSelectionHotkey = _hotkey.CurrentTransformSelectionHotkeyString }
+            _settings.Update(current =>
+                current with { TransformSelectionHotkey = _hotkey.CurrentTransformSelectionHotkeyString }
             );
             StatusMessage = string.IsNullOrWhiteSpace(_hotkey.CurrentTransformSelectionHotkeyString)
                 ? Loc.Instance["Shortcuts.TransformSelectionHotkeyCleared"]
@@ -1029,17 +1029,18 @@ public partial class ShortcutsSectionViewModel : ObservableObject, IDisposable
     {
         if (_hotkey.TrySetHotkeyFromString(HotkeyText))
         {
-            var updated = _settings.Current with
+            var hotkey = _hotkey.CurrentHotkeyString;
+            var proposed = _settings.Current with
             {
-                ToggleHotkey = _hotkey.CurrentHotkeyString,
+                ToggleHotkey = hotkey,
             };
             // Applying an unchanged chord deliberately skips the re-probe; tab reattach
             // and the explicit refresh affordance cover externally-deleted binds.
             await ScheduleDesktopIntegrationRefreshIfManagedSpecInputsChanged(
-                updated,
+                proposed,
                 () =>
                 {
-                    _settings.Save(updated);
+                    _settings.Update(current => current with { ToggleHotkey = hotkey });
                     StatusMessage = Loc.Instance.GetString(
                         "Shortcuts.HotkeySet",
                         _hotkey.CurrentHotkeyString
@@ -1061,8 +1062,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject, IDisposable
     {
         if (_hotkey.TrySetPromptPaletteHotkeyFromString(PromptPaletteHotkeyText))
         {
-            _settings.Save(
-                _settings.Current with { PromptPaletteHotkey = _hotkey.CurrentPromptPaletteHotkeyString }
+            _settings.Update(current =>
+                current with { PromptPaletteHotkey = _hotkey.CurrentPromptPaletteHotkeyString }
             );
             StatusMessage = string.IsNullOrWhiteSpace(_hotkey.CurrentPromptPaletteHotkeyString)
                 ? Loc.Instance["Shortcuts.PromptPaletteHotkeyCleared"]
@@ -1086,13 +1087,14 @@ public partial class ShortcutsSectionViewModel : ObservableObject, IDisposable
             return;
         }
 
-        var updated = _settings.Current with { Mode = value };
+        var mode = value;
+        var proposed = _settings.Current with { Mode = mode };
         _ = ScheduleDesktopIntegrationRefreshIfManagedSpecInputsChanged(
-            updated,
+            proposed,
             () =>
             {
-                _settings.Save(updated);
-                StatusMessage = value switch
+                _settings.Update(current => current with { Mode = mode });
+                StatusMessage = mode switch
                 {
                     RecordingMode.Toggle => Loc.Instance["Shortcuts.ModeToggleStatus"],
                     RecordingMode.PushToTalk => Loc.Instance["Shortcuts.ModePushToTalkStatus"],
@@ -1115,7 +1117,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject, IDisposable
             return;
         }
 
-        _settings.Save(_settings.Current with { WaylandEvdevHotkeysEnabled = value });
+        _settings.Update(current => current with { WaylandEvdevHotkeysEnabled = value });
         StatusMessage = value
             ? Loc.Instance["Shortcuts.GlobalReadsEnabled"]
             : Loc.Instance["Shortcuts.FocusedOnlyFallback"];

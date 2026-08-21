@@ -46,7 +46,7 @@ public sealed class WelcomeWizardViewModelTests
         await nextTask.WaitAsync(s_testTimeout);
 
         harness.Settings.Verify(
-            settings => settings.Save(It.IsAny<AppSettings>()),
+            settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
             Times.Never
         );
         Assert.Equal(0, harness.ViewModel.StepIndex);
@@ -120,7 +120,7 @@ public sealed class WelcomeWizardViewModelTests
             harness.ViewModel.ModelStatus
         );
         harness.Settings.Verify(
-            settings => settings.Save(It.IsAny<AppSettings>()),
+            settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
             Times.Never
         );
     }
@@ -158,8 +158,9 @@ public sealed class WelcomeWizardViewModelTests
         );
         harness.Settings.Verify(
             settings =>
-                settings.Save(
-                    It.Is<AppSettings>(saved => saved.SelectedModelId == plugin.FullModelId)
+                settings.Update(
+                    It.Is<Func<AppSettings, AppSettings>>(mutate =>
+                        mutate(new AppSettings()).SelectedModelId == plugin.FullModelId)
                 ),
             Times.Once
         );
@@ -186,7 +187,7 @@ public sealed class WelcomeWizardViewModelTests
         );
         Assert.False(Assert.Single(harness.ViewModel.AvailableModels).IsDownloaded);
         harness.Settings.Verify(
-            settings => settings.Save(It.IsAny<AppSettings>()),
+            settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
             Times.Never
         );
     }

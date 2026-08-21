@@ -2246,15 +2246,17 @@ public sealed partial class HttpApiService : IDisposable
 
     private void EnsureBearerToken()
     {
-        var current = _settings.Current;
+        var tokenToProtect = _settings.Current.ApiServerBearerToken;
         var protectedToken = ProtectBearerToken(
-            current.ApiServerBearerToken,
+            tokenToProtect,
             _secretProtectionKeyFilePath
         );
         if (protectedToken.Changed)
         {
-            _settings.Save(
-                current with { ApiServerBearerToken = protectedToken.StoredValue }
+            _settings.Update(current =>
+                current.ApiServerBearerToken == tokenToProtect
+                    ? current with { ApiServerBearerToken = protectedToken.StoredValue }
+                    : current
             );
         }
     }

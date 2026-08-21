@@ -261,7 +261,7 @@ public partial class GeneralSectionViewModel : ObservableObject
         // Applying the language still runs while hydrating; only the write-back is suppressed.
         if (!_hydratingFromSettings)
         {
-            _settings.Save(_settings.Current with { UiLanguage = value });
+            _settings.Update(current => current with { UiLanguage = value });
         }
 
         Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(value);
@@ -303,7 +303,7 @@ public partial class GeneralSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { ApiServerEnabled = value });
+        _settings.Update(current => current with { ApiServerEnabled = value });
     }
 
     partial void OnApiServerPortChanged(int value)
@@ -316,7 +316,7 @@ public partial class GeneralSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { ApiServerPort = value });
+        _settings.Update(current => current with { ApiServerPort = value });
     }
 
     partial void OnCloseToTrayChanged(bool value)

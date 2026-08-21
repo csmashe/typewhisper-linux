@@ -632,7 +632,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
                     return;
                 }
 
-                _settings.Save(_settings.Current with { SelectedModelId = row.ModelId });
+                _settings.Update(current => current with { SelectedModelId = row.ModelId });
                 ModelStatus = Loc.Instance.GetString("Wizard.ModelReady", row.DisplayName);
                 IsModelDownloading = false;
                 RefreshModelState();
@@ -663,15 +663,15 @@ public partial class WelcomeWizardViewModel : ObservableObject
                 return;
             }
 
-            _settings.Save(_settings.Current with { ToggleHotkey = _hotkey.CurrentHotkeyString });
+            _settings.Update(current => current with { ToggleHotkey = _hotkey.CurrentHotkeyString });
             HotkeyText = _hotkey.CurrentHotkeyString;
             HotkeyStatus = Loc.Instance.GetString("Wizard.HotkeySet", _hotkey.CurrentHotkeyString);
 
             if (SelectedMic is not null)
             {
                 _audio.SelectedDeviceIndex = SelectedMic.Index;
-                _settings.Save(
-                    _settings.Current with
+                _settings.Update(current =>
+                    current with
                     {
                         SelectedMicrophoneDevice = SelectedMic.Index,
                         SelectedMicrophoneDeviceId = SelectedMic.PersistentId,
@@ -711,15 +711,16 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     private void FinishOnboardingWithIndustryPreset()
     {
-        _dictionary.ApplyIndustryPreset(SelectedIndustryPresetId);
-        _settings.Save(
-            _settings.Current with
+        var presetId = SelectedIndustryPresetId;
+        _dictionary.ApplyIndustryPreset(presetId);
+        _settings.Update(current =>
+            current with
             {
                 HasCompletedOnboarding = true,
-                SelectedIndustryPresetId = SelectedIndustryPresetId,
+                SelectedIndustryPresetId = presetId,
                 EnabledPackIds = IndustryPreset.MergeIntoEnabledPackIds(
-                    _settings.Current.EnabledPackIds,
-                    SelectedIndustryPresetId
+                    current.EnabledPackIds,
+                    presetId
                 ),
             }
         );

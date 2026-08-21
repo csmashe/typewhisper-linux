@@ -42,6 +42,10 @@ public sealed class LinuxSystemTtsProviderTests
 
         Assert.Equal(persistedVoiceId, provider.SelectedVoiceId);
         settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(
+            service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
+            Times.Never
+        );
     }
 
     [Theory]
@@ -60,6 +64,10 @@ public sealed class LinuxSystemTtsProviderTests
 
         Assert.Null(provider.SelectedVoiceId);
         settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(
+            service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
+            Times.Never
+        );
     }
 
     [Theory]

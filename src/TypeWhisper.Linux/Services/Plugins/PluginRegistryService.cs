@@ -843,7 +843,7 @@ public sealed class PluginRegistryService
 
         if (!anyFailed)
         {
-            _settings.Save(_settings.Current with { PluginFirstRunCompleted = true });
+            _settings.Update(current => current with { PluginFirstRunCompleted = true });
         }
     }
 

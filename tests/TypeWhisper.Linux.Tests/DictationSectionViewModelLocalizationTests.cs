@@ -132,7 +132,7 @@ public sealed class DictationSectionViewModelLocalizationTests
             );
             Assert.Equal(TextInsertionStrategy.DirectTyping, appStrategyRow.Strategy);
             settings.Verify(
-                service => service.Save(It.IsAny<AppSettings>()),
+                service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
                 Times.Never
             );
         }

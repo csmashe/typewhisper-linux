@@ -500,7 +500,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         Assert.True(sut.CommandModeEnabled);
         Assert.Equal("Jarvis", sut.CommandKeyphrase);
         // Hydration must not write the values it just read back to settings.
-        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     [Fact]
@@ -532,7 +532,9 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         Assert.True(sut.CommandModeEnabled);
         Assert.True(settings.Object.Current.CommandModeEnabled);
         settings.Verify(
-            service => service.Save(It.Is<AppSettings>(saved => saved.CommandModeEnabled)),
+            service => service.Update(
+                It.Is<Func<AppSettings, AppSettings>>(mutate =>
+                    mutate(new AppSettings()).CommandModeEnabled)),
             Times.Once
         );
     }
@@ -553,7 +555,9 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         Assert.Equal("Jarvis", sut.CommandKeyphrase);
         Assert.Equal("Jarvis", settings.Object.Current.CommandKeyphrase);
         settings.Verify(
-            service => service.Save(It.Is<AppSettings>(saved => saved.CommandKeyphrase == "Jarvis")),
+            service => service.Update(
+                It.Is<Func<AppSettings, AppSettings>>(mutate =>
+                    mutate(new AppSettings()).CommandKeyphrase == "Jarvis")),
             Times.Once
         );
     }
@@ -592,7 +596,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         };
 
         Assert.Equal("Jarvis", sut.CommandKeyphrase);
-        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     private static void SetPrivateField(object target, string fieldName, object value)
