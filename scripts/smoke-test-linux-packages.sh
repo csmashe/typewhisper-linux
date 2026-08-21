@@ -29,6 +29,43 @@ require_executable() {
   [ -x "$1" ] || fail "required executable is missing or not executable: $1"
 }
 
+BUNDLE_IDENTITY_FILE_NAME=".typewhisper-bundle-identity.sha256"
+
+compute_bundle_identity() {
+  local plugin_root="$1"
+  local file_digest relative_path
+
+  (
+    cd "$plugin_root"
+    while IFS= read -r -d '' relative_path; do
+      file_digest="$(sha256sum <"$relative_path")"
+      file_digest="${file_digest%% *}"
+      printf '%s\0%s\n' "${relative_path#./}" "$file_digest"
+    done < <(
+      find . -type f \
+        ! -path "./$BUNDLE_IDENTITY_FILE_NAME" \
+        -print0 \
+        | LC_ALL=C sort -z
+    )
+  ) | sha256sum | cut -d ' ' -f1
+}
+
+validate_bundle_identity() {
+  local format="$1"
+  local plugin_root="$2"
+  local marker="$plugin_root/$BUNDLE_IDENTITY_FILE_NAME"
+  local published recomputed
+
+  require_file "$marker"
+  published="$(<"$marker")"
+  [[ "$published" =~ ^[[:xdigit:]]{64}$ ]] \
+    || fail "$format bundled plugin identity is malformed."
+  # Recompute over the extracted payload with only the marker itself excluded.
+  recomputed="$(compute_bundle_identity "$plugin_root")"
+  [ "${published,,}" = "$recomputed" ] \
+    || fail "$format bundled plugin identity does not match its payload."
+}
+
 assert_removed() {
   local path="$1"
   if [ -e "$path" ] || [ -L "$path" ]; then
@@ -471,7 +508,7 @@ if [ "$#" -gt 3 ]; then
   fail "too many arguments."
 fi
 
-for command in cpio dpkg-deb file find grep rpm rpm2cpio sed tar timeout; do
+for command in cpio dpkg-deb file find grep rpm rpm2cpio sed sha256sum sort tar timeout; do
   require_command "$command"
 done
 
@@ -611,6 +648,7 @@ validate_payload() {
     || fail "$format deployed payload is not stamped with version '$EXPECTED_VERSION'."
 
   [ -d "$app_dir/Plugins" ] || fail "$format payload has no bundled Plugins directory."
+  validate_bundle_identity "$format" "$app_dir/Plugins"
   shopt -s nullglob
   plugin_dirs=("$app_dir"/Plugins/*)
   shopt -u nullglob
