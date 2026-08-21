@@ -74,7 +74,7 @@ public class App : Application
             BootTrace.Stage("Loc.Initialize");
 
             var secretMigration = services.GetRequiredService<SecretProtectionMigrationService>();
-            var secretMigrationResult = secretMigration.MigrateAll();
+            var secretMigrationResult = secretMigration.MigrateAllAtStartup();
             if (secretMigrationResult.RootSettingsChanged)
             {
                 settings.Load();

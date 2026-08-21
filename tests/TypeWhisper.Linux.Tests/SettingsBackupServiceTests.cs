@@ -174,6 +174,110 @@ public sealed class SettingsBackupServiceTests : IDisposable
     }
 
     [Fact]
+    public void CreateBackupDoesNotAdvanceStartupCounterAndSucceedsAfterThirdStartupQuarantine()
+    {
+        var appData = Path.Join(_tempDir, "retired-provider-app-data");
+        var backupPath = Path.Join(_tempDir, "retired-provider-backup.zip");
+        var keyPath = Path.Join(appData, "secret-protection.key");
+        var settingsPath = Path.Join(appData, "settings.json");
+        var quarantinePath = Path.Join(
+            appData,
+            "retired-provider-secrets.quarantine.json"
+        );
+        var tampered = Convert.FromBase64String(
+            ApiKeyProtectionTests.EncryptLegacyGcm("provider-secret")
+        );
+        tampered[^1] ^= 0x10;
+        var ciphertext = Convert.ToBase64String(tampered);
+        Write(
+            settingsPath,
+            JsonSerializer.Serialize(
+                new Dictionary<string, string> { ["groqApiKey"] = ciphertext }
+            )
+        );
+
+        new SecretProtectionMigrationService(appData, keyPath, "startup-1")
+            .MigrateAllAtStartup();
+        Assert.Throws<InvalidOperationException>(() =>
+            new SettingsBackupService(
+                appData,
+                secretMigration: new SecretProtectionMigrationService(
+                    appData,
+                    keyPath,
+                    "backup-call-1"
+                )
+            ).CreateBackup(backupPath)
+        );
+        Assert.Throws<InvalidOperationException>(() =>
+            new SettingsBackupService(
+                appData,
+                secretMigration: new SecretProtectionMigrationService(
+                    appData,
+                    keyPath,
+                    "backup-call-2"
+                )
+            ).CreateBackup(backupPath)
+        );
+        using (var afterBackupCalls = JsonDocument.Parse(
+                   File.ReadAllText(quarantinePath)
+               ))
+        {
+            var failure = Assert.Single(
+                afterBackupCalls.RootElement
+                    .GetProperty("failures")
+                    .EnumerateArray()
+            );
+            Assert.Equal(1, failure.GetProperty("failureCount").GetInt32());
+            Assert.Empty(
+                afterBackupCalls.RootElement
+                    .GetProperty("retiredSecrets")
+                    .EnumerateArray()
+            );
+        }
+
+        new SecretProtectionMigrationService(appData, keyPath, "startup-2")
+            .MigrateAllAtStartup();
+        var thirdStartup = new SecretProtectionMigrationService(
+            appData,
+            keyPath,
+            "startup-3"
+        );
+        var startupResult = thirdStartup.MigrateAllAtStartup();
+        Assert.False(startupResult.HasUnresolvedSecrets);
+
+        var backupResult = new SettingsBackupService(
+            appData,
+            secretMigration: thirdStartup
+        ).CreateBackup(backupPath);
+
+        Assert.Equal(1, backupResult.FileCount);
+        using var settings = JsonDocument.Parse(File.ReadAllText(settingsPath));
+        Assert.Equal(
+            "",
+            settings.RootElement.GetProperty("groqApiKey").GetString()
+        );
+        using var quarantine = JsonDocument.Parse(File.ReadAllText(quarantinePath));
+        Assert.Equal(
+            ciphertext,
+            Assert.Single(
+                    quarantine.RootElement
+                        .GetProperty("retiredSecrets")
+                        .EnumerateArray()
+                )
+                .GetProperty("ciphertext")
+                .GetString()
+        );
+        using var archive = ZipFile.OpenRead(backupPath);
+        Assert.Null(
+            archive.GetEntry("retired-provider-secrets.quarantine.json")
+        );
+        Assert.DoesNotContain(
+            archive.Entries,
+            entry => entry.FullName.Contains("quarantine", StringComparison.Ordinal)
+        );
+    }
+
+    [Fact]
     public void CreateBackup_UninspectablePluginSettingsRefusesArchive()
     {
         var appData = Path.Join(_tempDir, "corrupt-plugin-app-data");
