@@ -515,6 +515,7 @@
   "Plugins.SummaryLoaded": "{0} plugin(s) cargado(s)",
   "Plugins.UnableToLoadSettings": "No se pudieron cargar los ajustes del plugin.",
   "Plugins.Validate": "Validar",
+  "Plugins.RevealSecretMultiline": "Mostrar valores",
   "Profiles.Activation": "Activación",
   "Profiles.AppRulesCount": "{0} regla(s) de app",
   "Profiles.ApplyChanges": "Aplicar cambios",

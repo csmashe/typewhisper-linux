@@ -54,6 +54,7 @@ public sealed class LocalizationResourcesTests
             "Dictation.LanguageSelectionRequired",
             "Dictation.LanguageSelectionRequiredAuto",
             "LanguageSelection.LanguageNotSupported",
+            "Plugins.RevealSecretMultiline",
             "Recorder.StatusSavedNoTranscript",
             "Recorder.StatusSavedTranscriptionFailed",
         };
