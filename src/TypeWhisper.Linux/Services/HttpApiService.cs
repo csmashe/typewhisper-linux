@@ -1515,9 +1515,34 @@ public sealed partial class HttpApiService : IDisposable
             return (400, Serialize(new { error = "File not found" }));
         }
 
-        if (!AudioFileService.IsSupported(payload.Path))
+        try
         {
-            return (400, Serialize(new { error = "Unsupported format" }));
+            if (!await _audioFiles.IsSupportedAsync(payload.Path, ct))
+            {
+                return (
+                    400,
+                    Serialize(
+                        new
+                        {
+                            error = "Unsupported format",
+                            reason = "unsupported_audio_format",
+                        }
+                    )
+                );
+            }
+        }
+        catch (TimeoutException)
+        {
+            return (
+                503,
+                Serialize(
+                    new
+                    {
+                        error = "Audio probe timed out",
+                        reason = "audio_probe_timeout",
+                    }
+                )
+            );
         }
 
         var (task, responseFormat) = HttpApiRequestParser.ParseTranscriptionOptions(

@@ -9,6 +9,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.PluginSDK.Processes;
 using TypeWhisper.Tests;
 using Xunit;
 
@@ -381,6 +382,89 @@ public sealed class HttpApiUnixSocketTests
     }
 
     [Fact]
+    public async Task LocalFileEndpointRejectedFallbackProbeReturnsStableReason()
+    {
+        using var fixture = new ApiFixture(
+            audioProbeResult: new ProcessRunOutcome(
+                ProcessRunStatus.Exited,
+                1,
+                [],
+                [],
+                ProcessOutputStatus.Complete,
+                null
+            )
+        );
+        fixture.Start();
+        var audioPath = fixture.CreateAudioFile("extensionless-audio");
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = new StringContent(
+            $$"""{"path":{{JsonSerializer.Serialize(audioPath)}}}""",
+            Encoding.UTF8,
+            "application/json"
+        );
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "Unsupported format",
+            json.RootElement.GetProperty("error").GetString()
+        );
+        Assert.Equal(
+            "unsupported_audio_format",
+            json.RootElement.GetProperty("reason").GetString()
+        );
+        var invocation = Assert.Single(fixture.ProcessRunner.SupervisorInvocations);
+        Assert.Equal("ffmpeg", invocation.Command.FileName);
+        Assert.Equal(audioPath, invocation.Command.Arguments[4]);
+    }
+
+    [Fact]
+    public async Task LocalFileEndpointSuccessfulFallbackProbePassesFormatGate()
+    {
+        using var fixture = new ApiFixture(
+            audioProbeResult: new ProcessRunOutcome(
+                ProcessRunStatus.Exited,
+                0,
+                [],
+                [],
+                ProcessOutputStatus.Complete,
+                null
+            )
+        );
+        fixture.Start();
+        var audioPath = fixture.CreateAudioFile("extensionless-audio");
+        using var client = fixture.CreateTcpClient(withBearer: true);
+
+        var error = await PostLocalFileForErrorAsync(
+            client,
+            $$"""{"path":{{JsonSerializer.Serialize(audioPath)}},"task":"invalid"}"""
+        );
+
+        Assert.Contains("Invalid task", error, StringComparison.Ordinal);
+        var invocation = Assert.Single(fixture.ProcessRunner.SupervisorInvocations);
+        Assert.Equal("ffmpeg", invocation.Command.FileName);
+    }
+
+    [Fact]
+    public async Task LocalFileEndpointRecognizedExtensionDoesNotProbe()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        var audioPath = fixture.CreateSupportedAudioFile();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+
+        var error = await PostLocalFileForErrorAsync(
+            client,
+            $$"""{"path":{{JsonSerializer.Serialize(audioPath)}},"task":"invalid"}"""
+        );
+
+        Assert.Contains("Invalid task", error, StringComparison.Ordinal);
+        Assert.Empty(fixture.ProcessRunner.SupervisorInvocations);
+    }
+
+    [Fact]
     public async Task ProfileToggleApi_EnableWithCollidingHotkey_Returns409AndLeavesDisabled()
     {
         using var fixture = new ApiFixture();
@@ -487,7 +571,8 @@ public sealed class HttpApiUnixSocketTests
 
         internal ApiFixture(
             Func<Socket, bool>? validateUnixPeer = null,
-            Mock<IHistoryService>? history = null
+            Mock<IHistoryService>? history = null,
+            ProcessRunOutcome? audioProbeResult = null
         )
         {
             Port = GetFreeTcpPort();
@@ -528,10 +613,18 @@ public sealed class HttpApiUnixSocketTests
             _promptActions = new PromptActionService(
                 Path.Join(_tempDirectory, "prompt-actions.json")
             );
+            ProcessRunner = new FakeProcessRunner
+            {
+                SupervisorDefault = audioProbeResult,
+            };
+            var commands = new SystemCommandAvailabilityService(ProcessRunner);
+            ProcessRunner.Invocations.Clear();
+            ProcessRunner.SupervisorInvocations.Clear();
+            var audioFiles = new AudioFileService(commands, ProcessRunner);
             Service = new HttpApiService(
                 _models,
                 Settings.Object,
-                null!,
+                audioFiles,
                 historyService.Object,
                 _profiles,
                 _promptActions,
@@ -559,6 +652,8 @@ public sealed class HttpApiUnixSocketTests
 
         internal PromptActionService PromptActions => _promptActions;
 
+        internal FakeProcessRunner ProcessRunner { get; }
+
         private Mock<ISettingsService> Settings { get; }
 
         internal HttpApiService Service { get; }
@@ -576,7 +671,12 @@ public sealed class HttpApiUnixSocketTests
         /// <summary>Creates an empty file with a supported audio extension so the handler reaches option validation.</summary>
         internal string CreateSupportedAudioFile()
         {
-            var path = Path.Join(_tempDirectory, "clip.wav");
+            return CreateAudioFile("clip.wav");
+        }
+
+        internal string CreateAudioFile(string fileName)
+        {
+            var path = Path.Join(_tempDirectory, fileName);
             File.WriteAllBytes(path, []);
             return path;
         }
