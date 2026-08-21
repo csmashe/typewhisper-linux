@@ -515,6 +515,7 @@
   "Plugins.SummaryLoaded": "Загружено плагинов: {0}",
   "Plugins.UnableToLoadSettings": "Не удалось загрузить настройки плагина.",
   "Plugins.Validate": "Проверить",
+  "Plugins.RevealSecretMultiline": "Показать значения",
   "Profiles.Activation": "Активация",
   "Profiles.AppRulesCount": "Правил приложений: {0}",
   "Profiles.ApplyChanges": "Применить изменения",

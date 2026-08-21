@@ -515,6 +515,7 @@
   "Plugins.SummaryLoaded": "{0} plugin(s) loaded",
   "Plugins.UnableToLoadSettings": "Unable to load plugin settings.",
   "Plugins.Validate": "Validate",
+  "Plugins.RevealSecretMultiline": "Show values",
   "Profiles.Activation": "Activation",
   "Profiles.AppRulesCount": "{0} app rule(s)",
   "Profiles.ApplyChanges": "Apply changes",

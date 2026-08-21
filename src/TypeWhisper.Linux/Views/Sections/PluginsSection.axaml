@@ -47,11 +47,19 @@
 
                 <TextBox Text="{Binding Value}"
                          PlaceholderText="{Binding Placeholder}"
+                         PasswordChar="{Binding MultilinePasswordChar}"
+                         RevealPassword="{Binding RevealSecretMultiline, Mode=TwoWay}"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"
                          MinHeight="80"
                          HorizontalAlignment="Stretch"
                          IsVisible="{Binding IsMultilineKind}" />
+
+                <ToggleButton IsChecked="{Binding RevealSecretMultiline}"
+                              Content="{loc:Str Plugins.RevealSecretMultiline}"
+                              FontSize="12"
+                              HorizontalAlignment="Left"
+                              IsVisible="{Binding IsSecretMultiline}" />
 
                 <CheckBox IsChecked="{Binding BoolValue}"
                           Content="{Binding Label}"
