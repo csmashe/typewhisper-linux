@@ -640,7 +640,7 @@ public sealed partial class HttpApiService : IDisposable
             )
             {
                 Trace.WriteLine(
-                    $"[HttpApiService] Bearer token protection unavailable: {ex.Message}"
+                    $"[HttpApiService] Bearer token protection unavailable: {ex}"
                 );
                 Stop();
                 SetStatus(Loc.Instance["Security.SecretProtectionUnavailable"]);
