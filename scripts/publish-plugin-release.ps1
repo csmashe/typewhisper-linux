@@ -92,6 +92,98 @@ function Get-JsonPropertyValue {
     return $property.Value
 }
 
+function Get-PluginRegistryProjection {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Manifest
+    )
+
+    $categoryNames = [ordered]@{
+        transcription = 'transcription'
+        llm = 'llm'
+        tts = 'tts'
+        postprocessing = 'postProcessing'
+        action = 'action'
+        memory = 'memory'
+        integration = 'integration'
+        utility = 'utility'
+    }
+    $rawCategories = @(Get-JsonPropertyValue -InputObject $Manifest -Name 'categories')
+    $declaredCategories = @($rawCategories | Where-Object { $null -ne $_ })
+    if ($declaredCategories.Count -eq 0) {
+        throw 'Manifest categories must contain at least one category.'
+    }
+    if ($declaredCategories.Count -ne $rawCategories.Count) {
+        throw 'Manifest categories must not contain null entries.'
+    }
+
+    $categories = @(
+        foreach ($declaredCategory in $declaredCategories) {
+            $categoryKey = ([string]$declaredCategory).Trim().ToLowerInvariant()
+            if (-not $categoryNames.Contains($categoryKey)) {
+                throw "Manifest declares an invalid category '$declaredCategory'."
+            }
+            $categoryNames[$categoryKey]
+        }
+    )
+    # Deduplicate on the normalized values so case- and whitespace-variant
+    # duplicates cannot slip past a raw-value comparison.
+    if (@($categories | Select-Object -Unique).Count -ne $categories.Count) {
+        throw 'Manifest categories must not contain duplicates.'
+    }
+
+    $networkAccessNames = @{
+        local = 'local'
+        network = 'network'
+        mixed = 'mixed'
+        usercontrolled = 'userControlled'
+    }
+    $declaredNetworkAccess = [string](
+        Get-JsonPropertyValue -InputObject $Manifest -Name 'networkAccess'
+    )
+    $networkAccessKey = $declaredNetworkAccess.Trim().ToLowerInvariant()
+    if (-not $networkAccessNames.ContainsKey($networkAccessKey)) {
+        throw "Manifest declares an invalid networkAccess value '$declaredNetworkAccess'."
+    }
+    $networkAccess = $networkAccessNames[$networkAccessKey]
+
+    [pscustomobject][ordered]@{
+        categories = $categories
+        networkAccess = $networkAccess
+        category = @($categoryNames.Values | Where-Object { $_ -in $categories })[0]
+        isLocal = $networkAccess -eq 'local'
+    }
+}
+
+function Assert-PluginRegistryProjection {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Candidate,
+        [Parameter(Mandatory)]
+        [object]$Expected,
+        [Parameter(Mandatory)]
+        [string]$Context
+    )
+
+    foreach ($name in @('categories', 'networkAccess', 'category', 'isLocal')) {
+        $property = $Candidate.PSObject.Properties[$name]
+        if ($null -eq $property -or $null -eq $property.Value) {
+            throw "$Context is missing registry projection field '$name'."
+        }
+    }
+
+    $actualCategories = ConvertTo-Json -InputObject $Candidate.categories -Compress
+    $expectedCategories = ConvertTo-Json -InputObject @($Expected.categories) -Compress
+    if (
+        $actualCategories -cne $expectedCategories -or
+        [string]$Candidate.networkAccess -cne [string]$Expected.networkAccess -or
+        [string]$Candidate.category -cne [string]$Expected.category -or
+        [bool]$Candidate.isLocal -ne [bool]$Expected.isLocal
+    ) {
+        throw "$Context registry projection does not match the source manifest."
+    }
+}
+
 function Read-JsonObjectFile {
     param(
         [Parameter(Mandatory)]
@@ -196,6 +288,12 @@ function Assert-ZipPackage {
         if ([string]$archiveManifest.version -ne $ExpectedVersion) {
             throw "Plugin ZIP manifest version '$($archiveManifest.version)' does not match '$ExpectedVersion'."
         }
+
+        $expectedProjection = Get-PluginRegistryProjection -Manifest $Manifest
+        Assert-PluginRegistryProjection `
+            -Candidate $archiveManifest `
+            -Expected $expectedProjection `
+            -Context 'Plugin ZIP manifest'
 
         $assemblyName = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'assemblyName')
         Assert-RequiredText -Name 'Manifest assemblyName' -Value $assemblyName
@@ -316,6 +414,7 @@ function Write-StagedRegistry {
     }
 
     # Always rebuild the complete target entry. Existing target metadata is never copied.
+    $projection = Get-PluginRegistryProjection -Manifest $Manifest
     $entry = [pscustomobject][ordered]@{
         id = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'id')
         name = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'name')
@@ -323,7 +422,10 @@ function Write-StagedRegistry {
         minHostVersion = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'minHostVersion')
         author = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'author')
         description = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'description')
-        category = [string](Get-JsonPropertyValue -InputObject $Manifest -Name 'category')
+        categories = @($projection.categories)
+        networkAccess = [string]$projection.networkAccess
+        category = [string]$projection.category
+        isLocal = [bool]$projection.isLocal
         size = $ExpectedZipSize
         downloadUrl = $ExpectedDownloadUrl
         sha256 = $ExpectedSha256
@@ -356,6 +458,10 @@ function Write-StagedRegistry {
     }
 
     $stagedEntry = $stagedMatches[0]
+    Assert-PluginRegistryProjection `
+        -Candidate $stagedEntry `
+        -Expected $projection `
+        -Context "The staged registry entry for '$ExpectedPluginId'"
     $stagedTimestamp = [DateTimeOffset]$stagedEntry.timestamp
     $expectedTimestampValue = [DateTimeOffset]::Parse(
         $ExpectedTimestamp,
@@ -384,6 +490,10 @@ function Write-StagedRegistry {
     if ($sourceHash -ne $stagedHash) {
         throw "The staged ZIP does not match the validated source ZIP."
     }
+
+    # The hash identity above proves the staged ZIP is byte-identical to the source
+    # ZIP the transaction already ran Assert-ZipPackage against; re-validating here
+    # would repeat the extraction on every push retry for no additional guarantee.
 }
 
 function Sync-RegistryWorktree {

@@ -870,7 +870,6 @@ public partial class PluginRow : ObservableObject
             .OrderBy(category => category.SortOrder)
             .First();
         CategoryKey = descriptor.Key;
-        CategoryLabel = descriptor.DisplayName;
         CategorySortOrder = descriptor.SortOrder;
     }
 
@@ -879,7 +878,6 @@ public partial class PluginRow : ObservableObject
     public string Version { get; }
     public string Description { get; }
     public string CategoryKey { get; }
-    public string CategoryLabel { get; }
     public int CategorySortOrder { get; }
     public IReadOnlySet<PluginCategory> Categories { get; }
     public PluginNetworkAccess NetworkAccess { get; }
