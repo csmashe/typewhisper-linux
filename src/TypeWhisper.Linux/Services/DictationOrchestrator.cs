@@ -34,6 +34,8 @@ internal sealed record RecordingContext(
     CancellationToken CancelToken
 )
 {
+    public OverlayPresentationToken? OverlayToken { get; init; }
+
     /// <summary>
     ///     Per-run sink for LLM prompt provenance. Null when capture is disabled
     ///     for this run (history saving or the provenance setting is off), so the
@@ -78,6 +80,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IMediaPauseService _mediaPause;
     private readonly MemoryService _memory;
     private readonly ModelManagerService _models;
+    private readonly OverlayCoordinator _overlayCoordinator;
     private readonly Lock _overlayStateLock = new();
     private readonly StreamingTranscriptState _partialTranscriptState = new();
     private readonly IPostProcessingPipeline _pipeline;
@@ -127,6 +130,7 @@ public sealed class DictationOrchestrator : IDisposable
     private DateTime _lastSpeechDetectedAtUtc;
     private DateTime _lastToggleUtc = DateTime.MinValue;
     private DictationOverlayState _overlayState = DictationOverlayState.Hidden;
+    private OverlayPresentationToken _overlayToken;
     private CancellationTokenSource? _partialTranscriptionCts;
     private Task? _partialTranscriptionTask;
     private string? _recordingAppProcess;
@@ -186,7 +190,8 @@ public sealed class DictationOrchestrator : IDisposable
         IDetectionFailureTracker failureTracker,
         IErrorLogService errorLog,
         ISessionActivityMonitor sessionActivityMonitor,
-        ActionPluginExecutionHost actionPluginExecutionHost
+        ActionPluginExecutionHost actionPluginExecutionHost,
+        OverlayCoordinator overlayCoordinator
     )
     {
         _hotkey = hotkey;
@@ -219,6 +224,8 @@ public sealed class DictationOrchestrator : IDisposable
         _errorLog = errorLog;
         _sessionActivityMonitor = sessionActivityMonitor;
         _actionPluginExecutionHost = actionPluginExecutionHost;
+        _overlayCoordinator = overlayCoordinator;
+        _overlayToken = _overlayCoordinator.Acquire(OverlayRequester.Dictation);
     }
 
     public bool IsRecording => _audio.IsRecordingOwnedBy(_audioCaptureSession);
@@ -760,6 +767,12 @@ public sealed class DictationOrchestrator : IDisposable
                     "Capture opened without a claimed recording session id."
                 );
 
+            var overlayToken = _overlayCoordinator.Acquire(OverlayRequester.Dictation);
+            lock (_overlayStateLock)
+            {
+                _overlayToken = overlayToken;
+            }
+
             _audioCaptureSession = captureSession;
             _recordingStart = DateTime.UtcNow;
             _lastSpeechDetectedAtUtc = _recordingStart;
@@ -998,7 +1011,7 @@ public sealed class DictationOrchestrator : IDisposable
                     matchedProfile?.WhisperModeOverride
                     ?? _settings.Current.WhisperModeEnabled
                 );
-                SetOverlayState(state =>
+                SetOverlayState(overlayToken, state =>
                     state with { ActiveProfileName = matchedProfile?.Name, ActiveAppName = appTitle }
                 );
                 _models.PluginManager.EventBus.Publish(
@@ -1088,7 +1101,7 @@ public sealed class DictationOrchestrator : IDisposable
                                         _recordingProfile = rematch.Profile;
                                     }
 
-                                    SetOverlayState(state =>
+                                    SetOverlayState(overlayToken, state =>
                                         state with { ActiveProfileName = rematch.Profile.Name }
                                     );
 
@@ -1430,7 +1443,15 @@ public sealed class DictationOrchestrator : IDisposable
                     stoppedStreamingModelId,
                     stoppedLanguageSelection,
                     snapshotCts?.Token ?? CancellationToken.None
-                );
+                )
+                {
+                    // Read WITHOUT _overlayStateLock on purpose: this runs under
+                    // _recordingSessionLock, and taking _overlayStateLock here would invert
+                    // the _overlayStateLock -> _recordingSessionLock order the transient
+                    // feedback gate takes (a real deadlock). The toggle gate's fences
+                    // already order this read against the acquire.
+                    OverlayToken = _overlayToken,
+                };
 
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
@@ -1470,7 +1491,7 @@ public sealed class DictationOrchestrator : IDisposable
                         // User hit Escape while still recording: clean up audio/media
                         // (already done above) and surface "Canceled" without saving
                         // the WAV or running transcription.
-                        SetOverlayState(state =>
+                        SetOverlayState(recordingContext, state =>
                             state with
                             {
                                 IsOverlayVisible = true,
@@ -1505,7 +1526,7 @@ public sealed class DictationOrchestrator : IDisposable
                         return;
                     }
 
-                    SetOverlayState(state =>
+                    SetOverlayState(recordingContext, state =>
                         state with
                         {
                             IsOverlayVisible = true,
@@ -2661,7 +2682,10 @@ public sealed class DictationOrchestrator : IDisposable
                     // unconditionally for non-overlay observers.
                     if (IsContextStillOwningOverlay(context))
                     {
-                        SetOverlayState(state => state with { LlmResponseText = accumulated });
+                        SetOverlayState(
+                            context,
+                            state => state with { LlmResponseText = accumulated }
+                        );
                     }
 
                     _models.PluginManager.EventBus.Publish(
@@ -2905,7 +2929,7 @@ public sealed class DictationOrchestrator : IDisposable
                 context.AppProcess,
                 async () =>
                 {
-                    SetOverlayState(state =>
+                    SetOverlayState(context, state =>
                         state with
                         {
                             IsOverlayVisible = false,
@@ -3860,7 +3884,7 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
-        SetOverlayState(state =>
+        SetOverlayState(context, state =>
             state with
             {
                 IsOverlayVisible = true,
@@ -4050,7 +4074,10 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
-        ShowFeedback(text, isError, isCanceled, playSound: false);
+        SetOverlayState(
+            context,
+            state => FeedbackState(state, text, isError)
+        );
         TryRunSessionTerminalFeedback(context, isError, isCanceled);
     }
 
@@ -4064,11 +4091,9 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
-        ShowFeedback(
-            result.Message,
-            !result.Success,
-            playSound: false,
-            actionResult: result
+        SetOverlayState(
+            context,
+            state => FeedbackState(state, result.Message, !result.Success, result)
         );
         TryRunSessionTerminalFeedback(context, !result.Success, isCanceled: false);
     }
@@ -4205,6 +4230,27 @@ public sealed class DictationOrchestrator : IDisposable
 
     private void SetOverlayState(Func<DictationOverlayState, DictationOverlayState> updater)
     {
+        // The current token is read inside the lock so a concurrent re-acquire cannot
+        // slip between the read and the publication.
+        SetOverlayState(token: null, updater);
+    }
+
+    private void SetOverlayState(
+        RecordingContext context,
+        Func<DictationOverlayState, DictationOverlayState> updater
+    )
+    {
+        if (context.OverlayToken is { } token)
+        {
+            SetOverlayState(token, updater);
+        }
+    }
+
+    private void SetOverlayState(
+        OverlayPresentationToken? token,
+        Func<DictationOverlayState, DictationOverlayState> updater
+    )
+    {
         // Serialize updates: SetOverlayState is invoked from the toggle path,
         // the active-window snapshot Task.Run, and the partial-transcription
         // loop concurrently. Without a lock, the read-modify-write on
@@ -4212,7 +4258,13 @@ public sealed class DictationOrchestrator : IDisposable
         // and emit a stale state after a newer one.
         lock (_overlayStateLock)
         {
-            _overlayState = updater(_overlayState);
+            var state = updater(_overlayState);
+            if (!_overlayCoordinator.Update(token ?? _overlayToken, _ => state))
+            {
+                return;
+            }
+
+            _overlayState = state;
             OverlayStateChanged?.Invoke(this, _overlayState);
         }
     }

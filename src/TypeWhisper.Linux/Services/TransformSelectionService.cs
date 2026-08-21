@@ -14,12 +14,15 @@ public sealed class TransformSelectionService
     private readonly SystemCommandAvailabilityService _commands;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ModelManagerService _models;
+    private readonly OverlayCoordinator _overlayCoordinator;
     private readonly Func<TimeSpan, CancellationTokenSource> _processingTimeoutCtsFactory;
     private readonly PromptProcessingService _promptProcessing;
     private readonly ISettingsService _settings;
 
     private readonly TextInsertionService _textInsertion;
+    private readonly Func<string, Task> _showWarningDialog;
     private DictationOverlayState _overlayState = DictationOverlayState.Hidden;
+    private OverlayPresentationToken? _overlayToken;
 
     private TransformSelectionSession? _session;
 
@@ -31,7 +34,9 @@ public sealed class TransformSelectionService
         ISettingsService settings,
         IActiveWindowService activeWindow,
         SystemCommandAvailabilityService commands,
-        Func<TimeSpan, CancellationTokenSource>? processingTimeoutCtsFactory = null
+        OverlayCoordinator overlayCoordinator,
+        Func<TimeSpan, CancellationTokenSource>? processingTimeoutCtsFactory = null,
+        Func<string, Task>? showWarningDialog = null
     )
     {
         _textInsertion = textInsertion;
@@ -41,8 +46,10 @@ public sealed class TransformSelectionService
         _settings = settings;
         _activeWindow = activeWindow;
         _commands = commands;
+        _overlayCoordinator = overlayCoordinator;
         _processingTimeoutCtsFactory = processingTimeoutCtsFactory
                                        ?? (timeout => new CancellationTokenSource(timeout));
+        _showWarningDialog = showWarningDialog ?? ShowWarningDialogAsync;
     }
 
     public async Task ToggleAsync()
@@ -56,6 +63,7 @@ public sealed class TransformSelectionService
         {
             if (_session is null)
             {
+                _overlayToken = _overlayCoordinator.Acquire(OverlayRequester.Transform);
                 await StartAsync();
             }
             else
@@ -442,6 +450,11 @@ public sealed class TransformSelectionService
     private async Task ShowWarningAsync(string message)
     {
         ShowFeedback(message, true);
+        await _showWarningDialog(message);
+    }
+
+    private static async Task ShowWarningDialogAsync(string message)
+    {
         await Dispatcher.UIThread.InvokeAsync(async () =>
         {
             var dialog = new MessageDialogWindow();
@@ -492,7 +505,17 @@ public sealed class TransformSelectionService
 
     private void PublishOverlay(Func<DictationOverlayState, DictationOverlayState> updater)
     {
-        _overlayState = updater(_overlayState);
+        var token = _overlayToken
+                    ?? throw new InvalidOperationException(
+                        "Transform overlay publication requires an active presentation token."
+                    );
+        var state = updater(_overlayState);
+        if (!_overlayCoordinator.Update(token, _ => state))
+        {
+            return;
+        }
+
+        _overlayState = state;
         OverlayStateChanged?.Invoke(this, _overlayState);
     }
 
