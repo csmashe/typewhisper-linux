@@ -2036,12 +2036,13 @@ public sealed class DictationOrchestrator : IDisposable
                         ErrorMessage = ex.Message, ModelId = engineModelId, AppName = context.AppTitle,
                     }
                 );
-                ReportStatus(context, $"Transcription failed: {userMessage}");
+                var failureMessage = $"Transcription failed: {userMessage}";
+                ReportStatus(context, failureMessage);
                 TryPublishSessionSpeechFeedback(
                     context,
                     () => _speechFeedback.AnnounceError(userMessage)
                 );
-                ShowFeedback(context, "Transcription failed.", true);
+                ShowFeedback(context, failureMessage, true);
                 PublishSessionTerminal(context.SessionId, "failed", userMessage);
                 return;
             }

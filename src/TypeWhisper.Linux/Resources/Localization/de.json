@@ -247,6 +247,8 @@
   "Dictation.InputDevicesAvailable": "{0} Eingabegerät(e) verfügbar.",
   "Dictation.Language": "Sprache",
   "Dictation.LanguageAutoDetect": "Automatisch erkennen",
+  "Dictation.LanguageSelectionRequired": "Die gespeicherte Sprache ist für das ausgewählte Modell nicht verfügbar. Wählen Sie ausdrücklich eine Sprache aus.",
+  "Dictation.LanguageSelectionRequiredAuto": "Die gespeicherte Sprache ist für das ausgewählte Modell nicht verfügbar. Dieses Modell unterstützt nur die automatische Erkennung – wählen Sie Auto aus.",
   "Dictation.LiveTranscriptionPreview": "Echtzeit-Transkriptionsvorschau",
   "Dictation.LiveTranscriptionPreviewHint": "Während des Sprechens Teiltext im Aufnahme-Overlay anzeigen.",
   "Dictation.LoadingModel": "{0} wird geladen...",
@@ -656,7 +658,8 @@
   "Recorder.StatusReady": "Bereit.",
   "Recorder.StatusRecording": "Aufnahme...",
   "Recorder.StatusSaveFailed": "Aufnahme konnte nicht gespeichert werden.",
-  "Recorder.StatusSavedNoModel": "Gespeichert (kein Modell geladen)",
+  "Recorder.StatusSavedNoTranscript": "Gespeichert, aber es wurde kein Transkript erzeugt.",
+  "Recorder.StatusSavedTranscriptionFailed": "Gespeichert, aber die Transkription ist fehlgeschlagen: {0}",
   "Recorder.StatusSavedTranscribing": "Gespeichert. Transkribiere...",
   "Recorder.StatusTranscriptSaveFailed": "Gespeichert, aber Transkript konnte nicht geschrieben werden.",
   "Recorder.Stop": "Stoppen",
@@ -991,5 +994,6 @@
   "Wizard.YouAreReady": "Sie sind bereit",
   "LanguageSelection.Invalid": "Ungültige Transkriptionssprache „{0}“. Wählen Sie Auto oder geben Sie ein gültiges BCP-47-Tag ein.",
   "LanguageSelection.AutomaticNotSupported": "{0} kann die Sprache nicht automatisch erkennen. Wählen Sie eine Sprache ausdrücklich aus.",
-  "LanguageSelection.ExplicitNotSupported": "{0} akzeptiert keine ausdrückliche Sprachauswahl. Wählen Sie Auto."
+  "LanguageSelection.ExplicitNotSupported": "{0} akzeptiert keine ausdrückliche Sprachauswahl. Wählen Sie Auto.",
+  "LanguageSelection.LanguageNotSupported": "{0} unterstützt „{1}“ nicht. Wählen Sie eine der folgenden Sprachen: {2}."
 }

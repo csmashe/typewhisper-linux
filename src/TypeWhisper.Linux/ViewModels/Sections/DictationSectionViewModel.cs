@@ -128,6 +128,9 @@ public partial class DictationSectionViewModel : ObservableObject
     private string _language = "auto";
 
     [ObservableProperty]
+    private bool _languageSelectionRequired;
+
+    [ObservableProperty]
     private string? _lastCapturePath;
 
     [ObservableProperty]
@@ -535,7 +538,12 @@ public partial class DictationSectionViewModel : ObservableObject
             );
         set
         {
-            var code = value?.Code ?? "auto";
+            if (value is null)
+            {
+                return;
+            }
+
+            var code = value.Code;
             if (string.Equals(code, Language, StringComparison.Ordinal))
             {
                 return;
@@ -545,6 +553,13 @@ public partial class DictationSectionViewModel : ObservableObject
             OnPropertyChanged();
         }
     }
+
+    private bool _autoIsOnlyLanguageChoice;
+
+    public string LanguageSelectionWarning =>
+        _autoIsOnlyLanguageChoice
+            ? Loc.Instance["Dictation.LanguageSelectionRequiredAuto"]
+            : Loc.Instance["Dictation.LanguageSelectionRequired"];
 
     public CleanupLevelOption? SelectedCleanupLevelOption
     {
@@ -818,7 +833,7 @@ public partial class DictationSectionViewModel : ObservableObject
         try
         {
             ReplaceCollection(AccelerationOptions, CreateAccelerationOptions());
-            ReplaceCollection(LanguageChoices, CreateLanguageChoices());
+            RefreshLanguageChoices();
             ReplaceCollection(CleanupLevelOptions, CreateCleanupLevelOptions());
             ReplaceCollection(InsertionStrategyOptions, CreateInsertionStrategyOptions());
 
@@ -833,6 +848,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
             OnPropertyChanged(nameof(SelectedAccelerationOption));
             OnPropertyChanged(nameof(SelectedLanguageOption));
+            OnPropertyChanged(nameof(LanguageSelectionWarning));
             OnPropertyChanged(nameof(SelectedCleanupLevelOption));
             OnPropertyChanged(nameof(SelectedNewInsertionStrategyOption));
             OnPropertyChanged(nameof(AudioDuckingUnavailableReason));
@@ -877,6 +893,56 @@ public partial class DictationSectionViewModel : ObservableObject
             new("da", "Dansk"),
             new("fi", "Suomi"),
         ];
+    }
+
+    private void RefreshLanguageChoices()
+    {
+        var choices = CreateLanguageChoices();
+        var selectedModelIsActive =
+            SelectedModel is { } selected
+            && ModelReady
+            && string.Equals(
+                selected.ModelId,
+                _models.ActiveModelId,
+                StringComparison.Ordinal
+            );
+        if (!selectedModelIsActive || _models.ActiveTranscriptionPlugin is not { } engine)
+        {
+            ReplaceCollection(LanguageChoices, choices);
+            LanguageSelectionRequired = false;
+            OnPropertyChanged(nameof(SelectedLanguageOption));
+            return;
+        }
+
+        var capabilities = engine as ITranscriptionLanguageSelectionCapabilities;
+        var automaticSupported =
+            capabilities?.AutomaticDetectionSupport != LanguageSelectionSupport.Unsupported;
+        var explicitSupported =
+            capabilities?.ExplicitSelectionSupport != LanguageSelectionSupport.Unsupported;
+        var supportedLanguages = engine.SupportedLanguages;
+
+        ReplaceCollection(
+            LanguageChoices,
+            choices.Where(option =>
+                option.Code == "auto"
+                    ? automaticSupported
+                    : explicitSupported
+                        && (
+                            supportedLanguages.Count == 0
+                            || supportedLanguages.Contains(
+                                option.Code,
+                                StringComparer.OrdinalIgnoreCase
+                            )
+                        )
+            )
+        );
+        OnPropertyChanged(nameof(SelectedLanguageOption));
+        // Parakeet-style engines reject every explicit language: telling the user to
+        // "choose a language explicitly" would contradict the only selectable option,
+        // so the warning switches to a switch-to-Auto instruction.
+        _autoIsOnlyLanguageChoice = LanguageChoices is [{ Code: "auto" }];
+        LanguageSelectionRequired = SelectedLanguageOption is null;
+        OnPropertyChanged(nameof(LanguageSelectionWarning));
     }
 
     private static IReadOnlyList<CleanupLevelOption> CreateCleanupLevelOptions()
@@ -983,6 +1049,7 @@ public partial class DictationSectionViewModel : ObservableObject
             EngineName = Loc.Instance["Dictation.NoEngineSelected"];
             ModelStatusText = Loc.Instance["Dictation.StatusNotSelected"];
             ModelReady = false;
+            RefreshLanguageChoices();
             OnPropertyChanged(nameof(CanDeleteSelectedModel));
             return;
         }
@@ -1001,6 +1068,7 @@ public partial class DictationSectionViewModel : ObservableObject
             ModelStatusType.Error => FormatModelStatusError(status.ErrorMessage),
             _ => Loc.Instance["Dictation.StatusNotReady"],
         };
+        RefreshLanguageChoices();
         OnPropertyChanged(nameof(CanDeleteSelectedModel));
         OnPropertyChanged(nameof(CanUseCuda));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
@@ -1495,6 +1563,7 @@ public partial class DictationSectionViewModel : ObservableObject
         }
 
         _settings.Update(current => current with { Language = value });
+        LanguageSelectionRequired = false;
         OnPropertyChanged(nameof(SelectedLanguageOption));
     }
 

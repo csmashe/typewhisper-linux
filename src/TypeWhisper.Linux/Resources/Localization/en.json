@@ -247,6 +247,8 @@
   "Dictation.InputDevicesAvailable": "{0} input device(s) available.",
   "Dictation.Language": "Language",
   "Dictation.LanguageAutoDetect": "Auto detect",
+  "Dictation.LanguageSelectionRequired": "The saved language is unavailable for the selected model. Choose a language explicitly.",
+  "Dictation.LanguageSelectionRequiredAuto": "The saved language is unavailable for the selected model. This model only supports automatic detection — choose Auto.",
   "Dictation.LiveTranscriptionPreview": "Live transcription preview",
   "Dictation.LiveTranscriptionPreviewHint": "Show partial text in the recording overlay while you speak.",
   "Dictation.LoadingModel": "Loading {0}...",
@@ -656,7 +658,8 @@
   "Recorder.StatusReady": "Ready.",
   "Recorder.StatusRecording": "Recording...",
   "Recorder.StatusSaveFailed": "Could not save recording.",
-  "Recorder.StatusSavedNoModel": "Saved (no model loaded)",
+  "Recorder.StatusSavedNoTranscript": "Saved, but no transcript was produced.",
+  "Recorder.StatusSavedTranscriptionFailed": "Saved, but transcription failed: {0}",
   "Recorder.StatusSavedTranscribing": "Saved. Transcribing...",
   "Recorder.StatusTranscriptSaveFailed": "Saved, but transcript could not be written.",
   "Recorder.Stop": "Stop",
@@ -991,5 +994,6 @@
   "Wizard.YouAreReady": "You're ready",
   "LanguageSelection.Invalid": "Invalid transcription language “{0}”. Choose Auto or enter a valid BCP-47 tag.",
   "LanguageSelection.AutomaticNotSupported": "{0} cannot detect the language automatically. Choose an explicit language.",
-  "LanguageSelection.ExplicitNotSupported": "{0} does not accept an explicit language. Choose Auto."
+  "LanguageSelection.ExplicitNotSupported": "{0} does not accept an explicit language. Choose Auto.",
+  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}."
 }

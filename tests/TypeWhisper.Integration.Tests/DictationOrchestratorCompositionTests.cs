@@ -1,7 +1,13 @@
 using Microsoft.Extensions.DependencyInjection;
+using System.Reflection;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Models;
 using Xunit;
 
 namespace TypeWhisper.Integration.Tests;
@@ -269,5 +275,113 @@ public sealed class DictationOrchestratorCompositionTests
             Assert.Equal("ready", result.Status);
             Assert.Equal(["de"], fixture.Plugin.ReceivedLanguages);
         });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task LateProfileLanguageOutsideEngineList_IsRejectedWithDetailedOverlayFeedback()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture(
+                focusedApp: ("language-app", "Language app — integration")
+            );
+            var constrained = new LanguageConstrainedRole(fixture.Plugin);
+            SetTranscriptionEngines(fixture.PluginManager, [constrained]);
+            var profiles = fixture.Provider.GetRequiredService<IProfileService>();
+            profiles.AddProfile(
+                new Profile
+                {
+                    Id = "integration-late-language",
+                    Name = "Late German",
+                    ProcessNames = ["language-app"],
+                    InputLanguage = "de",
+                }
+            );
+
+            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+            await BoundedTest.WaitAsync(fixture.RecordingStarted.Task);
+            fixture.FeedNonSilentAudio();
+            var resultTask = fixture.WaitForResultAsync(sessionId);
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+            var result = await BoundedTest.WaitAsync(resultTask);
+
+            var expected = Loc.Instance.GetString(
+                "LanguageSelection.LanguageNotSupported",
+                constrained.ProviderId,
+                "de",
+                "en"
+            );
+            var overlay = fixture.Provider.GetRequiredService<OverlayCoordinator>();
+
+            Assert.Equal("failed", result.Status);
+            Assert.Equal(expected, result.Message);
+            Assert.Equal(0, fixture.Plugin.TranscriptionCount);
+            Assert.Empty(fixture.Plugin.ReceivedLanguages);
+            Assert.True(overlay.PresentedState.ShowFeedback);
+            Assert.True(overlay.PresentedState.FeedbackIsError);
+            Assert.Equal(
+                $"Transcription failed: {expected}",
+                overlay.PresentedState.FeedbackText
+            );
+            Assert.Empty(fixture.InsertionPlatform.Typed);
+            Assert.Empty(fixture.History.Records);
+        });
+    }
+
+    private static void SetTranscriptionEngines(
+        PluginManager pluginManager,
+        IReadOnlyList<ITranscriptionEngineRole> engines
+    )
+    {
+        var field =
+            typeof(PluginManager).GetField(
+                "_transcriptionEngines",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            )
+            ?? throw new MissingFieldException(
+                typeof(PluginManager).FullName,
+                "_transcriptionEngines"
+            );
+        field.SetValue(pluginManager, engines.ToList());
+    }
+
+    private sealed class LanguageConstrainedRole(ITranscriptionEngineRole inner)
+        : ITranscriptionEngineRole,
+            ITranscriptionLanguageSelectionCapabilities
+    {
+        public string PluginId => inner.PluginId;
+        public string ProviderId => inner.ProviderId;
+        public string ProviderDisplayName => inner.ProviderDisplayName;
+        public bool IsConfigured => inner.IsConfigured;
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels => inner.TranscriptionModels;
+        public string? SelectedModelId => inner.SelectedModelId;
+        public bool SupportsTranslation => inner.SupportsTranslation;
+        public IReadOnlyList<string> SupportedLanguages => ["en"];
+        public LanguageSelectionSupport AutomaticDetectionSupport =>
+            LanguageSelectionSupport.Supported;
+        public LanguageSelectionSupport ExplicitSelectionSupport =>
+            LanguageSelectionSupport.Supported;
+
+        public void SelectModel(string modelId)
+        {
+            inner.SelectModel(modelId);
+        }
+
+        public Task LoadModelAsync(string modelId, CancellationToken ct)
+        {
+            return inner.LoadModelAsync(modelId, ct);
+        }
+
+        public Task<PluginTranscriptionResult> TranscribeAsync(
+            byte[] wavAudio,
+            string? language,
+            bool translate,
+            string? prompt,
+            CancellationToken ct
+        )
+        {
+            return inner.TranscribeAsync(wavAudio, language, translate, prompt, ct);
+        }
     }
 }
