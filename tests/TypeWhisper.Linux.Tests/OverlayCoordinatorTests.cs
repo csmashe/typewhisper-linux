@@ -214,8 +214,8 @@ public sealed class OverlayCoordinatorTests
         Assert.True(sut.Show(transient, Feedback("transient")));
 
         // The suppressed toast must not burn its display budget while it waits:
-        // no expiry is armed until it actually presents, so it can no longer
-        // expire retired without ever having been seen behind a long recording.
+        // no expiry is armed until it actually presents, so it cannot expire
+        // retired without ever having been seen behind a long recording.
         Assert.False(scheduler.HasLiveEntries);
         Assert.Equal("recording", sut.PresentedState.StatusText);
 

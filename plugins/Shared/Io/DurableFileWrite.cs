@@ -14,7 +14,7 @@ namespace TypeWhisper.Plugins.Shared.Io;
 // Local to the plugin compile set: TypeWhisper.Core's AtomicFileWrite is unreachable here
 // (plugins reference only the PluginSDK and link shared sources file-by-file), and linking
 // that file in would pull its LibraryImport marshalling (AllowUnsafeBlocks) and public Core
-// types into every plugin assembly. DllImport matches CudaRuntimeProvisioner's interop style.
+// types into every plugin assembly.
 internal static class DurableFileWrite
 {
     private const int OpenReadOnly = 0;

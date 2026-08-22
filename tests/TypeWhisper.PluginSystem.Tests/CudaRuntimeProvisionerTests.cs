@@ -759,8 +759,8 @@ public class CudaRuntimeProvisionerTests
         );
     }
 
-    // PA105: real crash durability (fsync reaching the platter) can't be exercised in a
-    // unit test — these three pin the mechanism instead: the tombstone goes through the
+    // Real crash durability (fsync reaching the platter) can't be exercised in a unit
+    // test — these three pin the mechanism instead: the tombstone goes through the
     // staged -> file-fsync -> rename -> parent-dir-fsync sequence, and a failure at either
     // sync point aborts the Clear before the configured cache is deleted.
     [Fact]

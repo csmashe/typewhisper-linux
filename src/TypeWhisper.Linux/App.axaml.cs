@@ -607,7 +607,8 @@ public class App : Application
         {
             // A kind/reason this formatter does not know yet must still produce a log
             // entry — throwing here would abort the whole hotkey-apply pass over a
-            // diagnostic string. Unlocalized by the log-text rule.
+            // diagnostic string. No localization key covers the combination, so the
+            // fallback stays English.
             return $"Hotkey binding rejected ({rejection.Kind}/{rejection.Reason}): "
                    + $"'{rejection.DisplayName}' {rejection.NormalizedChord}";
         }

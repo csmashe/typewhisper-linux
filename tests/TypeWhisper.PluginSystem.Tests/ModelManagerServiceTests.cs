@@ -520,10 +520,10 @@ public class ModelManagerServiceTests
     [Fact]
     public async Task DownloadAndLoadModelAsync_StragglerProgressAfterCancelClear_DoesNotReinsertStatus()
     {
-        // TOCTOU pin (PA89): off a SynchronizationContext, Progress<T> posts callbacks via
-        // the ThreadPool, so a callback that passed a plain in-progress pre-check can run
-        // AFTER the cancel path's ClearStatus and re-insert DownloadingModel(p) — a
-        // permanent phantom "downloading" with no operation in flight. The callback core is
+        // Off a SynchronizationContext, Progress<T> posts callbacks via the ThreadPool,
+        // so a callback that passed a plain in-progress pre-check can run AFTER the cancel
+        // path's ClearStatus and re-insert DownloadingModel(p) — a permanent phantom
+        // "downloading" with no operation in flight. The callback core is
         // SetStatusFromProgress; invoking it with the generation the canceled download's
         // progress scope captured simulates that straggler deterministically.
         using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);

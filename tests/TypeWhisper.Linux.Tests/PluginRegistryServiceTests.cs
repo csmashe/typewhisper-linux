@@ -223,7 +223,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
     [Fact]
     public async Task FetchRegistryAsync_UndefinedNumericEnumValues_FallBack()
     {
-        // The strict converter accepted any integer, producing undefined enum values; the
+        // The strict converter accepts any integer, producing undefined enum values; the
         // tolerant one keeps defined numbers and maps out-of-range ones to the fallbacks.
         var plugin = await FetchRegistryPluginAsync(
             new Dictionary<string, object?>

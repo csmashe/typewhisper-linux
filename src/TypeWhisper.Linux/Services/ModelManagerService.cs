@@ -658,12 +658,10 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         {
             if (plugin.SupportsModelDownload && !plugin.IsModelDownloaded(pluginModelId))
             {
-                // Progress<T> posts callbacks asynchronously, so a late download report can
-                // run AFTER a later authoritative transition — the load's LoadingModel/Ready,
-                // Failed, or the cancel path's ClearStatus — and re-stick a stale
-                // DownloadingModel status. SetStatusFromProgress validates the generation
-                // captured here atomically with its write, so every transition after this
-                // point retires stragglers (mirrors the load progress in LoadModelCoreAsync).
+                // The generation captured here gates this download's progress callbacks
+                // (see _statusGate): every authoritative transition after this point — the
+                // load's LoadingModel/Ready, Failed, or the cancel path's ClearStatus —
+                // retires stragglers that would otherwise re-stick DownloadingModel.
                 var generation = SetStatus(modelId, ModelStatus.DownloadingModel(0));
                 var progress = new Progress<double>(p =>
                     SetStatusFromProgress(modelId, generation, ModelStatus.DownloadingModel(p))
@@ -716,7 +714,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
 
         CancelAutoUnload();
-        // The generation gates this load's progress callbacks; see DownloadAndLoadModelCoreAsync.
+        // The generation gates this load's progress callbacks; see _statusGate.
         var generation = SetStatus(modelId, ModelStatus.LoadingModel);
         try
         {
