@@ -72,7 +72,16 @@ compute_bundle_identity() {
 
 compute_glibc_floor() {
   local payload_root="$1"
-  local candidate verneed verneeds floors floor
+  local candidate candidate_list verneed verneeds floors floor
+
+  # Enumerate through a checked find first: process substitution would hide a
+  # partial enumeration failure and silently under-floor the packages.
+  candidate_list="$(mktemp)"
+  if ! find "$payload_root" \( -type f -o -type l \) -print0 >"$candidate_list"; then
+    rm -f "$candidate_list"
+    echo "ERROR: failed to enumerate payload files under $payload_root" >&2
+    return 1
+  fi
 
   # One "GLIBC_<name> <path>" line per distinct GLIBC_* verneed per ELF, so an
   # unrecognized name can be reported with the binary that requires it.
@@ -87,8 +96,9 @@ compute_glibc_floor() {
               printf '%s %s\n' "$verneed" "$candidate"
             done
       fi
-    done < <(find "$payload_root" \( -type f -o -type l \) -print0)
+    done <"$candidate_list"
   )"
+  rm -f "$candidate_list"
 
   # Verneed names are not all numeric versions, and numeric ones may carry
   # three components (x86-64's glibc baseline is GLIBC_2.2.5). GLIBC_ABI_DT_RELR
