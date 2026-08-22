@@ -348,6 +348,11 @@ public sealed class SpeechFeedbackService : IDisposable
         if (toggledOffRequest is not null)
         {
             toggledOffRequest.CancelAndStop();
+
+            // Detached with no worker outstanding: complete now so the CTS and its
+            // provider ct.Register registrations are released instead of leaking
+            // once per toggle when the session never raises Completed.
+            toggledOffRequest.Complete();
             return;
         }
 
@@ -640,7 +645,15 @@ public sealed class SpeechFeedbackService : IDisposable
         // Both calls cross the host trust boundary (plugin cancellation
         // callbacks / Stop(), and the provider's synchronous SpeakAsync prefix),
         // so this must never run under the orchestrator's session lock.
-        pending.Superseded?.CancelAndStop();
+        if (pending.Superseded is { } superseded)
+        {
+            superseded.CancelAndStop();
+
+            // Same per-toggle CTS release as the toggle-off path; SpeakAsync
+            // tolerates a disposed source on its own late completion paths.
+            superseded.Complete();
+        }
+
         _ = SpeakAsync(pending.Speak, pending.Playback);
     }
 
@@ -697,12 +710,26 @@ public sealed class SpeechFeedbackService : IDisposable
         PlaybackRequest playbackRequest
     )
     {
+        // A begun-but-unlaunched request can be superseded, completed, and have its
+        // CTS disposed before the deferred launch runs; .Token throws then, and the
+        // request has nothing left to do but release its pending slot claim.
+        CancellationToken cancellationToken;
+        try
+        {
+            cancellationToken = playbackRequest.Cancellation.Token;
+        }
+        catch (ObjectDisposedException)
+        {
+            ClearPending(playbackRequest);
+            return;
+        }
+
         ITtsPlaybackSession? session;
         try
         {
             var provider = ResolveSpeakProvider();
             session = await provider
-                .SpeakAsync(request, playbackRequest.Cancellation.Token)
+                .SpeakAsync(request, cancellationToken)
                 .ConfigureAwait(false);
             Volatile.Write(ref playbackRequest.Session, session);
 
@@ -820,8 +847,22 @@ public sealed class SpeechFeedbackService : IDisposable
             // already detached; completing it here releases the CTS once the
             // worker finishes, and Complete is idempotent against any late
             // session-completed callback.
-            ObserveStopWorker(playbackRequest.LaunchCancelAndStop(), "dispose stop");
+            var stopWorker = playbackRequest.LaunchCancelAndStop();
             playbackRequest.Complete();
+
+            // Bounded wait: process exit does not kill TTS child processes, so a
+            // well-behaved provider must be stopped BEFORE Dispose returns and
+            // shutdown proceeds — while a hung plugin costs only this budget.
+            try
+            {
+                _ = stopWorker.Wait(s_stopPlaybackTimeout);
+            }
+            catch (AggregateException)
+            {
+                // Worker faults are observed below.
+            }
+
+            ObserveStopWorker(stopWorker, "dispose stop");
         }
 
         return playbackRequest;

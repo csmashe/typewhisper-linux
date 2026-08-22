@@ -202,24 +202,54 @@ public sealed class OverlayCoordinatorTests
     }
 
     [Fact]
-    public void SuppressedFeedbackExpiry_DoesNotTouchPresentation()
+    public void SuppressedFeedback_KeepsItsBudgetAndPresentsAfterTheWinnerEnds()
     {
         var scheduler = new ManualScheduler();
-        var presentations = new List<OverlayPresentationChangedEventArgs>();
         var sut = CreateCoordinator(scheduler);
-        sut.PresentationChanged += (_, presentation) => presentations.Add(presentation);
         var recording = sut.Acquire(OverlayRequester.Dictation);
         var transient = sut.Acquire(OverlayRequester.Transform);
         Assert.True(sut.Show(recording, Recording("recording")));
         Assert.True(sut.Show(transient, Feedback("transient")));
-        var revision = sut.Revision;
-        var presentationCount = presentations.Count;
+
+        // The suppressed toast must not burn its display budget while it waits:
+        // no expiry is armed until it actually presents, so it can no longer
+        // expire retired without ever having been seen behind a long recording.
+        Assert.False(scheduler.HasLiveEntries);
+        Assert.Equal("recording", sut.PresentedState.StatusText);
+
+        Assert.True(sut.Hide(recording));
+
+        Assert.Equal("transient", sut.PresentedState.FeedbackText);
+        Assert.True(scheduler.HasLiveEntries);
 
         scheduler.Fire(0);
 
-        Assert.Equal("recording", sut.PresentedState.StatusText);
-        Assert.Equal(revision, sut.Revision);
-        Assert.Equal(presentationCount, presentations.Count);
+        Assert.Equal(DictationOverlayState.Hidden, sut.PresentedState);
+    }
+
+    [Fact]
+    public void MidWorkflowStateBlank_KeepsTerminalRankForTheWorkflowOutcome()
+    {
+        var scheduler = new ManualScheduler();
+        var sut = CreateCoordinator(scheduler);
+        var transform = sut.Acquire(OverlayRequester.Transform);
+        var dictation = sut.Acquire(OverlayRequester.Dictation);
+        Assert.True(sut.Show(dictation, Recording("dictation recording")));
+
+        // The producer blanks the overlay MID-workflow via a state publication
+        // (e.g. while a command streams its output into the page). Unlike Hide,
+        // this must not end the workflow.
+        Assert.True(sut.Update(dictation, _ => DictationOverlayState.Hidden));
+
+        // A deliberately OLDER transient toast would win an age tie between
+        // equal ranks, so a wrongly demoted outcome could never present.
+        Assert.True(sut.Show(transform, Feedback("transform transient")));
+        Assert.Equal("transform transient", sut.PresentedState.FeedbackText);
+
+        // The workflow's real terminal outcome arrives through the same token
+        // and must still rank TerminalFeedback, preempting the transient toast.
+        Assert.True(sut.Show(dictation, Feedback("dictation outcome")));
+        Assert.Equal("dictation outcome", sut.PresentedState.FeedbackText);
     }
 
     [Fact]

@@ -36,6 +36,12 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
     private readonly Dictionary<string, SavedVolumeState> _savedVolumes =
         new(StringComparer.Ordinal);
     private readonly Lock _volumesGate = new();
+    // _isDucked stays false until a duck COMPLETES: RestoreAudio must no-op while a
+    // duck is mid-flight, or a restore could put an original volume back and remove
+    // the entry just before the duck's queued set-volume lands — leaving the stream
+    // ducked with nothing tracking it. _duckInProgress separately blocks duck
+    // re-entry so the two guards can't be satisfied by the same half-open state.
+    private bool _duckInProgress;
     private bool _isDucked;
 
     public AudioDuckingService(IProcessRunner processRunner, IErrorLogService errorLog)
@@ -48,12 +54,12 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
     {
         lock (_volumesGate)
         {
-            if (_isDucked)
+            if (_isDucked || _duckInProgress)
             {
                 return;
             }
 
-            _isDucked = true;
+            _duckInProgress = true;
         }
 
         try
@@ -66,11 +72,6 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
                 || string.IsNullOrWhiteSpace(listingResult.StandardOutput)
             )
             {
-                lock (_volumesGate)
-                {
-                    _isDucked = _savedVolumes.Count > 0;
-                }
-
                 return;
             }
 
@@ -95,11 +96,6 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
                     .ToArray();
                 _ = SetSinkInputVolume(inputId, duckedVolumes);
             }
-
-            lock (_volumesGate)
-            {
-                _isDucked = _savedVolumes.Count > 0;
-            }
         }
         catch (Exception ex)
         {
@@ -107,7 +103,14 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
             lock (_volumesGate)
             {
                 _savedVolumes.Clear();
-                _isDucked = false;
+            }
+        }
+        finally
+        {
+            lock (_volumesGate)
+            {
+                _duckInProgress = false;
+                _isDucked = _savedVolumes.Count > 0;
             }
         }
     }

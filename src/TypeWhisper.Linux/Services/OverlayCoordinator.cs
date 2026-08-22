@@ -217,6 +217,11 @@ public sealed class OverlayCoordinator
 
             // Hidden never arms feedback expiry, so no settings pre-read is needed here.
             SetStateLocked(slot, DictationOverlayState.Hidden, globalAutoHideMilliseconds: 0);
+
+            // Hide is the explicit relinquish: unlike a state-driven blank published
+            // mid-workflow through Show/Update, it ends the token's workflow, so later
+            // feedback through this token is a fresh toast, not a terminal outcome.
+            slot.HasOwnedWorkflow = false;
             presentation = ReevaluateLocked(token);
         }
 
@@ -289,12 +294,13 @@ public sealed class OverlayCoordinator
         {
             slot.HasOwnedWorkflow = true;
         }
-        else if (slot.Priority == OverlayPriority.None)
-        {
-            // Returning to hidden ends the token's workflow: later feedback through the
-            // same token is a fresh toast, not the workflow's terminal outcome.
-            slot.HasOwnedWorkflow = false;
-        }
+
+        // A state-driven blank (Show/Update with a hidden state) deliberately keeps
+        // HasOwnedWorkflow: producers hide the overlay MID-workflow (e.g. while a
+        // command streams its output into the page) and then publish the workflow's
+        // real terminal outcome through the same token — that outcome must still rank
+        // TerminalFeedback. Ownership resets only on Hide (explicit relinquish) and in
+        // RetireSlotLocked (expiry, zero-duration collapse, terminal-discard).
 
         if (slot.Priority is not (
                 OverlayPriority.TerminalFeedback or OverlayPriority.TransientFeedback
@@ -310,11 +316,10 @@ public sealed class OverlayCoordinator
             return;
         }
 
-        var expiryGeneration = slot.ExpiryGeneration;
-        slot.Expiry = _scheduleDelay(
-            TimeSpan.FromMilliseconds(milliseconds),
-            () => ExpireFeedback(slot.Token, expiryGeneration)
-        );
+        // Armed at presentation (ReevaluateLocked), not here: a toast that loses
+        // arbitration must not burn its display budget while suppressed behind the
+        // winner — it would expire retired without ever having been seen.
+        slot.PendingExpiryMilliseconds = milliseconds;
     }
 
     // _settings.Current can lazily reload from disk (and may throw); reading it inside
@@ -386,6 +391,25 @@ public sealed class OverlayCoordinator
         }
 
         winner = SelectWinnerLocked();
+
+        // Feedback consumes its display budget only while presented: arm the expiry
+        // the moment the slot wins (Expiry is null both for a fresh publication —
+        // SetStateLocked cancels any prior timer — and for a toast that waited
+        // suppressed behind a higher-priority slot). Runs before the no-change check
+        // below because a same-state republication still needs its timer re-armed.
+        if (winner is not null
+            && winner.Priority is OverlayPriority.TerminalFeedback
+                or OverlayPriority.TransientFeedback
+            && winner.Expiry is null)
+        {
+            var expiryGeneration = winner.ExpiryGeneration;
+            var expiryToken = winner.Token;
+            winner.Expiry = _scheduleDelay(
+                TimeSpan.FromMilliseconds(winner.PendingExpiryMilliseconds),
+                () => ExpireFeedback(expiryToken, expiryGeneration)
+            );
+        }
+
         var token = winner?.Token;
         var state = winner?.State ?? DictationOverlayState.Hidden;
         var force = forceToken is not null && ReferenceEquals(token, forceToken);
@@ -484,6 +508,12 @@ public sealed class OverlayCoordinator
         public bool HasOwnedWorkflow { get; set; }
         public long ExpiryGeneration { get; set; }
         public IDisposable? Expiry { get; set; }
+
+        /// <summary>
+        ///     Display budget for the slot's current feedback state, consumed only while
+        ///     presented — the timer arms at presentation, not publication.
+        /// </summary>
+        public int PendingExpiryMilliseconds { get; set; }
     }
 
     private readonly record struct Presentation(
