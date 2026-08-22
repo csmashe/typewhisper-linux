@@ -36,12 +36,16 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
     private readonly Dictionary<string, SavedVolumeState> _savedVolumes =
         new(StringComparer.Ordinal);
     private readonly Lock _volumesGate = new();
-    // _isDucked stays false until a duck COMPLETES: RestoreAudio must no-op while a
+    // _isDucked stays false until a duck COMPLETES: RestoreAudio must not run while a
     // duck is mid-flight, or a restore could put an original volume back and remove
     // the entry just before the duck's queued set-volume lands — leaving the stream
     // ducked with nothing tracking it. _duckInProgress separately blocks duck
     // re-entry so the two guards can't be satisfied by the same half-open state.
     private bool _duckInProgress;
+    // A restore that arrived mid-duck is deferred, not dropped: the duck's finally runs
+    // it once the last set-volume has landed. Dropping it would leave every stream the
+    // duck just lowered quiet forever when shutdown or session loss races the duck.
+    private bool _restorePending;
     private bool _isDucked;
 
     public AudioDuckingService(IProcessRunner processRunner, IErrorLogService errorLog)
@@ -107,10 +111,19 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
         }
         finally
         {
+            bool restoreDeferred;
             lock (_volumesGate)
             {
                 _duckInProgress = false;
                 _isDucked = _savedVolumes.Count > 0;
+                restoreDeferred = _restorePending && _isDucked;
+                _restorePending = false;
+            }
+
+            // Outside the gate: RestoreAudio retakes it and runs pactl round trips.
+            if (restoreDeferred)
+            {
+                RestoreAudio();
             }
         }
     }
@@ -120,6 +133,12 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
         KeyValuePair<string, SavedVolumeState>[] entries;
         lock (_volumesGate)
         {
+            if (_duckInProgress)
+            {
+                _restorePending = true;
+                return;
+            }
+
             if (!_isDucked)
             {
                 return;

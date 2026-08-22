@@ -405,6 +405,54 @@ public sealed class AudioDuckingServiceTests
         );
     }
 
+    [Fact]
+    public void RestoreAudio_arriving_mid_duck_runs_once_the_duck_finishes()
+    {
+        const string listing = """
+            Sink Input #593
+                Volume: mono: 45875 / 70% / -9.30 dB
+            """;
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) =>
+                fileName == "pactl" && args.SequenceEqual(["list", "sink-inputs"]),
+            listing
+        );
+        AudioDuckingService? service = null;
+        var raced = false;
+        // Side-effecting matcher, never matching: the only seam that lands a RestoreAudio
+        // between the duck's listing and its set-volume, which is what shutdown does.
+        runner.RespondWith(
+            (_, args) =>
+            {
+                if (!raced && args.Count > 0 && args[0] == "set-sink-input-volume")
+                {
+                    raced = true;
+                    service!.RestoreAudio();
+                }
+
+                return false;
+            },
+            string.Empty
+        );
+        service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>());
+
+        service.DuckAudio(0.5f);
+
+        // The deferred restore must run inside DuckAudio, after the ducking set-volume.
+        Assert.Equal(
+            ["list", "sink-inputs"],
+            runner.Invocations[0].Args
+        );
+        Assert.Equal(["set-sink-input-volume", "593", "22938"], runner.Invocations[1].Args);
+        Assert.Equal(["set-sink-input-volume", "593", "45875"], runner.Invocations[2].Args);
+        Assert.Equal(3, runner.Invocations.Count);
+
+        // The deferred restore completed, so a later restore has nothing left to undo.
+        service.RestoreAudio();
+        Assert.Equal(3, runner.Invocations.Count);
+    }
+
     private static int CountInvocations(FakeProcessRunner runner, IReadOnlyList<string> args)
     {
         return runner.Invocations.Count(invocation => invocation.Args.SequenceEqual(args));

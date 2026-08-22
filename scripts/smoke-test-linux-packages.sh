@@ -773,9 +773,12 @@ mkdir -p "$TARBALL_EXTRACT" "$APPIMAGE_EXTRACT" "$DEB_EXTRACT" "$RPM_EXTRACT"
 echo "==> Extracting every package format on the runner"
 tar -xzf "$EXPECTED_TARBALL" --no-same-owner -C "$TARBALL_EXTRACT"
 dpkg-deb --extract "$EXPECTED_DEB" "$DEB_EXTRACT"
+# Staged, not piped: cpio stops reading at the archive trailer, so under `pipefail`
+# a still-writing rpm2cpio takes SIGPIPE and fails the gate on a valid RPM.
+rpm2cpio "$EXPECTED_RPM" >"$EXTRACT_ROOT/rpm-payload.cpio"
 (
   cd "$RPM_EXTRACT"
-  rpm2cpio "$EXPECTED_RPM" | cpio --quiet -idmu --no-absolute-filenames
+  cpio --quiet -idmu --no-absolute-filenames <"$EXTRACT_ROOT/rpm-payload.cpio"
 )
 if ! (
   cd "$APPIMAGE_EXTRACT"
