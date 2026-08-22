@@ -4,6 +4,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using TypeWhisper.Plugins.Shared.Cuda;
+using TypeWhisper.Plugins.Shared.Io;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -758,6 +759,151 @@ public class CudaRuntimeProvisionerTests
         );
     }
 
+    // PA105: real crash durability (fsync reaching the platter) can't be exercised in a
+    // unit test — these three pin the mechanism instead: the tombstone goes through the
+    // staged -> file-fsync -> rename -> parent-dir-fsync sequence, and a failure at either
+    // sync point aborts the Clear before the configured cache is deleted.
+    [Fact]
+    public async Task ClearCache_TombstoneWrite_StagesFsyncsRenamesThenFsyncsParent()
+    {
+        using var temp = new TempDir();
+        var legacyRoot = Path.Join(temp.Path, "legacy", "cuda");
+        var configuredRoot = Path.Join(temp.Path, "selected", "Runtimes", "cuda");
+        var tombstonePath = Path.Join(temp.Path, "legacy", "cuda.legacy-migration-disabled");
+        var (_, http) = WhisperCublasFixture();
+        using var _ = http;
+
+        var events = new List<string>();
+        var provisioner = CreateProvisioner(
+            configuredRoot,
+            http,
+            legacyCacheRoot: legacyRoot,
+            tombstoneSyncHooks: new DurableFileWrite.SyncHooks(
+                (tempPath, stream) =>
+                {
+                    // The staged sibling is fsynced writable, before publication.
+                    Assert.True(stream.CanWrite);
+                    Assert.StartsWith(tombstonePath + ".", tempPath, StringComparison.Ordinal);
+                    Assert.EndsWith(".tmp", tempPath, StringComparison.Ordinal);
+                    Assert.False(File.Exists(tombstonePath));
+                    events.Add("sync-file");
+                },
+                directoryPath =>
+                {
+                    // The parent-dir fsync runs after the rename made the marker visible.
+                    Assert.Equal(Path.GetDirectoryName(tombstonePath), directoryPath);
+                    Assert.True(File.Exists(tombstonePath));
+                    events.Add("sync-directory");
+                }
+            )
+        );
+        Directory.CreateDirectory(provisioner.CacheDirectory);
+
+        await provisioner
+            .ClearCacheAsync(CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(new[] { "sync-file", "sync-directory" }, events);
+        Assert.Equal(tombstonePath, provisioner.LegacyMigrationDisabledPathForTests);
+        Assert.True(File.Exists(tombstonePath));
+        Assert.False(Directory.Exists(configuredRoot));
+        Assert.Empty(
+            Directory.GetFiles(Path.GetDirectoryName(tombstonePath)!, "*.tmp")
+        );
+    }
+
+    [Fact]
+    public async Task ClearCache_TombstoneParentFsyncFails_DoesNotDeleteConfiguredCache()
+    {
+        using var temp = new TempDir();
+        var legacyRoot = Path.Join(temp.Path, "legacy", "cuda");
+        var configuredRoot = Path.Join(temp.Path, "selected", "Runtimes", "cuda");
+        var (_, http) = WhisperCublasFixture();
+        using var _ = http;
+        var logs = new List<string>();
+        var provisioner = CreateProvisioner(
+            configuredRoot,
+            http,
+            logs.Add,
+            legacyCacheRoot: legacyRoot,
+            tombstoneSyncHooks: new DurableFileWrite.SyncHooks(
+                (_, _) => { },
+                _ => throw new IOException("simulated parent directory fsync failure")
+            )
+        );
+        var configuredArtifact = Path.Join(
+            provisioner.CacheDirectory,
+            "configured-artifact.so"
+        );
+        Directory.CreateDirectory(provisioner.CacheDirectory);
+        await File.WriteAllTextAsync(configuredArtifact, "configured");
+
+        var exception = await Assert.ThrowsAsync<IOException>(
+            () =>
+                provisioner
+                    .ClearCacheAsync(CancellationToken.None)
+                    .WaitAsync(TimeSpan.FromSeconds(5))
+        );
+
+        // The tombstone's durability is unknown, so the Clear must abort with the
+        // configured cache intact rather than risk re-arming legacy re-adoption.
+        Assert.Contains("parent directory fsync failure", exception.Message, StringComparison.Ordinal);
+        Assert.True(File.Exists(configuredArtifact));
+        Assert.Contains(
+            logs,
+            message =>
+                message.Contains(
+                    "failed to disable legacy cache adoption",
+                    StringComparison.Ordinal
+                )
+                && message.Contains(
+                    "configured cache was not cleared",
+                    StringComparison.OrdinalIgnoreCase
+                )
+        );
+    }
+
+    [Fact]
+    public async Task ClearCache_TombstoneFileFsyncFails_LeavesNoMarkerOrStagingBehind()
+    {
+        using var temp = new TempDir();
+        var legacyRoot = Path.Join(temp.Path, "legacy", "cuda");
+        var configuredRoot = Path.Join(temp.Path, "selected", "Runtimes", "cuda");
+        var tombstonePath = Path.Join(temp.Path, "legacy", "cuda.legacy-migration-disabled");
+        var (_, http) = WhisperCublasFixture();
+        using var _ = http;
+        var provisioner = CreateProvisioner(
+            configuredRoot,
+            http,
+            legacyCacheRoot: legacyRoot,
+            tombstoneSyncHooks: new DurableFileWrite.SyncHooks(
+                (_, _) => throw new IOException("simulated staged file fsync failure"),
+                _ => { }
+            )
+        );
+        var configuredArtifact = Path.Join(
+            provisioner.CacheDirectory,
+            "configured-artifact.so"
+        );
+        Directory.CreateDirectory(provisioner.CacheDirectory);
+        await File.WriteAllTextAsync(configuredArtifact, "configured");
+
+        await Assert.ThrowsAsync<IOException>(
+            () =>
+                provisioner
+                    .ClearCacheAsync(CancellationToken.None)
+                    .WaitAsync(TimeSpan.FromSeconds(5))
+        );
+
+        // An unsynced marker is never published, its staging sibling is cleaned up, and
+        // the configured cache survives.
+        Assert.False(File.Exists(tombstonePath));
+        Assert.Empty(
+            Directory.GetFiles(Path.GetDirectoryName(tombstonePath)!, "*.tmp")
+        );
+        Assert.True(File.Exists(configuredArtifact));
+    }
+
     [Fact]
     public async Task LegacyMigration_WaitingBehindClear_ObservesTombstoneUnderLease()
     {
@@ -1073,7 +1219,8 @@ public class CudaRuntimeProvisionerTests
         Func<string, bool>? systemLibraryProbe = null,
         string? legacyCacheRoot = null,
         Action<string, string>? moveDirectory = null,
-        TimeSpan? maintenanceLockTimeout = null
+        TimeSpan? maintenanceLockTimeout = null,
+        DurableFileWrite.SyncHooks? tombstoneSyncHooks = null
     ) =>
         new(
             cacheRoot,
@@ -1087,6 +1234,7 @@ public class CudaRuntimeProvisionerTests
             SystemLibraryProbeForTests = systemLibraryProbe,
             MaintenanceLockTimeoutForTests =
                 maintenanceLockTimeout ?? TimeSpan.FromSeconds(30),
+            TombstoneSyncHooksForTests = tombstoneSyncHooks,
         };
 
     private static (FakePyPiHandler Handler, HttpClient Http) WhisperCublasFixture(
