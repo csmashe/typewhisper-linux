@@ -78,17 +78,26 @@ public sealed class SpeechFeedbackService : IDisposable
                 // cross the host trust boundary on this worker. Startup may advance once
                 // the existing budget expires; PA25's reservation/version checks keep
                 // reentrant publication and late completion safe, and Complete is idempotent.
-                return Task.Run(() =>
-                {
-                    try
+                // LongRunning gets a dedicated thread: a permanently blocked plugin leaks
+                // one thread instead of pinning ThreadPool capacity, and the stop attempt
+                // starts promptly even under pool saturation instead of maybe not being
+                // scheduled within the 500ms stop budget at all.
+                return Task.Factory.StartNew(
+                    () =>
                     {
-                        CancelAndStop();
-                    }
-                    finally
-                    {
-                        StopWorkerCompleted();
-                    }
-                });
+                        try
+                        {
+                            CancelAndStop();
+                        }
+                        finally
+                        {
+                            StopWorkerCompleted();
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default
+                );
             }
             catch
             {
@@ -391,6 +400,13 @@ public sealed class SpeechFeedbackService : IDisposable
         }
         finally
         {
+            // A detached prior request whose session never raises Completed
+            // would otherwise stay incomplete forever, retaining its CTS and
+            // provider ct.Register registrations once per toggle. The request
+            // is already detached and version-checked, so completing after the
+            // bounded wait is safe; CTS disposal still waits for the stop
+            // worker, and Complete is idempotent.
+            request.Complete();
             ObserveStopWorker(stopWorker, "prior playback stop");
         }
     }
@@ -796,7 +812,18 @@ public sealed class SpeechFeedbackService : IDisposable
             _isPlaybackPending = false;
         }
 
-        playbackRequest?.CancelAndStop();
+        if (playbackRequest is not null)
+        {
+            // Reached from Dispose: a blocking plugin Stop() or cancellation
+            // callback must not hang the disposing thread (app shutdown), so the
+            // trust-boundary crossing runs on the stop worker. The request is
+            // already detached; completing it here releases the CTS once the
+            // worker finishes, and Complete is idempotent against any late
+            // session-completed callback.
+            ObserveStopWorker(playbackRequest.LaunchCancelAndStop(), "dispose stop");
+            playbackRequest.Complete();
+        }
+
         return playbackRequest;
     }
 
