@@ -14,7 +14,7 @@ internal sealed class TolerantJsonStringEnumConverter<TEnum>(TEnum fallback) : J
 {
     private static readonly JsonConverter<TEnum> s_strict = (JsonConverter<TEnum>)
         new JsonStringEnumConverter<TEnum>()
-            .CreateConverter(typeof(TEnum), JsonSerializerOptions.Default)!;
+            .CreateConverter(typeof(TEnum), JsonSerializerOptions.Default);
 
     public override TEnum Read(
         ref Utf8JsonReader reader,

@@ -779,6 +779,7 @@ public class CudaRuntimeProvisionerTests
             http,
             legacyCacheRoot: legacyRoot,
             tombstoneSyncHooks: new DurableFileWrite.SyncHooks(
+                // ReSharper disable ParameterOnlyUsedForPreconditionCheck.Local -- asserting on the hook arguments IS this test's purpose.
                 (tempPath, stream) =>
                 {
                     // The staged sibling is fsynced writable, before publication.
@@ -788,6 +789,7 @@ public class CudaRuntimeProvisionerTests
                     Assert.False(File.Exists(tombstonePath));
                     events.Add("sync-file");
                 },
+                // ReSharper restore ParameterOnlyUsedForPreconditionCheck.Local
                 directoryPath =>
                 {
                     // The parent-dir fsync runs after the rename made the marker visible.

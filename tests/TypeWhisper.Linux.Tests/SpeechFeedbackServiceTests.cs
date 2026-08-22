@@ -951,7 +951,7 @@ public sealed class SpeechFeedbackServiceTests
         {
             // The blocking Stop() crosses the plugin trust boundary; Dispose
             // must hand it to the stop worker instead of hanging app shutdown.
-            await Task.Run(() => sut.Dispose()).WaitAsync(s_testGuard);
+            await Task.Run(sut.Dispose).WaitAsync(s_testGuard);
             await session.StopCalled.Task.WaitAsync(s_testGuard);
         }
         finally
