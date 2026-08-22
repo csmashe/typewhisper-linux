@@ -484,6 +484,7 @@
   "Overlay.TooShort": "Too short",
   "Overlay.TransformProcessing": "Processing transform command...",
   "Overlay.TransformPrompt": "Transform command: speak the edit, then press the hotkey again.",
+  "Overlay.WindowDetectionFailed": "Active-window detection failed",
   "Plugins.BadgeCloud": "Cloud",
   "Plugins.BadgeDisabled": "Disabled",
   "Plugins.BadgeEnabled": "Enabled",

@@ -376,8 +376,29 @@ public sealed class DictationOverlayViewModelTests
         Assert.True(coordinator.Release(token));
 
         Assert.True(sut.ShowFeedback);
-        Assert.Equal("Focus detection failed", sut.FeedbackText);
+        // The toast carries the localized generic message; the detailed reason goes
+        // to the error log via the tracker, not the overlay.
+        Assert.Equal(Loc.Instance["Overlay.WindowDetectionFailed"], sut.FeedbackText);
+        Assert.Equal("Focus detection failed", tracker.LastFailureReason);
         Assert.True(sut.FeedbackIsError);
+    }
+
+    [Fact]
+    public void DetectionFailureWithPersistentBanner_DoesNotShowToast()
+    {
+        var settings = new FakeSettingsService(AppSettings.Default);
+        var tracker = new FakeDetectionFailureTracker();
+        var sut = new DictationOverlayViewModel(
+            settings,
+            static action => action(),
+            failureTracker: tracker
+        );
+
+        tracker.RaiseFailure("Focus detection failed", shouldShowPersistentBanner: true);
+
+        // The persistent banner owns the messaging; a toast on top would be redundant.
+        Assert.False(sut.ShowFeedback);
+        Assert.Null(sut.FeedbackText);
     }
 
     [Fact]
@@ -436,10 +457,13 @@ public sealed class DictationOverlayViewModelTests
             RaiseFailure(reason);
         }
 
-        public void RaiseFailure(string reason)
+        public void RaiseFailure(string reason, bool shouldShowPersistentBanner = false)
         {
             LastFailureReason = reason;
-            OnFailure?.Invoke(this, new DetectionFailureEvent(reason, false));
+            OnFailure?.Invoke(
+                this,
+                new DetectionFailureEvent(reason, shouldShowPersistentBanner)
+            );
         }
     }
 

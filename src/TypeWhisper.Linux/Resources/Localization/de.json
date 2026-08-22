@@ -484,6 +484,7 @@
   "Overlay.TooShort": "Zu kurz",
   "Overlay.TransformProcessing": "Transformationsbefehl wird verarbeitet...",
   "Overlay.TransformPrompt": "Transformationsbefehl: Bearbeitung sprechen, dann Hotkey erneut drücken.",
+  "Overlay.WindowDetectionFailed": "Aktive-Fenster-Erkennung fehlgeschlagen",
   "Plugins.BadgeCloud": "Cloud",
   "Plugins.BadgeDisabled": "Deaktiviert",
   "Plugins.BadgeEnabled": "Aktiv",

@@ -237,6 +237,47 @@ public sealed class PluginRegistryServiceTests : IDisposable
         Assert.Equal(PluginNetworkAccess.Network, plugin.NetworkAccess);
     }
 
+    [Theory]
+    // The tolerant converter only maps unknown STRINGS and NUMBERS to the fallback;
+    // structurally wrong tokens delegate to the strict converter, which throws, so the
+    // fetch fails instead of silently accepting a malformed registry.
+    [InlineData("object")]
+    [InlineData("array")]
+    [InlineData("boolean")]
+    public async Task FetchRegistryAsync_StructurallyInvalidEnumToken_FailsDeserialization(
+        string tokenKind
+    )
+    {
+        object? networkAccess = tokenKind switch
+        {
+            "object" => new Dictionary<string, object?> { ["value"] = "local" },
+            "array" => new[] { "local" },
+            _ => true,
+        };
+        var entry = MakeRegistryEntry(
+            "com.typewhisper.metadata-test",
+            new Dictionary<string, object?>
+            {
+                ["categories"] = new[] { "llm" },
+                ["networkAccess"] = networkAccess,
+            }
+        );
+
+        var service = new PluginRegistryService(
+            CreateManager(),
+            _loader,
+            _settings.Object,
+            CreateMockHttpClient(JsonSerializer.Serialize(new[] { entry }))
+        )
+        {
+            RuntimeRid = "linux-x64",
+        };
+
+        var result = await service.FetchRegistryAsync();
+
+        Assert.Empty(result);
+    }
+
     [Fact]
     public void TolerantEnumConverter_WritesIdenticallyToStrictSdkConverter()
     {

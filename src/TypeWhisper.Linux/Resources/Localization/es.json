@@ -484,6 +484,7 @@
   "Overlay.TooShort": "Demasiado corto",
   "Overlay.TransformProcessing": "Procesando el comando de transformación...",
   "Overlay.TransformPrompt": "Comando de transformación: di la edición y luego pulsa el atajo de nuevo.",
+  "Overlay.WindowDetectionFailed": "Falló la detección de la ventana activa",
   "Plugins.BadgeCloud": "Nube",
   "Plugins.BadgeDisabled": "Desactivado",
   "Plugins.BadgeEnabled": "Activado",
