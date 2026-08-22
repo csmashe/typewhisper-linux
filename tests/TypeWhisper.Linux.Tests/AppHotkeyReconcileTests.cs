@@ -17,6 +17,7 @@ public sealed class AppHotkeyReconcileTests
         int expectedActiveCount
     )
     {
+        _ = description; // Labels the theory case in test output only.
         var action = Rejection(
             DynamicHotkeyBindingKind.PromptAction,
             "action-a",
@@ -50,14 +51,7 @@ public sealed class AppHotkeyReconcileTests
             active = transition.Active;
         }
 
-        Assert.True(
-            string.Equals(
-                expectedLogPasses,
-                string.Join("/", loggedPasses),
-                StringComparison.Ordinal
-            ),
-            description
-        );
+        Assert.Equal(expectedLogPasses, string.Join("/", loggedPasses));
         Assert.Equal(expectedActiveCount, active.Count);
     }
 
@@ -78,6 +72,7 @@ public sealed class AppHotkeyReconcileTests
         bool expected
     )
     {
+        _ = description; // Labels the theory case in test output only.
         var actual = App.ShouldReconcileDynamicHotkeys(
             toggleChanged,
             promptPaletteChanged,
@@ -86,7 +81,7 @@ public sealed class AppHotkeyReconcileTests
             transformSelectionChanged
         );
 
-        Assert.True(actual == expected, description);
+        Assert.Equal(expected, actual);
     }
 
     private static DynamicHotkeyRejection Rejection(

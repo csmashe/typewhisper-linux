@@ -3131,8 +3131,9 @@ public sealed class TextInsertionServiceTests
     )
     {
         // ReSharper disable once IntroduceOptionalParameters.Local — keeping this
-        // 4-arg convenience overload separate reads clearer than defaulting the
-        // compositor/ydotool params on the 7-arg form; merging would also turn the
+        // convenience overload (three required flags plus an optional
+        // clipboardToolName) separate reads clearer than defaulting the
+        // compositor/ydotool params on the full form; merging would also turn the
         // existing "…, false, false" call sites into redundant-argument warnings.
         return SnapshotFor(
             sessionType,
