@@ -1,4 +1,3 @@
-using System.Reflection;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -382,7 +381,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
             }
         );
         using var pluginManager = TestPluginManagerFactory.Create();
-        SetTranscriptionEngines(pluginManager, [plugin]);
+        PluginManagerTestAccess.SetTranscriptionEngines(pluginManager, [plugin]);
         using var models = new ModelManagerService(
             pluginManager,
             settings,
@@ -637,23 +636,6 @@ public sealed class RecorderSectionViewModelTests : IDisposable
             recordingDirectory,
             transcribeAsync
         );
-    }
-
-    private static void SetTranscriptionEngines(
-        PluginManager pluginManager,
-        IReadOnlyList<ITranscriptionEngineRole> engines
-    )
-    {
-        var field =
-            typeof(PluginManager).GetField(
-                "_transcriptionEngines",
-                BindingFlags.Instance | BindingFlags.NonPublic
-            )
-            ?? throw new MissingFieldException(
-                typeof(PluginManager).FullName,
-                "_transcriptionEngines"
-            );
-        field.SetValue(pluginManager, engines.ToList());
     }
 
     private static async Task StartRecordingWithFramesAsync(
