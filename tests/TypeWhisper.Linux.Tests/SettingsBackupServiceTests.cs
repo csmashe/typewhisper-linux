@@ -207,6 +207,48 @@ public sealed class SettingsBackupServiceTests : IDisposable
         AssertArchiveDoesNotContain(backupPath, keyBytes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CreateBackup_rejects_planted_links_to_the_quarantine_file(bool hardAlias)
+    {
+        // The quarantine file's legacy ciphertext is one guessable derivation
+        // from plaintext, so it gets the same inode guard as the key: a link
+        // planted under a backup root must not export it.
+        var appData = Path.Join(_tempDir, hardAlias ? "quarantine-hard" : "quarantine-sym");
+        var backupPath = Path.Join(
+            _tempDir,
+            hardAlias ? "quarantine-hard.zip" : "quarantine-sym.zip"
+        );
+        var quarantinePath = Path.Join(appData, "retired-provider-secrets.quarantine.json");
+        var aliasPath = Path.Join(appData, "Data", "x", "innocuous.json");
+        var secretBytes = RandomNumberGenerator.GetBytes(48);
+
+        Write(Path.Join(appData, "settings.json"), "{}");
+        WriteBytes(quarantinePath, secretBytes);
+        Directory.CreateDirectory(Path.GetDirectoryName(aliasPath)!);
+        if (hardAlias)
+        {
+            CreateHardLink(quarantinePath, aliasPath);
+        }
+        else
+        {
+            File.CreateSymbolicLink(aliasPath, quarantinePath);
+        }
+
+        CreateBackupWithEntry(backupPath, "settings.json", "preserved");
+        var originalArchive = File.ReadAllBytes(backupPath);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            new SettingsBackupService(appData).CreateBackup(backupPath)
+        );
+
+        Assert.Contains("quarantine", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(originalArchive, File.ReadAllBytes(backupPath));
+        Assert.False(File.Exists(backupPath + ".tmp"));
+        AssertArchiveDoesNotContain(backupPath, secretBytes);
+    }
+
     [Fact]
     public void CreateBackup_fails_closed_when_the_key_path_is_a_non_regular_file()
     {

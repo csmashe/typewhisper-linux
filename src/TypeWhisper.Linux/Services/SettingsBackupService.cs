@@ -96,7 +96,7 @@ public sealed partial class SettingsBackupService
     private readonly BackupEntryObserver? _backupPreOpenObserver;
     // Call-scoped: set at the top of each CreateBackup and read during that walk
     // only. Relies on IsBackupBusy serializing CreateBackup; not concurrency-safe.
-    private FileIdentity? _protectionKeyIdentity;
+    private IReadOnlyList<GuardedSecretFile> _guardedSecretFiles = [];
 
     internal SettingsBackupService(
         string basePath,
@@ -142,9 +142,10 @@ public sealed partial class SettingsBackupService
             );
         }
 
-        // Captured AFTER migration: migrating legacy secrets can create the key,
-        // and a pre-migration capture would leave that new key unguarded.
-        _protectionKeyIdentity = NativeFile.GetRegularFileIdentity(_protectionKeyPath);
+        // Captured AFTER migration: migrating legacy secrets can create both the
+        // key and the quarantine file, and a pre-migration capture would leave
+        // those new inodes unguarded.
+        _guardedSecretFiles = CaptureGuardedSecretFiles();
 
         var destinationDirectory = Path.GetDirectoryName(destinationZipPath);
         if (!string.IsNullOrWhiteSpace(destinationDirectory))
@@ -908,7 +909,7 @@ public sealed partial class SettingsBackupService
         using var source = NativeFile.OpenRegularFile(
             path,
             entryName,
-            _protectionKeyIdentity
+            _guardedSecretFiles
         );
         var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
         var lastWriteTime = new DateTimeOffset(
@@ -1333,6 +1334,38 @@ public sealed partial class SettingsBackupService
 
     private readonly record struct FileIdentity(uint DevMajor, uint DevMinor, ulong Ino);
 
+    private readonly record struct GuardedSecretFile(FileIdentity Identity, string Description);
+
+    // The quarantine file's legacy ciphertext is protected only by a derivation
+    // from guessable inputs (username and home path), so a backup that exports
+    // it hands its secrets to the recipient — it gets the key's inode guard.
+    private GuardedSecretFile[] CaptureGuardedSecretFiles()
+    {
+        var guarded = new List<GuardedSecretFile>(2);
+        if (
+            NativeFile.GetRegularFileIdentity(_protectionKeyPath, "Protection key")
+            is { } keyIdentity
+        )
+        {
+            guarded.Add(new GuardedSecretFile(keyIdentity, "protection key"));
+        }
+
+        if (
+            NativeFile.GetRegularFileIdentity(
+                _secretMigration.QuarantinePath,
+                "Secret quarantine file"
+            )
+            is { } quarantineIdentity
+        )
+        {
+            guarded.Add(
+                new GuardedSecretFile(quarantineIdentity, "retired-secrets quarantine file")
+            );
+        }
+
+        return guarded.ToArray();
+    }
+
     private static partial class NativeFile
     {
         private const int AtCurrentWorkingDirectory = -100;
@@ -1374,6 +1407,7 @@ public sealed partial class SettingsBackupService
             );
             if (result == 0)
             {
+                EnsureReportedFields(stat.Mask, StatxType, path);
                 return KindFromMode(stat.Mode);
             }
 
@@ -1383,7 +1417,7 @@ public sealed partial class SettingsBackupService
                 : throw new Win32Exception(error, $"Could not inspect '{path}'.");
         }
 
-        internal static FileIdentity? GetRegularFileIdentity(string path)
+        internal static FileIdentity? GetRegularFileIdentity(string path, string description)
         {
             if (!OperatingSystem.IsLinux())
             {
@@ -1406,13 +1440,15 @@ public sealed partial class SettingsBackupService
                 ) == 0
             )
             {
-                // A key that exists but is not a regular file must fail closed:
-                // "could not identify the key" and "there is no key" would
-                // otherwise both disable the identity check.
+                EnsureReportedFields(stat.Mask, StatxType | StatxIno, path);
+
+                // A secret file that exists but is not a regular file must fail
+                // closed: "could not identify the file" and "there is no file"
+                // would otherwise both disable the identity check.
                 return KindFromMode(stat.Mode) == BackupEntryKind.RegularFile
                     ? GetIdentity(stat)
                     : throw new InvalidOperationException(
-                        $"Protection key '{Path.GetFileName(path)}' is not a regular file."
+                        $"{description} '{Path.GetFileName(path)}' is not a regular file."
                     );
             }
 
@@ -1425,7 +1461,7 @@ public sealed partial class SettingsBackupService
         internal static FileStream OpenRegularFile(
             string path,
             string displayName,
-            FileIdentity? protectionKeyIdentity
+            IReadOnlyList<GuardedSecretFile> guardedSecretFiles
         )
         {
             if (!OperatingSystem.IsLinux())
@@ -1476,6 +1512,8 @@ public sealed partial class SettingsBackupService
                     );
                 }
 
+                EnsureReportedFields(stat.Mask, StatxType | StatxIno, path);
+
                 if (KindFromMode(stat.Mode) != BackupEntryKind.RegularFile)
                 {
                     throw new IOException(
@@ -1483,14 +1521,15 @@ public sealed partial class SettingsBackupService
                     );
                 }
 
-                if (
-                    protectionKeyIdentity is { } keyIdentity
-                    && GetIdentity(stat) == keyIdentity
-                )
+                var identity = GetIdentity(stat);
+                foreach (var guarded in guardedSecretFiles)
                 {
-                    throw new InvalidOperationException(
-                        $"Backup entry '{displayName}' resolves to the protection key."
-                    );
+                    if (identity == guarded.Identity)
+                    {
+                        throw new InvalidOperationException(
+                            $"Backup entry '{displayName}' resolves to the {guarded.Description}."
+                        );
+                    }
                 }
 
                 return new FileStream(handle, FileAccess.Read);
@@ -1505,6 +1544,19 @@ public sealed partial class SettingsBackupService
         private static FileIdentity GetIdentity(StatxBuffer stat)
         {
             return new FileIdentity(stat.DevMajor, stat.DevMinor, stat.Ino);
+        }
+
+        private static void EnsureReportedFields(uint mask, uint required, string path)
+        {
+            // statx(2): fields absent from stx_mask are undefined. Trusting an
+            // undefined Mode or Ino here could fail the secret-identity guard
+            // open on a filesystem that omits basic stats, so require them.
+            if ((mask & required) != required)
+            {
+                throw new IOException(
+                    $"Filesystem did not report the statx fields required to classify '{path}'."
+                );
+            }
         }
 
         private static BackupEntryKind KindFromMode(ushort mode)

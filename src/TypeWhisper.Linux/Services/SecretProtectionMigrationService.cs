@@ -91,6 +91,10 @@ internal sealed class SecretProtectionMigrationService
         );
     }
 
+    // The backup export guards this file's inode the same way as the key: its
+    // ciphertext is protected only by a derivation from guessable inputs.
+    internal string QuarantinePath => _quarantinePath;
+
     public SecretProtectionMigrationResult MigrateAll()
     {
         return MigrateAll(countStartupFailures: false);
