@@ -77,6 +77,25 @@ public sealed class AudioFileServiceTests
     }
 
     [Fact]
+    public async Task IsSupportedAsync_unrecognized_extension_is_unsupported_when_ffmpeg_is_missing()
+    {
+        var runner = new FakeProcessRunner();
+        var commands = new SystemCommandAvailabilityService(runner);
+        commands.RaiseSnapshotChangedForTests(
+            commands.GetSnapshot() with { HasFfmpeg = false }
+        );
+        runner.SupervisorInvocations.Clear();
+        var service = new AudioFileService(commands, runner);
+
+        // Without ffmpeg the probe cannot run: the file is reported unsupported
+        // (the HTTP handler's 400) rather than surfacing StartFailed as a 500.
+        var supported = await service.IsSupportedAsync("mystery.bin");
+
+        Assert.False(supported);
+        Assert.Empty(runner.SupervisorInvocations);
+    }
+
+    [Fact]
     public async Task IsSupportedAsync_extensionless_audio_uses_bounded_discrete_probe_argv()
     {
         var directory = TestPaths.CreateTempDirectory("audio-file-service");

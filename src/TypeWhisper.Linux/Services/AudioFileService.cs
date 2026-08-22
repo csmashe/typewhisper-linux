@@ -51,6 +51,14 @@ public sealed class AudioFileService
             return true;
         }
 
+        // Without ffmpeg the probe cannot run; report the file unsupported —
+        // the pre-probe behavior for unrecognized extensions — instead of
+        // letting the StartFailed path surface as an internal error.
+        if (!_commands.HasFfmpeg)
+        {
+            return false;
+        }
+
         var result = await _processRunner.RunOneShotAsync(
             new ProcessCommand(
                 "ffmpeg",

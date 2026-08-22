@@ -421,6 +421,42 @@ public sealed class HttpApiUnixSocketTests
     }
 
     [Fact]
+    public async Task LocalFileEndpointProbeTimeoutReturnsServiceUnavailable()
+    {
+        using var fixture = new ApiFixture(
+            audioProbeResult: new ProcessRunOutcome(
+                ProcessRunStatus.TimedOut,
+                null,
+                [],
+                [],
+                ProcessOutputStatus.Complete,
+                null
+            )
+        );
+        fixture.Start();
+        var audioPath = fixture.CreateAudioFile("extensionless-audio");
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = new StringContent(
+            $$"""{"path":{{JsonSerializer.Serialize(audioPath)}}}""",
+            Encoding.UTF8,
+            "application/json"
+        );
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "Audio probe timed out",
+            json.RootElement.GetProperty("error").GetString()
+        );
+        Assert.Equal(
+            "audio_probe_timeout",
+            json.RootElement.GetProperty("reason").GetString()
+        );
+    }
+
+    [Fact]
     public async Task LocalFileEndpointSuccessfulFallbackProbePassesFormatGate()
     {
         using var fixture = new ApiFixture(
@@ -618,6 +654,11 @@ public sealed class HttpApiUnixSocketTests
                 SupervisorDefault = audioProbeResult,
             };
             var commands = new SystemCommandAvailabilityService(ProcessRunner);
+            // The content probe short-circuits to "unsupported" when ffmpeg is
+            // absent, so probe-path tests need it declared available.
+            commands.RaiseSnapshotChangedForTests(
+                commands.GetSnapshot() with { HasFfmpeg = true }
+            );
             ProcessRunner.Invocations.Clear();
             ProcessRunner.SupervisorInvocations.Clear();
             var audioFiles = new AudioFileService(commands, ProcessRunner);
