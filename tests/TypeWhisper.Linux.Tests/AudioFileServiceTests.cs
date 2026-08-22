@@ -56,7 +56,38 @@ public sealed class AudioFileServiceTests
                 ProcessCaptureMode.Binary,
                 invocation.Options.StandardOutput
             );
-            Assert.Null(invocation.Options.Timeout);
+            Assert.Equal(TimeSpan.FromMinutes(10), invocation.Options.Timeout);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public async Task LoadAudioAsWavAsync_timed_out_conversion_throws_timeout()
+    {
+        var directory = TestPaths.CreateTempDirectory("audio-file-service");
+        var filePath = Path.Join(directory, "clip.wav");
+        try
+        {
+            await File.WriteAllBytesAsync(filePath, [1]);
+            var runner = new FakeProcessRunner
+            {
+                SupervisorDefault = new ProcessRunOutcome(
+                    ProcessRunStatus.TimedOut,
+                    null,
+                    [],
+                    [],
+                    ProcessOutputStatus.Complete,
+                    null
+                ),
+            };
+            var service = CreateService(runner);
+
+            await Assert.ThrowsAsync<TimeoutException>(() =>
+                service.LoadAudioAsWavAsync(filePath)
+            );
         }
         finally
         {
