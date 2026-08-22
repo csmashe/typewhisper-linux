@@ -42,6 +42,23 @@ public sealed class PluginRegistryService
         PropertyNameCaseInsensitive = true,
     };
 
+    // Registry-only options: options-level converters take precedence over the SDK enums'
+    // type-level JsonStringEnumConverter, so an unknown name a future registry publishes
+    // degrades one field instead of blanking the whole plugin browser. Staged-manifest
+    // validation stays on the strict s_jsonOptions. PluginNetworkAccess has no Unknown
+    // member; Network is the documented fail-closed choice (see PluginLocalityClassifier).
+    private static readonly JsonSerializerOptions s_registryJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters =
+        {
+            new TolerantJsonStringEnumConverter<PluginCategory>(PluginCategory.Unknown),
+            new TolerantJsonStringEnumConverter<PluginNetworkAccess>(
+                PluginNetworkAccess.Network
+            ),
+        },
+    };
+
     private readonly ManagedDirectoryTransaction _directoryTransaction;
     private readonly HttpClient _httpClient;
     private readonly PluginManager _pluginManager;
@@ -201,7 +218,7 @@ public sealed class PluginRegistryService
         var entries = 0;
         await foreach (
             var plugin in JsonSerializer
-                .DeserializeAsyncEnumerable<RegistryPlugin>(bounded, s_jsonOptions, ct)
+                .DeserializeAsyncEnumerable<RegistryPlugin>(bounded, s_registryJsonOptions, ct)
                 .ConfigureAwait(false)
         )
         {

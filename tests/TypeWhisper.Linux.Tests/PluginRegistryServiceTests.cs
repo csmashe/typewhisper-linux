@@ -163,6 +163,112 @@ public sealed class PluginRegistryServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task FetchRegistryAsync_UnknownCategoryName_FallsBackWithoutDroppingRegistry()
+    {
+        // One future-schema entry must not blank the whole browser: the unknown name maps to
+        // the documented PluginCategory.Unknown fallback and every other entry stays intact.
+        var entries = new[]
+        {
+            MakeRegistryEntry(
+                "com.typewhisper.future",
+                new Dictionary<string, object?>
+                {
+                    ["categories"] = new[] { "transcription", "holograms" },
+                }
+            ),
+            MakeRegistryEntry(
+                "com.typewhisper.current",
+                new Dictionary<string, object?> { ["categories"] = new[] { "llm" } }
+            ),
+        };
+
+        var service = new PluginRegistryService(
+            CreateManager(),
+            _loader,
+            _settings.Object,
+            CreateMockHttpClient(JsonSerializer.Serialize(entries))
+        )
+        {
+            RuntimeRid = "linux-x64",
+        };
+
+        var result = await service.FetchRegistryAsync();
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal(
+            [PluginCategory.Transcription, PluginCategory.Unknown],
+            result.Single(p => p.Id == "com.typewhisper.future").Categories
+        );
+        Assert.Equal(
+            [PluginCategory.Llm],
+            result.Single(p => p.Id == "com.typewhisper.current").Categories
+        );
+    }
+
+    [Fact]
+    public async Task FetchRegistryAsync_UnknownNetworkAccessName_FailsClosedToNetwork()
+    {
+        var plugin = await FetchRegistryPluginAsync(
+            new Dictionary<string, object?>
+            {
+                ["categories"] = new[] { "llm" },
+                ["networkAccess"] = "quantumRelay",
+            }
+        );
+
+        Assert.Equal(PluginNetworkAccess.Network, plugin.NetworkAccess);
+        Assert.Equal([PluginCategory.Llm], plugin.Categories);
+    }
+
+    [Fact]
+    public async Task FetchRegistryAsync_UndefinedNumericEnumValues_FallBack()
+    {
+        // The strict converter accepted any integer, producing undefined enum values; the
+        // tolerant one keeps defined numbers and maps out-of-range ones to the fallbacks.
+        var plugin = await FetchRegistryPluginAsync(
+            new Dictionary<string, object?>
+            {
+                ["categories"] = new[] { 42, (int)PluginCategory.Tts },
+                ["networkAccess"] = 42,
+            }
+        );
+
+        Assert.Equal([PluginCategory.Unknown, PluginCategory.Tts], plugin.Categories);
+        Assert.Equal(PluginNetworkAccess.Network, plugin.NetworkAccess);
+    }
+
+    [Fact]
+    public void TolerantEnumConverter_WritesIdenticallyToStrictSdkConverter()
+    {
+        var tolerantOptions = new JsonSerializerOptions
+        {
+            Converters =
+            {
+                new TolerantJsonStringEnumConverter<PluginCategory>(PluginCategory.Unknown),
+                new TolerantJsonStringEnumConverter<PluginNetworkAccess>(
+                    PluginNetworkAccess.Network
+                ),
+            },
+        };
+
+        foreach (var category in Enum.GetValues<PluginCategory>())
+        {
+            Assert.Equal(
+                JsonSerializer.Serialize(category),
+                JsonSerializer.Serialize(category, tolerantOptions)
+            );
+        }
+
+        foreach (var access in Enum.GetValues<PluginNetworkAccess>())
+        {
+            Assert.Equal(
+                JsonSerializer.Serialize(access),
+                JsonSerializer.Serialize(access, tolerantOptions)
+            );
+        }
+    }
+
+    [Fact]
     public async Task FetchRegistryAsync_CachesResults()
     {
         var plugins = new[]
@@ -448,13 +554,14 @@ public sealed class PluginRegistryServiceTests : IDisposable
         return _manager;
     }
 
-    private async Task<RegistryPlugin> FetchRegistryPluginAsync(
+    private static Dictionary<string, object?> MakeRegistryEntry(
+        string id,
         Dictionary<string, object?> metadata
     )
     {
         var entry = new Dictionary<string, object?>
         {
-            ["id"] = "com.typewhisper.metadata-test",
+            ["id"] = id,
             ["name"] = "Metadata Test",
             ["version"] = "1.0.0",
             ["author"] = "Tester",
@@ -469,6 +576,15 @@ public sealed class PluginRegistryServiceTests : IDisposable
         {
             entry[name] = value;
         }
+
+        return entry;
+    }
+
+    private async Task<RegistryPlugin> FetchRegistryPluginAsync(
+        Dictionary<string, object?> metadata
+    )
+    {
+        var entry = MakeRegistryEntry("com.typewhisper.metadata-test", metadata);
 
         var service = new PluginRegistryService(
             CreateManager(),
