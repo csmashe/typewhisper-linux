@@ -1615,6 +1615,24 @@ public sealed partial class HttpApiService : IDisposable
         );
         var configuredLanguage = languageSelection.LanguageTag;
 
+        // A recognized extension passes the format gate without ffmpeg, but the
+        // conversion below requires it — answer as service-unavailable up front
+        // (both the local-file and upload routes funnel through here) instead of
+        // letting the loader's failure surface as a generic 500.
+        if (!_audioFiles.IsImporterAvailable)
+        {
+            return (
+                503,
+                Serialize(
+                    new
+                    {
+                        error = "Audio conversion is unavailable because ffmpeg is not installed",
+                        reason = "audio_importer_unavailable",
+                    }
+                )
+            );
+        }
+
         // Decode audio before acquiring the lease — ffmpeg shells out and
         // must not hold the model lock while no transcription runs.
         byte[] wav;
@@ -1887,10 +1905,18 @@ public sealed partial class HttpApiService : IDisposable
                     "prompt-action-required",
                     "Profile hotkey cannot be enabled because its selected-text prompt action is missing or disabled."
                 ),
-            _ =>
+            HotkeyCandidateValidationStatus.CollidesWithFixedBinding
+                or HotkeyCandidateValidationStatus.CollidesWithPromptAction
+                or HotkeyCandidateValidationStatus.CollidesWithProfile =>
                 (
                     "hotkey-collision",
                     "Profile hotkey cannot be enabled because it conflicts with an enabled shortcut."
+                ),
+            // A future non-collision status must not masquerade as a collision.
+            _ =>
+                (
+                    "hotkey-invalid",
+                    "Profile hotkey cannot be enabled."
                 ),
         };
     }

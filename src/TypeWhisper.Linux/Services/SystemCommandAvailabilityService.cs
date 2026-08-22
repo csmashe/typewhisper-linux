@@ -103,7 +103,11 @@ public sealed partial class SystemCommandAvailabilityService
         get
         {
             var s = _snapshot;
-            return s is { ClipboardToolName: "xclip", HasClipboardTool: true };
+            return s is
+            {
+                ClipboardToolName: LinuxCapabilitySnapshot.XclipToolName,
+                HasClipboardTool: true,
+            };
         }
     }
 
@@ -113,7 +117,11 @@ public sealed partial class SystemCommandAvailabilityService
         get
         {
             var s = _snapshot;
-            return s is { ClipboardToolName: "wl-clipboard", HasClipboardTool: true };
+            return s is
+            {
+                ClipboardToolName: LinuxCapabilitySnapshot.WlClipboardToolName,
+                HasClipboardTool: true,
+            };
         }
     }
 
@@ -554,7 +562,9 @@ public sealed partial class SystemCommandAvailabilityService
             : isX11 ? "X11"
             : "Unknown",
             hasWaylandDisplay ? hasWlClipboard : hasXclip,
-            hasWaylandDisplay ? "wl-clipboard" : "xclip",
+            hasWaylandDisplay
+                ? LinuxCapabilitySnapshot.WlClipboardToolName
+                : LinuxCapabilitySnapshot.XclipToolName,
             IsCommandAvailable("xdotool"),
             IsCommandAvailable("wtype"),
             IsCommandAvailable("ffmpeg"),
@@ -739,6 +749,11 @@ public sealed record LinuxCapabilitySnapshot(
     string? YdotoolSocketPath = null
 )
 {
+    // The only two values ClipboardToolName ever takes; identity checks reference
+    // these so producer and consumers cannot drift on a raw string.
+    public const string WlClipboardToolName = "wl-clipboard";
+    public const string XclipToolName = "xclip";
+
     public bool CanUseCuda => HasCudaGpu && HasCudaRuntimeLibraries;
 
     /// <summary>

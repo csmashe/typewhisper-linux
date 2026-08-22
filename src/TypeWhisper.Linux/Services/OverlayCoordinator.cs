@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Avalonia.Threading;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -528,7 +529,25 @@ public sealed class OverlayCoordinator
 
         public OneShotTimer(TimeSpan delay, Action callback)
         {
-            _timer = new Timer(_ => callback(), null, delay, Timeout.InfiniteTimeSpan);
+            // An unhandled exception on a Timer callback terminates the process; the
+            // expiry callback posts through the UI dispatcher, which can throw during
+            // shutdown teardown.
+            _timer = new Timer(
+                _ =>
+                {
+                    try
+                    {
+                        callback();
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"[OverlayCoordinator] Expiry callback failed: {ex.Message}");
+                    }
+                },
+                null,
+                delay,
+                Timeout.InfiniteTimeSpan
+            );
         }
 
         public void Dispose()

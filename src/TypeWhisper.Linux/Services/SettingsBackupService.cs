@@ -94,9 +94,6 @@ public sealed partial class SettingsBackupService
     private readonly SecretProtectionMigrationService _secretMigration;
     private readonly BackupEntryObserver? _backupSkipObserver;
     private readonly BackupEntryObserver? _backupPreOpenObserver;
-    // Call-scoped: set at the top of each CreateBackup and read during that walk
-    // only. Relies on IsBackupBusy serializing CreateBackup; not concurrency-safe.
-    private IReadOnlyList<GuardedSecretFile> _guardedSecretFiles = [];
 
     internal SettingsBackupService(
         string basePath,
@@ -144,8 +141,10 @@ public sealed partial class SettingsBackupService
 
         // Captured AFTER migration: migrating legacy secrets can create both the
         // key and the quarantine file, and a pre-migration capture would leave
-        // those new inodes unguarded.
-        _guardedSecretFiles = CaptureGuardedSecretFiles();
+        // those new inodes unguarded. Call-local (not instance state) so
+        // concurrent CreateBackup calls on this singleton cannot see each
+        // other's capture.
+        var guardedSecretFiles = CaptureGuardedSecretFiles();
 
         var destinationDirectory = Path.GetDirectoryName(destinationZipPath);
         if (!string.IsNullOrWhiteSpace(destinationDirectory))
@@ -189,6 +188,7 @@ public sealed partial class SettingsBackupService
                     var path = Path.Join(_basePath, relativeFile);
                     AddBackupCandidate(
                         archive,
+                        guardedSecretFiles,
                         path,
                         relativeFile,
                         ref fileCount,
@@ -207,6 +207,7 @@ public sealed partial class SettingsBackupService
                         case BackupEntryKind.Directory:
                             AddDirectoryEntries(
                                 archive,
+                                guardedSecretFiles,
                                 rootPath,
                                 ref fileCount,
                                 ref bytes
@@ -215,6 +216,7 @@ public sealed partial class SettingsBackupService
                         case BackupEntryKind.SymbolicLink:
                             AddLinkedDirectoryRoot(
                                 archive,
+                                guardedSecretFiles,
                                 rootPath,
                                 root,
                                 ref fileCount,
@@ -815,6 +817,7 @@ public sealed partial class SettingsBackupService
 
     private void AddDirectoryEntries(
         ZipArchive archive,
+        IReadOnlyList<GuardedSecretFile> guardedSecretFiles,
         string directoryPath,
         ref int fileCount,
         ref long bytes
@@ -830,7 +833,13 @@ public sealed partial class SettingsBackupService
                     if (!ShouldSkipPortableEntry(relativePath))
                     {
                         // openat2 RESOLVE_BENEATH traversal is deferred; a same-privilege attacker can already read reachable non-key files.
-                        AddDirectoryEntries(archive, path, ref fileCount, ref bytes);
+                        AddDirectoryEntries(
+                            archive,
+                            guardedSecretFiles,
+                            path,
+                            ref fileCount,
+                            ref bytes
+                        );
                     }
 
                     break;
@@ -842,6 +851,7 @@ public sealed partial class SettingsBackupService
                     {
                         AddRegularFile(
                             archive,
+                            guardedSecretFiles,
                             path,
                             relativePath,
                             ref fileCount,
@@ -853,6 +863,7 @@ public sealed partial class SettingsBackupService
                 case BackupEntryKind.SymbolicLink:
                     AddLinkedNestedEntry(
                         archive,
+                        guardedSecretFiles,
                         path,
                         relativePath,
                         ref fileCount,
@@ -868,6 +879,7 @@ public sealed partial class SettingsBackupService
 
     private void AddBackupCandidate(
         ZipArchive archive,
+        IReadOnlyList<GuardedSecretFile> guardedSecretFiles,
         string path,
         string relativePath,
         ref int fileCount,
@@ -877,11 +889,19 @@ public sealed partial class SettingsBackupService
         switch (NativeFile.GetEntryKind(path))
         {
             case BackupEntryKind.RegularFile:
-                AddRegularFile(archive, path, relativePath, ref fileCount, ref bytes);
+                AddRegularFile(
+                    archive,
+                    guardedSecretFiles,
+                    path,
+                    relativePath,
+                    ref fileCount,
+                    ref bytes
+                );
                 break;
             case BackupEntryKind.SymbolicLink:
                 AddLinkedFile(
                     archive,
+                    guardedSecretFiles,
                     path,
                     relativePath,
                     ref fileCount,
@@ -898,6 +918,7 @@ public sealed partial class SettingsBackupService
 
     private void AddRegularFile(
         ZipArchive archive,
+        IReadOnlyList<GuardedSecretFile> guardedSecretFiles,
         string path,
         string relativePath,
         ref int fileCount,
@@ -909,7 +930,7 @@ public sealed partial class SettingsBackupService
         using var source = NativeFile.OpenRegularFile(
             path,
             entryName,
-            _guardedSecretFiles
+            guardedSecretFiles
         );
         var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
         var lastWriteTime = new DateTimeOffset(
@@ -934,6 +955,7 @@ public sealed partial class SettingsBackupService
 
     private void AddLinkedFile(
         ZipArchive archive,
+        IReadOnlyList<GuardedSecretFile> guardedSecretFiles,
         string path,
         string relativePath,
         ref int fileCount,
@@ -949,6 +971,7 @@ public sealed partial class SettingsBackupService
         {
             AddRegularFile(
                 archive,
+                guardedSecretFiles,
                 resolved.FullName,
                 relativePath,
                 ref fileCount,
@@ -962,6 +985,7 @@ public sealed partial class SettingsBackupService
 
     private void AddLinkedNestedEntry(
         ZipArchive archive,
+        IReadOnlyList<GuardedSecretFile> guardedSecretFiles,
         string path,
         string relativePath,
         ref int fileCount,
@@ -979,6 +1003,7 @@ public sealed partial class SettingsBackupService
         {
             AddRegularFile(
                 archive,
+                guardedSecretFiles,
                 resolved.FullName,
                 relativePath,
                 ref fileCount,
@@ -992,6 +1017,7 @@ public sealed partial class SettingsBackupService
 
     private void AddLinkedDirectoryRoot(
         ZipArchive archive,
+        IReadOnlyList<GuardedSecretFile> guardedSecretFiles,
         string path,
         string relativePath,
         ref int fileCount,
@@ -1005,7 +1031,7 @@ public sealed partial class SettingsBackupService
             && NativeFile.GetEntryKind(resolved.FullName) == BackupEntryKind.Directory
         )
         {
-            AddDirectoryEntries(archive, path, ref fileCount, ref bytes);
+            AddDirectoryEntries(archive, guardedSecretFiles, path, ref fileCount, ref bytes);
             return;
         }
 
