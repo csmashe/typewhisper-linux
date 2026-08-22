@@ -248,7 +248,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
         string tokenKind
     )
     {
-        object? networkAccess = tokenKind switch
+        object networkAccess = tokenKind switch
         {
             "object" => new Dictionary<string, object?> { ["value"] = "local" },
             "array" => new[] { "local" },

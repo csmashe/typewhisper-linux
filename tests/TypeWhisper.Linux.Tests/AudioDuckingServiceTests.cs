@@ -428,6 +428,8 @@ public sealed class AudioDuckingServiceTests
                 if (!raced && args.Count > 0 && args[0] == "set-sink-input-volume")
                 {
                     raced = true;
+                    // ReSharper disable once AccessToModifiedClosure -- the matcher must call back
+                    // into the service constructed below; that back-reference is the seam under test.
                     service!.RestoreAudio();
                 }
 
