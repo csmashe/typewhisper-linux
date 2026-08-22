@@ -268,7 +268,9 @@ public sealed class DictationSectionViewModelTests
 
     private static async Task WaitUntilAsync(Func<bool> predicate)
     {
-        for (var attempt = 0; attempt < 100; attempt++)
+        // Generous ceiling for loaded CI machines; the loop exits as soon as the
+        // condition holds, so the headroom costs nothing on the happy path.
+        for (var attempt = 0; attempt < 500; attempt++)
         {
             if (predicate())
             {

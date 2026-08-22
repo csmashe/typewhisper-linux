@@ -371,7 +371,9 @@ public partial class RecorderSectionViewModel : ObservableObject
             : transcriptionException is not null
                 ? Loc.Instance.GetString(
                     "Recorder.StatusSavedTranscriptionFailed",
-                    transcriptionException.Message
+                    // Language-selection failures get the same localized message
+                    // as every other surface; other exceptions keep their raw text.
+                    LanguageSelectionUiMessage.From(transcriptionException)
                 )
             : transcriptPersisted
                 ? Loc.Instance["Recorder.StatusDone"]

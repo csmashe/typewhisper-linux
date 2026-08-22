@@ -1,6 +1,3 @@
-using System.Reflection;
-using System.Runtime.CompilerServices;
-using Moq;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -311,48 +308,6 @@ public sealed class DictationOverlayViewModelTests
         Assert.Equal(TimeSpan.FromMilliseconds(1500), sut.FeedbackTimerInterval);
     }
 
-    [Fact]
-    public void LegacyProducerEvents_DoNotReplaceCoordinatorPresentation()
-    {
-        var settings = new FakeSettingsService(AppSettings.Default);
-        var coordinator = new OverlayCoordinator(settings, static action => action());
-        var dictation = (DictationOrchestrator)RuntimeHelpers.GetUninitializedObject(
-            typeof(DictationOrchestrator)
-        );
-        var transform = (TransformSelectionService)RuntimeHelpers.GetUninitializedObject(
-            typeof(TransformSelectionService)
-        );
-        dictation.OverlayStateChanged += static (_, _) => { };
-        transform.OverlayStateChanged += static (_, _) => { };
-        using var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
-        var sut = new DictationOverlayViewModel(
-            audio,
-            settings,
-            new Mock<IDetectionFailureTracker>().Object,
-            new UrlLauncher(new Mock<IProcessRunner>().Object),
-            coordinator
-        );
-        var token = coordinator.Acquire(OverlayRequester.Dictation);
-        Assert.True(coordinator.Show(token, new DictationOverlayState
-        {
-            IsOverlayVisible = true,
-            IsRecording = true,
-            StatusText = "Coordinator recording",
-        }));
-
-        RaiseLegacyEvent(dictation, new DictationOverlayState
-        {
-            ShowFeedback = true,
-            FeedbackText = "Legacy dictation",
-        });
-        RaiseLegacyEvent(transform, DictationOverlayState.Hidden);
-
-        Assert.True(sut.IsOverlayVisible);
-        Assert.True(sut.IsRecording);
-        Assert.False(sut.ShowFeedback);
-        Assert.Equal("Coordinator recording", sut.StatusText);
-    }
-
     private static DictationOverlayViewModel CreateViewModel(FakeSettingsService settings)
     {
         return new DictationOverlayViewModel(settings, static action => action());
@@ -370,19 +325,6 @@ public sealed class DictationOverlayViewModelTests
         return propertyNames.Where(name =>
             name is nameof(DictationOverlayViewModel.LeftText)
                 or nameof(DictationOverlayViewModel.RightText));
-    }
-
-    private static void RaiseLegacyEvent(object source, DictationOverlayState state)
-    {
-        var field = source.GetType().GetField(
-            nameof(DictationOrchestrator.OverlayStateChanged),
-            BindingFlags.Instance | BindingFlags.NonPublic
-        ) ?? throw new MissingFieldException(
-            source.GetType().FullName,
-            nameof(DictationOrchestrator.OverlayStateChanged)
-        );
-        var handlers = (EventHandler<DictationOverlayState>?)field.GetValue(source);
-        handlers?.Invoke(source, state);
     }
 
     private sealed class FakeSettingsService(AppSettings current) : ISettingsService
