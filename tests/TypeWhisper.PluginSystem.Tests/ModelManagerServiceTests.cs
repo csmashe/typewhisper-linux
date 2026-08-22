@@ -518,6 +518,92 @@ public class ModelManagerServiceTests
     }
 
     [Fact]
+    public async Task DownloadAndLoadModelAsync_StragglerProgressAfterCancelClear_DoesNotReinsertStatus()
+    {
+        // TOCTOU pin (PA89): off a SynchronizationContext, Progress<T> posts callbacks via
+        // the ThreadPool, so a callback that passed a plain in-progress pre-check can run
+        // AFTER the cancel path's ClearStatus and re-insert DownloadingModel(p) — a
+        // permanent phantom "downloading" with no operation in flight. The callback core is
+        // SetStatusFromProgress; invoking it with the generation the canceled download's
+        // progress scope captured simulates that straggler deterministically.
+        using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        fake.DownloadGate = new TaskCompletionSource();
+        using var cancellation = new CancellationTokenSource();
+
+        var operation = sut.DownloadAndLoadModelAsync(fullModelId, cancellation.Token);
+        await fake.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        // The generation the in-flight download's progress callbacks captured.
+        var staleGeneration = sut.CurrentStatusGeneration;
+        await cancellation.CancelAsync();
+        fake.DownloadGate.SetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            operation.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None)
+        );
+        Assert.Equal(ModelStatusType.NotDownloaded, sut.GetStatus(fullModelId).Type);
+
+        // The straggler: a progress callback past its gate check, landing after ClearStatus.
+        sut.SetStatusFromProgress(fullModelId, staleGeneration, ModelStatus.DownloadingModel(0.42));
+
+        Assert.Equal(ModelStatusType.NotDownloaded, sut.GetStatus(fullModelId).Type);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_StragglerProgressAfterReady_DoesNotClobberReadyStatus()
+    {
+        // Same TOCTOU as the cancel case, against the Ready terminal transition: a late
+        // load-progress callback must not overwrite Ready with a stale Downloading status.
+        using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.LoadGate = new TaskCompletionSource();
+
+        var load = sut.LoadModelAsync(fullModelId);
+        await fake.LoadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var staleGeneration = sut.CurrentStatusGeneration;
+        fake.LoadGate.SetResult();
+        await load.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ModelStatusType.Ready, sut.GetStatus(fullModelId).Type);
+
+        sut.SetStatusFromProgress(fullModelId, staleGeneration, ModelStatus.DownloadingModel(0.9));
+
+        Assert.Equal(ModelStatusType.Ready, sut.GetStatus(fullModelId).Type);
+        Assert.Equal(fullModelId, sut.ActiveModelId);
+    }
+
+    [Fact]
+    public async Task DownloadAndLoadModelAsync_ProgressReportedMidDownload_UpdatesStatus()
+    {
+        // The generation gate must retire only stragglers — reports from the operation
+        // still in flight have to keep flowing into the status dictionary.
+        using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        fake.DownloadGate = new TaskCompletionSource();
+
+        var operation = sut.DownloadAndLoadModelAsync(fullModelId);
+        await fake.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        fake.LastDownloadProgress!.Report(0.5);
+
+        // Progress<T> posts to the ThreadPool here (no SynchronizationContext), so poll.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (
+            sut.GetStatus(fullModelId) is not { Type: ModelStatusType.Downloading, Progress: 0.5 }
+            && DateTime.UtcNow < deadline
+        )
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.Equal(ModelStatusType.Downloading, sut.GetStatus(fullModelId).Type);
+        Assert.Equal(0.5, sut.GetStatus(fullModelId).Progress);
+
+        fake.DownloadGate.SetResult();
+        await operation.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ModelStatusType.Ready, sut.GetStatus(fullModelId).Type);
+    }
+
+    [Fact]
     public async Task EnsureModelLoadedAsync_ColdLoadAndActiveFastPath_ArmAutoUnload()
     {
         using var sut = CreateServiceWithLoadableModel(
@@ -1313,6 +1399,9 @@ public class ModelManagerServiceTests
 
         /// <summary>When set, <see cref="DownloadModelAsync" /> parks until it completes.</summary>
         public TaskCompletionSource? DownloadGate { get; set; }
+
+        /// <summary>The progress sink the host passed to <see cref="DownloadModelAsync" />.</summary>
+        public IProgress<double>? LastDownloadProgress { get; private set; }
         public Exception? DownloadFault { get; set; }
         public Exception? LoadFault { get; set; }
 
@@ -1394,6 +1483,7 @@ public class ModelManagerServiceTests
         )
         {
             DownloadCallCount++;
+            LastDownloadProgress = progress;
             DownloadStarted.TrySetResult();
             if (DownloadGate is not null)
             {
