@@ -464,6 +464,45 @@ public sealed class SpeechFeedbackService : IDisposable
         Speak(Loc.Instance.GetString("Speech.Error", reason));
     }
 
+    // The Begin* variants split announcement into a host-only registration phase
+    // (safe to run under the orchestrator's session lock — it linearizes with
+    // ReserveStartupFeedback exactly like the inline path) and a returned launch
+    // continuation that crosses the provider/plugin trust boundary, so callers
+    // can invoke it after releasing their locks. A request registered here but
+    // superseded before launch is captured and stopped by the reservation, and
+    // SpeakAsync's acceptance check discards its session.
+    internal Action? BeginAnnounceError(string reason)
+    {
+        return BeginSpeech(
+            new TtsSpeakRequest(Loc.Instance.GetString("Speech.Error", reason)),
+            useConfiguredLanguageFallback: true
+        );
+    }
+
+    internal Action? BeginAnnounceTranscriptionComplete(
+        string text,
+        string? language = null,
+        bool useConfiguredLanguageFallback = true
+    )
+    {
+        return BeginSpeech(
+            new TtsSpeakRequest(text, language, TtsPurpose.Transcription),
+            useConfiguredLanguageFallback
+        );
+    }
+
+    private Action? BeginSpeech(TtsSpeakRequest request, bool useConfiguredLanguageFallback)
+    {
+        var pending = BeginPlayback(request, requireEnabled: true, useConfiguredLanguageFallback);
+        if (pending is null)
+        {
+            return null;
+        }
+
+        var captured = pending.Value;
+        return () => LaunchPlayback(captured);
+    }
+
     internal bool TryRunOrdinaryFeedback(Action feedback)
     {
         lock (_lock)
@@ -497,6 +536,34 @@ public sealed class SpeechFeedbackService : IDisposable
     }
 
     private PlaybackRequest? StartPlayback(
+        TtsSpeakRequest request,
+        bool requireEnabled,
+        bool useConfiguredLanguageFallback = true,
+        IStartupFeedbackReservation? startupFeedbackReservation = null
+    )
+    {
+        var pending = BeginPlayback(
+            request,
+            requireEnabled,
+            useConfiguredLanguageFallback,
+            startupFeedbackReservation
+        );
+        if (pending is null)
+        {
+            return null;
+        }
+
+        LaunchPlayback(pending.Value);
+        return pending.Value.Playback;
+    }
+
+    private readonly record struct PendingPlayback(
+        TtsSpeakRequest Speak,
+        PlaybackRequest Playback,
+        PlaybackRequest? Superseded
+    );
+
+    private PendingPlayback? BeginPlayback(
         TtsSpeakRequest request,
         bool requireEnabled,
         bool useConfiguredLanguageFallback = true,
@@ -549,9 +616,16 @@ public sealed class SpeechFeedbackService : IDisposable
             _isPlaybackPending = true;
         }
 
-        supersededRequest?.CancelAndStop();
-        _ = SpeakAsync(request, playbackRequest);
-        return playbackRequest;
+        return new PendingPlayback(request, playbackRequest, supersededRequest);
+    }
+
+    private void LaunchPlayback(PendingPlayback pending)
+    {
+        // Both calls cross the host trust boundary (plugin cancellation
+        // callbacks / Stop(), and the provider's synchronous SpeakAsync prefix),
+        // so this must never run under the orchestrator's session lock.
+        pending.Superseded?.CancelAndStop();
+        _ = SpeakAsync(pending.Speak, pending.Playback);
     }
 
     private void ReleaseStartupFeedback(StartupFeedbackReservation reservation)

@@ -2040,7 +2040,7 @@ public sealed class DictationOrchestrator : IDisposable
                 ReportStatus(context, failureMessage);
                 TryPublishSessionSpeechFeedback(
                     context,
-                    () => _speechFeedback.AnnounceError(userMessage)
+                    () => _speechFeedback.BeginAnnounceError(userMessage)
                 );
                 ShowFeedback(context, failureMessage, true);
                 PublishSessionTerminal(context.SessionId, "failed", userMessage);
@@ -2296,7 +2296,7 @@ public sealed class DictationOrchestrator : IDisposable
             // SpeechFeedbackService's configured-language fallback.
             TryPublishSessionSpeechFeedback(
                 context,
-                () => _speechFeedback.AnnounceTranscriptionComplete(
+                () => _speechFeedback.BeginAnnounceTranscriptionComplete(
                     finalText,
                     LinuxDictationReadbackLanguagePolicy.Resolve(
                         postProcessingLanguage,
@@ -2625,7 +2625,7 @@ public sealed class DictationOrchestrator : IDisposable
             ReportStatus(context, $"Transcription failed: {ex.Message}");
             TryPublishSessionSpeechFeedback(
                 context,
-                () => _speechFeedback.AnnounceError(ex.Message)
+                () => _speechFeedback.BeginAnnounceError(ex.Message)
             );
             var feedbackText = ex is InvalidOperationException ? ex.Message : "Transcription failed.";
             ShowFeedback(context, feedbackText, true);
@@ -4124,8 +4124,9 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    private void TryPublishSessionSpeechFeedback(RecordingContext context, Action publish)
+    private void TryPublishSessionSpeechFeedback(RecordingContext context, Func<Action?> begin)
     {
+        Action? launch;
         lock (_recordingSessionLock)
         {
             if (!IsSessionStillOwningOverlayLocked(context.SessionId))
@@ -4133,8 +4134,16 @@ public sealed class DictationOrchestrator : IDisposable
                 return;
             }
 
-            publish();
+            // Registration (version allocation + request swap) happens under the
+            // session lock so it linearizes with startup's generation claim and
+            // ReserveStartupFeedback, but the launch crosses the TTS provider /
+            // plugin trust boundary and must run after the lock is released — a
+            // hung provider or plugin Stop() must not be able to freeze the
+            // dictation toggle path.
+            launch = begin();
         }
+
+        launch?.Invoke();
     }
 
     /// <summary>
