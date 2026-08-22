@@ -17,6 +17,7 @@ public partial class SettingsUpdateGuardTests
         var root = FindRepositoryRoot();
         var sourceRoot = Path.Join(root, "src");
         var offenders = new List<string>();
+        var scanned = 0;
 
         foreach (var file in Directory.EnumerateFiles(sourceRoot, "*.cs", SearchOption.AllDirectories))
         {
@@ -26,6 +27,7 @@ public partial class SettingsUpdateGuardTests
                 continue;
             }
 
+            scanned++;
             var source = File.ReadAllText(file);
             foreach (Match match in SettingsSaveRegex().Matches(source))
             {
@@ -34,6 +36,7 @@ public partial class SettingsUpdateGuardTests
             }
         }
 
+        Assert.True(scanned > 0, $"No production source files found under {sourceRoot}.");
         Assert.True(
             offenders.Count == 0,
             "Production settings read-modify-write calls must use ISettingsService.Update. "
@@ -46,8 +49,9 @@ public partial class SettingsUpdateGuardTests
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            if (Directory.Exists(Path.Join(directory.FullName, "src"))
-                && Directory.Exists(Path.Join(directory.FullName, "tests")))
+            // TypeWhisper.slnx is unique to this repository, so an unrelated ancestor
+            // that merely contains src/ and tests/ directories cannot match.
+            if (File.Exists(Path.Join(directory.FullName, "TypeWhisper.slnx")))
             {
                 return directory.FullName;
             }
