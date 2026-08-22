@@ -146,9 +146,12 @@ public sealed class AudioFileService
                     "pipe:1",
                 ]
             ),
+            // The timeout bounds the transcode so a pathological input (FIFO,
+            // device node, unbounded stream) cannot hold the caller forever.
             new ProcessOneShotOptions(
                 StandardOutput: ProcessCaptureMode.Binary,
-                StandardError: ProcessCaptureMode.Utf8Text
+                StandardError: ProcessCaptureMode.Utf8Text,
+                Timeout: TimeSpan.FromMinutes(10)
             ),
             cancellationToken
         ).ConfigureAwait(false);
@@ -158,6 +161,11 @@ public sealed class AudioFileService
             throw new InvalidOperationException(
                 result.StartError ?? "ffmpeg failed to start."
             );
+        }
+
+        if (result.Status == ProcessRunStatus.TimedOut)
+        {
+            throw new TimeoutException("ffmpeg audio conversion timed out.");
         }
 
         // ReSharper disable once InvertIf -- guard clause; inverting would nest the success path.

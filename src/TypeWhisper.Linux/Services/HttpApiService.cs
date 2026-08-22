@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -1515,6 +1516,22 @@ public sealed partial class HttpApiService : IDisposable
             return (400, Serialize(new { error = "File not found" }));
         }
 
+        // File.Exists admits FIFOs and device nodes, whose opens can block
+        // ffmpeg indefinitely and pin a dispatcher slot — reject them up front.
+        if (!NativeFile.IsRegularFile(payload.Path))
+        {
+            return (
+                400,
+                Serialize(
+                    new
+                    {
+                        error = "Not a regular file",
+                        reason = "not_a_regular_file",
+                    }
+                )
+            );
+        }
+
         try
         {
             if (!await _audioFiles.IsSupportedAsync(payload.Path, ct))
@@ -1600,7 +1617,24 @@ public sealed partial class HttpApiService : IDisposable
 
         // Decode audio before acquiring the lease — ffmpeg shells out and
         // must not hold the model lock while no transcription runs.
-        var wav = await _audioFiles.LoadAudioAsWavAsync(audioPath, ct);
+        byte[] wav;
+        try
+        {
+            wav = await _audioFiles.LoadAudioAsWavAsync(audioPath, ct);
+        }
+        catch (TimeoutException)
+        {
+            return (
+                503,
+                Serialize(
+                    new
+                    {
+                        error = "Audio conversion timed out",
+                        reason = "audio_conversion_timeout",
+                    }
+                )
+            );
+        }
         var prompt = MergePrompt(
             opts.Prompt,
             BuildLanguageHintsPrompt(opts.LanguageHints),
@@ -2453,6 +2487,57 @@ public sealed partial class HttpApiService : IDisposable
         string TempPath,
         TranscriptionRunOptions Options
     );
+
+    private static partial class NativeFile
+    {
+        private const int AtCurrentWorkingDirectory = -100;
+        private const uint StatxType = 0x0001;
+        private const ushort FileTypeMask = 0xF000;
+        private const ushort FileTypeRegular = 0x8000;
+
+        // FOLLOW semantics on purpose: a symlink to a regular file is safe to
+        // transcode — the threat is opens that block (FIFOs, device nodes),
+        // not path identity. Fails closed on statx errors or an unreported
+        // type field.
+        internal static bool IsRegularFile(string path)
+        {
+            if (statx(AtCurrentWorkingDirectory, path, 0, StatxType, out var stat) != 0)
+            {
+                return false;
+            }
+
+            // statx(2): fields absent from stx_mask are undefined.
+            return (stat.Mask & StatxType) == StatxType
+                   && (ushort)(stat.Mode & FileTypeMask) == FileTypeRegular;
+        }
+
+        [StructLayout(LayoutKind.Sequential, Size = 256)]
+        private struct StatxBuffer
+        {
+            public uint Mask;
+            public uint BlockSize;
+            public ulong Attributes;
+            public uint LinkCount;
+            public uint UserId;
+            public uint GroupId;
+            public ushort Mode;
+            public ushort Spare0;
+            public ulong Ino;
+            public ulong Size;
+            public ulong Blocks;
+            public ulong AttributesMask;
+        }
+
+        // ReSharper disable once InconsistentNaming -- native libc function name; LibraryImport EntryPoint defaults to the method name.
+        [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+        private static partial int statx(
+            int directoryFileDescriptor,
+            string path,
+            int flags,
+            uint mask,
+            out StatxBuffer buffer
+        );
+    }
 
     /// <summary>Host lifetime that owns no process signals — the desktop app owns shutdown.</summary>
     private sealed class EmbeddedHostLifetime : IHostLifetime
