@@ -90,6 +90,35 @@ public sealed class CliInstallServiceTests : IDisposable
         Assert.Null(result);
     }
 
+    [Theory]
+    [InlineData("bin", "Debug", "net10.0")]
+    [InlineData("bin", "Debug", "net10.0", "linux-x64")]
+    [InlineData("bin", "Release", "net10.0", "linux-x64", "publish")]
+    public void FindDevelopmentSourceDirectory_resolves_rid_specific_output_layouts(
+        params string[] outputSegments
+    )
+    {
+        var sourceDirectory = Path.Join(_tempDir, "src");
+        Directory.CreateDirectory(Path.Join(sourceDirectory, "TypeWhisper.Cli"));
+        var baseDirectory = Path.Join(
+            [sourceDirectory, "TypeWhisper.Linux", .. outputSegments]
+        );
+        Directory.CreateDirectory(baseDirectory);
+
+        var result = CliInstallService.FindDevelopmentSourceDirectory(baseDirectory);
+
+        Assert.Equal(sourceDirectory, result);
+    }
+
+    [Fact]
+    public void FindDevelopmentSourceDirectory_returns_null_outside_a_source_tree()
+    {
+        var baseDirectory = Path.Join(_tempDir, "opt", "typewhisper");
+        Directory.CreateDirectory(baseDirectory);
+
+        Assert.Null(CliInstallService.FindDevelopmentSourceDirectory(baseDirectory));
+    }
+
     [Fact]
     public void GetState_reports_missing_bundle()
     {

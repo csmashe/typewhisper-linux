@@ -512,9 +512,11 @@ public sealed class SettingsBackupServiceTests : IDisposable
     [Fact]
     public void CreateBackup_skips_unix_domain_socket_as_non_regular()
     {
-        var appData = Path.Join(_tempDir, "socket-entry");
-        var backupPath = Path.Join(_tempDir, "socket-entry.zip");
-        var socketPath = Path.Join(appData, "Data", "service.sock");
+        // Short path segments: bind() rejects socket paths longer than sun_path
+        // (108 bytes on Linux), which the temp-dir prefix already eats into.
+        var appData = Path.Join(_tempDir, "sock");
+        var backupPath = Path.Join(_tempDir, "sock.zip");
+        var socketPath = Path.Join(appData, "Data", "s.sock");
         Write(Path.Join(appData, "Data", "ordinary.json"), "ordinary");
         var warnings = new List<string>();
         using var listener = new Socket(
@@ -532,8 +534,8 @@ public sealed class SettingsBackupServiceTests : IDisposable
         Assert.Equal(1, result.FileCount);
         using var archive = ZipFile.OpenRead(backupPath);
         Assert.NotNull(archive.GetEntry("Data/ordinary.json"));
-        Assert.Null(archive.GetEntry("Data/service.sock"));
-        Assert.Contains("Data/service.sock", warnings);
+        Assert.Null(archive.GetEntry("Data/s.sock"));
+        Assert.Contains("Data/s.sock", warnings);
     }
 
     [Fact]
