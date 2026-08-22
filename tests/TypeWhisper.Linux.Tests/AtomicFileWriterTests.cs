@@ -1,3 +1,4 @@
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Tests;
 using Xunit;
@@ -498,6 +499,187 @@ public sealed class AtomicFileWriterTests
             TestPaths.DeleteDirectory(dir);
         }
     }
+
+    [Fact]
+    public async Task WriteAsync_OrdersFileSyncThenRenameThenDirectorySync()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Join(dir, "hyprland.conf");
+            await File.WriteAllTextAsync(path, "old");
+            var calls = new List<string>();
+
+            // The hooks prove the publication order from observable filesystem state: the old
+            // destination remains at file-sync time; the new one is present, with the temp
+            // sibling consumed, at directory-sync time.
+            await AtomicFileWriter.WriteAsync(
+                path,
+                "new",
+                new AtomicFileWriter.SyncHooks(
+                    (candidate, _) =>
+                    {
+                        calls.Add("file-sync");
+                        Assert.EndsWith(".tmp", candidate, StringComparison.Ordinal);
+                        Assert.True(File.Exists(candidate));
+                        Assert.Equal("old", File.ReadAllText(path));
+                    },
+                    syncedDirectory =>
+                    {
+                        calls.Add("directory-sync");
+                        Assert.Equal(dir, syncedDirectory);
+                        Assert.Equal("new", File.ReadAllText(path));
+                        Assert.Empty(Directory.EnumerateFiles(dir, "*.tmp"));
+                    }
+                ),
+                CancellationToken.None
+            );
+
+            Assert.Equal(["file-sync", "directory-sync"], calls);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public async Task WriteIfUnchangedAsync_CommitSyncsDirectoryAfterRename()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Join(dir, "hyprland.conf");
+            await File.WriteAllTextAsync(path, "old");
+            var snapshot = await AtomicFileWriter.CaptureAsync(path, CancellationToken.None);
+            var calls = new List<string>();
+
+            var committed = await AtomicFileWriter.WriteIfUnchangedAsync(
+                snapshot,
+                "new",
+                new AtomicFileWriter.SyncHooks(
+                    (_, _) => calls.Add("file-sync"),
+                    syncedDirectory =>
+                    {
+                        calls.Add("directory-sync");
+                        Assert.Equal(dir, syncedDirectory);
+                        Assert.Equal("new", File.ReadAllText(path));
+                        Assert.Empty(Directory.EnumerateFiles(dir, "*.tmp"));
+                    }
+                ),
+                CancellationToken.None
+            );
+
+            Assert.True(committed);
+            Assert.Equal(["file-sync", "directory-sync"], calls);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public async Task WriteIfUnchangedAsync_Conflict_NeverReachesDirectorySync()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Join(dir, "hyprland.conf");
+            await File.WriteAllTextAsync(path, "old");
+            var snapshot = await AtomicFileWriter.CaptureAsync(path, CancellationToken.None);
+            await File.WriteAllTextAsync(path, "changed behind our back");
+            var calls = new List<string>();
+
+            var committed = await AtomicFileWriter.WriteIfUnchangedAsync(
+                snapshot,
+                "new",
+                new AtomicFileWriter.SyncHooks(
+                    (_, _) => calls.Add("file-sync"),
+                    _ => calls.Add("directory-sync")
+                ),
+                CancellationToken.None
+            );
+
+            Assert.False(committed);
+            Assert.Equal(["file-sync"], calls);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public async Task WriteAsync_WhenDirectorySyncFails_ThrowsIndeterminateCommitException()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Join(dir, "hyprland.conf");
+            await File.WriteAllTextAsync(path, "old");
+
+            var error = await Assert.ThrowsAsync<AtomicFileWriteIndeterminateCommitException>(
+                () => AtomicFileWriter.WriteAsync(
+                    path,
+                    "new",
+                    new AtomicFileWriter.SyncHooks(
+                        (_, _) => { },
+                        _ => throw new InjectedDirectorySyncException()
+                    ),
+                    CancellationToken.None
+                )
+            );
+
+            // The publish landed before the directory sync failed: the destination must hold
+            // the new content and the error must say the commit is indeterminate, not lost.
+            Assert.Contains("Indeterminate commit", error.Message, StringComparison.Ordinal);
+            Assert.Contains(path, error.Message, StringComparison.Ordinal);
+            Assert.IsType<InjectedDirectorySyncException>(error.InnerException);
+            Assert.Equal("new", await File.ReadAllTextAsync(path));
+            Assert.Empty(Directory.EnumerateFiles(dir, "*.tmp"));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteIfUnchangedAsync_SyncsDirectoryAfterUnlink()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Join(dir, "user.js");
+            await File.WriteAllTextAsync(path, "contents");
+            var snapshot = await AtomicFileWriter.CaptureAsync(path, CancellationToken.None);
+            var directorySyncObserved = false;
+
+            var deleted = await AtomicFileWriter.DeleteIfUnchangedAsync(
+                snapshot,
+                new AtomicFileWriter.SyncHooks(
+                    (_, _) => { },
+                    syncedDirectory =>
+                    {
+                        directorySyncObserved = true;
+                        Assert.Equal(dir, syncedDirectory);
+                        Assert.False(File.Exists(path));
+                    }
+                ),
+                CancellationToken.None
+            );
+
+            Assert.True(deleted);
+            Assert.True(directorySyncObserved);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    private sealed class InjectedDirectorySyncException : Exception;
 
     private static string CreateTempDir()
     {
