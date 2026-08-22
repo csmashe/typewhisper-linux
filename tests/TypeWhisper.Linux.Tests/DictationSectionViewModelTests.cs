@@ -204,7 +204,8 @@ public sealed class DictationSectionViewModelTests
                 SetTranscriptionEngines(PluginManager, engines);
             }
 
-            var commands = new SystemCommandAvailabilityService();
+            // A fake runner keeps the capability snapshot from probing host commands.
+            var commands = new SystemCommandAvailabilityService(new FakeProcessRunner());
             Models = new ModelManagerService(PluginManager, Settings.Object, commands);
             Audio = new AudioRecordingService(
                 devices.GetDevices,

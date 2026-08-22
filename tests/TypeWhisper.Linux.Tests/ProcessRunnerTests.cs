@@ -494,10 +494,14 @@ public sealed class ProcessRunnerTests
         int? processId = null;
         try
         {
+            // The stdin fault surfaces only when the private deadline completes the exit
+            // wait, and the runner then kills the child. The deadline therefore bounds how
+            // long the child has to publish its PID: 3 s absorbs slow dotnet startup on a
+            // loaded agent while still finishing inside the 5 s WaitAsync guard below.
             var run = new ProcessRunner().RunOneShotAsync(
                 ChildCommand("wait", pidFile),
                 new ProcessOneShotOptions(
-                    Timeout: TimeSpan.FromMilliseconds(500),
+                    Timeout: TimeSpan.FromSeconds(3),
                     StandardInput: new UnsupportedProcessInput()
                 ),
                 callerCts.Token
