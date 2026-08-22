@@ -273,7 +273,8 @@ install_ubuntu_runtime() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
   # Tarballs and AppImages have no package resolver, so install the full hard
-  # closure plus the weak desktop integrations used by the execution probes.
+  # closure plus the weak desktop integrations. Probe-only tooling (Xvfb,
+  # dbus-run-session) comes from install_ubuntu_probe_infrastructure instead.
   apt-get install -y --no-install-recommends \
     ca-certificates \
     dbus-x11 \
@@ -310,8 +311,7 @@ install_ubuntu_runtime() {
     libxtst6 \
     tar \
     tzdata \
-    zlib1g \
-    xvfb
+    zlib1g
 }
 
 install_ubuntu_probe_infrastructure() {
@@ -335,6 +335,7 @@ container_smoke_tarball() {
   local app_root extracted install_script
 
   install_ubuntu_runtime
+  install_ubuntu_probe_infrastructure
   assert_no_system_dotnet
   prepare_isolated_profile
 
@@ -404,6 +405,7 @@ container_smoke_appimage() {
   local app_run cli_executable
 
   install_ubuntu_runtime
+  install_ubuntu_probe_infrastructure
   assert_no_system_dotnet
   prepare_isolated_profile
 
