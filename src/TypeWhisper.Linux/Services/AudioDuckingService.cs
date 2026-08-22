@@ -103,11 +103,9 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
         }
         catch (Exception ex)
         {
+            // Entries saved before the failure are kept: they hold the only copy of the
+            // original volumes for streams already ducked, and RestoreAudio needs them.
             Debug.WriteLine($"[AudioDuckingService] Duck failed: {ex.Message}");
-            lock (_volumesGate)
-            {
-                _savedVolumes.Clear();
-            }
         }
         finally
         {

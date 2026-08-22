@@ -335,8 +335,11 @@ public sealed class OverlayCoordinator
                 _settings.Current.PreviewBubbleAutoHideMilliseconds
             );
         }
-        catch
+        catch (Exception ex)
         {
+            Debug.WriteLine(
+                $"[OverlayCoordinator] Reading preview auto-hide duration failed: {ex.Message}"
+            );
             return AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
                 AppSettings.DefaultPreviewBubbleAutoHideMilliseconds
             );

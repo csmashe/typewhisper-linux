@@ -484,6 +484,7 @@
   "Overlay.TooShort": "Слишком коротко",
   "Overlay.TransformProcessing": "Обработка команды преобразования...",
   "Overlay.TransformPrompt": "Команда преобразования: произнесите правку, затем нажмите горячую клавишу ещё раз.",
+  "Overlay.WindowDetectionFailed": "Не удалось определить активное окно",
   "Plugins.BadgeCloud": "Облако",
   "Plugins.BadgeDisabled": "Отключено",
   "Plugins.BadgeEnabled": "Включено",

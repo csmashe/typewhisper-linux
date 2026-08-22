@@ -118,7 +118,9 @@ public partial class DictationOverlayViewModel : ObservableObject
             {
                 if (!e.ShouldShowPersistentBanner)
                 {
-                    ShowSystemErrorFeedback(e.Reason);
+                    // The detailed English reason is already in the error log; the toast is
+                    // UI-facing and must be localized.
+                    ShowSystemErrorFeedback(Loc.Instance["Overlay.WindowDetectionFailed"]);
                 }
             };
         }

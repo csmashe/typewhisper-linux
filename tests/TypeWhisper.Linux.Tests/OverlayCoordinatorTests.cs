@@ -8,6 +8,8 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class OverlayCoordinatorTests
 {
+    private const int ConfiguredAutoHideMilliseconds = 1500;
+
     [Fact]
     public void ForeignStaleAndReleasedTokens_AreNoOps()
     {
@@ -221,6 +223,12 @@ public sealed class OverlayCoordinatorTests
 
         Assert.Equal("transient", sut.PresentedState.FeedbackText);
         Assert.True(scheduler.HasLiveEntries);
+        // The budget armed at presentation is the FULL configured duration, not a
+        // remainder discounted by the time spent suppressed.
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(ConfiguredAutoHideMilliseconds),
+            scheduler.LastDelay
+        );
 
         scheduler.Fire(0);
 
@@ -294,7 +302,10 @@ public sealed class OverlayCoordinatorTests
     private static OverlayCoordinator CreateCoordinator(ManualScheduler? scheduler = null)
     {
         var settings = new FakeSettingsService(
-            AppSettings.Default with { PreviewBubbleAutoHideMilliseconds = 1500 }
+            AppSettings.Default with
+            {
+                PreviewBubbleAutoHideMilliseconds = ConfiguredAutoHideMilliseconds,
+            }
         );
         return new OverlayCoordinator(
             settings,
