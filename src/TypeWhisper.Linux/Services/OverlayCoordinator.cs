@@ -8,6 +8,12 @@ public enum OverlayRequester
 {
     Dictation,
     Transform,
+
+    /// <summary>
+    ///     Ancillary system toasts (e.g. detection-failure feedback) that never own workflow
+    ///     UI; their feedback always ranks transient and waits behind active work.
+    /// </summary>
+    System,
 }
 
 public enum OverlayPriority
@@ -110,6 +116,7 @@ public sealed class OverlayCoordinator
         ArgumentNullException.ThrowIfNull(token);
         ArgumentNullException.ThrowIfNull(state);
 
+        var globalAutoHideMilliseconds = ReadGlobalAutoHideMilliseconds();
         Presentation? presentation;
         lock (_sync)
         {
@@ -118,7 +125,7 @@ public sealed class OverlayCoordinator
                 return false;
             }
 
-            SetStateLocked(slot, state);
+            SetStateLocked(slot, state, globalAutoHideMilliseconds);
             presentation = ReevaluateLocked(token);
         }
 
@@ -136,6 +143,7 @@ public sealed class OverlayCoordinator
         ArgumentNullException.ThrowIfNull(token);
         ArgumentNullException.ThrowIfNull(updater);
 
+        var globalAutoHideMilliseconds = ReadGlobalAutoHideMilliseconds();
         Presentation? presentation;
         lock (_sync)
         {
@@ -148,7 +156,46 @@ public sealed class OverlayCoordinator
                         ?? throw new InvalidOperationException(
                             "An overlay state updater returned null."
                         );
-            SetStateLocked(slot, state);
+            SetStateLocked(slot, state, globalAutoHideMilliseconds);
+            presentation = ReevaluateLocked(token);
+        }
+
+        Dispatch(presentation);
+        return true;
+    }
+
+    /// <summary>
+    ///     Replaces the currently presented feedback in place, keeping the presenting claim's
+    ///     rank and age while re-arming expiry from the replacement state. Lets ancillary UI
+    ///     (e.g. the action-result command) swap feedback it holds no token for without leaving
+    ///     the sole-render-path. Returns false when the current presentation is not feedback.
+    /// </summary>
+    // The updater runs under the coordinator lock: it must be pure — no coordinator
+    // calls, no other locks, no blocking work.
+    public bool ReplacePresentedFeedback(
+        Func<DictationOverlayState, DictationOverlayState> updater
+    )
+    {
+        ArgumentNullException.ThrowIfNull(updater);
+
+        var globalAutoHideMilliseconds = ReadGlobalAutoHideMilliseconds();
+        Presentation? presentation;
+        lock (_sync)
+        {
+            if (_presentedToken is not { } token
+                || !TryGetSlotLocked(token, out var slot)
+                || slot.Priority is not (
+                    OverlayPriority.TerminalFeedback or OverlayPriority.TransientFeedback
+                ))
+            {
+                return false;
+            }
+
+            var state = updater(slot.State)
+                        ?? throw new InvalidOperationException(
+                            "An overlay state updater returned null."
+                        );
+            SetStateLocked(slot, state, globalAutoHideMilliseconds);
             presentation = ReevaluateLocked(token);
         }
 
@@ -168,7 +215,8 @@ public sealed class OverlayCoordinator
                 return false;
             }
 
-            SetStateLocked(slot, DictationOverlayState.Hidden);
+            // Hidden never arms feedback expiry, so no settings pre-read is needed here.
+            SetStateLocked(slot, DictationOverlayState.Hidden, globalAutoHideMilliseconds: 0);
             presentation = ReevaluateLocked(token);
         }
 
@@ -232,7 +280,7 @@ public sealed class OverlayCoordinator
         return false;
     }
 
-    private void SetStateLocked(Slot slot, DictationOverlayState state)
+    private void SetStateLocked(Slot slot, DictationOverlayState state, int globalAutoHideMilliseconds)
     {
         CancelExpiryLocked(slot);
         slot.State = state;
@@ -240,6 +288,12 @@ public sealed class OverlayCoordinator
         if (slot.Priority is OverlayPriority.ActiveRecording or OverlayPriority.Processing)
         {
             slot.HasOwnedWorkflow = true;
+        }
+        else if (slot.Priority == OverlayPriority.None)
+        {
+            // Returning to hidden ends the token's workflow: later feedback through the
+            // same token is a fresh toast, not the workflow's terminal outcome.
+            slot.HasOwnedWorkflow = false;
         }
 
         if (slot.Priority is not (
@@ -249,11 +303,10 @@ public sealed class OverlayCoordinator
             return;
         }
 
-        var milliseconds = FeedbackExpiryMilliseconds(state);
+        var milliseconds = FeedbackExpiryMilliseconds(state, globalAutoHideMilliseconds);
         if (milliseconds <= 0)
         {
-            slot.State = DictationOverlayState.Hidden;
-            slot.Priority = OverlayPriority.None;
+            RetireSlotLocked(slot);
             return;
         }
 
@@ -264,10 +317,31 @@ public sealed class OverlayCoordinator
         );
     }
 
-    private int FeedbackExpiryMilliseconds(DictationOverlayState state)
+    // _settings.Current can lazily reload from disk (and may throw); reading it inside
+    // _sync would stall every overlay arbitration on I/O, and a throw mid-publish would
+    // strand the slot at feedback priority with no expiry armed. Callers pre-read before
+    // taking the lock; a failed read falls back to the normalized default.
+    private int ReadGlobalAutoHideMilliseconds()
     {
-        var globalMilliseconds = AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
-            _settings.Current.PreviewBubbleAutoHideMilliseconds);
+        try
+        {
+            return AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+                _settings.Current.PreviewBubbleAutoHideMilliseconds
+            );
+        }
+        catch
+        {
+            return AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+                AppSettings.DefaultPreviewBubbleAutoHideMilliseconds
+            );
+        }
+    }
+
+    private static int FeedbackExpiryMilliseconds(
+        DictationOverlayState state,
+        int globalMilliseconds
+    )
+    {
         return globalMilliseconds == 0
             ? 0
             : AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
@@ -307,9 +381,7 @@ public sealed class OverlayCoordinator
             if (slot.Priority == OverlayPriority.TerminalFeedback
                 && !ReferenceEquals(slot, winner))
             {
-                CancelExpiryLocked(slot);
-                slot.State = DictationOverlayState.Hidden;
-                slot.Priority = OverlayPriority.None;
+                RetireSlotLocked(slot);
             }
         }
 
@@ -358,6 +430,15 @@ public sealed class OverlayCoordinator
         slot.Expiry = null;
     }
 
+    // A retired slot's next feedback is a fresh toast, so workflow ownership resets too.
+    private void RetireSlotLocked(Slot slot)
+    {
+        CancelExpiryLocked(slot);
+        slot.State = DictationOverlayState.Hidden;
+        slot.Priority = OverlayPriority.None;
+        slot.HasOwnedWorkflow = false;
+    }
+
     private void ExpireFeedback(OverlayPresentationToken token, long expiryGeneration)
     {
         Presentation? presentation;
@@ -372,9 +453,7 @@ public sealed class OverlayCoordinator
                 return;
             }
 
-            CancelExpiryLocked(slot);
-            slot.State = DictationOverlayState.Hidden;
-            slot.Priority = OverlayPriority.None;
+            RetireSlotLocked(slot);
             presentation = ReevaluateLocked();
         }
 

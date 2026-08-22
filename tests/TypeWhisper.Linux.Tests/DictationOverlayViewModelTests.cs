@@ -1,6 +1,7 @@
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels;
 using Xunit;
 
@@ -289,6 +290,97 @@ public sealed class DictationOverlayViewModelTests
     }
 
     [Fact]
+    public void OpenActionResult_Failure_ReplacesCoordinatorFeedbackAndReArmsExpiry()
+    {
+        var settings = new FakeSettingsService(
+            AppSettings.Default with { PreviewBubbleAutoHideMilliseconds = 1500 }
+        );
+        var scheduler = new FakeScheduler();
+        var coordinator = new OverlayCoordinator(
+            settings,
+            static action => action(),
+            scheduler.Schedule
+        );
+        var sut = new DictationOverlayViewModel(
+            settings,
+            static action => action(),
+            openUrl: _ => false,
+            overlayCoordinator: coordinator
+        );
+        var token = coordinator.Acquire(OverlayRequester.Transform);
+        Assert.True(coordinator.Show(token, new DictationOverlayState
+        {
+            ShowFeedback = true,
+            FeedbackText = "Issue created",
+            ActionResultUrl = "https://example.com/issues/42",
+            FeedbackDurationMilliseconds = 5000,
+        }));
+        Assert.True(sut.HasActionResultUrl);
+        Assert.Equal(TimeSpan.FromSeconds(5), scheduler.LastDelay);
+
+        sut.OpenActionResultCommand.Execute(null);
+
+        // The replacement must be the coordinator's presented state — a VM-local rewrite
+        // would leave the original expiry armed and be invisible to arbitration.
+        var openFailed = Loc.Instance["ActionResult.OpenFailed"];
+        Assert.Equal(openFailed, coordinator.PresentedState.FeedbackText);
+        Assert.Null(coordinator.PresentedState.ActionResultUrl);
+        Assert.Equal(openFailed, sut.FeedbackText);
+        Assert.True(sut.FeedbackIsError);
+        Assert.False(sut.HasActionResultUrl);
+        // Expiry is re-armed for the replacement: the global duration, not the remainder
+        // of the original 5 s claim.
+        Assert.Equal(TimeSpan.FromMilliseconds(1500), scheduler.LastDelay);
+
+        scheduler.FirePending();
+
+        Assert.False(sut.ShowFeedback);
+        Assert.Equal(DictationOverlayState.Hidden, coordinator.PresentedState);
+    }
+
+    [Fact]
+    public void DetectionFailureToast_RoutesThroughCoordinatorAndWaitsBehindRecording()
+    {
+        var settings = new FakeSettingsService(
+            AppSettings.Default with { PreviewBubbleAutoHideMilliseconds = 1500 }
+        );
+        var scheduler = new FakeScheduler();
+        var coordinator = new OverlayCoordinator(
+            settings,
+            static action => action(),
+            scheduler.Schedule
+        );
+        var tracker = new FakeDetectionFailureTracker();
+        var sut = new DictationOverlayViewModel(
+            settings,
+            static action => action(),
+            overlayCoordinator: coordinator,
+            failureTracker: tracker
+        );
+        var token = coordinator.Acquire(OverlayRequester.Dictation);
+        Assert.True(coordinator.Show(token, new DictationOverlayState
+        {
+            IsOverlayVisible = true,
+            IsRecording = true,
+            StatusText = "Recording",
+        }));
+        Assert.True(sut.IsRecording);
+
+        tracker.RaiseFailure("Focus detection failed");
+
+        // The toast competes in arbitration and loses to the live recording instead of
+        // overpainting it with a direct property write the coordinator cannot see.
+        Assert.True(sut.IsRecording);
+        Assert.False(sut.ShowFeedback);
+
+        Assert.True(coordinator.Release(token));
+
+        Assert.True(sut.ShowFeedback);
+        Assert.Equal("Focus detection failed", sut.FeedbackText);
+        Assert.True(sut.FeedbackIsError);
+    }
+
+    [Fact]
     public void LegacyApplyState_RemainsFunctionalAndOwnsFeedbackExpiry()
     {
         var settings = new FakeSettingsService(
@@ -325,6 +417,30 @@ public sealed class DictationOverlayViewModelTests
         return propertyNames.Where(name =>
             name is nameof(DictationOverlayViewModel.LeftText)
                 or nameof(DictationOverlayViewModel.RightText));
+    }
+
+    private sealed class FakeDetectionFailureTracker : IDetectionFailureTracker
+    {
+        public bool ShouldShowPersistentBanner => false;
+
+        public string? LastFailureReason { get; private set; }
+
+        public event EventHandler<DetectionFailureEvent>? OnFailure;
+
+        public void RecordSuccess()
+        {
+        }
+
+        public void RecordFailure(string compositor, string reason)
+        {
+            RaiseFailure(reason);
+        }
+
+        public void RaiseFailure(string reason)
+        {
+            LastFailureReason = reason;
+            OnFailure?.Invoke(this, new DetectionFailureEvent(reason, false));
+        }
     }
 
     private sealed class FakeSettingsService(AppSettings current) : ISettingsService
