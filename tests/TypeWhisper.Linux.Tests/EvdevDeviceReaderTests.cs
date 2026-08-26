@@ -465,9 +465,8 @@ public sealed class EvdevDeviceReaderTests
         );
     }
 
-    // Reads the reader's private _inputDevice field: the retention constraint under test is
-    // that a timed-out DisposeAsync leaves the device published for the worker to capture,
-    // which has no other observable surface.
+    // Reflection because the retention constraint — a timed-out DisposeAsync leaves the device
+    // published for the worker to capture — has no other observable surface.
     private static IEvdevInputDevice? ReadPublishedInputDevice(EvdevDeviceReader reader)
     {
         var field = typeof(EvdevDeviceReader).GetField(

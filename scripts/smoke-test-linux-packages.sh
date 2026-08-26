@@ -66,7 +66,7 @@ compute_glibc_floor() {
   # One "GLIBC_<name> <path>" line per distinct GLIBC_* verneed per ELF, so an
   # unrecognized name can be reported with the binary that requires it. A
   # failing readelf -V is fatal: tolerating it would drop that ELF's verneeds
-  # and silently under-floor the packages. grep exit 1 stays tolerated — it
+  # and silently under-floor the packages. grep exit 1 is tolerated — it
   # just means the ELF has no GLIBC verneeds (e.g. a static binary).
   if ! verneeds="$(
     while IFS= read -r -d '' candidate; do
