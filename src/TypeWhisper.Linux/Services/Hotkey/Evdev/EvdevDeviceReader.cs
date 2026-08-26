@@ -99,17 +99,19 @@ internal sealed class EvdevDeviceReader : IEvdevDeviceReader
         {
             try
             {
-                Interlocked.CompareExchange(ref _inputDevice, null, inputDevice);
-
                 // The poller uses raw fds (DangerousGetHandle), so closing the handles
                 // while the worker is still parked past the wake budget could recycle
                 // those descriptor numbers under an in-flight poll/read. Dispose here
                 // only when the worker never started or has already returned; a
                 // timed-out worker's own finally disposes the device when it exits.
-                // Idempotent either way — both paths dispose under the device's lock.
+                // An incomplete loop must also keep the field published: a worker that
+                // has not yet captured the device bails out on a null field before its
+                // try/finally, so nulling here would orphan the handles. Idempotent
+                // either way — both paths dispose under the device's lock.
                 var readLoop = Volatile.Read(ref _readLoop);
                 if (readLoop is null || readLoop.IsCompleted)
                 {
+                    Interlocked.CompareExchange(ref _inputDevice, null, inputDevice);
                     inputDevice?.Dispose();
                 }
             }

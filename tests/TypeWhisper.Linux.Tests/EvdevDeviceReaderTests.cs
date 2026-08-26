@@ -1,6 +1,7 @@
 using Microsoft.Win32.SafeHandles;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Channels;
@@ -140,6 +141,33 @@ public sealed class EvdevDeviceReaderTests
 
         await reader.DisposeAsync().AsTask().WaitAsync(s_testGuard);
 
+        Assert.Empty(events.Snapshot());
+        Assert.False(failure.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task DisposeTimeout_KeepsDevicePublishedUntilWorkerDisposesIt()
+    {
+        var device = new BlockingReadInputDevice();
+        var events = new EventLog();
+        var failure = NewFailureSignal();
+        var reader = CreateReader(device, events, failure);
+        Assert.True(reader.TryStart());
+        await device.ReadStarted.WaitAsync(s_testGuard);
+
+        // The read ignores both the token and Wake, so this burns the full 500 ms wake budget.
+        await reader.DisposeAsync().AsTask().WaitAsync(s_testGuard);
+
+        // The wake budget lapsed with the worker still parked: the device must stay published
+        // and undisposed so the worker's finally can close it. A worker delayed before its
+        // field read would otherwise find null, return early, and leak the raw fds.
+        Assert.Equal(0, device.DisposeCount);
+        Assert.Same(device, ReadPublishedInputDevice(reader));
+
+        device.ReleaseRead();
+        await device.Disposed.WaitAsync(s_testGuard);
+
+        Assert.Equal(1, device.DisposeCount);
         Assert.Empty(events.Snapshot());
         Assert.False(failure.Task.IsCompleted);
     }
@@ -435,6 +463,19 @@ public sealed class EvdevDeviceReaderTests
                 events.Add(new DeviceEdge(devicePath, keyCode, pressed)),
             (_, exception) => failure.TrySetResult(exception)
         );
+    }
+
+    // Reads the reader's private _inputDevice field: the retention constraint under test is
+    // that a timed-out DisposeAsync leaves the device published for the worker to capture,
+    // which has no other observable surface.
+    private static IEvdevInputDevice? ReadPublishedInputDevice(EvdevDeviceReader reader)
+    {
+        var field = typeof(EvdevDeviceReader).GetField(
+            "_inputDevice",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        );
+        Assert.NotNull(field);
+        return (IEvdevInputDevice?)field.GetValue(reader);
     }
 
     private static TaskCompletionSource<Exception> NewFailureSignal()
@@ -744,6 +785,56 @@ public sealed class EvdevDeviceReaderTests
             {
                 throw new InvalidOperationException("The fake input stream is closed.");
             }
+        }
+    }
+
+    private sealed class BlockingReadInputDevice : IEvdevInputDevice
+    {
+        private readonly TaskCompletionSource<bool> _disposed = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        private readonly ManualResetEventSlim _readGate = new(false);
+        private readonly TaskCompletionSource<bool> _readStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        private int _disposeCount;
+
+        public Task ReadStarted => _readStarted.Task;
+        public Task Disposed => _disposed.Task;
+        public int DisposeCount => Volatile.Read(ref _disposeCount);
+
+        public void Open()
+        {
+        }
+
+        public int Read(Span<byte> buffer, CancellationToken ct)
+        {
+            _readStarted.TrySetResult(true);
+            // Ignores ct and Wake so the parked read outlasts DisposeAsync's wake budget.
+            _readGate.Wait(CancellationToken.None);
+            ct.ThrowIfCancellationRequested();
+            return 0;
+        }
+
+        public void ReleaseRead()
+        {
+            _readGate.Set();
+        }
+
+        public void Wake()
+        {
+        }
+
+        public byte[] QueryPressedKeyBitmap()
+        {
+            return Bitmap();
+        }
+
+        public void Dispose()
+        {
+            Interlocked.Increment(ref _disposeCount);
+            _readGate.Set();
+            _disposed.TrySetResult(true);
         }
     }
 
