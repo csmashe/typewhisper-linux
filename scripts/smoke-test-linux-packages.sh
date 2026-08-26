@@ -64,20 +64,36 @@ compute_glibc_floor() {
   fi
 
   # One "GLIBC_<name> <path>" line per distinct GLIBC_* verneed per ELF, so an
-  # unrecognized name can be reported with the binary that requires it.
-  verneeds="$(
+  # unrecognized name can be reported with the binary that requires it. A
+  # failing readelf -V is fatal: tolerating it would drop that ELF's verneeds
+  # and silently under-floor the packages. grep exit 1 stays tolerated — it
+  # just means the ELF has no GLIBC verneeds (e.g. a static binary).
+  if ! verneeds="$(
     while IFS= read -r -d '' candidate; do
       if readelf -h "$candidate" >/dev/null 2>&1; then
-        { readelf -V "$candidate" 2>/dev/null \
-            | grep -oE 'GLIBC_[0-9A-Za-z_.]+' \
-            | LC_ALL=C sort -u \
-            || true; } \
-          | while IFS= read -r verneed; do
-              printf '%s %s\n' "$verneed" "$candidate"
-            done
+        if ! version_info="$(readelf -V "$candidate" 2>/dev/null)"; then
+          echo "ERROR: readelf -V failed for $candidate" >&2
+          exit 1
+        fi
+        grep_status=0
+        candidate_verneeds="$(grep -oE 'GLIBC_[0-9A-Za-z_.]+' <<<"$version_info")" \
+          || grep_status=$?
+        if [ "$grep_status" -gt 1 ]; then
+          echo "ERROR: scanning GLIBC verneeds failed for $candidate" >&2
+          exit 1
+        fi
+        if [ -n "$candidate_verneeds" ]; then
+          LC_ALL=C sort -u <<<"$candidate_verneeds" \
+            | while IFS= read -r verneed; do
+                printf '%s %s\n' "$verneed" "$candidate"
+              done
+        fi
       fi
     done <"$candidate_list"
-  )"
+  )"; then
+    rm -f "$candidate_list"
+    return 1
+  fi
   rm -f "$candidate_list"
 
   # Verneed names are not all numeric versions, and numeric ones may carry
