@@ -248,6 +248,48 @@ public class ModelManagerServiceTests
     }
 
     [Fact]
+    public async Task DownloadAndLoadModelAsync_DependencyFaultOce_RecordsFailedNotReady()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out var plugin
+        );
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        // A bare TaskCanceledException with the caller's token NOT requested is a
+        // dependency fault per the SDK cancellation-origin contract (e.g. a stalled
+        // third-party download); it must record Failed, never clear toward Ready.
+        fake.DownloadFault = new TaskCanceledException();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.DownloadAndLoadModelAsync(fullModelId, CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None)
+        );
+
+        Assert.Equal(ModelStatusType.Error, sut.GetStatus(fullModelId).Type);
+        Assert.Equal(0, fake.LoadCallCount);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_DependencyFaultOce_RecordsFailedNotReady()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out var plugin
+        );
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.LoadFault = new TaskCanceledException();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.LoadModelAsync(fullModelId)
+                .WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None)
+        );
+
+        Assert.Equal(ModelStatusType.Error, sut.GetStatus(fullModelId).Type);
+        Assert.Null(sut.ActiveModelId);
+    }
+
+    [Fact]
     public async Task LoadModelAsync_BlockedWhileLeaseHeld_UntilLeaseDisposed()
     {
         var sut = CreateServiceWithLoadableModel(out var fullModelId, out _);
@@ -385,6 +427,180 @@ public class ModelManagerServiceTests
         await sut.DownloadAndLoadModelAsync(fullModelId);
 
         Assert.True(sut.IsAutoUnloadArmed);
+    }
+
+    [Fact]
+    public async Task DownloadAndLoadModelAsync_ExternalCancellationMidDownload_ResetsStatusAndPropagates()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out var plugin
+        );
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        fake.DownloadGate = new TaskCompletionSource();
+        using var cancellation = new CancellationTokenSource();
+
+        var operation = sut.DownloadAndLoadModelAsync(fullModelId, cancellation.Token);
+        await fake.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        await cancellation.CancelAsync();
+        fake.DownloadGate.SetResult();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            operation.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None)
+        );
+        Assert.Equal(ModelStatusType.NotDownloaded, sut.GetStatus(fullModelId).Type);
+        Assert.Equal(0, fake.LoadCallCount);
+
+        await sut.DownloadAndLoadModelAsync(fullModelId, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        Assert.Equal(2, fake.DownloadCallCount);
+        Assert.Equal(1, fake.LoadCallCount);
+        Assert.Equal(fullModelId, sut.ActiveModelId);
+    }
+
+    [Fact]
+    public async Task AcquireTranscriptionAsync_CancellationIgnoringDownloadCommit_StopsBeforeLoadAndPreservesArtifact()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out var plugin
+        );
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        fake.DownloadObservesCancellation = false;
+        fake.DownloadGate = new TaskCompletionSource();
+        using var cancellation = new CancellationTokenSource();
+
+        var acquire = sut.AcquireTranscriptionAsync(
+            fullModelId,
+            cancellationToken: cancellation.Token
+        );
+        await fake.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        await cancellation.CancelAsync();
+        Assert.False(acquire.IsCompleted);
+        fake.DownloadGate.SetResult();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => acquire);
+        Assert.True(fake.ModelDownloaded);
+        Assert.Equal(0, fake.LoadCallCount);
+        Assert.Equal(0, fake.SelectModelCallCount);
+        Assert.Null(sut.ActiveModelId);
+        Assert.Equal(ModelStatusType.Ready, sut.GetStatus(fullModelId).Type);
+    }
+
+    [Fact]
+    public async Task DownloadAndLoadModelAsync_CancellationIgnoringLoad_DoesNotCommitActiveState()
+    {
+        using var sut = CreateServiceWithLoadableModel(
+            out var fullModelId,
+            out var plugin
+        );
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.LoadObservesCancellation = false;
+        fake.LoadGate = new TaskCompletionSource();
+        using var cancellation = new CancellationTokenSource();
+
+        var operation = sut.DownloadAndLoadModelAsync(fullModelId, cancellation.Token);
+        await fake.LoadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        await cancellation.CancelAsync();
+        Assert.False(operation.IsCompleted);
+        fake.LoadGate.SetResult();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            operation.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None)
+        );
+        Assert.Equal(0, fake.DownloadCallCount);
+        Assert.Equal(1, fake.LoadCallCount);
+        Assert.Equal(0, fake.SelectModelCallCount);
+        Assert.Null(sut.ActiveModelId);
+        Assert.Equal(ModelStatusType.Ready, sut.GetStatus(fullModelId).Type);
+    }
+
+    [Fact]
+    public async Task DownloadAndLoadModelAsync_StragglerProgressAfterCancelClear_DoesNotReinsertStatus()
+    {
+        // Off a SynchronizationContext, Progress<T> posts callbacks via the ThreadPool,
+        // so a callback that passed a plain in-progress pre-check can run AFTER the cancel
+        // path's ClearStatus and re-insert DownloadingModel(p) — a permanent phantom
+        // "downloading" with no operation in flight. The callback core is
+        // SetStatusFromProgress; invoking it with the generation the canceled download's
+        // progress scope captured simulates that straggler deterministically.
+        using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        fake.DownloadGate = new TaskCompletionSource();
+        using var cancellation = new CancellationTokenSource();
+
+        var operation = sut.DownloadAndLoadModelAsync(fullModelId, cancellation.Token);
+        await fake.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        // The generation the in-flight download's progress callbacks captured.
+        var staleGeneration = sut.CurrentStatusGeneration;
+        await cancellation.CancelAsync();
+        fake.DownloadGate.SetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            operation.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None)
+        );
+        Assert.Equal(ModelStatusType.NotDownloaded, sut.GetStatus(fullModelId).Type);
+
+        // The straggler: a progress callback past its gate check, landing after ClearStatus.
+        sut.SetStatusFromProgress(fullModelId, staleGeneration, ModelStatus.DownloadingModel(0.42));
+
+        Assert.Equal(ModelStatusType.NotDownloaded, sut.GetStatus(fullModelId).Type);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_StragglerProgressAfterReady_DoesNotClobberReadyStatus()
+    {
+        // Same TOCTOU as the cancel case, against the Ready terminal transition: a late
+        // load-progress callback must not overwrite Ready with a stale Downloading status.
+        using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.LoadGate = new TaskCompletionSource();
+
+        var load = sut.LoadModelAsync(fullModelId);
+        await fake.LoadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var staleGeneration = sut.CurrentStatusGeneration;
+        fake.LoadGate.SetResult();
+        await load.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ModelStatusType.Ready, sut.GetStatus(fullModelId).Type);
+
+        sut.SetStatusFromProgress(fullModelId, staleGeneration, ModelStatus.DownloadingModel(0.9));
+
+        Assert.Equal(ModelStatusType.Ready, sut.GetStatus(fullModelId).Type);
+        Assert.Equal(fullModelId, sut.ActiveModelId);
+    }
+
+    [Fact]
+    public async Task DownloadAndLoadModelAsync_ProgressReportedMidDownload_UpdatesStatus()
+    {
+        // The generation gate must retire only stragglers — reports from the operation
+        // still in flight have to keep flowing into the status dictionary.
+        using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        fake.DownloadGate = new TaskCompletionSource();
+
+        var operation = sut.DownloadAndLoadModelAsync(fullModelId);
+        await fake.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        fake.LastDownloadProgress!.Report(0.5);
+
+        // Progress<T> posts to the ThreadPool here (no SynchronizationContext), so poll.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (
+            sut.GetStatus(fullModelId) is not { Type: ModelStatusType.Downloading, Progress: 0.5 }
+            && DateTime.UtcNow < deadline
+        )
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.Equal(ModelStatusType.Downloading, sut.GetStatus(fullModelId).Type);
+        Assert.Equal(0.5, sut.GetStatus(fullModelId).Progress);
+
+        fake.DownloadGate.SetResult();
+        await operation.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ModelStatusType.Ready, sut.GetStatus(fullModelId).Type);
     }
 
     [Fact]
@@ -1174,11 +1390,34 @@ public class ModelManagerServiceTests
 
         public string? LastLoadedModelId { get; private set; }
 
+        public bool ModelDownloaded { get; set; } = true;
+
+        public int DownloadCallCount { get; private set; }
+
+        /// <summary>Completes once <see cref="DownloadModelAsync" /> has begun.</summary>
+        public TaskCompletionSource DownloadStarted { get; } = new();
+
+        /// <summary>When set, <see cref="DownloadModelAsync" /> parks until it completes.</summary>
+        public TaskCompletionSource? DownloadGate { get; set; }
+
+        /// <summary>The progress sink the host passed to <see cref="DownloadModelAsync" />.</summary>
+        public IProgress<double>? LastDownloadProgress { get; private set; }
+        public Exception? DownloadFault { get; set; }
+        public Exception? LoadFault { get; set; }
+
+        public bool DownloadObservesCancellation { get; set; } = true;
+
+        public int LoadCallCount { get; private set; }
+
         /// <summary>Completes once <see cref="LoadModelAsync" /> has begun.</summary>
         public TaskCompletionSource LoadStarted { get; } = new();
 
         /// <summary>When set, <see cref="LoadModelAsync" /> parks until it completes.</summary>
         public TaskCompletionSource? LoadGate { get; set; }
+
+        public bool LoadObservesCancellation { get; set; } = true;
+
+        public int SelectModelCallCount { get; private set; }
 
         /// <summary>Completes once <see cref="UnloadModelAsync" /> has begun.</summary>
         public TaskCompletionSource UnloadStarted { get; } = new();
@@ -1228,15 +1467,71 @@ public class ModelManagerServiceTests
 
         public void SelectModel(string modelId)
         {
+            SelectModelCallCount++;
             SelectedModelId = modelId;
+        }
+
+        public bool IsModelDownloaded(string modelId)
+        {
+            return ModelDownloaded;
+        }
+
+        public async Task DownloadModelAsync(
+            string modelId,
+            IProgress<double>? progress,
+            CancellationToken ct
+        )
+        {
+            DownloadCallCount++;
+            LastDownloadProgress = progress;
+            DownloadStarted.TrySetResult();
+            if (DownloadGate is not null)
+            {
+                if (DownloadObservesCancellation)
+                {
+                    await DownloadGate.Task.WaitAsync(ct);
+                }
+                else
+                {
+                    await DownloadGate.Task;
+                }
+            }
+            else if (DownloadObservesCancellation)
+            {
+                ct.ThrowIfCancellationRequested();
+            }
+
+            if (DownloadFault is not null)
+            {
+                throw DownloadFault;
+            }
+
+            ModelDownloaded = true;
         }
 
         public async Task LoadModelAsync(string modelId, CancellationToken ct)
         {
+            LoadCallCount++;
             LoadStarted.TrySetResult();
             if (LoadGate is not null)
             {
-                await LoadGate.Task.WaitAsync(ct);
+                if (LoadObservesCancellation)
+                {
+                    await LoadGate.Task.WaitAsync(ct);
+                }
+                else
+                {
+                    await LoadGate.Task;
+                }
+            }
+            else if (LoadObservesCancellation)
+            {
+                ct.ThrowIfCancellationRequested();
+            }
+
+            if (LoadFault is not null)
+            {
+                throw LoadFault;
             }
 
             LastLoadedModelId = modelId;

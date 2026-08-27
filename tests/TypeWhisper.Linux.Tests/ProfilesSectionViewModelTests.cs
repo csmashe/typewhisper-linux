@@ -123,6 +123,15 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             var whisperBefore = sut.SelectedWhisperModeOption!;
             var modelDefaultBefore = sut.ModelOptions[0];
             var promptDefaultBefore = sut.PromptActionOptions[0];
+            HashSet<string?> expectedPropertyChanges =
+            [
+                nameof(ProfilesSectionViewModel.Summary),
+                nameof(ProfilesSectionViewModel.SelectedProfileSummary),
+                nameof(ProfilesSectionViewModel.SelectedProfileDisplayName),
+                nameof(ProfilesSectionViewModel.MatchStatusText),
+                nameof(ProfilesSectionViewModel.EditIsEnabledStatusText),
+            ];
+            HashSet<string?> propertyChanges = [];
 
             sut.StylePresetOptions.CollectionChanged += (_, _) =>
                 sut.SelectedStylePresetOption = null;
@@ -132,6 +141,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
                 sut.SelectedCleanupOverrideOption = null;
             sut.PropertyChanged += (_, args) =>
             {
+                propertyChanges.Add(args.PropertyName);
+
                 // ReSharper disable once InvertIf -- the positive form states the property this handler reacts to.
                 if (args.PropertyName == nameof(ProfilesSectionViewModel.WhisperModeOptions))
                 {
@@ -142,6 +153,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
 
             Loc.Instance.CurrentLanguage = "de";
 
+            Assert.Superset(expectedPropertyChanges, propertyChanges);
             Assert.NotEqual(styleBefore.Label, sut.SelectedStylePresetOption?.Label);
             Assert.NotSame(styleBefore, sut.SelectedStylePresetOption);
             Assert.Equal(ProfileStylePreset.Developer, sut.EditStylePreset);

@@ -202,6 +202,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<ISetupTask, KwinActiveWindowSetupTask>();
         services.AddSingleton<ISetupTask, FfmpegSetupTask>();
         services.AddSingleton<TrayIconService>();
+        services.AddSingleton<OverlayCoordinator>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
         services.AddSingleton<LlmCleanupService>();

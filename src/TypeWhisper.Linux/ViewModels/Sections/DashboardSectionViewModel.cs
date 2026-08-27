@@ -241,14 +241,13 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
 
     private void PersistSelectedRange(TimeRange value)
     {
-        var current = _settings.Current;
         var encoded = (int)value;
-        if (current.DashboardSelectedPeriod == encoded)
+        if (_settings.Current.DashboardSelectedPeriod == encoded)
         {
             return;
         }
 
-        _settings.Save(current with { DashboardSelectedPeriod = encoded });
+        _settings.Update(current => current with { DashboardSelectedPeriod = encoded });
     }
 
     private static TimeRange ReadSelectedRange(int value)

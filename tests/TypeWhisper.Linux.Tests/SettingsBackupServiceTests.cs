@@ -1,4 +1,7 @@
+using System.ComponentModel;
 using System.IO.Compression;
+using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -97,6 +100,468 @@ public sealed class SettingsBackupServiceTests : IDisposable
         Assert.DoesNotContain("secret-protection.key", entries);
     }
 
+    [Theory]
+    [InlineData("Data")]
+    [InlineData("PluginData")]
+    public void CreateBackup_follows_ordinary_file_symlinks_without_warning(string root)
+    {
+        var appData = Path.Join(_tempDir, $"ordinary-link-{root}");
+        var backupPath = Path.Join(_tempDir, $"ordinary-link-{root}.zip");
+        var settingsPath = Path.Join(appData, "settings.json");
+        var ordinaryPath = Path.Join(appData, root, "ordinary.json");
+        var linkPath = Path.Join(appData, root, "linked.json");
+        var externalPath = Path.Join(_tempDir, $"external-{root}.json");
+        Write(settingsPath, "{}");
+        Write(ordinaryPath, "ordinary");
+        var externalBytes = RandomNumberGenerator.GetBytes(37);
+        WriteBytes(externalPath, externalBytes);
+        File.CreateSymbolicLink(linkPath, externalPath);
+        var warnings = new List<string>();
+        var service = new SettingsBackupService(
+            appData,
+            backupSkipObserver: warnings.Add
+        );
+
+        var result = service.CreateBackup(backupPath);
+
+        Assert.Equal(3, result.FileCount);
+        Assert.Equal(
+            new FileInfo(settingsPath).Length
+                + new FileInfo(ordinaryPath).Length
+                + externalBytes.Length,
+            result.UncompressedBytes
+        );
+        using var archive = ZipFile.OpenRead(backupPath);
+        Assert.NotNull(archive.GetEntry("settings.json"));
+        Assert.NotNull(archive.GetEntry($"{root}/ordinary.json"));
+        var linkedEntry = archive.GetEntry($"{root}/linked.json");
+        Assert.NotNull(linkedEntry);
+        Assert.Equal(externalBytes, ReadEntryBytes(linkedEntry));
+        Assert.DoesNotContain($"{root}/linked.json", warnings);
+    }
+
+    [Fact]
+    public void CreateBackup_rejects_hard_link_to_protection_key_and_preserves_destination()
+    {
+        var appData = Path.Join(_tempDir, "hard-key-link");
+        var backupPath = Path.Join(_tempDir, "hard-key-link.zip");
+        var keyPath = Path.Join(appData, "secret-protection.key");
+        var aliasPath = Path.Join(appData, "PluginData", "x", "key-copy");
+        var keyBytes = RandomNumberGenerator.GetBytes(32);
+        WriteBytes(keyPath, keyBytes);
+        Directory.CreateDirectory(Path.GetDirectoryName(aliasPath)!);
+        CreateHardLink(keyPath, aliasPath);
+        CreateBackupWithEntry(backupPath, "settings.json", "preserved");
+        var originalArchive = File.ReadAllBytes(backupPath);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            new SettingsBackupService(appData).CreateBackup(backupPath)
+        );
+
+        Assert.Contains("protection key", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("PluginData/x/key-copy", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(appData, exception.Message, StringComparison.Ordinal);
+        Assert.Equal(originalArchive, File.ReadAllBytes(backupPath));
+        Assert.False(File.Exists(backupPath + ".tmp"));
+        AssertArchiveDoesNotContain(backupPath, keyBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CreateBackup_guards_key_even_when_the_key_file_is_a_symlink(bool hardAlias)
+    {
+        // The key consumers read secret-protection.key through symlinks, so a
+        // symlinked key resolves to a real inode elsewhere. The identity guard
+        // must follow the same way or it captures the link and disarms itself.
+        var appData = Path.Join(_tempDir, hardAlias ? "symkey-hard" : "symkey-sym");
+        var backupPath = Path.Join(_tempDir, hardAlias ? "symkey-hard.zip" : "symkey-sym.zip");
+        var realKey = Path.Join(_tempDir, hardAlias ? "real-hard" : "real-sym", "real.key");
+        var keyPath = Path.Join(appData, "secret-protection.key");
+        var aliasPath = Path.Join(appData, "PluginData", "x", "key-copy");
+        var keyBytes = RandomNumberGenerator.GetBytes(32);
+
+        WriteBytes(realKey, keyBytes);
+        Directory.CreateDirectory(appData);
+        File.CreateSymbolicLink(keyPath, realKey);
+        Directory.CreateDirectory(Path.GetDirectoryName(aliasPath)!);
+        if (hardAlias)
+        {
+            CreateHardLink(realKey, aliasPath);
+        }
+        else
+        {
+            File.CreateSymbolicLink(aliasPath, realKey);
+        }
+
+        CreateBackupWithEntry(backupPath, "settings.json", "preserved");
+        var originalArchive = File.ReadAllBytes(backupPath);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            new SettingsBackupService(appData).CreateBackup(backupPath)
+        );
+
+        Assert.Contains("protection key", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(originalArchive, File.ReadAllBytes(backupPath));
+        Assert.False(File.Exists(backupPath + ".tmp"));
+        AssertArchiveDoesNotContain(backupPath, keyBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CreateBackup_rejects_planted_links_to_the_quarantine_file(bool hardAlias)
+    {
+        // The quarantine file's legacy ciphertext is one guessable derivation
+        // from plaintext, so it gets the same inode guard as the key: a link
+        // planted under a backup root must not export it.
+        var appData = Path.Join(_tempDir, hardAlias ? "quarantine-hard" : "quarantine-sym");
+        var backupPath = Path.Join(
+            _tempDir,
+            hardAlias ? "quarantine-hard.zip" : "quarantine-sym.zip"
+        );
+        var quarantinePath = Path.Join(appData, "retired-provider-secrets.quarantine.json");
+        var aliasPath = Path.Join(appData, "Data", "x", "innocuous.json");
+        var secretBytes = RandomNumberGenerator.GetBytes(48);
+
+        Write(Path.Join(appData, "settings.json"), "{}");
+        WriteBytes(quarantinePath, secretBytes);
+        Directory.CreateDirectory(Path.GetDirectoryName(aliasPath)!);
+        if (hardAlias)
+        {
+            CreateHardLink(quarantinePath, aliasPath);
+        }
+        else
+        {
+            File.CreateSymbolicLink(aliasPath, quarantinePath);
+        }
+
+        CreateBackupWithEntry(backupPath, "settings.json", "preserved");
+        var originalArchive = File.ReadAllBytes(backupPath);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            new SettingsBackupService(appData).CreateBackup(backupPath)
+        );
+
+        Assert.Contains("quarantine", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(originalArchive, File.ReadAllBytes(backupPath));
+        Assert.False(File.Exists(backupPath + ".tmp"));
+        AssertArchiveDoesNotContain(backupPath, secretBytes);
+    }
+
+    [Fact]
+    public void CreateBackup_fails_closed_when_the_key_path_is_a_non_regular_file()
+    {
+        var appData = Path.Join(_tempDir, "key-is-directory");
+        var backupPath = Path.Join(_tempDir, "key-is-directory.zip");
+        var keyPath = Path.Join(appData, "secret-protection.key");
+        Directory.CreateDirectory(keyPath);
+        File.WriteAllText(Path.Join(appData, "settings.json"), "{}");
+
+        Assert.Throws<InvalidOperationException>(() =>
+            new SettingsBackupService(appData).CreateBackup(backupPath)
+        );
+        Assert.False(File.Exists(backupPath));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CreateBackup_rejects_direct_and_chained_protection_key_links(bool chained)
+    {
+        var appData = Path.Join(_tempDir, chained ? "chained-key-link" : "direct-key-link");
+        var backupPath = Path.Join(_tempDir, chained ? "chained-key-link.zip" : "direct-key-link.zip");
+        var keyPath = Path.Join(appData, "secret-protection.key");
+        var aliasPath = Path.Join(appData, "PluginData", "x", "key-copy");
+        var keyBytes = RandomNumberGenerator.GetBytes(32);
+        WriteBytes(keyPath, keyBytes);
+        Directory.CreateDirectory(Path.GetDirectoryName(aliasPath)!);
+
+        if (chained)
+        {
+            var chainDirectory = Path.Join(appData, "link-chain");
+            var first = Path.Join(chainDirectory, "first");
+            var second = Path.Join(chainDirectory, "second");
+            Directory.CreateDirectory(chainDirectory);
+            File.CreateSymbolicLink(second, "../secret-protection.key");
+            File.CreateSymbolicLink(first, "second");
+            File.CreateSymbolicLink(
+                aliasPath,
+                Path.GetRelativePath(Path.GetDirectoryName(aliasPath)!, first)
+            );
+        }
+        else
+        {
+            File.CreateSymbolicLink(
+                aliasPath,
+                Path.GetRelativePath(Path.GetDirectoryName(aliasPath)!, keyPath)
+            );
+        }
+
+        Assert.Throws<InvalidOperationException>(() =>
+            new SettingsBackupService(appData).CreateBackup(backupPath)
+        );
+        Assert.Equal(keyBytes, File.ReadAllBytes(keyPath));
+        Assert.False(File.Exists(backupPath));
+        Assert.False(File.Exists(backupPath + ".tmp"));
+    }
+
+    [Fact]
+    public void CreateBackup_key_link_failure_preserves_existing_archive_and_removes_temp()
+    {
+        var appData = Path.Join(_tempDir, "preserve-key-link");
+        var backupPath = Path.Join(_tempDir, "preserve-key-link.zip");
+        var keyPath = Path.Join(appData, "secret-protection.key");
+        var aliasPath = Path.Join(appData, "Data", "key-copy");
+        var originalArchive = RandomNumberGenerator.GetBytes(64);
+        WriteBytes(keyPath, RandomNumberGenerator.GetBytes(32));
+        WriteBytes(backupPath, originalArchive);
+        Directory.CreateDirectory(Path.GetDirectoryName(aliasPath)!);
+        File.CreateSymbolicLink(
+            aliasPath,
+            Path.GetRelativePath(Path.GetDirectoryName(aliasPath)!, keyPath)
+        );
+
+        Assert.Throws<InvalidOperationException>(() =>
+            new SettingsBackupService(appData).CreateBackup(backupPath)
+        );
+
+        Assert.Equal(originalArchive, File.ReadAllBytes(backupPath));
+        Assert.False(File.Exists(backupPath + ".tmp"));
+    }
+
+    [Fact]
+    public void CreateBackup_does_not_traverse_directory_symlink()
+    {
+        var appData = Path.Join(_tempDir, "directory-link");
+        var backupPath = Path.Join(_tempDir, "directory-link.zip");
+        var outsideDirectory = Path.Join(_tempDir, "directory-link-outside");
+        var linkPath = Path.Join(appData, "Data", "linked-directory");
+        Write(Path.Join(appData, "Data", "ordinary.json"), "ordinary");
+        Write(Path.Join(outsideDirectory, "reachable-only-through-link.json"), "external");
+        Directory.CreateSymbolicLink(linkPath, outsideDirectory);
+        var warnings = new List<string>();
+
+        var result = new SettingsBackupService(
+            appData,
+            backupSkipObserver: warnings.Add
+        ).CreateBackup(backupPath);
+
+        Assert.Equal(1, result.FileCount);
+        using var archive = ZipFile.OpenRead(backupPath);
+        Assert.NotNull(archive.GetEntry("Data/ordinary.json"));
+        Assert.Null(
+            archive.GetEntry("Data/linked-directory/reachable-only-through-link.json")
+        );
+        Assert.Contains("Data/linked-directory", warnings);
+    }
+
+    [Fact]
+    public void CreateBackup_follows_symlinked_root_settings_file()
+    {
+        var appData = Path.Join(_tempDir, "linked-root-settings");
+        var backupPath = Path.Join(_tempDir, "linked-root-settings.zip");
+        var settingsPath = Path.Join(appData, "settings.json");
+        var targetPath = Path.Join(_tempDir, "linked-root-settings-target.json");
+        var targetBytes = "{\"language\":\"sv\"}"u8.ToArray();
+        WriteBytes(targetPath, targetBytes);
+        Directory.CreateDirectory(appData);
+        File.CreateSymbolicLink(settingsPath, targetPath);
+        var warnings = new List<string>();
+
+        var result = new SettingsBackupService(
+            appData,
+            backupSkipObserver: warnings.Add
+        ).CreateBackup(backupPath);
+
+        Assert.Equal(1, result.FileCount);
+        Assert.Equal(targetBytes.Length, result.UncompressedBytes);
+        using var archive = ZipFile.OpenRead(backupPath);
+        var entry = archive.GetEntry("settings.json");
+        Assert.NotNull(entry);
+        Assert.Equal(targetBytes, ReadEntryBytes(entry));
+        Assert.DoesNotContain("settings.json", warnings);
+    }
+
+    [Fact]
+    public void CreateBackup_follows_symlinked_root_data_directory()
+    {
+        var appData = Path.Join(_tempDir, "linked-root-data");
+        var backupPath = Path.Join(_tempDir, "linked-root-data.zip");
+        var dataPath = Path.Join(appData, "Data");
+        var targetDirectory = Path.Join(_tempDir, "linked-root-data-target");
+        var targetPath = Path.Join(targetDirectory, "external.json");
+        var targetBytes = RandomNumberGenerator.GetBytes(43);
+        WriteBytes(targetPath, targetBytes);
+        Directory.CreateDirectory(appData);
+        Directory.CreateSymbolicLink(dataPath, targetDirectory);
+        var warnings = new List<string>();
+
+        var result = new SettingsBackupService(
+            appData,
+            backupSkipObserver: warnings.Add
+        ).CreateBackup(backupPath);
+
+        Assert.Equal(1, result.FileCount);
+        Assert.Equal(targetBytes.Length, result.UncompressedBytes);
+        using var archive = ZipFile.OpenRead(backupPath);
+        var entry = archive.GetEntry("Data/external.json");
+        Assert.NotNull(entry);
+        Assert.Equal(targetBytes, ReadEntryBytes(entry));
+        Assert.DoesNotContain("Data", warnings);
+    }
+
+    [Fact]
+    public void CreateBackup_regular_to_key_symlink_swap_before_open_fails_closed()
+    {
+        var appData = Path.Join(_tempDir, "pre-open-swap");
+        var backupPath = Path.Join(_tempDir, "pre-open-swap.zip");
+        var keyPath = Path.Join(appData, "secret-protection.key");
+        var candidatePath = Path.Join(appData, "Data", "candidate.json");
+        var keyBytes = RandomNumberGenerator.GetBytes(32);
+        WriteBytes(keyPath, keyBytes);
+        Write(candidatePath, "ordinary");
+        var swapped = false;
+        var service = new SettingsBackupService(
+            appData,
+            backupPreOpenObserver: relativePath =>
+            {
+                if (relativePath != "Data/candidate.json")
+                {
+                    return;
+                }
+
+                File.Delete(candidatePath);
+                File.CreateSymbolicLink(
+                    candidatePath,
+                    Path.GetRelativePath(Path.GetDirectoryName(candidatePath)!, keyPath)
+                );
+                swapped = true;
+            }
+        );
+
+        Assert.ThrowsAny<Exception>(() => service.CreateBackup(backupPath));
+
+        Assert.True(swapped);
+        Assert.Equal(keyBytes, File.ReadAllBytes(keyPath));
+        Assert.False(File.Exists(backupPath));
+        Assert.False(File.Exists(backupPath + ".tmp"));
+    }
+
+    [Fact]
+    public void CreateBackup_regular_to_key_hard_link_swap_before_open_fails_identity_check()
+    {
+        var appData = Path.Join(_tempDir, "pre-open-hard-link-swap");
+        var backupPath = Path.Join(_tempDir, "pre-open-hard-link-swap.zip");
+        var keyPath = Path.Join(appData, "secret-protection.key");
+        var candidatePath = Path.Join(appData, "Data", "candidate.json");
+        var keyBytes = RandomNumberGenerator.GetBytes(32);
+        WriteBytes(keyPath, keyBytes);
+        Write(candidatePath, "ordinary");
+        var swapped = false;
+        var service = new SettingsBackupService(
+            appData,
+            backupPreOpenObserver: relativePath =>
+            {
+                if (relativePath != "Data/candidate.json")
+                {
+                    return;
+                }
+
+                File.Delete(candidatePath);
+                CreateHardLink(keyPath, candidatePath);
+                swapped = true;
+            }
+        );
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            service.CreateBackup(backupPath)
+        );
+
+        Assert.True(swapped);
+        Assert.Contains("protection key", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Data/candidate.json", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(keyBytes, File.ReadAllBytes(keyPath));
+        Assert.False(File.Exists(backupPath));
+        Assert.False(File.Exists(backupPath + ".tmp"));
+    }
+
+    [Fact]
+    public void CreateBackup_preserves_source_last_write_time()
+    {
+        var appData = Path.Join(_tempDir, "entry-mtime");
+        var backupPath = Path.Join(_tempDir, "entry-mtime.zip");
+        var sourcePath = Path.Join(appData, "Data", "timestamped.json");
+        var sourceTime = new DateTime(2021, 4, 5, 6, 7, 9, DateTimeKind.Utc);
+        Write(sourcePath, "timestamped");
+        File.SetLastWriteTimeUtc(sourcePath, sourceTime);
+        sourceTime = File.GetLastWriteTimeUtc(sourcePath);
+
+        new SettingsBackupService(appData).CreateBackup(backupPath);
+
+        using var archive = ZipFile.OpenRead(backupPath);
+        var entry = archive.GetEntry("Data/timestamped.json");
+        Assert.NotNull(entry);
+        Assert.InRange(
+            Math.Abs((entry.LastWriteTime.UtcDateTime - sourceTime).TotalSeconds),
+            0,
+            2
+        );
+    }
+
+    [Fact]
+    public void CreateBackup_skips_unix_domain_socket_as_non_regular()
+    {
+        // Short path segments: bind() rejects socket paths longer than sun_path
+        // (108 bytes on Linux), which the temp-dir prefix already eats into.
+        var appData = Path.Join(_tempDir, "sock");
+        var backupPath = Path.Join(_tempDir, "sock.zip");
+        var socketPath = Path.Join(appData, "Data", "s.sock");
+        Write(Path.Join(appData, "Data", "ordinary.json"), "ordinary");
+        var warnings = new List<string>();
+        using var listener = new Socket(
+            AddressFamily.Unix,
+            SocketType.Stream,
+            ProtocolType.Unspecified
+        );
+        listener.Bind(new UnixDomainSocketEndPoint(socketPath));
+
+        var result = new SettingsBackupService(
+            appData,
+            backupSkipObserver: warnings.Add
+        ).CreateBackup(backupPath);
+
+        Assert.Equal(1, result.FileCount);
+        using var archive = ZipFile.OpenRead(backupPath);
+        Assert.NotNull(archive.GetEntry("Data/ordinary.json"));
+        Assert.Null(archive.GetEntry("Data/s.sock"));
+        Assert.Contains("Data/s.sock", warnings);
+    }
+
+    [Fact]
+    public void StageRestore_zip_symlink_entry_materializes_as_plain_file()
+    {
+        var backupPath = Path.Join(_tempDir, "zip-symlink-entry.zip");
+        var targetData = Path.Join(_tempDir, "zip-symlink-target");
+        using (var archive = ZipFile.Open(backupPath, ZipArchiveMode.Create))
+        {
+            WriteValidManifest(archive);
+            var entry = archive.CreateEntry("Data/crafted-link");
+            entry.ExternalAttributes = unchecked((int)0xA1FF0000);
+            using var writer = new StreamWriter(entry.Open());
+            writer.Write("entry-payload");
+        }
+
+        var service = new SettingsBackupService(targetData);
+        service.StageRestore(backupPath);
+        var applyResult = service.ApplyPendingRestoreAtStartup();
+
+        var restoredPath = Path.Join(targetData, "Data", "crafted-link");
+        Assert.Equal(StartupRestoreStatus.Applied, applyResult.Status);
+        Assert.Equal("entry-payload", File.ReadAllText(restoredPath));
+        Assert.Null(new FileInfo(restoredPath).LinkTarget);
+    }
+
     [Fact]
     public void CreateBackup_MigratesPluginSecretBeforeArchivingIt()
     {
@@ -171,6 +636,110 @@ public sealed class SettingsBackupServiceTests : IDisposable
         Assert.Contains("protected secret", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.False(File.Exists(backupPath));
         Assert.False(File.Exists(backupPath + ".tmp"));
+    }
+
+    [Fact]
+    public void CreateBackupDoesNotAdvanceStartupCounterAndSucceedsAfterThirdStartupQuarantine()
+    {
+        var appData = Path.Join(_tempDir, "retired-provider-app-data");
+        var backupPath = Path.Join(_tempDir, "retired-provider-backup.zip");
+        var keyPath = Path.Join(appData, "secret-protection.key");
+        var settingsPath = Path.Join(appData, "settings.json");
+        var quarantinePath = Path.Join(
+            appData,
+            "retired-provider-secrets.quarantine.json"
+        );
+        var tampered = Convert.FromBase64String(
+            ApiKeyProtectionTests.EncryptLegacyGcm("provider-secret")
+        );
+        tampered[^1] ^= 0x10;
+        var ciphertext = Convert.ToBase64String(tampered);
+        Write(
+            settingsPath,
+            JsonSerializer.Serialize(
+                new Dictionary<string, string> { ["groqApiKey"] = ciphertext }
+            )
+        );
+
+        new SecretProtectionMigrationService(appData, keyPath, "startup-1")
+            .MigrateAllAtStartup();
+        Assert.Throws<InvalidOperationException>(() =>
+            new SettingsBackupService(
+                appData,
+                secretMigration: new SecretProtectionMigrationService(
+                    appData,
+                    keyPath,
+                    "backup-call-1"
+                )
+            ).CreateBackup(backupPath)
+        );
+        Assert.Throws<InvalidOperationException>(() =>
+            new SettingsBackupService(
+                appData,
+                secretMigration: new SecretProtectionMigrationService(
+                    appData,
+                    keyPath,
+                    "backup-call-2"
+                )
+            ).CreateBackup(backupPath)
+        );
+        using (var afterBackupCalls = JsonDocument.Parse(
+                   File.ReadAllText(quarantinePath)
+               ))
+        {
+            var failure = Assert.Single(
+                afterBackupCalls.RootElement
+                    .GetProperty("failures")
+                    .EnumerateArray()
+            );
+            Assert.Equal(1, failure.GetProperty("failureCount").GetInt32());
+            Assert.Empty(
+                afterBackupCalls.RootElement
+                    .GetProperty("retiredSecrets")
+                    .EnumerateArray()
+            );
+        }
+
+        new SecretProtectionMigrationService(appData, keyPath, "startup-2")
+            .MigrateAllAtStartup();
+        var thirdStartup = new SecretProtectionMigrationService(
+            appData,
+            keyPath,
+            "startup-3"
+        );
+        var startupResult = thirdStartup.MigrateAllAtStartup();
+        Assert.False(startupResult.HasUnresolvedSecrets);
+
+        var backupResult = new SettingsBackupService(
+            appData,
+            secretMigration: thirdStartup
+        ).CreateBackup(backupPath);
+
+        Assert.Equal(1, backupResult.FileCount);
+        using var settings = JsonDocument.Parse(File.ReadAllText(settingsPath));
+        Assert.Equal(
+            "",
+            settings.RootElement.GetProperty("groqApiKey").GetString()
+        );
+        using var quarantine = JsonDocument.Parse(File.ReadAllText(quarantinePath));
+        Assert.Equal(
+            ciphertext,
+            Assert.Single(
+                    quarantine.RootElement
+                        .GetProperty("retiredSecrets")
+                        .EnumerateArray()
+                )
+                .GetProperty("ciphertext")
+                .GetString()
+        );
+        using var archive = ZipFile.OpenRead(backupPath);
+        Assert.Null(
+            archive.GetEntry("retired-provider-secrets.quarantine.json")
+        );
+        Assert.DoesNotContain(
+            archive.Entries,
+            entry => entry.FullName.Contains("quarantine", StringComparison.Ordinal)
+        );
     }
 
     [Fact]
@@ -1027,6 +1596,54 @@ public sealed class SettingsBackupServiceTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, content);
     }
+
+    private static byte[] ReadEntryBytes(ZipArchiveEntry entry)
+    {
+        using var source = entry.Open();
+        using var destination = new MemoryStream();
+        source.CopyTo(destination);
+        return destination.ToArray();
+    }
+
+    private static void AssertArchiveDoesNotContain(string backupPath, byte[] forbiddenBytes)
+    {
+        using var archive = ZipFile.OpenRead(backupPath);
+        foreach (var entry in archive.Entries)
+        {
+            Assert.Equal(-1, ReadEntryBytes(entry).AsSpan().IndexOf(forbiddenBytes));
+        }
+    }
+
+    private static void CreateHardLink(string existingPath, string linkPath)
+    {
+        var existingPathUtf8 = Marshal.StringToCoTaskMemUTF8(existingPath);
+        try
+        {
+            var linkPathUtf8 = Marshal.StringToCoTaskMemUTF8(linkPath);
+            try
+            {
+                if (CreateHardLinkNative(existingPathUtf8, linkPathUtf8) != 0)
+                {
+                    throw new Win32Exception(Marshal.GetLastPInvokeError());
+                }
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem(linkPathUtf8);
+            }
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(existingPathUtf8);
+        }
+    }
+
+// LibraryImport source-gen needs AllowUnsafeBlocks, which this test project
+    // does not enable, so this interop uses DllImport.
+#pragma warning disable SYSLIB1054
+    [DllImport("libc", EntryPoint = "link", SetLastError = true)]
+    private static extern int CreateHardLinkNative(nint existingPath, nint linkPath);
+#pragma warning restore SYSLIB1054
 
     private static void Write(string path, string content)
     {

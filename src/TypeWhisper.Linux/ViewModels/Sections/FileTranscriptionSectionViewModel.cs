@@ -18,6 +18,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     private const string DefaultSelectionId = "__default__";
     private readonly AudioFileService _audioFiles;
 
+    private readonly ModelManagerService _models;
     private readonly IFileTranscriptionProcessor _processor;
     private readonly PluginManager _pluginManager;
     private readonly Action<Action> _postStatus;
@@ -97,6 +98,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         ISettingsService settings,
         AudioFileService audioFiles,
         WatchFolderService watchFolder,
+        ModelManagerService models,
         PluginManager pluginManager,
         Action<Action>? postStatus = null
     )
@@ -106,6 +108,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         _settings = settings;
         _audioFiles = audioFiles;
         _watchFolder = watchFolder;
+        _models = models;
         _pluginManager = pluginManager;
 
         Items.CollectionChanged += (_, _) =>
@@ -610,6 +613,24 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
             );
         }
 
+        // Not-ready means "retry later can succeed": only a plugin-qualified
+        // selection whose engine has not loaded yet qualifies. A blank or
+        // non-plugin selection can never become ready by waiting, so it falls
+        // through to the processor's immediate invalid-model error instead of
+        // an endless retry loop.
+        var selectedModelId = _settings.Current.SelectedModelId;
+        if (
+            string.IsNullOrWhiteSpace(options.EngineId)
+            && !string.IsNullOrWhiteSpace(selectedModelId)
+            && ModelManagerService.IsPluginModel(selectedModelId)
+            && _models.GetTranscriptionPlugin(selectedModelId) is null
+        )
+        {
+            throw new WatchFolderNotReadyException(
+                "Transcription engines are not ready."
+            );
+        }
+
         if (
             !string.IsNullOrWhiteSpace(options.EngineId)
             && engines.All(engine =>
@@ -761,8 +782,8 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(
-            _settings.Current with
+        _settings.Update(current =>
+            current with
             {
                 FileTranscriptionEngineOverride = CleanSettingValue(
                     FileTranscriptionEngineOverride
@@ -779,8 +800,8 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(
-            _settings.Current with
+        _settings.Update(current =>
+            current with
             {
                 WatchFolderPath = CleanSettingValue(WatchFolderPath),
                 WatchFolderOutputPath = CleanSettingValue(WatchFolderOutputPath),

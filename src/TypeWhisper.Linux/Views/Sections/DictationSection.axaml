@@ -269,7 +269,8 @@
                 <Grid RowDefinitions="Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
-                        <Grid ColumnDefinitions="*,240">
+                        <Grid ColumnDefinitions="*,240"
+                              RowDefinitions="Auto,Auto">
                             <TextBlock Text="{loc:Str Dictation.SpokenLanguage}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
@@ -282,6 +283,14 @@
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
+                            <TextBlock Grid.Row="1"
+                                       Grid.ColumnSpan="2"
+                                       Text="{Binding LanguageSelectionWarning}"
+                                       IsVisible="{Binding LanguageSelectionRequired}"
+                                       FontSize="12"
+                                       Foreground="#D6B45F"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
                         </Grid>
                     </Border>
 

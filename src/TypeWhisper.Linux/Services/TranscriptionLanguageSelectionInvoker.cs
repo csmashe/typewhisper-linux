@@ -84,8 +84,51 @@ internal static class TranscriptionLanguageSelectionInvoker
             );
         }
 
+        if (
+            !languageSelection.IsAutomatic
+            && role.SupportedLanguages is { Count: > 0 } supportedLanguages
+            && !supportedLanguages.Contains(
+                languageSelection.LanguageTag!,
+                StringComparer.OrdinalIgnoreCase
+            )
+        )
+        {
+            throw new TranscriptionLanguageNotSupportedException(
+                role.ProviderId,
+                role.SelectedModelId,
+                languageSelection,
+                supportedLanguages
+            );
+        }
+
         return languageSelection.IsAutomatic ? null : languageSelection.LanguageTag;
     }
+}
+
+internal sealed class TranscriptionLanguageNotSupportedException : NotSupportedException
+{
+    public TranscriptionLanguageNotSupportedException(
+        string providerId,
+        string? modelId,
+        LanguageSelection selection,
+        IReadOnlyList<string> supportedLanguages
+    )
+        : base(
+            $"Transcription provider '{providerId}' model '{modelId ?? "<unknown>"}' "
+                + $"does not support language '{selection.LanguageTag}'. Supported languages: "
+                + $"{string.Join(", ", supportedLanguages)}."
+        )
+    {
+        ProviderId = providerId;
+        ModelId = modelId;
+        Selection = selection;
+        SupportedLanguages = [.. supportedLanguages];
+    }
+
+    public string ProviderId { get; }
+    public string? ModelId { get; }
+    public LanguageSelection Selection { get; }
+    public IReadOnlyList<string> SupportedLanguages { get; }
 }
 
 internal static class LanguageSelectionResolver
@@ -149,6 +192,13 @@ internal static class LanguageSelectionUiMessage
                 Loc.Instance.GetString(
                     "LanguageSelection.ExplicitNotSupported",
                     unsupported.ProviderId
+                ),
+            TranscriptionLanguageNotSupportedException unsupported =>
+                Loc.Instance.GetString(
+                    "LanguageSelection.LanguageNotSupported",
+                    unsupported.ProviderId,
+                    unsupported.Selection.LanguageTag ?? string.Empty,
+                    string.Join(", ", unsupported.SupportedLanguages)
                 ),
             _ => exception.Message,
         };

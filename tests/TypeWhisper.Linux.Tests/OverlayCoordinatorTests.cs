@@ -1,0 +1,454 @@
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.ViewModels;
+using Xunit;
+
+namespace TypeWhisper.Linux.Tests;
+
+public sealed class OverlayCoordinatorTests
+{
+    private const int ConfiguredAutoHideMilliseconds = 1500;
+
+    [Fact]
+    public void ForeignStaleAndReleasedTokens_AreNoOps()
+    {
+        var sut = CreateCoordinator();
+        var other = CreateCoordinator();
+        var token = sut.Acquire(OverlayRequester.Dictation);
+        var foreign = other.Acquire(OverlayRequester.Dictation);
+        Assert.True(sut.Show(token, Processing("owned")));
+
+        AssertRejected(sut, foreign);
+
+        var stale = token;
+        token = sut.Acquire(OverlayRequester.Dictation);
+        AssertRejected(sut, stale);
+
+        Assert.True(sut.Show(token, Processing("replacement")));
+        Assert.True(sut.Release(token));
+        AssertRejected(sut, token);
+    }
+
+    [Fact]
+    public void ReAcquireSameRequester_InvalidatesOldTokenAndNewTokenPresents()
+    {
+        var sut = CreateCoordinator();
+        var oldToken = sut.Acquire(OverlayRequester.Dictation);
+        Assert.True(sut.Show(oldToken, Recording("old")));
+
+        var newToken = sut.Acquire(OverlayRequester.Dictation);
+
+        Assert.Equal(DictationOverlayState.Hidden, sut.PresentedState);
+        Assert.False(sut.Show(oldToken, Recording("stale")));
+        Assert.True(sut.Show(newToken, Recording("new")));
+        Assert.Equal("new", sut.PresentedState.StatusText);
+    }
+
+    [Fact]
+    public void Recording_BeatsProcessingAndFallsBackWhenRecordingReleases()
+    {
+        var sut = CreateCoordinator();
+        // The processing claim is deliberately OLDER: on the equal-priority tie-break the
+        // earlier claim would win, so recording taking the presentation proves priority.
+        var processing = sut.Acquire(OverlayRequester.Transform);
+        Assert.True(sut.Show(processing, Processing("processing")));
+        var recording = sut.Acquire(OverlayRequester.Dictation);
+        Assert.True(sut.Show(recording, Recording("recording")));
+
+        Assert.Equal("recording", sut.PresentedState.StatusText);
+
+        Assert.True(sut.Show(processing, Processing("processing 2")));
+
+        Assert.Equal("recording", sut.PresentedState.StatusText);
+        Assert.True(sut.Release(recording));
+        Assert.Equal("processing 2", sut.PresentedState.StatusText);
+    }
+
+    [Fact]
+    public void Recording_BeatsTerminalAndTransientFeedback()
+    {
+        var scheduler = new ManualScheduler();
+        var sut = CreateCoordinator(scheduler);
+        // The competing claim is deliberately OLDER so no outcome below is explainable
+        // by the claim-age tie-break alone.
+        var other = sut.Acquire(OverlayRequester.Transform);
+        Assert.True(sut.Show(other, Processing("other processing")));
+        var recording = sut.Acquire(OverlayRequester.Dictation);
+        Assert.True(sut.Show(recording, Recording("recording")));
+        Assert.Equal("recording", sut.PresentedState.StatusText);
+
+        Assert.True(sut.Show(other, Feedback("terminal")));
+        Assert.Equal("recording", sut.PresentedState.StatusText);
+
+        other = sut.Acquire(OverlayRequester.Transform);
+        Assert.True(sut.Show(other, Feedback("transient")));
+        Assert.Equal("recording", sut.PresentedState.StatusText);
+
+        Assert.True(sut.Release(recording));
+        Assert.Equal("transient", sut.PresentedState.FeedbackText);
+    }
+
+    [Fact]
+    public void EqualPriority_EarlierClaimIsStableAndItsOwnUpdatesRender()
+    {
+        var presentations = new List<OverlayPresentationChangedEventArgs>();
+        var sut = CreateCoordinator();
+        sut.PresentationChanged += (_, presentation) => presentations.Add(presentation);
+        var earlier = sut.Acquire(OverlayRequester.Dictation);
+        var later = sut.Acquire(OverlayRequester.Transform);
+
+        Assert.True(sut.Show(earlier, Processing("earlier 1")));
+        Assert.True(sut.Show(later, Processing("later 1")));
+        Assert.True(sut.Update(later, state => state with { StatusText = "later 2" }));
+
+        Assert.Equal("earlier 1", sut.PresentedState.StatusText);
+        Assert.Single(presentations);
+
+        Assert.True(sut.Update(earlier, state => state with { StatusText = "earlier 2" }));
+
+        Assert.Equal("earlier 2", sut.PresentedState.StatusText);
+        Assert.Equal(2, presentations.Count);
+    }
+
+    [Fact]
+    public void SuppressedTerminalFeedback_IsDiscardedAndNeverResurfaces()
+    {
+        var scheduler = new ManualScheduler();
+        var sut = CreateCoordinator(scheduler);
+        var recording = sut.Acquire(OverlayRequester.Dictation);
+        var terminal = sut.Acquire(OverlayRequester.Transform);
+        Assert.True(sut.Show(recording, Recording("recording")));
+        Assert.True(sut.Show(terminal, Processing("processing")));
+
+        Assert.True(sut.Show(terminal, Feedback("finished")));
+        Assert.True(sut.Release(recording));
+
+        Assert.Equal(DictationOverlayState.Hidden, sut.PresentedState);
+        Assert.False(scheduler.HasLiveEntries);
+    }
+
+    [Fact]
+    public void PostWorkflowToast_RanksTransientAndPresentedTerminalFeedbackSurvives()
+    {
+        var scheduler = new ManualScheduler();
+        var sut = CreateCoordinator(scheduler);
+        var dictation = sut.Acquire(OverlayRequester.Dictation);
+        Assert.True(sut.Show(dictation, Recording("dictation recording")));
+        Assert.True(sut.Hide(dictation));
+
+        var transform = sut.Acquire(OverlayRequester.Transform);
+        Assert.True(sut.Show(transform, Processing("transform processing")));
+        Assert.True(sut.Show(transform, Feedback("transform done")));
+        Assert.Equal("transform done", sut.PresentedState.FeedbackText);
+
+        // The dictation claim is deliberately OLDER: if its ended workflow wrongly kept
+        // terminal rank, this toast would win the age tie and the arbitration pass would
+        // permanently discard the presented transform outcome.
+        Assert.True(sut.Show(dictation, Feedback("dictation toast")));
+
+        Assert.Equal("transform done", sut.PresentedState.FeedbackText);
+
+        scheduler.Fire(0);
+
+        Assert.Equal("dictation toast", sut.PresentedState.FeedbackText);
+
+        scheduler.Fire(1);
+
+        Assert.Equal(DictationOverlayState.Hidden, sut.PresentedState);
+    }
+
+    [Fact]
+    public void SettingsReadFailure_ArmsDefaultExpiryInsteadOfStickingFeedback()
+    {
+        var scheduler = new ManualScheduler();
+        var sut = new OverlayCoordinator(
+            new ThrowingSettingsService(),
+            static action => action(),
+            scheduler.Schedule
+        );
+        var token = sut.Acquire(OverlayRequester.Dictation);
+
+        Assert.True(sut.Show(token, Feedback("feedback")));
+
+        Assert.Equal("feedback", sut.PresentedState.FeedbackText);
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(AppSettings.DefaultPreviewBubbleAutoHideMilliseconds),
+            scheduler.LastDelay
+        );
+
+        scheduler.Fire(0);
+
+        Assert.Equal(DictationOverlayState.Hidden, sut.PresentedState);
+    }
+
+    [Fact]
+    public void PresentedFeedbackExpiry_FallsBackToOtherLiveTokenThenHidden()
+    {
+        var scheduler = new ManualScheduler();
+        var sut = CreateCoordinator(scheduler);
+        var terminal = sut.Acquire(OverlayRequester.Dictation);
+        var transient = sut.Acquire(OverlayRequester.Transform);
+        Assert.True(sut.Show(terminal, Processing("processing")));
+        Assert.True(sut.Show(terminal, Feedback("terminal")));
+        Assert.True(sut.Show(transient, Feedback("transient")));
+        Assert.Equal("terminal", sut.PresentedState.FeedbackText);
+
+        scheduler.Fire(0);
+
+        Assert.Equal("transient", sut.PresentedState.FeedbackText);
+
+        scheduler.Fire(1);
+
+        Assert.Equal(DictationOverlayState.Hidden, sut.PresentedState);
+    }
+
+    [Fact]
+    public void SuppressedFeedback_KeepsItsBudgetAndPresentsAfterTheWinnerEnds()
+    {
+        var scheduler = new ManualScheduler();
+        var sut = CreateCoordinator(scheduler);
+        var recording = sut.Acquire(OverlayRequester.Dictation);
+        var transient = sut.Acquire(OverlayRequester.Transform);
+        Assert.True(sut.Show(recording, Recording("recording")));
+        Assert.True(sut.Show(transient, Feedback("transient")));
+
+        // The suppressed toast must not burn its display budget while it waits:
+        // no expiry is armed until it actually presents, so it cannot expire
+        // retired without ever having been seen behind a long recording.
+        Assert.False(scheduler.HasLiveEntries);
+        Assert.Equal("recording", sut.PresentedState.StatusText);
+
+        Assert.True(sut.Hide(recording));
+
+        Assert.Equal("transient", sut.PresentedState.FeedbackText);
+        Assert.True(scheduler.HasLiveEntries);
+        // The budget armed at presentation is the FULL configured duration, not a
+        // remainder discounted by the time spent suppressed.
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(ConfiguredAutoHideMilliseconds),
+            scheduler.LastDelay
+        );
+
+        scheduler.Fire(0);
+
+        Assert.Equal(DictationOverlayState.Hidden, sut.PresentedState);
+    }
+
+    [Fact]
+    public void MidWorkflowStateBlank_KeepsTerminalRankForTheWorkflowOutcome()
+    {
+        var scheduler = new ManualScheduler();
+        var sut = CreateCoordinator(scheduler);
+        var transform = sut.Acquire(OverlayRequester.Transform);
+        var dictation = sut.Acquire(OverlayRequester.Dictation);
+        Assert.True(sut.Show(dictation, Recording("dictation recording")));
+
+        // The producer blanks the overlay MID-workflow via a state publication
+        // (e.g. while a command streams its output into the page). Unlike Hide,
+        // this must not end the workflow.
+        Assert.True(sut.Update(dictation, _ => DictationOverlayState.Hidden));
+
+        // A deliberately OLDER transient toast would win an age tie between
+        // equal ranks, so a wrongly demoted outcome could never present.
+        Assert.True(sut.Show(transform, Feedback("transform transient")));
+        Assert.Equal("transform transient", sut.PresentedState.FeedbackText);
+
+        // The workflow's real terminal outcome arrives through the same token
+        // and must still rank TerminalFeedback, preempting the transient toast.
+        Assert.True(sut.Show(dictation, Feedback("dictation outcome")));
+        Assert.Equal("dictation outcome", sut.PresentedState.FeedbackText);
+    }
+
+    [Fact]
+    public void OutOfOrderDelivery_ViewModelIgnoresOlderRevision()
+    {
+        var posts = new List<Action>();
+        var settings = new FakeSettingsService(AppSettings.Default);
+        var sut = new OverlayCoordinator(settings, posts.Add);
+        var viewModel = new DictationOverlayViewModel(
+            settings,
+            static action => action(),
+            overlayCoordinator: sut
+        );
+        var token = sut.Acquire(OverlayRequester.Dictation);
+        Assert.True(sut.Show(token, Processing("older")));
+        Assert.True(sut.Update(token, state => state with { StatusText = "newer" }));
+
+        Assert.Equal(2, posts.Count);
+        posts[1]();
+        posts[0]();
+
+        Assert.True(viewModel.IsOverlayVisible);
+        Assert.Equal("newer", viewModel.StatusText);
+    }
+
+    [Fact]
+    public void PublishedPresentationRevisions_AreStrictlyMonotonic()
+    {
+        var revisions = new List<long>();
+        var sut = CreateCoordinator();
+        sut.PresentationChanged += (_, presentation) =>
+            revisions.Add(presentation.Revision);
+        var token = sut.Acquire(OverlayRequester.Dictation);
+
+        Assert.True(sut.Show(token, Processing("one")));
+        Assert.True(sut.Update(token, state => state with { StatusText = "two" }));
+        Assert.True(sut.Hide(token));
+
+        Assert.Equal([1L, 2L, 3L], revisions);
+    }
+
+    private static OverlayCoordinator CreateCoordinator(ManualScheduler? scheduler = null)
+    {
+        var settings = new FakeSettingsService(
+            AppSettings.Default with
+            {
+                PreviewBubbleAutoHideMilliseconds = ConfiguredAutoHideMilliseconds,
+            }
+        );
+        return new OverlayCoordinator(
+            settings,
+            static action => action(),
+            scheduler is null ? null : scheduler.Schedule
+        );
+    }
+
+    private static void AssertRejected(
+        OverlayCoordinator sut,
+        OverlayPresentationToken token
+    )
+    {
+        var state = sut.PresentedState;
+        var revision = sut.Revision;
+        var updaterInvoked = false;
+
+        Assert.False(sut.Show(token, Recording("rejected")));
+        Assert.False(sut.Update(token, current =>
+        {
+            updaterInvoked = true;
+            return current with { StatusText = "rejected" };
+        }));
+        Assert.False(sut.Hide(token));
+        Assert.False(sut.Release(token));
+        Assert.False(updaterInvoked);
+        Assert.Equal(state, sut.PresentedState);
+        Assert.Equal(revision, sut.Revision);
+    }
+
+    private static DictationOverlayState Recording(string status) =>
+        new()
+        {
+            IsOverlayVisible = true,
+            IsRecording = true,
+            StatusText = status,
+        };
+
+    private static DictationOverlayState Processing(string status) =>
+        new()
+        {
+            IsOverlayVisible = true,
+            StatusText = status,
+        };
+
+    private static DictationOverlayState Feedback(string text) =>
+        new()
+        {
+            ShowFeedback = true,
+            FeedbackText = text,
+            StatusText = text,
+        };
+
+    private sealed class ManualScheduler
+    {
+        private readonly List<ScheduledEntry> _entries = [];
+
+        public bool HasLiveEntries => _entries.Any(entry => !entry.IsCancelled);
+
+        public TimeSpan? LastDelay { get; private set; }
+
+        public IDisposable Schedule(TimeSpan delay, Action callback)
+        {
+            LastDelay = delay;
+            var entry = new ScheduledEntry(callback);
+            _entries.Add(entry);
+            return entry;
+        }
+
+        public void Fire(int index)
+        {
+            _entries[index].Fire();
+        }
+
+        private sealed class ScheduledEntry(Action callback) : IDisposable
+        {
+            public bool IsCancelled { get; private set; }
+
+            public void Fire()
+            {
+                if (!IsCancelled)
+                {
+                    callback();
+                }
+            }
+
+            public void Dispose()
+            {
+                IsCancelled = true;
+            }
+        }
+    }
+
+    // Models AtomicJsonStore.Current failing its lazy reload from disk.
+    private sealed class ThrowingSettingsService : ISettingsService
+    {
+        public AppSettings Current => throw new IOException("settings reload failed");
+
+        public AppSettings Load()
+        {
+            throw new IOException("settings reload failed");
+        }
+
+        public void Save(AppSettings settings)
+        {
+        }
+
+        public AppSettings Update(Func<AppSettings, AppSettings> mutate)
+        {
+            throw new IOException("settings reload failed");
+        }
+
+        public event Action<AppSettings>? SettingsChanged
+        {
+            add { }
+            remove { }
+        }
+    }
+
+    private sealed class FakeSettingsService(AppSettings current) : ISettingsService
+    {
+        public AppSettings Current { get; private set; } = current;
+
+        public AppSettings Load() => Current;
+
+        public void Save(AppSettings settings)
+        {
+            Change(settings);
+        }
+
+        public AppSettings Update(Func<AppSettings, AppSettings> mutate)
+        {
+            var updated = mutate(Current);
+            Change(updated);
+            return updated;
+        }
+
+        private void Change(AppSettings settings)
+        {
+            Current = settings;
+            SettingsChanged?.Invoke(settings);
+        }
+
+        public event Action<AppSettings>? SettingsChanged;
+    }
+}

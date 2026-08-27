@@ -34,6 +34,8 @@ internal sealed record RecordingContext(
     CancellationToken CancelToken
 )
 {
+    public OverlayPresentationToken? OverlayToken { get; init; }
+
     /// <summary>
     ///     Per-run sink for LLM prompt provenance. Null when capture is disabled
     ///     for this run (history saving or the provenance setting is off), so the
@@ -78,6 +80,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IMediaPauseService _mediaPause;
     private readonly MemoryService _memory;
     private readonly ModelManagerService _models;
+    private readonly OverlayCoordinator _overlayCoordinator;
     private readonly Lock _overlayStateLock = new();
     private readonly StreamingTranscriptState _partialTranscriptState = new();
     private readonly IPostProcessingPipeline _pipeline;
@@ -127,6 +130,7 @@ public sealed class DictationOrchestrator : IDisposable
     private DateTime _lastSpeechDetectedAtUtc;
     private DateTime _lastToggleUtc = DateTime.MinValue;
     private DictationOverlayState _overlayState = DictationOverlayState.Hidden;
+    private OverlayPresentationToken _overlayToken;
     private CancellationTokenSource? _partialTranscriptionCts;
     private Task? _partialTranscriptionTask;
     private string? _recordingAppProcess;
@@ -186,7 +190,8 @@ public sealed class DictationOrchestrator : IDisposable
         IDetectionFailureTracker failureTracker,
         IErrorLogService errorLog,
         ISessionActivityMonitor sessionActivityMonitor,
-        ActionPluginExecutionHost actionPluginExecutionHost
+        ActionPluginExecutionHost actionPluginExecutionHost,
+        OverlayCoordinator overlayCoordinator
     )
     {
         _hotkey = hotkey;
@@ -219,6 +224,8 @@ public sealed class DictationOrchestrator : IDisposable
         _errorLog = errorLog;
         _sessionActivityMonitor = sessionActivityMonitor;
         _actionPluginExecutionHost = actionPluginExecutionHost;
+        _overlayCoordinator = overlayCoordinator;
+        _overlayToken = _overlayCoordinator.Acquire(OverlayRequester.Dictation);
     }
 
     public bool IsRecording => _audio.IsRecordingOwnedBy(_audioCaptureSession);
@@ -760,6 +767,12 @@ public sealed class DictationOrchestrator : IDisposable
                     "Capture opened without a claimed recording session id."
                 );
 
+            var overlayToken = _overlayCoordinator.Acquire(OverlayRequester.Dictation);
+            lock (_overlayStateLock)
+            {
+                _overlayToken = overlayToken;
+            }
+
             _audioCaptureSession = captureSession;
             _recordingStart = DateTime.UtcNow;
             _lastSpeechDetectedAtUtc = _recordingStart;
@@ -998,7 +1011,7 @@ public sealed class DictationOrchestrator : IDisposable
                     matchedProfile?.WhisperModeOverride
                     ?? _settings.Current.WhisperModeEnabled
                 );
-                SetOverlayState(state =>
+                SetOverlayState(overlayToken, state =>
                     state with { ActiveProfileName = matchedProfile?.Name, ActiveAppName = appTitle }
                 );
                 _models.PluginManager.EventBus.Publish(
@@ -1088,7 +1101,7 @@ public sealed class DictationOrchestrator : IDisposable
                                         _recordingProfile = rematch.Profile;
                                     }
 
-                                    SetOverlayState(state =>
+                                    SetOverlayState(overlayToken, state =>
                                         state with { ActiveProfileName = rematch.Profile.Name }
                                     );
 
@@ -1430,7 +1443,15 @@ public sealed class DictationOrchestrator : IDisposable
                     stoppedStreamingModelId,
                     stoppedLanguageSelection,
                     snapshotCts?.Token ?? CancellationToken.None
-                );
+                )
+                {
+                    // Read WITHOUT _overlayStateLock on purpose: this runs under
+                    // _recordingSessionLock, and taking _overlayStateLock here would invert
+                    // the _overlayStateLock -> _recordingSessionLock order the transient
+                    // feedback gate takes (a real deadlock). The toggle gate's fences
+                    // already order this read against the acquire.
+                    OverlayToken = _overlayToken,
+                };
 
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
@@ -1470,7 +1491,7 @@ public sealed class DictationOrchestrator : IDisposable
                         // User hit Escape while still recording: clean up audio/media
                         // (already done above) and surface "Canceled" without saving
                         // the WAV or running transcription.
-                        SetOverlayState(state =>
+                        SetOverlayState(recordingContext, state =>
                             state with
                             {
                                 IsOverlayVisible = true,
@@ -1505,7 +1526,7 @@ public sealed class DictationOrchestrator : IDisposable
                         return;
                     }
 
-                    SetOverlayState(state =>
+                    SetOverlayState(recordingContext, state =>
                         state with
                         {
                             IsOverlayVisible = true,
@@ -2015,12 +2036,13 @@ public sealed class DictationOrchestrator : IDisposable
                         ErrorMessage = ex.Message, ModelId = engineModelId, AppName = context.AppTitle,
                     }
                 );
-                ReportStatus(context, $"Transcription failed: {userMessage}");
+                var failureMessage = $"Transcription failed: {userMessage}";
+                ReportStatus(context, failureMessage);
                 TryPublishSessionSpeechFeedback(
                     context,
-                    () => _speechFeedback.AnnounceError(userMessage)
+                    () => _speechFeedback.BeginAnnounceError(userMessage)
                 );
-                ShowFeedback(context, "Transcription failed.", true);
+                ShowFeedback(context, failureMessage, true);
                 PublishSessionTerminal(context.SessionId, "failed", userMessage);
                 return;
             }
@@ -2274,7 +2296,7 @@ public sealed class DictationOrchestrator : IDisposable
             // SpeechFeedbackService's configured-language fallback.
             TryPublishSessionSpeechFeedback(
                 context,
-                () => _speechFeedback.AnnounceTranscriptionComplete(
+                () => _speechFeedback.BeginAnnounceTranscriptionComplete(
                     finalText,
                     LinuxDictationReadbackLanguagePolicy.Resolve(
                         postProcessingLanguage,
@@ -2603,7 +2625,7 @@ public sealed class DictationOrchestrator : IDisposable
             ReportStatus(context, $"Transcription failed: {ex.Message}");
             TryPublishSessionSpeechFeedback(
                 context,
-                () => _speechFeedback.AnnounceError(ex.Message)
+                () => _speechFeedback.BeginAnnounceError(ex.Message)
             );
             var feedbackText = ex is InvalidOperationException ? ex.Message : "Transcription failed.";
             ShowFeedback(context, feedbackText, true);
@@ -2661,7 +2683,10 @@ public sealed class DictationOrchestrator : IDisposable
                     // unconditionally for non-overlay observers.
                     if (IsContextStillOwningOverlay(context))
                     {
-                        SetOverlayState(state => state with { LlmResponseText = accumulated });
+                        SetOverlayState(
+                            context,
+                            state => state with { LlmResponseText = accumulated }
+                        );
                     }
 
                     _models.PluginManager.EventBus.Publish(
@@ -2905,7 +2930,7 @@ public sealed class DictationOrchestrator : IDisposable
                 context.AppProcess,
                 async () =>
                 {
-                    SetOverlayState(state =>
+                    SetOverlayState(context, state =>
                         state with
                         {
                             IsOverlayVisible = false,
@@ -3437,9 +3462,13 @@ public sealed class DictationOrchestrator : IDisposable
     /// </summary>
     private string ClipboardFallbackMessage(string? targetProcessName)
     {
+        // One snapshot for both the terminal guard and the switch: a concurrent
+        // insertion could change LastFailureReason between the two reads and
+        // produce guidance that matches neither outcome.
+        var failureReason = _textInsertion.LastFailureReason;
         if (
             TextInsertionService.IsTerminalApp(targetProcessName)
-            && _textInsertion.LastFailureReason
+            && failureReason
                 is InsertionFailureReason.None
                 or InsertionFailureReason.PasteRetriesExhausted
         )
@@ -3447,7 +3476,7 @@ public sealed class DictationOrchestrator : IDisposable
             return Localization.Loc.Instance["TextInsertion.TerminalClipboardFallback"];
         }
 
-        return _textInsertion.LastFailureReason switch
+        return failureReason switch
         {
             InsertionFailureReason.WtypeCompositorUnsupported =>
                 "Copied to clipboard. Compositor doesn't support direct typing — set up ydotool from Settings → Text insertion to enable auto-paste.",
@@ -3860,7 +3889,7 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
-        SetOverlayState(state =>
+        SetOverlayState(context, state =>
             state with
             {
                 IsOverlayVisible = true,
@@ -4050,7 +4079,10 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
-        ShowFeedback(text, isError, isCanceled, playSound: false);
+        SetOverlayState(
+            context,
+            state => FeedbackState(state, text, isError)
+        );
         TryRunSessionTerminalFeedback(context, isError, isCanceled);
     }
 
@@ -4064,11 +4096,9 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
-        ShowFeedback(
-            result.Message,
-            !result.Success,
-            playSound: false,
-            actionResult: result
+        SetOverlayState(
+            context,
+            state => FeedbackState(state, result.Message, !result.Success, result)
         );
         TryRunSessionTerminalFeedback(context, !result.Success, isCanceled: false);
     }
@@ -4098,8 +4128,9 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    private void TryPublishSessionSpeechFeedback(RecordingContext context, Action publish)
+    private void TryPublishSessionSpeechFeedback(RecordingContext context, Func<Action?> begin)
     {
+        Action? launch;
         lock (_recordingSessionLock)
         {
             if (!IsSessionStillOwningOverlayLocked(context.SessionId))
@@ -4107,8 +4138,16 @@ public sealed class DictationOrchestrator : IDisposable
                 return;
             }
 
-            publish();
+            // Registration (version allocation + request swap) happens under the
+            // session lock so it linearizes with startup's generation claim and
+            // ReserveStartupFeedback, but the launch crosses the TTS provider /
+            // plugin trust boundary and must run after the lock is released — a
+            // hung provider or plugin Stop() must not be able to freeze the
+            // dictation toggle path.
+            launch = begin();
         }
+
+        launch?.Invoke();
     }
 
     /// <summary>
@@ -4205,6 +4244,27 @@ public sealed class DictationOrchestrator : IDisposable
 
     private void SetOverlayState(Func<DictationOverlayState, DictationOverlayState> updater)
     {
+        // The current token is read inside the lock so a concurrent re-acquire cannot
+        // slip between the read and the publication.
+        SetOverlayState(token: null, updater);
+    }
+
+    private void SetOverlayState(
+        RecordingContext context,
+        Func<DictationOverlayState, DictationOverlayState> updater
+    )
+    {
+        if (context.OverlayToken is { } token)
+        {
+            SetOverlayState(token, updater);
+        }
+    }
+
+    private void SetOverlayState(
+        OverlayPresentationToken? token,
+        Func<DictationOverlayState, DictationOverlayState> updater
+    )
+    {
         // Serialize updates: SetOverlayState is invoked from the toggle path,
         // the active-window snapshot Task.Run, and the partial-transcription
         // loop concurrently. Without a lock, the read-modify-write on
@@ -4212,7 +4272,28 @@ public sealed class DictationOrchestrator : IDisposable
         // and emit a stale state after a newer one.
         lock (_overlayStateLock)
         {
-            _overlayState = updater(_overlayState);
+            // Derive from the COORDINATOR's slot state, not the _overlayState
+            // mirror: after feedback expiry retires the slot, the mirror still
+            // carries ShowFeedback and republishing from it would resurrect the
+            // expired toast. The mirror becomes a write-behind copy of what was
+            // actually published. Updaters stay pure record-withs, so running
+            // them under the coordinator lock is within Update's contract.
+            DictationOverlayState? published = null;
+            var accepted = _overlayCoordinator.Update(
+                token ?? _overlayToken,
+                current =>
+                {
+                    var next = updater(current);
+                    published = next;
+                    return next;
+                }
+            );
+            if (!accepted || published is null)
+            {
+                return;
+            }
+
+            _overlayState = published;
             OverlayStateChanged?.Invoke(this, _overlayState);
         }
     }

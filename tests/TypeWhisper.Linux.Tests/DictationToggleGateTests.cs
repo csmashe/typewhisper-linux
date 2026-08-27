@@ -283,6 +283,9 @@ public sealed class DictationToggleGateTests
 
         Assert.True(waiterAcquired);
         Assert.True(finalWaiterResult);
+        // Relies on SemaphoreSlim.Release handing the permit to the queued waiter
+        // while m_currentCount stays zero, so the barger's TryAcquire never sees it.
+        // That is current runtime behavior, not a DictationToggleGate contract.
         Assert.Equal(0, Volatile.Read(ref bargerAcquired));
     }
 

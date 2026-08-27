@@ -861,6 +861,63 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public void FieldRow_ExplicitMultiline_MasksOnlyWhenSecret()
+    {
+        var secret = new PluginSettingFieldRow(
+            "secret-notes",
+            "Secret notes",
+            "",
+            "",
+            [],
+            true,
+            PluginSettingKind.Multiline,
+            ""
+        );
+        var plain = new PluginSettingFieldRow(
+            "notes",
+            "Notes",
+            "",
+            "",
+            [],
+            false,
+            PluginSettingKind.Multiline,
+            ""
+        );
+
+        Assert.Equal(PluginSettingKind.Multiline, secret.Kind);
+        Assert.Equal(PluginSettingKind.Multiline, plain.Kind);
+        Assert.Equal('•', secret.MultilinePasswordChar);
+        Assert.Equal('\0', plain.MultilinePasswordChar);
+        Assert.True(secret.IsSecretMultiline);
+        Assert.False(plain.IsSecretMultiline);
+        Assert.False(secret.RevealSecretMultiline);
+        Assert.False(secret.IsSecretKind);
+    }
+
+    [Fact]
+    public void CollectionItemRow_SecretMultiline_PropagatesMask()
+    {
+        var item = new PluginCollectionItemRow(
+            [
+                new PluginSettingDefinition(
+                    "headers",
+                    "Headers",
+                    IsSecret: true,
+                    Kind: PluginSettingKind.Multiline
+                ),
+            ],
+            null,
+            null
+        );
+
+        var field = item.Fields.Single(candidate => candidate.Key == "headers");
+        Assert.Equal(PluginSettingKind.Multiline, field.Kind);
+        Assert.Equal('•', field.MultilinePasswordChar);
+        Assert.True(field.IsSecretMultiline);
+        Assert.False(field.RevealSecretMultiline);
+    }
+
+    [Fact]
     public void FieldRow_HiddenKey_IsHidden()
     {
         var field = new PluginSettingFieldRow(

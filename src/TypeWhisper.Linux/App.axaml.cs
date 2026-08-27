@@ -74,7 +74,7 @@ public class App : Application
             BootTrace.Stage("Loc.Initialize");
 
             var secretMigration = services.GetRequiredService<SecretProtectionMigrationService>();
-            var secretMigrationResult = secretMigration.MigrateAll();
+            var secretMigrationResult = secretMigration.MigrateAllAtStartup();
             if (secretMigrationResult.RootSettingsChanged)
             {
                 settings.Load();
@@ -600,8 +600,18 @@ public class App : Application
                 DynamicHotkeyBindingKind.Profile,
                 DynamicHotkeyRejectionReason.Conflict
             ) => "Shortcuts.ProfileHotkeyInactiveConflict",
-            _ => throw new ArgumentOutOfRangeException(nameof(rejection)),
+            _ => null,
         };
+
+        if (key is null)
+        {
+            // A kind/reason this formatter does not know yet must still produce a log
+            // entry — throwing here would abort the whole hotkey-apply pass over a
+            // diagnostic string. No localization key covers the combination, so the
+            // fallback stays English.
+            return $"Hotkey binding rejected ({rejection.Kind}/{rejection.Reason}): "
+                   + $"'{rejection.DisplayName}' {rejection.NormalizedChord}";
+        }
 
         return rejection.Reason == DynamicHotkeyRejectionReason.BlankId
             ? Loc.Instance.GetString(key, rejection.NormalizedChord)
@@ -630,13 +640,13 @@ public class App : Application
 
         if (shouldMigrate)
         {
-            settings.Save(s with { ToggleHotkey = linuxDefault });
+            settings.Update(current => current with { ToggleHotkey = linuxDefault });
         }
         else if (!hotkey.TrySetHotkeyFromString(persisted))
         {
             // User-set but unparseable — keep the service default and fix
             // settings so UI/state agree.
-            settings.Save(s with { ToggleHotkey = linuxDefault });
+            settings.Update(current => current with { ToggleHotkey = linuxDefault });
         }
     }
 
@@ -752,26 +762,6 @@ public class App : Application
 
         try
         {
-            var hotkey = services.GetService<HotkeyService>();
-            hotkey?.Dispose();
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[App] Hotkey dispose failed: {ex.Message}");
-        }
-
-        try
-        {
-            var controlSocket = services.GetService<ControlSocketServer>();
-            controlSocket?.Dispose();
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[App] Control socket dispose failed: {ex.Message}");
-        }
-
-        try
-        {
             var tray = services.GetService<TrayIconService>();
             tray?.Dispose();
         }
@@ -830,6 +820,31 @@ public class App : Application
         {
             httpApiDrained = false;
             Debug.WriteLine($"[App] HTTP API quiesce failed: {ex.Message}");
+        }
+
+        // After the HTTP quiesce: an admitted PUT /v1/profiles/toggle handler calls
+        // into HotkeyService, so disposing it (or the control socket) before the
+        // drain completes would let a live request touch a disposed service. Still
+        // unconditional — even on a failed drain the libuiohook threads must not
+        // race process exit, and a handler that outlived its budget is already lost.
+        try
+        {
+            var hotkey = services.GetService<HotkeyService>();
+            hotkey?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Hotkey dispose failed: {ex.Message}");
+        }
+
+        try
+        {
+            var controlSocket = services.GetService<ControlSocketServer>();
+            controlSocket?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Control socket dispose failed: {ex.Message}");
         }
 
         try
@@ -1457,13 +1472,37 @@ public class App : Application
 
             if (resolved.Index != configuredIndex || resolved.PersistentId != configuredId)
             {
-                settings.Save(
-                    settings.Current with
+                var raced = false;
+                settings.Update(current =>
+                {
+                    if (
+                        current.SelectedMicrophoneDevice != configuredIndex
+                        || current.SelectedMicrophoneDeviceId != configuredId
+                    )
+                    {
+                        // A newer selection landed after this restore captured its
+                        // inputs; persisting the stale resolution would overwrite
+                        // the user's choice.
+                        raced = true;
+                        return current;
+                    }
+
+                    // Update may retry the delegate; only the final run decides.
+                    raced = false;
+                    return current with
                     {
                         SelectedMicrophoneDevice = resolved.Index,
                         SelectedMicrophoneDeviceId = resolved.PersistentId,
-                    }
-                );
+                    };
+                });
+
+                if (raced)
+                {
+                    // Re-run against the newer selection so the audio service does
+                    // not keep the stale device applied above. Recurs only while
+                    // yet-newer selections keep landing, so it is self-limiting.
+                    ApplyConfiguredMicrophone(audio, settings);
+                }
             }
         }
         catch (Exception ex)

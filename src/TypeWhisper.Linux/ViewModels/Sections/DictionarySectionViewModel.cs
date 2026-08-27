@@ -192,7 +192,7 @@ public partial class DictionarySectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { VocabularyBoostingEnabled = value });
+        _settings.Update(current => current with { VocabularyBoostingEnabled = value });
     }
 
     partial void OnNewEntryTypeChanged(DictionaryEntryType value)
@@ -312,7 +312,7 @@ public partial class DictionarySectionViewModel : ObservableObject
     private void SaveEnabledPacks()
     {
         var enabledIds = Packs.Where(pack => pack.IsEnabled).Select(pack => pack.Pack.Id).ToArray();
-        _settings.Save(_settings.Current with { EnabledPackIds = enabledIds });
+        _settings.Update(current => current with { EnabledPackIds = enabledIds });
     }
 
     private void Refresh()

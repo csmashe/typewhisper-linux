@@ -128,6 +128,9 @@ public partial class DictationSectionViewModel : ObservableObject
     private string _language = "auto";
 
     [ObservableProperty]
+    private bool _languageSelectionRequired;
+
+    [ObservableProperty]
     private string? _lastCapturePath;
 
     [ObservableProperty]
@@ -535,7 +538,12 @@ public partial class DictationSectionViewModel : ObservableObject
             );
         set
         {
-            var code = value?.Code ?? "auto";
+            if (value is null)
+            {
+                return;
+            }
+
+            var code = value.Code;
             if (string.Equals(code, Language, StringComparison.Ordinal))
             {
                 return;
@@ -545,6 +553,13 @@ public partial class DictationSectionViewModel : ObservableObject
             OnPropertyChanged();
         }
     }
+
+    private bool _autoIsOnlyLanguageChoice;
+
+    public string LanguageSelectionWarning =>
+        _autoIsOnlyLanguageChoice
+            ? Loc.Instance["Dictation.LanguageSelectionRequiredAuto"]
+            : Loc.Instance["Dictation.LanguageSelectionRequired"];
 
     public CleanupLevelOption? SelectedCleanupLevelOption
     {
@@ -616,7 +631,7 @@ public partial class DictationSectionViewModel : ObservableObject
             await _models.DeleteModelAsync(selected.ModelId);
             if (_settings.Current.SelectedModelId == selected.ModelId)
             {
-                _settings.Save(_settings.Current with { SelectedModelId = null });
+                _settings.Update(current => current with { SelectedModelId = null });
             }
 
             SelectedModel = null;
@@ -818,7 +833,7 @@ public partial class DictationSectionViewModel : ObservableObject
         try
         {
             ReplaceCollection(AccelerationOptions, CreateAccelerationOptions());
-            ReplaceCollection(LanguageChoices, CreateLanguageChoices());
+            RefreshLanguageChoices();
             ReplaceCollection(CleanupLevelOptions, CreateCleanupLevelOptions());
             ReplaceCollection(InsertionStrategyOptions, CreateInsertionStrategyOptions());
 
@@ -833,8 +848,16 @@ public partial class DictationSectionViewModel : ObservableObject
 
             OnPropertyChanged(nameof(SelectedAccelerationOption));
             OnPropertyChanged(nameof(SelectedLanguageOption));
+            OnPropertyChanged(nameof(LanguageSelectionWarning));
             OnPropertyChanged(nameof(SelectedCleanupLevelOption));
             OnPropertyChanged(nameof(SelectedNewInsertionStrategyOption));
+            OnPropertyChanged(nameof(AudioDuckingUnavailableReason));
+            OnPropertyChanged(nameof(MediaPauseUnavailableReason));
+            OnPropertyChanged(nameof(SoundFeedbackUnavailableReason));
+            OnPropertyChanged(nameof(CudaLibraryPathActionText));
+            OnPropertyChanged(nameof(DownloadCudaRuntimeText));
+            OnPropertyChanged(nameof(ClearGpuRuntimeText));
+            OnPropertyChanged(nameof(AccelerationStatusText));
         }
         finally
         {
@@ -870,6 +893,56 @@ public partial class DictationSectionViewModel : ObservableObject
             new("da", "Dansk"),
             new("fi", "Suomi"),
         ];
+    }
+
+    private void RefreshLanguageChoices()
+    {
+        var choices = CreateLanguageChoices();
+        var selectedModelIsActive =
+            SelectedModel is { } selected
+            && ModelReady
+            && string.Equals(
+                selected.ModelId,
+                _models.ActiveModelId,
+                StringComparison.Ordinal
+            );
+        if (!selectedModelIsActive || _models.ActiveTranscriptionPlugin is not { } engine)
+        {
+            ReplaceCollection(LanguageChoices, choices);
+            LanguageSelectionRequired = false;
+            OnPropertyChanged(nameof(SelectedLanguageOption));
+            return;
+        }
+
+        var capabilities = engine as ITranscriptionLanguageSelectionCapabilities;
+        var automaticSupported =
+            capabilities?.AutomaticDetectionSupport != LanguageSelectionSupport.Unsupported;
+        var explicitSupported =
+            capabilities?.ExplicitSelectionSupport != LanguageSelectionSupport.Unsupported;
+        var supportedLanguages = engine.SupportedLanguages;
+
+        ReplaceCollection(
+            LanguageChoices,
+            choices.Where(option =>
+                option.Code == "auto"
+                    ? automaticSupported
+                    : explicitSupported
+                        && (
+                            supportedLanguages.Count == 0
+                            || supportedLanguages.Contains(
+                                option.Code,
+                                StringComparer.OrdinalIgnoreCase
+                            )
+                        )
+            )
+        );
+        OnPropertyChanged(nameof(SelectedLanguageOption));
+        // Parakeet-style engines reject every explicit language: telling the user to
+        // "choose a language explicitly" would contradict the only selectable option,
+        // so the warning switches to a switch-to-Auto instruction.
+        _autoIsOnlyLanguageChoice = LanguageChoices is [{ Code: "auto" }];
+        LanguageSelectionRequired = SelectedLanguageOption is null;
+        OnPropertyChanged(nameof(LanguageSelectionWarning));
     }
 
     private static IReadOnlyList<CleanupLevelOption> CreateCleanupLevelOptions()
@@ -976,6 +1049,7 @@ public partial class DictationSectionViewModel : ObservableObject
             EngineName = Loc.Instance["Dictation.NoEngineSelected"];
             ModelStatusText = Loc.Instance["Dictation.StatusNotSelected"];
             ModelReady = false;
+            RefreshLanguageChoices();
             OnPropertyChanged(nameof(CanDeleteSelectedModel));
             return;
         }
@@ -994,6 +1068,7 @@ public partial class DictationSectionViewModel : ObservableObject
             ModelStatusType.Error => FormatModelStatusError(status.ErrorMessage),
             _ => Loc.Instance["Dictation.StatusNotReady"],
         };
+        RefreshLanguageChoices();
         OnPropertyChanged(nameof(CanDeleteSelectedModel));
         OnPropertyChanged(nameof(CanUseCuda));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
@@ -1010,7 +1085,7 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { SelectedModelId = value.ModelId });
+        _settings.Update(current => current with { SelectedModelId = value.ModelId });
         RefreshModelState();
         _ = DownloadAndLoadSelectedModelAsync(value);
     }
@@ -1070,7 +1145,7 @@ public partial class DictationSectionViewModel : ObservableObject
             )
         )
         {
-            _settings.Save(_settings.Current with { LocalModelAcceleration = normalized });
+            _settings.Update(current => current with { LocalModelAcceleration = normalized });
         }
 
         OnPropertyChanged(nameof(SelectedAccelerationOption));
@@ -1460,8 +1535,8 @@ public partial class DictationSectionViewModel : ObservableObject
             // service into follow-default mode so it re-resolves the OS default.
             _audio.FollowSystemDefault = true;
             _audio.SelectedDeviceIndex = null;
-            _settings.Save(
-                _settings.Current with
+            _settings.Update(current =>
+                current with
                 {
                     SelectedMicrophoneDevice = null,
                     SelectedMicrophoneDeviceId = AppSettings.FollowSystemDefaultMicrophoneId,
@@ -1472,8 +1547,8 @@ public partial class DictationSectionViewModel : ObservableObject
 
         _audio.FollowSystemDefault = false;
         _audio.SelectedDeviceIndex = value.Index;
-        _settings.Save(
-            _settings.Current with
+        _settings.Update(current =>
+            current with
             {
                 SelectedMicrophoneDevice = value.Index, SelectedMicrophoneDeviceId = value.PersistentId,
             }
@@ -1487,13 +1562,14 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { Language = value });
+        _settings.Update(current => current with { Language = value });
+        LanguageSelectionRequired = false;
         OnPropertyChanged(nameof(SelectedLanguageOption));
     }
 
     partial void OnTranslationTargetLanguageChanged(string? value)
     {
-        _settings.Save(_settings.Current with { TranslationTargetLanguage = value });
+        _settings.Update(current => current with { TranslationTargetLanguage = value });
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
     }
 
@@ -1504,23 +1580,23 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { CleanupLevel = value });
+        _settings.Update(current => current with { CleanupLevel = value });
         OnPropertyChanged(nameof(SelectedCleanupLevelOption));
     }
 
     partial void OnAutoPasteChanged(bool value)
     {
-        _settings.Save(_settings.Current with { AutoPaste = value });
+        _settings.Update(current => current with { AutoPaste = value });
     }
 
     partial void OnAutoAddDictionaryCorrectionsChanged(bool value)
     {
-        _settings.Save(_settings.Current with { AutoAddDictionaryCorrections = value });
+        _settings.Update(current => current with { AutoAddDictionaryCorrections = value });
     }
 
     partial void OnTargetAppCorrectionLearningEnabledChanged(bool value)
     {
-        _settings.Save(_settings.Current with { TargetAppCorrectionLearningEnabled = value });
+        _settings.Update(current => current with { TargetAppCorrectionLearningEnabled = value });
         OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
         // Re-read the live flag when the feature is switched on so the enable button appears
         // if the bridge isn't active yet.
@@ -1561,20 +1637,20 @@ public partial class DictationSectionViewModel : ObservableObject
             // bridge a screen reader already turned on — blindly re-writing would re-assert persistent
             // global accessibility flags we won't offer a Remove for, leaving no in-app undo. So we no-op
             // an already-on bridge, fail an indeterminate read, and claim ownership only on a flip we made.
-            var current = await _a11yBus.IsActivatedAsync();
-            if (current == false)
+            var activated = await _a11yBus.IsActivatedAsync();
+            if (activated == false)
             {
                 ok = await _a11yBus.SetActivatedAsync(true);
                 if (ok)
                 {
-                    _settings.Save(
-                        _settings.Current with { AccessibilityBridgeEnabledByApp = true }
+                    _settings.Update(current =>
+                        current with { AccessibilityBridgeEnabledByApp = true }
                     );
                 }
             }
             else
             {
-                ok = current == true;
+                ok = activated == true;
             }
         }
         else
@@ -1597,8 +1673,8 @@ public partial class DictationSectionViewModel : ObservableObject
             {
                 // A successful remove always clears ownership. See ShowAccessibilityBridgeRemove
                 // for why this gates the button.
-                _settings.Save(
-                    _settings.Current with { AccessibilityBridgeEnabledByApp = false }
+                _settings.Update(current =>
+                    current with { AccessibilityBridgeEnabledByApp = false }
                 );
             }
         }
@@ -1656,17 +1732,17 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnLiveTranscriptionEnabledChanged(bool value)
     {
-        _settings.Save(_settings.Current with { LiveTranscriptionEnabled = value });
+        _settings.Update(current => current with { LiveTranscriptionEnabled = value });
     }
 
     partial void OnOnlineAsrBatchLiveTranscriptionEnabledChanged(bool value)
     {
-        _settings.Save(_settings.Current with { OnlineAsrBatchLiveTranscriptionEnabled = value });
+        _settings.Update(current => current with { OnlineAsrBatchLiveTranscriptionEnabled = value });
     }
 
     partial void OnLiveTranscriptionStreamingEnabledChanged(bool value)
     {
-        _settings.Save(_settings.Current with { LiveTranscriptionStreamingEnabled = value });
+        _settings.Update(current => current with { LiveTranscriptionStreamingEnabled = value });
     }
 
     [RelayCommand]
@@ -1734,7 +1810,7 @@ public partial class DictationSectionViewModel : ObservableObject
                 StringComparer.OrdinalIgnoreCase
             );
 
-        _settings.Save(_settings.Current with { AppInsertionStrategies = strategies });
+        _settings.Update(current => current with { AppInsertionStrategies = strategies });
     }
 
     private static string NormalizeProcessName(string? processName)
@@ -1744,7 +1820,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnWhisperModeEnabledChanged(bool value)
     {
-        _settings.Save(_settings.Current with { WhisperModeEnabled = value });
+        _settings.Update(current => current with { WhisperModeEnabled = value });
     }
 
     partial void OnSoundFeedbackEnabledChanged(bool value)
@@ -1755,22 +1831,22 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { SoundFeedbackEnabled = value });
+        _settings.Update(current => current with { SoundFeedbackEnabled = value });
     }
 
     partial void OnTranscribeShortQuietClipsAggressivelyChanged(bool value)
     {
-        _settings.Save(_settings.Current with { TranscribeShortQuietClipsAggressively = value });
+        _settings.Update(current => current with { TranscribeShortQuietClipsAggressively = value });
     }
 
     partial void OnTranscriptionNumberNormalizationEnabledChanged(bool value)
     {
-        _settings.Save(_settings.Current with { TranscriptionNumberNormalizationEnabled = value });
+        _settings.Update(current => current with { TranscriptionNumberNormalizationEnabled = value });
     }
 
     partial void OnSilenceAutoStopEnabledChanged(bool value)
     {
-        _settings.Save(_settings.Current with { SilenceAutoStopEnabled = value });
+        _settings.Update(current => current with { SilenceAutoStopEnabled = value });
     }
 
     partial void OnSilenceAutoStopSecondsChanged(int value)
@@ -1780,7 +1856,7 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { SilenceAutoStopSeconds = value });
+        _settings.Update(current => current with { SilenceAutoStopSeconds = value });
     }
 
     partial void OnAudioDuckingEnabledChanged(bool value)
@@ -1791,7 +1867,7 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { AudioDuckingEnabled = value });
+        _settings.Update(current => current with { AudioDuckingEnabled = value });
     }
 
     // Lower and upper bounds for how quiet ducking may make other audio,
@@ -1814,8 +1890,8 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnAudioDuckingLevelChanged(double value)
     {
-        _settings.Save(
-            _settings.Current with
+        _settings.Update(current =>
+            current with
             {
                 AudioDuckingLevel = (float)Math.Clamp(value, MinDuckingLevel, MaxDuckingLevel),
             }
@@ -1831,7 +1907,7 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { PauseMediaDuringRecording = value });
+        _settings.Update(current => current with { PauseMediaDuringRecording = value });
     }
 
     private void OnLevelChanged(object? sender, float level)

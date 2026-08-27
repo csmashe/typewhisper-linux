@@ -870,7 +870,6 @@ public partial class PluginRow : ObservableObject
             .OrderBy(category => category.SortOrder)
             .First();
         CategoryKey = descriptor.Key;
-        CategoryLabel = descriptor.DisplayName;
         CategorySortOrder = descriptor.SortOrder;
     }
 
@@ -879,7 +878,6 @@ public partial class PluginRow : ObservableObject
     public string Version { get; }
     public string Description { get; }
     public string CategoryKey { get; }
-    public string CategoryLabel { get; }
     public int CategorySortOrder { get; }
     public IReadOnlySet<PluginCategory> Categories { get; }
     public PluginNetworkAccess NetworkAccess { get; }
@@ -1082,6 +1080,8 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
         Description = description;
         Placeholder = placeholder;
         Kind = ResolveKind(kind, options, isSecret);
+        IsSecretMultiline = isSecret && Kind == PluginSettingKind.Multiline;
+        MultilinePasswordChar = IsSecretMultiline ? '•' : '\0';
         _advertisedOptions = options.ToArray();
         _options = new ObservableCollection<PluginSettingOption>(_advertisedOptions);
         Options = new ReadOnlyObservableCollection<PluginSettingOption>(_options);
@@ -1114,6 +1114,14 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
     public string Placeholder { get; }
     public ReadOnlyObservableCollection<PluginSettingOption> Options { get; }
     public PluginSettingKind Kind { get; }
+    public char MultilinePasswordChar { get; }
+    public bool IsSecretMultiline { get; }
+
+    // Fluent's built-in reveal button cannot attach to a multiline TextBox
+    // (its style requires AcceptsReturn=False), so secret multiline fields get
+    // an explicit toggle bound to RevealPassword instead.
+    [ObservableProperty]
+    private bool _revealSecretMultiline;
 
     public bool IsTextKind => Kind == PluginSettingKind.Text;
     public bool IsSecretKind => Kind == PluginSettingKind.Secret;

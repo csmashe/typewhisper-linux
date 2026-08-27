@@ -8,6 +8,31 @@ internal static class RecorderFileNamer
 
     public static string CommitRecording(string directory, DateTime timestamp, byte[] wav)
     {
+        return CommitRecording(directory, timestamp, wav, syncHooks: null);
+    }
+
+    internal static string CommitRecording(
+        string directory,
+        DateTime timestamp,
+        byte[] wav,
+        Action<string> syncDirectory
+    )
+    {
+        return CommitRecording(
+            directory,
+            timestamp,
+            wav,
+            new AtomicFileWrite.SyncHooks((_, _) => { }, syncDirectory)
+        );
+    }
+
+    private static string CommitRecording(
+        string directory,
+        DateTime timestamp,
+        byte[] wav,
+        AtomicFileWrite.SyncHooks? syncHooks
+    )
+    {
         var baseStem = $"recording-{timestamp:yyyy-MM-dd-HHmmss}";
 
         for (var attempt = 0; attempt < MaxPathAttempts; attempt++)
@@ -22,10 +47,17 @@ internal static class RecorderFileNamer
 
             try
             {
-                AtomicFileWrite.WriteAllBytesCreateNew(wavPath, wav);
+                AtomicFileWrite.WriteAllBytesCreateNew(
+                    wavPath,
+                    wav,
+                    attemptHardLink: true,
+                    syncHooks: syncHooks
+                );
                 return wavPath;
             }
-            catch (IOException) when (PathIsOccupied(wavPath))
+            catch (IOException ex)
+                when (ex is not AtomicFileWriteIndeterminateCommitException
+                      && PathIsOccupied(wavPath))
             {
                 // Another actor claimed the WAV candidate after the fast-path check.
             }

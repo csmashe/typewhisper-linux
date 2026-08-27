@@ -16,6 +16,7 @@ namespace TypeWhisper.Linux.Services;
 public sealed class BundledPluginDeployer
 {
     private const string StampFileName = ".typewhisper-bundle.sha256";
+    private const string BundleIdentityFileName = ".typewhisper-bundle-identity.sha256";
     private const string ScratchDirectoryName = ".typewhisper-deploy";
 
     // ReSharper disable once UnusedMethodReturnValue.Global -- returns the count of synced plugins for callers that want it; the current caller ignores it.
@@ -47,6 +48,28 @@ public sealed class BundledPluginDeployer
         copyFile ??= static (source, destination) => File.Copy(source, destination);
         Directory.CreateDirectory(destRoot);
 
+        // Packaging writes this identity only after the bundled payload is final. A
+        // valid marker therefore attests to the sorted paths and contents of the whole
+        // source tree; runtime trusts it instead of re-hashing published source files.
+        // The marker is an OPAQUE token: the packaging script's hash algorithm differs
+        // from ComputeFingerprints, and the only valid comparison is source marker vs
+        // installed marker — never marker vs a locally computed hash.
+        var hasPublishedIdentity = TryReadBundleIdentity(sourceRoot, out var sourceIdentity);
+        if (!hasPublishedIdentity)
+        {
+            // An unmarked (dev/legacy) run may deploy a different plugin tree while the
+            // installed marker still vouches for the last marked build. Left in place, a
+            // later launch of that same marked build would trust the marker and accept
+            // the unmarked tree as current, so retract the attestation up front.
+            InvalidateInstalledIdentity(destRoot);
+        }
+
+        var installedIdentityCurrent =
+            hasPublishedIdentity
+            && TryReadBundleIdentity(destRoot, out var installedIdentity)
+            && DigestsEqual(sourceIdentity, installedIdentity);
+        var forceDeploy = hasPublishedIdentity && !installedIdentityCurrent;
+        var allPluginsSucceeded = true;
         var deployed = 0;
         foreach (
             var pluginDir in Directory
@@ -66,7 +89,18 @@ public sealed class BundledPluginDeployer
                     );
                 }
 
-                if (DeployPlugin(pluginDir, destRoot, dest, name, copyFile, afterCommit))
+                if (
+                    DeployPlugin(
+                        pluginDir,
+                        destRoot,
+                        dest,
+                        name,
+                        copyFile,
+                        afterCommit,
+                        hasPublishedIdentity,
+                        forceDeploy
+                    )
+                )
                 {
                     Trace.WriteLine(
                         $"[BundledPluginDeployer] Synced bundled plugin {name} → {dest}"
@@ -80,7 +114,24 @@ public sealed class BundledPluginDeployer
             }
             catch (Exception ex)
             {
+                allPluginsSucceeded = false;
                 Trace.WriteLine($"[BundledPluginDeployer] Failed to deploy {name}: {ex.Message}");
+            }
+        }
+
+        if (forceDeploy && allPluginsSucceeded)
+        {
+            try
+            {
+                WriteBundleIdentity(destRoot, sourceIdentity);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Deployment itself succeeded; a failed identity advance only costs a
+                // force-redeploy on the next startup, so it must not abort bootstrap.
+                Trace.WriteLine(
+                    $"[BundledPluginDeployer] Failed to record bundle identity: {ex.Message}"
+                );
             }
         }
 
@@ -100,7 +151,9 @@ public sealed class BundledPluginDeployer
         string dest,
         string pluginName,
         Action<string, string> copyFile,
-        Action<string>? afterCommit
+        Action<string>? afterCommit,
+        bool hasPublishedIdentity,
+        bool forceDeploy
     )
     {
         var scratchRoot = Path.Join(destRoot, ScratchDirectoryName);
@@ -117,23 +170,27 @@ public sealed class BundledPluginDeployer
             .GetResult();
 
         Fingerprints? sourceFingerprints = null;
-        if (TryReadStamp(dest, out var stamp))
+        if (!forceDeploy && TryReadStamp(dest, out var stamp))
         {
-            var sourceStat = ComputeStatDigest(source);
+            var sourceStat = stamp.SourceStat;
             var refreshStamp = false;
             var deploy = false;
 
-            if (!DigestsEqual(sourceStat, stamp.SourceStat))
+            if (!hasPublishedIdentity)
             {
-                sourceFingerprints = ComputeFingerprints(source);
-                sourceStat = sourceFingerprints.Stat;
-                if (!DigestsEqual(sourceFingerprints.Content, stamp.Content))
+                sourceStat = ComputeStatDigest(source);
+                if (!DigestsEqual(sourceStat, stamp.SourceStat))
                 {
-                    deploy = true;
-                }
-                else
-                {
-                    refreshStamp = true;
+                    sourceFingerprints = ComputeFingerprints(source);
+                    sourceStat = sourceFingerprints.Stat;
+                    if (!DigestsEqual(sourceFingerprints.Content, stamp.Content))
+                    {
+                        deploy = true;
+                    }
+                    else
+                    {
+                        refreshStamp = true;
+                    }
                 }
             }
 
@@ -291,6 +348,47 @@ public sealed class BundledPluginDeployer
         return true;
     }
 
+    private static bool TryReadBundleIdentity(string root, out byte[] identity)
+    {
+        identity = [];
+        var path = Path.Join(root, BundleIdentityFileName);
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        string value;
+        try
+        {
+            value = File.ReadAllText(path).TrimEnd('\r', '\n');
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // An unreadable marker degrades exactly like a missing or malformed one;
+            // throwing here would take the whole plugin bootstrap stage down with it.
+            Trace.WriteLine(
+                $"[BundledPluginDeployer] Failed to read bundle identity at {path}: {ex.Message}"
+            );
+            return false;
+        }
+
+        return TryParseDigest(value, out identity);
+    }
+
+    private static void InvalidateInstalledIdentity(string destRoot)
+    {
+        try
+        {
+            File.Delete(Path.Join(destRoot, BundleIdentityFileName));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Trace.WriteLine(
+                $"[BundledPluginDeployer] Failed to retract bundle identity: {ex.Message}"
+            );
+        }
+    }
+
     private static bool TryParseDigest(string value, out byte[] digest)
     {
         digest = [];
@@ -323,6 +421,14 @@ public sealed class BundledPluginDeployer
         );
     }
 
+    private static void WriteBundleIdentity(string root, byte[] identity)
+    {
+        File.WriteAllText(
+            Path.Join(root, BundleIdentityFileName),
+            Convert.ToHexString(identity) + Environment.NewLine
+        );
+    }
+
     private static byte[] ComputeStatDigest(string root)
     {
         var files = GetFingerprintFiles(root);
@@ -349,6 +455,13 @@ public sealed class BundledPluginDeployer
         }
 
         return new Fingerprints(content.GetHashAndReset(), stat.GetHashAndReset());
+    }
+
+    // Retained solely so tests can fabricate a published identity; production markers
+    // come from the packaging script, whose hash algorithm differs from this one.
+    internal static byte[] ComputeContentFingerprint(string root)
+    {
+        return ComputeFingerprints(root).Content;
     }
 
     private static FingerprintFile[] GetFingerprintFiles(string root)

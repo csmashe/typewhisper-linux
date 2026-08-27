@@ -1,6 +1,7 @@
 using Microsoft.Win32.SafeHandles;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Channels;
@@ -145,6 +146,33 @@ public sealed class EvdevDeviceReaderTests
     }
 
     [Fact]
+    public async Task DisposeTimeout_KeepsDevicePublishedUntilWorkerDisposesIt()
+    {
+        var device = new BlockingReadInputDevice();
+        var events = new EventLog();
+        var failure = NewFailureSignal();
+        var reader = CreateReader(device, events, failure);
+        Assert.True(reader.TryStart());
+        await device.ReadStarted.WaitAsync(s_testGuard);
+
+        // The read ignores both the token and Wake, so this burns the full 500 ms wake budget.
+        await reader.DisposeAsync().AsTask().WaitAsync(s_testGuard);
+
+        // The wake budget lapsed with the worker still parked: the device must stay published
+        // and undisposed so the worker's finally can close it. A worker delayed before its
+        // field read would otherwise find null, return early, and leak the raw fds.
+        Assert.Equal(0, device.DisposeCount);
+        Assert.Same(device, ReadPublishedInputDevice(reader));
+
+        device.ReleaseRead();
+        await device.Disposed.WaitAsync(s_testGuard);
+
+        Assert.Equal(1, device.DisposeCount);
+        Assert.Empty(events.Snapshot());
+        Assert.False(failure.Task.IsCompleted);
+    }
+
+    [Fact]
     public async Task DisposeWhileParked_WakesLoopAndClosesSlaveFdPromptly()
     {
         if (!OperatingSystem.IsLinux())
@@ -155,7 +183,7 @@ public sealed class EvdevDeviceReaderTests
         using var pty = new LinuxPty();
         var events = new DeviceEventLog();
         var failure = NewFailureSignal();
-        var pollBaseline = PollBlockedTaskSnapshot();
+        var pollBaseline = PollBlockedTaskSnapshot(out _);
         await using var reader = CreateRealReader(pty.SlavePath, events, failure);
         Assert.True(reader.TryStart());
         var readerFd = await pty.WaitForReaderFileDescriptorAsync();
@@ -373,8 +401,10 @@ public sealed class EvdevDeviceReaderTests
             secondPty.SlavePath,
             LinuxPty.GetFileDescriptorTarget(secondReaderFd)
         );
+        // Serialized disposals burn two 500 ms read-loop waits (>= 1000 ms), so stay
+        // just under that while giving loaded CI agents as much headroom as possible.
         Assert.True(
-            disposeStopwatch.Elapsed < TimeSpan.FromMilliseconds(900),
+            disposeStopwatch.Elapsed < TimeSpan.FromMilliseconds(950),
             $"Concurrent DisposeAsync calls took {disposeStopwatch.Elapsed.TotalMilliseconds:F0} ms."
         );
     }
@@ -433,6 +463,18 @@ public sealed class EvdevDeviceReaderTests
                 events.Add(new DeviceEdge(devicePath, keyCode, pressed)),
             (_, exception) => failure.TrySetResult(exception)
         );
+    }
+
+    // Reflection because the retention constraint — a timed-out DisposeAsync leaves the device
+    // published for the worker to capture — has no other observable surface.
+    private static IEvdevInputDevice? ReadPublishedInputDevice(EvdevDeviceReader reader)
+    {
+        var field = typeof(EvdevDeviceReader).GetField(
+            "_inputDevice",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        );
+        Assert.NotNull(field);
+        return (IEvdevInputDevice?)field.GetValue(reader);
     }
 
     private static TaskCompletionSource<Exception> NewFailureSignal()
@@ -550,25 +592,43 @@ public sealed class EvdevDeviceReaderTests
     // /proc/self/task/<tid>/wchan names the kernel symbol a blocked task sleeps in (empty or "0"
     // while running). The evdev reader parks in poll(2), whose wait symbols all contain "poll"
     // (do_sys_poll / poll_schedule_timeout / do_sys_ppoll across kernels and libc entry points).
-    private static HashSet<string> PollBlockedTaskSnapshot()
+    // sawWchanSymbol reports whether any wchan read exposed a symbol at all, so callers can tell
+    // a host that hides wchan (hidepid, wchan-less kernel) apart from a reader that never parked.
+    private static HashSet<string> PollBlockedTaskSnapshot(out bool sawWchanSymbol)
     {
         var blocked = new HashSet<string>();
-        foreach (var taskDir in Directory.EnumerateDirectories("/proc/self/task"))
+        sawWchanSymbol = false;
+        try
         {
-            try
+            foreach (var taskDir in Directory.EnumerateDirectories("/proc/self/task"))
             {
-                if (File.ReadAllText(Path.Join(taskDir, "wchan")).Contains("poll", StringComparison.Ordinal))
+                try
                 {
-                    blocked.Add(Path.GetFileName(taskDir));
+                    var wchan = File.ReadAllText(Path.Join(taskDir, "wchan")).Trim();
+                    if (wchan.Length > 0 && wchan != "0")
+                    {
+                        sawWchanSymbol = true;
+                    }
+
+                    if (wchan.Contains("poll", StringComparison.Ordinal))
+                    {
+                        blocked.Add(Path.GetFileName(taskDir));
+                    }
+                }
+                catch (IOException)
+                {
+                    // Task exited between enumeration and read.
+                }
+                catch (UnauthorizedAccessException)
+                {
                 }
             }
-            catch (IOException)
-            {
-                // Task exited between enumeration and read.
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"Poll-parking probe cannot enumerate /proc/self/task on this host: {ex.Message}"
+            );
         }
 
         return blocked;
@@ -576,15 +636,32 @@ public sealed class EvdevDeviceReaderTests
 
     private static async Task WaitForNewPollParkedTaskAsync(HashSet<string> baseline)
     {
+        var sawWchanSymbolEver = false;
         using var timeout = new CancellationTokenSource(s_testGuard);
         while (true)
         {
-            if (PollBlockedTaskSnapshot().Any(taskId => !baseline.Contains(taskId)))
+            var blocked = PollBlockedTaskSnapshot(out var sawWchanSymbol);
+            sawWchanSymbolEver |= sawWchanSymbol;
+            if (blocked.Any(taskId => !baseline.Contains(taskId)))
             {
                 return;
             }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new Xunit.Sdk.XunitException(
+                    sawWchanSymbolEver
+                        ? "Poll-parking probe timed out: no new task parked in a poll wchan "
+                          + $"within {s_testGuard.TotalSeconds:F0}s."
+                        : "Poll-parking probe is unsupported on this host: "
+                          + "/proc/self/task/*/wchan never exposed a kernel wait symbol "
+                          + "(hidepid mount option or a wchan-less kernel)."
+                );
+            }
         }
     }
 
@@ -707,6 +784,56 @@ public sealed class EvdevDeviceReaderTests
             {
                 throw new InvalidOperationException("The fake input stream is closed.");
             }
+        }
+    }
+
+    private sealed class BlockingReadInputDevice : IEvdevInputDevice
+    {
+        private readonly TaskCompletionSource<bool> _disposed = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        private readonly ManualResetEventSlim _readGate = new(false);
+        private readonly TaskCompletionSource<bool> _readStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        private int _disposeCount;
+
+        public Task ReadStarted => _readStarted.Task;
+        public Task Disposed => _disposed.Task;
+        public int DisposeCount => Volatile.Read(ref _disposeCount);
+
+        public void Open()
+        {
+        }
+
+        public int Read(Span<byte> buffer, CancellationToken ct)
+        {
+            _readStarted.TrySetResult(true);
+            // Ignores ct and Wake so the parked read outlasts DisposeAsync's wake budget.
+            _readGate.Wait(CancellationToken.None);
+            ct.ThrowIfCancellationRequested();
+            return 0;
+        }
+
+        public void ReleaseRead()
+        {
+            _readGate.Set();
+        }
+
+        public void Wake()
+        {
+        }
+
+        public byte[] QueryPressedKeyBitmap()
+        {
+            return Bitmap();
+        }
+
+        public void Dispose()
+        {
+            Interlocked.Increment(ref _disposeCount);
+            _readGate.Set();
+            _disposed.TrySetResult(true);
         }
     }
 

@@ -75,6 +75,17 @@ public sealed class DictationSectionViewModelLocalizationTests
             var insertionBefore = sut.SelectedNewInsertionStrategyOption!;
             var appStrategyRow = Assert.Single(sut.AppInsertionStrategies);
             var appInsertionBefore = appStrategyRow.SelectedStrategyOption!;
+            HashSet<string?> expectedPropertyChanges =
+            [
+                nameof(DictationSectionViewModel.AudioDuckingUnavailableReason),
+                nameof(DictationSectionViewModel.MediaPauseUnavailableReason),
+                nameof(DictationSectionViewModel.SoundFeedbackUnavailableReason),
+                nameof(DictationSectionViewModel.CudaLibraryPathActionText),
+                nameof(DictationSectionViewModel.DownloadCudaRuntimeText),
+                nameof(DictationSectionViewModel.ClearGpuRuntimeText),
+                nameof(DictationSectionViewModel.AccelerationStatusText),
+            ];
+            HashSet<string?> propertyChanges = [];
 
             sut.AccelerationOptions.CollectionChanged += (_, _) =>
                 sut.SelectedAccelerationOption = null;
@@ -87,9 +98,11 @@ public sealed class DictationSectionViewModelLocalizationTests
                 sut.SelectedNewInsertionStrategyOption = null;
                 appStrategyRow.SelectedStrategyOption = null;
             };
+            sut.PropertyChanged += (_, args) => propertyChanges.Add(args.PropertyName);
 
             Loc.Instance.CurrentLanguage = "de";
 
+            Assert.Superset(expectedPropertyChanges, propertyChanges);
             Assert.NotSame(accelerationBefore, sut.SelectedAccelerationOption);
             Assert.Equal(
                 AppSettings.LocalModelAccelerationCpu,
@@ -119,7 +132,7 @@ public sealed class DictationSectionViewModelLocalizationTests
             );
             Assert.Equal(TextInsertionStrategy.DirectTyping, appStrategyRow.Strategy);
             settings.Verify(
-                service => service.Save(It.IsAny<AppSettings>()),
+                service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
                 Times.Never
             );
         }

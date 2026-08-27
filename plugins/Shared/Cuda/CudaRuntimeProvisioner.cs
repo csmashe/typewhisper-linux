@@ -8,6 +8,7 @@ using System.IO.Compression;
 using System.Runtime.InteropServices;
 using TypeWhisper.PluginSDK.Processes;
 using System.Text.Json;
+using TypeWhisper.Plugins.Shared.Io;
 using TypeWhisper.Plugins.Shared.Net;
 
 namespace TypeWhisper.Plugins.Shared.Cuda;
@@ -152,6 +153,7 @@ public class CudaRuntimeProvisioner
     private readonly string _maintenanceLockPath;
     private readonly string _wheelLockDirectory;
     private readonly string _legacyCacheRoot;
+    private readonly string _legacyMigrationDisabledPath;
     private readonly Action<string, string> _moveDirectory;
     private readonly Func<IPluginProcessSupervisor>? _processSupervisor;
     private bool _legacyMigrationAttempted;
@@ -191,10 +193,15 @@ public class CudaRuntimeProvisioner
         _maintenanceLockPath = cachePaths.MaintenanceLockPath;
         _wheelLockDirectory = cachePaths.WheelLockDirectory;
         CacheDirectory = Path.Join(_cacheRoot, BundleVersion);
-        _legacyCacheRoot = ResolveCachePaths(
+        var legacyCachePaths = ResolveCachePaths(
             legacyCacheRoot,
             nameof(legacyCacheRoot)
-        ).CacheRoot;
+        );
+        _legacyCacheRoot = legacyCachePaths.CacheRoot;
+        _legacyMigrationDisabledPath = Path.Join(
+            Directory.GetParent(_legacyCacheRoot)!.FullName,
+            Path.GetFileName(_legacyCacheRoot) + ".legacy-migration-disabled"
+        );
     }
 
     /// <summary>Directory holding the downloaded CUDA <c>.so</c> files for this bundle version.</summary>
@@ -205,8 +212,15 @@ public class CudaRuntimeProvisioner
     internal string MaintenanceLockPathForTests => _maintenanceLockPath;
     // ReSharper disable once ConvertToAutoPropertyWhenPossible -- the backing field is the real member, read throughout this class; these are read-only test seams over it.
     internal string WheelLockDirectoryForTests => _wheelLockDirectory;
+    // ReSharper disable once ConvertToAutoPropertyWhenPossible -- the backing field is the real member, read throughout this class; this is a read-only test seam over it.
+    internal string LegacyMigrationDisabledPathForTests =>
+        _legacyMigrationDisabledPath;
     internal TimeSpan MaintenanceLockTimeoutForTests { get; init; } =
         s_defaultMaintenanceLockTimeout;
+
+    // Test seam: replaces the tombstone write's two durability syscalls so tests can pin
+    // the staged -> fsync -> rename -> parent-fsync sequence without real power loss.
+    internal DurableFileWrite.SyncHooks? TombstoneSyncHooksForTests { get; init; }
 
     /// <summary>
     ///     The shared cache root both local engines use, so the CUDA math libraries
@@ -286,25 +300,43 @@ public class CudaRuntimeProvisioner
                 $"The NVIDIA CUDA driver is not usable: {driverError}"
             );
 
-        await DownloadAndExtractAsync(profile, progress, ct).ConfigureAwait(false);
-
-        // Preload the full set RTLD_GLOBAL in dependency order (the dlopen half). Kept
-        // OUT of DownloadAndExtractAsync so unit tests can drive the network+disk logic
-        // against a fake HttpMessageHandler + a temp cache dir without a GPU or driver.
-        // PreloadAll guards its own state with _preloadSync and is idempotent, so it is
-        // safe to run after DownloadAndExtractAsync has released _gate (the cache files it
-        // reads are only ever added under that gate, never removed).
-        PreloadAll(WheelsFor(profile));
+        await ProvisionAsync(
+                profile,
+                progress,
+                () =>
+                {
+                    PreloadAll(WheelsFor(profile));
+                    return Task.CompletedTask;
+                },
+                ct
+            )
+            .ConfigureAwait(false);
     }
 
-    // The network+disk half of EnsureReadyAsync: prune superseded bundles, then download
-    // and extract any wheels the host doesn't already satisfy (each stamped with a
-    // completion marker). Split out — and internal — so tests can exercise the
+    // The network+disk half of EnsureReadyAsync. Internal so tests can exercise the
     // marker/satisfied/extract/prune/progress/concurrency logic against a fake
     // HttpMessageHandler and a temp cache dir, never touching dlopen or the driver probe.
-    internal async Task DownloadAndExtractAsync(
+    internal Task DownloadAndExtractAsync(
         CudaRuntimeProfile profile,
         IProgress<double>? progress,
+        CancellationToken ct
+    ) =>
+        ProvisionAsync(profile, progress, () => Task.CompletedTask, ct);
+
+    // Async callback seam for tests that need to observe or park the final operation
+    // performed while the complete profile lock lease is still held.
+    internal Task DownloadAndExtractAsync(
+        CudaRuntimeProfile profile,
+        IProgress<double>? progress,
+        Func<Task> runUnderProfileLocks,
+        CancellationToken ct
+    ) =>
+        ProvisionAsync(profile, progress, runUnderProfileLocks, ct);
+
+    private async Task ProvisionAsync(
+        CudaRuntimeProfile profile,
+        IProgress<double>? progress,
+        Func<Task> runUnderProfileLocks,
         CancellationToken ct
     )
     {
@@ -334,22 +366,62 @@ public class CudaRuntimeProvisioner
                 missing = wheels.Where(w => !IsWheelSatisfied(w)).ToList();
             }
 
-            if (missing.Count > 0)
+            // Resolve initial metadata outside the profile locks: PyPI latency must not
+            // extend the usual lock hold time. Clear may run here, so this is only a
+            // speculative snapshot that is recomputed after the full lease is acquired.
+            var jobs = new Dictionary<
+                CudaWheel,
+                (string Url, long Size, string Sha256)
+            >();
+            foreach (var wheel in missing)
             {
-                _log?.Invoke(
-                    $"CUDA runtime: fetching {missing.Count} missing package(s): "
-                        + string.Join(", ", missing.Select(w => w.Package))
-                );
-                await DownloadMissingAsync(missing, progress, ct).ConfigureAwait(false);
-            }
-            else
-            {
-                _log?.Invoke("CUDA runtime: all required libraries already present.");
-                progress?.Report(1.0);
+                jobs[wheel] = await ResolveWheelAsync(wheel, ct).ConfigureAwait(false);
             }
 
-            // Pruning is best-effort; run it after provisioning so two provisioners
-            // with disjoint wheel sets can still download/extract in parallel.
+            int fetchedCount;
+            await using (
+                await AcquireProvisioningWheelLocksAsync(wheels, ct).ConfigureAwait(false)
+            )
+            {
+                // Clear may have run while PyPI metadata was resolving. Recreate the
+                // directory and recompute the entire profile only after every profile
+                // wheel is locked, including on the initially-satisfied fast path.
+                Directory.CreateDirectory(CacheDirectory);
+                missing = wheels.Where(w => !IsWheelSatisfied(w)).ToList();
+
+                // Only wheels that became missing during the pre-lock window need an
+                // under-lock metadata request; reuse the speculative jobs for the rest.
+                foreach (var wheel in missing.Where(wheel => !jobs.ContainsKey(wheel)))
+                    jobs[wheel] = await ResolveWheelAsync(wheel, ct).ConfigureAwait(false);
+
+                fetchedCount = missing.Count;
+                if (fetchedCount > 0)
+                {
+                    _log?.Invoke(
+                        $"CUDA runtime: fetching {fetchedCount} missing package(s): "
+                            + string.Join(", ", missing.Select(w => w.Package))
+                    );
+                    await DownloadMissingAsync(missing, jobs, progress, ct)
+                        .ConfigureAwait(false);
+                }
+
+                if (!wheels.All(IsWheelSatisfied))
+                    throw new InvalidOperationException(
+                        $"CUDA runtime provisioning did not satisfy the {profile} profile."
+                    );
+
+                await runUnderProfileLocks().ConfigureAwait(false);
+            }
+
+            _log?.Invoke(
+                fetchedCount > 0
+                    ? "CUDA runtime: all required libraries are ready."
+                    : "CUDA runtime: all required libraries already present."
+            );
+            progress?.Report(1.0);
+
+            // Pruning is best-effort and deliberately begins only after the profile
+            // lease is released and provisioning completion has been reported.
             await PruneStaleBundlesAsync(ct).ConfigureAwait(false);
         }
         finally
@@ -363,8 +435,20 @@ public class CudaRuntimeProvisioner
         if (_legacyMigrationAttempted)
             return;
 
-        if (PathsEqual(_legacyCacheRoot, _cacheRoot)
-            || !Directory.Exists(_legacyCacheRoot)
+        if (PathsEqual(_legacyCacheRoot, _cacheRoot))
+        {
+            _legacyMigrationAttempted = true;
+            return;
+        }
+
+        if (File.Exists(_legacyMigrationDisabledPath))
+        {
+            LogLegacyMigrationDisabled();
+            _legacyMigrationAttempted = true;
+            return;
+        }
+
+        if (!Directory.Exists(_legacyCacheRoot)
             || Directory.Exists(_cacheRoot))
         {
             _legacyMigrationAttempted = true;
@@ -385,6 +469,16 @@ public class CudaRuntimeProvisioner
                     ct
                 )
                 .ConfigureAwait(false);
+
+            // Clear may have published the tombstone while migration waited for the
+            // destination lease. Check before waiting on any legacy-root locks.
+            if (File.Exists(_legacyMigrationDisabledPath))
+            {
+                LogLegacyMigrationDisabled();
+                _legacyMigrationAttempted = true;
+                return;
+            }
+
             await using var legacyLocks = await AcquireMaintenanceLocksAsync(
                     legacyPaths.MaintenanceLockPath,
                     legacyPaths.WheelLockDirectory,
@@ -426,58 +520,36 @@ public class CudaRuntimeProvisioner
 
     private async Task DownloadMissingAsync(
         IReadOnlyList<CudaWheel> missing,
+        IReadOnlyDictionary<CudaWheel, (string Url, long Size, string Sha256)> jobs,
         IProgress<double>? progress,
         CancellationToken ct
     )
     {
-        // Resolve each wheel's download URL + size + checksum up front so progress
-        // can be weighted by real byte totals across the whole batch. The size is a
-        // best-effort estimate: PyPI publishes it today, but ResolveWheelAsync defaults
-        // it to 0 if a future response omits it, so the denominator could be understated.
-        var jobs = new List<(CudaWheel Wheel, string Url, long Size, string Sha256)>();
+        // Weight progress by metadata sizes for the recomputed set. A size of zero is
+        // allowed and advances by bytes actually read instead.
+        var totalBytes = missing.Sum(wheel => jobs[wheel].Size);
+        long completedBytes = 0;
+
         foreach (var wheel in missing)
         {
-            var (url, size, sha256) = await ResolveWheelAsync(wheel, ct).ConfigureAwait(false);
-            jobs.Add((wheel, url, size, sha256));
+            var (url, size, sha256) = jobs[wheel];
+            var baseline = completedBytes;
+            var downloaded = await DownloadAndExtractWheelAsync(
+                wheel,
+                url,
+                sha256,
+                read =>
+                {
+                    if (totalBytes > 0)
+                        progress?.Report(Math.Min(1.0, (double)(baseline + read) / totalBytes));
+                },
+                ct
+            ).ConfigureAwait(false);
+            // Advance by the metadata size when known, else by what we actually read,
+            // so a wheel whose PyPI size was missing still moves the cumulative counter
+            // instead of stalling it at the previous baseline.
+            completedBytes += size > 0 ? size : downloaded;
         }
-
-        // Lock coupling: root -> every wheel needed by this batch, in stable path
-        // order. The root lock is then released while the wheel locks remain held
-        // through the full batch. Clear/prune take root -> every wheel, so they wait
-        // for an active batch and prevent a new one from starting. Provisioners with
-        // disjoint wheel sets retain their existing safe parallelism.
-        await using (await AcquireProvisioningWheelLocksAsync(missing, ct).ConfigureAwait(false))
-        {
-            // Clear may have run while PyPI metadata was resolving. Recreate the cache
-            // only after this batch owns its external wheel locks, so maintenance can
-            // no longer delete it until all of the batch's writes finish.
-            Directory.CreateDirectory(CacheDirectory);
-
-            var totalBytes = jobs.Sum(j => j.Size);
-            long completedBytes = 0;
-
-            foreach (var (wheel, url, size, sha256) in jobs)
-            {
-                var baseline = completedBytes;
-                var downloaded = await DownloadAndExtractWheelAsync(
-                    wheel,
-                    url,
-                    sha256,
-                    read =>
-                    {
-                        if (totalBytes > 0)
-                            progress?.Report(Math.Min(1.0, (double)(baseline + read) / totalBytes));
-                    },
-                    ct
-                ).ConfigureAwait(false);
-                // Advance by the metadata size when known, else by what we actually read,
-                // so a wheel whose PyPI size was missing still moves the cumulative counter
-                // instead of stalling it at the previous baseline.
-                completedBytes += size > 0 ? size : downloaded;
-            }
-        }
-
-        progress?.Report(1.0);
     }
 
     private async Task<ExternalLockLease> AcquireProvisioningWheelLocksAsync(
@@ -486,6 +558,9 @@ public class CudaRuntimeProvisioner
     )
     {
         EnsureExternalLockDirectory();
+        // Lock coupling remains root -> stable package sentinel order. The caller passes
+        // the complete requested profile, and retains the returned wheel lease through
+        // revalidation and preload; root is released once every wheel lock is acquired.
         var lockPaths = wheels
             .Select(WheelLockPath)
             .Distinct(StringComparer.Ordinal)
@@ -610,6 +685,10 @@ public class CudaRuntimeProvisioner
     private string WheelLockPath(CudaWheel wheel) =>
         WheelLockPath(wheel, _wheelLockDirectory);
 
+    // Package-scoped sentinels intentionally overlap unchanged wheels across mixed old
+    // and new bundle versions. Wheel-set changes can therefore have only partial overlap;
+    // maintenance's root + existing-sentinel snapshot remains the compatibility boundary,
+    // rather than adding a separate partial-compatibility lock.
     private static string WheelLockPath(CudaWheel wheel, string wheelLockDirectory) =>
         Path.Join(wheelLockDirectory, wheel.Package + ".lock");
 
@@ -1026,11 +1105,13 @@ public class CudaRuntimeProvisioner
     ///     The per-instance gate is layered with a bounded, cross-process maintenance
     ///     lock outside the deleted tree. Maintenance owns root -> every external wheel
     ///     sentinel through the full delete window, so it cannot unlink a live sentinel
-    ///     or race another provisioner. A missing cache is a no-op (already clear); a
-    ///     timeout or delete failure is logged and rethrown so the caller can surface it
-    ///     rather than report a corrupt runtime as repaired. Note: libraries already
-    ///     dlopen'd this process are held until exit, so a restart is required for a fresh
-    ///     re-provision to take effect.
+    ///     or race another provisioner. When the configured and legacy roots differ,
+    ///     clearing also durably disables future adoption of the deliberately-retained
+    ///     legacy tree. A missing configured cache is otherwise a no-op (already clear);
+    ///     a timeout, marker failure, or delete failure is logged and rethrown so the
+    ///     caller can surface it rather than report a corrupt runtime as repaired. Note:
+    ///     libraries already dlopen'd this process are held until exit, so a restart is
+    ///     required for a fresh re-provision to take effect.
     /// </summary>
     public async Task ClearCacheAsync(CancellationToken ct)
     {
@@ -1045,6 +1126,39 @@ public class CudaRuntimeProvisioner
                     .ConfigureAwait(false)
             )
             {
+                if (!PathsEqual(_legacyCacheRoot, _cacheRoot))
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(
+                            Directory.GetParent(_legacyMigrationDisabledPath)!.FullName
+                        );
+                        // Durable, not just written: fsync'd temp + atomic rename +
+                        // parent-dir fsync. A plain write could let a power loss persist
+                        // the destination delete below while losing the tombstone, and the
+                        // next start would re-adopt the legacy tree Clear just disowned.
+                        // Ordering is load-bearing: the tombstone commits to stable
+                        // storage BEFORE anything is deleted.
+                        DurableFileWrite.WriteAllText(
+                            _legacyMigrationDisabledPath,
+                            string.Empty,
+                            TombstoneSyncHooksForTests
+                        );
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _log?.Invoke(
+                            "CUDA runtime: failed to disable legacy cache adoption at "
+                                + $"{_legacyMigrationDisabledPath}: {ex.Message} "
+                                + "The configured cache was not cleared."
+                        );
+                        throw;
+                    }
+
+                    _legacyMigrationAttempted = true;
+                    LogLegacyMigrationDisabled();
+                }
+
                 if (!Directory.Exists(_cacheRoot))
                     return;
 
@@ -1065,6 +1179,16 @@ public class CudaRuntimeProvisioner
         {
             _gate.Release();
         }
+    }
+
+    private void LogLegacyMigrationDisabled()
+    {
+        var retention = Directory.Exists(_legacyCacheRoot)
+            ? $"; the old legacy cache tree at {_legacyCacheRoot} was deliberately retained"
+            : "";
+        _log?.Invoke(
+            $"CUDA runtime: legacy cache adoption is disabled via {_legacyMigrationDisabledPath}{retention}."
+        );
     }
 
     // Remove sibling bundle dirs from earlier BundleVersions so superseded caches

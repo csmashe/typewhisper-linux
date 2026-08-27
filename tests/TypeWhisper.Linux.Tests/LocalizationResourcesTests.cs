@@ -44,6 +44,57 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    public void Catalogs_HaveLanguageSelectionAndRecorderOutcomeStringsWithPlaceholders(
+        string language
+    )
+    {
+        var catalog = Load(language);
+        var keys = new[]
+        {
+            "Dictation.LanguageSelectionRequired",
+            "Dictation.LanguageSelectionRequiredAuto",
+            "LanguageSelection.LanguageNotSupported",
+            "Plugins.RevealSecretMultiline",
+            "Recorder.StatusSavedNoTranscript",
+            "Recorder.StatusSavedTranscriptionFailed",
+        };
+
+        foreach (var key in keys)
+        {
+            Assert.True(
+                catalog.TryGetValue(key, out var value),
+                $"Missing {language} key: {key}"
+            );
+            Assert.False(string.IsNullOrWhiteSpace(value), $"{language} key is empty: {key}");
+        }
+
+        var languageNotSupported = catalog["LanguageSelection.LanguageNotSupported"];
+        Assert.Contains("{0}", languageNotSupported, StringComparison.Ordinal);
+        Assert.Contains("{1}", languageNotSupported, StringComparison.Ordinal);
+        Assert.Contains("{2}", languageNotSupported, StringComparison.Ordinal);
+        Assert.Contains(
+            "{0}",
+            catalog["Recorder.StatusSavedTranscriptionFailed"],
+            StringComparison.Ordinal
+        );
+
+        if (language == CanonicalLanguage)
+        {
+            return;
+        }
+
+        var en = Load(CanonicalLanguage);
+        foreach (var key in keys)
+        {
+            Assert.NotEqual(en[key], catalog[key]);
+        }
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
     public void Catalogs_HaveUiOperationFailureStringsWithRequiredPlaceholders(
         string language
     )

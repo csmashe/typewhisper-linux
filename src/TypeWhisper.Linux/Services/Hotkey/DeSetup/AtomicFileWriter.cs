@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
+using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
@@ -20,7 +21,10 @@ internal readonly record struct AtomicFileSnapshot(
 /// <summary>
 ///     Shared atomic file-write helper for the per-desktop shortcut writers.
 ///     Writes to a sibling temp file then <see cref="File.Move(string,string,bool)" />s
-///     it over the target so the destination never exists half-written.
+///     it over the target so the destination never exists half-written. The temp file is
+///     fsynced before the rename and the parent directory after it, so a crash cannot
+///     roll the rename (or a delete) back; a directory-sync failure after the publish
+///     surfaces as <see cref="AtomicFileWriteIndeterminateCommitException" />.
 ///     When the target already exists, its Unix permission bits are copied
 ///     onto the temp file first — a user who hardened their compositor
 ///     config to e.g. 0600 keeps that mode across our writes.
@@ -31,6 +35,20 @@ internal readonly record struct AtomicFileSnapshot(
 /// </summary>
 internal static partial class AtomicFileWriter
 {
+    internal sealed class SyncHooks(
+        Action<string, FileStream> syncFile,
+        Action<string> syncDirectory
+    )
+    {
+        internal Action<string, FileStream> SyncFile { get; } = syncFile;
+        internal Action<string> SyncDirectory { get; } = syncDirectory;
+    }
+
+    private static readonly SyncHooks s_productionSyncHooks = new(
+        (_, stream) => stream.Flush(flushToDisk: true),
+        AtomicFileWrite.FlushDirectoryToDisk
+    );
+
     public static async Task<AtomicFileSnapshot> CaptureAsync(
         string target,
         CancellationToken ct
@@ -49,13 +67,23 @@ internal static partial class AtomicFileWriter
         return new AtomicFileSnapshot(target, resolvedTarget, true, contents, mode);
     }
 
-    public static async Task WriteAsync(string target, string contents, CancellationToken ct)
+    public static Task WriteAsync(string target, string contents, CancellationToken ct)
+    {
+        return WriteAsync(target, contents, s_productionSyncHooks, ct);
+    }
+
+    internal static async Task WriteAsync(
+        string target,
+        string contents,
+        SyncHooks syncHooks,
+        CancellationToken ct
+    )
     {
         var resolvedTarget = ResolveWriteTarget(target);
         var mode = !OperatingSystem.IsWindows() && File.Exists(resolvedTarget)
             ? File.GetUnixFileMode(resolvedTarget)
             : PrivateConfigMode;
-        var tmp = await StageAsync(resolvedTarget, contents, mode, nameof(target), ct)
+        var tmp = await StageAsync(resolvedTarget, contents, mode, nameof(target), syncHooks, ct)
             .ConfigureAwait(false);
         try
         {
@@ -65,6 +93,8 @@ internal static partial class AtomicFileWriter
         {
             DeleteTempBestEffort(tmp);
         }
+
+        SyncPublishedDirectory(resolvedTarget, syncHooks);
     }
 
     /// <summary>
@@ -77,9 +107,19 @@ internal static partial class AtomicFileWriter
     ///     user-initiated setup actions, so it is accepted rather than papered over with a
     ///     quarantine-and-restore dance that has wider failure modes of its own.
     /// </summary>
-    public static async Task<bool> WriteIfUnchangedAsync(
+    public static Task<bool> WriteIfUnchangedAsync(
         AtomicFileSnapshot snapshot,
         string contents,
+        CancellationToken ct
+    )
+    {
+        return WriteIfUnchangedAsync(snapshot, contents, s_productionSyncHooks, ct);
+    }
+
+    internal static async Task<bool> WriteIfUnchangedAsync(
+        AtomicFileSnapshot snapshot,
+        string contents,
+        SyncHooks syncHooks,
         CancellationToken ct
     )
     {
@@ -88,6 +128,7 @@ internal static partial class AtomicFileWriter
                 contents,
                 snapshot.Mode ?? PrivateConfigMode,
                 nameof(snapshot),
+                syncHooks,
                 ct
             )
             .ConfigureAwait(false);
@@ -134,12 +175,14 @@ internal static partial class AtomicFileWriter
 
             ct.ThrowIfCancellationRequested();
             File.Move(tmp, snapshot.ResolvedTarget, true);
-            return true;
         }
         finally
         {
             DeleteTempBestEffort(tmp);
         }
+
+        SyncPublishedDirectory(snapshot.ResolvedTarget, syncHooks);
+        return true;
     }
 
     /// <summary>
@@ -150,8 +193,17 @@ internal static partial class AtomicFileWriter
     ///     Carries the same one-syscall check-then-act window as
     ///     <see cref="WriteIfUnchangedAsync" />.
     /// </summary>
-    public static async Task<bool> DeleteIfUnchangedAsync(
+    public static Task<bool> DeleteIfUnchangedAsync(
         AtomicFileSnapshot snapshot,
+        CancellationToken ct
+    )
+    {
+        return DeleteIfUnchangedAsync(snapshot, s_productionSyncHooks, ct);
+    }
+
+    internal static async Task<bool> DeleteIfUnchangedAsync(
+        AtomicFileSnapshot snapshot,
+        SyncHooks syncHooks,
         CancellationToken ct
     )
     {
@@ -199,6 +251,7 @@ internal static partial class AtomicFileWriter
 
         ct.ThrowIfCancellationRequested();
         File.Delete(snapshot.ResolvedTarget);
+        SyncPublishedDirectory(snapshot.ResolvedTarget, syncHooks);
         return true;
     }
 
@@ -207,6 +260,7 @@ internal static partial class AtomicFileWriter
         string contents,
         UnixFileMode mode,
         string argumentName,
+        SyncHooks syncHooks,
         CancellationToken ct
     )
     {
@@ -242,7 +296,7 @@ internal static partial class AtomicFileWriter
                 await stream.WriteAsync(Encoding.UTF8.GetBytes(contents), ct)
                     .ConfigureAwait(false);
                 await stream.FlushAsync(ct).ConfigureAwait(false);
-                stream.Flush(flushToDisk: true);
+                syncHooks.SyncFile(tmp, stream);
             }
 
             if (OperatingSystem.IsWindows())
@@ -259,6 +313,35 @@ internal static partial class AtomicFileWriter
         {
             DeleteTempBestEffort(tmp);
             throw;
+        }
+    }
+
+    /// <summary>
+    ///     Syncs the published entry's parent directory so the rename (or unlink) itself is
+    ///     crash-durable, mirroring Core's <see cref="AtomicFileWrite" /> ordering: stage →
+    ///     file fsync → publish → directory fsync. Runs only after the publication landed, so
+    ///     a failure here is reported as an
+    ///     <see cref="AtomicFileWriteIndeterminateCommitException" /> — the destination is
+    ///     visible but its crash durability is unknown — rather than as an ordinary write
+    ///     failure a caller might blindly retry.
+    /// </summary>
+    private static void SyncPublishedDirectory(string path, SyncHooks syncHooks)
+    {
+        // Keep the raw parent prefix the staging and publish syscalls used; lexically
+        // normalizing ".." after a symlink component could select an unrelated directory.
+        var directoryPath = Path.GetDirectoryName(path);
+        if (string.IsNullOrEmpty(directoryPath))
+        {
+            directoryPath = ".";
+        }
+
+        try
+        {
+            syncHooks.SyncDirectory(directoryPath);
+        }
+        catch (Exception ex) when (ex is not AtomicFileWriteIndeterminateCommitException)
+        {
+            throw new AtomicFileWriteIndeterminateCommitException(path, directoryPath, ex);
         }
     }
 

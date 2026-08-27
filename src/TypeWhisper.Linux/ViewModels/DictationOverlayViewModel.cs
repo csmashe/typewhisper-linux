@@ -21,10 +21,14 @@ public partial class DictationOverlayViewModel : ObservableObject
     private readonly DispatcherTimer _clockTimer;
     private readonly DispatcherTimer _feedbackTimer;
     private readonly Func<string?, bool> _openUrl;
+    private readonly OverlayCoordinator? _overlayCoordinator;
     private readonly Action<Action> _postToUiThread;
     private readonly DispatcherTimer _recordingTimer;
     private readonly ISettingsService _settings;
     private readonly float[] _waveformLevels = new float[WaveformSampleCount];
+
+    private bool _applyingCoordinatorPresentation;
+    private long _lastCoordinatorRevision;
 
     [ObservableProperty]
     private string? _activeAppName;
@@ -71,44 +75,21 @@ public partial class DictationOverlayViewModel : ObservableObject
     private string _statusText = Loc.Instance["Overlay.Ready"];
 
     public DictationOverlayViewModel(
-        DictationOrchestrator dictation,
-        TransformSelectionService transformSelection,
         AudioRecordingService audio,
         ISettingsService settings,
         IDetectionFailureTracker failureTracker,
-        UrlLauncher urlLauncher
+        UrlLauncher urlLauncher,
+        OverlayCoordinator overlayCoordinator
     )
         : this(
             settings,
             static action => Dispatcher.UIThread.Post(action),
-            openUrl: urlLauncher.Open
+            openUrl: urlLauncher.Open,
+            overlayCoordinator: overlayCoordinator,
+            failureTracker: failureTracker
         )
     {
-        dictation.OverlayStateChanged += (_, state) =>
-            _postToUiThread(() => ApplyState(state));
-
-        transformSelection.OverlayStateChanged += (_, state) =>
-            _postToUiThread(() => ApplyState(state));
-
         SubscribeToAudioLevels(audio);
-
-        failureTracker.OnFailure += (_, e) =>
-        {
-            if (e.ShouldShowPersistentBanner)
-            {
-                return;
-            }
-
-            _postToUiThread(() =>
-            {
-                ActionResultUrl = null;
-                FeedbackDurationMilliseconds = null;
-                FeedbackText = e.Reason;
-                FeedbackIsError = true;
-                ShowFeedback = true;
-                RestartFeedbackTimer();
-            });
-        };
     }
 
     // Test seam: production posts non-audio service events to Avalonia's UI thread; tests can
@@ -117,15 +98,31 @@ public partial class DictationOverlayViewModel : ObservableObject
         ISettingsService settings,
         Action<Action> postToUiThread,
         AudioRecordingService? audio = null,
-        Func<string?, bool>? openUrl = null
+        Func<string?, bool>? openUrl = null,
+        OverlayCoordinator? overlayCoordinator = null,
+        IDetectionFailureTracker? failureTracker = null
     )
     {
         _settings = settings;
         _postToUiThread = postToUiThread;
         _openUrl = openUrl ?? (_ => false);
+        _overlayCoordinator = overlayCoordinator;
         if (audio is not null)
         {
             SubscribeToAudioLevels(audio);
+        }
+
+        if (failureTracker is not null)
+        {
+            failureTracker.OnFailure += (_, e) =>
+            {
+                if (!e.ShouldShowPersistentBanner)
+                {
+                    // The detailed English reason is already in the error log; the toast is
+                    // UI-facing and must be localized.
+                    ShowSystemErrorFeedback(Loc.Instance["Overlay.WindowDetectionFailed"]);
+                }
+            };
         }
 
         _recordingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
@@ -150,6 +147,11 @@ public partial class DictationOverlayViewModel : ObservableObject
             FeedbackDurationMilliseconds = null;
             OnPropertyChanged(nameof(HasVisibleContent));
         };
+
+        if (overlayCoordinator is not null)
+        {
+            overlayCoordinator.PresentationChanged += OnCoordinatorPresentationChanged;
+        }
 
         _settings.SettingsChanged += _ => _postToUiThread(RefreshOverlaySlots);
     }
@@ -237,7 +239,7 @@ public partial class DictationOverlayViewModel : ObservableObject
         OnPropertyChanged(nameof(HasVisibleContent));
 
         _feedbackTimer.Stop();
-        if (value)
+        if (value && !_applyingCoordinatorPresentation)
         {
             ArmFeedbackAutoHideTimer();
         }
@@ -315,15 +317,89 @@ public partial class DictationOverlayViewModel : ObservableObject
             return;
         }
 
-        ActionResultUrl = null;
-        FeedbackDurationMilliseconds = null;
-        FeedbackText = Loc.Instance["ActionResult.OpenFailed"];
-        FeedbackIsError = true;
-        ShowFeedback = true;
-        RestartFeedbackTimer();
+        // Swap the presented feedback in place so the coordinator stays the sole render
+        // path and re-arms its expiry for the replacement; rewriting VM properties here
+        // would leave the original expiry armed and cut the replacement short. When the
+        // feedback already expired, surface the failure as a fresh system toast instead.
+        var message = Loc.Instance["ActionResult.OpenFailed"];
+        if (_overlayCoordinator is null
+            || !_overlayCoordinator.ReplacePresentedFeedback(state => state with
+            {
+                ActionResultUrl = null,
+                FeedbackDurationMilliseconds = null,
+                FeedbackText = message,
+                FeedbackIsError = true,
+                ShowFeedback = true,
+            }))
+        {
+            ShowSystemErrorFeedback(message);
+        }
+    }
+
+    // Sole-render-path invariant: with a coordinator wired, every repaint must flow through
+    // its arbitration — a direct property write here would be invisible to the coordinator,
+    // which suppresses repaints while its own presented state is unchanged and so could
+    // never paint over it again.
+    private void ShowSystemErrorFeedback(string message)
+    {
+        if (_overlayCoordinator is { } coordinator)
+        {
+            var token = coordinator.Acquire(OverlayRequester.System);
+            coordinator.Show(
+                token,
+                new DictationOverlayState
+                {
+                    ShowFeedback = true,
+                    FeedbackIsError = true,
+                    FeedbackText = message,
+                }
+            );
+            return;
+        }
+
+        _postToUiThread(() =>
+        {
+            ActionResultUrl = null;
+            FeedbackDurationMilliseconds = null;
+            FeedbackText = message;
+            FeedbackIsError = true;
+            ShowFeedback = true;
+            RestartFeedbackTimer();
+        });
     }
 
     internal void ApplyState(DictationOverlayState state)
+    {
+        ApplyStateCore(state, restartFeedbackTimer: true);
+    }
+
+    private void OnCoordinatorPresentationChanged(
+        object? sender,
+        OverlayPresentationChangedEventArgs presentation
+    )
+    {
+        if (presentation.Revision <= _lastCoordinatorRevision)
+        {
+            return;
+        }
+
+        _lastCoordinatorRevision = presentation.Revision;
+        _feedbackTimer.Stop();
+        _applyingCoordinatorPresentation = true;
+        try
+        {
+            ApplyStateCore(presentation.State, restartFeedbackTimer: false);
+        }
+        finally
+        {
+            _applyingCoordinatorPresentation = false;
+        }
+    }
+
+    private void ApplyStateCore(
+        DictationOverlayState state,
+        bool restartFeedbackTimer
+    )
     {
         var wasShowingFeedback = ShowFeedback;
         IsOverlayVisible = state.IsOverlayVisible;
@@ -339,7 +415,7 @@ public partial class DictationOverlayViewModel : ObservableObject
         _sessionStartedAtUtc = state.SessionStartedAtUtc;
         IsRecording = state.IsRecording;
         ShowFeedback = state.ShowFeedback;
-        if (wasShowingFeedback && state.ShowFeedback)
+        if (restartFeedbackTimer && wasShowingFeedback && state.ShowFeedback)
         {
             RestartFeedbackTimer();
         }
@@ -388,6 +464,8 @@ public partial class DictationOverlayViewModel : ObservableObject
     }
 
     internal bool IsClockTimerRunning => _clockTimer.IsEnabled;
+
+    internal bool IsFeedbackTimerRunning => _feedbackTimer.IsEnabled;
 
     internal TimeSpan FeedbackTimerInterval => _feedbackTimer.Interval;
 

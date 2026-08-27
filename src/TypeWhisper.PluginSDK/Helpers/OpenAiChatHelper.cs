@@ -204,7 +204,7 @@ public static class OpenAiChatHelper
 
     /// <summary>
     ///     Extracts <c>choices[0].delta.content</c> from a single SSE chunk payload,
-    ///     or <c>null</c> for contentless/unparseable frames (heartbeats, role-only, finish).
+    ///     or <c>null</c> for valid contentless frames (role-only, finish).
     ///     Reflection-free via <see cref="JsonDocument" />.
     /// </summary>
     // ReSharper disable once UnusedMember.Global
@@ -216,8 +216,7 @@ public static class OpenAiChatHelper
 
     /// <summary>
     ///     Extracts a content delta and reports whether <c>choices[0].finish_reason</c>
-    ///     carries a valid terminal value. Invalid/contentless frames remain non-fatal
-    ///     and return <c>null</c>.
+    ///     carries a valid terminal value. Valid contentless frames return <c>null</c>.
     /// </summary>
     private static string? ParseChatCompletionStreamDelta(
         string dataPayload,
@@ -225,44 +224,54 @@ public static class OpenAiChatHelper
     )
     {
         hasFinishReason = false;
-        JsonDocument doc;
-        try
+        using var doc = JsonDocument.Parse(dataPayload);
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("choices", out var choices)
+            || choices.ValueKind != JsonValueKind.Array
+            || choices.GetArrayLength() == 0)
         {
-            doc = JsonDocument.Parse(dataPayload);
+            throw CreateInvalidResponseException(
+                dataPayload,
+                root,
+                "'choices' must be a non-empty array"
+            );
         }
-        catch (JsonException)
+
+        var firstChoice = choices[0];
+        if (firstChoice.ValueKind != JsonValueKind.Object
+            || !firstChoice.TryGetProperty("delta", out var delta)
+            || delta.ValueKind != JsonValueKind.Object)
+        {
+            throw CreateInvalidResponseException(
+                dataPayload,
+                root,
+                "'choices[0].delta' must be an object"
+            );
+        }
+
+        // finish_reason is only ever null (still streaming) or a non-empty string
+        // ("stop", "length", ...); anything else must not mask a truncated stream.
+        hasFinishReason = firstChoice.TryGetProperty("finish_reason", out var finishReason)
+                          && finishReason.ValueKind == JsonValueKind.String
+                          && !string.IsNullOrEmpty(finishReason.GetString());
+
+        if (!delta.TryGetProperty("content", out var content)
+            || content.ValueKind == JsonValueKind.Null)
         {
             return null;
         }
 
-        using (doc)
+        if (content.ValueKind != JsonValueKind.String)
         {
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object
-                || !root.TryGetProperty("choices", out var choices)
-                || choices.ValueKind != JsonValueKind.Array
-                || choices.GetArrayLength() == 0
-                || choices[0].ValueKind != JsonValueKind.Object)
-            {
-                return null;
-            }
-
-            var firstChoice = choices[0];
-            // finish_reason is only ever null (still streaming) or a non-empty string
-            // ("stop", "length", ...); anything else must not mask a truncated stream.
-            hasFinishReason = firstChoice.TryGetProperty("finish_reason", out var finishReason)
-                              && finishReason.ValueKind == JsonValueKind.String
-                              && !string.IsNullOrEmpty(finishReason.GetString());
-
-            if (firstChoice.TryGetProperty("delta", out var delta)
-                && delta.TryGetProperty("content", out var content)
-                && content.ValueKind == JsonValueKind.String)
-            {
-                return content.GetString();
-            }
+            throw CreateInvalidResponseException(
+                dataPayload,
+                root,
+                "'choices[0].delta.content' must be a string"
+            );
         }
 
-        return null;
+        return content.GetString();
     }
 
     /// <summary>

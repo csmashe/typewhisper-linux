@@ -251,7 +251,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
         }
 
         _configuredMemoryEnabled = value;
-        _settings.Save(_settings.Current with { MemoryEnabled = value });
+        _settings.Update(current => current with { MemoryEnabled = value });
     }
 
     partial void OnSelectedAutoUnloadOptionChanged(AutoUnloadOption? value)
@@ -265,7 +265,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { ModelAutoUnloadSeconds = value.Seconds });
+        _settings.Update(current => current with { ModelAutoUnloadSeconds = value.Seconds });
     }
 
     partial void OnSpokenFeedbackEnabledChanged(bool value)
@@ -288,7 +288,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
         }
 
         _configuredSpokenFeedbackEnabled = value;
-        _settings.Save(_settings.Current with { SpokenFeedbackEnabled = value });
+        _settings.Update(current => current with { SpokenFeedbackEnabled = value });
     }
 
     partial void OnSelectedSpokenFeedbackProviderIdChanged(string value)
@@ -318,8 +318,8 @@ public partial class AdvancedSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(
-            _settings.Current with { SpokenFeedbackProviderId = value, SpokenFeedbackVoiceId = selectedVoiceId }
+        _settings.Update(current =>
+            current with { SpokenFeedbackProviderId = value, SpokenFeedbackVoiceId = selectedVoiceId }
         );
     }
 
@@ -340,7 +340,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { SpokenFeedbackVoiceId = normalized });
+        _settings.Update(current => current with { SpokenFeedbackVoiceId = normalized });
     }
 
     partial void OnSaveToHistoryEnabledChanged(bool value)
@@ -350,7 +350,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { SaveToHistoryEnabled = value });
+        _settings.Update(current => current with { SaveToHistoryEnabled = value });
     }
 
     partial void OnCaptureLlmProvenanceChanged(bool value)
@@ -360,7 +360,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { CaptureLlmProvenance = value });
+        _settings.Update(current => current with { CaptureLlmProvenance = value });
     }
 
     partial void OnSelectedHistoryRetentionChanged(HistoryRetentionOption? value)
@@ -381,12 +381,12 @@ public partial class AdvancedSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(
-            _settings.Current with
+        _settings.Update(current =>
+            current with
             {
                 HistoryRetentionMode = value.Mode,
                 HistoryRetentionMinutes =
-                value.Minutes ?? _settings.Current.HistoryRetentionMinutes,
+                value.Minutes ?? current.HistoryRetentionMinutes,
             }
         );
     }
@@ -415,6 +415,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
             // The voices list carries a localized "System default voice" entry, so it
             // must be rebuilt too or the dropdown stays in the previous language.
             RefreshSpokenFeedbackVoices();
+
+            OnPropertyChanged(nameof(SpokenFeedbackHint));
+            OnPropertyChanged(nameof(MemoryHint));
         });
     }
 

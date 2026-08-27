@@ -1106,11 +1106,13 @@ public sealed class InputAccessSetupHelperTests
                 );
             }
 
+            // The external commands the lock prefix and group-remove fragment invoke.
+            // Resolve them through PATH: they do not live in /usr/bin on every distro.
             foreach (var command in new[] { "flock", "mkdir", "chmod", "cat", "rm" })
             {
                 File.CreateSymbolicLink(
                     Path.Join(_pathDir, command),
-                    Path.Join("/usr/bin", command)
+                    ResolveHostCommand(command)
                 );
             }
 
@@ -1145,6 +1147,26 @@ public sealed class InputAccessSetupHelperTests
         private void PutExecutableSuccessBinaryOnPath(string name)
         {
             File.CreateSymbolicLink(Path.Join(_pathDir, name), "/bin/true");
+        }
+
+        // Resolves against the PATH captured before this fixture restricted the
+        // process PATH to the shim directory.
+        private string ResolveHostCommand(string command)
+        {
+            var searchPaths = (_originalPath ?? string.Empty)
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var searchPath in searchPaths)
+            {
+                var candidate = Path.Join(searchPath, command);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            throw new Xunit.Sdk.XunitException(
+                $"Host command '{command}' was not found on PATH; the restricted-PATH shim setup requires it."
+            );
         }
 
         private static void TryDelete(string dir)
