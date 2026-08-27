@@ -936,6 +936,151 @@ public sealed class SpeechFeedbackServiceTests
     }
 
     [Fact]
+    public async Task Dispose_does_not_block_on_a_hanging_plugin_stop()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var session = new ControlledPlaybackSession(blockStop: true);
+        var provider = new ControlledTtsProvider(session);
+        var sut = new SpeechFeedbackService(settings.Object, manager, provider);
+        sut.AnnounceError("playing");
+
+        try
+        {
+            // The blocking Stop() crosses the plugin trust boundary; Dispose
+            // must hand it to the stop worker instead of hanging app shutdown.
+            await Task.Run(sut.Dispose).WaitAsync(s_testGuard);
+            await session.StopCalled.Task.WaitAsync(s_testGuard);
+        }
+        finally
+        {
+            session.ReleaseStop();
+        }
+    }
+
+    [Fact]
+    public async Task Capture_wait_completes_a_prior_request_whose_session_never_completes()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        using var sut = new SpeechFeedbackService(settings.Object, manager, provider);
+
+        sut.AnnounceError("prior");
+        var call = await provider.NextRequestAsync();
+        var reservation = sut.ReserveStartupFeedback();
+
+        await reservation.StopPriorPlaybackAsync().WaitAsync(s_testGuard);
+
+        // Completing the detached request lets its CTS dispose once the stop
+        // worker finishes — observable as the provider's captured token dying.
+        // Without the completion the CTS (and every ct.Register) leaks per toggle.
+        var disposed = false;
+        for (var attempt = 0; attempt < 100 && !disposed; attempt++)
+        {
+            try
+            {
+                _ = call.CancellationToken.WaitHandle;
+                await Task.Delay(20);
+            }
+            catch (ObjectDisposedException)
+            {
+                disposed = true;
+            }
+        }
+
+        Assert.True(disposed, "The prior request's CancellationTokenSource was never disposed.");
+        reservation.Dispose();
+    }
+
+    [Fact]
+    public void BeginAnnounce_registers_only_and_defers_provider_calls_until_launch()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var firstSession = new ControlledPlaybackSession();
+        var secondSession = new ControlledPlaybackSession();
+        var provider = new ControlledTtsProvider(firstSession, secondSession);
+        using var sut = new SpeechFeedbackService(settings.Object, manager, provider);
+
+        sut.AnnounceError("first");
+        Assert.Single(provider.Requests);
+
+        // Begin must not cross the provider trust boundary: no SpeakAsync call
+        // and no Stop() of the superseded session — both belong to the launch
+        // continuation, which the orchestrator invokes outside its session lock.
+        var launch = sut.BeginAnnounceTranscriptionComplete("second");
+
+        Assert.NotNull(launch);
+        Assert.Single(provider.Requests);
+        Assert.Equal(0, firstSession.StopCount);
+
+        launch();
+
+        Assert.Equal(2, provider.Requests.Length);
+        Assert.True(firstSession.StopCount >= 1);
+        Assert.Contains("second", provider.Requests[1].Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BeginAnnounce_is_rejected_without_allocating_while_reserved()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        var allocations = new ConcurrentQueue<(long Version, bool LockHeld)>();
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            manager,
+            provider,
+            playbackVersionAllocated: (version, lockHeld) =>
+                allocations.Enqueue((version, lockHeld))
+        );
+        using var reservation = sut.ReserveStartupFeedback();
+
+        Assert.Null(sut.BeginAnnounceError("late error"));
+        Assert.Null(sut.BeginAnnounceTranscriptionComplete("late readback"));
+        Assert.Empty(provider.Requests);
+        Assert.Empty(allocations);
+    }
+
+    [Fact]
+    public async Task Begun_but_unlaunched_request_is_captured_and_stopped_by_a_reservation()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        using var sut = new SpeechFeedbackService(settings.Object, manager, provider);
+
+        // Registration happened, launch has not: this models the orchestrator
+        // being preempted between releasing its session lock and launching.
+        var launch = sut.BeginAnnounceError("stale");
+        Assert.NotNull(launch);
+
+        using var reservation = sut.ReserveStartupFeedback();
+        launch();
+
+        // The reservation detached the registered request, so SpeakAsync's
+        // acceptance check discards the session instead of letting it own the
+        // slot — the late launch cannot speak over the startup lane.
+        var call = await provider.NextRequestAsync();
+        var session = new ControlledPlaybackSession();
+        call.Return(session);
+        await session.StopCalled.Task.WaitAsync(s_testGuard);
+        Assert.True(session.StopCount >= 1);
+    }
+
+    [Fact]
     public async Task Stale_dispose_cannot_release_newer_reservation_and_dispose_is_idempotent()
     {
         var settings = TestPluginManagerFactory.CreateSettings(

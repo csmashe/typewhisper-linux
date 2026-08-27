@@ -16,7 +16,16 @@ public sealed class AtomicFileWriteIndeterminateCommitException : IOException
                 + $"directory '{directoryPath}' failed. The destination is visible, but its "
                 + "crash durability is unknown.",
             innerException
-        ) { }
+        )
+    {
+        PublishedPath = path;
+    }
+
+    /// <summary>
+    ///     The destination that IS visible despite the failed directory sync, so callers
+    ///     can record where the content landed instead of reporting a lost write.
+    /// </summary>
+    public string PublishedPath { get; }
 }
 
 /// <summary>

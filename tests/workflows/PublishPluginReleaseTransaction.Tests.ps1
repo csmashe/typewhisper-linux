@@ -257,7 +257,7 @@ Describe 'Publish plugin release transaction' {
         $projection.isLocal | Should -BeFalse
     }
 
-    It 'rejects manifests with missing, null-entry, duplicate, or scalar categories' {
+    It 'rejects manifests with missing, null-entry, or duplicate categories' {
         { Get-PluginRegistryProjection -Manifest ([pscustomobject]@{ networkAccess = 'local' }) } |
             Should -Throw '*at least one category*'
         { Get-PluginRegistryProjection -Manifest ([pscustomobject]@{

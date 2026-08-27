@@ -39,7 +39,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cpio dpkg-dev file rpm wget desktop-file-utils
+            binutils cpio dpkg-dev file rpm wget desktop-file-utils
 
       - name: Resolve dry-run version
         id: meta

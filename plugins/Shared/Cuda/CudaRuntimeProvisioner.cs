@@ -8,6 +8,7 @@ using System.IO.Compression;
 using System.Runtime.InteropServices;
 using TypeWhisper.PluginSDK.Processes;
 using System.Text.Json;
+using TypeWhisper.Plugins.Shared.Io;
 using TypeWhisper.Plugins.Shared.Net;
 
 namespace TypeWhisper.Plugins.Shared.Cuda;
@@ -216,6 +217,10 @@ public class CudaRuntimeProvisioner
         _legacyMigrationDisabledPath;
     internal TimeSpan MaintenanceLockTimeoutForTests { get; init; } =
         s_defaultMaintenanceLockTimeout;
+
+    // Test seam: replaces the tombstone write's two durability syscalls so tests can pin
+    // the staged -> fsync -> rename -> parent-fsync sequence without real power loss.
+    internal DurableFileWrite.SyncHooks? TombstoneSyncHooksForTests { get; init; }
 
     /// <summary>
     ///     The shared cache root both local engines use, so the CUDA math libraries
@@ -1128,12 +1133,17 @@ public class CudaRuntimeProvisioner
                         Directory.CreateDirectory(
                             Directory.GetParent(_legacyMigrationDisabledPath)!.FullName
                         );
-                        await File.WriteAllTextAsync(
-                                _legacyMigrationDisabledPath,
-                                string.Empty,
-                                ct
-                            )
-                            .ConfigureAwait(false);
+                        // Durable, not just written: fsync'd temp + atomic rename +
+                        // parent-dir fsync. A plain write could let a power loss persist
+                        // the destination delete below while losing the tombstone, and the
+                        // next start would re-adopt the legacy tree Clear just disowned.
+                        // Ordering is load-bearing: the tombstone commits to stable
+                        // storage BEFORE anything is deleted.
+                        DurableFileWrite.WriteAllText(
+                            _legacyMigrationDisabledPath,
+                            string.Empty,
+                            TombstoneSyncHooksForTests
+                        );
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {

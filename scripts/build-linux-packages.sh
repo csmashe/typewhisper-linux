@@ -14,7 +14,7 @@
 #
 # Tooling required: dotnet, ffmpeg-free tools not required, plus:
 #   tar gzip                 (tar.gz)
-#   sha256sum sort           (bundled plugin identity — hard required, checked up front)
+#   sha256sum sort readelf   (plugin identity + dependency floors — hard required, checked up front)
 #   wget, appstreamcli       (AppImage helpers — only wget is hard required)
 #   dpkg-deb                 (.deb)
 #   rpmbuild                 (.rpm)
@@ -46,9 +46,9 @@ BUNDLE_IDENTITY_FILE_NAME=".typewhisper-bundle-identity.sha256"
 
 # Every format carries the bundled plugin identity, so unlike per-format tooling
 # these are checked before the long publish rather than skipped with a warning.
-for required in sha256sum sort; do
+for required in sha256sum sort readelf; do
   command -v "$required" >/dev/null 2>&1 \
-    || { echo "ERROR: $required is required to identify the bundled plugin payload" >&2; exit 1; }
+    || { echo "ERROR: $required is required for plugin identity and dependency floors" >&2; exit 1; }
 done
 
 compute_bundle_identity() {
@@ -69,6 +69,79 @@ compute_bundle_identity() {
     )
   ) | sha256sum | cut -d ' ' -f1
 }
+
+compute_glibc_floor() {
+  local payload_root="$1"
+  local candidate candidate_list verneed verneeds floors floor
+
+  # Enumerate through a checked find first: process substitution would hide a
+  # partial enumeration failure and silently under-floor the packages.
+  candidate_list="$(mktemp)"
+  if ! find "$payload_root" \( -type f -o -type l \) -print0 >"$candidate_list"; then
+    rm -f "$candidate_list"
+    echo "ERROR: failed to enumerate payload files under $payload_root" >&2
+    return 1
+  fi
+
+  # One "GLIBC_<name> <path>" line per distinct GLIBC_* verneed per ELF, so an
+  # unrecognized name can be reported with the binary that requires it. A
+  # failing readelf -V is fatal: tolerating it would drop that ELF's verneeds
+  # and silently under-floor the packages. grep exit 1 is tolerated — it
+  # just means the ELF has no GLIBC verneeds (e.g. a static binary).
+  if ! verneeds="$(
+    while IFS= read -r -d '' candidate; do
+      if readelf -h "$candidate" >/dev/null 2>&1; then
+        if ! version_info="$(readelf -V "$candidate" 2>/dev/null)"; then
+          echo "ERROR: readelf -V failed for $candidate" >&2
+          exit 1
+        fi
+        grep_status=0
+        candidate_verneeds="$(grep -oE 'GLIBC_[0-9A-Za-z_.]+' <<<"$version_info")" \
+          || grep_status=$?
+        if [ "$grep_status" -gt 1 ]; then
+          echo "ERROR: scanning GLIBC verneeds failed for $candidate" >&2
+          exit 1
+        fi
+        if [ -n "$candidate_verneeds" ]; then
+          LC_ALL=C sort -u <<<"$candidate_verneeds" \
+            | while IFS= read -r verneed; do
+                printf '%s %s\n' "$verneed" "$candidate"
+              done
+        fi
+      fi
+    done <"$candidate_list"
+  )"; then
+    rm -f "$candidate_list"
+    return 1
+  fi
+  rm -f "$candidate_list"
+
+  # Verneed names are not all numeric versions, and numeric ones may carry
+  # three components (x86-64's glibc baseline is GLIBC_2.2.5). GLIBC_ABI_DT_RELR
+  # marks packed DT_RELR relocations, which glibc first loads at 2.36, so it
+  # competes as a 2.36 floor candidate. Any other name (GLIBC_PRIVATE included)
+  # has no known version mapping and must fail here rather than silently
+  # under-floor the packages.
+  floors=""
+  while IFS=' ' read -r verneed candidate; do
+    [ -n "$verneed" ] || continue
+    if [[ "$verneed" =~ ^GLIBC_2\.[0-9]+(\.[0-9]+)?$ ]]; then
+      floors+="${verneed#GLIBC_}"$'\n'
+    elif [ "$verneed" = "GLIBC_ABI_DT_RELR" ]; then
+      floors+="2.36"$'\n'
+    else
+      echo "ERROR: unrecognized GLIBC verneed '$verneed' required by $candidate; map it to a glibc version floor before shipping" >&2
+      return 1
+    fi
+  done <<<"$verneeds"
+
+  floor="$(printf '%s' "$floors" | LC_ALL=C sort -Vu | tail -n 1)"
+  [[ "$floor" =~ ^2\.[0-9]+(\.[0-9]+)?$ ]] \
+    || { echo "ERROR: could not determine the staged payload's GLIBC floor" >&2; return 1; }
+  printf '%s\n' "$floor"
+}
+
+# The GLIBCXX floor is deliberately not encoded: symbol-to-package-version mapping is distro-specific, and staged-verify/smoke containers run at-or-above the build host.
 
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
@@ -132,6 +205,7 @@ fi
 echo "==> Pruning non-linux-x64 native runtimes"
 find "$PUBLISH_DIR" -type d \
   \( -name "linux-arm" -o -name "linux-arm64" -o -name "linux-musl-*" \
+     -o -name "linux-x86" -o -name "linux-loongarch64" -o -name "linux-riscv64" \
      -o -name "win-*" -o -name "osx-*" -o -name "macos-*" \
      -o -name "browser-*" -o -name "android-*" \
   \) -prune -exec rm -rf {} +
@@ -245,6 +319,7 @@ else
 fi
 
 # ---------- .deb ----------
+DEB_GLIBC_FLOOR=""
 if command -v dpkg-deb >/dev/null 2>&1; then
   echo "==> Building .deb"
   DEB_STAGE="$STAGE_ROOT/deb"
@@ -289,7 +364,10 @@ EOF
   # Strip a leading 'v' if a caller passed a tag; Debian package versions don't take one.
   DEB_VERSION="${VERSION#v}"
   INSTALLED_SIZE="$(du -sk "$DEB_STAGE/opt/typewhisper" | cut -f1)"
+  DEB_GLIBC_FLOOR="$(compute_glibc_floor "$DEB_STAGE")"
 
+  # Keep this list literal: dpkg-shlibdeps cannot see the ICU, OpenSSL, and
+  # GSSAPI libraries that self-contained .NET resolves with dlopen at runtime.
   cat > "$DEB_STAGE/DEBIAN/control" <<EOF
 Package: typewhisper
 Version: $DEB_VERSION
@@ -298,8 +376,8 @@ Priority: optional
 Architecture: amd64
 Maintainer: Excel on the Web <noreply@excelontheweb.com>
 Installed-Size: $INSTALLED_SIZE
-Depends: libasound2t64 | libasound2, libjack-jackd2-0 | libjack0 | pipewire-jack
-Recommends: libpulse0, pulseaudio-utils, playerctl, xdotool
+Depends: libc6 (>= $DEB_GLIBC_FLOOR), libgcc-s1, libstdc++6, libicu78 | libicu76 | libicu74 | libicu72 | libicu70, libfontconfig1, libx11-6, libxcursor1, libxext6, libxi6, libxrandr2, libice6, libsm6, libxtst6, libxt6t64 | libxt6, libxinerama1, libssl3t64 | libssl3, zlib1g, libgomp1, libgssapi-krb5-2, ca-certificates, tzdata, libasound2t64 | libasound2, libjack-jackd2-0 | libjack0 | pipewire-jack
+Recommends: libgl1, libegl1, libpulse0, pulseaudio-utils, playerctl, xdotool, libdbus-1-3, dbus-x11, libglib2.0-bin, libxkbcommon0, libxkbcommon-x11-0
 Description: Speech-to-text dictation for Linux desktop
  TypeWhisper provides global dictation, file transcription, recorder,
  dictionary/snippets, and pluggable speech and LLM providers for Linux.
@@ -367,6 +445,12 @@ StartupNotify=true
 StartupWMClass=typewhisper
 EOF
 
+  RPM_GLIBC_FLOOR="$(compute_glibc_floor "$RPM_SRC")"
+  if [ -n "$DEB_GLIBC_FLOOR" ] && [ "$RPM_GLIBC_FLOOR" != "$DEB_GLIBC_FLOOR" ]; then
+    echo "ERROR: staged deb GLIBC floor $DEB_GLIBC_FLOOR differs from rpm floor $RPM_GLIBC_FLOOR" >&2
+    exit 1
+  fi
+
   tar -czf "$RPM_TOP/SOURCES/typewhisper-$RPM_VERSION_CLEAN.tar.gz" -C "$RPM_TOP/SOURCES" "typewhisper-$RPM_VERSION_CLEAN"
 
   cat > "$RPM_TOP/SPECS/typewhisper.spec" <<EOF
@@ -386,13 +470,38 @@ URL:            https://github.com/csmashe/typewhisper-linux
 Source0:        %{name}-%{version}.tar.gz
 BuildArch:      x86_64
 AutoReqProv:    no
-# AutoReqProv is off (it would scan every bundled .NET/native lib), so the audio
-# stack the bundled libportaudio.so links against has to be declared by hand.
-# Soname form, not a package name: pipewire-jack and jack-audio-connection-kit
-# both satisfy it, and the app cannot capture a microphone without them.
+# Keep this list literal: AutoReq cannot see the ICU, OpenSSL, and GSSAPI
+# libraries that self-contained .NET resolves with dlopen at runtime. SONAME
+# capabilities also let alternative providers satisfy the native dependencies.
+# /bin/sh is added automatically as the %post interpreter requirement and is
+# asserted in RPM_EXPECTED_REQUIREMENTS; declaring it here would create a
+# second requirement tuple with different flags and break set-equality.
+Requires:       libc.so.6()(64bit)
+Requires:       libc.so.6(GLIBC_$RPM_GLIBC_FLOOR)(64bit)
+Requires:       libgcc_s.so.1()(64bit)
+Requires:       libstdc++.so.6()(64bit)
+Requires:       libicu
+Requires:       libfontconfig.so.1()(64bit)
+Requires:       libX11.so.6()(64bit)
+Requires:       libXcursor.so.1()(64bit)
+Requires:       libXext.so.6()(64bit)
+Requires:       libXi.so.6()(64bit)
+Requires:       libXrandr.so.2()(64bit)
+Requires:       libICE.so.6()(64bit)
+Requires:       libSM.so.6()(64bit)
+Requires:       libXtst.so.6()(64bit)
+Requires:       libXt.so.6()(64bit)
+Requires:       libXinerama.so.1()(64bit)
+Requires:       libssl.so.3()(64bit)
+Requires:       libcrypto.so.3()(64bit)
+Requires:       libz.so.1()(64bit)
+Requires:       libgomp.so.1()(64bit)
+Requires:       libgssapi_krb5.so.2()(64bit)
+Requires:       ca-certificates
+Requires:       tzdata
 Requires:       libjack.so.0()(64bit)
 Requires:       libasound.so.2()(64bit)
-Recommends:     pulseaudio-libs, pulseaudio-utils, playerctl, xdotool
+Recommends:     libglvnd-glx, libglvnd-egl, pulseaudio-libs, pulseaudio-utils, playerctl, xdotool, dbus-libs, dbus-daemon, glib2, libxkbcommon, libxkbcommon-x11
 
 %description
 TypeWhisper provides global dictation, file transcription, recorder,

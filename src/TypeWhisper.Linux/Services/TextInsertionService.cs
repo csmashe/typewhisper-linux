@@ -1200,7 +1200,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public bool LastTypingDeliveredPartialText { get; private set; }
 
-    private bool UsesWaylandClipboard => _snapshot.ClipboardToolName == "wl-clipboard";
+    private bool UsesWaylandClipboard =>
+        _snapshot.ClipboardToolName == LinuxCapabilitySnapshot.WlClipboardToolName;
 
     public async Task<string?> TryGetClipboardTextAsync()
     {

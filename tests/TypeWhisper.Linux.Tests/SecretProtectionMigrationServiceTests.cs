@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Runtime.Versioning;
+using System.Text;
 using System.Text.Json;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Tests;
@@ -228,6 +229,309 @@ public sealed class SecretProtectionMigrationServiceTests : IDisposable
         Assert.NotEmpty(result.Errors);
     }
 
+    [Fact]
+    public void PreservesRetiredCiphertextUntilThirdDistinctRun()
+    {
+        var settingsPath = Path.Join(_basePath, "settings.json");
+        var ciphertext = CreateUndecryptableLegacyCiphertext("retired-secret");
+        WriteJson(
+            settingsPath,
+            new Dictionary<string, object?> { ["groqApiKey"] = ciphertext }
+        );
+
+        var firstRun = CreateService("run-1");
+        Assert.True(firstRun.MigrateAllAtStartup().HasUnresolvedSecrets);
+        Assert.True(firstRun.MigrateAllAtStartup().HasUnresolvedSecrets);
+        Assert.Equal(ciphertext, ReadString(settingsPath, "groqApiKey"));
+        using (var afterFirstRun = ReadQuarantine())
+        {
+            var failure = Assert.Single(
+                afterFirstRun.RootElement.GetProperty("failures").EnumerateArray()
+            );
+            Assert.Equal(1, failure.GetProperty("failureCount").GetInt32());
+            Assert.Equal("run-1", failure.GetProperty("lastStartupId").GetString());
+            Assert.Empty(
+                afterFirstRun.RootElement
+                    .GetProperty("retiredSecrets")
+                    .EnumerateArray()
+            );
+        }
+
+        Assert.True(CreateService("run-2").MigrateAllAtStartup().HasUnresolvedSecrets);
+
+        Assert.Equal(ciphertext, ReadString(settingsPath, "groqApiKey"));
+        using var afterSecondRun = ReadQuarantine();
+        var secondFailure = Assert.Single(
+            afterSecondRun.RootElement.GetProperty("failures").EnumerateArray()
+        );
+        Assert.Equal(2, secondFailure.GetProperty("failureCount").GetInt32());
+        Assert.Equal("run-2", secondFailure.GetProperty("lastStartupId").GetString());
+        Assert.Empty(
+            afterSecondRun.RootElement.GetProperty("retiredSecrets").EnumerateArray()
+        );
+    }
+
+    [Fact]
+    public void ThirdFailureQuarantinesPrimaryAndBackupProviderFields()
+    {
+        var primaryPath = Path.Join(_basePath, "settings.json");
+        var backupPath = Path.Join(_basePath, "settings.json.bak");
+        var values = new Dictionary<(string Source, string Property), string>
+        {
+            [("settings.json", "groqApiKey")] =
+                CreateUndecryptableLegacyCiphertext("primary-groq"),
+            [("settings.json", "openAiApiKey")] =
+                CreateUndecryptableLegacyCiphertext("primary-openai"),
+            [("settings.json.bak", "groqApiKey")] =
+                CreateUndecryptableLegacyCiphertext("backup-groq"),
+            [("settings.json.bak", "openAiApiKey")] =
+                CreateUndecryptableLegacyCiphertext("backup-openai"),
+        };
+        WriteJson(
+            primaryPath,
+            new Dictionary<string, object?>
+            {
+                ["groqApiKey"] = values[("settings.json", "groqApiKey")],
+                ["openAiApiKey"] = values[("settings.json", "openAiApiKey")],
+            }
+        );
+        WriteJson(
+            backupPath,
+            new Dictionary<string, object?>
+            {
+                ["groqApiKey"] = values[("settings.json.bak", "groqApiKey")],
+                ["openAiApiKey"] = values[("settings.json.bak", "openAiApiKey")],
+            }
+        );
+
+        CreateService("run-1").MigrateAllAtStartup();
+        CreateService("run-2").MigrateAllAtStartup();
+        var result = CreateService("run-3").MigrateAllAtStartup();
+
+        Assert.Equal(2, result.MigratedFileCount);
+        Assert.Equal(0, result.UnresolvedSecretCount);
+        Assert.True(result.RootSettingsChanged);
+        Assert.Equal("", ReadString(primaryPath, "groqApiKey"));
+        Assert.Equal("", ReadString(primaryPath, "openAiApiKey"));
+        Assert.Equal("", ReadString(backupPath, "groqApiKey"));
+        Assert.Equal("", ReadString(backupPath, "openAiApiKey"));
+
+        using var quarantine = ReadQuarantine();
+        Assert.Equal(1, quarantine.RootElement.GetProperty("version").GetInt32());
+        var retired = quarantine.RootElement
+            .GetProperty("retiredSecrets")
+            .EnumerateArray()
+            .ToArray();
+        Assert.Equal(4, retired.Length);
+        foreach (var expected in values)
+        {
+            var entry = Assert.Single(retired, candidate =>
+                candidate.GetProperty("sourceFile").GetString() == expected.Key.Source
+                && candidate.GetProperty("property").GetString() == expected.Key.Property
+            );
+            Assert.Equal(
+                expected.Value,
+                entry.GetProperty("ciphertext").GetString()
+            );
+            Assert.Equal(
+                HashCiphertext(expected.Value),
+                entry.GetProperty("ciphertextHash").GetString()
+            );
+            Assert.Equal(3, entry.GetProperty("failureCount").GetInt32());
+            Assert.Equal("run-3", entry.GetProperty("startupId").GetString());
+            Assert.NotEqual(
+                default,
+                entry.GetProperty("timestampUtc").GetDateTimeOffset()
+            );
+        }
+
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            File.GetUnixFileMode(QuarantinePath)
+        );
+    }
+
+    [Fact]
+    public void PersistsQuarantineBeforeCompareAndSetClear()
+    {
+        var settingsPath = Path.Join(_basePath, "settings.json");
+        var ciphertext = CreateUndecryptableLegacyCiphertext("original-secret");
+        var replacement = CreateUndecryptableLegacyCiphertext("replacement-secret");
+        WriteJson(
+            settingsPath,
+            new Dictionary<string, object?> { ["groqApiKey"] = ciphertext }
+        );
+        CreateService("run-1").MigrateAllAtStartup();
+        CreateService("run-2").MigrateAllAtStartup();
+        var boundaryObserved = false;
+        var thirdRun = CreateService(
+            "run-3",
+            () =>
+            {
+                using var durableCopy = ReadQuarantine();
+                var entry = Assert.Single(
+                    durableCopy.RootElement
+                        .GetProperty("retiredSecrets")
+                        .EnumerateArray()
+                );
+                Assert.Equal(ciphertext, entry.GetProperty("ciphertext").GetString());
+                Assert.Equal(
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                    File.GetUnixFileMode(QuarantinePath)
+                );
+                Assert.Equal(
+                    ciphertext,
+                    ReadString(settingsPath, "groqApiKey")
+                );
+                WriteJson(
+                    settingsPath,
+                    new Dictionary<string, object?> { ["groqApiKey"] = replacement }
+                );
+                boundaryObserved = true;
+            }
+        );
+
+        var result = thirdRun.MigrateAllAtStartup();
+
+        Assert.True(boundaryObserved);
+        Assert.True(result.HasUnresolvedSecrets);
+        Assert.Equal(replacement, ReadString(settingsPath, "groqApiKey"));
+        using var quarantine = ReadQuarantine();
+        Assert.Equal(
+            ciphertext,
+            Assert.Single(
+                    quarantine.RootElement
+                        .GetProperty("retiredSecrets")
+                        .EnumerateArray()
+                )
+                .GetProperty("ciphertext")
+                .GetString()
+        );
+    }
+
+    [Fact]
+    public void ChangedCiphertextResetsFailureCount()
+    {
+        var settingsPath = Path.Join(_basePath, "settings.json");
+        var first = CreateUndecryptableLegacyCiphertext("first-secret");
+        var replacement = CreateUndecryptableLegacyCiphertext("second-secret");
+        WriteJson(
+            settingsPath,
+            new Dictionary<string, object?> { ["openAiApiKey"] = first }
+        );
+        CreateService("run-1").MigrateAllAtStartup();
+        CreateService("run-2").MigrateAllAtStartup();
+        WriteJson(
+            settingsPath,
+            new Dictionary<string, object?> { ["openAiApiKey"] = replacement }
+        );
+
+        CreateService("run-3").MigrateAllAtStartup();
+
+        Assert.Equal(replacement, ReadString(settingsPath, "openAiApiKey"));
+        using (var afterReplacement = ReadQuarantine())
+        {
+            var failure = Assert.Single(
+                afterReplacement.RootElement
+                    .GetProperty("failures")
+                    .EnumerateArray()
+            );
+            Assert.Equal(1, failure.GetProperty("failureCount").GetInt32());
+            Assert.Equal(
+                HashCiphertext(replacement),
+                failure.GetProperty("ciphertextHash").GetString()
+            );
+            Assert.Empty(
+                afterReplacement.RootElement
+                    .GetProperty("retiredSecrets")
+                    .EnumerateArray()
+            );
+        }
+
+        CreateService("run-4").MigrateAllAtStartup();
+        Assert.Equal(replacement, ReadString(settingsPath, "openAiApiKey"));
+        CreateService("run-5").MigrateAllAtStartup();
+
+        Assert.Equal("", ReadString(settingsPath, "openAiApiKey"));
+        using var quarantine = ReadQuarantine();
+        var retired = Assert.Single(
+            quarantine.RootElement.GetProperty("retiredSecrets").EnumerateArray()
+        );
+        Assert.Equal(replacement, retired.GetProperty("ciphertext").GetString());
+    }
+
+    [Fact]
+    public void RestoredHomeDecryptsInsteadOfQuarantining()
+    {
+        var originalProcessHome = Environment.GetEnvironmentVariable("HOME");
+        var encryptionHome = Path.Join(_basePath, "original-home");
+        var wrongHome = Path.Join(_basePath, "wrong-home");
+        try
+        {
+            Environment.SetEnvironmentVariable("HOME", encryptionHome);
+            var ciphertext = ApiKeyProtectionTests.EncryptLegacyGcm("recoverable-secret");
+            var settingsPath = Path.Join(_basePath, "settings.json");
+            WriteJson(
+                settingsPath,
+                new Dictionary<string, object?> { ["groqApiKey"] = ciphertext }
+            );
+
+            Environment.SetEnvironmentVariable("HOME", wrongHome);
+            CreateService("run-1").MigrateAllAtStartup();
+            CreateService("run-2").MigrateAllAtStartup();
+            Assert.Equal(ciphertext, ReadString(settingsPath, "groqApiKey"));
+
+            Environment.SetEnvironmentVariable("HOME", encryptionHome);
+            var result = CreateService("run-3").MigrateAllAtStartup();
+
+            Assert.False(result.HasUnresolvedSecrets);
+            AssertCurrentSecret(
+                ReadString(settingsPath, "groqApiKey"),
+                "recoverable-secret"
+            );
+            using var quarantine = ReadQuarantine();
+            Assert.Empty(
+                quarantine.RootElement.GetProperty("failures").EnumerateArray()
+            );
+            Assert.Empty(
+                quarantine.RootElement
+                    .GetProperty("retiredSecrets")
+                    .EnumerateArray()
+            );
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("HOME", originalProcessHome);
+        }
+    }
+
+    [Fact]
+    public void DoesNotQuarantinePluginSecrets()
+    {
+        var pluginSettingsPath = Path.Join(
+            _basePath,
+            "PluginData",
+            "com.test.plugin",
+            "settings.json"
+        );
+        var ciphertext = CreateUndecryptableLegacyCiphertext("plugin-secret");
+        WriteJson(
+            pluginSettingsPath,
+            new Dictionary<string, object?> { ["secret:api-key"] = ciphertext }
+        );
+
+        CreateService("run-1").MigrateAllAtStartup();
+        CreateService("run-2").MigrateAllAtStartup();
+        var result = CreateService("run-3").MigrateAllAtStartup();
+
+        Assert.True(result.HasUnresolvedSecrets);
+        Assert.Equal(
+            ciphertext,
+            ReadString(pluginSettingsPath, "secret:api-key")
+        );
+        Assert.False(File.Exists(QuarantinePath));
+    }
+
     private static bool CanRead(string path)
     {
         try
@@ -241,9 +545,20 @@ public sealed class SecretProtectionMigrationServiceTests : IDisposable
         }
     }
 
-    private SecretProtectionMigrationService CreateService()
+    private string QuarantinePath =>
+        Path.Join(_basePath, "retired-provider-secrets.quarantine.json");
+
+    private SecretProtectionMigrationService CreateService(
+        string? startupId = null,
+        Action? quarantinePersistedObserver = null
+    )
     {
-        return new SecretProtectionMigrationService(_basePath, _keyFilePath);
+        return new SecretProtectionMigrationService(
+            _basePath,
+            _keyFilePath,
+            startupId,
+            quarantinePersistedObserver
+        );
     }
 
     private void AssertCurrentSecret(string stored, string expectedPlainText)
@@ -260,6 +575,27 @@ public sealed class SecretProtectionMigrationServiceTests : IDisposable
     {
         using var document = JsonDocument.Parse(File.ReadAllText(path));
         return document.RootElement.GetProperty(propertyName).GetString()!;
+    }
+
+    private JsonDocument ReadQuarantine()
+    {
+        return JsonDocument.Parse(File.ReadAllText(QuarantinePath));
+    }
+
+    private static string CreateUndecryptableLegacyCiphertext(string plainText)
+    {
+        var bytes = Convert.FromBase64String(
+            ApiKeyProtectionTests.EncryptLegacyGcm(plainText)
+        );
+        bytes[^1] ^= 0x20;
+        return Convert.ToBase64String(bytes);
+    }
+
+    private static string HashCiphertext(string ciphertext)
+    {
+        return Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(ciphertext))
+        );
     }
 
     private static void WriteJson(string path, Dictionary<string, object?> values)

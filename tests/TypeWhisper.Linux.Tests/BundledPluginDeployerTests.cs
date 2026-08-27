@@ -846,6 +846,9 @@ public sealed class BundledPluginDeployerTests
 
     private static string WritePublishedIdentity(string sourceRoot)
     {
+        // ComputeContentFingerprint excludes StampFileName but includes
+        // BundleIdentityFileName, so delete any existing marker before hashing
+        // to keep the fabricated identity stable across rewrites.
         File.Delete(Path.Join(sourceRoot, BundleIdentityFileName));
         var identity = Convert.ToHexString(
             BundledPluginDeployer.ComputeContentFingerprint(sourceRoot)

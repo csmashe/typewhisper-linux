@@ -732,12 +732,24 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
                 return;
             }
 
-            var outputPath = CommitExport(
-                outputFolder,
-                Path.GetFileNameWithoutExtension(filePath),
-                artifact,
-                ct
-            );
+            string outputPath;
+            try
+            {
+                outputPath = CommitExport(
+                    outputFolder,
+                    Path.GetFileNameWithoutExtension(filePath),
+                    artifact,
+                    ct
+                );
+            }
+            catch (AtomicFileWriteIndeterminateCommitException ex)
+            {
+                // The export landed — only its crash durability is unknown — so the
+                // failure history entry must still point at the transcript on disk.
+                committedOutputPath = ex.PublishedPath;
+                throw;
+            }
+
             committedOutputPath = outputPath;
 
             string? sourceDeletionError = null;

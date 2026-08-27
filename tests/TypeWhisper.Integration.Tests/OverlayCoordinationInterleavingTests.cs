@@ -175,24 +175,47 @@ public sealed class OverlayCoordinationInterleavingTests
             AssertDictationRecording(coordinator.PresentedState);
 
             var failedTransformStart = transform.ToggleAsync();
-            await BoundedTest.WaitAsync(transformFailure.Task);
-            AssertDictationRecording(coordinator.PresentedState);
+            var transformRecording = false;
+            try
+            {
+                await BoundedTest.WaitAsync(transformFailure.Task);
+                AssertDictationRecording(coordinator.PresentedState);
 
-            await BoundedTest.WaitAsync(fixture.Orchestrator.CancelAsync());
-            await BoundedTest.WaitAsync(failedTransformStart);
+                await BoundedTest.WaitAsync(fixture.Orchestrator.CancelAsync());
+                await BoundedTest.WaitAsync(failedTransformStart);
 
-            await BoundedTest.WaitAsync(transform.ToggleAsync());
-            AssertTransformRecording(coordinator.PresentedState);
+                await BoundedTest.WaitAsync(transform.ToggleAsync());
+                transformRecording = true;
+                AssertTransformRecording(coordinator.PresentedState);
 
-            var failedDictationStart = await BoundedTest.WaitAsync(
-                fixture.Orchestrator.StartAsync()
-            );
-            Assert.Equal(0, failedDictationStart);
-            AssertTransformRecording(coordinator.PresentedState);
+                var failedDictationStart = await BoundedTest.WaitAsync(
+                    fixture.Orchestrator.StartAsync()
+                );
+                Assert.Equal(0, failedDictationStart);
+                AssertTransformRecording(coordinator.PresentedState);
 
-            fixture.Plugin.EnqueueText("cancel");
-            fixture.FeedNonSilentAudio();
-            await BoundedTest.WaitAsync(transform.ToggleAsync());
+                fixture.Plugin.EnqueueText("cancel");
+                fixture.FeedNonSilentAudio();
+                await BoundedTest.WaitAsync(transform.ToggleAsync());
+                transformRecording = false;
+            }
+            finally
+            {
+                if (fixture.Orchestrator.IsRecording)
+                {
+                    await IgnoreFailureAsync(fixture.Orchestrator.CancelAsync());
+                }
+
+                await IgnoreFailureAsync(failedTransformStart);
+                if (transformRecording)
+                {
+                    // A transform session left recording would keep the shared audio
+                    // capture alive; queue a cancel command so its stop can transcribe.
+                    fixture.Plugin.EnqueueText("cancel");
+                    fixture.FeedNonSilentAudio();
+                    await IgnoreFailureAsync(transform.ToggleAsync());
+                }
+            }
         });
     }
 

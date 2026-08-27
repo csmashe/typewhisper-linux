@@ -2040,7 +2040,7 @@ public sealed class DictationOrchestrator : IDisposable
                 ReportStatus(context, failureMessage);
                 TryPublishSessionSpeechFeedback(
                     context,
-                    () => _speechFeedback.AnnounceError(userMessage)
+                    () => _speechFeedback.BeginAnnounceError(userMessage)
                 );
                 ShowFeedback(context, failureMessage, true);
                 PublishSessionTerminal(context.SessionId, "failed", userMessage);
@@ -2296,7 +2296,7 @@ public sealed class DictationOrchestrator : IDisposable
             // SpeechFeedbackService's configured-language fallback.
             TryPublishSessionSpeechFeedback(
                 context,
-                () => _speechFeedback.AnnounceTranscriptionComplete(
+                () => _speechFeedback.BeginAnnounceTranscriptionComplete(
                     finalText,
                     LinuxDictationReadbackLanguagePolicy.Resolve(
                         postProcessingLanguage,
@@ -2625,7 +2625,7 @@ public sealed class DictationOrchestrator : IDisposable
             ReportStatus(context, $"Transcription failed: {ex.Message}");
             TryPublishSessionSpeechFeedback(
                 context,
-                () => _speechFeedback.AnnounceError(ex.Message)
+                () => _speechFeedback.BeginAnnounceError(ex.Message)
             );
             var feedbackText = ex is InvalidOperationException ? ex.Message : "Transcription failed.";
             ShowFeedback(context, feedbackText, true);
@@ -3462,9 +3462,13 @@ public sealed class DictationOrchestrator : IDisposable
     /// </summary>
     private string ClipboardFallbackMessage(string? targetProcessName)
     {
+        // One snapshot for both the terminal guard and the switch: a concurrent
+        // insertion could change LastFailureReason between the two reads and
+        // produce guidance that matches neither outcome.
+        var failureReason = _textInsertion.LastFailureReason;
         if (
             TextInsertionService.IsTerminalApp(targetProcessName)
-            && _textInsertion.LastFailureReason
+            && failureReason
                 is InsertionFailureReason.None
                 or InsertionFailureReason.PasteRetriesExhausted
         )
@@ -3472,7 +3476,7 @@ public sealed class DictationOrchestrator : IDisposable
             return Localization.Loc.Instance["TextInsertion.TerminalClipboardFallback"];
         }
 
-        return _textInsertion.LastFailureReason switch
+        return failureReason switch
         {
             InsertionFailureReason.WtypeCompositorUnsupported =>
                 "Copied to clipboard. Compositor doesn't support direct typing — set up ydotool from Settings → Text insertion to enable auto-paste.",
@@ -4124,8 +4128,9 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
-    private void TryPublishSessionSpeechFeedback(RecordingContext context, Action publish)
+    private void TryPublishSessionSpeechFeedback(RecordingContext context, Func<Action?> begin)
     {
+        Action? launch;
         lock (_recordingSessionLock)
         {
             if (!IsSessionStillOwningOverlayLocked(context.SessionId))
@@ -4133,8 +4138,16 @@ public sealed class DictationOrchestrator : IDisposable
                 return;
             }
 
-            publish();
+            // Registration (version allocation + request swap) happens under the
+            // session lock so it linearizes with startup's generation claim and
+            // ReserveStartupFeedback, but the launch crosses the TTS provider /
+            // plugin trust boundary and must run after the lock is released — a
+            // hung provider or plugin Stop() must not be able to freeze the
+            // dictation toggle path.
+            launch = begin();
         }
+
+        launch?.Invoke();
     }
 
     /// <summary>
@@ -4259,13 +4272,28 @@ public sealed class DictationOrchestrator : IDisposable
         // and emit a stale state after a newer one.
         lock (_overlayStateLock)
         {
-            var state = updater(_overlayState);
-            if (!_overlayCoordinator.Update(token ?? _overlayToken, _ => state))
+            // Derive from the COORDINATOR's slot state, not the _overlayState
+            // mirror: after feedback expiry retires the slot, the mirror still
+            // carries ShowFeedback and republishing from it would resurrect the
+            // expired toast. The mirror becomes a write-behind copy of what was
+            // actually published. Updaters stay pure record-withs, so running
+            // them under the coordinator lock is within Update's contract.
+            DictationOverlayState? published = null;
+            var accepted = _overlayCoordinator.Update(
+                token ?? _overlayToken,
+                current =>
+                {
+                    var next = updater(current);
+                    published = next;
+                    return next;
+                }
+            );
+            if (!accepted || published is null)
             {
                 return;
             }
 
-            _overlayState = state;
+            _overlayState = published;
             OverlayStateChanged?.Invoke(this, _overlayState);
         }
     }

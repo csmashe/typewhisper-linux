@@ -26,16 +26,20 @@ public sealed class DictationOrchestratorStartFeedbackTests
             () => order.Add("dispose")
         );
 
+        // Production swallows cue exceptions, so record what the cue observed and
+        // assert after the helper returns instead of asserting inside the callback.
+        IStartupFeedbackReservation? cueLease = null;
+        bool? reservationDisposedAtCue = null;
+
         var startup = DictationOrchestrator.StartCaptureAfterFeedbackAsync(
             soundFeedbackEnabled: false,
             reserveStartupFeedback: () => reservation,
             playStartSoundAsync: () =>
                 throw new InvalidOperationException("Sound is disabled."),
-            // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local -- asserting the identity of the lease handed to the cue is what this test exists to prove.
             announceRecordingStartedAsync: lease =>
             {
-                Assert.Same(reservation, lease);
-                Assert.False(reservation.IsDisposed);
+                cueLease = lease;
+                reservationDisposedAtCue = reservation.IsDisposed;
                 order.Add("cue");
                 cueStarted.TrySetResult();
                 return cueCompletion.Task;
@@ -71,6 +75,8 @@ public sealed class DictationOrchestratorStartFeedbackTests
         var result = await startup.WaitAsync(s_testGuard);
 
         Assert.Same(captureToken, result);
+        Assert.Same(reservation, cueLease);
+        Assert.False(reservationDisposedAtCue);
         Assert.True(generationClaimed);
         Assert.True(reservation.IsDisposed);
         Assert.Equal(1, reservation.DisposeCount);

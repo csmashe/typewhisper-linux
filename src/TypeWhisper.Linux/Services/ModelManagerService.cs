@@ -27,6 +27,15 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     private Timer? _autoUnloadTimer;
     private int _autoUnloadGeneration;
     private bool _disposed;
+    // Serializes status writes with the progress-generation check. Progress<T> posts its
+    // callbacks asynchronously (via the ThreadPool when no SynchronizationContext is
+    // captured), so a callback that already passed a plain pre-check could land after a
+    // terminal SetStatus/ClearStatus and re-insert a stale transient status — e.g. a
+    // permanent phantom "downloading" after a cancel with no operation in flight. The
+    // generation is advanced by every authoritative transition and validated inside the
+    // same lock as the progress write, closing that check-then-write gap.
+    private readonly Lock _statusGate = new();
+    private long _statusGeneration;
 
     public ModelManagerService(
         PluginManager pluginManager,
@@ -649,30 +658,15 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         {
             if (plugin.SupportsModelDownload && !plugin.IsModelDownloaded(pluginModelId))
             {
-                SetStatus(modelId, ModelStatus.DownloadingModel(0));
-
-                // Progress<T> posts callbacks asynchronously to the captured
-                // SynchronizationContext, so a late download report can run AFTER the load
-                // below sets the terminal Ready status and clobber it with a stale
-                // DownloadingModel(1.0) — leaving the UI pinned at 100% and never flipping to
-                // "Ready". Gate the handler so it no-ops once the download has returned
-                // (mirrors the load-progress gate in LoadModelCoreAsync).
-                var downloadInProgress = true;
+                // The generation captured here gates this download's progress callbacks
+                // (see _statusGate): every authoritative transition after this point — the
+                // load's LoadingModel/Ready, Failed, or the cancel path's ClearStatus —
+                // retires stragglers that would otherwise re-stick DownloadingModel.
+                var generation = SetStatus(modelId, ModelStatus.DownloadingModel(0));
                 var progress = new Progress<double>(p =>
-                {
-                    // ReSharper disable once AccessToModifiedClosure -- intentional gate: downloadInProgress is flipped under Volatile in the enclosing finally so a late Progress callback no-ops (see comment above).
-                    if (!Volatile.Read(ref downloadInProgress))
-                        return;
-                    SetStatus(modelId, ModelStatus.DownloadingModel(p));
-                });
-                try
-                {
-                    await plugin.DownloadModelAsync(pluginModelId, progress, cancellationToken);
-                }
-                finally
-                {
-                    Volatile.Write(ref downloadInProgress, false);
-                }
+                    SetStatusFromProgress(modelId, generation, ModelStatus.DownloadingModel(p))
+                );
+                await plugin.DownloadModelAsync(pluginModelId, progress, cancellationToken);
 
                 // A cancellation-ignoring plugin may have finished writing its artifact;
                 // that work is uninterruptible here, so checkpoint before the service
@@ -720,7 +714,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
 
         CancelAutoUnload();
-        SetStatus(modelId, ModelStatus.LoadingModel);
+        // The generation gates this load's progress callbacks; see _statusGate.
+        var generation = SetStatus(modelId, ModelStatus.LoadingModel);
         try
         {
             var requestedPreference = GetAccelerationPreference(
@@ -794,31 +789,14 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 // UI shows a real progress bar instead of the static LoadingModel spinner
                 // set above; when provisioning finishes (or none is needed) the plugin
                 // reports 1.0 and we drop back to LoadingModel for the native init.
-                //
-                // Progress<T> posts callbacks asynchronously to the captured
-                // SynchronizationContext, so a late report could otherwise run AFTER this
-                // load returns and clobber the terminal Ready status (set below) with a
-                // stale Loading/Downloading one. Gate the handler so it no-ops once the
-                // load has returned.
-                var loadInProgress = true;
                 var loadProgress = new Progress<double>(p =>
-                {
-                    // ReSharper disable once AccessToModifiedClosure -- intentional gate: loadInProgress is flipped under Volatile in the enclosing finally so a late Progress callback no-ops (see comment above).
-                    if (!Volatile.Read(ref loadInProgress))
-                        return;
-                    SetStatus(
+                    SetStatusFromProgress(
                         modelId,
+                        generation,
                         p >= 1.0 ? ModelStatus.LoadingModel : ModelStatus.DownloadingModel(p)
-                    );
-                });
-                try
-                {
-                    await plugin.LoadModelAsync(pluginModelId, loadProgress, cancellationToken);
-                }
-                finally
-                {
-                    Volatile.Write(ref loadInProgress, false);
-                }
+                    )
+                );
+                await plugin.LoadModelAsync(pluginModelId, loadProgress, cancellationToken);
 
                 cancellationToken.ThrowIfCancellationRequested();
             }
@@ -989,17 +967,72 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         return true;
     }
 
-    private void SetStatus(string modelId, ModelStatus status)
+    /// <summary>
+    ///     Authoritative status write from an operation flow (all flows are serialized under
+    ///     <c>_modelLock</c>). Advances the progress generation so every progress callback
+    ///     still in flight from before this transition becomes a no-op; returns the new
+    ///     generation for a progress scope opened by this write to capture.
+    /// </summary>
+    private long SetStatus(string modelId, ModelStatus status)
     {
-        _modelStatuses[modelId] = status;
+        long generation;
+        lock (_statusGate)
+        {
+            generation = ++_statusGeneration;
+            _modelStatuses[modelId] = status;
+        }
+
         OnPropertyChanged(nameof(GetStatus));
+        return generation;
     }
 
     private void ClearStatus(string modelId)
     {
-        if (_modelStatuses.TryRemove(modelId, out _))
+        bool removed;
+        lock (_statusGate)
+        {
+            // Advance even when there is no entry to remove: a straggling progress
+            // callback must not re-insert a status after this terminal transition.
+            _statusGeneration++;
+            removed = _modelStatuses.TryRemove(modelId, out _);
+        }
+
+        if (removed)
         {
             OnPropertyChanged(nameof(GetStatus));
+        }
+    }
+
+    /// <summary>
+    ///     Status write from a progress callback: applies only while
+    ///     <paramref name="generation" /> is still current, checked atomically with the
+    ///     write so a straggler can never re-stick a status after its operation's terminal
+    ///     transition. Internal as a test seam (the Progress&lt;T&gt; wrappers delegate here).
+    /// </summary>
+    internal void SetStatusFromProgress(string modelId, long generation, ModelStatus status)
+    {
+        lock (_statusGate)
+        {
+            if (generation != _statusGeneration)
+            {
+                return;
+            }
+
+            _modelStatuses[modelId] = status;
+        }
+
+        OnPropertyChanged(nameof(GetStatus));
+    }
+
+    /// <summary>Test seam: the generation an open progress scope has captured.</summary>
+    internal long CurrentStatusGeneration
+    {
+        get
+        {
+            lock (_statusGate)
+            {
+                return _statusGeneration;
+            }
         }
     }
 

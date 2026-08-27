@@ -127,7 +127,15 @@ internal sealed partial class EvdevInputDevice(string path) : IEvdevInputDevice
             // draining it would reintroduce a hang window.
             if ((wakeEvents & PollIn) != 0)
             {
-                throw new OperationCanceledException(ct);
+                ct.ThrowIfCancellationRequested();
+
+                // Wake is only ever invoked after cancellation, and the never-drained
+                // eventfd makes the signal permanent — a wake without cancellation is
+                // an invariant breach that would otherwise masquerade as a phantom
+                // cancel; surface it loudly instead.
+                throw new InvalidOperationException(
+                    $"Evdev wake fd signaled without cancellation for {path}."
+                );
             }
 
             if ((wakeEvents & (PollError | PollHangUp | PollInvalid)) != 0)

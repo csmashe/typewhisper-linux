@@ -19,11 +19,16 @@ public sealed record RegistryPlugin
     // ReSharper disable once UnusedMember.Global  part of the plugin-registry JSON schema (RegistryPlugin deserialized in PluginRegistryService line 90); data-carrier field
     public string? Category { get; init; }
     // ReSharper disable once UnusedMember.Global  part of the plugin-registry JSON schema (RegistryPlugin deserialized in PluginRegistryService line 90); data-carrier field
+    // The legacy mapping is cached on first read rather than computed at init:
+    // JSON initialization order can populate Category after Categories, and a
+    // per-read mapping would hand every caller a fresh array.
     public PluginCategory[]? Categories
     {
-        get => field ?? MapLegacyCategory(Category);
+        get => field ?? (_legacyCategories ??= MapLegacyCategory(Category));
         init;
     }
+
+    private PluginCategory[]? _legacyCategories;
     // ReSharper disable once UnusedMember.Global  part of the plugin-registry JSON schema (RegistryPlugin deserialized in PluginRegistryService line 90); data-carrier field
     public PluginNetworkAccess? NetworkAccess
     {

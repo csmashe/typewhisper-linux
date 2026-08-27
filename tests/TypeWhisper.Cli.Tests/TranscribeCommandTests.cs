@@ -92,6 +92,32 @@ public sealed class TranscribeCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task ExtensionlessFileUsesOriginalAbsolutePathWithoutCopyOrMultipart()
+    {
+        var filePath = Path.Join(_tempDirectory, "extensionless audio");
+        await File.WriteAllBytesAsync(filePath, "fLaCaudio"u8.ToArray());
+        await using var stub = new UnixHttpStub();
+        var options = new CliOptions { Positionals = [filePath] };
+
+        var result = await RunCommandAsync(stub, options, Stream.Null);
+        var request = await stub.FirstRequest.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("POST /v1/transcribe/local-file HTTP/1.1", request.RequestLine);
+        Assert.True(request.Headers.TryGetValue("Content-Type", out var contentType));
+        Assert.StartsWith("application/json", contentType, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            "multipart/form-data",
+            contentType,
+            StringComparison.OrdinalIgnoreCase
+        );
+        using var document = JsonDocument.Parse(request.Body);
+        Assert.Equal(filePath, document.RootElement.GetProperty("path").GetString());
+        Assert.Equal(new[] { filePath }, Directory.GetFiles(_tempDirectory));
+        Assert.Equal(1, stub.RequestCount);
+    }
+
+    [Fact]
     public async Task RegularFileMapsLanguageWhenHintsAreAbsent()
     {
         var filePath = Path.Join(_tempDirectory, "language.flac");

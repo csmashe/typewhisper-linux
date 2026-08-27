@@ -1,9 +1,7 @@
-using System.Reflection;
-using System.Runtime.CompilerServices;
-using Moq;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels;
 using Xunit;
 
@@ -292,6 +290,118 @@ public sealed class DictationOverlayViewModelTests
     }
 
     [Fact]
+    public void OpenActionResult_Failure_ReplacesCoordinatorFeedbackAndReArmsExpiry()
+    {
+        var settings = new FakeSettingsService(
+            AppSettings.Default with { PreviewBubbleAutoHideMilliseconds = 1500 }
+        );
+        var scheduler = new FakeScheduler();
+        var coordinator = new OverlayCoordinator(
+            settings,
+            static action => action(),
+            scheduler.Schedule
+        );
+        var sut = new DictationOverlayViewModel(
+            settings,
+            static action => action(),
+            openUrl: _ => false,
+            overlayCoordinator: coordinator
+        );
+        var token = coordinator.Acquire(OverlayRequester.Transform);
+        Assert.True(coordinator.Show(token, new DictationOverlayState
+        {
+            ShowFeedback = true,
+            FeedbackText = "Issue created",
+            ActionResultUrl = "https://example.com/issues/42",
+            FeedbackDurationMilliseconds = 5000,
+        }));
+        Assert.True(sut.HasActionResultUrl);
+        Assert.Equal(TimeSpan.FromSeconds(5), scheduler.LastDelay);
+
+        sut.OpenActionResultCommand.Execute(null);
+
+        // The replacement must be the coordinator's presented state — a VM-local rewrite
+        // would leave the original expiry armed and be invisible to arbitration.
+        var openFailed = Loc.Instance["ActionResult.OpenFailed"];
+        Assert.Equal(openFailed, coordinator.PresentedState.FeedbackText);
+        Assert.Null(coordinator.PresentedState.ActionResultUrl);
+        Assert.Equal(openFailed, sut.FeedbackText);
+        Assert.True(sut.FeedbackIsError);
+        Assert.False(sut.HasActionResultUrl);
+        // Expiry is re-armed for the replacement: the global duration, not the remainder
+        // of the original 5 s claim.
+        Assert.Equal(TimeSpan.FromMilliseconds(1500), scheduler.LastDelay);
+
+        scheduler.FirePending();
+
+        Assert.False(sut.ShowFeedback);
+        Assert.Equal(DictationOverlayState.Hidden, coordinator.PresentedState);
+    }
+
+    [Fact]
+    public void DetectionFailureToast_RoutesThroughCoordinatorAndWaitsBehindRecording()
+    {
+        var settings = new FakeSettingsService(
+            AppSettings.Default with { PreviewBubbleAutoHideMilliseconds = 1500 }
+        );
+        var scheduler = new FakeScheduler();
+        var coordinator = new OverlayCoordinator(
+            settings,
+            static action => action(),
+            scheduler.Schedule
+        );
+        var tracker = new FakeDetectionFailureTracker();
+        var sut = new DictationOverlayViewModel(
+            settings,
+            static action => action(),
+            overlayCoordinator: coordinator,
+            failureTracker: tracker
+        );
+        var token = coordinator.Acquire(OverlayRequester.Dictation);
+        Assert.True(coordinator.Show(token, new DictationOverlayState
+        {
+            IsOverlayVisible = true,
+            IsRecording = true,
+            StatusText = "Recording",
+        }));
+        Assert.True(sut.IsRecording);
+
+        tracker.RaiseFailure("Focus detection failed");
+
+        // The toast competes in arbitration and loses to the live recording instead of
+        // overpainting it with a direct property write the coordinator cannot see.
+        Assert.True(sut.IsRecording);
+        Assert.False(sut.ShowFeedback);
+
+        Assert.True(coordinator.Release(token));
+
+        Assert.True(sut.ShowFeedback);
+        // The toast carries the localized generic message; the detailed reason goes
+        // to the error log via the tracker, not the overlay.
+        Assert.Equal(Loc.Instance["Overlay.WindowDetectionFailed"], sut.FeedbackText);
+        Assert.Equal("Focus detection failed", tracker.LastFailureReason);
+        Assert.True(sut.FeedbackIsError);
+    }
+
+    [Fact]
+    public void DetectionFailureWithPersistentBanner_DoesNotShowToast()
+    {
+        var settings = new FakeSettingsService(AppSettings.Default);
+        var tracker = new FakeDetectionFailureTracker();
+        var sut = new DictationOverlayViewModel(
+            settings,
+            static action => action(),
+            failureTracker: tracker
+        );
+
+        tracker.RaiseFailure("Focus detection failed", shouldShowPersistentBanner: true);
+
+        // The persistent banner owns the messaging; a toast on top would be redundant.
+        Assert.False(sut.ShowFeedback);
+        Assert.Null(sut.FeedbackText);
+    }
+
+    [Fact]
     public void LegacyApplyState_RemainsFunctionalAndOwnsFeedbackExpiry()
     {
         var settings = new FakeSettingsService(
@@ -309,48 +419,6 @@ public sealed class DictationOverlayViewModelTests
         Assert.Equal("Legacy feedback", sut.FeedbackText);
         Assert.True(sut.IsFeedbackTimerRunning);
         Assert.Equal(TimeSpan.FromMilliseconds(1500), sut.FeedbackTimerInterval);
-    }
-
-    [Fact]
-    public void LegacyProducerEvents_DoNotReplaceCoordinatorPresentation()
-    {
-        var settings = new FakeSettingsService(AppSettings.Default);
-        var coordinator = new OverlayCoordinator(settings, static action => action());
-        var dictation = (DictationOrchestrator)RuntimeHelpers.GetUninitializedObject(
-            typeof(DictationOrchestrator)
-        );
-        var transform = (TransformSelectionService)RuntimeHelpers.GetUninitializedObject(
-            typeof(TransformSelectionService)
-        );
-        dictation.OverlayStateChanged += static (_, _) => { };
-        transform.OverlayStateChanged += static (_, _) => { };
-        using var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
-        var sut = new DictationOverlayViewModel(
-            audio,
-            settings,
-            new Mock<IDetectionFailureTracker>().Object,
-            new UrlLauncher(new Mock<IProcessRunner>().Object),
-            coordinator
-        );
-        var token = coordinator.Acquire(OverlayRequester.Dictation);
-        Assert.True(coordinator.Show(token, new DictationOverlayState
-        {
-            IsOverlayVisible = true,
-            IsRecording = true,
-            StatusText = "Coordinator recording",
-        }));
-
-        RaiseLegacyEvent(dictation, new DictationOverlayState
-        {
-            ShowFeedback = true,
-            FeedbackText = "Legacy dictation",
-        });
-        RaiseLegacyEvent(transform, DictationOverlayState.Hidden);
-
-        Assert.True(sut.IsOverlayVisible);
-        Assert.True(sut.IsRecording);
-        Assert.False(sut.ShowFeedback);
-        Assert.Equal("Coordinator recording", sut.StatusText);
     }
 
     private static DictationOverlayViewModel CreateViewModel(FakeSettingsService settings)
@@ -372,17 +440,31 @@ public sealed class DictationOverlayViewModelTests
                 or nameof(DictationOverlayViewModel.RightText));
     }
 
-    private static void RaiseLegacyEvent(object source, DictationOverlayState state)
+    private sealed class FakeDetectionFailureTracker : IDetectionFailureTracker
     {
-        var field = source.GetType().GetField(
-            nameof(DictationOrchestrator.OverlayStateChanged),
-            BindingFlags.Instance | BindingFlags.NonPublic
-        ) ?? throw new MissingFieldException(
-            source.GetType().FullName,
-            nameof(DictationOrchestrator.OverlayStateChanged)
-        );
-        var handlers = (EventHandler<DictationOverlayState>?)field.GetValue(source);
-        handlers?.Invoke(source, state);
+        public bool ShouldShowPersistentBanner => false;
+
+        public string? LastFailureReason { get; private set; }
+
+        public event EventHandler<DetectionFailureEvent>? OnFailure;
+
+        public void RecordSuccess()
+        {
+        }
+
+        public void RecordFailure(string compositor, string reason)
+        {
+            RaiseFailure(reason);
+        }
+
+        public void RaiseFailure(string reason, bool shouldShowPersistentBanner = false)
+        {
+            LastFailureReason = reason;
+            OnFailure?.Invoke(
+                this,
+                new DetectionFailureEvent(reason, shouldShowPersistentBanner)
+            );
+        }
     }
 
     private sealed class FakeSettingsService(AppSettings current) : ISettingsService

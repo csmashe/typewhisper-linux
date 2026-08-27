@@ -50,6 +50,77 @@ compute_bundle_identity() {
   ) | sha256sum | cut -d ' ' -f1
 }
 
+compute_glibc_floor() {
+  local payload_root="$1"
+  local candidate candidate_list verneed verneeds floors floor
+
+  # Enumerate through a checked find first: process substitution would hide a
+  # partial enumeration failure and silently under-floor the packages.
+  candidate_list="$(mktemp)"
+  if ! find "$payload_root" \( -type f -o -type l \) -print0 >"$candidate_list"; then
+    rm -f "$candidate_list"
+    echo "ERROR: failed to enumerate payload files under $payload_root" >&2
+    return 1
+  fi
+
+  # One "GLIBC_<name> <path>" line per distinct GLIBC_* verneed per ELF, so an
+  # unrecognized name can be reported with the binary that requires it. A
+  # failing readelf -V is fatal: tolerating it would drop that ELF's verneeds
+  # and silently under-floor the packages. grep exit 1 is tolerated — it
+  # just means the ELF has no GLIBC verneeds (e.g. a static binary).
+  if ! verneeds="$(
+    while IFS= read -r -d '' candidate; do
+      if readelf -h "$candidate" >/dev/null 2>&1; then
+        if ! version_info="$(readelf -V "$candidate" 2>/dev/null)"; then
+          echo "ERROR: readelf -V failed for $candidate" >&2
+          exit 1
+        fi
+        grep_status=0
+        candidate_verneeds="$(grep -oE 'GLIBC_[0-9A-Za-z_.]+' <<<"$version_info")" \
+          || grep_status=$?
+        if [ "$grep_status" -gt 1 ]; then
+          echo "ERROR: scanning GLIBC verneeds failed for $candidate" >&2
+          exit 1
+        fi
+        if [ -n "$candidate_verneeds" ]; then
+          LC_ALL=C sort -u <<<"$candidate_verneeds" \
+            | while IFS= read -r verneed; do
+                printf '%s %s\n' "$verneed" "$candidate"
+              done
+        fi
+      fi
+    done <"$candidate_list"
+  )"; then
+    rm -f "$candidate_list"
+    return 1
+  fi
+  rm -f "$candidate_list"
+
+  # Verneed names are not all numeric versions, and numeric ones may carry
+  # three components (x86-64's glibc baseline is GLIBC_2.2.5). GLIBC_ABI_DT_RELR
+  # marks packed DT_RELR relocations, which glibc first loads at 2.36, so it
+  # competes as a 2.36 floor candidate. Any other name (GLIBC_PRIVATE included)
+  # has no known version mapping and must fail here rather than silently
+  # under-floor the packages.
+  floors=""
+  while IFS=' ' read -r verneed candidate; do
+    [ -n "$verneed" ] || continue
+    if [[ "$verneed" =~ ^GLIBC_2\.[0-9]+(\.[0-9]+)?$ ]]; then
+      floors+="${verneed#GLIBC_}"$'\n'
+    elif [ "$verneed" = "GLIBC_ABI_DT_RELR" ]; then
+      floors+="2.36"$'\n'
+    else
+      echo "ERROR: unrecognized GLIBC verneed '$verneed' required by $candidate; map it to a glibc version floor before shipping" >&2
+      return 1
+    fi
+  done <<<"$verneeds"
+
+  floor="$(printf '%s' "$floors" | LC_ALL=C sort -Vu | tail -n 1)"
+  [[ "$floor" =~ ^2\.[0-9]+(\.[0-9]+)?$ ]] \
+    || { echo "ERROR: could not determine the staged payload's GLIBC floor" >&2; return 1; }
+  printf '%s\n' "$floor"
+}
+
 validate_bundle_identity() {
   local format="$1"
   local plugin_root="$2"
@@ -227,22 +298,29 @@ run_gui_probe() {
 install_ubuntu_runtime() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  # libjack/libasound back the bundled libportaudio.so. A desktop gets them via
-  # pipewire-jack; a bare container does not, and without them PortAudio fails to
-  # load and the GUI probe can only ever prove the no-audio path.
+  # Tarballs and AppImages have no package resolver, so install the full hard
+  # closure plus the weak desktop integrations. Probe-only tooling (Xvfb,
+  # dbus-run-session) comes from install_ubuntu_probe_infrastructure instead.
   apt-get install -y --no-install-recommends \
+    ca-certificates \
     dbus-x11 \
     gzip \
     libdbus-1-3 \
     libegl1 \
     libfontconfig1 \
     libfreetype6 \
+    libc6 \
+    libgcc-s1 \
     libgl1 \
+    libgomp1 \
+    libgssapi-krb5-2 \
     libice6 \
     libicu74 \
     libjack-jackd2-0 \
     libasound2t64 \
     libsm6 \
+    libssl3t64 \
+    libstdc++6 \
     libx11-6 \
     libx11-xcb1 \
     libxcb1 \
@@ -254,36 +332,21 @@ install_ubuntu_runtime() {
     libxkbcommon0 \
     libxrandr2 \
     libxrender1 \
+    libxinerama1 \
+    libxt6t64 \
+    libxtst6 \
     tar \
-    xvfb
+    tzdata \
+    zlib1g
 }
 
-install_fedora_runtime() {
-  # See install_ubuntu_runtime: alsa-lib/jack back the bundled libportaudio.so.
+install_ubuntu_probe_infrastructure() {
+  apt-get install -y --no-install-recommends dbus-daemon xvfb
+}
+
+install_fedora_probe_infrastructure() {
   dnf install -y \
-    alsa-lib \
     dbus-daemon \
-    fontconfig \
-    freetype \
-    gzip \
-    jack-audio-connection-kit \
-    libICE \
-    libSM \
-    libX11 \
-    libX11-xcb \
-    libXcursor \
-    libXext \
-    libXfixes \
-    libXi \
-    libXrandr \
-    libXrender \
-    libglvnd-egl \
-    libglvnd-glx \
-    libicu \
-    libxcb \
-    libxkbcommon \
-    libxkbcommon-x11 \
-    tar \
     xorg-x11-server-Xvfb
 }
 
@@ -298,6 +361,7 @@ container_smoke_tarball() {
   local app_root extracted install_script
 
   install_ubuntu_runtime
+  install_ubuntu_probe_infrastructure
   assert_no_system_dotnet
   prepare_isolated_profile
 
@@ -367,6 +431,7 @@ container_smoke_appimage() {
   local app_run cli_executable
 
   install_ubuntu_runtime
+  install_ubuntu_probe_infrastructure
   assert_no_system_dotnet
   prepare_isolated_profile
 
@@ -390,12 +455,21 @@ container_smoke_deb() {
   local package="$1"
   local owned_path package_files
 
-  install_ubuntu_runtime
+  echo "==> Installing deb in disposable Ubuntu container"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y --no-install-recommends "$package"
+  ! dpkg -s libgl1 >/dev/null 2>&1 \
+    || fail "deb package transaction unexpectedly installed Recommends-demoted libgl1."
+  ! dpkg -s libdbus-1-3 >/dev/null 2>&1 \
+    || fail "deb package transaction unexpectedly installed Recommends-demoted libdbus-1-3."
+  # The package transaction must resolve on Depends alone. The probe harness is
+  # added afterward and may bring its own libraries, so probes do not prove the
+  # app runs without the Recommends-demoted libraries.
+  install_ubuntu_probe_infrastructure
   assert_no_system_dotnet
   prepare_isolated_profile
 
-  echo "==> Installing deb in disposable Ubuntu container"
-  apt-get install -y --no-install-recommends "$package"
   require_executable /usr/bin/typewhisper
   require_executable /usr/bin/typewhisper-cli
   require_executable /opt/typewhisper/Cli/typewhisper-cli
@@ -433,12 +507,14 @@ container_smoke_rpm() {
   local package="$1"
   local owned_path package_files
 
-  install_fedora_runtime
+  echo "==> Installing rpm in disposable Fedora container"
+  dnf install -y --setopt=install_weak_deps=False "$package"
+  # The package transaction keeps weak dependencies disabled; the probe harness
+  # is added afterward and may supply libraries used by the execution probes.
+  install_fedora_probe_infrastructure
   assert_no_system_dotnet
   prepare_isolated_profile
 
-  echo "==> Installing rpm in disposable Fedora container"
-  dnf install -y "$package"
   require_executable /usr/bin/typewhisper
   require_executable /usr/bin/typewhisper-cli
   require_executable /opt/typewhisper/Cli/typewhisper-cli
@@ -508,7 +584,7 @@ if [ "$#" -gt 3 ]; then
   fail "too many arguments."
 fi
 
-for command in cpio dpkg-deb file find grep rpm rpm2cpio sed sha256sum sort tar timeout; do
+for command in cpio dpkg-deb file find grep readelf rpm rpm2cpio sed sha256sum sort tar timeout; do
   require_command "$command"
 done
 
@@ -523,6 +599,59 @@ EXPECTED_TARBALL="$PACKAGE_DIR/typewhisper-linux-x64-${VERSION}.tar.gz"
 EXPECTED_APPIMAGE="$PACKAGE_DIR/TypeWhisper-${VERSION}-x86_64.AppImage"
 EXPECTED_DEB="$PACKAGE_DIR/typewhisper_${EXPECTED_VERSION}_amd64.deb"
 EXPECTED_RPM="$PACKAGE_DIR/typewhisper-${RPM_VERSION}-1.x86_64.rpm"
+
+DEB_EXPECTED_DEPENDENCY_GROUPS=(
+  "libgcc-s1"
+  "libstdc++6"
+  "libicu78 | libicu76 | libicu74 | libicu72 | libicu70"
+  "libfontconfig1"
+  "libx11-6"
+  "libxcursor1"
+  "libxext6"
+  "libxi6"
+  "libxrandr2"
+  "libice6"
+  "libsm6"
+  "libxtst6"
+  "libxt6t64 | libxt6"
+  "libxinerama1"
+  "libssl3t64 | libssl3"
+  "zlib1g"
+  "libgomp1"
+  "libgssapi-krb5-2"
+  "ca-certificates"
+  "tzdata"
+  "libasound2t64 | libasound2"
+  "libjack-jackd2-0 | libjack0 | pipewire-jack"
+)
+
+RPM_EXPECTED_REQUIREMENTS=(
+  "/bin/sh"
+  "libc.so.6()(64bit)"
+  "libgcc_s.so.1()(64bit)"
+  "libstdc++.so.6()(64bit)"
+  "libicu"
+  "libfontconfig.so.1()(64bit)"
+  "libX11.so.6()(64bit)"
+  "libXcursor.so.1()(64bit)"
+  "libXext.so.6()(64bit)"
+  "libXi.so.6()(64bit)"
+  "libXrandr.so.2()(64bit)"
+  "libICE.so.6()(64bit)"
+  "libSM.so.6()(64bit)"
+  "libXtst.so.6()(64bit)"
+  "libXt.so.6()(64bit)"
+  "libXinerama.so.1()(64bit)"
+  "libssl.so.3()(64bit)"
+  "libcrypto.so.3()(64bit)"
+  "libz.so.1()(64bit)"
+  "libgomp.so.1()(64bit)"
+  "libgssapi_krb5.so.2()(64bit)"
+  "ca-certificates"
+  "tzdata"
+  "libjack.so.0()(64bit)"
+  "libasound.so.2()(64bit)"
+)
 
 shopt -s nullglob
 tarballs=("$PACKAGE_DIR"/*.tar.gz)
@@ -549,6 +678,91 @@ check_exact_artifact "AppImage" "$EXPECTED_APPIMAGE" "${appimages[@]}"
 check_exact_artifact "deb" "$EXPECTED_DEB" "${debs[@]}"
 check_exact_artifact "rpm" "$EXPECTED_RPM" "${rpms[@]}"
 require_executable "$EXPECTED_APPIMAGE"
+
+array_contains_exact() {
+  local expected="$1"
+  shift
+  local actual
+
+  for actual in "$@"; do
+    [ "$actual" = "$expected" ] && return 0
+  done
+  return 1
+}
+
+normalize_deb_dependency_groups() {
+  local dependency_field="$1"
+  local group alternative normalized
+  local groups alternatives
+
+  dependency_field="${dependency_field//$'\n'/ }"
+  IFS=',' read -ra groups <<<"$dependency_field"
+  for group in "${groups[@]}"; do
+    normalized=""
+    # Appending then removing a marker preserves an otherwise-discarded empty
+    # alternative after a trailing '|'.
+    IFS='|' read -ra alternatives <<<"${group}|<DEPENDENCY-GROUP-END>"
+    unset 'alternatives[${#alternatives[@]}-1]'
+    for alternative in "${alternatives[@]}"; do
+      alternative="${alternative#"${alternative%%[![:space:]]*}"}"
+      alternative="${alternative%"${alternative##*[![:space:]]}"}"
+      if [ -z "$alternative" ]; then
+        printf '%s\n' "<EMPTY-ALTERNATIVE>"
+        continue
+      fi
+      if [ -n "$normalized" ]; then
+        normalized+=" | "
+      fi
+      normalized+="$alternative"
+    done
+    printf '%s\n' "$normalized"
+  done
+}
+
+assert_exact_deb_dependencies() {
+  local dependency_field expected_sorted actual_sorted
+
+  dependency_field="$(dpkg-deb -f "$EXPECTED_DEB" Depends)"
+  mapfile -t DEB_ACTUAL_DEPENDENCY_GROUPS < <(
+    normalize_deb_dependency_groups "$dependency_field"
+  )
+  expected_sorted="$(
+    printf '%s\n' "${DEB_EXPECTED_DEPENDENCY_GROUPS[@]}" | LC_ALL=C sort
+  )"
+  actual_sorted="$(
+    printf '%s\n' "${DEB_ACTUAL_DEPENDENCY_GROUPS[@]}" | LC_ALL=C sort
+  )"
+
+  if [ "$actual_sorted" != "$expected_sorted" ]; then
+    echo "Expected deb Depends groups:" >&2
+    printf '  %s\n' "${DEB_EXPECTED_DEPENDENCY_GROUPS[@]}" >&2
+    echo "Actual deb Depends groups:" >&2
+    printf '  %s\n' "${DEB_ACTUAL_DEPENDENCY_GROUPS[@]}" >&2
+    fail "deb Depends does not exactly match the required dependency groups."
+  fi
+}
+
+assert_rpm_requirements() {
+  local expected_sorted actual_sorted
+
+  mapfile -t RPM_ACTUAL_REQUIREMENTS < <(
+    rpm -qp --requires "$EXPECTED_RPM" | grep -vE '^rpmlib\(' || true
+  )
+  expected_sorted="$(
+    printf '%s\n' "${RPM_EXPECTED_REQUIREMENTS[@]}" | LC_ALL=C sort
+  )"
+  actual_sorted="$(
+    printf '%s\n' "${RPM_ACTUAL_REQUIREMENTS[@]}" | LC_ALL=C sort
+  )"
+
+  if [ "$actual_sorted" != "$expected_sorted" ]; then
+    echo "Expected rpm Requires entries (excluding rpmlib capabilities):" >&2
+    printf '  %s\n' "${RPM_EXPECTED_REQUIREMENTS[@]}" >&2
+    echo "Actual rpm Requires entries (excluding rpmlib capabilities):" >&2
+    printf '  %s\n' "${RPM_ACTUAL_REQUIREMENTS[@]}" >&2
+    fail "rpm Requires does not exactly match the required capability set."
+  fi
+}
 
 echo "==> Debian metadata"
 dpkg-deb --info "$EXPECTED_DEB"
@@ -585,9 +799,12 @@ mkdir -p "$TARBALL_EXTRACT" "$APPIMAGE_EXTRACT" "$DEB_EXTRACT" "$RPM_EXTRACT"
 echo "==> Extracting every package format on the runner"
 tar -xzf "$EXPECTED_TARBALL" --no-same-owner -C "$TARBALL_EXTRACT"
 dpkg-deb --extract "$EXPECTED_DEB" "$DEB_EXTRACT"
+# Staged, not piped: cpio stops reading at the archive trailer, so under `pipefail`
+# a still-writing rpm2cpio takes SIGPIPE and fails the gate on a valid RPM.
+rpm2cpio "$EXPECTED_RPM" >"$EXTRACT_ROOT/rpm-payload.cpio"
 (
   cd "$RPM_EXTRACT"
-  rpm2cpio "$EXPECTED_RPM" | cpio --quiet -idmu --no-absolute-filenames
+  cpio --quiet -idmu --no-absolute-filenames <"$EXTRACT_ROOT/rpm-payload.cpio"
 )
 if ! (
   cd "$APPIMAGE_EXTRACT"
@@ -596,6 +813,19 @@ if ! (
   cat "$APPIMAGE_EXTRACT/appimage-extract.log" >&2
   fail "AppImage extraction without FUSE failed."
 fi
+
+DEB_GLIBC_FLOOR="$(compute_glibc_floor "$DEB_EXTRACT")"
+RPM_GLIBC_FLOOR="$(compute_glibc_floor "$RPM_EXTRACT")"
+[ "$DEB_GLIBC_FLOOR" = "$RPM_GLIBC_FLOOR" ] \
+  || fail "extracted deb GLIBC floor $DEB_GLIBC_FLOOR differs from rpm floor $RPM_GLIBC_FLOOR."
+DEB_EXPECTED_DEPENDENCY_GROUPS=(
+  "libc6 (>= $DEB_GLIBC_FLOOR)"
+  "${DEB_EXPECTED_DEPENDENCY_GROUPS[@]}"
+)
+RPM_EXPECTED_REQUIREMENTS+=("libc.so.6(GLIBC_$RPM_GLIBC_FLOOR)(64bit)")
+echo "==> Extracted payload GLIBC floor: $DEB_GLIBC_FLOOR"
+assert_exact_deb_dependencies
+assert_rpm_requirements
 
 validate_desktop_entry() {
   local desktop_file="$1"
@@ -676,6 +906,197 @@ validate_payload() {
   [ -n "$native_file" ] || fail "$format payload has no native runtime libraries."
 }
 
+# These SONAMEs are intentionally weak: the corresponding integration can be
+# absent without preventing startup, and each entry has a working fallback.
+declare -A OPTIONAL_ELF_SONAMES=(
+  # GLX acceleration is optional because Avalonia can continue with EGL/software.
+  ["libGL.so.1"]="optional GLX rendering"
+  # The GLX dispatcher is used only by the optional accelerated rendering path.
+  ["libGLX.so.0"]="optional GLX vendor dispatch"
+  # EGL is the second rendering choice and is not needed by software rendering.
+  ["libEGL.so.1"]="optional EGL rendering"
+  # Vendor-neutral OpenGL is part of the optional GL/EGL driver stack.
+  ["libOpenGL.so.0"]="optional vendor-neutral OpenGL"
+  # GLdispatch is driver plumbing for optional GLX/EGL acceleration.
+  ["libGLdispatch.so.0"]="optional GLX/EGL vendor dispatch"
+  # Xlib/XCB interop is used by optional GLX/EGL integration, not software mode.
+  ["libX11-xcb.so.1"]="optional X11 GL interop"
+  # PulseAudio is an optional audio backend alongside the hard ALSA/JACK closure.
+  ["libpulse.so.0"]="optional PulseAudio backend"
+  # The PulseAudio simple API is likewise optional backend support.
+  ["libpulse-simple.so.0"]="optional PulseAudio simple API"
+  # D-Bus backs optional tray/session desktop integration.
+  ["libdbus-1.so.3"]="optional tray and session integration"
+  # xkbcommon augments keyboard handling but the X11 path can run without it.
+  ["libxkbcommon.so.0"]="optional keyboard mapping"
+  # The xkbcommon X11 adapter is optional with the core X11 keyboard path.
+  ["libxkbcommon-x11.so.0"]="optional X11 keyboard mapping"
+  ["liblttng-ust.so.0"]="optional LTTng CoreCLR trace provider (dlopened only when LTTng tracing is enabled)"
+)
+
+soname_is_declared_hard_dependency() {
+  local format="$1"
+  local soname="$2"
+  local deb_prefix group alternative rpm_requirement
+  local alternatives
+
+  if [ "$format" = "rpm" ]; then
+    case "$soname" in
+      libicudata.so.*|libicui18n.so.*|libicuio.so.*|libicutest.so.*|libicutu.so.*|libicuuc.so.*)
+        # ICU is intentionally represented by its stable virtual capability.
+        array_contains_exact "libicu" "${RPM_EXPECTED_REQUIREMENTS[@]}"
+        return
+        ;;
+    esac
+
+    case "$soname" in
+      ld-linux-x86-64.so.2|libanl.so.1|libBrokenLocale.so.1|libdl.so.2|libm.so.6|libpthread.so.0|libresolv.so.2|librt.so.1|libutil.so.1)
+        # glibc provides all of these; represented by the libc.so.6 capability.
+        array_contains_exact "libc.so.6()(64bit)" "${RPM_EXPECTED_REQUIREMENTS[@]}"
+        return
+        ;;
+    esac
+
+    rpm_requirement="${soname}()(64bit)"
+    array_contains_exact "$rpm_requirement" "${RPM_EXPECTED_REQUIREMENTS[@]}"
+    return
+  fi
+
+  [ "$format" = "deb" ] || return 1
+
+  case "$soname" in
+    ld-linux-x86-64.so.2|libanl.so.1|libBrokenLocale.so.1|libc.so.6|libdl.so.2|libm.so.6|libpthread.so.0|libresolv.so.2|librt.so.1|libutil.so.1)
+      deb_prefix="libc6"
+      ;;
+    libgcc_s.so.1)
+      deb_prefix="libgcc-s1"
+      ;;
+    libstdc++.so.6)
+      deb_prefix="libstdc++6"
+      ;;
+    libicudata.so.*|libicui18n.so.*|libicuio.so.*|libicutest.so.*|libicutu.so.*|libicuuc.so.*)
+      deb_prefix="libicu"
+      ;;
+    libfontconfig.so.1|libexpat.so.1|libfreetype.so.6)
+      # libfontconfig1/fontconfig guarantees its expat/freetype runtime closure.
+      deb_prefix="libfontconfig1"
+      ;;
+    libX11.so.6|libXau.so.6|libXdmcp.so.6|libxcb.so.1)
+      # The X11 provider guarantees its Xau/Xdmcp/XCB runtime closure.
+      deb_prefix="libx11-6"
+      ;;
+    libXcursor.so.1|libXfixes.so.3|libXrender.so.1)
+      # Xcursor guarantees its Xfixes/Xrender runtime closure.
+      deb_prefix="libxcursor1"
+      ;;
+    libXext.so.6)
+      deb_prefix="libxext6"
+      ;;
+    libXi.so.6)
+      deb_prefix="libxi6"
+      ;;
+    libXrandr.so.2)
+      deb_prefix="libxrandr2"
+      ;;
+    libICE.so.6)
+      deb_prefix="libice6"
+      ;;
+    libSM.so.6|libuuid.so.1)
+      # libSM6/libSM guarantees the libuuid runtime used by session management.
+      deb_prefix="libsm6"
+      ;;
+    libXtst.so.6)
+      # SharpHook's libuiohook.so hard-links the Xtst/Xt/Xinerama trio.
+      deb_prefix="libxtst6"
+      ;;
+    libXt.so.6)
+      deb_prefix="libxt6"
+      ;;
+    libXinerama.so.1)
+      deb_prefix="libxinerama1"
+      ;;
+    libssl.so.3|libcrypto.so.3)
+      deb_prefix="libssl3"
+      ;;
+    libz.so.1)
+      deb_prefix="zlib1g"
+      ;;
+    libgomp.so.1)
+      deb_prefix="libgomp1"
+      ;;
+    libgssapi_krb5.so.2)
+      deb_prefix="libgssapi-krb5-2"
+      ;;
+    libasound.so.2)
+      deb_prefix="libasound2"
+      ;;
+    libjack.so.0)
+      deb_prefix="libjack"
+      ;;
+    *) return 1 ;;
+  esac
+
+  for group in "${DEB_EXPECTED_DEPENDENCY_GROUPS[@]}"; do
+    IFS='|' read -ra alternatives <<<"$group"
+    for alternative in "${alternatives[@]}"; do
+      alternative="${alternative#"${alternative%%[![:space:]]*}"}"
+      alternative="${alternative%"${alternative##*[![:space:]]}"}"
+      [[ "$alternative" == "$deb_prefix"* ]] && return 0
+    done
+  done
+  return 1
+}
+
+# The single-file CLI's embedded native libraries are invisible to readelf: only
+# its apphost DT_NEEDED entries are scanned, and those natives are currently a
+# subset of the loose GUI native libraries that are scanned directly.
+audit_elf_dependency_closure() {
+  local format="$1"
+  local app_dir="$2"
+  local candidate soname
+  local missing=0
+  local provided_sonames needed_sonames
+
+  echo "==> Auditing extracted $format ELF dependency closure"
+  provided_sonames="$(
+    while IFS= read -r -d '' candidate; do
+      if readelf -h "$candidate" >/dev/null 2>&1; then
+        printf '%s\n' "${candidate##*/}"
+        readelf -d "$candidate" 2>/dev/null \
+          | sed -nE 's/.*\(SONAME\).*Library soname: \[([^]]+)\].*/\1/p'
+      fi
+    done < <(find "$app_dir" \( -type f -o -type l \) -print0)
+  )"
+  needed_sonames="$(
+    while IFS= read -r -d '' candidate; do
+      if readelf -h "$candidate" >/dev/null 2>&1; then
+        readelf -d "$candidate" 2>/dev/null \
+          | sed -nE 's/.*\(NEEDED\).*Shared library: \[([^]]+)\].*/\1/p'
+      fi
+    done < <(find "$app_dir" \( -type f -o -type l \) -print0)
+  )"
+
+  while IFS= read -r soname; do
+    [ -n "$soname" ] || continue
+    if grep -Fxq -- "$soname" <<<"$provided_sonames"; then
+      continue
+    fi
+    if soname_is_declared_hard_dependency "$format" "$soname"; then
+      continue
+    fi
+    if [[ -v "OPTIONAL_ELF_SONAMES[$soname]" ]]; then
+      echo "    optional external $soname (${OPTIONAL_ELF_SONAMES[$soname]})"
+      continue
+    fi
+
+    echo "ERROR: $format payload needs undeclared external SONAME: $soname" >&2
+    missing=1
+  done < <(printf '%s\n' "$needed_sonames" | LC_ALL=C sort -u)
+
+  [ "$missing" -eq 0 ] \
+    || fail "$format payload has external ELF dependencies outside its metadata and optional allowlist."
+}
+
 TARBALL_APP_DIR="$TARBALL_EXTRACT/typewhisper-linux-x64-${VERSION}"
 [ -d "$TARBALL_APP_DIR" ] || fail "tarball did not contain its expected top-level directory."
 require_executable "$TARBALL_APP_DIR/install.sh"
@@ -707,6 +1128,7 @@ validate_payload \
   "$DEB_EXTRACT/opt/typewhisper/typewhisper" \
   "$DEB_EXTRACT/usr/share/applications/typewhisper.desktop" \
   "$DEB_EXTRACT/usr/share/icons/hicolor/128x128/apps/typewhisper.png"
+audit_elf_dependency_closure "deb" "$DEB_EXTRACT/opt/typewhisper"
 
 require_executable "$RPM_EXTRACT/usr/bin/typewhisper"
 require_executable "$RPM_EXTRACT/usr/bin/typewhisper-cli"
@@ -716,6 +1138,7 @@ validate_payload \
   "$RPM_EXTRACT/opt/typewhisper/typewhisper" \
   "$RPM_EXTRACT/usr/share/applications/typewhisper.desktop" \
   "$RPM_EXTRACT/usr/share/icons/hicolor/128x128/apps/typewhisper.png"
+audit_elf_dependency_closure "rpm" "$RPM_EXTRACT/opt/typewhisper"
 
 echo "==> All host-side metadata and extraction checks passed."
 if [ "$MODE" = "--validate-only" ]; then

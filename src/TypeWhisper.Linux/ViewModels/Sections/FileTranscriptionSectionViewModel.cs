@@ -613,9 +613,17 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
             );
         }
 
+        // Not-ready means "retry later can succeed": only a plugin-qualified
+        // selection whose engine has not loaded yet qualifies. A blank or
+        // non-plugin selection can never become ready by waiting, so it falls
+        // through to the processor's immediate invalid-model error instead of
+        // an endless retry loop.
+        var selectedModelId = _settings.Current.SelectedModelId;
         if (
             string.IsNullOrWhiteSpace(options.EngineId)
-            && _models.GetTranscriptionPlugin(_settings.Current.SelectedModelId) is null
+            && !string.IsNullOrWhiteSpace(selectedModelId)
+            && ModelManagerService.IsPluginModel(selectedModelId)
+            && _models.GetTranscriptionPlugin(selectedModelId) is null
         )
         {
             throw new WatchFolderNotReadyException(
