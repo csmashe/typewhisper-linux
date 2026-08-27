@@ -189,6 +189,114 @@ public sealed class MediaPauseServiceTests
         Assert.Equal(1, CountInvocations(runner, play));
     }
 
+    [Fact]
+    public void ResumeMedia_retires_player_after_three_failures()
+    {
+        const string players = "vlc Playing";
+        string[] status = ["-a", "--format", "{{playerName}} {{status}}", "status"];
+        string[] pause = ["-p", "vlc", "pause"];
+        string[] play = ["-p", "vlc", "play"];
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(status),
+            players
+        );
+        runner.FailWhen(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(play),
+            "persistent resume failure"
+        );
+        var errorLog = new Mock<IErrorLogService>();
+        var service = new MediaPauseService(runner, errorLog.Object);
+
+        service.PauseMedia();
+        service.ResumeMedia();
+        service.ResumeMedia();
+        service.ResumeMedia();
+        service.ResumeMedia();
+
+        Assert.Equal(1, CountInvocations(runner, status));
+        Assert.Equal(1, CountInvocations(runner, pause));
+        Assert.Equal(3, CountInvocations(runner, play));
+        errorLog.Verify(
+            log =>
+                log.AddEntry(
+                    It.Is<string>(message =>
+                        message.EndsWith(
+                            "Giving up after 3 attempts.",
+                            StringComparison.Ordinal
+                        )
+                    ),
+                    ErrorCategory.General
+                ),
+            Times.Once
+        );
+        errorLog.Verify(
+            log => log.AddEntry(It.IsAny<string>(), ErrorCategory.General),
+            Times.Exactly(3)
+        );
+        errorLog.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public void ResumeMedia_missing_player_is_completed_without_retry_or_error()
+    {
+        const string players = "vlc Playing";
+        string[] status = ["-a", "--format", "{{playerName}} {{status}}", "status"];
+        string[] pause = ["-p", "vlc", "pause"];
+        string[] play = ["-p", "vlc", "play"];
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(status),
+            players
+        );
+        runner.FailWhen(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(play),
+            "No players found\n"
+        );
+        var errorLog = new Mock<IErrorLogService>();
+        var service = new MediaPauseService(runner, errorLog.Object);
+
+        service.PauseMedia();
+        service.ResumeMedia();
+        service.ResumeMedia();
+        service.PauseMedia();
+
+        Assert.Equal(2, CountInvocations(runner, status));
+        Assert.Equal(2, CountInvocations(runner, pause));
+        Assert.Equal(1, CountInvocations(runner, play));
+        errorLog.VerifyNoOtherCalls();
+    }
+
+
+    [Fact]
+    public void ResumeMedia_other_failure_is_not_classified_as_missing()
+    {
+        const string players = "vlc Playing";
+        string[] status = ["-a", "--format", "{{playerName}} {{status}}", "status"];
+        string[] play = ["-p", "vlc", "play"];
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(status),
+            players
+        );
+        runner.FailWhen(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(play),
+            "No player could handle this command\n"
+        );
+        var errorLog = new Mock<IErrorLogService>();
+        var service = new MediaPauseService(runner, errorLog.Object);
+
+        service.PauseMedia();
+        service.ResumeMedia();
+        service.ResumeMedia();
+
+        Assert.Equal(2, CountInvocations(runner, play));
+        errorLog.Verify(
+            log => log.AddEntry(It.IsAny<string>(), ErrorCategory.General),
+            Times.Exactly(2)
+        );
+    }
+
     private static int CountInvocations(FakeProcessRunner runner, IReadOnlyList<string> args)
     {
         return runner.Invocations.Count(invocation => invocation.Args.SequenceEqual(args));

@@ -29,7 +29,9 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     private readonly bool _enableDeviceMonitoring;
     private readonly Lock _lock = new();
     private readonly bool _ownsSessionActivityMonitor;
+    private readonly Action? _beforeSessionResetState;
     private readonly Dictionary<int, int> _aggregateKeyCounts = new();
+    private readonly HashSet<TaskCompletionSource<bool>> _outstandingResetBarriers = [];
     private readonly Dictionary<string, HashSet<int>> _pressedKeysByDevice = new();
     private readonly Dictionary<string, IEvdevDeviceReader> _readers = new();
     private readonly ISessionActivityMonitor _sessionActivityMonitor;
@@ -48,7 +50,8 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             new EvdevKeyboardEnumerator(),
             new EvdevDeviceReaderFactory(),
             true,
-            true
+            true,
+            null
         )
     {
     }
@@ -59,7 +62,8 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             new EvdevKeyboardEnumerator(),
             new EvdevDeviceReaderFactory(),
             true,
-            false
+            false,
+            null
         )
     {
     }
@@ -68,14 +72,16 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         ISessionActivityMonitor sessionActivityMonitor,
         IEvdevKeyboardEnumerator deviceEnumerator,
         IEvdevDeviceReaderFactory deviceReaderFactory,
-        bool enableDeviceMonitoring = false
+        bool enableDeviceMonitoring = false,
+        Action? beforeSessionResetState = null
     )
         : this(
             sessionActivityMonitor,
             deviceEnumerator,
             deviceReaderFactory,
             enableDeviceMonitoring,
-            false
+            false,
+            beforeSessionResetState
         )
     {
     }
@@ -85,7 +91,8 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         IEvdevKeyboardEnumerator deviceEnumerator,
         IEvdevDeviceReaderFactory deviceReaderFactory,
         bool enableDeviceMonitoring,
-        bool ownsSessionActivityMonitor
+        bool ownsSessionActivityMonitor,
+        Action? beforeSessionResetState
     )
     {
         _sessionActivityMonitor = sessionActivityMonitor;
@@ -93,6 +100,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
         _deviceReaderFactory = deviceReaderFactory;
         _enableDeviceMonitoring = enableDeviceMonitoring;
         _ownsSessionActivityMonitor = ownsSessionActivityMonitor;
+        _beforeSessionResetState = beforeSessionResetState;
         _sessionActivityMonitor.InputAllowedChanged += OnInputAllowedChanged;
 
         _dispatcher.DictationToggleRequested += () =>
@@ -250,6 +258,14 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             readers = _readers.Values.ToList();
             _readers.Clear();
             ClearInputState_NoLock();
+            // A queued reopen may be waiting for a session reset that another callback is still
+            // finishing. Disposal supersedes that work; wake it so it can observe _disposed.
+            foreach (var resetBarrier in _outstandingResetBarriers)
+            {
+                resetBarrier.TrySetResult(true);
+            }
+
+            _outstandingResetBarriers.Clear();
         }
 
         // Whole-input teardown is the security boundary: clear dispatcher guards and discard any
@@ -427,14 +443,18 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     }
 
     [SuppressMessage("Usage", "CA2012:Use ValueTasks correctly", Justification = "Intentional fire-and-forget disposal of stale readers pruned during rescan; EvdevDeviceReader.DisposeAsync is a self-contained async ValueTask and awaiting here is unnecessary.")]
-    private bool Rescan()
+    internal bool Rescan()
     {
         var added = false;
         List<IEvdevDeviceReader>? toDispose = null;
         List<DispatchEdge>? releases = null;
         lock (_lock)
         {
-            if (Volatile.Read(ref _disposed) == 1 || !_inputAllowed)
+            if (
+                Volatile.Read(ref _disposed) == 1
+                || !_inputAllowed
+                || _outstandingResetBarriers.Count > 0
+            )
             {
                 return false;
             }
@@ -570,6 +590,8 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     private void OnInputAllowedChanged(object? sender, EventArgs e)
     {
         List<IEvdevDeviceReader>? readers = null;
+        TaskCompletionSource<bool>? resetBarrier = null;
+        Task<bool>[] resetBarriers = [];
         long generation;
         var reopen = false;
         var resetState = false;
@@ -589,6 +611,10 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             generation = ++_lifecycleGeneration;
             if (!allowed)
             {
+                resetBarrier = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                _outstandingResetBarriers.Add(resetBarrier);
                 readers = _readers.Values.ToList();
                 _readers.Clear();
                 ClearInputState_NoLock();
@@ -597,33 +623,53 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             else
             {
                 reopen = _started;
+                resetBarriers = _outstandingResetBarriers
+                    .Select(barrier => barrier.Task)
+                    .ToArray();
             }
         }
 
         if (resetState)
         {
             // Session loss is a whole-input teardown, unlike one-device detach. Preserve its
-            // discard semantics without invoking dispatcher event handlers under the backend lock.
-            _dispatcher.ResetState();
+            // discard semantics without invoking dispatcher event handlers under the backend lock:
+            // doing so would invert locks with shortcut handlers. Outstanding barriers gate both
+            // queued reopen and rescan attachments, and unlock awaits every reset from overlapping
+            // cycles so a delayed reset cannot clear a fresh hold from a newly attached reader.
+            try
+            {
+                _beforeSessionResetState?.Invoke();
+                _dispatcher.ResetState();
+            }
+            finally
+            {
+                lock (_lock)
+                {
+                    resetBarrier!.TrySetResult(true);
+                    _outstandingResetBarriers.Remove(resetBarrier);
+                }
+            }
         }
 
         if (readers is not null)
         {
-            // DisposeAsync on a real reader closes its FileStream synchronously before its first
-            // await. Start every disposal now so one slow read loop cannot delay another fd close.
+            // Start every disposal now so each reader signals its native poll wakeup promptly;
+            // one slow read-loop shutdown must not delay another reader's fd cleanup.
             _ = DisposeReadersAsync(readers);
         }
 
         if (reopen)
         {
-            QueueReopen(generation);
+            QueueReopen(generation, resetBarriers);
         }
     }
 
-    private void QueueReopen(long generation)
+    private void QueueReopen(long generation, Task<bool>[] resetBarriers)
     {
-        _ = Task.Run(() =>
+        _ = Task.Run(async () =>
         {
+            await Task.WhenAll(resetBarriers).ConfigureAwait(false);
+
             List<string> paths;
             try
             {

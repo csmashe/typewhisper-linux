@@ -12,6 +12,113 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class PromptPaletteServiceTests
 {
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Action_delivery_without_configured_target_inserts_once(string? targetId)
+    {
+        var insertionCalls = 0;
+        var pluginCalls = 0;
+        var routingErrorCalls = 0;
+
+        await PromptPaletteService.RouteActionDeliveryAsync(
+            targetId,
+            null,
+            () =>
+            {
+                insertionCalls++;
+                return Task.CompletedTask;
+            },
+            _ =>
+            {
+                pluginCalls++;
+                return Task.CompletedTask;
+            },
+            _ =>
+            {
+                routingErrorCalls++;
+                return Task.CompletedTask;
+            }
+        );
+
+        Assert.Equal(1, insertionCalls);
+        Assert.Equal(0, pluginCalls);
+        Assert.Equal(0, routingErrorCalls);
+    }
+
+    [Fact]
+    public async Task Action_delivery_with_unresolved_configured_target_reports_routing_error_once()
+    {
+        const string expectedTargetId = "missing-action-plugin";
+        var insertionCalls = 0;
+        var pluginCalls = 0;
+        var routingErrorCalls = 0;
+        string? reportedTargetId = null;
+
+        await PromptPaletteService.RouteActionDeliveryAsync(
+            expectedTargetId,
+            null,
+            () =>
+            {
+                insertionCalls++;
+                return Task.CompletedTask;
+            },
+            _ =>
+            {
+                pluginCalls++;
+                return Task.CompletedTask;
+            },
+            targetId =>
+            {
+                routingErrorCalls++;
+                reportedTargetId = targetId;
+                return Task.CompletedTask;
+            }
+        );
+
+        Assert.Equal(0, insertionCalls);
+        Assert.Equal(0, pluginCalls);
+        Assert.Equal(1, routingErrorCalls);
+        Assert.Equal(expectedTargetId, reportedTargetId);
+    }
+
+    [Fact]
+    public async Task Action_delivery_with_resolved_configured_target_executes_plugin_once()
+    {
+        var resolvedPlugin = new Mock<IActionPlugin>().Object;
+        var insertionCalls = 0;
+        var pluginCalls = 0;
+        var routingErrorCalls = 0;
+        IActionPlugin? executedPlugin = null;
+
+        await PromptPaletteService.RouteActionDeliveryAsync(
+            "configured-action-plugin",
+            resolvedPlugin,
+            () =>
+            {
+                insertionCalls++;
+                return Task.CompletedTask;
+            },
+            plugin =>
+            {
+                pluginCalls++;
+                executedPlugin = plugin;
+                return Task.CompletedTask;
+            },
+            _ =>
+            {
+                routingErrorCalls++;
+                return Task.CompletedTask;
+            }
+        );
+
+        Assert.Equal(0, insertionCalls);
+        Assert.Equal(1, pluginCalls);
+        Assert.Same(resolvedPlugin, executedPlugin);
+        Assert.Equal(0, routingErrorCalls);
+    }
+
     [Fact]
     public async Task Action_plugin_declared_failure_is_passed_to_shared_presenter()
     {

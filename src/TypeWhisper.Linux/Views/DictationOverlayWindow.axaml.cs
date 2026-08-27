@@ -457,7 +457,7 @@ public partial class DictationOverlayWindow : Window
         var pos = _pendingDragPosition.Value;
         _pendingDragPosition = null;
 
-        _settings.Save(_settings.Current with
+        _settings.Update(current => current with
         {
             OverlayCustomLeft = (double)pos.X,
             OverlayCustomTop = (double)pos.Y,

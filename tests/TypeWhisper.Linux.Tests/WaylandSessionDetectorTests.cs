@@ -5,83 +5,39 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class WaylandSessionDetectorTests
 {
-    [Fact]
-    public void IsWaylandSession_WaylandDisplaySetWithoutSessionType_ReturnsTrue()
+    [Theory]
+    [InlineData("wayland-0", null, true, true)]
+    [InlineData(null, "wayland", true, false)]
+    [InlineData(null, null, false, false)]
+    [InlineData("", null, false, false)]
+    [InlineData("   ", null, false, false)]
+    [InlineData(null, " WAYLAND ", true, false)]
+    public void Predicates_ClassifyEnvironment(
+        string? waylandDisplay,
+        string? xdgSessionType,
+        bool expectedSession,
+        bool expectedDisplay
+    )
     {
-        var originalWaylandDisplay = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY");
-        var originalSessionType = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE");
-
-        try
-        {
-            Environment.SetEnvironmentVariable("WAYLAND_DISPLAY", "wayland-0");
-            Environment.SetEnvironmentVariable("XDG_SESSION_TYPE", null);
-
-            Assert.True(WaylandSessionDetector.IsWaylandSession());
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("WAYLAND_DISPLAY", originalWaylandDisplay);
-            Environment.SetEnvironmentVariable("XDG_SESSION_TYPE", originalSessionType);
-        }
+        Assert.Equal(
+            expectedSession,
+            WaylandSessionDetector.IsWaylandSession(waylandDisplay, xdgSessionType)
+        );
+        Assert.Equal(
+            expectedDisplay,
+            WaylandSessionDetector.HasWaylandDisplay(waylandDisplay)
+        );
     }
 
     [Fact]
-    public void IsWaylandSession_NoWaylandDisplayOrSessionType_ReturnsFalse()
+    public void IsWaylandSession_XdgWaylandWithoutWaylandDisplay_ReturnsTrue()
     {
-        var originalWaylandDisplay = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY");
-        var originalSessionType = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE");
-
-        try
-        {
-            Environment.SetEnvironmentVariable("WAYLAND_DISPLAY", null);
-            Environment.SetEnvironmentVariable("XDG_SESSION_TYPE", null);
-
-            Assert.False(WaylandSessionDetector.IsWaylandSession());
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("WAYLAND_DISPLAY", originalWaylandDisplay);
-            Environment.SetEnvironmentVariable("XDG_SESSION_TYPE", originalSessionType);
-        }
+        Assert.True(WaylandSessionDetector.IsWaylandSession(null, "wayland"));
     }
 
     [Fact]
-    public void IsWaylandSession_SessionTypeWaylandWithoutWaylandDisplay_ReturnsFalse()
+    public void HasWaylandDisplay_XdgWaylandWithoutWaylandDisplay_ReturnsFalse()
     {
-        var originalWaylandDisplay = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY");
-        var originalSessionType = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE");
-
-        try
-        {
-            Environment.SetEnvironmentVariable("WAYLAND_DISPLAY", null);
-            Environment.SetEnvironmentVariable("XDG_SESSION_TYPE", "wayland");
-
-            Assert.False(WaylandSessionDetector.IsWaylandSession());
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("WAYLAND_DISPLAY", originalWaylandDisplay);
-            Environment.SetEnvironmentVariable("XDG_SESSION_TYPE", originalSessionType);
-        }
-    }
-
-    [Fact]
-    public void IsWaylandSession_EmptyWaylandDisplay_ReturnsFalse()
-    {
-        var originalWaylandDisplay = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY");
-        var originalSessionType = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE");
-
-        try
-        {
-            Environment.SetEnvironmentVariable("WAYLAND_DISPLAY", "");
-            Environment.SetEnvironmentVariable("XDG_SESSION_TYPE", null);
-
-            Assert.False(WaylandSessionDetector.IsWaylandSession());
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("WAYLAND_DISPLAY", originalWaylandDisplay);
-            Environment.SetEnvironmentVariable("XDG_SESSION_TYPE", originalSessionType);
-        }
+        Assert.False(WaylandSessionDetector.HasWaylandDisplay(null));
     }
 }

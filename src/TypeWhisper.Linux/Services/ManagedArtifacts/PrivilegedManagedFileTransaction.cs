@@ -300,32 +300,8 @@ internal static class PrivilegedManagedFileTransaction
 
     private static string CommonPrefix(string stateRoot)
     {
-        var header =
-            "set -eu\n"
-            // pkexec does not reset the umask, so root inherits the caller's. Without this,
-            // a permissive one leaves anything not explicitly chmod'd world-writable.
-            + "umask 022\n"
-            + "if ! command -v flock >/dev/null 2>&1; then\n"
-            + $"  echo '{FlockUnavailableToken}: flock is required for TypeWhisper managed root files' >&2\n"
-            + $"  exit {FlockUnavailableExitCode}\n"
-            + "fi\n"
-            + $"state_root={ShellQuote(stateRoot)}\n";
-        return header
+        return BuildLockPrefix(stateRoot)
                + """
-            if [ -L "$state_root" ] || { [ -e "$state_root" ] && [ ! -d "$state_root" ]; }; then
-              echo 'TYPEWHISPER_ROOT_STATE_UNSAFE' >&2
-              exit 72
-            fi
-            mkdir -p "$state_root"
-            chmod 0700 "$state_root"
-            if [ -L "$state_root" ] || [ ! -d "$state_root" ]; then
-              echo 'TYPEWHISPER_ROOT_STATE_UNSAFE' >&2
-              exit 72
-            fi
-            exec 9>"$state_root/transaction.lock"
-            chmod 0600 "$state_root/transaction.lock"
-            flock -x 9
-
             mode_of() {
               stat -c '%a' "$1"
             }
@@ -675,6 +651,38 @@ internal static class PrivilegedManagedFileTransaction
                 fi
               fi
             }
+
+            """;
+    }
+
+    internal static string BuildLockPrefix(string stateRoot)
+    {
+        var header =
+            "set -eu\n"
+            // pkexec does not reset the umask, so root inherits the caller's. Without this,
+            // a permissive one leaves anything not explicitly chmod'd world-writable.
+            + "umask 022\n"
+            + "if ! command -v flock >/dev/null 2>&1; then\n"
+            + $"  echo '{FlockUnavailableToken}: flock is required for TypeWhisper managed root files' >&2\n"
+            + $"  exit {FlockUnavailableExitCode}\n"
+            + "fi\n"
+            + $"state_root={ShellQuote(stateRoot)}\n";
+        return header
+               + """
+            if [ -L "$state_root" ] || { [ -e "$state_root" ] && [ ! -d "$state_root" ]; }; then
+              echo 'TYPEWHISPER_ROOT_STATE_UNSAFE' >&2
+              exit 72
+            fi
+            mkdir -p "$state_root"
+            chmod 0700 "$state_root"
+            if [ -L "$state_root" ] || [ ! -d "$state_root" ]; then
+              echo 'TYPEWHISPER_ROOT_STATE_UNSAFE' >&2
+              exit 72
+            fi
+            exec 9>"$state_root/transaction.lock"
+            chmod 0600 "$state_root/transaction.lock"
+            flock -x 9
+
 
             """;
     }

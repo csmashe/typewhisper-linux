@@ -85,6 +85,19 @@ public sealed class OpenAiCompatiblePluginTests
                 Encoding.UTF8, "application/json"),
         }));
 
+    private static HttpResponseMessage ModelCatalogResponse(params string[] modelIds) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(new
+                {
+                    data = modelIds.Select(id => new { id }),
+                }),
+                Encoding.UTF8,
+                "application/json"
+            ),
+        };
+
     private static PluginCollectionItem ProfileItem(
         string name, string baseUrl, string? apiKey = null,
         string? model = null, string? llmModel = null, string? id = "") =>
@@ -1398,6 +1411,176 @@ public sealed class OpenAiCompatiblePluginTests
         await sut.RefreshModelCatalogAsync();
 
         Assert.Contains(sut.AdditionalLlmProviders[0].SupportedModels, m => m.Id == "m2");
+    }
+
+    [Fact]
+    public async Task RefreshModelCatalogAsync_BaseUrlChange_DiscardsStaleResponse()
+    {
+        var oldRequestStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseOldRequest = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var handler = new AsyncHandler(async (request, _) =>
+        {
+            if (request.RequestUri?.Port == 11434)
+            {
+                oldRequestStarted.TrySetResult(true);
+                await releaseOldRequest.Task;
+                return ModelCatalogResponse("old-a-model");
+            }
+
+            Assert.Equal(9999, request.RequestUri?.Port);
+            return ModelCatalogResponse("b-model");
+        });
+        var host = CachedDefaultHost();
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var staleRefresh = sut.RefreshModelCatalogAsync();
+        await oldRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        try
+        {
+            await sut.SetSettingValueAsync("baseUrl", "http://localhost:9999");
+            await sut.RefreshModelCatalogAsync().WaitAsync(TimeSpan.FromSeconds(30));
+
+            releaseOldRequest.TrySetResult(true);
+            await staleRefresh.WaitAsync(TimeSpan.FromSeconds(30));
+
+            Assert.Equal(["b-model"], sut.FetchedModels.Select(model => model.Id));
+            Assert.Equal("b-model", sut.SelectedTranscriptionModelId);
+            Assert.Equal("b-model", sut.SelectedLlmModelId);
+            Assert.Equal(
+                ["b-model"],
+                JsonSerializer.Deserialize<List<FetchedModel>>(
+                    host.GetSetting<string>("fetchedModels")!
+                )!.Select(model => model.Id)
+            );
+            Assert.Equal("b-model", host.GetSetting<string>("selectedModel"));
+            Assert.Equal("b-model", host.GetSetting<string>("selectedLlmModel"));
+        }
+        finally
+        {
+            releaseOldRequest.TrySetResult(true);
+        }
+    }
+
+    [Fact]
+    public async Task ValidateAsync_EndpointAba_DiscardsStaleResponse()
+    {
+        var originalRequestStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseOriginalRequest = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var aRequestCount = 0;
+        // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local -- pinning the port IS the parameter's purpose: every request in this test must target endpoint A.
+        var handler = new AsyncHandler(async (request, _) =>
+        {
+            Assert.Equal(11434, request.RequestUri?.Port);
+            // ReSharper disable once AccessToModifiedClosure -- the counter distinguishes the deliberately concurrent original and fresh A requests.
+            if (Interlocked.Increment(ref aRequestCount) == 1)
+            {
+                originalRequestStarted.TrySetResult(true);
+                await releaseOriginalRequest.Task;
+                return ModelCatalogResponse("stale-a-model");
+            }
+
+            return ModelCatalogResponse("fresh-a-model");
+        });
+        var host = CachedDefaultHost();
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var staleValidation = sut.ValidateAsync();
+        await originalRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        try
+        {
+            await sut.SetSettingValueAsync("baseUrl", "http://localhost:9999");
+            await sut.SetSettingValueAsync("baseUrl", "http://localhost:11434");
+            await sut.RefreshModelCatalogAsync().WaitAsync(TimeSpan.FromSeconds(30));
+
+            releaseOriginalRequest.TrySetResult(true);
+            var result = await staleValidation.WaitAsync(TimeSpan.FromSeconds(30));
+
+            Assert.NotNull(result);
+            Assert.False(result.IsSuccess);
+            Assert.Equal(["fresh-a-model"], sut.FetchedModels.Select(model => model.Id));
+            Assert.Equal("fresh-a-model", sut.SelectedTranscriptionModelId);
+            Assert.Equal("fresh-a-model", sut.SelectedLlmModelId);
+            Assert.Equal(
+                ["fresh-a-model"],
+                JsonSerializer.Deserialize<List<FetchedModel>>(
+                    host.GetSetting<string>("fetchedModels")!
+                )!.Select(model => model.Id)
+            );
+            Assert.Equal("fresh-a-model", host.GetSetting<string>("selectedModel"));
+            Assert.Equal("fresh-a-model", host.GetSetting<string>("selectedLlmModel"));
+        }
+        finally
+        {
+            releaseOriginalRequest.TrySetResult(true);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshModelCatalogAsync_ApiKeyChange_DiscardsStaleResponse()
+    {
+        var oldKeyRequestStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseOldKeyRequest = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var handler = new AsyncHandler(async (request, _) =>
+        {
+            var apiKey = request.Headers.Authorization?.Parameter;
+            if (apiKey == "old-key")
+            {
+                oldKeyRequestStarted.TrySetResult(true);
+                await releaseOldKeyRequest.Task;
+                return ModelCatalogResponse("old-key-model");
+            }
+
+            Assert.Equal("new-key", apiKey);
+            return ModelCatalogResponse("new-key-model");
+        });
+        var host = CachedDefaultHost();
+        host.Secrets["api-key"] = "old-key";
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiCompatiblePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var staleRefresh = sut.RefreshModelCatalogAsync();
+        await oldKeyRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        try
+        {
+            await sut.SetApiKeyAsync("new-key");
+            await sut.RefreshModelCatalogAsync().WaitAsync(TimeSpan.FromSeconds(30));
+
+            releaseOldKeyRequest.TrySetResult(true);
+            await staleRefresh.WaitAsync(TimeSpan.FromSeconds(30));
+
+            Assert.Equal(["new-key-model"], sut.FetchedModels.Select(model => model.Id));
+            Assert.Equal("new-key-model", sut.SelectedTranscriptionModelId);
+            Assert.Equal("new-key-model", sut.SelectedLlmModelId);
+            Assert.Equal(
+                ["new-key-model"],
+                JsonSerializer.Deserialize<List<FetchedModel>>(
+                    host.GetSetting<string>("fetchedModels")!
+                )!.Select(model => model.Id)
+            );
+            Assert.Equal("new-key-model", host.GetSetting<string>("selectedModel"));
+            Assert.Equal("new-key-model", host.GetSetting<string>("selectedLlmModel"));
+        }
+        finally
+        {
+            releaseOldKeyRequest.TrySetResult(true);
+        }
     }
 
     [Fact]

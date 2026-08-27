@@ -968,6 +968,110 @@ public sealed class HotkeyServiceTests
     }
 
     [Fact]
+    public void SetDynamicHotkeysDetailed_ReturnsStructuredBlankAndConflictRejections()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var actions = HotkeyService.ParsePromptActionHotkeyCandidates(
+            [
+                new PromptAction
+                {
+                    Id = "fixed-action",
+                    Name = "Fixed action",
+                    SystemPrompt = "x",
+                    HotkeyKey = "Ctrl+Shift+Space",
+                },
+                new PromptAction
+                {
+                    Id = "",
+                    Name = "Blank action",
+                    SystemPrompt = "x",
+                    HotkeyKey = "Ctrl+Alt+T",
+                },
+            ]
+        );
+        var profiles = HotkeyService.ParseProfileHotkeyCandidates(
+            [
+                new Profile
+                {
+                    Id = "fixed-profile",
+                    Name = "Fixed profile",
+                    HotkeyData = "Ctrl+Shift+Space",
+                },
+                new Profile
+                {
+                    Id = "",
+                    Name = "Blank profile",
+                    HotkeyData = "Ctrl+Alt+E",
+                },
+            ]
+        );
+
+        var rejections = hotkey.SetDynamicHotkeysDetailed(actions, profiles);
+
+        Assert.Equal(
+            [
+                new DynamicHotkeyRejection(
+                    DynamicHotkeyBindingKind.PromptAction,
+                    DynamicHotkeyRejectionReason.Conflict,
+                    "fixed-action",
+                    "Fixed action",
+                    "Ctrl+Shift+Space"
+                ),
+                new DynamicHotkeyRejection(
+                    DynamicHotkeyBindingKind.PromptAction,
+                    DynamicHotkeyRejectionReason.BlankId,
+                    "",
+                    "Blank action",
+                    "Ctrl+Alt+T"
+                ),
+                new DynamicHotkeyRejection(
+                    DynamicHotkeyBindingKind.Profile,
+                    DynamicHotkeyRejectionReason.Conflict,
+                    "fixed-profile",
+                    "Fixed profile",
+                    "Ctrl+Shift+Space"
+                ),
+                new DynamicHotkeyRejection(
+                    DynamicHotkeyBindingKind.Profile,
+                    DynamicHotkeyRejectionReason.BlankId,
+                    "",
+                    "Blank profile",
+                    "Ctrl+Alt+E"
+                ),
+            ],
+            rejections
+        );
+    }
+
+    [Fact]
+    public async Task FixedHotkeyChange_ThenReconcile_ActivatesRetainedRejectedCandidate()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        var candidate = new PromptActionHotkey(
+            "action",
+            KeyCode.VcSpace,
+            ModifierMask.LeftCtrl | ModifierMask.LeftShift
+        );
+
+        var initialRejections = hotkey.SetPromptActionHotkeys([candidate]);
+        await backend.WaitUntilSettledAsync();
+        Assert.Single(initialRejections);
+        Assert.Empty(Assert.IsType<GlobalShortcutSet>(backend.LastSet).PromptActionHotkeys);
+
+        Assert.True(hotkey.TrySetHotkeyFromString("Alt+F8"));
+        var afterFixedChange = hotkey.SetProfileHotkeys([]);
+        await backend.WaitUntilSettledAsync();
+
+        Assert.Empty(afterFixedChange);
+        var accepted = Assert.Single(
+            Assert.IsType<GlobalShortcutSet>(backend.LastSet).PromptActionHotkeys
+        );
+        Assert.Equal("action", accepted.ActionId);
+    }
+
+    [Fact]
     public async Task DynamicHotkeys_DefensivelySnapshotsRetainedCandidates()
     {
         var backend = new TestShortcutBackend();

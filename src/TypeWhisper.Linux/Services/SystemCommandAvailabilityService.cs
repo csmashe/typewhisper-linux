@@ -58,7 +58,6 @@ public sealed partial class SystemCommandAvailabilityService
         _snapshot = BuildSnapshot();
     }
 
-    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
     public bool IsWaylandSession
     {
         get
@@ -104,7 +103,11 @@ public sealed partial class SystemCommandAvailabilityService
         get
         {
             var s = _snapshot;
-            return s is { ClipboardToolName: "xclip", HasClipboardTool: true };
+            return s is
+            {
+                ClipboardToolName: LinuxCapabilitySnapshot.XclipToolName,
+                HasClipboardTool: true,
+            };
         }
     }
 
@@ -114,7 +117,11 @@ public sealed partial class SystemCommandAvailabilityService
         get
         {
             var s = _snapshot;
-            return s is { ClipboardToolName: "wl-clipboard", HasClipboardTool: true };
+            return s is
+            {
+                ClipboardToolName: LinuxCapabilitySnapshot.WlClipboardToolName,
+                HasClipboardTool: true,
+            };
         }
     }
 
@@ -535,7 +542,8 @@ public sealed partial class SystemCommandAvailabilityService
 
     private LinuxCapabilitySnapshot BuildSnapshot()
     {
-        var isWayland = WaylandSessionDetector.IsWaylandSession();
+        var isWaylandSession = WaylandSessionDetector.IsWaylandSession();
+        var hasWaylandDisplay = WaylandSessionDetector.HasWaylandDisplay();
         var isX11 = Environment.GetEnvironmentVariable("DISPLAY") is { Length: > 0 };
         var hasXclip = IsCommandAvailable("xclip");
         var hasWlClipboard = IsCommandAvailable("wl-copy") && IsCommandAvailable("wl-paste");
@@ -550,11 +558,13 @@ public sealed partial class SystemCommandAvailabilityService
         var ydotoolSocket = ResolveYdotoolSocketPath(_processRunner);
 
         return new LinuxCapabilitySnapshot(
-            isWayland ? "Wayland"
+            isWaylandSession ? "Wayland"
             : isX11 ? "X11"
             : "Unknown",
-            isWayland ? hasWlClipboard : hasXclip,
-            isWayland ? "wl-clipboard" : "xclip",
+            hasWaylandDisplay ? hasWlClipboard : hasXclip,
+            hasWaylandDisplay
+                ? LinuxCapabilitySnapshot.WlClipboardToolName
+                : LinuxCapabilitySnapshot.XclipToolName,
             IsCommandAvailable("xdotool"),
             IsCommandAvailable("wtype"),
             IsCommandAvailable("ffmpeg"),
@@ -739,12 +749,11 @@ public sealed record LinuxCapabilitySnapshot(
     string? YdotoolSocketPath = null
 )
 {
-    public bool HasAutomaticPasteTool =>
-        SessionType == "Wayland"
-            ? HasWtype || HasXdotool || (HasYdotool && HasYdotoolSocket)
-            : HasXdotool;
+    // The only two values ClipboardToolName ever takes; identity checks reference
+    // these so producer and consumers cannot drift on a raw string.
+    public const string WlClipboardToolName = "wl-clipboard";
+    public const string XclipToolName = "xclip";
 
-    public bool CanAutoPaste => HasClipboardTool && HasAutomaticPasteTool;
     public bool CanUseCuda => HasCudaGpu && HasCudaRuntimeLibraries;
 
     /// <summary>

@@ -37,10 +37,10 @@ public sealed class LinuxDictationReadbackLanguagePolicyTests
     }
 
     [Fact]
-    public void Resolve_UsesEngineDetectedLanguage_OverConfiguredLanguage()
+    public void Resolve_UsesEffectiveSourceLanguage_OverConfiguredLanguage()
     {
-        // Regression: global Language="de" but the transcript was detected as
-        // English — the readback must follow the detected language.
+        // Regression: global Language="de" but the effective engine output is
+        // English — the readback must follow the effective source language.
         var language = LinuxDictationReadbackLanguagePolicy.Resolve(
             "en",
             "de",
@@ -53,12 +53,12 @@ public sealed class LinuxDictationReadbackLanguagePolicyTests
     }
 
     [Fact]
-    public void Resolve_FallsBackToConfiguredLanguage_WhenNoDetectedLanguage()
+    public void Resolve_FallsBackToConfiguredLanguage_WhenNoEffectiveSourceLanguage()
     {
         // Regression: a profile sets an English input language while the global
         // setting is "de"; the caller passes the profile-effective value.
         var language = LinuxDictationReadbackLanguagePolicy.Resolve(
-            detectedLanguage: null,
+            effectiveSourceLanguage: null,
             "en",
             engineTranslatedToEnglish: false,
             translationTarget: null,
@@ -71,10 +71,10 @@ public sealed class LinuxDictationReadbackLanguagePolicyTests
     [Fact]
     public void Resolve_ReturnsNull_WhenConfiguredLanguageIsAuto()
     {
-        // No detected language and an "auto" input language: leave the language
-        // unset for the provider to infer from the text.
+        // No effective source language and an "auto" input language: leave the
+        // language unset for the provider to infer from the text.
         var language = LinuxDictationReadbackLanguagePolicy.Resolve(
-            detectedLanguage: null,
+            effectiveSourceLanguage: null,
             "auto",
             engineTranslatedToEnglish: false,
             translationTarget: null,
@@ -88,7 +88,7 @@ public sealed class LinuxDictationReadbackLanguagePolicyTests
     public void Resolve_ReturnsNull_WhenNothingIsKnown()
     {
         var language = LinuxDictationReadbackLanguagePolicy.Resolve(
-            detectedLanguage: null,
+            effectiveSourceLanguage: null,
             configuredSourceLanguage: null,
             engineTranslatedToEnglish: false,
             translationTarget: null,
@@ -111,6 +111,50 @@ public sealed class LinuxDictationReadbackLanguagePolicyTests
         );
 
         Assert.Equal("en", language);
+    }
+
+    [Fact]
+    public void Resolve_UsesTranslationTarget_WhenEngineTranslationIsTranslatedBack()
+    {
+        // French audio was translated to English by the engine, then the
+        // pipeline translated that effective English output back to French.
+        var language = LinuxDictationReadbackLanguagePolicy.Resolve(
+            effectiveSourceLanguage: "en",
+            configuredSourceLanguage: "fr",
+            engineTranslatedToEnglish: true,
+            translationTarget: "fr",
+            postProcessingSteps: [Translation()]
+        );
+
+        Assert.Equal("fr", language);
+    }
+
+    [Fact]
+    public void Resolve_UsesTranslationTarget_WhenTranslateBackTextIsUnchanged()
+    {
+        var language = LinuxDictationReadbackLanguagePolicy.Resolve(
+            effectiveSourceLanguage: "en",
+            configuredSourceLanguage: "fr",
+            engineTranslatedToEnglish: true,
+            translationTarget: "fr",
+            postProcessingSteps: [Translation(changed: false)]
+        );
+
+        Assert.Equal("fr", language);
+    }
+
+    [Fact]
+    public void Resolve_UsesEffectiveSource_WhenEngineDidNotTranslate()
+    {
+        var language = LinuxDictationReadbackLanguagePolicy.Resolve(
+            effectiveSourceLanguage: "de",
+            configuredSourceLanguage: "fr",
+            engineTranslatedToEnglish: false,
+            translationTarget: null,
+            postProcessingSteps: []
+        );
+
+        Assert.Equal("de", language);
     }
 
     [Fact]
@@ -370,6 +414,52 @@ public sealed class LinuxDictationReadbackLanguagePolicyTests
             engineTranslatedToEnglish: false,
             translationTarget: null,
             steps
+        );
+
+        Assert.Equal("de", language);
+    }
+
+    [Fact]
+    public void Resolve_ComposedWithEffectiveLanguageHelper_TranslateBackReachesTarget()
+    {
+        // Chains the real §2 M1 helper into the policy: fr audio, engine translate
+        // to English, pipeline translates back to fr — readback must say fr.
+        var effective = DictationOrchestrator.ResolvePostProcessingSourceLanguage(
+            "fr",
+            "fr",
+            translateRequested: true,
+            engineSupportsTranslation: true
+        );
+
+        var language = LinuxDictationReadbackLanguagePolicy.Resolve(
+            effective,
+            "fr",
+            engineTranslatedToEnglish: true,
+            translationTarget: "fr",
+            [Translation()]
+        );
+
+        Assert.Equal("fr", language);
+    }
+
+    [Fact]
+    public void Resolve_ComposedWithEffectiveLanguageHelper_UnsupportedEngineKeepsSource()
+    {
+        // Deepgram-shaped engine: translate requested but SupportsTranslation=false,
+        // so the effective language stays the detected one and readback follows it.
+        var effective = DictationOrchestrator.ResolvePostProcessingSourceLanguage(
+            "de",
+            "fr",
+            translateRequested: true,
+            engineSupportsTranslation: false
+        );
+
+        var language = LinuxDictationReadbackLanguagePolicy.Resolve(
+            effective,
+            "fr",
+            engineTranslatedToEnglish: false,
+            translationTarget: null,
+            []
         );
 
         Assert.Equal("de", language);

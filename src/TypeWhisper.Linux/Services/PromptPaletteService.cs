@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Views;
 using TypeWhisper.PluginSDK;
@@ -85,7 +86,7 @@ public sealed class PromptPaletteService
         }
 
         // No palette window: streaming has no UI sink (null → no-op renders),
-        // but the result still streams + falls back to batch and is pasted normally.
+        // but the result still streams + falls back to batch before configured delivery.
         await ExecuteActionAsync(action, captured, null, targetWindowId);
     }
 
@@ -196,40 +197,86 @@ public sealed class PromptPaletteService
             await CloseWindowAsync(window);
 
             var actionPlugin = ResolveActionPlugin(action);
-            if (actionPlugin is not null)
-            {
-                // Unlinked: userCts is dead once the palette closed; the plugin's
-                // only budget is this private deadline.
-                using var execCts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-                try
+            await RouteActionDeliveryAsync(
+                action.TargetActionPluginId,
+                actionPlugin,
+                () => _textInsertion.InsertTextAsync(result, targetWindowId: targetWindowId),
+                async resolvedActionPlugin =>
                 {
-                    await ExecuteActionPluginAsync(
-                        _actionPluginExecutionHost,
-                        actionPlugin,
-                        result,
-                        capturedText,
-                        _dictation.TryPublishActionFeedback,
-                        execCts.Token
+                    // Unlinked: userCts is dead once the palette closed; the plugin's
+                    // only budget is this private deadline.
+                    using var execCts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+                    try
+                    {
+                        await ExecuteActionPluginAsync(
+                            _actionPluginExecutionHost,
+                            resolvedActionPlugin,
+                            result,
+                            capturedText,
+                            _dictation.TryPublishActionFeedback,
+                            execCts.Token
+                        );
+                    }
+                    catch (Exception ex) when (
+                        ClassifyCancellationOrigin(ex, CancellationToken.None, execCts.Token)
+                        == PromptPaletteCancellationOrigin.PrivateDeadline
+                    )
+                    {
+                        // Private action deadline — bounded quiet exit.
+                    }
+                },
+                async targetActionPluginId =>
+                {
+                    Debug.WriteLine(
+                        $"[PromptPalette] Configured action plugin '{targetActionPluginId}' is unavailable."
+                    );
+                    await ShowWarningAsync(
+                        "TypeWhisper",
+                        Loc.Instance.GetString(
+                            "PromptPalette.ActionPluginUnavailable",
+                            targetActionPluginId
+                        )
                     );
                 }
-                catch (Exception ex) when (
-                    ClassifyCancellationOrigin(ex, CancellationToken.None, execCts.Token)
-                    == PromptPaletteCancellationOrigin.PrivateDeadline
-                )
-                {
-                    // Private action deadline — bounded quiet exit.
-                }
-
-                return;
-            }
-
-            await _textInsertion.InsertTextAsync(result, targetWindowId: targetWindowId);
+            );
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[PromptPalette] Prompt processing failed: {ex}");
             await ShowWarningAsync("TypeWhisper", $"Prompt processing failed: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    ///     Extracted for tests: a configured-but-unresolved action target must surface a routing
+    ///     error instead of silently falling back to ordinary insertion (audit §2 M2 / PA7).
+    /// </summary>
+    internal static async Task RouteActionDeliveryAsync(
+        string? targetActionPluginId,
+        IActionPlugin? actionPlugin,
+        Func<Task> insertText,
+        Func<IActionPlugin, Task> executeActionPlugin,
+        Func<string, Task> reportRoutingError
+    )
+    {
+        var actionPluginUnavailable = DictationOrchestrator.IsActionPluginTargetUnavailable(
+            targetActionPluginId,
+            actionPlugin is not null
+        );
+
+        if (actionPluginUnavailable)
+        {
+            await reportRoutingError(targetActionPluginId!);
+            return;
+        }
+
+        if (actionPlugin is not null)
+        {
+            await executeActionPlugin(actionPlugin);
+            return;
+        }
+
+        await insertText();
     }
 
     /// <summary>

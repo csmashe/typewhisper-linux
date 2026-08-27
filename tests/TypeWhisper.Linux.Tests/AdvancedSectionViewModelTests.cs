@@ -180,7 +180,7 @@ public sealed class AdvancedSectionViewModelTests
             harness.ViewModel.SelectedSpokenFeedbackProviderOption?.Id
         );
         harness.Settings.Verify(
-            service => service.Save(It.IsAny<AppSettings>()),
+            service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
             Times.Never
         );
 
@@ -203,7 +203,7 @@ public sealed class AdvancedSectionViewModelTests
         );
         Assert.Equal("before-voice", harness.Settings.Object.Current.SpokenFeedbackVoiceId);
         harness.Settings.Verify(
-            service => service.Save(It.IsAny<AppSettings>()),
+            service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
             Times.Never
         );
     }
@@ -248,7 +248,7 @@ public sealed class AdvancedSectionViewModelTests
         Assert.False(viewModel.CanUseMemory);
         Assert.False(viewModel.MemoryEnabled);
         Assert.True(settings.Object.Current.MemoryEnabled);
-        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
 
         await pluginManager.EnablePluginAsync(plugin.PluginId);
         ApplyPostedActions(postedActions);
@@ -256,7 +256,7 @@ public sealed class AdvancedSectionViewModelTests
         Assert.True(viewModel.CanUseMemory);
         Assert.True(viewModel.MemoryEnabled);
         Assert.True(settings.Object.Current.MemoryEnabled);
-        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
 
         await pluginManager.DisablePluginAsync(plugin.PluginId);
         ApplyPostedActions(postedActions);
@@ -264,7 +264,7 @@ public sealed class AdvancedSectionViewModelTests
         Assert.False(viewModel.CanUseMemory);
         Assert.False(viewModel.MemoryEnabled);
         Assert.True(settings.Object.Current.MemoryEnabled);
-        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     [Fact]
@@ -316,7 +316,7 @@ public sealed class AdvancedSectionViewModelTests
         Assert.True(viewModel.CanUseSpokenFeedback);
         Assert.True(viewModel.SpokenFeedbackEnabled);
         Assert.True(settings.Object.Current.SpokenFeedbackEnabled);
-        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
 
         systemProvider.IsConfigured = false;
         await pluginManager.EnablePluginAsync(auxPlugin.PluginId);
@@ -325,7 +325,7 @@ public sealed class AdvancedSectionViewModelTests
         Assert.False(viewModel.CanUseSpokenFeedback);
         Assert.False(viewModel.SpokenFeedbackEnabled);
         Assert.True(settings.Object.Current.SpokenFeedbackEnabled);
-        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
 
         systemProvider.IsConfigured = true;
         await pluginManager.DisablePluginAsync(auxPlugin.PluginId);
@@ -334,7 +334,7 @@ public sealed class AdvancedSectionViewModelTests
         Assert.True(viewModel.CanUseSpokenFeedback);
         Assert.True(viewModel.SpokenFeedbackEnabled);
         Assert.True(settings.Object.Current.SpokenFeedbackEnabled);
-        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     [Fact]
@@ -360,7 +360,7 @@ public sealed class AdvancedSectionViewModelTests
         Assert.Equal(0, harness.Plugin.SelectVoiceCallCount);
         Assert.Equal("before-voice", harness.Settings.Object.Current.SpokenFeedbackVoiceId);
         harness.Settings.Verify(
-            service => service.Save(It.IsAny<AppSettings>()),
+            service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
             Times.Never
         );
 
@@ -376,7 +376,7 @@ public sealed class AdvancedSectionViewModelTests
             harness.Settings.Object.Current.SpokenFeedbackVoiceId
         );
         harness.Settings.Verify(
-            service => service.Save(It.IsAny<AppSettings>()),
+            service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
             Times.Once
         );
     }
@@ -406,8 +406,16 @@ public sealed class AdvancedSectionViewModelTests
                 voice => voice.Id == SpeechFeedbackService.DefaultVoiceOptionId
             );
             var selectedVoiceIdBefore = harness.ViewModel.SelectedSpokenFeedbackVoiceId;
+            HashSet<string?> expectedPropertyChanges =
+            [
+                nameof(AdvancedSectionViewModel.SpokenFeedbackHint),
+                nameof(AdvancedSectionViewModel.MemoryHint),
+            ];
+            HashSet<string?> propertyChanges = [];
             harness.ViewModel.PropertyChanged += (_, args) =>
             {
+                propertyChanges.Add(args.PropertyName);
+
                 // ReSharper disable once ConvertIfStatementToSwitchStatement -- independent property-name checks, each with its own suppression comment.
                 if (args.PropertyName == nameof(AdvancedSectionViewModel.AutoUnloadOptions))
                 {
@@ -424,6 +432,7 @@ public sealed class AdvancedSectionViewModelTests
 
             Loc.Instance.CurrentLanguage = "de";
 
+            Assert.Superset(expectedPropertyChanges, propertyChanges);
             Assert.NotEqual(
                 autoUnloadBefore.DisplayName,
                 harness.ViewModel.SelectedAutoUnloadOption?.DisplayName
@@ -453,7 +462,7 @@ public sealed class AdvancedSectionViewModelTests
             );
 
             harness.Settings.Verify(
-                service => service.Save(It.IsAny<AppSettings>()),
+                service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
                 Times.Never
             );
         }

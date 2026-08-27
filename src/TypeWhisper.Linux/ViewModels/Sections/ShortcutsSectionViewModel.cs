@@ -1,3 +1,4 @@
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
@@ -20,13 +21,17 @@ internal enum ManagedDesktopIntegrationState
 // MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
 // value parameter is part of the generated signature and cannot be dropped even when ignored here.
 // ReSharper disable UnusedParameterInPartialMethod
-public partial class ShortcutsSectionViewModel : ObservableObject
+public partial class ShortcutsSectionViewModel : ObservableObject, IDisposable
 {
     private const string DictationShortcutId = DictationShortcutSpecFactory.DictationShortcutId;
 
     private readonly HotkeyService _hotkey;
+    private readonly Action<Action> _post;
     private readonly ISettingsService _settings;
     private readonly IReadOnlyList<IDeShortcutWriter> _writers;
+    private readonly Lock _managedSpecInputsGate = new();
+    private (string ToggleHotkey, RecordingMode Mode) _managedSpecInputs;
+    private int _disposed;
 
     // Cached lazily: IsCurrentDesktop hits the filesystem (BinaryExists) so
     // we don't want to rerun it for every UI-bound property. The resolved writer
@@ -45,10 +50,10 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     // probe that finishes late must not clobber the latest result.
     private int _keyboardAccessRefreshVersion;
 
-    // Desktop-integration probes are independent from M5's startup ownership probe: config
-    // presence can identify a stale managed entry, but does not prove that the desktop route is
-    // live. The generation prevents an old spec probe from overwriting a later setting change or
-    // an explicit refresh/removal result.
+    // Desktop-integration and startup ownership probes classify persisted managed specs, not live
+    // desktop routes. Suppressing on a persisted match avoids duplicate routes after re-login, at
+    // the cost of a transient dead route after an app-only KDE restart. The generation prevents an
+    // old spec probe from overwriting a later setting change or explicit refresh/removal result.
     private int _desktopIntegrationRefreshVersion;
     private ManagedDesktopIntegrationState _desktopIntegrationState =
         ManagedDesktopIntegrationState.Unknown;
@@ -107,10 +112,22 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         ISettingsService settings,
         IEnumerable<IDeShortcutWriter> writers
     )
+        : this(hotkey, settings, writers, PostToUiThread)
+    {
+    }
+
+    internal ShortcutsSectionViewModel(
+        HotkeyService hotkey,
+        ISettingsService settings,
+        IEnumerable<IDeShortcutWriter> writers,
+        Action<Action> post
+    )
     {
         _hotkey = hotkey;
+        _post = post;
         _settings = settings;
         _writers = writers.ToArray();
+        _managedSpecInputs = GetManagedSpecInputs(settings.Current);
         HotkeyText = _hotkey.CurrentHotkeyString;
         PromptPaletteHotkeyText = settings.Current.PromptPaletteHotkey;
         RecentTranscriptionsHotkeyText = settings.Current.RecentTranscriptionsHotkey;
@@ -119,12 +136,63 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         Mode = settings.Current.Mode;
         _waylandEvdevHotkeysEnabled = settings.Current.WaylandEvdevHotkeysEnabled;
         _compositorBindsExpanded = ComputeCompositorBindsRelevant();
+        _settings.SettingsChanged += OnSettingsChanged;
 
         // Keyboard access is probed on section activation (RefreshKeyboardAccess),
         // not here: the probe is expensive (see RefreshKeyboardAccessAsync) and this
         // VM is built eagerly at startup, before first-run onboarding can grant
         // access — probing in the ctor would both stall startup and cache a stale
         // pre-onboarding result.
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        _settings.SettingsChanged -= OnSettingsChanged;
+        Interlocked.Increment(ref _keyboardAccessRefreshVersion);
+        Interlocked.Increment(ref _desktopIntegrationRefreshVersion);
+    }
+
+    // Pre-filter on the delivered snapshot but never update the cache here: only the
+    // posted callback advances it, so a burst of events collapses to one probe of the
+    // final state and the VM's own save (which updates the cache first) becomes a no-op.
+    private void OnSettingsChanged(AppSettings settings)
+    {
+        if (Volatile.Read(ref _disposed) != 0 || !ManagedSpecInputsChanged(settings))
+        {
+            return;
+        }
+
+        _post(RefreshDesktopIntegrationForCurrentSettings);
+    }
+
+    // Deliberately re-reads _settings.Current instead of replaying the event payload:
+    // an older posted callback then converges the cache forward to the newest state,
+    // preserving "latest Current wins with at least one probe after the last change".
+    private void RefreshDesktopIntegrationForCurrentSettings()
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        _ = ScheduleDesktopIntegrationRefreshIfManagedSpecInputsChanged(_settings.Current);
+    }
+
+    private static void PostToUiThread(Action action)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            action();
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(action);
+        }
     }
 
     // ReSharper disable once UnusedMember.Global  public ViewModel property (recording-mode options for selection UI); not currently bound in-tree
@@ -262,11 +330,11 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
         // Claim this probe's version before awaiting (runs on the UI thread, so the
         // increment and the post-await check below never interleave with each other).
-        var version = ++_keyboardAccessRefreshVersion;
+        var version = Interlocked.Increment(ref _keyboardAccessRefreshVersion);
         var hasAccess = await Task.Run(InputDeviceAccessCheck.HasKeyboardAccess);
 
         // A newer probe superseded us while we awaited — drop this stale result.
-        if (version != _keyboardAccessRefreshVersion)
+        if (version != Volatile.Read(ref _keyboardAccessRefreshVersion))
         {
             return;
         }
@@ -525,6 +593,64 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         return task;
     }
 
+    private Task ScheduleDesktopIntegrationRefreshIfManagedSpecInputsChanged(
+        AppSettings settings,
+        Action? beforeSchedule = null
+    )
+    {
+        // The cache advances BEFORE beforeSchedule runs its Update so the resulting
+        // SettingsChanged echo compares equal at the pre-filter and cannot double-probe;
+        // an Update failure rolls the cache back below.
+        var inputs = GetManagedSpecInputs(settings);
+        (string ToggleHotkey, RecordingMode Mode) previousInputs;
+        bool changed;
+        lock (_managedSpecInputsGate)
+        {
+            previousInputs = _managedSpecInputs;
+            changed = inputs != previousInputs;
+            if (changed)
+            {
+                _managedSpecInputs = inputs;
+            }
+        }
+
+        try
+        {
+            beforeSchedule?.Invoke();
+        }
+        catch
+        {
+            lock (_managedSpecInputsGate)
+            {
+                if (changed && _managedSpecInputs == inputs)
+                {
+                    _managedSpecInputs = previousInputs;
+                }
+            }
+
+            throw;
+        }
+
+        return changed && Volatile.Read(ref _disposed) == 0
+            ? ScheduleDesktopIntegrationRefresh()
+            : Task.CompletedTask;
+    }
+
+    private bool ManagedSpecInputsChanged(AppSettings settings)
+    {
+        lock (_managedSpecInputsGate)
+        {
+            return GetManagedSpecInputs(settings) != _managedSpecInputs;
+        }
+    }
+
+    private static (string ToggleHotkey, RecordingMode Mode) GetManagedSpecInputs(
+        AppSettings settings
+    )
+    {
+        return (settings.ToggleHotkey, settings.Mode);
+    }
+
     private void SetDesktopIntegrationStateIfCurrent(
         int version,
         ManagedDesktopIntegrationState state
@@ -576,6 +702,9 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         Interlocked.Increment(ref _desktopIntegrationRefreshVersion);
     }
 
+    // Reconcile suppression with the current persisted managed spec. An exact KDE file match is
+    // deliberately treated as desktop ownership before KGlobalAccel loads it: this avoids duplicate
+    // routes after re-login, but an app-only restart can transiently leave no live dictation route.
     internal async Task RefreshNativeDictationBindingStateAsync(CancellationToken ct)
     {
         try
@@ -639,8 +768,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     {
         if (_hotkey.TrySetRecentTranscriptionsHotkeyFromString(RecentTranscriptionsHotkeyText))
         {
-            _settings.Save(
-                _settings.Current with { RecentTranscriptionsHotkey = _hotkey.CurrentRecentTranscriptionsHotkeyString }
+            _settings.Update(current =>
+                current with { RecentTranscriptionsHotkey = _hotkey.CurrentRecentTranscriptionsHotkeyString }
             );
             StatusMessage = string.IsNullOrWhiteSpace(
                 _hotkey.CurrentRecentTranscriptionsHotkeyString
@@ -664,8 +793,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     {
         if (_hotkey.TrySetCopyLastTranscriptionHotkeyFromString(CopyLastTranscriptionHotkeyText))
         {
-            _settings.Save(
-                _settings.Current with
+            _settings.Update(current =>
+                current with
                 {
                     CopyLastTranscriptionHotkey = _hotkey.CurrentCopyLastTranscriptionHotkeyString,
                 }
@@ -692,8 +821,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     {
         if (_hotkey.TrySetTransformSelectionHotkeyFromString(TransformSelectionHotkeyText))
         {
-            _settings.Save(
-                _settings.Current with { TransformSelectionHotkey = _hotkey.CurrentTransformSelectionHotkeyString }
+            _settings.Update(current =>
+                current with { TransformSelectionHotkey = _hotkey.CurrentTransformSelectionHotkeyString }
             );
             StatusMessage = string.IsNullOrWhiteSpace(_hotkey.CurrentTransformSelectionHotkeyString)
                 ? Loc.Instance["Shortcuts.TransformSelectionHotkeyCleared"]
@@ -900,11 +1029,26 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     {
         if (_hotkey.TrySetHotkeyFromString(HotkeyText))
         {
-            _settings.Save(_settings.Current with { ToggleHotkey = _hotkey.CurrentHotkeyString });
-            StatusMessage = Loc.Instance.GetString("Shortcuts.HotkeySet", _hotkey.CurrentHotkeyString);
-            HotkeyText = _hotkey.CurrentHotkeyString;
-            OnPropertyChanged(nameof(IntegrationPreview));
-            await ScheduleDesktopIntegrationRefresh();
+            var hotkey = _hotkey.CurrentHotkeyString;
+            var proposed = _settings.Current with
+            {
+                ToggleHotkey = hotkey,
+            };
+            // Applying an unchanged chord deliberately skips the re-probe; tab reattach
+            // and the explicit refresh affordance cover externally-deleted binds.
+            await ScheduleDesktopIntegrationRefreshIfManagedSpecInputsChanged(
+                proposed,
+                () =>
+                {
+                    _settings.Update(current => current with { ToggleHotkey = hotkey });
+                    StatusMessage = Loc.Instance.GetString(
+                        "Shortcuts.HotkeySet",
+                        _hotkey.CurrentHotkeyString
+                    );
+                    HotkeyText = _hotkey.CurrentHotkeyString;
+                    OnPropertyChanged(nameof(IntegrationPreview));
+                }
+            );
         }
         else
         {
@@ -918,8 +1062,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     {
         if (_hotkey.TrySetPromptPaletteHotkeyFromString(PromptPaletteHotkeyText))
         {
-            _settings.Save(
-                _settings.Current with { PromptPaletteHotkey = _hotkey.CurrentPromptPaletteHotkeyString }
+            _settings.Update(current =>
+                current with { PromptPaletteHotkey = _hotkey.CurrentPromptPaletteHotkeyString }
             );
             StatusMessage = string.IsNullOrWhiteSpace(_hotkey.CurrentPromptPaletteHotkeyString)
                 ? Loc.Instance["Shortcuts.PromptPaletteHotkeyCleared"]
@@ -943,20 +1087,27 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { Mode = value });
-        StatusMessage = value switch
-        {
-            RecordingMode.Toggle => Loc.Instance["Shortcuts.ModeToggleStatus"],
-            RecordingMode.PushToTalk => Loc.Instance["Shortcuts.ModePushToTalkStatus"],
-            RecordingMode.Hybrid => Loc.Instance["Shortcuts.ModeHybridStatus"],
-            _ => "",
-        };
-        OnPropertyChanged(nameof(ShowCapabilityMismatch));
-        OnPropertyChanged(nameof(IntegrationPreview));
-        OnPropertyChanged(nameof(CanWriteDesktopIntegration));
-        OnPropertyChanged(nameof(CanRefreshDesktopIntegration));
-        OnPropertyChanged(nameof(StaleIntegrationMessage));
-        _ = ScheduleDesktopIntegrationRefresh();
+        var mode = value;
+        var proposed = _settings.Current with { Mode = mode };
+        _ = ScheduleDesktopIntegrationRefreshIfManagedSpecInputsChanged(
+            proposed,
+            () =>
+            {
+                _settings.Update(current => current with { Mode = mode });
+                StatusMessage = mode switch
+                {
+                    RecordingMode.Toggle => Loc.Instance["Shortcuts.ModeToggleStatus"],
+                    RecordingMode.PushToTalk => Loc.Instance["Shortcuts.ModePushToTalkStatus"],
+                    RecordingMode.Hybrid => Loc.Instance["Shortcuts.ModeHybridStatus"],
+                    _ => "",
+                };
+                OnPropertyChanged(nameof(ShowCapabilityMismatch));
+                OnPropertyChanged(nameof(IntegrationPreview));
+                OnPropertyChanged(nameof(CanWriteDesktopIntegration));
+                OnPropertyChanged(nameof(CanRefreshDesktopIntegration));
+                OnPropertyChanged(nameof(StaleIntegrationMessage));
+            }
+        );
     }
 
     partial void OnWaylandEvdevHotkeysEnabledChanged(bool value)
@@ -966,7 +1117,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { WaylandEvdevHotkeysEnabled = value });
+        _settings.Update(current => current with { WaylandEvdevHotkeysEnabled = value });
         StatusMessage = value
             ? Loc.Instance["Shortcuts.GlobalReadsEnabled"]
             : Loc.Instance["Shortcuts.FocusedOnlyFallback"];

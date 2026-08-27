@@ -1,3 +1,4 @@
+using Moq;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.PluginSDK.Models;
@@ -9,6 +10,65 @@ public sealed class LinuxSystemTtsProviderTests
 {
     private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(2);
     private static readonly string[] s_audioPlaybackCommands = ["pw-play", "paplay", "aplay"];
+
+    [Fact]
+    public void Constructor_hydrates_selected_voice_from_current_settings()
+    {
+        const string selectedVoiceId = "persisted-voice";
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackVoiceId = selectedVoiceId }
+        );
+        var runner = ControlledProcessRunner.WithImmediateResult(Success());
+        using var provider = new LinuxSystemTtsProvider(settings.Object, runner, "espeak");
+
+        Assert.Equal(selectedVoiceId, provider.SelectedVoiceId);
+    }
+
+    [Fact]
+    public void SelectVoice_updates_selection_in_memory_without_saving()
+    {
+        const string persistedVoiceId = "persisted-voice";
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackVoiceId = persistedVoiceId }
+        );
+        var runner = ControlledProcessRunner.WithImmediateResult(Success());
+        using var provider = new LinuxSystemTtsProvider(settings.Object, runner, "espeak");
+
+        provider.SelectVoice("updated-voice");
+
+        Assert.Equal("updated-voice", provider.SelectedVoiceId);
+
+        provider.SelectVoice(persistedVoiceId);
+
+        Assert.Equal(persistedVoiceId, provider.SelectedVoiceId);
+        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(
+            service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
+            Times.Never
+        );
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void SelectVoice_normalizes_blank_voice_to_default_without_saving(string? voiceId)
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackVoiceId = "persisted-voice" }
+        );
+        var runner = ControlledProcessRunner.WithImmediateResult(Success());
+        using var provider = new LinuxSystemTtsProvider(settings.Object, runner, "espeak");
+
+        provider.SelectVoice(voiceId);
+
+        Assert.Null(provider.SelectedVoiceId);
+        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(
+            service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
+            Times.Never
+        );
+    }
 
     [Theory]
     [InlineData(null, "spoken text")]

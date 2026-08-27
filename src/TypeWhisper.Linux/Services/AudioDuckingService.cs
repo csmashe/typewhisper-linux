@@ -14,6 +14,7 @@ namespace TypeWhisper.Linux.Services;
 public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposable
 {
     private const double MaximumRawVolume = 98_304d;
+    private const int MaxRestoreAttempts = 3;
     private static readonly TimeSpan s_pactlTimeout = TimeSpan.FromMilliseconds(1500);
     private static readonly IReadOnlyDictionary<string, string> s_pactlEnvironment =
         new Dictionary<string, string>(StringComparer.Ordinal) { ["LC_ALL"] = "C" };
@@ -28,7 +29,23 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
 
     private readonly IProcessRunner _processRunner;
     private readonly IErrorLogService _errorLog;
-    private readonly Dictionary<string, string[]> _savedVolumes = new(StringComparer.Ordinal);
+    // Guarded by _volumesGate, mirroring MediaPauseService's _playersGate:
+    // RestoreAudio is reachable from async continuations and Dispose, so two
+    // threads can otherwise enumerate/mutate the dictionary concurrently.
+    // pactl round trips stay OUTSIDE the gate.
+    private readonly Dictionary<string, SavedVolumeState> _savedVolumes =
+        new(StringComparer.Ordinal);
+    private readonly Lock _volumesGate = new();
+    // _isDucked stays false until a duck COMPLETES: RestoreAudio must not run while a
+    // duck is mid-flight, or a restore could put an original volume back and remove
+    // the entry just before the duck's queued set-volume lands — leaving the stream
+    // ducked with nothing tracking it. _duckInProgress separately blocks duck
+    // re-entry so the two guards can't be satisfied by the same half-open state.
+    private bool _duckInProgress;
+    // A restore that arrived mid-duck is deferred, not dropped: the duck's finally runs
+    // it once the last set-volume has landed. Dropping it would leave every stream the
+    // duck just lowered quiet forever when shutdown or session loss races the duck.
+    private bool _restorePending;
     private bool _isDucked;
 
     public AudioDuckingService(IProcessRunner processRunner, IErrorLogService errorLog)
@@ -39,9 +56,14 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
 
     public void DuckAudio(float factor)
     {
-        if (_isDucked)
+        lock (_volumesGate)
         {
-            return;
+            if (_isDucked || _duckInProgress)
+            {
+                return;
+            }
+
+            _duckInProgress = true;
         }
 
         try
@@ -64,59 +86,154 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
             )
             {
                 var savedVolumes = currentVolumes.ToArray();
-                _savedVolumes[inputId] = savedVolumes;
+                lock (_volumesGate)
+                {
+                    // TryAdd, never overwrite: an entry that survived a failed
+                    // restore still holds the ORIGINAL volume — replacing it
+                    // here would capture the already-ducked value and lower
+                    // that stream permanently.
+                    _savedVolumes.TryAdd(inputId, new SavedVolumeState(savedVolumes, 0));
+                }
+
                 var duckedVolumes = savedVolumes
                     .Select(volume => ScaleVolume(volume, factor))
                     .ToArray();
                 _ = SetSinkInputVolume(inputId, duckedVolumes);
             }
-
-            _isDucked = _savedVolumes.Count > 0;
         }
         catch (Exception ex)
         {
+            // Entries saved before the failure are kept: they hold the only copy of the
+            // original volumes for streams already ducked, and RestoreAudio needs them.
             Debug.WriteLine($"[AudioDuckingService] Duck failed: {ex.Message}");
-            _savedVolumes.Clear();
-            _isDucked = false;
+        }
+        finally
+        {
+            bool restoreDeferred;
+            lock (_volumesGate)
+            {
+                _duckInProgress = false;
+                _isDucked = _savedVolumes.Count > 0;
+                restoreDeferred = _restorePending && _isDucked;
+                _restorePending = false;
+            }
+
+            // Outside the gate: RestoreAudio retakes it and runs pactl round trips.
+            if (restoreDeferred)
+            {
+                RestoreAudio();
+            }
         }
     }
 
     public void RestoreAudio()
     {
-        if (!_isDucked)
+        KeyValuePair<string, SavedVolumeState>[] entries;
+        lock (_volumesGate)
         {
-            return;
+            if (_duckInProgress)
+            {
+                _restorePending = true;
+                return;
+            }
+
+            if (!_isDucked)
+            {
+                return;
+            }
+
+            entries = [.. _savedVolumes];
         }
 
-        foreach (var (inputId, volumes) in _savedVolumes.ToArray())
+        foreach (var (inputId, state) in entries)
         {
             try
             {
-                var result = SetSinkInputVolume(inputId, volumes);
+                var result = SetSinkInputVolume(inputId, state.Volumes);
                 if (result.Succeeded)
                 {
-                    _savedVolumes.Remove(inputId);
+                    RemoveSavedVolume(inputId);
                     continue;
                 }
 
-                ReportRestoreFailure(
-                    $"Failed to restore sink input {inputId}: {DescribeFailure(result)}"
-                );
+                // pactl reports a vanished sink-input on stderr with a trailing newline;
+                // trim before the exact match or the classifier never fires in production.
+                if (
+                    string.Equals(
+                        result.StandardError.Trim(),
+                        "Failure: No such entity",
+                        StringComparison.Ordinal
+                    )
+                )
+                {
+                    WriteDiagnostic(
+                        $"[AudioDuckingService] Sink input {inputId} vanished; treating restore as completed."
+                    );
+                    RemoveSavedVolume(inputId);
+                    continue;
+                }
+
+                RecordRestoreFailure(inputId, DescribeFailure(result));
             }
             catch (Exception ex)
             {
-                ReportRestoreFailure(
-                    $"Failed to restore sink input {inputId}: exception: {ex.Message}"
-                );
+                RecordRestoreFailure(inputId, $"exception: {ex.Message}");
             }
         }
 
-        _isDucked = _savedVolumes.Count > 0;
+        lock (_volumesGate)
+        {
+            _isDucked = _savedVolumes.Count > 0;
+        }
+    }
+
+    private void RemoveSavedVolume(string inputId)
+    {
+        lock (_volumesGate)
+        {
+            _savedVolumes.Remove(inputId);
+        }
     }
 
     public void Dispose()
     {
         RestoreAudio();
+    }
+
+    private void RecordRestoreFailure(string inputId, string failure)
+    {
+        bool retired;
+        lock (_volumesGate)
+        {
+            // Never write back an entry that is no longer tracked — a concurrent pass may
+            // have completed it, and resurrecting it would retry a restore that already
+            // happened (or worse, re-apply stale volumes to a recycled sink-input id).
+            // The attempt count comes from the LIVE entry, not the caller's snapshot,
+            // so concurrent passes cannot undercount failures.
+            if (!_savedVolumes.TryGetValue(inputId, out var current))
+            {
+                return;
+            }
+
+            var attempts = current.FailedRestoreAttempts + 1;
+            retired = attempts >= MaxRestoreAttempts;
+            if (retired)
+            {
+                // A generation token would be needed to eliminate recycled pactl-ID restores;
+                // bounded eviction only limits that stale-identity exposure.
+                _savedVolumes.Remove(inputId);
+            }
+            else
+            {
+                _savedVolumes[inputId] = current with { FailedRestoreAttempts = attempts };
+            }
+        }
+
+        ReportRestoreFailure(
+            retired
+                ? $"Failed to restore sink input {inputId}: {failure}. Giving up after {MaxRestoreAttempts} attempts."
+                : $"Failed to restore sink input {inputId}: {failure}"
+        );
     }
 
     /// <summary>
@@ -235,4 +352,6 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
         var rounded = Math.Round(scaled, MidpointRounding.AwayFromZero);
         return rounded.ToString("0", CultureInfo.InvariantCulture);
     }
+
+    private sealed record SavedVolumeState(string[] Volumes, int FailedRestoreAttempts);
 }

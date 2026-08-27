@@ -5,6 +5,7 @@ using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.PluginSDK.Models;
 using TypeWhisper.Tests;
 using Xunit;
 
@@ -86,6 +87,229 @@ public sealed class PluginRegistryServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task FetchRegistryAsync_NewSchemaMetadata_DeserializesTypedFields()
+    {
+        var plugin = await FetchRegistryPluginAsync(
+            new Dictionary<string, object?>
+            {
+                ["categories"] = new[] { "transcription", "llm" },
+                ["networkAccess"] = "userControlled",
+            }
+        );
+
+        Assert.Equal(
+            [PluginCategory.Transcription, PluginCategory.Llm],
+            plugin.Categories
+        );
+        Assert.Equal(PluginNetworkAccess.UserControlled, plugin.NetworkAccess);
+        Assert.Null(plugin.Category);
+        Assert.Null(plugin.IsLocal);
+    }
+
+    [Fact]
+    public async Task FetchRegistryAsync_LegacyMetadata_ProjectsTypedFields()
+    {
+        var plugin = await FetchRegistryPluginAsync(
+            new Dictionary<string, object?>
+            {
+                ["category"] = "post-processor",
+                ["isLocal"] = true,
+            }
+        );
+
+        Assert.Equal([PluginCategory.PostProcessing], plugin.Categories);
+        Assert.Equal(PluginNetworkAccess.Local, plugin.NetworkAccess);
+        Assert.Equal("post-processor", plugin.Category);
+        Assert.True(plugin.IsLocal);
+    }
+
+    [Fact]
+    public async Task FetchRegistryAsync_DualSchemaMetadata_TypedFieldsTakePrecedence()
+    {
+        var plugin = await FetchRegistryPluginAsync(
+            new Dictionary<string, object?>
+            {
+                ["categories"] = new[] { "llm" },
+                ["networkAccess"] = "network",
+                ["category"] = "utility",
+                ["isLocal"] = true,
+            }
+        );
+
+        Assert.Equal([PluginCategory.Llm], plugin.Categories);
+        Assert.Equal(PluginNetworkAccess.Network, plugin.NetworkAccess);
+        Assert.Equal("utility", plugin.Category);
+        Assert.True(plugin.IsLocal);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task FetchRegistryAsync_NullOrEmptyLegacyCategory_DoesNotProjectCategory(
+        string? category
+    )
+    {
+        var plugin = await FetchRegistryPluginAsync(
+            new Dictionary<string, object?>
+            {
+                ["category"] = category,
+            }
+        );
+
+        Assert.Null(plugin.Categories);
+        Assert.Null(plugin.NetworkAccess);
+        Assert.Equal(category, plugin.Category);
+        Assert.Null(plugin.IsLocal);
+    }
+
+    [Fact]
+    public async Task FetchRegistryAsync_UnknownCategoryName_FallsBackWithoutDroppingRegistry()
+    {
+        // One future-schema entry must not blank the whole browser: the unknown name maps to
+        // the documented PluginCategory.Unknown fallback and every other entry stays intact.
+        var entries = new[]
+        {
+            MakeRegistryEntry(
+                "com.typewhisper.future",
+                new Dictionary<string, object?>
+                {
+                    ["categories"] = new[] { "transcription", "holograms" },
+                }
+            ),
+            MakeRegistryEntry(
+                "com.typewhisper.current",
+                new Dictionary<string, object?> { ["categories"] = new[] { "llm" } }
+            ),
+        };
+
+        var service = new PluginRegistryService(
+            CreateManager(),
+            _loader,
+            _settings.Object,
+            CreateMockHttpClient(JsonSerializer.Serialize(entries))
+        )
+        {
+            RuntimeRid = "linux-x64",
+        };
+
+        var result = await service.FetchRegistryAsync();
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal(
+            [PluginCategory.Transcription, PluginCategory.Unknown],
+            result.Single(p => p.Id == "com.typewhisper.future").Categories
+        );
+        Assert.Equal(
+            [PluginCategory.Llm],
+            result.Single(p => p.Id == "com.typewhisper.current").Categories
+        );
+    }
+
+    [Fact]
+    public async Task FetchRegistryAsync_UnknownNetworkAccessName_FailsClosedToNetwork()
+    {
+        var plugin = await FetchRegistryPluginAsync(
+            new Dictionary<string, object?>
+            {
+                ["categories"] = new[] { "llm" },
+                ["networkAccess"] = "quantumRelay",
+            }
+        );
+
+        Assert.Equal(PluginNetworkAccess.Network, plugin.NetworkAccess);
+        Assert.Equal([PluginCategory.Llm], plugin.Categories);
+    }
+
+    [Fact]
+    public async Task FetchRegistryAsync_UndefinedNumericEnumValues_FallBack()
+    {
+        // The strict converter accepts any integer, producing undefined enum values; the
+        // tolerant one keeps defined numbers and maps out-of-range ones to the fallbacks.
+        var plugin = await FetchRegistryPluginAsync(
+            new Dictionary<string, object?>
+            {
+                ["categories"] = new[] { 42, (int)PluginCategory.Tts },
+                ["networkAccess"] = 42,
+            }
+        );
+
+        Assert.Equal([PluginCategory.Unknown, PluginCategory.Tts], plugin.Categories);
+        Assert.Equal(PluginNetworkAccess.Network, plugin.NetworkAccess);
+    }
+
+    [Theory]
+    // The tolerant converter only maps unknown STRINGS and NUMBERS to the fallback;
+    // structurally wrong tokens delegate to the strict converter, which throws, so the
+    // fetch fails instead of silently accepting a malformed registry.
+    [InlineData("object")]
+    [InlineData("array")]
+    [InlineData("boolean")]
+    public async Task FetchRegistryAsync_StructurallyInvalidEnumToken_FailsDeserialization(
+        string tokenKind
+    )
+    {
+        object networkAccess = tokenKind switch
+        {
+            "object" => new Dictionary<string, object?> { ["value"] = "local" },
+            "array" => new[] { "local" },
+            _ => true,
+        };
+        var entry = MakeRegistryEntry(
+            "com.typewhisper.metadata-test",
+            new Dictionary<string, object?>
+            {
+                ["categories"] = new[] { "llm" },
+                ["networkAccess"] = networkAccess,
+            }
+        );
+
+        var service = new PluginRegistryService(
+            CreateManager(),
+            _loader,
+            _settings.Object,
+            CreateMockHttpClient(JsonSerializer.Serialize(new[] { entry }))
+        )
+        {
+            RuntimeRid = "linux-x64",
+        };
+
+        var result = await service.FetchRegistryAsync();
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void TolerantEnumConverter_WritesIdenticallyToStrictSdkConverter()
+    {
+        var tolerantOptions = new JsonSerializerOptions
+        {
+            Converters =
+            {
+                new TolerantJsonStringEnumConverter<PluginCategory>(PluginCategory.Unknown),
+                new TolerantJsonStringEnumConverter<PluginNetworkAccess>(
+                    PluginNetworkAccess.Network
+                ),
+            },
+        };
+
+        foreach (var category in Enum.GetValues<PluginCategory>())
+        {
+            Assert.Equal(
+                JsonSerializer.Serialize(category),
+                JsonSerializer.Serialize(category, tolerantOptions)
+            );
+        }
+
+        foreach (var access in Enum.GetValues<PluginNetworkAccess>())
+        {
+            Assert.Equal(
+                JsonSerializer.Serialize(access),
+                JsonSerializer.Serialize(access, tolerantOptions)
+            );
+        }
+    }
+
+    [Fact]
     public async Task FetchRegistryAsync_CachesResults()
     {
         var plugins = new[]
@@ -142,13 +366,19 @@ public sealed class PluginRegistryServiceTests : IDisposable
     [Fact]
     public async Task FirstRunAutoInstallAsync_SetsFlag()
     {
+        var current = new AppSettings { PluginFirstRunCompleted = false };
         AppSettings? savedSettings = null;
         _settings
-            .Setup(s => s.Save(It.IsAny<AppSettings>()))
-            .Callback<AppSettings>(s => savedSettings = s);
+            .Setup(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Returns((Func<AppSettings, AppSettings> mutate) =>
+            {
+                current = mutate(current);
+                savedSettings = current;
+                return current;
+            });
         _settings
             .Setup(s => s.Current)
-            .Returns(new AppSettings { PluginFirstRunCompleted = false });
+            .Returns(() => current);
 
         var httpClient = CreateMockHttpClient("[]");
         var manager = CreateManager();
@@ -177,19 +407,25 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         await service.FirstRunAutoInstallAsync();
 
-        _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+        _settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     [Fact]
     public async Task FirstRunAutoInstallAsync_OfflineFetch_DoesNotCompleteAndRetries()
     {
+        var current = new AppSettings { PluginFirstRunCompleted = false };
         AppSettings? savedSettings = null;
         _settings
             .Setup(settings => settings.Current)
-            .Returns(new AppSettings { PluginFirstRunCompleted = false });
+            .Returns(() => current);
         _settings
-            .Setup(settings => settings.Save(It.IsAny<AppSettings>()))
-            .Callback<AppSettings>(settings => savedSettings = settings);
+            .Setup(settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Returns((Func<AppSettings, AppSettings> mutate) =>
+            {
+                current = mutate(current);
+                savedSettings = current;
+                return current;
+            });
         var requests = 0;
         var handler = new Mock<HttpMessageHandler>();
         handler
@@ -264,7 +500,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
         await service.FirstRunAutoInstallAsync();
 
         Assert.Empty(result);
-        _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+        _settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     [Fact]
@@ -304,7 +540,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
         // a byte limit on its own does not catch.
         Assert.True(json.Length < 8L * 1024 * 1024);
         Assert.Empty(result);
-        _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+        _settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     [Theory]
@@ -343,7 +579,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
         await service.FirstRunAutoInstallAsync();
 
         Assert.Empty(result);
-        _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+        _settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     private PluginManager CreateManager()
@@ -357,6 +593,51 @@ public sealed class PluginRegistryServiceTests : IDisposable
             []
         );
         return _manager;
+    }
+
+    private static Dictionary<string, object?> MakeRegistryEntry(
+        string id,
+        Dictionary<string, object?> metadata
+    )
+    {
+        var entry = new Dictionary<string, object?>
+        {
+            ["id"] = id,
+            ["name"] = "Metadata Test",
+            ["version"] = "1.0.0",
+            ["author"] = "Tester",
+            ["description"] = "Registry metadata compatibility fixture",
+            ["size"] = 1024L,
+            ["downloadUrl"] = "https://example.com/plugin.zip",
+            ["platform"] = "linux",
+            ["rid"] = "linux-x64",
+            ["sdkAbi"] = "net10.0",
+        };
+        foreach (var (name, value) in metadata)
+        {
+            entry[name] = value;
+        }
+
+        return entry;
+    }
+
+    private async Task<RegistryPlugin> FetchRegistryPluginAsync(
+        Dictionary<string, object?> metadata
+    )
+    {
+        var entry = MakeRegistryEntry("com.typewhisper.metadata-test", metadata);
+
+        var service = new PluginRegistryService(
+            CreateManager(),
+            _loader,
+            _settings.Object,
+            CreateMockHttpClient(JsonSerializer.Serialize(new[] { entry }))
+        )
+        {
+            RuntimeRid = "linux-x64",
+        };
+
+        return Assert.Single(await service.FetchRegistryAsync());
     }
 
     private static HttpClient CreateMockHttpClient(

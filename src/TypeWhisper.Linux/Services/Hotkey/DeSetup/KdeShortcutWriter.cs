@@ -7,12 +7,13 @@ namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 /// <summary>
 ///     Writes a <c>.desktop</c> entry into <c>~/.local/share/kglobalaccel/</c>.
-///     KGlobalAccel scans that directory on session start; the user can override the
-///     trigger from System Settings → Shortcuts.
+///     KGlobalAccel scans that directory on session start, so dropped or removed
+///     entries take effect only after a daemon reload or re-login.
+///     The user can override the trigger from System Settings → Shortcuts.
 ///     Existing targets are changed only when the ownership marker and shortcut ID match.
 ///     The live D-Bus path (<c>org.kde.kglobalaccel.registerShortcut</c>) is avoided
 ///     because it's fragile across Plasma versions and a static toggle doesn't need
-///     the immediate-effect property. Cost: user must log out once to activate.
+///     the immediate-effect property.
 /// </summary>
 public sealed class KdeShortcutWriter : IDeShortcutWriter
 {
@@ -36,8 +37,8 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
     public string DisplayName => "KDE Plasma";
     public bool SupportsPushToTalk => false;
 
-    // KGlobalAccel only loads a dropped .desktop on the next login / daemon
-    // restart, so the bind isn't live the moment we write it.
+    // KGlobalAccel does not observe a dropped or removed .desktop until its next daemon reload or
+    // re-login, so both install and removal are deferred.
     public bool RequiresSessionRestartToApply => true;
 
     public bool IsCurrentDesktop()
@@ -50,6 +51,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
         return $"~/.local/share/kglobalaccel/{FileName(spec.ShortcutId)}\n" + BuildDesktopFile(spec);
     }
 
+    // Reports the persisted managed-file classification, even when the live route still differs.
     public async Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct)
     {
         try

@@ -78,6 +78,38 @@ public sealed class RecordingNotificationServiceTests
         Assert.DoesNotContain(runner.Invocations, IsClose);
     }
 
+    [Fact]
+    public async Task Transform_coordinator_presentation_projects_into_notification()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(IsNotify, "(uint32 41,)");
+        var settings = CreateSettings(AppSettings.Default).Object;
+        var coordinator = new OverlayCoordinator(settings, static action => action());
+        var service = new RecordingNotificationService(coordinator, settings, runner, true);
+        service.Initialize();
+        var token = coordinator.Acquire(OverlayRequester.Transform);
+
+        Assert.True(coordinator.Show(token, new DictationOverlayState
+        {
+            IsOverlayVisible = true,
+            IsRecording = true,
+            StatusText = Loc.Instance["Overlay.TransformPrompt"],
+        }));
+        await service.WaitForIdleAsync().WaitAsync(s_testGuard);
+
+        // Transform is toggle-only: the dictation recording title/body ("release to
+        // insert" in push-to-talk) would misinstruct, so its recording states project
+        // the transform status text instead.
+        var call = Assert.Single(AssertNotifyCalls(runner, 1));
+        AssertNotify(
+            call,
+            replacesId: 0,
+            Loc.Instance["Overlay.TransformPrompt"],
+            string.Empty,
+            expireTimeout: 0
+        );
+    }
+
     [Theory]
     [InlineData("Dictation completed", false)]
     [InlineData("Overlay.Canceled", false)]
@@ -509,11 +541,19 @@ public sealed class RecordingNotificationServiceTests
 
     private sealed class FakeOverlayStateSource : IRecordingNotificationStateSource
     {
-        public event EventHandler<DictationOverlayState>? OverlayStateChanged;
+        private long _revision;
 
-        public void Raise(DictationOverlayState state)
+        public event EventHandler<OverlayPresentationChangedEventArgs>? PresentationChanged;
+
+        public void Raise(
+            DictationOverlayState state,
+            OverlayRequester? requester = OverlayRequester.Dictation
+        )
         {
-            OverlayStateChanged?.Invoke(this, state);
+            PresentationChanged?.Invoke(
+                this,
+                new OverlayPresentationChangedEventArgs(++_revision, state, requester)
+            );
         }
     }
 

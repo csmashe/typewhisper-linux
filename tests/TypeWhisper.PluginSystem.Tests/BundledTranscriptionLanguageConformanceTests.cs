@@ -132,6 +132,17 @@ public sealed class BundledTranscriptionLanguageConformanceTests
             LanguageSelectionSupport.Supported,
             sherpa.ExplicitSelectionSupport
         );
+        Assert.Equal(["en", "de", "fr", "es"], sherpa.SupportedLanguages);
+        Assert.Equal(
+            "de",
+            sherpa.ToLegacyLanguage(LanguageSelection.Explicit("DE"))
+        );
+        Assert.Throws<TranscriptionLanguageNotSupportedException>(
+            () => sherpa.ToLegacyLanguage(LanguageSelection.Explicit("it"))
+        );
+        Assert.Throws<TranscriptionLanguageNotSupportedException>(
+            () => sherpa.ToLegacyLanguage(LanguageSelection.Explicit("en-US"))
+        );
     }
 
     private static void AssertNoDetection(ITranscriptionEngineRole role)
@@ -159,6 +170,21 @@ public sealed class BundledTranscriptionLanguageConformanceTests
         if (support == LanguageSelectionSupport.Unsupported)
         {
             Assert.Throws<LanguageSelectionNotSupportedException>(
+                () => role.ToLegacyLanguage(selection)
+            );
+            return;
+        }
+
+        if (
+            !selection.IsAutomatic
+            && role.SupportedLanguages.Count > 0
+            && !role.SupportedLanguages.Contains(
+                selection.LanguageTag!,
+                StringComparer.OrdinalIgnoreCase
+            )
+        )
+        {
+            Assert.Throws<TranscriptionLanguageNotSupportedException>(
                 () => role.ToLegacyLanguage(selection)
             );
             return;

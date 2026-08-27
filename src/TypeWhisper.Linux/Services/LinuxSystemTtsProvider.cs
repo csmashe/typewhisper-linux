@@ -19,7 +19,7 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
 
     private readonly Func<string?> _speechFeedbackCommand;
     private readonly IProcessRunner _processRunner;
-    private readonly ISettingsService _settings;
+    private string? _selectedVoiceId;
 
     public LinuxSystemTtsProvider(
         ISettingsService settings,
@@ -45,7 +45,7 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
         Func<string?> speechFeedbackCommand
     )
     {
-        _settings = settings;
+        _selectedVoiceId = settings.Current.SpokenFeedbackVoiceId;
         _processRunner = processRunner;
         _speechFeedbackCommand = speechFeedbackCommand;
     }
@@ -56,7 +56,7 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
     public string ProviderId => BuiltInProviderId;
     public string ProviderDisplayName => "Linux system voice";
     public bool IsConfigured => _speechFeedbackCommand() is not null;
-    public string? SelectedVoiceId => _settings.Current.SpokenFeedbackVoiceId;
+    public string? SelectedVoiceId => _selectedVoiceId;
     public string SettingsSummary => SelectedVoiceId ?? "System default voice";
 
     public IReadOnlyList<PluginVoiceInfo> AvailableVoices => [];
@@ -73,13 +73,7 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
 
     public void SelectVoice(string? voiceId)
     {
-        var normalized = string.IsNullOrWhiteSpace(voiceId) ? null : voiceId;
-        if (_settings.Current.SpokenFeedbackVoiceId == normalized)
-        {
-            return;
-        }
-
-        _settings.Save(_settings.Current with { SpokenFeedbackVoiceId = normalized });
+        _selectedVoiceId = string.IsNullOrWhiteSpace(voiceId) ? null : voiceId;
     }
 
     public Task<ITtsPlaybackSession> SpeakAsync(TtsSpeakRequest request, CancellationToken ct)

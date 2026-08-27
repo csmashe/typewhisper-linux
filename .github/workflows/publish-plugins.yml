@@ -80,9 +80,11 @@ jobs:
       - name: Create ZIP
         shell: pwsh
         run: |
+          . ./scripts/publish-plugin-release.ps1
           $outputDir = Join-Path $env:PROJECT_DIRECTORY 'bin/Release/net10.0'
           $manifestPath = Join-Path $env:PROJECT_DIRECTORY 'manifest.json'
           $manifest = Get-Content $manifestPath | ConvertFrom-Json
+          $projection = Get-PluginRegistryProjection -Manifest $manifest
           $pluginId = $manifest.id
           $assemblyName = $manifest.assemblyName -replace '\.dll$',''
 
@@ -94,7 +96,11 @@ jobs:
           Copy-Item (Join-Path $outputDir "$assemblyName.dll") $stagingDir
           $depsFile = Join-Path $outputDir "$assemblyName.deps.json"
           if (Test-Path $depsFile) { Copy-Item $depsFile $stagingDir }
-          Copy-Item $manifestPath $stagingDir
+          foreach ($property in $projection.PSObject.Properties) {
+            $manifest | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value -Force
+          }
+          $manifest | ConvertTo-Json -Depth 20 |
+            Set-Content (Join-Path $stagingDir 'manifest.json') -Encoding utf8NoBOM
 
           # Copy Localization folder if present
           $locDir = Join-Path $env:PROJECT_DIRECTORY 'Localization'

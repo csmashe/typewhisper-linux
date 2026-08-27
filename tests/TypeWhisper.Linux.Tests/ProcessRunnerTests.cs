@@ -487,6 +487,46 @@ public sealed class ProcessRunnerTests
     }
 
     [Fact]
+    public async Task RunOneShotAsync_unexpected_post_start_failure_reaps_and_propagates()
+    {
+        var pidFile = NewPidFile();
+        using var callerCts = new CancellationTokenSource();
+        int? processId = null;
+        try
+        {
+            // The stdin fault surfaces only when the private deadline completes the exit
+            // wait, and the runner then kills the child. The deadline therefore bounds how
+            // long the child has to publish its PID: 3 s absorbs slow dotnet startup on a
+            // loaded agent while still finishing inside the 5 s WaitAsync guard below.
+            var run = new ProcessRunner().RunOneShotAsync(
+                ChildCommand("wait", pidFile),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(3),
+                    StandardInput: new UnsupportedProcessInput()
+                ),
+                callerCts.Token
+            );
+            processId = await WaitForProcessIdAsync(pidFile);
+
+            var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+                async () => await run.WaitAsync(s_testGuard, CancellationToken.None)
+            );
+
+            Assert.Equal("input", exception.ParamName);
+            await AssertProcessDisappearsAsync(processId.Value);
+        }
+        finally
+        {
+            if (processId is { } leaked)
+            {
+                TryKillProcess(leaked);
+            }
+
+            File.Delete(pidFile);
+        }
+    }
+
+    [Fact]
     public async Task RunOneShotAsync_rejects_invalid_delays_before_running_the_child()
     {
         var marker = NewPidFile();
@@ -1068,6 +1108,8 @@ public sealed class ProcessRunnerTests
     }
 
     private readonly record struct FakeProcessIds(int BashProcessId, int ChildProcessId);
+
+    private sealed record UnsupportedProcessInput : ProcessInput;
 
     private sealed class ObservedArguments(
         IReadOnlyList<string> values,

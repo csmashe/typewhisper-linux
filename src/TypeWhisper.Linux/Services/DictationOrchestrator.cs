@@ -34,12 +34,21 @@ internal sealed record RecordingContext(
     CancellationToken CancelToken
 )
 {
+    public OverlayPresentationToken? OverlayToken { get; init; }
+
     /// <summary>
     ///     Per-run sink for LLM prompt provenance. Null when capture is disabled
     ///     for this run (history saving or the provenance setting is off), so the
     ///     pipeline records nothing and pays no cost.
     /// </summary>
     public LlmCallCapture? Capture { get; init; }
+}
+
+internal enum ToggleGateCloseOutcome
+{
+    Unknown,
+    Idle,
+    TimedOut,
 }
 
 public sealed class DictationOrchestrator : IDisposable
@@ -71,6 +80,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IMediaPauseService _mediaPause;
     private readonly MemoryService _memory;
     private readonly ModelManagerService _models;
+    private readonly OverlayCoordinator _overlayCoordinator;
     private readonly Lock _overlayStateLock = new();
     private readonly StreamingTranscriptState _partialTranscriptState = new();
     private readonly IPostProcessingPipeline _pipeline;
@@ -112,13 +122,15 @@ public sealed class DictationOrchestrator : IDisposable
     private EventHandler? _sessionActivityHandler;
     private volatile bool _cancelRequested;
 
-    private bool _disposed;
+    private volatile bool _disposed;
+    private int _disposeStarted;
     private EventHandler<string>? _hookFailedHandler;
     private bool _initialized;
     private string? _lastPublishedPartialText;
     private DateTime _lastSpeechDetectedAtUtc;
     private DateTime _lastToggleUtc = DateTime.MinValue;
     private DictationOverlayState _overlayState = DictationOverlayState.Hidden;
+    private OverlayPresentationToken _overlayToken;
     private CancellationTokenSource? _partialTranscriptionCts;
     private Task? _partialTranscriptionTask;
     private string? _recordingAppProcess;
@@ -126,10 +138,11 @@ public sealed class DictationOrchestrator : IDisposable
     private string? _recordingAppUrl;
     private Profile? _recordingProfile;
 
-    // Monotonically incremented per StartAsync. The active-window snapshot task
-    // captures this at start and guards every write behind it; a late snapshot
-    // (after AwaitRecordingSnapshotAsync timed out) drops its writes rather
-    // than corrupting the next dictation's context.
+    // Monotonically incremented when a start reserves ownership, when a stop
+    // relinquishes it, and when session-loss rollback invalidates startup. The
+    // active-window snapshot task captures this at start and guards every write
+    // behind it; a late snapshot (after AwaitRecordingSnapshotAsync timed out)
+    // drops its writes rather than corrupting the next dictation's context.
     private int _recordingSession;
     private Task? _recordingSnapshotTask;
     private DateTime _recordingStart;
@@ -145,6 +158,7 @@ public sealed class DictationOrchestrator : IDisposable
     private CancellationTokenSource? _streamingStartupCts;
 
     private EventHandler? _toggleHandler;
+    private int _toggleGateCloseOutcome;
 
     public DictationOrchestrator(
         HotkeyService hotkey,
@@ -176,7 +190,8 @@ public sealed class DictationOrchestrator : IDisposable
         IDetectionFailureTracker failureTracker,
         IErrorLogService errorLog,
         ISessionActivityMonitor sessionActivityMonitor,
-        ActionPluginExecutionHost actionPluginExecutionHost
+        ActionPluginExecutionHost actionPluginExecutionHost,
+        OverlayCoordinator overlayCoordinator
     )
     {
         _hotkey = hotkey;
@@ -209,6 +224,8 @@ public sealed class DictationOrchestrator : IDisposable
         _errorLog = errorLog;
         _sessionActivityMonitor = sessionActivityMonitor;
         _actionPluginExecutionHost = actionPluginExecutionHost;
+        _overlayCoordinator = overlayCoordinator;
+        _overlayToken = _overlayCoordinator.Acquire(OverlayRequester.Dictation);
     }
 
     public bool IsRecording => _audio.IsRecordingOwnedBy(_audioCaptureSession);
@@ -239,12 +256,33 @@ public sealed class DictationOrchestrator : IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposeStarted, 1) != 0)
         {
             return;
         }
 
-        _disposed = true;
+        var toggleGateIdle = CloseToggleGateForDispose(
+            (ToggleGateCloseOutcome)Volatile.Read(ref _toggleGateCloseOutcome),
+            // ReSharper disable once AccessToDisposedClosure -- invoked synchronously here,
+            // strictly before the unconditional gate dispose at the end of this method.
+            () => MarkDisposedThenCloseToggleGate(
+                _toggleGate,
+                s_sessionLossGateTimeout,
+                () => _disposed = true
+            )
+        );
+        Volatile.Write(
+            ref _toggleGateCloseOutcome,
+            toggleGateIdle
+                ? (int)ToggleGateCloseOutcome.Idle
+                : (int)ToggleGateCloseOutcome.TimedOut
+        );
+        if (!toggleGateIdle)
+        {
+            Trace.WriteLine(
+                "[Dictation] Dispose timed out waiting for the toggle gate; proceeding with cleanup and leaving the live gate undisposed."
+            );
+        }
 
         if (_toggleHandler is not null)
         {
@@ -325,7 +363,49 @@ public sealed class DictationOrchestrator : IDisposable
             Trace.WriteLine($"[Dictation] Snapshot shutdown failed: {ex.Message}");
         }
 
+        // The gate's Dispose is self-guarding (idempotent, no-ops while busy), so calling it
+        // unconditionally also covers a gate that went idle during the teardown waits above
+        // after the bounded close had already timed out.
         _toggleGate.Dispose();
+    }
+
+    internal async Task<bool> CloseToggleGateAsync()
+    {
+        return await CloseToggleGateAsync(
+                s_sessionLossGateTimeout,
+                () => _disposed = true,
+                _toggleGate.CloseAsync,
+                outcome => Volatile.Write(ref _toggleGateCloseOutcome, (int)outcome)
+            )
+            .ConfigureAwait(false);
+    }
+
+    internal static async Task<bool> CloseToggleGateAsync(
+        TimeSpan budget,
+        Action markDisposed,
+        Func<TimeSpan, Task<bool>> closeToggleGateAsync,
+        Action<ToggleGateCloseOutcome> recordOutcome
+    )
+    {
+        // This mark must precede the asynchronous wait: the current gate owner may still be in
+        // startup feedback and will revalidate this state before opening the microphone.
+        markDisposed();
+        var idle = await closeToggleGateAsync(budget).ConfigureAwait(false);
+        recordOutcome(idle ? ToggleGateCloseOutcome.Idle : ToggleGateCloseOutcome.TimedOut);
+        return idle;
+    }
+
+    internal static bool CloseToggleGateForDispose(
+        ToggleGateCloseOutcome recordedOutcome,
+        Func<bool> closeWhenUnrecorded
+    )
+    {
+        return recordedOutcome switch
+        {
+            ToggleGateCloseOutcome.Idle => true,
+            ToggleGateCloseOutcome.TimedOut => false,
+            _ => closeWhenUnrecorded(),
+        };
     }
 
     internal static void StopCaptureAndRestoreSystemAudio(
@@ -364,6 +444,23 @@ public sealed class DictationOrchestrator : IDisposable
         {
             Trace.WriteLine($"[Dictation] ResumeMedia during dispose failed: {ex.Message}");
         }
+    }
+
+    private static bool MarkDisposedThenCloseToggleGate(
+        DictationToggleGate toggleGate,
+        TimeSpan budget,
+        Action markDisposed
+    )
+    {
+        // This mark must precede the bounded wait: the current gate owner may still be in
+        // startup feedback and will revalidate this state before opening the microphone.
+        markDisposed();
+        return toggleGate.CloseAsync(budget).GetAwaiter().GetResult();
+    }
+
+    internal static bool IsCaptureStartAllowed(bool disposed, bool inputAllowed)
+    {
+        return !disposed && inputAllowed;
     }
 
     public void Initialize()
@@ -507,42 +604,66 @@ public sealed class DictationOrchestrator : IDisposable
     /// </summary>
     internal static async Task<TCapture?> StartCaptureAfterFeedbackAsync<TCapture>(
         bool soundFeedbackEnabled,
-        Func<Task> stopPriorSpeechAsync,
+        Func<IStartupFeedbackReservation> reserveStartupFeedback,
         Func<Task> playStartSoundAsync,
-        Func<Task> announceRecordingStartedAsync,
+        Func<IStartupFeedbackReservation, Task> announceRecordingStartedAsync,
         Func<bool> isInputAllowed,
-        Func<TCapture?> startCapture
+        Func<TCapture?> startCapture,
+        Action<TCapture> onCaptureOpened
     )
         where TCapture : class
     {
+        var startupFeedback = reserveStartupFeedback();
         try
         {
-            await stopPriorSpeechAsync().ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[Dictation] Could not finish prior speech before capture: {ex.Message}");
-        }
-
-        try
-        {
-            if (soundFeedbackEnabled)
+            try
             {
-                await playStartSoundAsync().ConfigureAwait(false);
+                await startupFeedback.StopPriorPlaybackAsync().ConfigureAwait(false);
             }
-            else
+            catch (Exception ex)
             {
-                await announceRecordingStartedAsync().ConfigureAwait(false);
+                Trace.WriteLine($"[Dictation] Could not finish prior speech before capture: {ex.Message}");
             }
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[Dictation] Optional recording-start feedback failed: {ex.Message}");
-        }
 
-        // The cue adds bounded work while the startup gate is held. Revalidate
-        // immediately before opening capture so a lock during feedback wins.
-        return isInputAllowed() ? startCapture() : null;
+            try
+            {
+                if (soundFeedbackEnabled)
+                {
+                    // start.wav is already ordered by this startup lane and is
+                    // the non-TTS bypass of the ordinary-feedback reservation.
+                    await playStartSoundAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    await announceRecordingStartedAsync(startupFeedback).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Optional recording-start feedback failed: {ex.Message}");
+            }
+
+            // The cue adds bounded work while the startup gate is held. Revalidate
+            // immediately before opening capture so a lock during feedback wins.
+            if (!isInputAllowed())
+            {
+                return null;
+            }
+
+            var capture = startCapture();
+            if (capture is not null)
+            {
+                // Claim the generation before releasing the reservation. Otherwise
+                // a prior session can pass its ownership check in the release-to-claim gap.
+                onCaptureOpened(capture);
+            }
+
+            return capture;
+        }
+        finally
+        {
+            startupFeedback.Dispose();
+        }
     }
 
     public async Task<int> StartAsync(string? forcedProfileId = null)
@@ -576,26 +697,40 @@ public sealed class DictationOrchestrator : IDisposable
             // mode even if settings change while the bounded cue is playing.
             var startupSettings = _settings.Current;
             var inputRejectedAfterCue = false;
+            int? claimedSessionId = null;
             AudioRecordingService.AudioCaptureSession? captureSession;
             try
             {
                 captureSession = await StartCaptureAfterFeedbackAsync(
                     startupSettings.SoundFeedbackEnabled,
-                    _speechFeedback.StopCurrentPlaybackBeforeCaptureAsync,
+                    _speechFeedback.ReserveStartupFeedback,
                     () => _soundFeedback.PlayRecordingStartedAsync(),
-                    () => _speechFeedback.AnnounceRecordingStartedAsync(
-                        startupSettings.SpokenFeedbackEnabled
+                    startupFeedback => _speechFeedback.AnnounceRecordingStartedAsync(
+                        startupSettings.SpokenFeedbackEnabled,
+                        startupFeedback
                     ),
                     () =>
                     {
                         // Disposal can restore system audio and stop capture while the
                         // bounded cue is still pending; never open a new capture session
                         // once shutdown has begun.
-                        var allowed = !_disposed && _sessionActivityMonitor.IsInputAllowed;
+                        var allowed = IsCaptureStartAllowed(
+                            _disposed,
+                            _sessionActivityMonitor.IsInputAllowed
+                        );
                         inputRejectedAfterCue = !allowed;
                         return allowed;
                     },
-                    () => _audio.TryStartRecording(startupSettings.WhisperModeEnabled)
+                    () => _audio.TryStartRecording(startupSettings.WhisperModeEnabled),
+                    _ =>
+                    {
+                        // Must not throw: the capture is already open and the helper
+                        // would surface the exception before rollback could run.
+                        lock (_recordingSessionLock)
+                        {
+                            claimedSessionId = ++_recordingSession;
+                        }
+                    }
                 );
             }
             catch (Exception ex)
@@ -621,6 +756,21 @@ public sealed class DictationOrchestrator : IDisposable
                 ReportStatus(message);
                 ShowFeedback(message, true);
                 goto StartupComplete;
+            }
+
+            // The claim callback runs for every non-null capture, so a missing id
+            // here is a helper-contract break — fail loudly rather than running the
+            // session as id 0.
+            var sessionId =
+                claimedSessionId
+                ?? throw new InvalidOperationException(
+                    "Capture opened without a claimed recording session id."
+                );
+
+            var overlayToken = _overlayCoordinator.Acquire(OverlayRequester.Dictation);
+            lock (_overlayStateLock)
+            {
+                _overlayToken = overlayToken;
             }
 
             _audioCaptureSession = captureSession;
@@ -757,10 +907,12 @@ public sealed class DictationOrchestrator : IDisposable
             // near-immediate StopAsync can observe and await it. The Task.Run
             // only commits results if the session is still active — protecting
             // the next dictation from late writes after the 500ms timeout.
-            int sessionId;
+            // Begin stays late so a post-capture setup exception cannot leave a phantom in-flight
+            // session. That failure still consumes the generation reserved above: ids stay
+            // monotonic (all the gate needs), and a predecessor's overlay feedback stays rejected
+            // past the rollback's hide — matching session-loss rollback, which double-increments.
             lock (_recordingSessionLock)
             {
-                sessionId = ++_recordingSession;
                 _inFlightTracker.Begin(sessionId);
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
@@ -859,7 +1011,7 @@ public sealed class DictationOrchestrator : IDisposable
                     matchedProfile?.WhisperModeOverride
                     ?? _settings.Current.WhisperModeEnabled
                 );
-                SetOverlayState(state =>
+                SetOverlayState(overlayToken, state =>
                     state with { ActiveProfileName = matchedProfile?.Name, ActiveAppName = appTitle }
                 );
                 _models.PluginManager.EventBus.Publish(
@@ -949,7 +1101,7 @@ public sealed class DictationOrchestrator : IDisposable
                                         _recordingProfile = rematch.Profile;
                                     }
 
-                                    SetOverlayState(state =>
+                                    SetOverlayState(overlayToken, state =>
                                         state with { ActiveProfileName = rematch.Profile.Name }
                                     );
 
@@ -1094,7 +1246,9 @@ public sealed class DictationOrchestrator : IDisposable
         // than release/reacquire) so a concurrent start can't slip in and record behind the lock.
         if (!await _toggleGate.WaitAsync(s_sessionLossGateTimeout).ConfigureAwait(false))
         {
-            Trace.WriteLine("[Dictation] Session-loss discard timed out waiting for the toggle gate.");
+            Trace.WriteLine(_toggleGate.IsClosed
+                ? "[Dictation] Session-loss discard refused because the toggle gate is closed."
+                : "[Dictation] Session-loss discard timed out waiting for the current toggle-gate owner.");
             return;
         }
 
@@ -1289,7 +1443,15 @@ public sealed class DictationOrchestrator : IDisposable
                     stoppedStreamingModelId,
                     stoppedLanguageSelection,
                     snapshotCts?.Token ?? CancellationToken.None
-                );
+                )
+                {
+                    // Read WITHOUT _overlayStateLock on purpose: this runs under
+                    // _recordingSessionLock, and taking _overlayStateLock here would invert
+                    // the _overlayStateLock -> _recordingSessionLock order the transient
+                    // feedback gate takes (a real deadlock). The toggle gate's fences
+                    // already order this read against the acquire.
+                    OverlayToken = _overlayToken,
+                };
 
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
@@ -1329,7 +1491,7 @@ public sealed class DictationOrchestrator : IDisposable
                         // User hit Escape while still recording: clean up audio/media
                         // (already done above) and surface "Canceled" without saving
                         // the WAV or running transcription.
-                        SetOverlayState(state =>
+                        SetOverlayState(recordingContext, state =>
                             state with
                             {
                                 IsOverlayVisible = true,
@@ -1364,7 +1526,7 @@ public sealed class DictationOrchestrator : IDisposable
                         return;
                     }
 
-                    SetOverlayState(state =>
+                    SetOverlayState(recordingContext, state =>
                         state with
                         {
                             IsOverlayVisible = true,
@@ -1874,9 +2036,13 @@ public sealed class DictationOrchestrator : IDisposable
                         ErrorMessage = ex.Message, ModelId = engineModelId, AppName = context.AppTitle,
                     }
                 );
-                ReportStatus(context, $"Transcription failed: {userMessage}");
-                _speechFeedback.AnnounceError(userMessage);
-                ShowFeedback(context, "Transcription failed.", true);
+                var failureMessage = $"Transcription failed: {userMessage}";
+                ReportStatus(context, failureMessage);
+                TryPublishSessionSpeechFeedback(
+                    context,
+                    () => _speechFeedback.BeginAnnounceError(userMessage)
+                );
+                ShowFeedback(context, failureMessage, true);
                 PublishSessionTerminal(context.SessionId, "failed", userMessage);
                 return;
             }
@@ -2124,21 +2290,23 @@ public sealed class DictationOrchestrator : IDisposable
             var finalText = ApplyProfileStyleFormatting(context, commandResult.Text);
 
             TranscriptionCompleted?.Invoke(this, finalText);
-            // The orchestrator has full language context (detection, profile /
-            // global input language, translate task, and the actual
-            // post-processing step outcomes), so it resolves the readback
-            // language itself and opts out of SpeechFeedbackService's
-            // configured-language fallback.
-            _speechFeedback.AnnounceTranscriptionComplete(
-                finalText,
-                LinuxDictationReadbackLanguagePolicy.Resolve(
-                    result?.DetectedLanguage,
-                    configuredLanguage,
-                    translate,
-                    translationTarget,
-                    pipelineResult.Steps
-                ),
-                false
+            // The orchestrator has the effective language entering post-processing,
+            // the capability-gated translate task, and the actual step outcomes,
+            // so it resolves the readback language itself and opts out of
+            // SpeechFeedbackService's configured-language fallback.
+            TryPublishSessionSpeechFeedback(
+                context,
+                () => _speechFeedback.BeginAnnounceTranscriptionComplete(
+                    finalText,
+                    LinuxDictationReadbackLanguagePolicy.Resolve(
+                        postProcessingLanguage,
+                        configuredLanguage,
+                        translate && engineSupportsTranslation,
+                        translationTarget,
+                        pipelineResult.Steps
+                    ),
+                    false
+                )
             );
             _models.PluginManager.EventBus.Publish(
                 new TranscriptionCompletedEvent
@@ -2310,7 +2478,8 @@ public sealed class DictationOrchestrator : IDisposable
                         "Pressed Enter.",
                     InsertionResult.Pasted or InsertionResult.Typed =>
                         $"Typed {finalText.Length} char(s).",
-                    InsertionResult.CopiedToClipboard => ClipboardFallbackMessage(),
+                    InsertionResult.CopiedToClipboard =>
+                        ClipboardFallbackMessage(context.AppProcess),
                     InsertionResult.ActionHandled => "Action completed.",
                     InsertionResult.ActionFailed => "Action failed.",
                     InsertionResult.ActionUnavailable => "Action destination unavailable.",
@@ -2454,7 +2623,10 @@ public sealed class DictationOrchestrator : IDisposable
                 }
             );
             ReportStatus(context, $"Transcription failed: {ex.Message}");
-            _speechFeedback.AnnounceError(ex.Message);
+            TryPublishSessionSpeechFeedback(
+                context,
+                () => _speechFeedback.BeginAnnounceError(ex.Message)
+            );
             var feedbackText = ex is InvalidOperationException ? ex.Message : "Transcription failed.";
             ShowFeedback(context, feedbackText, true);
             PublishSessionTerminal(context.SessionId, "failed", ex.Message);
@@ -2511,7 +2683,10 @@ public sealed class DictationOrchestrator : IDisposable
                     // unconditionally for non-overlay observers.
                     if (IsContextStillOwningOverlay(context))
                     {
-                        SetOverlayState(state => state with { LlmResponseText = accumulated });
+                        SetOverlayState(
+                            context,
+                            state => state with { LlmResponseText = accumulated }
+                        );
                     }
 
                     _models.PluginManager.EventBus.Publish(
@@ -2755,7 +2930,7 @@ public sealed class DictationOrchestrator : IDisposable
                 context.AppProcess,
                 async () =>
                 {
-                    SetOverlayState(state =>
+                    SetOverlayState(context, state =>
                         state with
                         {
                             IsOverlayVisible = false,
@@ -2914,8 +3089,9 @@ public sealed class DictationOrchestrator : IDisposable
 
     // Outcome of streaming a spoken-command result onto the page. Text is the full accumulated LLM
     // output (useful even when typing failed); TypingFailed marks a chunk-injection failure and
-    // TypedAnything whether any chunk landed before that failure; Faulted marks the provider stream
-    // breaking mid-way after partial output already landed, so the accumulated text is incomplete.
+    // TypedAnything whether a successful chunk or part of a failed chunk landed; Faulted marks the
+    // provider stream breaking mid-way after partial output already landed, so the accumulated text
+    // is incomplete.
     private sealed record StreamCommandResult(
         string Text,
         bool TypingFailed,
@@ -3023,18 +3199,14 @@ public sealed class DictationOrchestrator : IDisposable
                 }
             }
 
-            if (
-                await _textInsertion
-                    .TypeStreamChunkAsync(text, targetProcessName)
-                    .ConfigureAwait(false)
-            )
-            {
-                typedAnything = true;
-            }
-            else
-            {
-                typingFailed = true;
-            }
+            var chunk = await _textInsertion
+                .TypeStreamChunkAsync(text, targetProcessName)
+                .ConfigureAwait(false);
+            (typingFailed, typedAnything) = ApplyStreamChunkTypingOutcome(
+                typedAnything,
+                chunk.Succeeded,
+                chunk.DeliveredPartialText
+            );
         }
 
         async Task FlushAsync()
@@ -3075,6 +3247,21 @@ public sealed class DictationOrchestrator : IDisposable
 
             return true;
         }
+    }
+
+    // TypingFailed is assigned, not OR'd: the flush guards early-return once it is set, so this only
+    // ever runs while no chunk has failed and the write cannot clear a sticky failure. Callers must
+    // not invoke it after a failed chunk.
+    internal static (bool TypingFailed, bool TypedAnything) ApplyStreamChunkTypingOutcome(
+        bool typedAnythingSoFar,
+        bool chunkSucceeded,
+        bool chunkDeliveredPartialText
+    )
+    {
+        return (
+            !chunkSucceeded,
+            typedAnythingSoFar || chunkSucceeded || chunkDeliveredPartialText
+        );
     }
 
     internal static async Task<bool> RecoverSpokenCommandStreamFaultAsync(
@@ -3120,7 +3307,8 @@ public sealed class DictationOrchestrator : IDisposable
         {
             InsertionResult.Pasted or InsertionResult.Typed =>
                 Localization.Loc.Instance["Command.Done"],
-            InsertionResult.CopiedToClipboard => ClipboardFallbackMessage(),
+            InsertionResult.CopiedToClipboard =>
+                ClipboardFallbackMessage(context.AppProcess),
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             InsertionResult.MissingPasteTool =>
                 $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
@@ -3256,7 +3444,7 @@ public sealed class DictationOrchestrator : IDisposable
 
     private static string ClipboardToolMissingMessage()
     {
-        return Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+        return WaylandSessionDetector.HasWaylandDisplay()
             ? "Text insertion failed. Install wl-clipboard to enable clipboard insertion."
             : "Text insertion failed. Install xclip to enable clipboard insertion.";
     }
@@ -3268,10 +3456,27 @@ public sealed class DictationOrchestrator : IDisposable
     ///     which the service sets on the same call that produced this result —
     ///     so we can guide the user to the actual setup gap (e.g. ydotool not
     ///     running) instead of the generic "paste with Ctrl+V" line.
+    ///     Reason-specific guidance wins even in a terminal; the terminal hint
+    ///     (which names the terminal's Ctrl+Shift+V chord) only covers the cases
+    ///     with no actionable diagnosis behind them.
     /// </summary>
-    private string ClipboardFallbackMessage()
+    private string ClipboardFallbackMessage(string? targetProcessName)
     {
-        return _textInsertion.LastFailureReason switch
+        // One snapshot for both the terminal guard and the switch: a concurrent
+        // insertion could change LastFailureReason between the two reads and
+        // produce guidance that matches neither outcome.
+        var failureReason = _textInsertion.LastFailureReason;
+        if (
+            TextInsertionService.IsTerminalApp(targetProcessName)
+            && failureReason
+                is InsertionFailureReason.None
+                or InsertionFailureReason.PasteRetriesExhausted
+        )
+        {
+            return Localization.Loc.Instance["TextInsertion.TerminalClipboardFallback"];
+        }
+
+        return failureReason switch
         {
             InsertionFailureReason.WtypeCompositorUnsupported =>
                 "Copied to clipboard. Compositor doesn't support direct typing — set up ydotool from Settings → Text insertion to enable auto-paste.",
@@ -3684,7 +3889,7 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
-        SetOverlayState(state =>
+        SetOverlayState(context, state =>
             state with
             {
                 IsOverlayVisible = true,
@@ -3722,14 +3927,22 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
-        if (isError)
+        TryRunTerminalFeedback(isError, isCanceled);
+    }
+
+    private void TryRunTerminalFeedback(bool isError, bool isCanceled)
+    {
+        _speechFeedback.TryRunOrdinaryFeedback(() =>
         {
-            _soundFeedback.PlayError();
-        }
-        else if (!isCanceled)
-        {
-            _soundFeedback.PlaySuccess();
-        }
+            if (isError)
+            {
+                _soundFeedback.PlayError();
+            }
+            else if (!isCanceled)
+            {
+                _soundFeedback.PlaySuccess();
+            }
+        });
     }
 
     internal static DictationOverlayState FeedbackState(
@@ -3866,7 +4079,11 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
-        ShowFeedback(text, isError, isCanceled);
+        SetOverlayState(
+            context,
+            state => FeedbackState(state, text, isError)
+        );
+        TryRunSessionTerminalFeedback(context, isError, isCanceled);
     }
 
     private void ShowActionFeedback(
@@ -3879,11 +4096,58 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
-        ShowFeedback(
-            result.Message,
-            !result.Success,
-            actionResult: result
+        SetOverlayState(
+            context,
+            state => FeedbackState(state, result.Message, !result.Success, result)
         );
+        TryRunSessionTerminalFeedback(context, !result.Success, isCanceled: false);
+    }
+
+    private void TryRunSessionTerminalFeedback(
+        RecordingContext context,
+        bool isError,
+        bool isCanceled
+    )
+    {
+        if (!_settings.Current.SoundFeedbackEnabled)
+        {
+            return;
+        }
+
+        lock (_recordingSessionLock)
+        {
+            if (!IsSessionStillOwningOverlayLocked(context.SessionId))
+            {
+                return;
+            }
+
+            // Keep the generation check held through the speech-service guard.
+            // Startup claims the next generation before releasing that guard,
+            // so a prior terminal cue linearizes entirely before or after startup.
+            TryRunTerminalFeedback(isError, isCanceled);
+        }
+    }
+
+    private void TryPublishSessionSpeechFeedback(RecordingContext context, Func<Action?> begin)
+    {
+        Action? launch;
+        lock (_recordingSessionLock)
+        {
+            if (!IsSessionStillOwningOverlayLocked(context.SessionId))
+            {
+                return;
+            }
+
+            // Registration (version allocation + request swap) happens under the
+            // session lock so it linearizes with startup's generation claim and
+            // ReserveStartupFeedback, but the launch crosses the TTS provider /
+            // plugin trust boundary and must run after the lock is released — a
+            // hung provider or plugin Stop() must not be able to freeze the
+            // dictation toggle path.
+            launch = begin();
+        }
+
+        launch?.Invoke();
     }
 
     /// <summary>
@@ -3895,13 +4159,22 @@ public sealed class DictationOrchestrator : IDisposable
     /// </summary>
     private bool IsContextStillOwningOverlay(RecordingContext context)
     {
-        int current;
+        return IsSessionStillOwningOverlay(context.SessionId);
+    }
+
+    // Internal so a test holding only a session id reaches the same arithmetic; keeping one
+    // copy stops a refactor from moving production off the rule the test pins.
+    internal bool IsSessionStillOwningOverlay(int sessionId)
+    {
         lock (_recordingSessionLock)
         {
-            current = _recordingSession;
+            return IsSessionStillOwningOverlayLocked(sessionId);
         }
+    }
 
-        return current <= context.SessionId + 1;
+    private bool IsSessionStillOwningOverlayLocked(int sessionId)
+    {
+        return _recordingSession <= sessionId + 1;
     }
 
     private void RollBackStartedRecording(AudioRecordingService.AudioCaptureSession captureSession)
@@ -3971,6 +4244,27 @@ public sealed class DictationOrchestrator : IDisposable
 
     private void SetOverlayState(Func<DictationOverlayState, DictationOverlayState> updater)
     {
+        // The current token is read inside the lock so a concurrent re-acquire cannot
+        // slip between the read and the publication.
+        SetOverlayState(token: null, updater);
+    }
+
+    private void SetOverlayState(
+        RecordingContext context,
+        Func<DictationOverlayState, DictationOverlayState> updater
+    )
+    {
+        if (context.OverlayToken is { } token)
+        {
+            SetOverlayState(token, updater);
+        }
+    }
+
+    private void SetOverlayState(
+        OverlayPresentationToken? token,
+        Func<DictationOverlayState, DictationOverlayState> updater
+    )
+    {
         // Serialize updates: SetOverlayState is invoked from the toggle path,
         // the active-window snapshot Task.Run, and the partial-transcription
         // loop concurrently. Without a lock, the read-modify-write on
@@ -3978,7 +4272,28 @@ public sealed class DictationOrchestrator : IDisposable
         // and emit a stale state after a newer one.
         lock (_overlayStateLock)
         {
-            _overlayState = updater(_overlayState);
+            // Derive from the COORDINATOR's slot state, not the _overlayState
+            // mirror: after feedback expiry retires the slot, the mirror still
+            // carries ShowFeedback and republishing from it would resurrect the
+            // expired toast. The mirror becomes a write-behind copy of what was
+            // actually published. Updaters stay pure record-withs, so running
+            // them under the coordinator lock is within Update's contract.
+            DictationOverlayState? published = null;
+            var accepted = _overlayCoordinator.Update(
+                token ?? _overlayToken,
+                current =>
+                {
+                    var next = updater(current);
+                    published = next;
+                    return next;
+                }
+            );
+            if (!accepted || published is null)
+            {
+                return;
+            }
+
+            _overlayState = published;
             OverlayStateChanged?.Invoke(this, _overlayState);
         }
     }

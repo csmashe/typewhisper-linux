@@ -191,9 +191,14 @@ public static class Program
         }
         finally
         {
-            // DisposeAsync: some DI services are IAsyncDisposable-only (e.g. XdgPortalGlobalShortcutsBackend);
-            // sync Dispose() throws InvalidOperationException for those.
-            Services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            // A timed-out HTTP handler may still be using DI-owned services. The process is
+            // exiting, so skipping provider disposal here cannot leak anything beyond its life.
+            if (!App.SkipProviderDisposal)
+            {
+                // DisposeAsync: some DI services are IAsyncDisposable-only (e.g. XdgPortalGlobalShortcutsBackend);
+                // sync Dispose() throws InvalidOperationException for those.
+                Services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
         }
     }
 

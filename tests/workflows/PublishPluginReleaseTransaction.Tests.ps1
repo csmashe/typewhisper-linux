@@ -50,7 +50,8 @@ Describe 'Publish plugin release transaction' {
             minHostVersion = '1.0.0'
             author = 'TypeWhisper'
             description = 'Example plugin'
-            category = 'Utility'
+            categories = @('utility')
+            networkAccess = 'local'
             iconSystemName = 'PuzzlePiece'
             requiresApiKey = $false
             descriptions = [ordered]@{
@@ -61,7 +62,18 @@ Describe 'Publish plugin release transaction' {
         $script:manifestPath = Join-Path $script:fixtureRoot 'manifest.json'
         ConvertTo-Json -InputObject $manifest -Depth 10 |
             Set-Content -LiteralPath $script:manifestPath -Encoding utf8NoBOM
-        Copy-Item -LiteralPath $script:manifestPath -Destination (Join-Path $script:packageRoot 'manifest.json')
+        $packageManifest = Get-Content -LiteralPath $script:manifestPath -Raw | ConvertFrom-Json
+        $projection = Get-PluginRegistryProjection -Manifest $packageManifest
+        foreach ($property in $projection.PSObject.Properties) {
+            $packageManifest | Add-Member `
+                -NotePropertyName $property.Name `
+                -NotePropertyValue $property.Value `
+                -Force
+        }
+        ConvertTo-Json -InputObject $packageManifest -Depth 10 |
+            Set-Content `
+                -LiteralPath (Join-Path $script:packageRoot 'manifest.json') `
+                -Encoding utf8NoBOM
         Set-Content `
             -LiteralPath (Join-Path $script:packageRoot 'TypeWhisper.Plugin.Example.dll') `
             -Value 'deterministic test assembly' `
@@ -231,6 +243,76 @@ Describe 'Publish plugin release transaction' {
         }
     }
 
+    It 'projects modern manifest metadata into typed and deterministic legacy fields' {
+        $manifest = [pscustomobject][ordered]@{
+            categories = @('utility', 'llm', 'transcription')
+            networkAccess = 'mixed'
+        }
+
+        $projection = Get-PluginRegistryProjection -Manifest $manifest
+
+        ($projection.categories -join ',') | Should -Be 'utility,llm,transcription'
+        $projection.networkAccess | Should -Be 'mixed'
+        $projection.category | Should -Be 'transcription'
+        $projection.isLocal | Should -BeFalse
+    }
+
+    It 'rejects manifests with missing, null-entry, or duplicate categories' {
+        { Get-PluginRegistryProjection -Manifest ([pscustomobject]@{ networkAccess = 'local' }) } |
+            Should -Throw '*at least one category*'
+        { Get-PluginRegistryProjection -Manifest ([pscustomobject]@{
+            categories = @('transcription', $null)
+            networkAccess = 'local'
+        }) } | Should -Throw '*must not contain null entries*'
+        { Get-PluginRegistryProjection -Manifest ([pscustomobject]@{
+            categories = @('llm', 'LLM')
+            networkAccess = 'local'
+        }) } | Should -Throw '*must not contain duplicates*'
+    }
+
+    It 'rejects a registry entry whose categories degraded to a scalar' {
+        $projection = Get-PluginRegistryProjection -Manifest ([pscustomobject]@{
+            categories = @('utility')
+            networkAccess = 'local'
+        })
+        $degraded = [pscustomobject]@{
+            categories = 'utility'
+            networkAccess = 'local'
+            category = 'utility'
+            isLocal = $true
+        }
+        { Assert-PluginRegistryProjection -Candidate $degraded -Expected $projection -Context 'test' } |
+            Should -Throw '*does not match*'
+    }
+
+    It 'projects local network access to the legacy local flag' {
+        $projection = Get-PluginRegistryProjection -Manifest ([pscustomobject]@{
+            categories = @('memory')
+            networkAccess = 'local'
+        })
+
+        $projection.isLocal | Should -BeTrue
+    }
+
+    It 'rejects a ZIP whose manifest omits a registry projection field' {
+        $archiveManifestPath = Join-Path $script:packageRoot 'manifest.json'
+        $archiveManifest = Get-Content -LiteralPath $archiveManifestPath -Raw | ConvertFrom-Json
+        $archiveManifest.PSObject.Properties.Remove('isLocal')
+        ConvertTo-Json -InputObject $archiveManifest -Depth 10 |
+            Set-Content -LiteralPath $archiveManifestPath -Encoding utf8NoBOM
+        $invalidZipPath = Join-Path $script:fixtureRoot 'invalid.zip'
+        Compress-Archive -Path (Join-Path $script:packageRoot '*') -DestinationPath $invalidZipPath
+        $sourceManifest = Read-JsonObjectFile -Path $script:manifestPath
+
+        {
+            Assert-ZipPackage `
+                -Path $invalidZipPath `
+                -Manifest $sourceManifest `
+                -ExpectedPluginId $script:pluginId `
+                -ExpectedVersion $script:pluginVersion
+        } | Should -Throw "*missing registry projection field 'isLocal'*"
+    }
+
     It 'resumes a draft after a registry push failure and publishes only after repair' {
         $script:remainingPushFailures = 1
 
@@ -268,6 +350,10 @@ Describe 'Publish plugin release transaction' {
         $registry[0].platform | Should -Be $script:platform
         $registry[0].rid | Should -Be $script:rid
         $registry[0].sdkAbi | Should -Be $script:sdkAbi
+        ($registry[0].categories -join ',') | Should -Be 'utility'
+        $registry[0].networkAccess | Should -Be 'local'
+        $registry[0].category | Should -Be 'utility'
+        $registry[0].isLocal | Should -BeTrue
         $registry[0].sha256 | Should -Be (
             (Get-FileHash -LiteralPath $script:zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
         )

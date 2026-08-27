@@ -111,6 +111,30 @@ public sealed class ControlSocketServerTests
         }
     }
 
+    [Theory]
+    [InlineData(JsonControlProtocol.StateTranscribing)]
+    [InlineData(JsonControlProtocol.StateInjecting)]
+    public async Task Pending_start_returns_real_active_state(string state)
+    {
+        var releaseStart = NewSignal();
+        var coordinator = CreateCoordinator(() => state);
+
+        try
+        {
+            _ = coordinator.DispatchStart(() => releaseStart.Task);
+            var publishedCorrelation = coordinator.GetLastStart().Completion;
+            Assert.NotNull(publishedCorrelation);
+            Assert.False(publishedCorrelation.IsCompleted);
+
+            Assert.Equal(state, coordinator.SnapshotState());
+        }
+        finally
+        {
+            releaseStart.TrySetResult();
+            await AwaitPublishedStartAsync(coordinator);
+        }
+    }
+
     [Fact]
     public async Task Repeated_start_reuses_in_flight_correlation()
     {

@@ -1,6 +1,7 @@
 using Avalonia.Threading;
 using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Views;
 
 namespace TypeWhisper.Linux.Services;
@@ -8,17 +9,20 @@ namespace TypeWhisper.Linux.Services;
 public sealed class TransformSelectionService
 {
     private static readonly TimeSpan s_processingTimeout = TimeSpan.FromSeconds(90);
-    private readonly ActiveWindowService _activeWindow;
+    private readonly IActiveWindowService _activeWindow;
     private readonly AudioRecordingService _audio;
     private readonly SystemCommandAvailabilityService _commands;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ModelManagerService _models;
+    private readonly OverlayCoordinator _overlayCoordinator;
     private readonly Func<TimeSpan, CancellationTokenSource> _processingTimeoutCtsFactory;
     private readonly PromptProcessingService _promptProcessing;
     private readonly ISettingsService _settings;
 
     private readonly TextInsertionService _textInsertion;
+    private readonly Func<string, Task> _showWarningDialog;
     private DictationOverlayState _overlayState = DictationOverlayState.Hidden;
+    private OverlayPresentationToken? _overlayToken;
 
     private TransformSelectionSession? _session;
 
@@ -28,9 +32,11 @@ public sealed class TransformSelectionService
         ModelManagerService models,
         PromptProcessingService promptProcessing,
         ISettingsService settings,
-        ActiveWindowService activeWindow,
+        IActiveWindowService activeWindow,
         SystemCommandAvailabilityService commands,
-        Func<TimeSpan, CancellationTokenSource>? processingTimeoutCtsFactory = null
+        OverlayCoordinator overlayCoordinator,
+        Func<TimeSpan, CancellationTokenSource>? processingTimeoutCtsFactory = null,
+        Func<string, Task>? showWarningDialog = null
     )
     {
         _textInsertion = textInsertion;
@@ -40,8 +46,10 @@ public sealed class TransformSelectionService
         _settings = settings;
         _activeWindow = activeWindow;
         _commands = commands;
+        _overlayCoordinator = overlayCoordinator;
         _processingTimeoutCtsFactory = processingTimeoutCtsFactory
                                        ?? (timeout => new CancellationTokenSource(timeout));
+        _showWarningDialog = showWarningDialog ?? ShowWarningDialogAsync;
     }
 
     public async Task ToggleAsync()
@@ -55,6 +63,7 @@ public sealed class TransformSelectionService
         {
             if (_session is null)
             {
+                _overlayToken = _overlayCoordinator.Acquire(OverlayRequester.Transform);
                 await StartAsync();
             }
             else
@@ -96,57 +105,94 @@ public sealed class TransformSelectionService
     }
 
     // Test seam: lets the terminal-aware copy-shortcut decision be tested without constructing the full service. See audit §3 M5.
-    internal static Task<string> CaptureSelectionForTransformAsync(
+    internal static async Task<TransformSelectionCapture> CaptureSelectionForTransformAsync(
         TextInsertionService textInsertion,
-        string? processName
+        IActiveWindowService activeWindow
     )
     {
-        return textInsertion.CaptureSelectedTextAsync(
-            TextInsertionService.IsTerminalApp(processName)
+        var targetSnapshot = await activeWindow.GetActiveWindowSnapshotAsync(
+            CancellationToken.None
         );
+        var selectedText = await textInsertion.CaptureSelectedTextAsync(
+            TextInsertionService.IsTerminalApp(targetSnapshot?.ProcessName)
+        );
+        return new TransformSelectionCapture(selectedText, targetSnapshot);
     }
 
     // Test seam: decides whether it's still safe to replace the captured selection. See audit §3 M6.
     // Cannot detect caret/selection drift within the same window — that would need an
     // AT-SPI selection-range or document-revision token.
     internal static bool HasSelectionTargetChanged(
-        string? capturedWindowId,
-        string? capturedProcessName,
-        string? currentWindowId,
-        string? currentProcessName
+        ActiveWindowSnapshot? captured,
+        ActiveWindowSnapshot? current
     )
     {
-        // Window id is the strongest signal (X11 only) — if both sides have one, trust it
-        // even if process-name detection disagrees.
-        var capturedHasWindowId = !string.IsNullOrEmpty(capturedWindowId);
-        var currentHasWindowId = !string.IsNullOrEmpty(currentWindowId);
-        if (capturedHasWindowId && currentHasWindowId)
-        {
-            return !string.Equals(capturedWindowId, currentWindowId, StringComparison.Ordinal);
-        }
-
-        // A window id on exactly one side means identity appeared or vanished between capture and
-        // replace — usually the captured window closing, or detection dropping the id (including
-        // the current target losing all identity). Treat it as changed even when the process names
-        // agree: we can't confirm it's the same window, so don't replace into an unconfirmable one.
-        if (capturedHasWindowId != currentHasWindowId)
+        // Missing identity now fails closed to clipboard. Process-name equality used to
+        // authorize replacement here, but it cannot distinguish two windows of the same app.
+        if (
+            captured is null
+            || current is null
+            || string.IsNullOrWhiteSpace(captured.Source)
+            || string.IsNullOrWhiteSpace(current.Source)
+            || string.IsNullOrWhiteSpace(captured.WindowId)
+            || string.IsNullOrWhiteSpace(current.WindowId)
+        )
         {
             return true;
         }
 
-        // Neither side has a window id. Fall back to process identity — the only cross-compositor
-        // signal ActiveWindowService exposes (Wayland, or an X11 case missing an id on both sides).
-        if (!string.IsNullOrEmpty(capturedProcessName) || !string.IsNullOrEmpty(currentProcessName))
-        {
-            return !string.Equals(
-                capturedProcessName,
-                currentProcessName,
-                StringComparison.OrdinalIgnoreCase
-            );
-        }
+        return !string.Equals(captured.Source, current.Source, StringComparison.Ordinal)
+               || !string.Equals(
+                   captured.WindowId,
+                   current.WindowId,
+                   StringComparison.Ordinal
+               )
+               || !string.Equals(
+                   captured.AppId,
+                   current.AppId,
+                   StringComparison.OrdinalIgnoreCase
+               );
+    }
 
-        // No identity signal on either side — fail open rather than block a replacement we can't validate.
-        return false;
+    // Test seam: re-checks that the captured window still holds focus. Returns the captured
+    // snapshot while replacement is still safe, null once the target changed. The probe swallows
+    // per-provider cancellation and reports a null snapshot, so an expired processing deadline is
+    // rethrown here into the timeout handling — otherwise it reads as a focus change.
+    internal static async Task<ActiveWindowSnapshot?> ResolveReplacementTargetAsync(
+        IActiveWindowService activeWindow,
+        ActiveWindowSnapshot? capturedSnapshot,
+        CancellationToken processingToken
+    )
+    {
+        var currentSnapshot = await activeWindow.GetActiveWindowSnapshotAsync(processingToken);
+        processingToken.ThrowIfCancellationRequested();
+        return HasSelectionTargetChanged(capturedSnapshot, currentSnapshot)
+            ? null
+            : capturedSnapshot;
+    }
+
+    internal static Task<InsertionResult> DeliverValidatedTransformAsync(
+        TextInsertionService textInsertion,
+        string transformed,
+        ActiveWindowSnapshot targetSnapshot,
+        bool isWaylandSession
+    )
+    {
+        var targetWindowId = !isWaylandSession
+                             && string.Equals(
+                                 targetSnapshot.Source,
+                                 "xdotool",
+                                 StringComparison.Ordinal
+                             )
+            ? targetSnapshot.WindowId
+            : null;
+        return textInsertion.InsertTextAsync(
+            transformed,
+            true,
+            targetWindowId,
+            targetSnapshot.ProcessName,
+            targetSnapshot.Title
+        );
     }
 
     // Test seam: delivers an aborted transform clipboard-only so it can never paste into the now-focused window. See audit §3 M6.
@@ -167,10 +213,8 @@ public sealed class TransformSelectionService
             return;
         }
 
-        var windowId = _activeWindow.GetActiveWindowId();
-        var processName = _activeWindow.GetActiveWindowProcessName();
-        var windowTitle = _activeWindow.GetActiveWindowTitle();
-        var selectedText = await CaptureSelectionForTransformAsync(_textInsertion, processName);
+        var capture = await CaptureSelectionForTransformAsync(_textInsertion, _activeWindow);
+        var selectedText = capture.SelectedText;
         if (string.IsNullOrWhiteSpace(selectedText))
         {
             await ShowWarningAsync("Select text before using Transform Selection.");
@@ -197,9 +241,7 @@ public sealed class TransformSelectionService
 
         _session = new TransformSelectionSession(
             selectedText,
-            windowId,
-            processName,
-            windowTitle,
+            capture.TargetSnapshot,
             captureSession
         );
         PublishOverlay(state =>
@@ -212,7 +254,7 @@ public sealed class TransformSelectionService
                 IsRecording = true,
                 StatusText = Localization.Loc.Instance["Overlay.TransformPrompt"],
                 PartialText = selectedText,
-                ActiveAppName = string.IsNullOrWhiteSpace(processName) ? windowTitle : processName,
+                ActiveAppName = ResolveActiveAppName(capture.TargetSnapshot),
                 SessionStartedAtUtc = DateTime.UtcNow,
             }
         );
@@ -236,9 +278,7 @@ public sealed class TransformSelectionService
                 IsRecording = false,
                 StatusText = Localization.Loc.Instance["Overlay.TransformProcessing"],
                 PartialText = session.SelectedText,
-                ActiveAppName = string.IsNullOrWhiteSpace(session.ProcessName)
-                    ? session.WindowTitle
-                    : session.ProcessName,
+                ActiveAppName = ResolveActiveAppName(session.TargetSnapshot),
                 SessionStartedAtUtc = null,
             }
         );
@@ -332,28 +372,23 @@ public sealed class TransformSelectionService
                 return;
             }
 
-            var currentWindowId = _activeWindow.GetActiveWindowId();
-            var currentProcessName = _activeWindow.GetActiveWindowProcessName();
-            if (
-                HasSelectionTargetChanged(
-                    session.WindowId,
-                    session.ProcessName,
-                    currentWindowId,
-                    currentProcessName
-                )
-            )
+            var replacementTarget = await ResolveReplacementTargetAsync(
+                _activeWindow,
+                session.TargetSnapshot,
+                processingCts.Token
+            );
+            if (replacementTarget is null)
             {
                 await AbortReplacementAsync(transformed);
                 return;
             }
 
             PublishStatus("Replacing selected text...");
-            var insertion = await _textInsertion.InsertTextAsync(
+            var insertion = await DeliverValidatedTransformAsync(
+                _textInsertion,
                 transformed,
-                true,
-                session.WindowId,
-                session.ProcessName,
-                session.WindowTitle
+                replacementTarget,
+                _commands.IsWaylandSession
             );
 
             switch (insertion)
@@ -415,6 +450,11 @@ public sealed class TransformSelectionService
     private async Task ShowWarningAsync(string message)
     {
         ShowFeedback(message, true);
+        await _showWarningDialog(message);
+    }
+
+    private static async Task ShowWarningDialogAsync(string message)
+    {
         await Dispatcher.UIThread.InvokeAsync(async () =>
         {
             var dialog = new MessageDialogWindow();
@@ -449,24 +489,44 @@ public sealed class TransformSelectionService
         });
     }
 
+    private static string? ResolveActiveAppName(ActiveWindowSnapshot? snapshot)
+    {
+        return string.IsNullOrWhiteSpace(snapshot?.ProcessName)
+            ? snapshot?.Title
+            : snapshot.ProcessName;
+    }
+
     private static string ClipboardToolMissingMessage()
     {
-        return Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+        return WaylandSessionDetector.HasWaylandDisplay()
             ? "Install wl-clipboard to copy transformed text."
             : "Install xclip to copy transformed text.";
     }
 
     private void PublishOverlay(Func<DictationOverlayState, DictationOverlayState> updater)
     {
-        _overlayState = updater(_overlayState);
+        var token = _overlayToken
+                    ?? throw new InvalidOperationException(
+                        "Transform overlay publication requires an active presentation token."
+                    );
+        var state = updater(_overlayState);
+        if (!_overlayCoordinator.Update(token, _ => state))
+        {
+            return;
+        }
+
+        _overlayState = state;
         OverlayStateChanged?.Invoke(this, _overlayState);
     }
 
+    internal sealed record TransformSelectionCapture(
+        string SelectedText,
+        ActiveWindowSnapshot? TargetSnapshot
+    );
+
     private sealed record TransformSelectionSession(
         string SelectedText,
-        string? WindowId,
-        string? ProcessName,
-        string? WindowTitle,
+        ActiveWindowSnapshot? TargetSnapshot,
         AudioRecordingService.AudioCaptureSession CaptureSession
     );
 }

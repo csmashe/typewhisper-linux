@@ -1,6 +1,7 @@
 using System.Net;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
 using TypeWhisper.PluginSDK.Helpers;
 
 namespace TypeWhisper.PluginSystem.Tests;
@@ -128,9 +129,115 @@ public sealed class OpenAiChatHelperTests
     }
 
     [Fact]
-    public void ParseChatCompletionStreamDelta_GarbageFrame_ReturnsNull()
+    public void ParseChatCompletionStreamDelta_ExplicitNullContent_ReturnsNull()
     {
-        Assert.Null(OpenAiChatHelper.ParseChatCompletionStreamDelta("not json"));
+        Assert.Null(OpenAiChatHelper.ParseChatCompletionStreamDelta(
+            """{"choices":[{"delta":{"content":null}}]}"""));
+    }
+
+    [Fact]
+    public void ParseChatCompletionStreamDelta_ExplicitEmptyContent_ReturnsEmpty()
+    {
+        Assert.Equal("", OpenAiChatHelper.ParseChatCompletionStreamDelta(
+            """{"choices":[{"delta":{"content":""}}]}"""));
+    }
+
+    [Fact]
+    public void ParseChatCompletionStreamDelta_GarbageFrame_ThrowsJsonException()
+    {
+        Assert.ThrowsAny<JsonException>(() =>
+            OpenAiChatHelper.ParseChatCompletionStreamDelta("not json"));
+    }
+
+    [Theory]
+    [InlineData("""{"id":"chatcmpl-123"}""")]
+    [InlineData("""{"choices":{}}""")]
+    [InlineData("""{"choices":[]}""")]
+    public void ParseChatCompletionStreamDelta_InvalidChoices_ThrowsProtocolFailure(string json)
+    {
+        var exception = AssertStreamProtocolFailure(json);
+
+        Assert.Contains("'choices'", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("""{"choices":[{}]}""")]
+    [InlineData("""{"choices":[{"delta":[]}] }""")]
+    public void ParseChatCompletionStreamDelta_InvalidDelta_ThrowsProtocolFailure(string json)
+    {
+        var exception = AssertStreamProtocolFailure(json);
+
+        Assert.Contains("'choices[0].delta'", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("42")]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    [InlineData("true")]
+    public void ParseChatCompletionStreamDelta_NonStringContent_ThrowsProtocolFailure(
+        string contentJson)
+    {
+        var json = $"{{\"choices\":[{{\"delta\":{{\"content\":{contentJson}}}}}]}}";
+
+        var exception = AssertStreamProtocolFailure(json);
+
+        Assert.Contains("'choices[0].delta.content'", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("42")]
+    [InlineData("\"\"")]
+    public async Task SendChatCompletionStreamingAsync_InvalidFinishReasonThenDone_Completes(
+        string finishReasonJson)
+    {
+        var sse = string.Join(
+            "\n",
+            $"data: {{\"choices\":[{{\"delta\":{{\"content\":\"Hello\"}},\"finish_reason\":{finishReasonJson}}}]}}",
+            "",
+            "data: [DONE]",
+            "",
+            "");
+        var chunks = new List<string>();
+
+        await StreamChatResponseAsync(sse, chunks);
+
+        Assert.Equal(["Hello"], chunks);
+    }
+
+    [Fact]
+    public async Task SendChatCompletionStreamingAsync_MalformedDeltaBetweenTextAndDone_Throws()
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":42}}]}",
+            "",
+            "data: [DONE]",
+            "",
+            "");
+        var chunks = new List<string>();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => StreamChatResponseAsync(sse, chunks));
+
+        Assert.Equal(["Hello"], chunks);
+        Assert.Contains("'choices[0].delta.content'", exception.Message);
+    }
+
+    [Fact]
+    public void ParseChatCompletionStreamDelta_LongInvalidPayload_TruncatesBodySnippet()
+    {
+        var json = $$"""{"padding":"{{new string('x', 240)}}not-in-snippet"}""";
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            OpenAiChatHelper.ParseChatCompletionStreamDelta(json));
+        var body = exception.Message[(exception.Message.IndexOf("Body: ", StringComparison.Ordinal)
+                                      + "Body: ".Length)..];
+
+        Assert.Equal($"{json[..200]}...", body);
+        Assert.DoesNotContain("not-in-snippet", exception.Message);
     }
 
     [Theory]
@@ -160,6 +267,15 @@ public sealed class OpenAiChatHelperTests
         return exception;
     }
 
+    private static InvalidOperationException AssertStreamProtocolFailure(string json)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            OpenAiChatHelper.ParseChatCompletionStreamDelta(json));
+        Assert.Contains("Body:", exception.Message);
+        Assert.Contains(json.Length > 200 ? json[..200] : json, exception.Message);
+        return exception;
+    }
+
     private static async Task<string> SendChatResponseAsync(string json)
     {
         using var httpClient = new HttpClient(new JsonResponseHandler(json));
@@ -174,6 +290,23 @@ public sealed class OpenAiChatHelperTests
         );
     }
 
+    private static async Task StreamChatResponseAsync(string sse, List<string> chunks)
+    {
+        using var httpClient = new HttpClient(new SseResponseHandler(sse));
+        await foreach (var chunk in OpenAiChatHelper.SendChatCompletionStreamingAsync(
+                           httpClient,
+                           "https://example.test",
+                           "test-key",
+                           "test-model",
+                           "system",
+                           "user",
+                           CancellationToken.None
+                       ))
+        {
+            chunks.Add(chunk);
+        }
+    }
+
     private sealed class JsonResponseHandler(string json) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
@@ -184,6 +317,20 @@ public sealed class OpenAiChatHelperTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            });
+        }
+    }
+
+    private sealed class SseResponseHandler(string sse) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             });
         }
     }

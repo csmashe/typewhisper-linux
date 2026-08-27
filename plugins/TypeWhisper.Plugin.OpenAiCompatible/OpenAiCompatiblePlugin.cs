@@ -41,6 +41,12 @@ public sealed class OpenAiCompatiblePlugin
     private readonly Dictionary<string, OpenAiCompatibleProfileRole> _profileRoles =
         new(StringComparer.Ordinal);
 
+    // Fences fetch-then-apply work for the default endpoint. The revision is an
+    // identity token rather than a value comparison, so A -> B -> A is still a
+    // connection change and an older A response cannot become current again.
+    private readonly Lock _defaultConnectionLock = new();
+    private long _defaultConnectionRevision;
+
     // Guards _profileRoles: the capability getters populate it lazily (a read that
     // mutates) while model-selection, catalog refresh, and invalidation remove from it,
     // and these run on different threads (host capability rebuilds vs. UI/async paths).
@@ -255,20 +261,28 @@ public sealed class OpenAiCompatiblePlugin
         // include "/v1", so strip a trailing "/v1" segment to avoid building
         // "/v1/v1/models" and similar paths.
         var normalized = NormalizeBaseUrl(url);
-        var changed = !string.Equals(BaseUrl, normalized, StringComparison.Ordinal);
-        BaseUrl = normalized;
-        _host?.SetSetting("baseUrl", normalized);
+        lock (_defaultConnectionLock)
+        {
+            var changed = !string.Equals(BaseUrl, normalized, StringComparison.Ordinal);
+            BaseUrl = normalized;
+            if (changed)
+            {
+                // Bump and invalidate before the host persist: if the settings write
+                // throws, the new URL must not stay live at the old revision with the
+                // old catalog still applied.
+                _defaultConnectionRevision++;
+                SetFetchedModels([], notifyCapabilitiesChanged: false);
+            }
 
-        if (changed)
-            SetFetchedModels([]);
-        else
-            _host?.NotifyCapabilitiesChanged();
+            _host?.SetSetting("baseUrl", normalized);
+        }
+
+        _host?.NotifyCapabilitiesChanged();
     }
 
     internal async Task SetApiKeyAsync(string key)
     {
         var apiKey = string.IsNullOrWhiteSpace(key) ? null : key;
-        var changed = !string.Equals(ApiKey, apiKey, StringComparison.Ordinal);
 
         if (_host is not null)
         {
@@ -278,11 +292,18 @@ public sealed class OpenAiCompatiblePlugin
                 await _host.StoreSecretAsync("api-key", apiKey);
         }
 
-        ApiKey = apiKey;
-        if (changed)
-            SetFetchedModels([]);
-        else
-            _host?.NotifyCapabilitiesChanged();
+        lock (_defaultConnectionLock)
+        {
+            var changed = !string.Equals(ApiKey, apiKey, StringComparison.Ordinal);
+            ApiKey = apiKey;
+            if (changed)
+            {
+                _defaultConnectionRevision++;
+                SetFetchedModels([], notifyCapabilitiesChanged: false);
+            }
+        }
+
+        _host?.NotifyCapabilitiesChanged();
     }
 
     internal void SelectLlmModel(string modelId)
@@ -300,7 +321,7 @@ public sealed class OpenAiCompatiblePlugin
     private static bool ParseBool(string? value) =>
         string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
 
-    internal void SetFetchedModels(List<FetchedModel> models, bool notifyCapabilitiesChanged = true)
+    internal void SetFetchedModels(List<FetchedModel> models, bool notifyCapabilitiesChanged)
     {
         var selectedModelId = NormalizeModelSelection(SelectedModelId, models);
         var selectedLlmModelId = NormalizeModelSelection(SelectedLlmModelId, models);
@@ -331,46 +352,8 @@ public sealed class OpenAiCompatiblePlugin
     // from "couldn't reach/parse the server."
     internal async Task<List<FetchedModel>?> FetchModelsAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrEmpty(BaseUrl))
-            return null;
-
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
-            if (!string.IsNullOrEmpty(ApiKey))
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
-
-            using var response = await _httpClient.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
-                return null;
-
-            var json = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(json);
-
-            if (!doc.RootElement.TryGetProperty("data", out var data))
-                return null;
-
-            return data.EnumerateArray()
-                .Select(e => new FetchedModel(
-                    e.GetProperty("id").GetString() ?? "",
-                    e.TryGetProperty("owned_by", out var ob) ? ob.GetString() : null
-                ))
-                .Where(m => !string.IsNullOrEmpty(m.Id))
-                .OrderBy(m => m.Id)
-                .ToList();
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception) when (ct.IsCancellationRequested)
-        {
-            throw new OperationCanceledException(ct);
-        }
-        catch
-        {
-            return null;
-        }
+        var connection = CaptureDefaultConnection();
+        return await FetchModelsForAsync(connection.BaseUrl, connection.ApiKey, ct);
     }
 
     internal async Task<bool> ValidateConnectionAsync(CancellationToken ct = default)
@@ -496,15 +479,22 @@ public sealed class OpenAiCompatiblePlugin
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(BaseUrl))
+        var connection = CaptureDefaultConnection();
+        if (string.IsNullOrWhiteSpace(connection.BaseUrl))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterBaseUrl"));
 
-        var models = await FetchModelsAsync(ct);
-        if (models is null)
+        var models = await FetchModelsForAsync(connection.BaseUrl, connection.ApiKey, ct);
+        var isCurrent = TryApplyDefaultCatalog(
+            connection,
+            models,
+            onlyIfChanged: false,
+            out var applied
+        );
+        if (!isCurrent || models is null)
             return new PluginSettingsValidationResult(false, Loc.L("Settings.CouldNotConnect"));
 
-        SetFetchedModels(models, notifyCapabilitiesChanged: false);
-        _host?.NotifyCapabilitiesChanged();
+        if (applied)
+            _host?.NotifyCapabilitiesChanged();
 
         return new PluginSettingsValidationResult(
             true,
@@ -517,11 +507,13 @@ public sealed class OpenAiCompatiblePlugin
     // failure leaves all three untouched.
     public async Task RefreshModelCatalogAsync(CancellationToken ct = default)
     {
-        if (!string.IsNullOrEmpty(BaseUrl))
+        var connection = CaptureDefaultConnection();
+        if (!string.IsNullOrEmpty(connection.BaseUrl))
         {
-            var models = await FetchModelsAsync(ct);
-            if (models is not null && DefaultCatalogStateChanged(models))
-                SetFetchedModels(models);
+            var models = await FetchModelsForAsync(connection.BaseUrl, connection.ApiKey, ct);
+            TryApplyDefaultCatalog(connection, models, onlyIfChanged: true, out var applied);
+            if (applied)
+                _host?.NotifyCapabilitiesChanged();
         }
 
         // Refresh additional profiles on the same dropdown-open path so their
@@ -553,6 +545,38 @@ public sealed class OpenAiCompatiblePlugin
 
     private static bool CatalogChanged(List<FetchedModel> fetched, List<FetchedModel> current) =>
         !fetched.SequenceEqual(current);
+
+    private DefaultConnectionSnapshot CaptureDefaultConnection()
+    {
+        lock (_defaultConnectionLock)
+        {
+            return new DefaultConnectionSnapshot(BaseUrl, ApiKey, _defaultConnectionRevision);
+        }
+    }
+
+    // A null catalog is a fetch failure. It still passes through the revision
+    // check so validation can distinguish a current failure from a stale result.
+    private bool TryApplyDefaultCatalog(
+        DefaultConnectionSnapshot connection,
+        List<FetchedModel>? models,
+        bool onlyIfChanged,
+        out bool applied
+    )
+    {
+        lock (_defaultConnectionLock)
+        {
+            applied = false;
+            if (connection.Revision != _defaultConnectionRevision)
+                return false;
+
+            if (models is null || (onlyIfChanged && !DefaultCatalogStateChanged(models)))
+                return true;
+
+            SetFetchedModels(models, notifyCapabilitiesChanged: false);
+            applied = true;
+            return true;
+        }
+    }
 
     private bool DefaultCatalogStateChanged(List<FetchedModel> models) =>
         CatalogChanged(models, _fetchedModels)
@@ -1371,6 +1395,12 @@ public sealed class OpenAiCompatiblePlugin
 
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private readonly record struct DefaultConnectionSnapshot(
+        string? BaseUrl,
+        string? ApiKey,
+        long Revision
+    );
 
     // Cached wrapper that presents one additional profile as a standalone
     // transcription engine / LLM provider. Its selection identity is the profile

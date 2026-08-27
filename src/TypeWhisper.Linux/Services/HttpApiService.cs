@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -24,50 +25,107 @@ namespace TypeWhisper.Linux.Services;
 
 internal sealed class HttpApiRequestDispatcher : IDisposable
 {
-    private static readonly TimeSpan s_drainTimeout = TimeSpan.FromSeconds(1);
-
-    private readonly int _capacity;
+    private readonly Lock _admissionLock = new();
     private readonly Action<Exception> _reportException;
     private readonly SemaphoreSlim _slots;
+    private int _admittedHandlerCount;
+    private bool _closed;
+    private bool _slotsDisposed;
+    private TaskCompletionSource? _handlersCompleted;
 
     public HttpApiRequestDispatcher(int capacity, Action<Exception>? reportException = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
-        _capacity = capacity;
         _slots = new SemaphoreSlim(capacity, capacity);
         _reportException = reportException ?? (ex =>
             Trace.WriteLine($"[HttpApiService] Dispatched request failed: {ex}"));
     }
 
-    public Task? TryRun(Func<Task> handler)
+    public HttpApiDispatchResult TryRun(Func<Task> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
-        return _slots.Wait(0) ? RunAsync(handler) : null;
-    }
-
-    /// <summary>
-    ///     Reclaims every slot first, proving no admitted handler is still in flight: a handler
-    ///     releases its slot in a finally block, so disposing underneath one would surface an
-    ///     <see cref="ObjectDisposedException" /> as an unobserved fault. A handler that outlasts
-    ///     the drain leaves the semaphore undisposed, which is harmless — the Wait(0) path never
-    ///     allocates a wait handle.
-    /// </summary>
-    public void Dispose()
-    {
-        for (var acquired = 0; acquired < _capacity; acquired++)
+        lock (_admissionLock)
         {
-            if (_slots.Wait(s_drainTimeout))
+            if (_closed)
             {
-                continue;
+                return new HttpApiDispatchResult(HttpApiDispatchStatus.Closed, null);
             }
 
-            Trace.WriteLine(
-                "[HttpApiService] Request slots still in use at dispose; leaving them undisposed."
-            );
-            return;
+            if (!_slots.Wait(0))
+            {
+                return new HttpApiDispatchResult(
+                    HttpApiDispatchStatus.CapacityExceeded,
+                    null
+                );
+            }
+
+            if (_admittedHandlerCount++ == 0)
+            {
+                _handlersCompleted = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+            }
         }
 
-        _slots.Dispose();
+        return new HttpApiDispatchResult(
+            HttpApiDispatchStatus.Admitted,
+            RunAsync(handler)
+        );
+    }
+
+    public void CloseAdmission()
+    {
+        lock (_admissionLock)
+        {
+            _closed = true;
+        }
+    }
+
+    public async Task<bool> DrainAsync(TimeSpan timeout)
+    {
+        Task handlersCompleted;
+        lock (_admissionLock)
+        {
+            if (_admittedHandlerCount == 0)
+            {
+                return true;
+            }
+
+            handlersCompleted = _handlersCompleted!.Task;
+        }
+
+        try
+        {
+            await handlersCompleted.WaitAsync(timeout).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_admissionLock)
+        {
+            _closed = true;
+            if (_slotsDisposed)
+            {
+                return;
+            }
+
+            if (_admittedHandlerCount != 0)
+            {
+                Trace.WriteLine(
+                    "[HttpApiService] Requests still in flight at dispose; leaving their slots undisposed."
+                );
+                return;
+            }
+
+            _slots.Dispose();
+            _slotsDisposed = true;
+        }
     }
 
     private async Task RunAsync(Func<Task> handler)
@@ -82,14 +140,43 @@ internal sealed class HttpApiRequestDispatcher : IDisposable
         }
         finally
         {
-            _slots.Release();
+            TaskCompletionSource? handlersCompleted = null;
+            lock (_admissionLock)
+            {
+                _slots.Release();
+                if (--_admittedHandlerCount == 0)
+                {
+                    handlersCompleted = _handlersCompleted;
+                    _handlersCompleted = null;
+                }
+            }
+
+            handlersCompleted?.TrySetResult();
         }
     }
 }
 
+internal enum HttpApiDispatchStatus
+{
+    Admitted,
+    CapacityExceeded,
+    Closed,
+}
+
+internal readonly record struct HttpApiDispatchResult(
+    HttpApiDispatchStatus Status,
+    Task? HandlerTask
+);
+
 internal sealed record HttpApiOverCapacityResponse(
     int StatusCode,
     string RetryAfter,
+    string Body
+);
+
+internal sealed record HttpApiClosedResponse(
+    int StatusCode,
+    string? RetryAfter,
     string Body
 );
 
@@ -108,6 +195,9 @@ public sealed partial class HttpApiService : IDisposable
 {
     internal const int MaxConcurrentRequests = 2;
     internal const long MaxTranscribeRequestBytes = 100 * 1024 * 1024;
+    private const int LifecycleRunning = 0;
+    private const int LifecycleQuiescing = 1;
+    private const int LifecycleDisposed = 2;
 
     // Applies to every JSON endpoint, including bulk PUT /v1/dictionary/terms uploads. A body
     // over this limit is rejected with 413 "Request body too large" rather than truncated, so
@@ -124,8 +214,10 @@ public sealed partial class HttpApiService : IDisposable
         PropertyNameCaseInsensitive = true,
         WriteIndented = false,
     };
+    private static readonly TimeSpan s_defaultQuiesceBudget = TimeSpan.FromSeconds(5);
 
     private readonly AudioFileService _audioFiles;
+    private readonly HotkeyService _hotkeys;
     private readonly DictationOrchestrator _dictation;
     private readonly IDictionaryService _dictionary;
     private readonly ApiDiscoveryFile _discoveryFile;
@@ -133,7 +225,12 @@ public sealed partial class HttpApiService : IDisposable
     private readonly ModelManagerService _models;
     private readonly IPostProcessingPipeline _pipeline;
     private readonly IProfileService _profiles;
+    private readonly IPromptActionService _promptActions;
     private readonly HttpApiRequestDispatcher _requestDispatcher = new(MaxConcurrentRequests);
+    private readonly CancellationTokenSource _serviceLifetime = new();
+    private readonly CancellationToken _serviceLifetimeToken;
+    private readonly Lock _lifecycleLock = new();
+    private readonly Lock _settingsLifecycleLock = new();
     private readonly DictationSessionResultStore _sessionResults;
     private readonly ISettingsService _settings;
     private readonly ITranslationService _translation;
@@ -141,12 +238,18 @@ public sealed partial class HttpApiService : IDisposable
     private readonly string? _apiSocketPathOverride;
     private readonly Func<Socket, bool> _validateUnixPeer;
     private readonly string _secretProtectionKeyFilePath;
-    private bool _disposed;
+    private bool _disposeStarted;
+    private int _lifecycleGeneration;
+    private int _lifecycleState;
+    private Task<bool>? _quiesceTask;
 
     private WebApplication? _host;
+    private WebApplication? _hostPendingDisposal;
     private ApiSocketOwnership? _ownership;
+    private ApiSocketOwnership? _ownershipPendingDisposal;
     private int _port;
     private string? _socketPath;
+    private string? _socketPathPendingDisposal;
 
     public HttpApiService(
         ModelManagerService models,
@@ -154,6 +257,8 @@ public sealed partial class HttpApiService : IDisposable
         AudioFileService audioFiles,
         IHistoryService history,
         IProfileService profiles,
+        IPromptActionService promptActions,
+        HotkeyService hotkeys,
         IDictionaryService dictionary,
         IVocabularyBoostingService vocabularyBoosting,
         IPostProcessingPipeline pipeline,
@@ -169,6 +274,8 @@ public sealed partial class HttpApiService : IDisposable
             audioFiles,
             history,
             profiles,
+            promptActions,
+            hotkeys,
             dictionary,
             vocabularyBoosting,
             pipeline,
@@ -189,6 +296,8 @@ public sealed partial class HttpApiService : IDisposable
         AudioFileService audioFiles,
         IHistoryService history,
         IProfileService profiles,
+        IPromptActionService promptActions,
+        HotkeyService hotkeys,
         IDictionaryService dictionary,
         IVocabularyBoostingService vocabularyBoosting,
         IPostProcessingPipeline pipeline,
@@ -206,6 +315,8 @@ public sealed partial class HttpApiService : IDisposable
         _audioFiles = audioFiles;
         _history = history;
         _profiles = profiles;
+        _promptActions = promptActions;
+        _hotkeys = hotkeys;
         _dictionary = dictionary;
         _vocabularyBoosting = vocabularyBoosting;
         _pipeline = pipeline;
@@ -219,47 +330,183 @@ public sealed partial class HttpApiService : IDisposable
         _secretProtectionKeyFilePath =
             secretProtectionKeyFilePath
             ?? TypeWhisperEnvironment.SecretProtectionKeyFilePath;
+        _serviceLifetimeToken = _serviceLifetime.Token;
     }
 
     public string StatusText { get; private set; } = "Local API is disabled.";
 
+    // ReSharper disable once InconsistentlySynchronizedField -- racy-read-tolerant status probe;
+    // _host is published under _lifecycleLock and a stale read only skews advisory status text.
     private bool IsRunning => _host is not null;
 
+    // ReSharper disable once InconsistentlySynchronizedField -- same advisory-read tolerance as IsRunning.
     internal IHostLifetime? HostLifetime => _host?.Services.GetService<IHostLifetime>();
 
     public void Dispose()
     {
-        if (_disposed)
+        lock (_lifecycleLock)
         {
-            return;
+            if (_disposeStarted || _lifecycleState == LifecycleDisposed)
+            {
+                return;
+            }
+
+            _disposeStarted = true;
         }
 
-        Stop();
-        // Stop() only tears down the host; admitted handlers run detached, so the dispatcher
-        // does its own bounded drain before releasing the semaphore.
-        _requestDispatcher.Dispose();
-        _disposed = true;
+        // A false drain result still reaches resource teardown here. App owns the fail-fast guard
+        // that avoids provider disposal (and therefore this Dispose call) after its drain budget.
+        try
+        {
+            QuiesceAsync(s_defaultQuiesceBudget).GetAwaiter().GetResult();
+        }
+        finally
+        {
+            DisposeQuiescedResources();
+            _requestDispatcher.Dispose();
+            _serviceLifetime.Dispose();
+            Volatile.Write(ref _lifecycleState, LifecycleDisposed);
+        }
+    }
+
+    public Task<bool> QuiesceAsync(TimeSpan budget)
+    {
+        if (budget < TimeSpan.Zero && budget != Timeout.InfiniteTimeSpan)
+        {
+            throw new ArgumentOutOfRangeException(nameof(budget));
+        }
+
+        lock (_lifecycleLock)
+        {
+            if (_lifecycleState == LifecycleDisposed)
+            {
+                return Task.FromResult(true);
+            }
+
+            if (_quiesceTask is not null)
+            {
+                if (!_quiesceTask.IsCompleted)
+                {
+                    return _quiesceTask;
+                }
+
+                if (!_quiesceTask.IsCompletedSuccessfully || _quiesceTask.Result)
+                {
+                    return _quiesceTask;
+                }
+
+                // A timed-out drain is only a snapshot. Admission remains closed, so a later
+                // caller cheaply checks the remaining handlers again instead of trusting stale
+                // false forever.
+                _quiesceTask = Task.Run(() => RedrainCoreAsync(budget), CancellationToken.None);
+                return _quiesceTask;
+            }
+
+            Volatile.Write(ref _lifecycleState, LifecycleQuiescing);
+            _lifecycleGeneration++;
+            _requestDispatcher.CloseAdmission();
+
+            var host = _host;
+            var ownership = _ownership;
+            var socketPath = _socketPath;
+            _hostPendingDisposal = host;
+            _ownershipPendingDisposal = ownership;
+            _socketPathPendingDisposal = socketPath;
+            _host = null;
+            _ownership = null;
+            _socketPath = null;
+            _port = 0;
+
+            // Queue the body so it cannot run inline before the memo is published and this
+            // lifecycle-lock handoff completes.
+            _quiesceTask = Task.Run(
+                () => QuiesceCoreAsync(host, ownership, socketPath, budget),
+                CancellationToken.None
+            );
+            return _quiesceTask;
+        }
     }
 
     private void Start(int port)
     {
-        if (IsRunning && _port == port)
+        // Serialize settings-driven starts/stops with each other, while quiescence uses only the
+        // short lifecycle-state lock and therefore never waits behind a Kestrel bind.
+        lock (_settingsLifecycleLock)
         {
-            SetStatus(BuildRunningStatus(port, _socketPath, PublishDiscovery()));
+            StartCore(port);
+        }
+    }
+
+    private void StartCore(int port)
+    {
+        WebApplication? priorHost;
+        ApiSocketOwnership? priorOwnership;
+        string? priorSocketPath;
+        WebApplication? currentHost;
+        string? currentSocketPath;
+        int generation;
+        lock (_lifecycleLock)
+        {
+            if (_lifecycleState != LifecycleRunning)
+            {
+                return;
+            }
+
+            generation = _lifecycleGeneration;
+            if (IsRunning && _port == port)
+            {
+                priorHost = null;
+                priorOwnership = null;
+                priorSocketPath = null;
+                currentHost = _host;
+                currentSocketPath = _socketPath;
+            }
+            else
+            {
+                generation = ++_lifecycleGeneration;
+                priorHost = _host;
+                priorOwnership = _ownership;
+                priorSocketPath = _socketPath;
+                _host = null;
+                _ownership = null;
+                _socketPath = null;
+                _port = 0;
+                currentHost = null;
+                currentSocketPath = null;
+            }
+        }
+
+        if (currentHost is not null)
+        {
+            var discoveryPublished = PublishDiscovery(port, currentSocketPath);
+            if (IsCurrentHost(generation, currentHost))
+            {
+                SetStatus(BuildRunningStatus(port, currentSocketPath, discoveryPublished));
+            }
+            else
+            {
+                TryDeleteDiscoveryFile();
+            }
+
             return;
         }
+
+        TryDeleteDiscoveryFile();
+        StopHostResources(priorHost, priorSocketPath, priorOwnership);
 
         if (port is <= 0 or > 65535)
         {
-            Stop(false);
-            SetStatus($"Local API failed to start: port must be 1–65535 (got {port}).");
+            if (IsCurrentGeneration(generation))
+            {
+                SetStatus($"Local API failed to start: port must be 1–65535 (got {port}).");
+            }
+
             return;
         }
 
-        Stop(false);
-
         ApiSocketOwnership? ownership = null;
         WebApplication? host = null;
+        WebApplication? publishedHost = null;
         string? socketPath = null;
         try
         {
@@ -278,36 +525,108 @@ public sealed partial class HttpApiService : IDisposable
             }
 
             host = BuildHost(port, socketPath);
-            host.StartAsync().GetAwaiter().GetResult();
+            host.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
             SetOwnerOnlySocketMode(socketPath);
 
-            _port = port;
-            _socketPath = socketPath;
-            _host = host;
-            _ownership = ownership;
-            host = null;
-            ownership = null;
+            lock (_lifecycleLock)
+            {
+                if (
+                    _lifecycleState == LifecycleRunning
+                    && generation == _lifecycleGeneration
+                )
+                {
+                    _port = port;
+                    _socketPath = socketPath;
+                    _host = host;
+                    _ownership = ownership;
+                    publishedHost = host;
+                    host = null;
+                    ownership = null;
+                }
+            }
 
-            SetStatus(BuildRunningStatus(port, socketPath, PublishDiscovery()));
+            if (host is not null)
+            {
+                StopHostResources(host, socketPath, ownership);
+                return;
+            }
+
+            var discoveryPublished = PublishDiscovery(port, socketPath);
+            if (IsCurrentHost(generation, publishedHost!))
+            {
+                SetStatus(BuildRunningStatus(port, socketPath, discoveryPublished));
+            }
+            else
+            {
+                TryDeleteDiscoveryFile();
+            }
         }
         catch (Exception ex)
         {
-            StopHost(host);
-            TryUnlinkSocket(socketPath, ownership);
-            ownership?.Dispose();
-            Stop(false);
-            SetStatus($"Local API failed to start: {ex.Message}");
+            WebApplication? failedPublishedHost = null;
+            ApiSocketOwnership? failedPublishedOwnership = null;
+            string? failedPublishedSocketPath = null;
+            var reportFailure = false;
+            if (publishedHost is not null)
+            {
+                lock (_lifecycleLock)
+                {
+                    if (
+                        _lifecycleState == LifecycleRunning
+                        && generation == _lifecycleGeneration
+                        && ReferenceEquals(_host, publishedHost)
+                    )
+                    {
+                        _lifecycleGeneration++;
+                        failedPublishedHost = _host;
+                        failedPublishedOwnership = _ownership;
+                        failedPublishedSocketPath = _socketPath;
+                        _host = null;
+                        _ownership = null;
+                        _socketPath = null;
+                        _port = 0;
+                        reportFailure = true;
+                    }
+                }
+            }
+            else
+            {
+                reportFailure = IsCurrentGeneration(generation);
+            }
+
+            StopHostResources(host, socketPath, ownership);
+            if (failedPublishedHost is not null)
+            {
+                TryDeleteDiscoveryFile();
+                StopHostResources(
+                    failedPublishedHost,
+                    failedPublishedSocketPath,
+                    failedPublishedOwnership
+                );
+            }
+
+            if (reportFailure)
+            {
+                SetStatus($"Local API failed to start: {ex.Message}");
+            }
         }
     }
 
     private void Stop()
     {
-        // ReSharper disable once IntroduceOptionalParameters.Local -- kept as explicit overloads; collapsing into an optional parameter would delete a member.
-        Stop(true);
+        lock (_settingsLifecycleLock)
+        {
+            StopCore();
+        }
     }
 
     public void ApplySettings()
     {
+        if (Volatile.Read(ref _lifecycleState) != LifecycleRunning)
+        {
+            return;
+        }
+
         var settings = _settings.Current;
         if (settings.ApiServerEnabled)
         {
@@ -322,7 +641,7 @@ public sealed partial class HttpApiService : IDisposable
             )
             {
                 Trace.WriteLine(
-                    $"[HttpApiService] Bearer token protection unavailable: {ex.Message}"
+                    $"[HttpApiService] Bearer token protection unavailable: {ex}"
                 );
                 Stop();
                 SetStatus(Loc.Instance["Security.SecretProtectionUnavailable"]);
@@ -376,23 +695,151 @@ public sealed partial class HttpApiService : IDisposable
 
     public event Action? StateChanged;
 
-    private void Stop(bool updateStatus)
+    private void StopCore()
     {
-        var host = _host;
-        var ownership = _ownership;
-        var socketPath = _socketPath;
-        _host = null;
-        _ownership = null;
-        _socketPath = null;
-        _port = 0;
-        _discoveryFile.Delete();
-        StopHost(host);
-        TryUnlinkSocket(socketPath, ownership);
-        ownership?.Dispose();
-        if (updateStatus)
+        WebApplication? host;
+        ApiSocketOwnership? ownership;
+        string? socketPath;
+        lock (_lifecycleLock)
         {
-            SetStatus("Local API is disabled.");
+            if (_lifecycleState != LifecycleRunning)
+            {
+                return;
+            }
+
+            _lifecycleGeneration++;
+            host = _host;
+            ownership = _ownership;
+            socketPath = _socketPath;
+            _host = null;
+            _ownership = null;
+            _socketPath = null;
+            _port = 0;
         }
+
+        TryDeleteDiscoveryFile();
+        StopHostResources(host, socketPath, ownership);
+        SetStatus("Local API is disabled.");
+    }
+
+    private async Task<bool> QuiesceCoreAsync(
+        WebApplication? host,
+        ApiSocketOwnership? ownership,
+        string? socketPath,
+        TimeSpan budget
+    )
+    {
+        var elapsed = Stopwatch.StartNew();
+        try
+        {
+            await _serviceLifetime.CancelAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[HttpApiService] Request cancellation during quiesce failed: {ex.Message}"
+            );
+        }
+
+        try
+        {
+            // ReSharper disable once InconsistentlySynchronizedField -- runs after admission is
+            // closed and the quiesce memo is published; no concurrent discovery writer remains.
+            _discoveryFile.Delete();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[HttpApiService] Discovery cleanup during quiesce failed: {ex.Message}"
+            );
+        }
+        await StopHostForQuiesceAsync(host, RemainingBudget(budget, elapsed))
+            .ConfigureAwait(false);
+        var drained = await _requestDispatcher
+            .DrainAsync(RemainingBudget(budget, elapsed))
+            .ConfigureAwait(false);
+        TryUnlinkSocket(socketPath, ownership);
+        return drained;
+    }
+
+    private async Task<bool> RedrainCoreAsync(TimeSpan budget)
+    {
+        return await _requestDispatcher.DrainAsync(budget).ConfigureAwait(false);
+    }
+
+    private void DisposeQuiescedResources()
+    {
+        WebApplication? host;
+        ApiSocketOwnership? ownership;
+        string? socketPath;
+        lock (_lifecycleLock)
+        {
+            host = _hostPendingDisposal;
+            ownership = _ownershipPendingDisposal;
+            socketPath = _socketPathPendingDisposal;
+            _hostPendingDisposal = null;
+            _ownershipPendingDisposal = null;
+            _socketPathPendingDisposal = null;
+        }
+
+        if (host is not null)
+        {
+            try
+            {
+                host.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[HttpApiService] Kestrel disposal failed: {ex.Message}");
+            }
+        }
+
+        TryUnlinkSocket(socketPath, ownership);
+        try
+        {
+            ownership?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[HttpApiService] Socket ownership disposal failed: {ex.Message}");
+        }
+    }
+
+    private static async Task StopHostForQuiesceAsync(
+        WebApplication? host,
+        TimeSpan remainingBudget
+    )
+    {
+        if (host is null)
+        {
+            return;
+        }
+
+        var stopBudget = remainingBudget == Timeout.InfiniteTimeSpan
+            ? TimeSpan.FromSeconds(2)
+            : TimeSpan.FromTicks(
+                Math.Min(remainingBudget.Ticks, TimeSpan.FromSeconds(2).Ticks)
+            );
+        try
+        {
+            using var timeout = new CancellationTokenSource(stopBudget);
+            await host.StopAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[HttpApiService] Kestrel shutdown failed: {ex.Message}");
+        }
+    }
+
+    private static TimeSpan RemainingBudget(TimeSpan budget, Stopwatch elapsed)
+    {
+        if (budget == Timeout.InfiniteTimeSpan)
+        {
+            return budget;
+        }
+
+        var remaining = budget - elapsed.Elapsed;
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
 
     private void SetStatus(string status)
@@ -406,15 +853,48 @@ public sealed partial class HttpApiService : IDisposable
         StateChanged?.Invoke();
     }
 
-    private bool PublishDiscovery()
+    private bool PublishDiscovery(int port, string? socketPath)
     {
         var token = ReadBearerToken(
             _settings.Current,
             _secretProtectionKeyFilePath
         );
         return !string.IsNullOrWhiteSpace(token)
-               && _socketPath is not null
-               && _discoveryFile.Write(_port, token, _socketPath);
+               && socketPath is not null
+               && _discoveryFile.Write(port, token, socketPath);
+    }
+
+    private bool IsCurrentGeneration(int generation)
+    {
+        lock (_lifecycleLock)
+        {
+            return _lifecycleState == LifecycleRunning
+                   && generation == _lifecycleGeneration;
+        }
+    }
+
+    private bool IsCurrentHost(int generation, WebApplication host)
+    {
+        lock (_lifecycleLock)
+        {
+            return _lifecycleState == LifecycleRunning
+                   && generation == _lifecycleGeneration
+                   && ReferenceEquals(_host, host);
+        }
+    }
+
+    private void TryDeleteDiscoveryFile()
+    {
+        try
+        {
+            _discoveryFile.Delete();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[HttpApiService] Discovery cleanup failed: {ex.Message}"
+            );
+        }
     }
 
     // The CLI reaches the API only through the discovery file's socket path, so a
@@ -466,6 +946,24 @@ public sealed partial class HttpApiService : IDisposable
             {
                 Trace.WriteLine($"[HttpApiService] Kestrel disposal failed: {ex.Message}");
             }
+        }
+    }
+
+    private static void StopHostResources(
+        WebApplication? host,
+        string? socketPath,
+        ApiSocketOwnership? ownership
+    )
+    {
+        StopHost(host);
+        TryUnlinkSocket(socketPath, ownership);
+        try
+        {
+            ownership?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[HttpApiService] Socket ownership disposal failed: {ex.Message}");
         }
     }
 
@@ -565,16 +1063,37 @@ public sealed partial class HttpApiService : IDisposable
 
     private async Task DispatchRequestAsync(HttpContext context)
     {
-        var handlerTask = _requestDispatcher.TryRun(() =>
-            HandleRequestAsync(context, context.RequestAborted)
+        var connectionAborted = context.RequestAborted;
+        using var requestLifetime = CancellationTokenSource.CreateLinkedTokenSource(
+            connectionAborted,
+            _serviceLifetimeToken
         );
-        if (handlerTask is null)
+        context.RequestAborted = requestLifetime.Token;
+        try
         {
-            await RejectOverCapacityAsync(context, context.RequestAborted);
-            return;
-        }
+            // ReSharper disable once AccessToDisposedClosure -- the dispatcher runs the handler
+            // to completion before this method's finally disposes requestLifetime.
+            var dispatch = _requestDispatcher.TryRun(() =>
+                HandleRequestAsync(context, requestLifetime.Token)
+            );
+            if (dispatch.Status == HttpApiDispatchStatus.CapacityExceeded)
+            {
+                await RejectOverCapacityAsync(context, requestLifetime.Token);
+                return;
+            }
 
-        await handlerTask;
+            if (dispatch.Status == HttpApiDispatchStatus.Closed)
+            {
+                await RejectClosedAsync(context, connectionAborted);
+                return;
+            }
+
+            await dispatch.HandlerTask!;
+        }
+        finally
+        {
+            context.RequestAborted = connectionAborted;
+        }
     }
 
     internal static HttpApiOverCapacityResponse CreateOverCapacityResponse()
@@ -583,6 +1102,15 @@ public sealed partial class HttpApiService : IDisposable
             (int)HttpStatusCode.TooManyRequests,
             "1",
             Serialize(new { error = "Too many concurrent requests" })
+        );
+    }
+
+    internal static HttpApiClosedResponse CreateClosedResponse()
+    {
+        return new HttpApiClosedResponse(
+            (int)HttpStatusCode.ServiceUnavailable,
+            null,
+            Serialize(new { error = "Service unavailable" })
         );
     }
 
@@ -607,6 +1135,30 @@ public sealed partial class HttpApiService : IDisposable
         catch (Exception ex)
         {
             Trace.WriteLine($"[HttpApiService] Over-capacity response failed: {ex}");
+        }
+        finally
+        {
+            await response.CompleteAsync();
+        }
+    }
+
+    private async Task RejectClosedAsync(HttpContext context, CancellationToken ct)
+    {
+        var response = context.Response;
+        try
+        {
+            var rejection = CreateClosedResponse();
+            await WriteJsonAsync(
+                response,
+                rejection.StatusCode,
+                rejection.Body,
+                GetAllowedOrigin(context.Request),
+                ct
+            );
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[HttpApiService] Closed-service response failed: {ex}");
         }
         finally
         {
@@ -717,6 +1269,22 @@ public sealed partial class HttpApiService : IDisposable
                     {
                         error = ex.Message,
                         reason = "invalid_language_selection",
+                    }
+                ),
+                GetAllowedOrigin(context.Request),
+                ct
+            );
+        }
+        catch (TranscriptionLanguageNotSupportedException ex)
+        {
+            await WriteJsonAsync(
+                response,
+                400,
+                Serialize(
+                    new
+                    {
+                        error = ex.Message,
+                        reason = "language_not_supported",
                     }
                 ),
                 GetAllowedOrigin(context.Request),
@@ -948,9 +1516,50 @@ public sealed partial class HttpApiService : IDisposable
             return (400, Serialize(new { error = "File not found" }));
         }
 
-        if (!AudioFileService.IsSupported(payload.Path))
+        // File.Exists admits FIFOs and device nodes, whose opens can block
+        // ffmpeg indefinitely and pin a dispatcher slot — reject them up front.
+        if (!NativeFile.IsRegularFile(payload.Path))
         {
-            return (400, Serialize(new { error = "Unsupported format" }));
+            return (
+                400,
+                Serialize(
+                    new
+                    {
+                        error = "Not a regular file",
+                        reason = "not_a_regular_file",
+                    }
+                )
+            );
+        }
+
+        try
+        {
+            if (!await _audioFiles.IsSupportedAsync(payload.Path, ct))
+            {
+                return (
+                    400,
+                    Serialize(
+                        new
+                        {
+                            error = "Unsupported format",
+                            reason = "unsupported_audio_format",
+                        }
+                    )
+                );
+            }
+        }
+        catch (TimeoutException)
+        {
+            return (
+                503,
+                Serialize(
+                    new
+                    {
+                        error = "Audio probe timed out",
+                        reason = "audio_probe_timeout",
+                    }
+                )
+            );
         }
 
         var (task, responseFormat) = HttpApiRequestParser.ParseTranscriptionOptions(
@@ -1006,9 +1615,44 @@ public sealed partial class HttpApiService : IDisposable
         );
         var configuredLanguage = languageSelection.LanguageTag;
 
+        // A recognized extension passes the format gate without ffmpeg, but the
+        // conversion below requires it — answer as service-unavailable up front
+        // (both the local-file and upload routes funnel through here) instead of
+        // letting the loader's failure surface as a generic 500.
+        if (!_audioFiles.IsImporterAvailable)
+        {
+            return (
+                503,
+                Serialize(
+                    new
+                    {
+                        error = "Audio conversion is unavailable because ffmpeg is not installed",
+                        reason = "audio_importer_unavailable",
+                    }
+                )
+            );
+        }
+
         // Decode audio before acquiring the lease — ffmpeg shells out and
         // must not hold the model lock while no transcription runs.
-        var wav = await _audioFiles.LoadAudioAsWavAsync(audioPath, ct);
+        byte[] wav;
+        try
+        {
+            wav = await _audioFiles.LoadAudioAsWavAsync(audioPath, ct);
+        }
+        catch (TimeoutException)
+        {
+            return (
+                503,
+                Serialize(
+                    new
+                    {
+                        error = "Audio conversion timed out",
+                        reason = "audio_conversion_timeout",
+                    }
+                )
+            );
+        }
         var prompt = MergePrompt(
             opts.Prompt,
             BuildLanguageHintsPrompt(opts.LanguageHints),
@@ -1210,6 +1854,34 @@ public sealed partial class HttpApiService : IDisposable
             return (400, Serialize(new { error = "Missing id parameter" }));
         }
 
+        var profiles = _profiles.Profiles;
+        var current = profiles.FirstOrDefault(profile => profile.Id == id);
+        if (current is null)
+        {
+            return (404, Serialize(new { error = "Profile not found" }));
+        }
+
+        if (!current.IsEnabled)
+        {
+            var hotkeyValidation = _hotkeys.ValidateProfileHotkeyCandidate(
+                current.HotkeyData,
+                current.HotkeyBehavior,
+                current.PromptActionId,
+                current.Id,
+                _promptActions.Actions,
+                profiles
+            );
+            if (!hotkeyValidation.IsValid)
+            {
+                var (reason, error) = GetProfileToggleValidationFailure(
+                    hotkeyValidation.Status
+                );
+                return (409, Serialize(new { error, reason }));
+            }
+        }
+
+        // Snapshot-then-toggle: a concurrent enable can slip through; dynamic
+        // reconciliation rejects the loser and logs it.
         var profile = _profiles.ToggleProfileEnabled(id);
         if (profile is null)
         {
@@ -1218,6 +1890,35 @@ public sealed partial class HttpApiService : IDisposable
 
         var isEnabled = profile.IsEnabled;
         return (200, Serialize(new { id, isEnabled }));
+    }
+
+    private static (string Reason, string Error) GetProfileToggleValidationFailure(
+        HotkeyCandidateValidationStatus status
+    )
+    {
+        return status switch
+        {
+            HotkeyCandidateValidationStatus.Malformed =>
+                ("hotkey-malformed", "Profile hotkey cannot be enabled because it is malformed."),
+            HotkeyCandidateValidationStatus.MissingEnabledPromptAction =>
+                (
+                    "prompt-action-required",
+                    "Profile hotkey cannot be enabled because its selected-text prompt action is missing or disabled."
+                ),
+            HotkeyCandidateValidationStatus.CollidesWithFixedBinding
+                or HotkeyCandidateValidationStatus.CollidesWithPromptAction
+                or HotkeyCandidateValidationStatus.CollidesWithProfile =>
+                (
+                    "hotkey-collision",
+                    "Profile hotkey cannot be enabled because it conflicts with an enabled shortcut."
+                ),
+            // A future non-collision status must not masquerade as a collision.
+            _ =>
+                (
+                    "hotkey-invalid",
+                    "Profile hotkey cannot be enabled."
+                ),
+        };
     }
 
     private async Task<(int, string)> HandleDictationStartAsync()
@@ -1646,15 +2347,17 @@ public sealed partial class HttpApiService : IDisposable
 
     private void EnsureBearerToken()
     {
-        var current = _settings.Current;
+        var tokenToProtect = _settings.Current.ApiServerBearerToken;
         var protectedToken = ProtectBearerToken(
-            current.ApiServerBearerToken,
+            tokenToProtect,
             _secretProtectionKeyFilePath
         );
         if (protectedToken.Changed)
         {
-            _settings.Save(
-                current with { ApiServerBearerToken = protectedToken.StoredValue }
+            _settings.Update(current =>
+                current.ApiServerBearerToken == tokenToProtect
+                    ? current with { ApiServerBearerToken = protectedToken.StoredValue }
+                    : current
             );
         }
     }
@@ -1810,6 +2513,57 @@ public sealed partial class HttpApiService : IDisposable
         string TempPath,
         TranscriptionRunOptions Options
     );
+
+    private static partial class NativeFile
+    {
+        private const int AtCurrentWorkingDirectory = -100;
+        private const uint StatxType = 0x0001;
+        private const ushort FileTypeMask = 0xF000;
+        private const ushort FileTypeRegular = 0x8000;
+
+        // FOLLOW semantics on purpose: a symlink to a regular file is safe to
+        // transcode — the threat is opens that block (FIFOs, device nodes),
+        // not path identity. Fails closed on statx errors or an unreported
+        // type field.
+        internal static bool IsRegularFile(string path)
+        {
+            if (statx(AtCurrentWorkingDirectory, path, 0, StatxType, out var stat) != 0)
+            {
+                return false;
+            }
+
+            // statx(2): fields absent from stx_mask are undefined.
+            return (stat.Mask & StatxType) == StatxType
+                   && (ushort)(stat.Mode & FileTypeMask) == FileTypeRegular;
+        }
+
+        [StructLayout(LayoutKind.Sequential, Size = 256)]
+        private struct StatxBuffer
+        {
+            public uint Mask;
+            public uint BlockSize;
+            public ulong Attributes;
+            public uint LinkCount;
+            public uint UserId;
+            public uint GroupId;
+            public ushort Mode;
+            public ushort Spare0;
+            public ulong Ino;
+            public ulong Size;
+            public ulong Blocks;
+            public ulong AttributesMask;
+        }
+
+        // ReSharper disable once InconsistentNaming -- native libc function name; LibraryImport EntryPoint defaults to the method name.
+        [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+        private static partial int statx(
+            int directoryFileDescriptor,
+            string path,
+            int flags,
+            uint mask,
+            out StatxBuffer buffer
+        );
+    }
 
     /// <summary>Host lifetime that owns no process signals — the desktop app owns shutdown.</summary>
     private sealed class EmbeddedHostLifetime : IHostLifetime

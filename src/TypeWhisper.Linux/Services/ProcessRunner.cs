@@ -481,8 +481,8 @@ public sealed class ProcessRunner : IProcessRunner
         return Process.Start(startInfo);
     }
 
-    // Shared PA33 cleanup hook. M2 routes expected timeout/cancellation/termination paths here;
-    // it deliberately does not broaden the legacy policy for unexpected post-start failures.
+    // Shared cleanup hook for expected timeout/cancellation/termination paths and unexpected
+    // post-start faults; once a child starts, it is reaped before the original exception propagates.
     private static async Task TerminateAndReapAsync(Process process)
     {
         try

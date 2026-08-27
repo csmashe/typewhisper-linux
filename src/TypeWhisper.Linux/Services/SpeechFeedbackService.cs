@@ -12,6 +12,11 @@ public sealed record TtsProviderOption(string Id, string DisplayName);
 // ReSharper disable once NotAccessedPositionalProperty.Global  LocaleIdentifier carried in the voice-option record's data shape
 public sealed record TtsVoiceOption(string Id, string DisplayName, string? LocaleIdentifier = null);
 
+internal interface IStartupFeedbackReservation : IDisposable
+{
+    Task StopPriorPlaybackAsync();
+}
+
 public sealed class SpeechFeedbackService : IDisposable
 {
     public const string DefaultVoiceOptionId = "__typewhisper_default_voice__";
@@ -20,7 +25,10 @@ public sealed class SpeechFeedbackService : IDisposable
 
     private sealed class PlaybackRequest(long version)
     {
-        private int _completed;
+        private readonly Lock _lifetimeLock = new();
+        private bool _cancellationDisposed;
+        private bool _completed;
+        private int _stopWorkerCount;
 
         public CancellationTokenSource Cancellation { get; } = new();
         public TaskCompletionSource Completion { get; } = new(
@@ -39,6 +47,13 @@ public sealed class SpeechFeedbackService : IDisposable
             {
                 // Completion won the race and already released the source.
             }
+            catch (Exception ex)
+            {
+                // A plugin cancellation callback threw. The session stop below must
+                // still be attempted, otherwise the prior speech keeps playing into
+                // the newly opened microphone.
+                Debug.WriteLine($"SpeechFeedback cancellation error: {ex.Message}");
+            }
 
             try
             {
@@ -50,15 +65,123 @@ public sealed class SpeechFeedbackService : IDisposable
             }
         }
 
+        public Task LaunchCancelAndStop()
+        {
+            lock (_lifetimeLock)
+            {
+                _stopWorkerCount++;
+            }
+
+            try
+            {
+                // Cancellation callbacks and synchronous plugin Stop() implementations
+                // cross the host trust boundary on this worker. Startup may advance once
+                // the existing budget expires; PA25's reservation/version checks keep
+                // reentrant publication and late completion safe, and Complete is idempotent.
+                // LongRunning gets a dedicated thread: a permanently blocked plugin leaks
+                // one thread instead of pinning ThreadPool capacity, and the stop attempt
+                // starts promptly even under pool saturation instead of maybe not being
+                // scheduled within the 500ms stop budget at all.
+                return Task.Factory.StartNew(
+                    () =>
+                    {
+                        try
+                        {
+                            CancelAndStop();
+                        }
+                        finally
+                        {
+                            StopWorkerCompleted();
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default
+                );
+            }
+            catch
+            {
+                StopWorkerCompleted();
+                throw;
+            }
+        }
+
         public void Complete()
         {
-            if (Interlocked.Exchange(ref _completed, 1) != 0)
+            lock (_lifetimeLock)
+            {
+                if (_completed)
+                {
+                    return;
+                }
+
+                _completed = true;
+            }
+
+            Completion.TrySetResult();
+            DisposeCancellationIfReady();
+        }
+
+        private void StopWorkerCompleted()
+        {
+            lock (_lifetimeLock)
+            {
+                _stopWorkerCount--;
+            }
+
+            DisposeCancellationIfReady();
+        }
+
+        private void DisposeCancellationIfReady()
+        {
+            var dispose = false;
+            lock (_lifetimeLock)
+            {
+                if (
+                    _completed
+                    && _stopWorkerCount == 0
+                    && !_cancellationDisposed
+                )
+                {
+                    _cancellationDisposed = true;
+                    dispose = true;
+                }
+            }
+
+            // A permanently blocked plugin never lets its worker count reach zero and so
+            // deliberately retains this request and its CTS.
+            if (dispose)
+            {
+                Cancellation.Dispose();
+            }
+        }
+    }
+
+    private sealed class StartupFeedbackReservation(
+        SpeechFeedbackService owner,
+        PlaybackRequest? priorRequest
+    ) : IStartupFeedbackReservation
+    {
+        private readonly Lock _stopLock = new();
+        private int _disposed;
+        private Task? _stopTask;
+
+        public Task StopPriorPlaybackAsync()
+        {
+            lock (_stopLock)
+            {
+                return _stopTask ??= owner.WaitForPriorPlaybackBeforeCaptureAsync(priorRequest);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
             {
                 return;
             }
 
-            Completion.TrySetResult();
-            Cancellation.Dispose();
+            owner.ReleaseStartupFeedback(this);
         }
     }
 
@@ -74,6 +197,7 @@ public sealed class SpeechFeedbackService : IDisposable
     private PlaybackRequest? _playbackRequest;
     private ITtsPlaybackSession? _playbackSession;
     private long _playbackVersion;
+    private StartupFeedbackReservation? _startupFeedbackReservation;
 
     // ReSharper disable once UnusedMember.Global -- resolved by DI (AddSingleton<SpeechFeedbackService>); the analyzer cannot see the reflection-driven construction.
     public SpeechFeedbackService(
@@ -108,17 +232,6 @@ public sealed class SpeechFeedbackService : IDisposable
 
     public bool IsAvailable => ResolveSpeakProvider().IsConfigured;
     public string BackendName => ResolveSpeakProvider().ProviderDisplayName;
-
-    private bool IsSpeaking
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _isPlaybackPending || _playbackSession?.IsActive == true;
-            }
-        }
-    }
 
     public IReadOnlyList<TtsProviderOption> AvailableProviders =>
         AllProviders()
@@ -209,9 +322,37 @@ public sealed class SpeechFeedbackService : IDisposable
     // ReSharper disable once UnusedMember.Global  public API surface (manual TTS read-back entry point); not currently called in-tree
     public void ReadBack(string text, string? language = null)
     {
-        if (IsSpeaking)
+        PlaybackRequest? toggledOffRequest;
+        lock (_lock)
         {
-            Stop();
+            // Manual readback is also a stop-toggle. Keep that stop decision in
+            // the reservation lock so it cannot cancel the matching start cue.
+            if (_startupFeedbackReservation is not null)
+            {
+                return;
+            }
+
+            if (_isPlaybackPending || _playbackSession?.IsActive == true)
+            {
+                toggledOffRequest = _playbackRequest;
+                _playbackRequest = null;
+                _playbackSession = null;
+                _isPlaybackPending = false;
+            }
+            else
+            {
+                toggledOffRequest = null;
+            }
+        }
+
+        if (toggledOffRequest is not null)
+        {
+            toggledOffRequest.CancelAndStop();
+
+            // Detached with no worker outstanding: complete now so the CTS and its
+            // provider ct.Register registrations are released instead of leaking
+            // once per toggle when the session never raises Completed.
+            toggledOffRequest.Complete();
             return;
         }
 
@@ -226,14 +367,33 @@ public sealed class SpeechFeedbackService : IDisposable
         Speak(Loc.Instance["Speech.Recording"]);
     }
 
-    internal async Task StopCurrentPlaybackBeforeCaptureAsync()
+    internal IStartupFeedbackReservation ReserveStartupFeedback()
     {
-        var request = StopPlayback();
+        StartupFeedbackReservation reservation;
+        lock (_lock)
+        {
+            // A late readback from the prior dictation must not supersede or
+            // overlap the new start cue. Install the reservation before detaching
+            // the current request so there is no stop-to-reserve publication gap.
+            var priorRequest = _playbackRequest;
+            reservation = new StartupFeedbackReservation(this, priorRequest);
+            _startupFeedbackReservation = reservation;
+            _playbackRequest = null;
+            _playbackSession = null;
+            _isPlaybackPending = false;
+        }
+
+        return reservation;
+    }
+
+    private async Task WaitForPriorPlaybackBeforeCaptureAsync(PlaybackRequest? request)
+    {
         if (request is null)
         {
             return;
         }
 
+        var stopWorker = request.LaunchCancelAndStop();
         try
         {
             _ = await WaitForCompletionAsync(request, s_stopPlaybackTimeout)
@@ -243,9 +403,23 @@ public sealed class SpeechFeedbackService : IDisposable
         {
             Debug.WriteLine($"SpeechFeedback stop wait error: {ex.Message}");
         }
+        finally
+        {
+            // A detached prior request whose session never raises Completed
+            // would otherwise stay incomplete forever, retaining its CTS and
+            // provider ct.Register registrations once per toggle. The request
+            // is already detached and version-checked, so completing after the
+            // bounded wait is safe; CTS disposal still waits for the stop
+            // worker, and Complete is idempotent.
+            request.Complete();
+            ObserveStopWorker(stopWorker, "prior playback stop");
+        }
     }
 
-    internal async Task AnnounceRecordingStartedAsync(bool spokenFeedbackEnabled)
+    internal async Task AnnounceRecordingStartedAsync(
+        bool spokenFeedbackEnabled,
+        IStartupFeedbackReservation reservation
+    )
     {
         if (!spokenFeedbackEnabled)
         {
@@ -254,13 +428,15 @@ public sealed class SpeechFeedbackService : IDisposable
 
         var request = StartPlayback(
             new TtsSpeakRequest(Loc.Instance["Speech.Recording"]),
-            requireEnabled: false
+            requireEnabled: false,
+            startupFeedbackReservation: reservation
         );
         if (request is null)
         {
             return;
         }
 
+        Task? stopWorker = null;
         try
         {
             if (
@@ -271,7 +447,7 @@ public sealed class SpeechFeedbackService : IDisposable
                 return;
             }
 
-            request.CancelAndStop();
+            stopWorker = request.LaunchCancelAndStop();
             ReleasePlaybackOwnership(request);
             _ = await WaitForCompletionAsync(request, s_stopPlaybackTimeout)
                 .ConfigureAwait(false);
@@ -281,10 +457,17 @@ public sealed class SpeechFeedbackService : IDisposable
         {
             // Spoken feedback is optional; a failed timeout wait or provider
             // completion must not leave the request's session unstopped.
-            request.CancelAndStop();
+            stopWorker ??= request.LaunchCancelAndStop();
             ReleasePlaybackOwnership(request);
             request.Complete();
             Debug.WriteLine($"SpeechFeedback recording announcement error: {ex.Message}");
+        }
+        finally
+        {
+            if (stopWorker is not null)
+            {
+                ObserveStopWorker(stopWorker, "recording announcement stop");
+            }
         }
     }
 
@@ -300,6 +483,61 @@ public sealed class SpeechFeedbackService : IDisposable
     public void AnnounceError(string reason)
     {
         Speak(Loc.Instance.GetString("Speech.Error", reason));
+    }
+
+    // The Begin* variants split announcement into a host-only registration phase
+    // (safe to run under the orchestrator's session lock — it linearizes with
+    // ReserveStartupFeedback exactly like the inline path) and a returned launch
+    // continuation that crosses the provider/plugin trust boundary, so callers
+    // can invoke it after releasing their locks. A request registered here but
+    // superseded before launch is captured and stopped by the reservation, and
+    // SpeakAsync's acceptance check discards its session.
+    internal Action? BeginAnnounceError(string reason)
+    {
+        return BeginSpeech(
+            new TtsSpeakRequest(Loc.Instance.GetString("Speech.Error", reason)),
+            useConfiguredLanguageFallback: true
+        );
+    }
+
+    internal Action? BeginAnnounceTranscriptionComplete(
+        string text,
+        string? language = null,
+        bool useConfiguredLanguageFallback = true
+    )
+    {
+        return BeginSpeech(
+            new TtsSpeakRequest(text, language, TtsPurpose.Transcription),
+            useConfiguredLanguageFallback
+        );
+    }
+
+    private Action? BeginSpeech(TtsSpeakRequest request, bool useConfiguredLanguageFallback)
+    {
+        var pending = BeginPlayback(request, requireEnabled: true, useConfiguredLanguageFallback);
+        if (pending is null)
+        {
+            return null;
+        }
+
+        var captured = pending.Value;
+        return () => LaunchPlayback(captured);
+    }
+
+    internal bool TryRunOrdinaryFeedback(Action feedback)
+    {
+        lock (_lock)
+        {
+            if (_startupFeedbackReservation is not null)
+            {
+                // Suppressed terminal cues are intentionally dropped. Replaying
+                // one after release could send it into the microphone we just opened.
+                return false;
+            }
+
+            feedback();
+            return true;
+        }
     }
 
     private void Stop()
@@ -321,7 +559,36 @@ public sealed class SpeechFeedbackService : IDisposable
     private PlaybackRequest? StartPlayback(
         TtsSpeakRequest request,
         bool requireEnabled,
-        bool useConfiguredLanguageFallback = true
+        bool useConfiguredLanguageFallback = true,
+        IStartupFeedbackReservation? startupFeedbackReservation = null
+    )
+    {
+        var pending = BeginPlayback(
+            request,
+            requireEnabled,
+            useConfiguredLanguageFallback,
+            startupFeedbackReservation
+        );
+        if (pending is null)
+        {
+            return null;
+        }
+
+        LaunchPlayback(pending.Value);
+        return pending.Value.Playback;
+    }
+
+    private readonly record struct PendingPlayback(
+        TtsSpeakRequest Speak,
+        PlaybackRequest Playback,
+        PlaybackRequest? Superseded
+    );
+
+    private PendingPlayback? BeginPlayback(
+        TtsSpeakRequest request,
+        bool requireEnabled,
+        bool useConfiguredLanguageFallback = true,
+        IStartupFeedbackReservation? startupFeedbackReservation = null
     )
     {
         if (_disposed || string.IsNullOrWhiteSpace(request.Text))
@@ -347,17 +614,58 @@ public sealed class SpeechFeedbackService : IDisposable
 
         lock (_lock)
         {
-            supersededRequest = _playbackRequest;
+            // Ordinary speech is dropped while startup owns this lane. Only the
+            // exact lease may publish the spoken "Recording" cue; stale and
+            // foreign leases cannot allocate a version or reach a provider.
+            if (
+                startupFeedbackReservation is null
+                    ? _startupFeedbackReservation is not null
+                    : !ReferenceEquals(
+                        _startupFeedbackReservation,
+                        startupFeedbackReservation
+                    )
+            )
+            {
+                return null;
+            }
+
             var version = AllocatePlaybackVersion();
+            supersededRequest = _playbackRequest;
             playbackRequest = new PlaybackRequest(version);
             _playbackRequest = playbackRequest;
             _playbackSession = null;
             _isPlaybackPending = true;
         }
 
-        supersededRequest?.CancelAndStop();
-        _ = SpeakAsync(request, playbackRequest);
-        return playbackRequest;
+        return new PendingPlayback(request, playbackRequest, supersededRequest);
+    }
+
+    private void LaunchPlayback(PendingPlayback pending)
+    {
+        // Both calls cross the host trust boundary (plugin cancellation
+        // callbacks / Stop(), and the provider's synchronous SpeakAsync prefix),
+        // so this must never run under the orchestrator's session lock.
+        if (pending.Superseded is { } superseded)
+        {
+            superseded.CancelAndStop();
+
+            // Same per-toggle CTS release as the toggle-off path; SpeakAsync
+            // tolerates a disposed source on its own late completion paths.
+            superseded.Complete();
+        }
+
+        _ = SpeakAsync(pending.Speak, pending.Playback);
+    }
+
+    private void ReleaseStartupFeedback(StartupFeedbackReservation reservation)
+    {
+        lock (_lock)
+        {
+            if (ReferenceEquals(_startupFeedbackReservation, reservation))
+            {
+                _startupFeedbackReservation = null;
+            }
+        }
     }
 
     private long AllocatePlaybackVersion()
@@ -402,12 +710,26 @@ public sealed class SpeechFeedbackService : IDisposable
         PlaybackRequest playbackRequest
     )
     {
+        // A begun-but-unlaunched request can be superseded, completed, and have its
+        // CTS disposed before the deferred launch runs; .Token throws then, and the
+        // request has nothing left to do but release its pending slot claim.
+        CancellationToken cancellationToken;
+        try
+        {
+            cancellationToken = playbackRequest.Cancellation.Token;
+        }
+        catch (ObjectDisposedException)
+        {
+            ClearPending(playbackRequest);
+            return;
+        }
+
         ITtsPlaybackSession? session;
         try
         {
             var provider = ResolveSpeakProvider();
             session = await provider
-                .SpeakAsync(request, playbackRequest.Cancellation.Token)
+                .SpeakAsync(request, cancellationToken)
                 .ConfigureAwait(false);
             Volatile.Write(ref playbackRequest.Session, session);
 
@@ -517,7 +839,32 @@ public sealed class SpeechFeedbackService : IDisposable
             _isPlaybackPending = false;
         }
 
-        playbackRequest?.CancelAndStop();
+        if (playbackRequest is not null)
+        {
+            // Reached from Dispose: a blocking plugin Stop() or cancellation
+            // callback must not hang the disposing thread (app shutdown), so the
+            // trust-boundary crossing runs on the stop worker. The request is
+            // already detached; completing it here releases the CTS once the
+            // worker finishes, and Complete is idempotent against any late
+            // session-completed callback.
+            var stopWorker = playbackRequest.LaunchCancelAndStop();
+            playbackRequest.Complete();
+
+            // Bounded wait: process exit does not kill TTS child processes, so a
+            // well-behaved provider must be stopped BEFORE Dispose returns and
+            // shutdown proceeds — while a hung plugin costs only this budget.
+            try
+            {
+                _ = stopWorker.Wait(s_stopPlaybackTimeout);
+            }
+            catch (AggregateException)
+            {
+                // Worker faults are observed below.
+            }
+
+            ObserveStopWorker(stopWorker, "dispose stop");
+        }
+
         return playbackRequest;
     }
 
@@ -542,6 +889,33 @@ public sealed class SpeechFeedbackService : IDisposable
 
         await timeoutTask.ConfigureAwait(false);
         return false;
+    }
+
+    private static void ObserveStopWorker(Task stopWorker, string operation)
+    {
+        if (stopWorker.IsCompleted)
+        {
+            if (stopWorker.Exception is { } exception)
+            {
+                Debug.WriteLine(
+                    $"SpeechFeedback {operation} error: {exception.GetBaseException().Message}"
+                );
+            }
+
+            return;
+        }
+
+        _ = stopWorker.ContinueWith(
+            static (task, state) =>
+                Debug.WriteLine(
+                    $"SpeechFeedback {state} error: {task.Exception!.GetBaseException().Message}"
+                ),
+            operation,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously
+                | TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default
+        );
     }
 
     private IReadOnlyList<ITtsProviderPlugin> AllProviders()

@@ -612,28 +612,34 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var promptActionId = string.IsNullOrWhiteSpace(EditPromptActionId)
             ? null
             : EditPromptActionId.Trim();
-        var hotkeyValidation = _hotkeys.ValidateProfileHotkeyCandidate(
-            EditHotkeyData,
-            EditHotkeyBehavior,
-            promptActionId,
-            SelectedProfile.Id,
-            _promptActions.Actions,
-            _profiles.Profiles
-        );
-        if (!hotkeyValidation.IsValid)
+        // Disabled outcomes keep the draft chord unvalidated; the enable gates
+        // (ToggleProfileEnabled here and the HTTP profile toggle) validate it
+        // before it can ever bind.
+        string? hotkeyData;
+        if (!EditIsEnabled)
         {
-            HotkeyValidationMessage = hotkeyValidation.Status switch
+            hotkeyData = string.IsNullOrWhiteSpace(EditHotkeyData) ? null : EditHotkeyData;
+        }
+        else
+        {
+            var hotkeyValidation = _hotkeys.ValidateProfileHotkeyCandidate(
+                EditHotkeyData,
+                EditHotkeyBehavior,
+                promptActionId,
+                SelectedProfile.Id,
+                _promptActions.Actions,
+                _profiles.Profiles
+            );
+            if (!hotkeyValidation.IsValid)
             {
-                HotkeyCandidateValidationStatus.Malformed =>
-                    Loc.Instance["Profiles.HotkeyMalformed"],
-                HotkeyCandidateValidationStatus.MissingEnabledPromptAction =>
-                    Loc.Instance["Profiles.HotkeyPromptActionRequired"],
-                _ => Loc.Instance["Profiles.HotkeyCollision"],
-            };
-            return;
+                HotkeyValidationMessage = GetHotkeyValidationMessage(hotkeyValidation.Status);
+                return;
+            }
+
+            hotkeyData = hotkeyValidation.NormalizedHotkey;
         }
 
-        EditHotkeyData = hotkeyValidation.NormalizedHotkey;
+        EditHotkeyData = hotkeyData;
         HotkeyValidationMessage = null;
 
         var updated = SelectedProfile with
@@ -649,7 +655,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
                 ? null
                 : EditModelId,
             PromptActionId = promptActionId,
-            HotkeyData = hotkeyValidation.NormalizedHotkey,
+            HotkeyData = hotkeyData,
             HotkeyBehavior = EditHotkeyBehavior,
             StylePreset = EditStylePreset,
             CleanupLevelOverride = EditCleanupLevelOverride,
@@ -737,6 +743,24 @@ public partial class ProfilesSectionViewModel : ObservableObject
             return;
         }
 
+        if (!profile.IsEnabled)
+        {
+            var hotkeyValidation = _hotkeys.ValidateProfileHotkeyCandidate(
+                profile.HotkeyData,
+                profile.HotkeyBehavior,
+                profile.PromptActionId,
+                profile.Id,
+                _promptActions.Actions,
+                _profiles.Profiles
+            );
+            if (!hotkeyValidation.IsValid)
+            {
+                SelectById(profile.Id);
+                HotkeyValidationMessage = GetHotkeyValidationMessage(hotkeyValidation.Status);
+                return;
+            }
+        }
+
         _uiOperations.Run(
             "toggle profile",
             Loc.Instance["Common.Enabled"],
@@ -748,6 +772,18 @@ public partial class ProfilesSectionViewModel : ObservableObject
             },
             ResyncProfilesAfterFailure
         );
+    }
+
+    private static string GetHotkeyValidationMessage(HotkeyCandidateValidationStatus status)
+    {
+        return status switch
+        {
+            HotkeyCandidateValidationStatus.Malformed =>
+                Loc.Instance["Profiles.HotkeyMalformed"],
+            HotkeyCandidateValidationStatus.MissingEnabledPromptAction =>
+                Loc.Instance["Profiles.HotkeyPromptActionRequired"],
+            _ => Loc.Instance["Profiles.HotkeyCollision"],
+        };
     }
 
     [RelayCommand]
@@ -1007,6 +1043,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
         OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
+        OnPropertyChanged(nameof(Summary));
+        OnPropertyChanged(nameof(SelectedProfileSummary));
+        OnPropertyChanged(nameof(SelectedProfileDisplayName));
+        OnPropertyChanged(nameof(MatchStatusText));
+        OnPropertyChanged(nameof(EditIsEnabledStatusText));
     }
 
     private static IReadOnlyList<ProfileStylePresetOption> CreateStylePresetOptions()
