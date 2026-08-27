@@ -12,7 +12,11 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Reson8;
 
-public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class Reson8Plugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     internal const string DefaultModelId = "__default__";
     internal const string DefaultBaseUrl = "https://api.reson8.dev";
@@ -51,7 +55,7 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
 
     public string PluginId => "com.typewhisper.reson8";
     public string PluginName => "Reson8";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -79,6 +83,8 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public IReadOnlyList<string> SupportedLanguages => s_languages;
 
     internal string? ApiKey { get; private set; }
@@ -150,48 +156,89 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
-        try
-        {
-            var pcm16 = WavPcm16Extractor.ExtractPcm16(wavAudio);
-
-            // onProgress returning false means the host wants to stop (e.g.
-            // recording ended). Honor it by cancelling a token linked to ct so
-            // the send/finalize flow halts instead of streaming the whole clip
-            // and returning a result the caller no longer wants.
-            using var streamingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            await using var session = await StartStreamingAsync(language, streamingCts.Token);
-            var collector = new Reson8TranscriptCollector();
-
-            session.TranscriptReceived += evt =>
+        return await RunStreamingWithBatchFallbackAsync(
+            async markProgressStopped =>
             {
-                var text = collector.ApplyEvent(evt);
-                if (!string.IsNullOrWhiteSpace(text) && !onProgress(text))
+                var pcm16 = WavPcm16Extractor.ExtractPcm16(wavAudio);
+
+                // onProgress returning false means the host wants to stop (e.g.
+                // recording ended). Honor it by cancelling a token linked to ct so
+                // the send/finalize flow halts instead of streaming the whole clip
+                // and returning a result the caller no longer wants.
+                using var streamingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                await using var session = await StartStreamingAsync(language, streamingCts.Token);
+                var collector = new Reson8TranscriptCollector();
+
+                session.TranscriptReceived += evt =>
+                {
+                    var text = collector.ApplyEvent(evt);
+                    if (string.IsNullOrWhiteSpace(text) || onProgress(text))
+                        return;
+
+                    markProgressStopped();
                     // ReSharper disable once AccessToDisposedClosure -- the closure runs only within the using-scope (or the source is disposed after the captured resource), so the access is safe.
                     streamingCts.Cancel();
-            };
+                };
 
-            const int chunkSize = 8192;
-            for (var offset = 0;
-                offset < pcm16.Length && !streamingCts.IsCancellationRequested;
-                offset += chunkSize)
-            {
-                var count = Math.Min(chunkSize, pcm16.Length - offset);
-                await session.SendAudioAsync(pcm16.AsMemory(offset, count), streamingCts.Token);
-            }
+                const int chunkSize = 8192;
+                for (var offset = 0;
+                    offset < pcm16.Length && !streamingCts.IsCancellationRequested;
+                    offset += chunkSize)
+                {
+                    var count = Math.Min(chunkSize, pcm16.Length - offset);
+                    await session.SendAudioAsync(pcm16.AsMemory(offset, count), streamingCts.Token);
+                }
 
-            streamingCts.Token.ThrowIfCancellationRequested();
-            await session.FinalizeAsync(streamingCts.Token);
+                streamingCts.Token.ThrowIfCancellationRequested();
+                await session.FinalizeAsync(streamingCts.Token);
 
-            var text = collector.FinalText;
-            return string.IsNullOrWhiteSpace(text)
-                ? await TranscribeAsync(wavAudio, language, translate, prompt, ct)
-                : new PluginTranscriptionResult(text, NormalizeLanguage(language), PcmDurationSeconds(pcm16.Length), NoSpeechProbability: null);
+                var text = collector.FinalText;
+                return string.IsNullOrWhiteSpace(text)
+                    ? null
+                    : new PluginTranscriptionResult(
+                        text,
+                        NormalizeLanguage(language),
+                        PcmDurationSeconds(pcm16.Length),
+                        NoSpeechProbability: null
+                    );
+            },
+            () => TranscribeAsync(wavAudio, language, translate, prompt, ct),
+            ct
+        );
+    }
+
+    internal static async Task<T> RunStreamingWithBatchFallbackAsync<T>(
+        Func<Action, Task<T?>> runStreaming,
+        Func<Task<T>> runBatch,
+        CancellationToken callerToken
+    ) where T : class
+    {
+        var progressStopped = 0;
+        T? streamed;
+        try
+        {
+            streamed = await runStreaming(() => Volatile.Write(ref progressStopped, 1));
         }
-        catch (OperationCanceledException) { throw; }
+        catch (Exception) when (callerToken.IsCancellationRequested)
+        {
+            // Caller cancellation has precedence over a simultaneous dependency fault.
+            throw new OperationCanceledException(callerToken);
+        }
+        catch (OperationCanceledException) when (Volatile.Read(ref progressStopped) != 0)
+        {
+            throw;
+        }
+        catch (Exception) when (Volatile.Read(ref progressStopped) != 0)
+        {
+            throw new OperationCanceledException("Streaming stopped by the progress callback.");
+        }
         catch
         {
-            return await TranscribeAsync(wavAudio, language, translate, prompt, ct);
+            return await runBatch();
         }
+
+        callerToken.ThrowIfCancellationRequested();
+        return streamed ?? await runBatch();
     }
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
@@ -475,10 +522,15 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         }
     }
 
-    internal static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
+    // The typed invoker maps "auto" to null already; this only catches direct/legacy callers.
+    internal static string? NormalizeLanguage(string? language)
+    {
+        var trimmed = language?.Trim();
+        return string.IsNullOrEmpty(trimmed)
+            || trimmed.Equals("auto", StringComparison.OrdinalIgnoreCase)
             ? null
-            : language.Trim();
+            : trimmed;
+    }
 
     internal static void AddAuthHeader(HttpRequestMessage request, string apiKey, string authHeader)
     {

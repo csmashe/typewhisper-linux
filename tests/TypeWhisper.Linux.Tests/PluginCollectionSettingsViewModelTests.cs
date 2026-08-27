@@ -83,6 +83,83 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task SaveSettings_SecretFields_DistinguishUntouchedClearedAndReplacement()
+    {
+        // Pre-fix, the host serialized both untouched and explicitly cleared
+        // secrets as "", so the untouched-null assertion below failed and the
+        // plugin could not distinguish those two user intents.
+        var (vm, row, plugin) = CreateSectionWithCollectionPlugin();
+        plugin.Items.Add(CreateItem("Untouched"));
+        plugin.Items.Add(CreateItem("Cleared"));
+        plugin.Items.Add(CreateItem("Replaced"));
+        plugin.Items.Add(CreateItem("Non-secret"));
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+
+        var items = Assert.Single(row.Collections).Items;
+        var cleared = items[1].Fields.Single(field => field.Key == "api-key");
+        cleared.Value = "temporary";
+        cleared.Value = "";
+        items[2].Fields.Single(field => field.Key == "api-key").Value = "replacement";
+        items[3].Fields.Single(field => field.Key == "name").Value = "Edited name";
+
+        await vm.SaveSettingsCommand.ExecuteAsync(row);
+
+        var forwarded = Assert.IsType<IReadOnlyList<PluginCollectionItem>>(
+            plugin.LastSetItems,
+            exactMatch: false
+        );
+        Assert.Null(forwarded[0].Values["api-key"]);
+        Assert.Equal("", forwarded[1].Values["api-key"]);
+        Assert.Equal("replacement", forwarded[2].Values["api-key"]);
+        Assert.Equal("Untouched", forwarded[0].Values["name"]);
+        Assert.Equal("Edited name", forwarded[3].Values["name"]);
+    }
+
+    [Fact]
+    public async Task AmbientRefresh_SecretEditedBackToEmpty_PreservesModifiedStateUntilSave()
+    {
+        // Pre-fix, returning the visible value to its empty baseline made the
+        // row look clean, so ambient refresh recreated its field VMs and lost
+        // the only state that can identify an explicit clear.
+        var (vm, row, plugin) = CreateSectionWithCollectionPlugin();
+        plugin.Items.Add(CreateItem("Profile"));
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+        var secret = Assert
+            .Single(row.Collections)
+            .Items.Single()
+            .Fields.Single(field => field.Key == "api-key");
+
+        secret.Value = "temporary";
+        secret.Value = "";
+
+        Assert.True(secret.IsUserModified);
+        Assert.True(row.HasUnsavedSettings);
+
+        InvokeRefresh(vm);
+
+        var visibleRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        Assert.Same(row, visibleRow);
+        Assert.Same(
+            secret,
+            visibleRow
+                .Collections.Single()
+                .Items.Single()
+                .Fields.Single(field => field.Key == "api-key")
+        );
+
+        await vm.SaveSettingsCommand.ExecuteAsync(visibleRow);
+
+        Assert.Equal("", Assert.Single(plugin.LastSetItems!).Values["api-key"]);
+        Assert.False(
+            visibleRow
+                .Collections.Single()
+                .Items.Single()
+                .Fields.Single(field => field.Key == "api-key")
+                .IsUserModified
+        );
+    }
+
+    [Fact]
     public async Task SaveSettings_DropdownSentinel_SubmitsDisplayedValueThenDropsAfterRealSelection()
     {
         var plugin = new FakeDropdownSettingsPlugin("com.test.dropdown-save");
@@ -784,6 +861,63 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public void FieldRow_ExplicitMultiline_MasksOnlyWhenSecret()
+    {
+        var secret = new PluginSettingFieldRow(
+            "secret-notes",
+            "Secret notes",
+            "",
+            "",
+            [],
+            true,
+            PluginSettingKind.Multiline,
+            ""
+        );
+        var plain = new PluginSettingFieldRow(
+            "notes",
+            "Notes",
+            "",
+            "",
+            [],
+            false,
+            PluginSettingKind.Multiline,
+            ""
+        );
+
+        Assert.Equal(PluginSettingKind.Multiline, secret.Kind);
+        Assert.Equal(PluginSettingKind.Multiline, plain.Kind);
+        Assert.Equal('•', secret.MultilinePasswordChar);
+        Assert.Equal('\0', plain.MultilinePasswordChar);
+        Assert.True(secret.IsSecretMultiline);
+        Assert.False(plain.IsSecretMultiline);
+        Assert.False(secret.RevealSecretMultiline);
+        Assert.False(secret.IsSecretKind);
+    }
+
+    [Fact]
+    public void CollectionItemRow_SecretMultiline_PropagatesMask()
+    {
+        var item = new PluginCollectionItemRow(
+            [
+                new PluginSettingDefinition(
+                    "headers",
+                    "Headers",
+                    IsSecret: true,
+                    Kind: PluginSettingKind.Multiline
+                ),
+            ],
+            null,
+            null
+        );
+
+        var field = item.Fields.Single(candidate => candidate.Key == "headers");
+        Assert.Equal(PluginSettingKind.Multiline, field.Kind);
+        Assert.Equal('•', field.MultilinePasswordChar);
+        Assert.True(field.IsSecretMultiline);
+        Assert.False(field.RevealSecretMultiline);
+    }
+
+    [Fact]
     public void FieldRow_HiddenKey_IsHidden()
     {
         var field = new PluginSettingFieldRow(
@@ -1030,6 +1164,12 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             [
                 new PluginSettingDefinition("name", "Name", Kind: PluginSettingKind.Text),
                 new PluginSettingDefinition("enabled", "Enabled", Kind: PluginSettingKind.Boolean),
+                new PluginSettingDefinition(
+                    "api-key",
+                    "API key",
+                    IsSecret: true,
+                    Kind: PluginSettingKind.Secret
+                ),
                 new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text),
             ],
             "name",

@@ -15,6 +15,7 @@ namespace TypeWhisper.Plugin.OpenRouter;
 
 public sealed class OpenRouterPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         ILlmProviderPlugin,
         IPluginSettingsProvider,
         IPluginLocalizationAware
@@ -83,7 +84,7 @@ public sealed class OpenRouterPlugin
 
     public string PluginId => "com.typewhisper.openrouter";
     public string PluginName => "OpenRouter";
-    public string PluginVersion => "1.1.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -124,6 +125,8 @@ public sealed class OpenRouterPlugin
     public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public void SelectModel(string modelId)
     {
@@ -701,9 +704,7 @@ public sealed class OpenRouterPlugin
         string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
 
     private static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) || string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase)
-            ? null
-            : language.Trim();
+        string.IsNullOrWhiteSpace(language) ? null : language.Trim();
 
     internal static string NormalizeTemperatureMode(string? mode) =>
         string.Equals(mode, TemperatureModeCustom, StringComparison.OrdinalIgnoreCase)

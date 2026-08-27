@@ -34,7 +34,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
 
     public string PluginId => "com.typewhisper.obsidian";
     public string PluginName => "Obsidian";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public string ActionId => "save-to-obsidian";
     public string ActionName => "Save to Obsidian";
@@ -87,8 +87,20 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
         if (string.IsNullOrWhiteSpace(filenameTemplate))
             filenameTemplate = "{{date}} {{time}} Transcription";
 
+        if (!TryGetContainedTargetDirectory(vaultPath, subfolder, out var vaultRoot, out var targetDir))
+            return new ActionResult(false, Loc.L("Settings.SubfolderOutsideVault"));
+
+        // In-vault link targets are allowed, outside ones refused. Checked before
+        // CreateDirectory, or an escaping link's directories would exist by the time we refuse.
+        //
+        // Path-based, so a window ahead of the write rather than atomic with it. Deliberate: the
+        // vault is the user's own directory, so anyone who could swap in an escaping link already
+        // has write access to what this protects. Closing the window needs handle-based
+        // O_NOFOLLOW traversal, which .NET does not expose.
+        if (!IsResolvedTargetContained(vaultRoot, targetDir))
+            return new ActionResult(false, Loc.L("Settings.SubfolderOutsideVault"));
+
         var now = DateTime.Now;
-        var targetDir = Path.Join(vaultPath, subfolder);
         Directory.CreateDirectory(targetDir);
 
         string filePath;
@@ -99,6 +111,11 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
             filename = $"{now:yyyy-MM-dd}.md";
             filePath = Path.Join(targetDir, filename);
 
+            // The daily note itself may be a link that appending would follow, so it
+            // needs the same in-vault-target check as the directory above.
+            if (!IsResolvedTargetContained(vaultRoot, filePath))
+                return new ActionResult(false, Loc.L("Settings.NoteOutsideVault"));
+
             var entry = BuildDailyNoteEntry(input, context, now);
             var header = $"# {now:yyyy-MM-dd}\n\n";
             var lockPath = GetDailyNoteLockPath(Host.PluginDataDirectory, filePath);
@@ -106,6 +123,8 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
         }
         else
         {
+            // No link check needed: FileMode.CreateNew below refuses an existing link
+            // rather than following it.
             filename = BuildFilename(filenameTemplate, context, now) + ".md";
             filePath = Path.Join(targetDir, filename);
 
@@ -117,6 +136,139 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
         Host.Log(PluginLogLevel.Info, $"Saved transcription to {filePath}");
         return new ActionResult(true, Loc.L("Settings.SavedTo", filename));
     }
+
+    private static bool TryGetContainedTargetDirectory(
+        string vaultPath,
+        string subfolder,
+        out string vaultRoot,
+        out string targetDir
+    )
+    {
+        vaultRoot = string.Empty;
+        targetDir = string.Empty;
+
+        if (Path.IsPathRooted(subfolder))
+            return false;
+
+        try
+        {
+            vaultRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(vaultPath));
+            targetDir = Path.TrimEndingDirectorySeparator(
+                Path.GetFullPath(Path.Join(vaultRoot, subfolder))
+            );
+            return IsSameOrDescendantPath(vaultRoot, targetDir);
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException
+                or IOException
+                or NotSupportedException
+                or UnauthorizedAccessException
+        )
+        {
+            return false;
+        }
+    }
+
+    private static bool IsResolvedTargetContained(string vaultRoot, string target)
+    {
+        try
+        {
+            var resolvedVaultRoot = ResolveLinkedPath(vaultRoot);
+            var resolvedTarget = ResolveLinkedPath(target);
+            return IsSameOrDescendantPath(resolvedVaultRoot, resolvedTarget);
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException
+                or IOException
+                or NotSupportedException
+                or UnauthorizedAccessException
+        )
+        {
+            return false;
+        }
+    }
+
+    // ResolveLinkTarget reports links of either kind, so this segment-by-segment walk
+    // also resolves a leaf note file.
+    private static string ResolveLinkedPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var remainingSegments = new Queue<string>();
+        var resolvedPath = ResetToPathRoot(fullPath, remainingSegments);
+        var followedLinks = 0;
+
+        while (remainingSegments.TryDequeue(out var segment))
+        {
+            var nextPath = Path.Join(resolvedPath, segment);
+            // ResolveLinkTarget throws on a path that doesn't exist yet, so segments we're
+            // about to create are skipped as literal. Path.Exists (unlike Directory.Exists)
+            // is still true for a dangling link, so an escaping one is still rejected.
+            if (!Path.Exists(nextPath))
+            {
+                resolvedPath = nextPath;
+                continue;
+            }
+
+            var resolvedLink = Directory.ResolveLinkTarget(nextPath, returnFinalTarget: true);
+            if (resolvedLink is null)
+            {
+                resolvedPath = nextPath;
+                continue;
+            }
+
+            followedLinks++;
+            if (followedLinks > 64)
+                throw new IOException($"Too many symbolic links while resolving path: {path}");
+
+            var trailingSegments = remainingSegments.ToArray();
+            remainingSegments.Clear();
+            resolvedPath = ResetToPathRoot(
+                Path.GetFullPath(resolvedLink.FullName),
+                remainingSegments
+            );
+            foreach (var trailingSegment in trailingSegments)
+                remainingSegments.Enqueue(trailingSegment);
+        }
+
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(resolvedPath));
+    }
+
+    private static string ResetToPathRoot(string path, Queue<string> segments)
+    {
+        var root = Path.GetPathRoot(path)
+            ?? throw new IOException($"Path has no root: {path}");
+        foreach (var segment in path[root.Length..].Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries
+        ))
+        {
+            segments.Enqueue(segment);
+        }
+
+        return root;
+    }
+
+    private static bool IsSameOrDescendantPath(string root, string candidate)
+    {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (string.Equals(root, candidate, comparison))
+            return true;
+
+        if (!candidate.StartsWith(root, comparison))
+            return false;
+
+        if (Path.EndsInDirectorySeparator(root))
+            return true;
+
+        return candidate.Length > root.Length
+            && IsDirectorySeparator(candidate[root.Length]);
+    }
+
+    private static bool IsDirectorySeparator(char value) =>
+        value == Path.DirectorySeparatorChar || value == Path.AltDirectorySeparatorChar;
 
     private static string BuildNoteContent(string input, ActionContext context, DateTime now)
     {

@@ -152,10 +152,9 @@ public class SonioxPluginTests
     }
 
     [Theory]
-    [InlineData("auto")]
     [InlineData("")]
     [InlineData(null)]
-    public void BuildConfigMessage_OmitsLanguageHints_ForAutoOrEmpty(string? language)
+    public void BuildConfigMessage_OmitsLanguageHints_WhenUnspecified(string? language)
     {
         var json = SonioxSession.BuildConfigMessage("k", SonioxSession.RealtimeModel, language);
 
@@ -478,7 +477,7 @@ public class SonioxPluginTests
     }
 
     [Fact]
-    public async Task TranscribeAsync_OmitsLanguageHintsForAuto()
+    public async Task TranscribeAsync_OmitsLanguageHintsWhenUnspecified()
     {
         var handler = new SonioxFlowHandler(createBody =>
         {
@@ -491,18 +490,21 @@ public class SonioxPluginTests
         var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
         await sut.ActivateAsync(host);
 
-        var result = await sut.TranscribeAsync([1, 2, 3], "auto", translate: false, prompt: null, CancellationToken.None);
+        var result = await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
 
         Assert.Equal("Hello", result.Text);
     }
 
     [Fact]
-    public async Task TranscribeAsync_OmitsLanguageHintsForWhitespacePaddedAuto()
+    public async Task TranscribeAsync_CarriesExplicitCanonicalLanguageHint()
     {
         var handler = new SonioxFlowHandler(createBody =>
         {
             using var doc = JsonDocument.Parse(createBody);
-            Assert.False(doc.RootElement.TryGetProperty("language_hints", out _));
+            Assert.Equal(
+                "de-DE",
+                doc.RootElement.GetProperty("language_hints")[0].GetString()
+            );
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
@@ -510,10 +512,10 @@ public class SonioxPluginTests
         var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
         await sut.ActivateAsync(host);
 
-        var result = await sut.TranscribeAsync([1, 2, 3], " auto ", translate: false, prompt: null, CancellationToken.None);
+        var result = await sut.TranscribeAsync([1, 2, 3], "de-DE", translate: false, prompt: null, CancellationToken.None);
 
         Assert.Equal("Hello", result.Text);
-        Assert.Null(result.DetectedLanguage);
+        Assert.Equal("de-DE", result.DetectedLanguage);
     }
 
     [Fact]

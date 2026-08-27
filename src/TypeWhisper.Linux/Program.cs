@@ -42,7 +42,7 @@ public static class Program
 
         // GNOME launches menu apps at nice 6 / ionice idle, which throttles cold start ~60×
         // for a CPU+IO-heavy .NET app. Restore defaults so menu launch matches terminal launch.
-        var priorityResult = ProcessPriority.ResetToDefaults();
+        var priorityResult = ProcessPriority.ResetToDefaults(new ProcessRunner());
         BootTrace.Stage($"ProcessPriority reset ({priorityResult})");
 
         var action = CommandLineParser.Parse(args);
@@ -191,9 +191,14 @@ public static class Program
         }
         finally
         {
-            // DisposeAsync: some DI services are IAsyncDisposable-only (e.g. XdgPortalGlobalShortcutsBackend);
-            // sync Dispose() throws InvalidOperationException for those.
-            Services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            // A timed-out HTTP handler may still be using DI-owned services. The process is
+            // exiting, so skipping provider disposal here cannot leak anything beyond its life.
+            if (!App.SkipProviderDisposal)
+            {
+                // DisposeAsync: some DI services are IAsyncDisposable-only (e.g. XdgPortalGlobalShortcutsBackend);
+                // sync Dispose() throws InvalidOperationException for those.
+                Services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
         }
     }
 

@@ -14,6 +14,7 @@ namespace TypeWhisper.Plugin.Xai;
 
 public sealed class XaiPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         ILlmProviderPlugin,
         ITtsProviderPlugin,
         IPluginSettingsProvider,
@@ -51,8 +52,6 @@ public sealed class XaiPlugin
     ];
 
     private readonly HttpClient _httpClient;
-    private readonly Func<byte[], ITtsPlaybackSession> _ttsPlaybackFactory;
-    private readonly Func<bool> _ttsPlaybackAvailableProbe;
     private IPluginHostServices? _host;
     private List<XaiFetchedModel> _fetchedLlmModels = [];
     private string? _selectedVoiceId;
@@ -64,23 +63,16 @@ public sealed class XaiPlugin
     {
     }
 
-    internal XaiPlugin(
-        HttpClient httpClient,
-        Func<byte[], ITtsPlaybackSession>? ttsPlaybackFactory = null,
-        Func<bool>? ttsPlaybackAvailableProbe = null)
+    internal XaiPlugin(HttpClient httpClient)
     {
         _httpClient = httpClient;
-        _ttsPlaybackFactory = ttsPlaybackFactory
-            ?? (pcm => XaiPcmTtsPlaybackSession.Create(pcm, XaiTtsConfiguration.SampleRate));
-        _ttsPlaybackAvailableProbe = ttsPlaybackAvailableProbe
-            ?? XaiPcmTtsPlaybackSession.IsPlaybackAvailable;
     }
 
     // ITypeWhisperPlugin
 
     public string PluginId => "com.typewhisper.xai";
     public string PluginName => "xAI / Grok";
-    public string PluginVersion => "1.1.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -119,6 +111,8 @@ public sealed class XaiPlugin
 
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public IReadOnlyList<string> SupportedLanguages => s_languages;
 
     public void SelectModel(string modelId)
@@ -166,9 +160,6 @@ public sealed class XaiPlugin
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
-        // Run through the same normalization the batch TranscribeAsync uses
-        // so a setting value like " de " or "auto" doesn't propagate into the
-        // streaming URI as %20de%20 or language=auto.
         return await XaiStreamingSession.ConnectAsync(ApiKey!, NormalizeLanguage(language), ct);
     }
 
@@ -257,14 +248,17 @@ public sealed class XaiPlugin
         if (string.IsNullOrWhiteSpace(text))
             return XaiInactiveTtsPlaybackSession.Instance;
 
-        // The xAI TTS endpoint is a paid request. With no audio player on PATH
-        // the synthesized PCM could only be discarded (XaiPcmTtsPlaybackSession
-        // would return the inactive sentinel), so skip the request entirely.
-        if (!_ttsPlaybackAvailableProbe())
+        var host = _host
+                   ?? throw new InvalidOperationException(
+                       "xAI plugin is not activated."
+                   );
+        // Paid endpoint: preflight playback before issuing a request that couldn't be played.
+        if (!host.PcmPlayback.IsAvailable)
         {
-            _host?.Log(
+            host.Log(
                 PluginLogLevel.Warning,
-                "Skipping xAI TTS request: no audio player (paplay/aplay) found on PATH.");
+                "Skipping xAI TTS request: no supported PCM audio player is available."
+            );
             return XaiInactiveTtsPlaybackSession.Instance;
         }
 
@@ -279,9 +273,21 @@ public sealed class XaiPlugin
         httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
         httpRequest.Content = XaiJson.CreateJsonContent(body);
 
-        var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, httpRequest, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient,
+            httpRequest,
+            ct
+        );
         var pcm = await response.Content.ReadAsByteArrayAsync(ct);
-        return _ttsPlaybackFactory(pcm);
+        return await host.PcmPlayback.PlayAsync(
+            new PcmPlaybackRequest(
+                pcm,
+                XaiTtsConfiguration.SampleRate,
+                1,
+                PcmSampleFormat.Signed16LittleEndian
+            ),
+            ct
+        );
     }
 
     // Settings support
@@ -590,10 +596,16 @@ public sealed class XaiPlugin
     private static string NormalizeVoiceId(string? voiceId) =>
         string.IsNullOrWhiteSpace(voiceId) ? XaiTtsConfiguration.DefaultVoiceId : voiceId.Trim();
 
-    private static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
+    // The typed invoker maps "auto" to null already; this only catches direct/legacy callers.
+    // Forwarding it would also make ParseSttResponse report "auto" as the detected language.
+    private static string? NormalizeLanguage(string? language)
+    {
+        var trimmed = language?.Trim();
+        return string.IsNullOrEmpty(trimmed)
+            || trimmed.Equals("auto", StringComparison.OrdinalIgnoreCase)
             ? null
-            : language.Trim();
+            : trimmed;
+    }
 
     private static string NormalizeTtsLanguage(string? language) =>
         string.IsNullOrWhiteSpace(language) ? "auto" : language.Trim();

@@ -18,11 +18,13 @@ public sealed class StartupServiceTests : IDisposable
     public StartupServiceTests()
     {
         Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", _tempDir);
+        StartupService.ManagedArtifactStateRootOverride = Path.Join(_tempDir, "managed-state");
     }
 
     public void Dispose()
     {
         Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", _originalXdgConfigHome);
+        StartupService.ManagedArtifactStateRootOverride = null;
         try
         {
             TestPaths.DeleteDirectory(_tempDir);
@@ -162,7 +164,7 @@ public sealed class StartupServiceTests : IDisposable
     }
 
     [Fact]
-    public void Marker_owned_stale_entry_updates_and_removes_normally()
+    public void Marker_owned_customized_entry_is_refused_and_preserved()
     {
         const string staleContent =
             "[Desktop Entry]\n"
@@ -173,24 +175,44 @@ public sealed class StartupServiceTests : IDisposable
             + ManagedLine;
         WriteTarget(staleContent);
 
-        Assert.True(StartupService.IsEnabled);
+        Assert.False(StartupService.IsEnabled);
 
         var enableResult = StartupService.Enable();
 
-        Assert.True(enableResult.Success);
-        Assert.True(enableResult.IsEnabled);
-        Assert.Equal(
-            CurrentDesktopContent(includeManagedMarker: true),
-            File.ReadAllText(TargetPath)
-        );
-        Assert.True(StartupService.IsEnabled);
+        Assert.False(enableResult.Success);
+        Assert.False(enableResult.IsEnabled);
+        AssertRefusalStatus(enableResult);
+        Assert.Equal(staleContent, File.ReadAllText(TargetPath));
+        Assert.False(StartupService.IsEnabled);
 
         var disableResult = StartupService.Disable();
 
-        Assert.True(disableResult.Success);
+        Assert.False(disableResult.Success);
         Assert.False(disableResult.IsEnabled);
-        Assert.False(File.Exists(TargetPath));
+        AssertRefusalStatus(disableResult);
+        Assert.True(File.Exists(TargetPath));
+        Assert.Equal(staleContent, File.ReadAllText(TargetPath));
         Assert.False(StartupService.IsEnabled);
+    }
+
+    [Fact]
+    public void Enable_and_disable_refuse_symlink_and_preserve_its_target()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(TargetPath)!);
+        var target = Path.Join(_tempDir, "foreign-autostart.desktop");
+        const string targetContent = "[Desktop Entry]\nName=Foreign\n";
+        File.WriteAllText(target, targetContent);
+        File.CreateSymbolicLink(TargetPath, target);
+
+        Assert.False(StartupService.Enable().Success);
+        Assert.False(StartupService.Disable().Success);
+        Assert.NotNull(new FileInfo(TargetPath).LinkTarget);
+        Assert.Equal(targetContent, File.ReadAllText(target));
     }
 
     [Fact]
@@ -209,6 +231,10 @@ public sealed class StartupServiceTests : IDisposable
             CurrentDesktopContent(includeManagedMarker: true),
             File.ReadAllText(TargetPath)
         );
+
+        var migratedRemoval = StartupService.Disable();
+        Assert.True(migratedRemoval.Success);
+        Assert.False(File.Exists(TargetPath));
 
         WriteTarget(legacyContent);
         Assert.True(StartupService.IsEnabled);
@@ -233,7 +259,7 @@ public sealed class StartupServiceTests : IDisposable
     }
 
     [Fact]
-    public void IsEnabled_requires_exact_marker_line_or_exact_legacy_content()
+    public void IsEnabled_requires_exact_current_or_legacy_content()
     {
         Assert.False(StartupService.IsEnabled);
 
@@ -254,7 +280,7 @@ public sealed class StartupServiceTests : IDisposable
         }
 
         WriteTarget($"[Desktop Entry]\r\nName=Old TypeWhisper\r\n{ManagedLine}\r\n");
-        Assert.True(StartupService.IsEnabled);
+        Assert.False(StartupService.IsEnabled);
 
         WriteTarget(CurrentDesktopContent(includeManagedMarker: false));
         Assert.True(StartupService.IsEnabled);

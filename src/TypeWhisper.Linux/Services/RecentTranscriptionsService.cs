@@ -45,7 +45,7 @@ public sealed class RecentTranscriptionsService
             textInsertion.InsertTextAsync,
             Task.Delay,
             () => PasteToolHintFor(commands.GetSnapshot()),
-            Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+            WaylandSessionDetector.IsWaylandSession()
         )
     {
     }
@@ -408,7 +408,7 @@ public sealed class RecentTranscriptionsService
     private static string ClipboardToolMissingMessage()
     {
         var clipboardTool =
-            Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+            WaylandSessionDetector.HasWaylandDisplay()
                 ? "wl-clipboard"
                 : "xclip";
         return Localization.Loc.Instance.GetString(

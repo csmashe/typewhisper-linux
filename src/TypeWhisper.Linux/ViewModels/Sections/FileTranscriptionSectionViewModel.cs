@@ -18,8 +18,10 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     private const string DefaultSelectionId = "__default__";
     private readonly AudioFileService _audioFiles;
 
+    private readonly ModelManagerService _models;
     private readonly IFileTranscriptionProcessor _processor;
     private readonly PluginManager _pluginManager;
+    private readonly Action<Action> _postStatus;
     private readonly ISettingsService _settings;
 
     // One concurrent transcription at a time — shared between manual queue
@@ -96,13 +98,17 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         ISettingsService settings,
         AudioFileService audioFiles,
         WatchFolderService watchFolder,
-        PluginManager pluginManager
+        ModelManagerService models,
+        PluginManager pluginManager,
+        Action<Action>? postStatus = null
     )
     {
+        _postStatus = postStatus ?? (action => Dispatcher.UIThread.Post(action));
         _processor = processor;
         _settings = settings;
         _audioFiles = audioFiles;
         _watchFolder = watchFolder;
+        _models = models;
         _pluginManager = pluginManager;
 
         Items.CollectionChanged += (_, _) =>
@@ -350,10 +356,17 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         try
         {
             while (
-                Items.FirstOrDefault(i => i.Status == FileTranscriptionQueueItemStatus.Queued)
+                Items.FirstOrDefault(i =>
+                    i is
+                    {
+                        Status: FileTranscriptionQueueItemStatus.Queued,
+                        ProcessingAttempted: false,
+                    }
+                )
                 is { } item
             )
             {
+                item.ProcessingAttempted = true;
                 SelectedItem = item;
                 item.Cancellation = new CancellationTokenSource();
                 var gateHeld = false;
@@ -385,7 +398,9 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
                         )
                     );
                 }
-                catch (OperationCanceledException)
+                catch (Exception) when (
+                    item.Cancellation.Token.IsCancellationRequested
+                )
                 {
                     SetStatus(
                         item,
@@ -395,8 +410,9 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
                 }
                 catch (Exception ex)
                 {
-                    item.ErrorText = ex.Message;
-                    SetStatus(item, FileTranscriptionQueueItemStatus.Error, ex.Message);
+                    var message = LanguageSelectionUiMessage.From(ex);
+                    item.ErrorText = message;
+                    SetStatus(item, FileTranscriptionQueueItemStatus.Error, message);
                 }
                 finally
                 {
@@ -424,7 +440,6 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     private FileTranscriptionProcessOptions BuildFileTranscriptionOptions()
     {
         var s = _settings.Current;
-        var language = s.Language == "auto" ? null : s.Language;
         var task =
             s.TranscriptionTask == "translate"
                 ? TranscriptionTask.Translate
@@ -433,7 +448,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         return new FileTranscriptionProcessOptions(
             CleanSettingValue(FileTranscriptionEngineOverride),
             CleanSettingValue(FileTranscriptionModelOverride),
-            language,
+            s.Language,
             task
         );
     }
@@ -444,7 +459,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         string statusText
     )
     {
-        Dispatcher.UIThread.Post(() =>
+        _postStatus(() =>
         {
             item.Status = status;
             item.StatusText = statusText;
@@ -598,6 +613,24 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
             );
         }
 
+        // Not-ready means "retry later can succeed": only a plugin-qualified
+        // selection whose engine has not loaded yet qualifies. A blank or
+        // non-plugin selection can never become ready by waiting, so it falls
+        // through to the processor's immediate invalid-model error instead of
+        // an endless retry loop.
+        var selectedModelId = _settings.Current.SelectedModelId;
+        if (
+            string.IsNullOrWhiteSpace(options.EngineId)
+            && !string.IsNullOrWhiteSpace(selectedModelId)
+            && ModelManagerService.IsPluginModel(selectedModelId)
+            && _models.GetTranscriptionPlugin(selectedModelId) is null
+        )
+        {
+            throw new WatchFolderNotReadyException(
+                "Transcription engines are not ready."
+            );
+        }
+
         if (
             !string.IsNullOrWhiteSpace(options.EngineId)
             && engines.All(engine =>
@@ -623,15 +656,10 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
     private FileTranscriptionProcessOptions BuildWatchFolderProcessOptions()
     {
         var s = _settings.Current;
-        var language =
-            string.IsNullOrWhiteSpace(s.WatchFolderLanguage) || s.WatchFolderLanguage == "auto"
-                ? null
-                : s.WatchFolderLanguage;
-
         return new FileTranscriptionProcessOptions(
             CleanSettingValue(s.WatchFolderEngineOverride),
             CleanSettingValue(s.WatchFolderModelOverride),
-            language,
+            s.WatchFolderLanguage,
             TranscriptionTask.Transcribe
         );
     }
@@ -754,8 +782,8 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(
-            _settings.Current with
+        _settings.Update(current =>
+            current with
             {
                 FileTranscriptionEngineOverride = CleanSettingValue(
                     FileTranscriptionEngineOverride
@@ -772,8 +800,8 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(
-            _settings.Current with
+        _settings.Update(current =>
+            current with
             {
                 WatchFolderPath = CleanSettingValue(WatchFolderPath),
                 WatchFolderOutputPath = CleanSettingValue(WatchFolderOutputPath),

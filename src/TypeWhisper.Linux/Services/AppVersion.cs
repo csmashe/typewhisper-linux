@@ -122,6 +122,9 @@ public static class AppVersion
         return true;
     }
 
+    /// <summary>Whether a value is a well-formed SemVer 2.0 version.</summary>
+    internal static bool IsValidStrict(string? value) => TryParseStrict(value, out _);
+
     /// <summary>
     ///     Strictly parses and compares two SemVer 2.0 versions. Returns false when either
     ///     input is malformed; otherwise comparison is &lt;0/0/&gt;0 for older/equal/newer.

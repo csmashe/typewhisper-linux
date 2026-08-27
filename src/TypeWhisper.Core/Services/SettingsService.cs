@@ -17,94 +17,77 @@ public sealed class SettingsService : ISettingsService
         WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    private readonly Lock _gate = new();
+    private readonly Lock _commitGate = new();
 
-    // Publication happens outside _gate (handlers must not run under the write lock) but still in
-    // commit order, or a preempted publisher could deliver its older snapshot after a newer
-    // commit. Both fields are guarded by _gate; see PublishPendingChanges.
+    // Publication happens outside _commitGate (handlers must not run under the commit lock) but
+    // still in commit order, or a preempted publisher could deliver its older snapshot after a
+    // newer commit. Both fields are guarded by _commitGate; see PublishPendingChanges.
     private readonly Queue<AppSettings> _pendingNotifications = new();
     private bool _publishing;
-    private readonly string _filePath;
+    private readonly AtomicJsonStore<AppSettings> _store;
 
     public SettingsService(string filePath)
     {
-        _filePath = filePath;
-        Current = Load();
+        _store = new AtomicJsonStore<AppSettings>(
+            filePath,
+            () => AppSettings.Default,
+            new AtomicJsonStoreOptions<AppSettings>
+            {
+                JsonOptions = s_jsonOptions,
+                BackupMode = AtomicJsonBackupMode.LastKnownGood,
+                CorruptFilePolicy = AtomicJsonCorruptFilePolicy.PreserveAndReset,
+                Deserialize = Deserialize,
+                Diagnostic = diagnostic =>
+                    LogWarning(
+                        $"{diagnostic.Kind} at {diagnostic.Path}"
+                        + (
+                            diagnostic.Exception is null
+                                ? string.Empty
+                                : $": {diagnostic.Exception.Message}"
+                        )
+                    ),
+            }
+        );
+        _ = _store.Current;
     }
 
-    private string BackupPath => _filePath + ".bak";
-    private string TempPath => _filePath + ".tmp";
-
-    public AppSettings Current { get; private set; }
+    public AppSettings Current => _store.Current;
 
     public event Action<AppSettings>? SettingsChanged;
 
     public AppSettings Load()
     {
-        // Under _gate for the whole read: Load both writes Current and (on the backup path) copies
-        // over the primary file, so an unsynchronized read could clobber a concurrent Save.
-        lock (_gate)
-        {
-            return LoadLocked();
-        }
-    }
-
-    public AppSettings Reload()
-    {
-        AppSettings committed;
-        lock (_gate)
-        {
-            committed = SaveLocked(LoadLocked());
-        }
-
-        PublishPendingChanges();
-        return committed;
-    }
-
-    private AppSettings LoadLocked()
-    {
-        var result = TryLoadFrom(_filePath);
-        if (result is not null)
-        {
-            Current = result;
-            return Current;
-        }
-
-        // Primary failed — try backup, then restore it as primary.
-        if (File.Exists(BackupPath))
-        {
-            LogWarning("Primary settings corrupt or missing, trying backup.");
-            result = TryLoadFrom(BackupPath);
-            if (result is not null)
-            {
-                Current = result;
-                try { File.Copy(BackupPath, _filePath, true); } catch { /* best effort */ }
-                return Current;
-            }
-        }
-
-        LogWarning("No valid settings found, using defaults.");
-        Current = AppSettings.Default;
-        return Current;
+        return _store.Reload();
     }
 
     public void Save(AppSettings settings)
     {
-        lock (_gate)
-        {
-            SaveLocked(settings);
-        }
-
-        PublishPendingChanges();
+        ArgumentNullException.ThrowIfNull(settings);
+        Commit(_ => settings);
     }
 
     public AppSettings Update(Func<AppSettings, AppSettings> mutate)
     {
         ArgumentNullException.ThrowIfNull(mutate);
+        return Commit(mutate);
+    }
+
+    private AppSettings Commit(Func<AppSettings, AppSettings> update)
+    {
+        // `changed` is decided by the store from the persisted form, not by comparing
+        // AppSettings by reference here, which would miss real changes and announce false ones.
+        // The store commits atomically but releases before returning, so without this lock
+        // two concurrent saves could notify out of order and leave a subscriber applying
+        // superseded settings. Queue rather than raise here: handlers must never run under the
+        // commit lock, or a subscriber that saves (or waits on a thread that saves) deadlocks.
         AppSettings committed;
-        lock (_gate)
+        lock (_commitGate)
         {
-            committed = SaveLocked(mutate(Current));
+            committed = _store.Update(update, out var changed);
+            if (changed)
+            {
+                _pendingNotifications.Enqueue(committed);
+            }
         }
 
         PublishPendingChanges();
@@ -120,7 +103,7 @@ public sealed class SettingsService : ISettingsService
     /// </summary>
     private void PublishPendingChanges()
     {
-        lock (_gate)
+        lock (_commitGate)
         {
             if (_publishing)
             {
@@ -135,7 +118,7 @@ public sealed class SettingsService : ISettingsService
             while (true)
             {
                 AppSettings next;
-                lock (_gate)
+                lock (_commitGate)
                 {
                     if (_pendingNotifications.Count == 0)
                     {
@@ -152,8 +135,7 @@ public sealed class SettingsService : ISettingsService
                 // Per subscriber, not per multicast invoke: one throwing handler would otherwise
                 // starve every handler after it. The drainer may also be carrying another writer's
                 // snapshot, so a failure must not escape and fail that already-succeeded Save.
-                foreach (var subscriber in
-                         SettingsChanged?.GetInvocationList() ?? [])
+                foreach (var subscriber in SettingsChanged?.GetInvocationList() ?? [])
                 {
                     try
                     {
@@ -170,7 +152,7 @@ public sealed class SettingsService : ISettingsService
         {
             // Backstop for an abnormal exit (the subscriber chain is already guarded above):
             // never leave the flag set, or publication stops for the process lifetime.
-            lock (_gate)
+            lock (_commitGate)
             {
                 _publishing = false;
             }
@@ -179,58 +161,13 @@ public sealed class SettingsService : ISettingsService
         }
     }
 
-    // Queues the committed snapshot instead of raising SettingsChanged here: handlers must never
-    // run under _gate. Callers publish via PublishPendingChanges once the lock is released.
-    private AppSettings SaveLocked(AppSettings settings)
+    private static AppSettings Deserialize(string json)
     {
-        var directory = Path.GetDirectoryName(_filePath);
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        if (File.Exists(_filePath))
-        {
-            try { File.Copy(_filePath, BackupPath, true); } catch { /* best effort */ }
-        }
-
-        // Atomic write via .tmp so a crash mid-write can't corrupt the primary file.
-        var json = JsonSerializer.Serialize(settings, s_jsonOptions);
-        File.WriteAllText(TempPath, json);
-        File.Move(TempPath, _filePath, true);
-
-        // Advance in-memory state only after disk success so Current never leads what a reload sees.
-        Current = settings;
-        _pendingNotifications.Enqueue(settings);
-        return settings;
-    }
-
-    private static AppSettings? TryLoadFrom(string path)
-    {
-        try
-        {
-            if (!File.Exists(path))
-            {
-                return null;
-            }
-
-            var json = File.ReadAllText(path);
-            // ReSharper disable once InconsistentlySynchronizedField -- s_jsonOptions is static readonly (immutable reference); _gate guards file I/O and Current, not this field.
-            var settings = JsonSerializer.Deserialize<AppSettings>(json, s_jsonOptions);
-            if (settings is null)
-            {
-                return null;
-            }
-
-            settings = ApplyHistoryRetentionMigration(settings, json);
-            settings = ApplyAccelerationMigration(settings, json);
-            return settings;
-        }
-        catch (Exception ex)
-        {
-            LogWarning($"Failed to load settings from {path}: {ex.Message}");
-            return null;
-        }
+        var settings =
+            JsonSerializer.Deserialize<AppSettings>(json, s_jsonOptions)
+            ?? throw new JsonException("Settings JSON deserialized to null.");
+        settings = ApplyHistoryRetentionMigration(settings, json);
+        return ApplyAccelerationMigration(settings, json);
     }
 
     /// <summary>

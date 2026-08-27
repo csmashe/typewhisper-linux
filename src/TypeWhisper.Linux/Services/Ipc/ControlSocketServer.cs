@@ -691,8 +691,9 @@ internal sealed class ControlSocketServer : IDisposable
     }
 
     /// <summary>
-    ///     Projects an accepted start as <c>starting</c> until capture is observably open or
-    ///     the complete start operation settles.
+    ///     Projects an accepted start as <c>starting</c> only while the orchestrator is
+    ///     otherwise idle; any real active state (recording, transcribing, injecting)
+    ///     supersedes the pending projection.
     /// </summary>
     private string SnapshotState()
     {
@@ -786,7 +787,12 @@ internal sealed class ControlSocketStartCoordinator
     public string SnapshotState()
     {
         var state = _readState();
-        if (state == JsonControlProtocol.StateRecording)
+        if (
+            state
+            is JsonControlProtocol.StateRecording
+                or JsonControlProtocol.StateTranscribing
+                or JsonControlProtocol.StateInjecting
+        )
         {
             return state;
         }

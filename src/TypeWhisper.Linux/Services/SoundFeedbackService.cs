@@ -15,26 +15,35 @@ public sealed class SoundFeedbackService
     private static readonly string s_soundsDir =
         Path.Join(AppContext.BaseDirectory, "Resources", "Sounds");
 
-    private readonly string? _player;
+    // ReSharper disable once ReplaceWithFieldKeyword -- PlayerPath would then have a setter meaning "the override" and a getter meaning "override or live resolve"; the two names keep those apart.
+    private readonly string? _overriddenPlayerPath;
     private readonly IProcessRunner _processRunner;
     private readonly string _soundsDir;
 
     // ReSharper disable once UnusedMember.Global -- resolved by DI (AddSingleton<SoundFeedbackService>).
     public SoundFeedbackService(IProcessRunner processRunner)
-        : this(processRunner, ResolvePlayer(), s_soundsDir)
+        : this(processRunner, null, s_soundsDir)
     {
     }
 
     internal SoundFeedbackService(
         IProcessRunner processRunner,
-        string? player,
+        string? playerOverride,
         string soundsDir
     )
     {
         _processRunner = processRunner;
-        _player = player;
+        _overriddenPlayerPath = playerOverride;
         _soundsDir = soundsDir;
     }
+
+    /// <summary>
+    ///     Resolved per cue rather than cached at construction: the capability snapshot already
+    ///     re-runs <see cref="PcmPlayerResolver" /> on refresh, so a singleton that cached its
+    ///     player would leave cues silent until a restart.
+    /// </summary>
+    internal string? PlayerPath =>
+        _overriddenPlayerPath ?? PcmPlayerResolver.Resolve()?.AbsolutePath;
 
     /// <summary>
     ///     Plays the startup cue to completion before capture opens. The process
@@ -63,7 +72,9 @@ public sealed class SoundFeedbackService
 
     private async Task PlayAsync(string fileName, TimeSpan timeout, CancellationToken ct = default)
     {
-        if (_player is null)
+        // One read: the property resolves live, so re-reading could pick a different player.
+        var player = PlayerPath;
+        if (player is null)
         {
             return;
         }
@@ -77,7 +88,7 @@ public sealed class SoundFeedbackService
         try
         {
             _ = await _processRunner
-                .RunAsync(_player, [path], timeout: timeout, ct: ct)
+                .RunAsync(player, [path], timeout: timeout, ct: ct)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -98,12 +109,4 @@ public sealed class SoundFeedbackService
         );
     }
 
-    private static string? ResolvePlayer()
-    {
-        // Same candidate order as SystemCommandAvailabilityService.HasAudioPlayer.
-        return Array.Find(
-            ["pw-play", "paplay", "aplay"],
-            SystemCommandAvailabilityService.IsCommandAvailable
-        );
-    }
 }

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
@@ -17,25 +18,40 @@ public sealed class ErrorLogService : IErrorLogService
     private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
     private const int MaxEntries = 200;
-    private readonly List<ErrorLogEntry> _entries = [];
-    private readonly Lock _lock = new();
-
-    private readonly string _logFilePath;
+    private readonly AtomicJsonStore<ImmutableArray<ErrorLogEntry>> _store;
 
     public ErrorLogService(string dataDirectory)
     {
-        _logFilePath = Path.Join(dataDirectory, "error-log.json");
-        LoadFromDisk();
+        var logFilePath = Path.Join(dataDirectory, "error-log.json");
+        _store = new AtomicJsonStore<ImmutableArray<ErrorLogEntry>>(
+            logFilePath,
+            static () => [],
+            new AtomicJsonStoreOptions<ImmutableArray<ErrorLogEntry>>
+            {
+                JsonOptions = s_jsonOptions,
+                CorruptFilePolicy = AtomicJsonCorruptFilePolicy.PreserveAndReset,
+                Deserialize = DeserializeEntries,
+            }
+        );
+        _ = ReadEntries();
     }
 
-    public IReadOnlyList<ErrorLogEntry> Entries
+    public IReadOnlyList<ErrorLogEntry> Entries => ReadEntries().ToArray();
+
+    /// <summary>
+    ///     A read failure must not stop the app, so it degrades to empty. Safe: a later
+    ///     <see cref="AddEntry" /> reloads through the store, which still refuses to
+    ///     overwrite an unreadable primary.
+    /// </summary>
+    private ImmutableArray<ErrorLogEntry> ReadEntries()
     {
-        get
+        try
         {
-            lock (_lock)
-            {
-                return _entries.ToList();
-            }
+            return _store.Current;
+        }
+        catch
+        {
+            return [];
         }
     }
 
@@ -45,18 +61,22 @@ public sealed class ErrorLogService : IErrorLogService
     {
         var entry = ErrorLogEntry.Create(message, category);
 
-        lock (_lock)
+        try
         {
-            _entries.Insert(0, entry);
-
-            while (_entries.Count > MaxEntries)
-            {
-                _entries.RemoveAt(_entries.Count - 1);
-            }
-
-            // Persist inside the lock so two near-simultaneous AddEntry calls
-            // can't have the older snapshot overwrite the newer one on disk.
-            SaveToDisk();
+            _store.Update(
+                current =>
+                {
+                    var next = current.Insert(0, entry);
+                    return next.Length > MaxEntries
+                        ? next.RemoveRange(MaxEntries, next.Length - MaxEntries)
+                        : next;
+                }
+            );
+        }
+        catch
+        {
+            // Best-effort persistence: do not publish the entry or surface the failure.
+            return;
         }
 
         RaiseEntriesChanged();
@@ -64,13 +84,22 @@ public sealed class ErrorLogService : IErrorLogService
 
     public void ClearAll()
     {
-        lock (_lock)
+        bool changed;
+        try
         {
-            _entries.Clear();
-            SaveToDisk();
+            _store.Update(static current => current.IsEmpty ? current : [], out changed);
+        }
+        catch
+        {
+            // Best-effort persistence: keep the prior committed entries.
+            return;
         }
 
-        RaiseEntriesChanged();
+        // Outside the catch, as in AddEntry: a throwing subscriber is not a persistence failure.
+        if (changed)
+        {
+            RaiseEntriesChanged();
+        }
     }
 
     // Callers report errors from inside their own catch blocks; a throwing subscriber must not
@@ -99,11 +128,7 @@ public sealed class ErrorLogService : IErrorLogService
 
     public string ExportDiagnostics()
     {
-        List<ErrorLogEntry> snapshot;
-        lock (_lock)
-        {
-            snapshot = [.. _entries];
-        }
+        var snapshot = ReadEntries();
 
         var report = new
         {
@@ -117,7 +142,7 @@ public sealed class ErrorLogService : IErrorLogService
                 locale = CultureInfo.CurrentCulture.Name,
                 timezone = TimeZoneInfo.Local.Id,
             },
-            error_count = snapshot.Count,
+            error_count = snapshot.Length,
             errors = snapshot.Select(e => new
             {
                 timestamp = e.Timestamp.ToString("o"), category = e.Category, message = e.Message,
@@ -127,60 +152,18 @@ public sealed class ErrorLogService : IErrorLogService
         return JsonSerializer.Serialize(report, s_jsonOptions);
     }
 
-    private void LoadFromDisk()
+    private static ImmutableArray<ErrorLogEntry> DeserializeEntries(string json)
     {
-        try
+        var entries =
+            JsonSerializer.Deserialize<ImmutableArray<ErrorLogEntry>>(json, s_jsonOptions);
+        if (entries.IsDefault)
         {
-            if (!File.Exists(_logFilePath))
-            {
-                return;
-            }
-
-            var json = File.ReadAllText(_logFilePath);
-            var entries = JsonSerializer.Deserialize<List<ErrorLogEntry>>(json);
-            if (entries is null)
-            {
-                return;
-            }
-
-            // Trim on load: an older build or hand-edited file may exceed MaxEntries.
-            if (entries.Count > MaxEntries)
-            {
-                entries = entries.GetRange(0, MaxEntries);
-            }
-
-            lock (_lock)
-            {
-                _entries.Clear();
-                _entries.AddRange(entries);
-            }
+            throw new JsonException("Error-log JSON deserialized to null.");
         }
-        catch
-        {
-            // Corrupted or unreadable log — start fresh rather than surfacing an error about the error log
-        }
-    }
 
-    private void SaveToDisk()
-    {
-        // Caller must hold _lock so the on-disk snapshot stays in step with
-        // the in-memory list; two concurrent writers could otherwise interleave.
-        try
-        {
-            var json = JsonSerializer.Serialize(_entries, s_jsonOptions);
-
-            var dir = Path.GetDirectoryName(_logFilePath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
-
-            AtomicFileWrite.WriteAllText(_logFilePath, json);
-        }
-        catch
-        {
-            // Best-effort persistence — silently discard save failures so callers are unaffected
-        }
+        return entries.Length > MaxEntries
+            ? entries.RemoveRange(MaxEntries, entries.Length - MaxEntries)
+            : entries;
     }
 
     private static string GetAppVersion()

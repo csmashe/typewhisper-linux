@@ -1,4 +1,5 @@
 // ReSharper disable MethodHasAsyncOverload -- synchronous File.ReadAllBytes is deliberate in these test assertions.
+using System.Collections.Immutable;
 using Moq;
 using System.Security.Cryptography;
 using System.Runtime.Versioning;
@@ -8,12 +9,128 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Processes;
 using TypeWhisper.Tests;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
 public sealed class PluginHostServicesTests : IDisposable
 {
+    [Fact]
+    public async Task ProcessScope_tracks_completion_and_terminates_remaining_sessions()
+    {
+        var runner = new RecordingPluginProcessSupervisor();
+        var first = new ControlledPluginProcessSession();
+        runner.NextSession = first;
+        var scope = new PluginProcessSupervisorScope("test-plugin", runner);
+
+        var started = scope.StartSession(
+            new ProcessCommand("player", ["one.wav"]),
+            new ProcessSessionOptions()
+        );
+
+        Assert.True(started.Started);
+        Assert.Equal(1, scope.SessionCount);
+        first.Complete(new ProcessExitOutcome(ProcessExitReason.Exited, 0));
+        await ProcessTestWait.UntilAsync(() => scope.SessionCount == 0);
+
+        var second = new ControlledPluginProcessSession();
+        runner.NextSession = second;
+        scope.StartSession(
+            new ProcessCommand("player", ["two.wav"]),
+            new ProcessSessionOptions()
+        );
+
+        scope.TerminateAll();
+
+        Assert.Equal(1, second.TerminateCount);
+        second.Complete(
+            new ProcessExitOutcome(ProcessExitReason.Terminated, null)
+        );
+        await ProcessTestWait.UntilAsync(() => scope.SessionCount == 0);
+    }
+
+    [Fact]
+    public async Task ProcessScope_retire_closes_the_scope_while_terminate_leaves_it_usable()
+    {
+        var runner = new RecordingPluginProcessSupervisor();
+        var scope = new PluginProcessSupervisorScope("test-plugin", runner);
+
+        // A failed deactivation leaves the plugin registered, so a plain terminate must
+        // stop current work without stranding it on a permanently cancelled scope.
+        scope.TerminateAll();
+
+        var afterTerminate = await scope.RunOneShotAsync(
+            new ProcessCommand("probe", []),
+            new ProcessOneShotOptions()
+        );
+        Assert.Equal(ProcessRunStatus.Exited, afterTerminate.Status);
+
+        runner.NextSession = new ControlledPluginProcessSession();
+        Assert.True(
+            scope.StartSession(
+                new ProcessCommand("player", ["one.wav"]),
+                new ProcessSessionOptions()
+            ).Started
+        );
+
+        // Retiring is terminal: work crossing the teardown boundary is refused and stopped.
+        scope.Retire();
+
+        var startsBeforeRefusal = runner.Sessions.Count;
+        var late = new ControlledPluginProcessSession();
+        runner.NextSession = late;
+        var refused = scope.StartSession(
+            new ProcessCommand("player", ["two.wav"]),
+            new ProcessSessionOptions()
+        );
+
+        Assert.False(refused.Started);
+        // Refused before the handoff, so the command never ran at all.
+        Assert.Equal(startsBeforeRefusal, runner.Sessions.Count);
+        Assert.Equal(0, late.TerminateCount);
+        Assert.False(scope.LaunchDetached(new ProcessCommand("tool", [])).Started);
+        Assert.False(scope.LaunchUri(new Uri("https://example.test/")).Started);
+        Assert.Empty(runner.Uris);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => scope.RunOneShotAsync(
+                new ProcessCommand("probe", []),
+                new ProcessOneShotOptions()
+            )
+        );
+
+        // A terminate arriving after retirement must not hand the scope back its lifetime.
+        scope.TerminateAll();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => scope.RunOneShotAsync(
+                new ProcessCommand("probe", []),
+                new ProcessOneShotOptions()
+            )
+        );
+    }
+
+    [Fact]
+    public void ProcessScope_terminates_a_session_that_crosses_a_stop_sweep()
+    {
+        var runner = new RecordingPluginProcessSupervisor();
+        var scope = new PluginProcessSupervisorScope("test-plugin", runner);
+        var crossing = new ControlledPluginProcessSession();
+
+        // The sweep runs while the launch is in flight, so this session was never in the
+        // snapshot TerminateAll took and must be stopped as it tries to register.
+        runner.OnStartSession = scope.TerminateAll;
+        runner.NextSession = crossing;
+
+        var started = scope.StartSession(
+            new ProcessCommand("player", ["one.wav"]),
+            new ProcessSessionOptions()
+        );
+
+        Assert.False(started.Started);
+        Assert.Equal(1, crossing.TerminateCount);
+        Assert.Equal(0, scope.SessionCount);
+    }
+
     private readonly Mock<IActiveWindowService> _activeWindow = new();
     private readonly Mock<IPluginEventBus> _eventBus = new();
     private readonly Mock<IProfileService> _profiles = new();
@@ -261,9 +378,29 @@ public sealed class PluginHostServicesTests : IDisposable
     }
 
     [Fact]
+    public async Task LoadSecret_NonStringSiblingSecretIsTreatedAsAnIntegrityFailure()
+    {
+        // A secret:* entry that is not even a JSON string means the file's shape is wrong, not
+        // that a write failed -- withhold, same as an unauthenticatable sibling.
+        var pluginDirectory = Path.Join(_tempDir, "PluginData", "test-plugin");
+        var settingsPath = Path.Join(pluginDirectory, "settings.json");
+        Directory.CreateDirectory(pluginDirectory);
+        File.WriteAllText(
+            settingsPath,
+            $$"""{"secret:valid":"{{EncryptLegacyGcm("valid-secret")}}","secret:broken":42}"""
+        );
+        var before = File.ReadAllBytes(settingsPath);
+
+        var loaded = await CreateServices().LoadSecretAsync("valid");
+
+        Assert.Null(loaded);
+        Assert.Equal(before, File.ReadAllBytes(settingsPath));
+    }
+
+    [Fact]
     public async Task FailedSave_ThrowsWithoutChangingCacheOrSettingsFile()
     {
-        if (!OperatingSystem.IsLinux() || Environment.UserName == "root")
+        if (!OperatingSystem.IsLinux() || Environment.IsPrivilegedProcess)
         {
             // Root can bypass directory write permissions, so chmod cannot force this failure.
             return;
@@ -330,7 +467,7 @@ public sealed class PluginHostServicesTests : IDisposable
     [Fact]
     public void UnreadableSettingsFile_RefusesToOverwriteExistingFile()
     {
-        if (!OperatingSystem.IsLinux() || Environment.UserName == "root")
+        if (!OperatingSystem.IsLinux() || Environment.IsPrivilegedProcess)
         {
             // Root can read a mode-000 file, so this cannot exercise the unreadable-file path.
             return;
@@ -348,8 +485,11 @@ public sealed class PluginHostServicesTests : IDisposable
             File.SetUnixFileMode(settingsPath, UnixFileMode.None);
             var services = CreateServices();
 
-            Assert.Null(services.GetSetting<string>("language"));
-            Assert.Throws<IOException>(() =>
+            // Narrow: any-exception would also pass on an unrelated failure and hide it.
+            Assert.ThrowsAny<UnauthorizedAccessException>(() =>
+                services.GetSetting<string>("language")
+            );
+            Assert.ThrowsAny<UnauthorizedAccessException>(() =>
                 services.SetSetting("language", "new-value")
             );
             Assert.True(File.Exists(settingsPath));
@@ -378,7 +518,7 @@ public sealed class PluginHostServicesTests : IDisposable
     [Fact]
     public async Task DeleteSecret_ThrowsWhenFileUnreadableAndLeavesSecretOnDisk()
     {
-        if (!OperatingSystem.IsLinux() || Environment.UserName == "root")
+        if (!OperatingSystem.IsLinux() || Environment.IsPrivilegedProcess)
         {
             // Root can read a mode-000 file, so this cannot exercise the unreadable-file path.
             return;
@@ -397,7 +537,9 @@ public sealed class PluginHostServicesTests : IDisposable
             File.SetUnixFileMode(settingsPath, UnixFileMode.None);
             var services = CreateServices();
 
-            await Assert.ThrowsAsync<IOException>(() => services.DeleteSecretAsync("api-key"));
+            await Assert.ThrowsAnyAsync<UnauthorizedAccessException>(() =>
+                services.DeleteSecretAsync("api-key")
+            );
         }
         finally
         {
@@ -442,6 +584,99 @@ public sealed class PluginHostServicesTests : IDisposable
         Assert.Contains("reserved", ex.Message, StringComparison.Ordinal);
         Assert.Equal(before, File.ReadAllBytes(settingsPath));
         Assert.Equal("secret-value", await CreateServices().LoadSecretAsync("api-key"));
+    }
+
+    [Theory]
+    [InlineData("../outside.json")]
+    [InlineData("sub/state.json")]
+    [InlineData("sub\\state.json")]
+    [InlineData("settings.json")]
+    [InlineData("secret-protection.key")]
+    [InlineData(".")]
+    [InlineData("..")]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("/etc/passwd")]
+    [InlineData("C:\\state.json")]
+    public void OpenStateStore_RejectsNonLeafAndReservedNames(string fileName)
+    {
+        var services = CreateServices();
+
+        Assert.Throws<ArgumentException>(() =>
+            services.OpenStateStore<ImmutableArray<string>>(
+                fileName,
+                static () => []
+            )
+        );
+    }
+
+    [Fact]
+    public void OpenStateStore_ReusesSamePathTypeAndOptionsButRejectsConflicts()
+    {
+        var services = CreateServices();
+        var options = new PluginStateStoreOptions
+        {
+            JsonOptions = new JsonSerializerOptions { WriteIndented = true },
+            CorruptFilePolicy = PluginStateCorruptFilePolicy.PreserveAndReset,
+        };
+
+        var first = services.OpenStateStore<ImmutableArray<string>>(
+            "state.json",
+            static () => [],
+            options
+        );
+        var second = services.OpenStateStore<ImmutableArray<string>>(
+            "state.json",
+            static () => [],
+            options
+        );
+
+        Assert.Same(first, second);
+        Assert.Throws<InvalidOperationException>(() =>
+            services.OpenStateStore<ImmutableArray<int>>(
+                "state.json",
+                static () => [],
+                options
+            )
+        );
+        Assert.Throws<InvalidOperationException>(() =>
+            services.OpenStateStore<ImmutableArray<string>>(
+                "state.json",
+                static () => [],
+                options with { KeepLastKnownGoodBackup = true }
+            )
+        );
+    }
+
+    [Fact]
+    public async Task OpenStateStore_CancellationBeforeCommit_DoesNotWrite()
+    {
+        var services = CreateServices();
+        var store = services.OpenStateStore<ImmutableArray<string>>(
+            "state.json",
+            static () => []
+        );
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () =>
+                await store.UpdateAsync(
+                    current => current.Add("not committed"),
+                    cancellation.Token
+                )
+        );
+
+        Assert.False(
+            File.Exists(
+                Path.Join(
+                    _tempDir,
+                    "PluginData",
+                    "test-plugin",
+                    "state.json"
+                )
+            )
+        );
     }
 
     private PluginHostServices CreateServices(

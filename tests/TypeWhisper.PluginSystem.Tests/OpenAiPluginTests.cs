@@ -123,7 +123,7 @@ public class OpenAiPluginTests
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
         host.SetSetting("reasoningEffort", "xhigh");
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         await sut.ProcessAsync("system", "user", "gpt-5.5", CancellationToken.None);
@@ -150,7 +150,7 @@ public class OpenAiPluginTests
         host.Secrets["oauth-refresh-token"] = "refresh-token";
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
         host.SetSetting("reasoningEffort", "xhigh");
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         await sut.ProcessAsync("system", "user", "gpt-5.5", CancellationToken.None);
@@ -172,7 +172,7 @@ public class OpenAiPluginTests
 
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         await sut.ProcessAsync("system", "user", "o4-mini", CancellationToken.None);
@@ -250,7 +250,7 @@ public class OpenAiPluginTests
 
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-live" } };
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var result = await sut.ProcessAsync("Fix grammar", "hello world", "gpt-5.5", CancellationToken.None);
@@ -295,7 +295,7 @@ public class OpenAiPluginTests
 
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-live" } };
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var models = await sut.RefreshAvailableLlmModelsAsync(CancellationToken.None);
@@ -353,7 +353,7 @@ public class OpenAiPluginTests
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
         host.SetSetting("selectedLLMModel", "gpt-5.5");
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         await sut.RefreshAvailableLlmModelsAsync(CancellationToken.None);
@@ -433,7 +433,7 @@ public class OpenAiPluginTests
         host.Secrets["oauth-refresh-token"] = "refresh-token";
 
         using var httpClient = new HttpClient(handler);
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var result = await sut.ProcessAsync("Fix grammar", "hello world", "gpt-5.5", CancellationToken.None);
@@ -452,18 +452,21 @@ public class OpenAiPluginTests
     }
 
     [Fact]
-    public void ChatGptResponseParser_ExtractsServerSentEventText()
+    public async Task ChatGptResponseParser_ExtractsServerSentEventText()
     {
-        const string stream = """
-                              event: response.output_text.delta
-                              data: {"type":"response.output_text.delta","delta":"Hello"}
-                              event: response.output_text.delta
-                              data: {"type":"response.output_text.delta","delta":" world"}
-                              data: [DONE]
+        var stream = string.Join(
+            "\n",
+            "event: response.output_text.delta",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\"}",
+            "",
+            "event: response.output_text.delta",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}",
+            "",
+            "data: [DONE]",
+            "",
+            "");
 
-                              """;
-
-        Assert.Equal("Hello world", OpenAiChatGptClient.ParseResponseText(stream));
+        Assert.Equal("Hello world", await OpenAiChatGptClient.ParseResponseTextAsync(stream));
     }
 
     [Fact]
@@ -494,7 +497,7 @@ public class OpenAiPluginTests
         host.Secrets["oauth-refresh-token"] = "original-refresh-token";
 
         using var httpClient = new HttpClient(handler);
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         await sut.ProcessAsync("system", "user", "gpt-5.5", CancellationToken.None);
@@ -583,7 +586,7 @@ public class OpenAiPluginTests
 
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         using var httpClient = new HttpClient(handler);
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var firstRequest = sut.ProcessAsync(
@@ -659,7 +662,7 @@ public class OpenAiPluginTests
 
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         using var httpClient = new HttpClient(handler);
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var failingRequest = sut.ProcessAsync(
@@ -725,7 +728,7 @@ public class OpenAiPluginTests
         using var firstRequestCts = new CancellationTokenSource();
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         using var httpClient = new HttpClient(handler);
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var canceledRequest = sut.ProcessAsync(
@@ -865,7 +868,7 @@ public class OpenAiPluginTests
 
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-live" } };
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var result = await sut.ValidateAsync();
@@ -920,9 +923,8 @@ public class OpenAiPluginTests
     }
 
     [Fact]
-    public async Task SpeakAsync_PostsAudioSpeechRequestAndUsesPlaybackFactory()
+    public async Task SpeakAsync_PostsAudioSpeechRequestAndUsesHostPcmPlayback()
     {
-        byte[]? playbackBytes = null;
         var handler = new CapturingHandler((request, body) =>
         {
             Assert.Equal(HttpMethod.Post, request.Method);
@@ -944,22 +946,24 @@ public class OpenAiPluginTests
         });
 
         using var httpClient = new HttpClient(handler);
-        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-live" } };
-        var sut = new OpenAiPlugin(
-            httpClient,
-            pcm =>
-            {
-                playbackBytes = pcm;
-                return new FakeTtsPlaybackSession();
-            },
-            ttsPlaybackAvailableProbe: () => true);
+        var playback = new RecordingPcmPlaybackService();
+        var host = new TestPluginHostServices
+        {
+            PcmPlayback = playback,
+            Secrets = { ["api-key"] = "sk-live" },
+        };
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
         sut.SelectVoice("nova");
 
         var session = await sut.SpeakAsync(new TtsSpeakRequest("Read this", "en"), CancellationToken.None);
 
         Assert.NotNull(session);
-        Assert.Equal([0, 1, 2, 3], playbackBytes);
+        var playbackRequest = Assert.Single(playback.Requests);
+        Assert.Equal([0, 1, 2, 3], playbackRequest.Payload.ToArray());
+        Assert.Equal(24_000, playbackRequest.SampleRate);
+        Assert.Equal(1, playbackRequest.Channels);
+        Assert.Equal(PcmSampleFormat.Signed16LittleEndian, playbackRequest.Format);
     }
 
     [Fact]
@@ -977,7 +981,7 @@ public class OpenAiPluginTests
 
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-live" } };
-        var sut = new OpenAiPlugin(httpClient, ttsPlaybackAvailableProbe: () => false);
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var session = await sut.SpeakAsync(new TtsSpeakRequest("Read this", "en"), CancellationToken.None);
@@ -1005,7 +1009,7 @@ public class OpenAiPluginTests
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
         host.SetSetting("llmTemperatureMode", "custom");
         host.SetSetting("llmTemperatureValue", 0.7);
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         await sut.ProcessAsync("system", "user", "gpt-4o", CancellationToken.None);
@@ -1035,7 +1039,7 @@ public class OpenAiPluginTests
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
         host.SetSetting("reasoningEffort", "high");
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         await sut.ProcessAsync("system", "user", "o4-mini", CancellationToken.None);
@@ -1110,7 +1114,7 @@ public class OpenAiPluginTests
         host.Secrets["oauth-access-token"] = "access-token";
         host.Secrets["oauth-refresh-token"] = "refresh-token";
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var models = await sut.RefreshAvailableLlmModelsAsync(CancellationToken.None);
@@ -1428,7 +1432,7 @@ public class OpenAiPluginTests
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var socket = new FakeRealtimeWebSocket();
         await using var session =
-            OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+            await OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
 
         await session.SendAudioAsync(new byte[] { 1, 0, 2, 0 }, timeoutCts.Token);
 
@@ -1488,7 +1492,7 @@ public class OpenAiPluginTests
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var socket = new FakeRealtimeWebSocket();
         await using var session =
-            OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+            await OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
 
         await session.SendAudioAsync(new byte[] { 1, 0, 2, 0 }, timeoutCts.Token);
 
@@ -1520,7 +1524,7 @@ public class OpenAiPluginTests
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var socket = new FakeRealtimeWebSocket();
         await using var session =
-            OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+            await OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
 
         // No server-VAD commit arrives in manual mode. Finalize retains the
         // existing batch behavior of sending exactly one explicit commit.
@@ -1560,7 +1564,7 @@ public class OpenAiPluginTests
         using var finalizeCts = new CancellationTokenSource();
         var socket = new FakeRealtimeWebSocket();
         await using var session =
-            OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+            await OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
 
         await session.SendAudioAsync(new byte[] { 1, 0, 2, 0 }, testTimeoutCts.Token);
 
@@ -1682,6 +1686,7 @@ public class OpenAiPluginTests
             "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -1695,7 +1700,7 @@ public class OpenAiPluginTests
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
         using var httpClient = new HttpClient(handler);
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var chunks = new List<string>();
@@ -1717,7 +1722,7 @@ public class OpenAiPluginTests
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
         host.SetSetting("streamResponses", false);
         using var httpClient = new HttpClient(handler);
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var chunks = new List<string>();
@@ -1923,6 +1928,8 @@ public class OpenAiPluginTests
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
+        public IPluginPcmPlaybackService PcmPlayback { get; init; } =
+            UnavailablePluginPcmPlaybackService.Instance;
         public string? ActiveAppProcessName => null;
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();
@@ -1962,16 +1969,4 @@ public class OpenAiPluginTests
         public void Dispose() { }
     }
 
-    private sealed class FakeTtsPlaybackSession : ITtsPlaybackSession
-    {
-        public bool IsActive => false;
-
-        public event EventHandler? Completed
-        {
-            add { value?.Invoke(this, EventArgs.Empty); }
-            remove { }
-        }
-
-        public void Stop() { }
-    }
 }

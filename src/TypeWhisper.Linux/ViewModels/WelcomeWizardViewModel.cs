@@ -632,7 +632,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
                     return;
                 }
 
-                _settings.Save(_settings.Current with { SelectedModelId = row.ModelId });
+                _settings.Update(current => current with { SelectedModelId = row.ModelId });
                 ModelStatus = Loc.Instance.GetString("Wizard.ModelReady", row.DisplayName);
                 IsModelDownloading = false;
                 RefreshModelState();
@@ -663,15 +663,15 @@ public partial class WelcomeWizardViewModel : ObservableObject
                 return;
             }
 
-            _settings.Save(_settings.Current with { ToggleHotkey = _hotkey.CurrentHotkeyString });
+            _settings.Update(current => current with { ToggleHotkey = _hotkey.CurrentHotkeyString });
             HotkeyText = _hotkey.CurrentHotkeyString;
             HotkeyStatus = Loc.Instance.GetString("Wizard.HotkeySet", _hotkey.CurrentHotkeyString);
 
             if (SelectedMic is not null)
             {
                 _audio.SelectedDeviceIndex = SelectedMic.Index;
-                _settings.Save(
-                    _settings.Current with
+                _settings.Update(current =>
+                    current with
                     {
                         SelectedMicrophoneDevice = SelectedMic.Index,
                         SelectedMicrophoneDeviceId = SelectedMic.PersistentId,
@@ -711,15 +711,16 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     private void FinishOnboardingWithIndustryPreset()
     {
-        _dictionary.ApplyIndustryPreset(SelectedIndustryPresetId);
-        _settings.Save(
-            _settings.Current with
+        var presetId = SelectedIndustryPresetId;
+        _dictionary.ApplyIndustryPreset(presetId);
+        _settings.Update(current =>
+            current with
             {
                 HasCompletedOnboarding = true,
-                SelectedIndustryPresetId = SelectedIndustryPresetId,
+                SelectedIndustryPresetId = presetId,
                 EnabledPackIds = IndustryPreset.MergeIntoEnabledPackIds(
-                    _settings.Current.EnabledPackIds,
-                    SelectedIndustryPresetId
+                    current.EnabledPackIds,
+                    presetId
                 ),
             }
         );
@@ -1055,7 +1056,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
                 );
                 var result = await plugin.TranscribeAsync(
                     wav,
-                    null,
+                    LanguageSelection.Automatic,
                     false,
                     null,
                     _lifetimeToken
@@ -1090,7 +1091,10 @@ public partial class WelcomeWizardViewModel : ObservableObject
                 return;
             }
 
-            FirstDictationStatus = Loc.Instance.GetString("Wizard.TranscriptionFailed", ex.Message);
+            FirstDictationStatus = Loc.Instance.GetString(
+                "Wizard.TranscriptionFailed",
+                LanguageSelectionUiMessage.From(ex)
+            );
         }
     }
 
@@ -1140,20 +1144,12 @@ public partial class WelcomeWizardViewModel : ObservableObject
             return;
         }
 
-        Dispatcher.UIThread.Post(() =>
+        // Raw RMS is typically well below 0.1 for normal speech; ×8 maps it to 0–1 for the meter.
+        MicLevel = Math.Clamp(level * 8, 0, 1);
+        if (IsMicTestRunning && MicLevel > 0.05)
         {
-            if (IsAbandoned)
-            {
-                return;
-            }
-
-            // Raw RMS is typically well below 0.1 for normal speech; ×8 maps it to 0–1 for the meter.
-            MicLevel = Math.Clamp(level * 8, 0, 1);
-            if (IsMicTestRunning && MicLevel > 0.05)
-            {
-                MicTestStatus = Loc.Instance["Wizard.MicInputDetected"];
-            }
-        });
+            MicTestStatus = Loc.Instance["Wizard.MicInputDetected"];
+        }
     }
 
     private static void FireAndLog(Func<Task> start, string label)

@@ -57,6 +57,7 @@ public sealed class DictationSectionViewModelLocalizationTests
                 settings.Object,
                 pluginManager,
                 commands,
+                new CudaLibraryPathSetupService(),
                 a11yBus.Object,
                 () => []
             )
@@ -74,6 +75,17 @@ public sealed class DictationSectionViewModelLocalizationTests
             var insertionBefore = sut.SelectedNewInsertionStrategyOption!;
             var appStrategyRow = Assert.Single(sut.AppInsertionStrategies);
             var appInsertionBefore = appStrategyRow.SelectedStrategyOption!;
+            HashSet<string?> expectedPropertyChanges =
+            [
+                nameof(DictationSectionViewModel.AudioDuckingUnavailableReason),
+                nameof(DictationSectionViewModel.MediaPauseUnavailableReason),
+                nameof(DictationSectionViewModel.SoundFeedbackUnavailableReason),
+                nameof(DictationSectionViewModel.CudaLibraryPathActionText),
+                nameof(DictationSectionViewModel.DownloadCudaRuntimeText),
+                nameof(DictationSectionViewModel.ClearGpuRuntimeText),
+                nameof(DictationSectionViewModel.AccelerationStatusText),
+            ];
+            HashSet<string?> propertyChanges = [];
 
             sut.AccelerationOptions.CollectionChanged += (_, _) =>
                 sut.SelectedAccelerationOption = null;
@@ -86,9 +98,11 @@ public sealed class DictationSectionViewModelLocalizationTests
                 sut.SelectedNewInsertionStrategyOption = null;
                 appStrategyRow.SelectedStrategyOption = null;
             };
+            sut.PropertyChanged += (_, args) => propertyChanges.Add(args.PropertyName);
 
             Loc.Instance.CurrentLanguage = "de";
 
+            Assert.Superset(expectedPropertyChanges, propertyChanges);
             Assert.NotSame(accelerationBefore, sut.SelectedAccelerationOption);
             Assert.Equal(
                 AppSettings.LocalModelAccelerationCpu,
@@ -118,7 +132,7 @@ public sealed class DictationSectionViewModelLocalizationTests
             );
             Assert.Equal(TextInsertionStrategy.DirectTyping, appStrategyRow.Strategy);
             settings.Verify(
-                service => service.Save(It.IsAny<AppSettings>()),
+                service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
                 Times.Never
             );
         }
@@ -126,5 +140,71 @@ public sealed class DictationSectionViewModelLocalizationTests
         {
             Loc.Instance.CurrentLanguage = originalLanguage;
         }
+    }
+
+    [Fact]
+    public void PreviewLevel_DirectDeliveryRequiresAttachedNonRecordingPreview()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(AppSettings.Default);
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var commands = new SystemCommandAvailabilityService();
+        using var models = new ModelManagerService(
+            pluginManager,
+            settings.Object,
+            commands
+        );
+        var serviceJobs = new List<Action>();
+        using var audio = new AudioRecordingService(
+            _ => { },
+            () => 0,
+            () => { },
+            postToUiThread: serviceJobs.Add
+        );
+        // ReSharper disable once InconsistentNaming -- "a11y" is the standard numeronym for accessibility.
+        var a11yBus = new Mock<IAccessibilityBusActivation>();
+        a11yBus
+            .Setup(bus => bus.IsActivatedAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        var dictation = (DictationOrchestrator)RuntimeHelpers.GetUninitializedObject(
+            typeof(DictationOrchestrator)
+        );
+        var sut = new DictationSectionViewModel(
+            dictation,
+            models,
+            audio,
+            settings.Object,
+            pluginManager,
+            commands,
+            new CudaLibraryPathSetupService(),
+            a11yBus.Object,
+            () => []
+        );
+
+        sut.ActivatePreview();
+        audio.ProcessAudioBufferForTest([0.1f]);
+        serviceJobs[0]();
+        Assert.Equal(0.8, sut.PreviewLevel, precision: 5);
+
+        sut.DeactivatePreview();
+        serviceJobs[1]();
+        Assert.Equal(0, sut.PreviewLevel);
+
+        Assert.True(audio.StartPreview());
+        audio.ProcessAudioBufferForTest([0.2f]);
+        serviceJobs[2]();
+        Assert.Equal(0, sut.PreviewLevel);
+
+        sut.ActivatePreview();
+        var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            audio.TryStartRecording(whisperModeEnabled: false)
+        );
+        sut.IsRecording = true;
+        audio.ProcessAudioBufferForTest([0.3f]);
+        serviceJobs[3]();
+        Assert.Equal(0, sut.PreviewLevel);
+
+        // ReSharper disable once MethodHasAsyncOverload -- synchronous teardown keeps this focused on delivery guards.
+        audio.StopRecording(session);
+        sut.DeactivatePreview();
     }
 }

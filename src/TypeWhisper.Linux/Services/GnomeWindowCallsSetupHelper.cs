@@ -1,5 +1,4 @@
-using System.Diagnostics;
-using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -10,6 +9,16 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed class GnomeWindowCallsSetupHelper
 {
+    private readonly IProcessRunner _processRunner;
+
+    public GnomeWindowCallsSetupHelper()
+        : this(new ProcessRunner()) { }
+
+    public GnomeWindowCallsSetupHelper(IProcessRunner processRunner)
+    {
+        _processRunner = processRunner;
+    }
+
     private const string ExtensionInstallUrl =
         "https://extensions.gnome.org/extension/4974/window-calls/";
 
@@ -38,80 +47,47 @@ public sealed class GnomeWindowCallsSetupHelper
         return lower.Contains("gnome") || lower.Contains("ubuntu");
     }
 
-    // kept instance: injected as a DI/test seam by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
-    // ReSharper disable once MemberCanBeMadeStatic.Global
     public bool IsCurrentlyInstalled()
     {
-        if (!DesktopDetector.BinaryExists("gdbus"))
-        {
-            return false;
-        }
+        // No PATH check for gdbus: a missing binary already comes back as a not-started
+        // probe below, and routing it through the seam keeps tests off the host.
 
         // Don't use `gdbus introspect`: org.gnome.Shell answers it on any path
         // (empty node), giving a false positive. Actually CALL List — a missing
         // object/method exits non-zero. Try each known endpoint.
         foreach (var (path, iface) in s_endpoints)
         {
-            try
+            var result = _processRunner.RunProbe(
+                new ProcessCommand(
+                    "gdbus",
+                    [
+                        "call",
+                        "--session",
+                        "--dest",
+                        DBusDest,
+                        "--object-path",
+                        path,
+                        "--method",
+                        $"{iface}.List",
+                    ]
+                ),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardOutput: ProcessCaptureMode.Discard,
+                    StandardError: ProcessCaptureMode.Discard
+                )
+            );
+            if (result is { Status: ProcessRunStatus.Exited, ExitCode: 0 })
             {
-                using var p = Process.Start(
-                    new ProcessStartInfo(
-                        "gdbus",
-                        $"call --session --dest {DBusDest} --object-path {path} --method {iface}.List"
-                    ) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false }
-                );
-                if (p is null)
-                {
-                    continue;
-                }
-
-                if (!p.WaitForExit(1000))
-                {
-                    try
-                    {
-                        p.Kill(true);
-                    }
-                    catch
-                    {
-                        /* best effort */
-                    }
-
-                    continue;
-                }
-
-                if (p.ExitCode == 0)
-                {
-                    return true;
-                }
-            }
-            catch
-            {
-                // Try the next endpoint.
+                return true;
             }
         }
 
         return false;
     }
 
-    // kept instance: injected as a DI/test seam by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
-    // ReSharper disable once MemberCanBeMadeStatic.Global
     public bool TryOpenInstallPage()
     {
-        try
-        {
-            using var p = Process.Start(
-                new ProcessStartInfo("xdg-open", ExtensionInstallUrl)
-                {
-                    UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true,
-                }
-            );
-            return p is not null;
-        }
-        catch
-        {
-            return false;
-        }
+        return _processRunner.LaunchUri(new Uri(ExtensionInstallUrl)).Started;
     }
 }

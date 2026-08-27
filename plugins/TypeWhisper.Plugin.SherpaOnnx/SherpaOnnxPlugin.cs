@@ -10,7 +10,9 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.SherpaOnnx;
 
-public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
+public sealed class SherpaOnnxPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities
 {
     private const string ParakeetRepo =
         "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main";
@@ -121,7 +123,7 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
 
     public string PluginId => "com.typewhisper.sherpa-onnx";
     public string PluginName => "Local Models (sherpa-onnx)";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public string ProviderId => "sherpa-onnx";
     public string ProviderDisplayName => "Lokal (sherpa-onnx)";
@@ -130,6 +132,14 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
 
     public bool SupportsTranslation => SelectedModelId == "canary-180m-flash";
     public bool SupportsModelDownload => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport =>
+        SelectedModelId == "canary-180m-flash"
+            ? LanguageSelectionSupport.Unsupported
+            : LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport =>
+        SelectedModelId == "canary-180m-flash"
+            ? LanguageSelectionSupport.Supported
+            : LanguageSelectionSupport.Unsupported;
 
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
         [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
@@ -191,7 +201,13 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
                 host.PluginAssetDirectory
             ),
             _httpClient,
-            msg => host.Log(PluginLogLevel.Info, msg)
+            msg => host.Log(PluginLogLevel.Info, msg),
+            // Resolved per call, not captured: the provisioner outlives a disable/re-enable
+            // cycle, and the first activation's process scope is retired by then.
+            () => _host?.Processes
+                  ?? throw new NotSupportedException(
+                      "The plugin host does not provide process supervision."
+                  )
         );
     }
 
@@ -756,8 +772,11 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
 
     // Test seam: exercise the same eager construction path as ActivateAsync without
     // running the legacy model-file migration against a real per-user directory.
-    internal void InitializeCudaDependenciesForTests(IPluginHostServices host) =>
+    internal void InitializeCudaDependenciesForTests(IPluginHostServices host)
+    {
+        _host = host;
         InitializeCudaDependencies(host);
+    }
 
     internal string? CudaRuntimeCacheRootForTests =>
         _cudaProvisioner is null
@@ -1219,10 +1238,7 @@ public sealed class SherpaOnnxPlugin : ITranscriptionEnginePlugin
     internal static string NormalizeCanaryLanguage(string? language)
     {
         var normalized = language?.Trim();
-        if (
-            string.IsNullOrWhiteSpace(normalized)
-            || string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase)
-        )
+        if (string.IsNullOrWhiteSpace(normalized))
         {
             throw new NotSupportedException(
                 "Sherpa ONNX Canary requires an explicit source language from the supported set: en, de, fr, es."

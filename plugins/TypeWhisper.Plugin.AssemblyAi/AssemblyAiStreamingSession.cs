@@ -1,34 +1,36 @@
-using System.Diagnostics;
 using System.Net.WebSockets;
-using System.Runtime.ExceptionServices;
-using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.AssemblyAi;
 
 internal sealed class AssemblyAiStreamingSession : IStreamingSession
 {
-    private readonly WebSocket _ws;
-    private readonly CancellationTokenSource _receiveCts = new();
-    private readonly TaskCompletionSource _terminalCompletion =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly MemoryStream _audioBuffer = new();
-    private Exception? _sessionFault;
-    private readonly Task? _receiveTask;
-    private int _terminationReceived;
-    private bool _disposed;
+    private readonly WebSocketSessionPump _pump;
 
-    // AssemblyAI requires chunks between 50-1000ms (800-16000 samples at 16kHz = 1600-32000 bytes)
-    private const int MinChunkBytes = 1600; // 50ms at 16kHz, 16-bit
-
-    internal AssemblyAiStreamingSession(WebSocket ws)
+    private AssemblyAiStreamingSession(WebSocketSessionPump pump)
     {
-        _ws = ws;
-        _receiveTask = ReceiveLoopAsync(_receiveCts.Token);
+        _pump = pump;
     }
 
-    public event Action<StreamingTranscriptEvent>? TranscriptReceived;
+    internal static async Task<AssemblyAiStreamingSession> CreateConnectedSessionForTests(
+        WebSocket ws
+    )
+    {
+        var pump = await WebSocketSessionPump.StartConnectedAsync(
+            new AssemblyAiWebSocketAdapter("", null),
+            new ClientWebSocketTransport(ws),
+            CancellationToken.None
+        );
+        return new AssemblyAiStreamingSession(pump);
+    }
+
+    public event Action<StreamingTranscriptEvent>? TranscriptReceived
+    {
+        add => _pump.TranscriptReceived += value;
+        remove => _pump.TranscriptReceived -= value;
+    }
 
     public static async Task<AssemblyAiStreamingSession> ConnectAsync(
         string apiKey,
@@ -36,272 +38,196 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
         CancellationToken ct
     )
     {
-        var ws = new ClientWebSocket();
+        var pump = await WebSocketSessionPump.ConnectAsync(
+            new AssemblyAiWebSocketAdapter(apiKey, language),
+            ct
+        );
+        return new AssemblyAiStreamingSession(pump);
+    }
 
-        var url = "wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&format_turns=true";
-        // The default streaming model is English-only; opt into the multilingual
-        // variant only when a non-English language is requested. Match by prefix
-        // so locale variants like "en-US" stay on the English model.
-        if (!string.IsNullOrEmpty(language)
-            && !language.StartsWith("en", StringComparison.OrdinalIgnoreCase))
+    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct) =>
+        _pump.SendAudioAsync(pcm16Audio, ct);
+
+    public Task FinalizeAsync(CancellationToken ct) => _pump.FinalizeAsync(ct);
+
+    public ValueTask DisposeAsync() => _pump.DisposeAsync();
+}
+
+internal sealed class AssemblyAiWebSocketAdapter(
+    string apiKey,
+    string? language
+) : IWebSocketSessionAdapter
+{
+    internal const int MinimumChunkBytes = 1600;
+
+    private readonly MemoryStream _audioBuffer = new();
+
+    public string ProviderName => "AssemblyAI";
+    public WebSocketReadinessPolicy Readiness => WebSocketReadinessPolicy.Immediate;
+    public WebSocketTerminalPolicy Terminal =>
+        WebSocketTerminalPolicy.Require("Termination");
+    public WebSocketKeepAlivePolicy? KeepAlive => null;
+    public WebSocketClosePolicy ClosePolicy => WebSocketClosePolicy.Default;
+
+    public ValueTask<WebSocketConnectionOptions> GetConnectionOptionsAsync(
+        CancellationToken ct
+    )
+    {
+        var url =
+            "wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&format_turns=true";
+        if (
+            !string.IsNullOrEmpty(language)
+            && !language.StartsWith("en", StringComparison.OrdinalIgnoreCase)
+        )
         {
             url += "&speech_model=universal-streaming-multilingual";
         }
 
-        ws.Options.SetRequestHeader("Authorization", apiKey);
-        try
-        {
-            await ws.ConnectAsync(new Uri(url), ct);
-            return new AssemblyAiStreamingSession(ws);
-        }
-        catch
-        {
-            ws.Dispose();
-            throw;
-        }
+        IReadOnlyDictionary<string, string> headers =
+            new Dictionary<string, string>
+            {
+                ["Authorization"] = apiKey,
+            };
+        return ValueTask.FromResult(
+            new WebSocketConnectionOptions(new Uri(url), headers)
+        );
     }
 
-    public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
+    public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> OnConnectedAsync(
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>([]);
+
+    public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> EncodeAudioAsync(
+        ReadOnlyMemory<byte> pcm16Audio,
+        CancellationToken ct
+    )
     {
-        if (_disposed)
-            return;
-
-        ThrowIfFaulted();
-        if (_ws.State != WebSocketState.Open)
-        {
-            ThrowIfClosedBeforeTermination();
-            return;
-        }
-
         _audioBuffer.Write(pcm16Audio.Span);
-
-        // A residual smaller than MinChunkBytes is deliberately left unflushed
-        // here; flushing it is unchanged and out of scope for this change.
-        if (_audioBuffer.Length < MinChunkBytes)
-            return;
+        if (_audioBuffer.Length < MinimumChunkBytes)
+        {
+            return ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
+                []
+            );
+        }
 
         var chunk = _audioBuffer.ToArray();
         _audioBuffer.SetLength(0);
+        return ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
+            [new WebSocketOutboundMessage(chunk, WebSocketMessageType.Binary)]
+        );
+    }
+
+    public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct)
+    {
+        var messages = new List<WebSocketOutboundMessage>(2);
+        if (_audioBuffer.Length != 0)
+        {
+            // AssemblyAI rejects chunks under 50 ms; pad the residual with
+            // silence instead of dropping it.
+            var residual = _audioBuffer.ToArray();
+            if (residual.Length < MinimumChunkBytes)
+                Array.Resize(ref residual, MinimumChunkBytes);
+
+            messages.Add(
+                new WebSocketOutboundMessage(residual, WebSocketMessageType.Binary)
+            );
+            _audioBuffer.SetLength(0);
+        }
+
+        messages.Add(
+            new WebSocketOutboundMessage(
+                """{"type":"Terminate"}"""u8.ToArray(),
+                WebSocketMessageType.Text
+            )
+        );
+        return ValueTask.FromResult(new WebSocketFinalizePlan(messages));
+    }
+
+    public WebSocketInboundResult HandleMessage(
+        WebSocketMessageType type,
+        ReadOnlyMemory<byte> completePayload
+    )
+    {
+        if (type != WebSocketMessageType.Text)
+            return WebSocketInboundResult.Empty;
 
         try
         {
-            await _ws.SendAsync(chunk, WebSocketMessageType.Binary, true, ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            CaptureFault(
-                new InvalidOperationException("AssemblyAI streaming audio send failed.", ex)
-            );
-            throw;
-        }
-    }
-
-    public async Task FinalizeAsync(CancellationToken ct)
-    {
-        if (_disposed)
-            return;
-
-        ThrowIfFaulted();
-        if (Volatile.Read(ref _terminationReceived) == 0)
-        {
-            if (_ws.State != WebSocketState.Open)
+            using var document = JsonDocument.Parse(completePayload);
+            var root = document.RootElement;
+            if (
+                root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("type", out var typeElement)
+                || typeElement.ValueKind != JsonValueKind.String
+            )
             {
-                ThrowIfClosedBeforeTermination();
-                return;
+                return Fault("AssemblyAI sent a malformed streaming message.");
             }
 
-            var msg = """{"type":"Terminate"}"""u8.ToArray();
-            try
+            return typeElement.GetString() switch
             {
-                await _ws.SendAsync(msg, WebSocketMessageType.Text, true, ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                CaptureFault(
-                    new InvalidOperationException(
-                        "AssemblyAI streaming termination send failed.",
-                        ex
-                    )
-                );
-                throw;
-            }
-        }
-
-        // The coordinator supplies the finalization deadline through ct. Do not
-        // turn that cancellation into success: it must remain able to select the
-        // complete-WAV batch fallback.
-        await _terminalCompletion.Task.WaitAsync(ct);
-        ThrowIfFaulted();
-    }
-
-    private async Task ReceiveLoopAsync(CancellationToken ct)
-    {
-        var buffer = new byte[8192];
-        using var messageBuffer = new MemoryStream();
-
-        try
-        {
-            while (true)
-            {
-                messageBuffer.SetLength(0);
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await _ws.ReceiveAsync(buffer, ct);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        CaptureFault(CreatePrematureCloseException(result));
-                        return;
-                    }
-
-                    messageBuffer.Write(buffer, 0, result.Count);
-                } while (!result.EndOfMessage);
-
-                if (result.MessageType != WebSocketMessageType.Text)
-                    continue;
-
-                var json = Encoding.UTF8.GetString(
-                    messageBuffer.GetBuffer(),
-                    0,
-                    (int)messageBuffer.Length
-                );
-                ProcessMessage(json);
-
-                if (Volatile.Read(ref _terminationReceived) != 0)
-                    return;
-            }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // DisposeAsync owns this token. Local teardown is not a stream fault.
-        }
-        catch (OperationCanceledException ex)
-        {
-            CaptureFault(
-                new InvalidOperationException("AssemblyAI streaming receive was canceled.", ex)
-            );
-        }
-        catch (WebSocketException ex)
-        {
-            CaptureFault(
-                new InvalidOperationException("AssemblyAI streaming transport failed.", ex)
-            );
+                "Turn" => HandleTurn(root),
+                "Termination" => new WebSocketInboundResult(
+                    [],
+                    WebSocketSessionSignal.Terminal
+                ),
+                "Error" => Fault(
+                    $"AssemblyAI streaming provider error: {ExtractError(root)}"
+                ),
+                _ => WebSocketInboundResult.Empty,
+            };
         }
         catch (JsonException ex)
         {
-            CaptureFault(
-                new InvalidOperationException("AssemblyAI sent malformed JSON.", ex)
+            return new WebSocketInboundResult(
+                [],
+                Fault: new InvalidOperationException(
+                    "AssemblyAI sent malformed JSON.",
+                    ex
+                )
             );
-        }
-        catch (InvalidOperationException ex)
-        {
-            CaptureFault(ex);
-        }
-        catch (Exception ex)
-        {
-            CaptureFault(
-                new InvalidOperationException("AssemblyAI streaming receive failed.", ex)
-            );
-        }
-        finally
-        {
-            if (ct.IsCancellationRequested)
-            {
-                _terminalCompletion.TrySetResult();
-            }
-            else if (
-                Volatile.Read(ref _terminationReceived) == 0
-                && Volatile.Read(ref _sessionFault) is null
-            )
-            {
-                CaptureFault(
-                    new InvalidOperationException(
-                        "AssemblyAI streaming receive ended before Termination."
-                    )
-                );
-            }
         }
     }
 
-    private void ProcessMessage(string json)
-    {
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-        if (
-            root.ValueKind != JsonValueKind.Object
-            || !root.TryGetProperty("type", out var typeEl)
-            || typeEl.ValueKind != JsonValueKind.String
-        )
-        {
-            throw new InvalidOperationException(
-                "AssemblyAI sent a malformed streaming message."
-            );
-        }
-
-        switch (typeEl.GetString())
-        {
-            case "Turn":
-                ProcessTurn(root);
-                break;
-            case "Termination":
-                Volatile.Write(ref _terminationReceived, 1);
-                _terminalCompletion.TrySetResult();
-                break;
-            case "Error":
-                throw new InvalidOperationException(
-                    $"AssemblyAI streaming provider error: {ExtractError(root)}"
-                );
-        }
-    }
-
-    private void ProcessTurn(JsonElement root)
+    private static WebSocketInboundResult HandleTurn(JsonElement root)
     {
         if (
-            !root.TryGetProperty("transcript", out var textEl)
-            || textEl.ValueKind != JsonValueKind.String
+            !root.TryGetProperty("transcript", out var textElement)
+            || textElement.ValueKind != JsonValueKind.String
         )
         {
-            throw new InvalidOperationException("AssemblyAI sent a malformed Turn message.");
+            return Fault("AssemblyAI sent a malformed Turn message.");
         }
 
-        var transcript = textEl.GetString() ?? "";
+        var transcript = textElement.GetString() ?? "";
         if (string.IsNullOrWhiteSpace(transcript))
-            return;
+            return WebSocketInboundResult.Empty;
 
         var isEndOfTurn =
-            root.TryGetProperty("end_of_turn", out var eotEl)
-            && eotEl.ValueKind is JsonValueKind.True or JsonValueKind.False
-            && eotEl.GetBoolean();
+            root.TryGetProperty("end_of_turn", out var endOfTurnElement)
+            && endOfTurnElement.ValueKind
+                is JsonValueKind.True
+                    or JsonValueKind.False
+            && endOfTurnElement.GetBoolean();
         var isFormatted =
-            root.TryGetProperty("turn_is_formatted", out var formattedEl)
-            && formattedEl.ValueKind is JsonValueKind.True or JsonValueKind.False
-            && formattedEl.GetBoolean();
-
-        // With format_turns=true AssemblyAI sends an unformatted end-of-turn
-        // message followed by the formatted replacement. Expose the former only
-        // as interim text and commit the formatted terminal turn exactly once.
-        Emit(new StreamingTranscriptEvent(transcript, isEndOfTurn && isFormatted));
+            root.TryGetProperty("turn_is_formatted", out var formattedElement)
+            && formattedElement.ValueKind
+                is JsonValueKind.True
+                    or JsonValueKind.False
+            && formattedElement.GetBoolean();
+        return new WebSocketInboundResult(
+            [
+                new StreamingTranscriptEvent(
+                    transcript,
+                    isEndOfTurn && isFormatted
+                ),
+            ]
+        );
     }
 
-    private void Emit(StreamingTranscriptEvent transcriptEvent)
-    {
-        try
-        {
-            TranscriptReceived?.Invoke(transcriptEvent);
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"AssemblyAI streaming subscriber failed: {ex.Message}");
-        }
-    }
+    private static WebSocketInboundResult Fault(string message) =>
+        new([], Fault: new InvalidOperationException(message));
 
     private static string ExtractError(JsonElement root)
     {
@@ -318,99 +244,5 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
         }
 
         return "Unknown provider error.";
-    }
-
-    private static InvalidOperationException CreatePrematureCloseException(
-        WebSocketReceiveResult result
-    )
-    {
-        var status = result.CloseStatus is { } closeStatus
-            ? $"{(int)closeStatus} ({closeStatus})"
-            : "without a close status";
-        var reason = string.IsNullOrWhiteSpace(result.CloseStatusDescription)
-            ? ""
-            : $": {result.CloseStatusDescription}";
-        return new InvalidOperationException(
-            $"AssemblyAI streaming socket closed {status}{reason} before Termination."
-        );
-    }
-
-    private void ThrowIfClosedBeforeTermination()
-    {
-        ThrowIfFaulted();
-        if (Volatile.Read(ref _terminationReceived) != 0)
-            return;
-
-        CaptureFault(
-            new InvalidOperationException(
-                $"AssemblyAI streaming socket is {_ws.State} before Termination."
-            )
-        );
-        ThrowIfFaulted();
-    }
-
-    private void CaptureFault(Exception exception)
-    {
-        if (Interlocked.CompareExchange(ref _sessionFault, exception, null) is null)
-            _terminalCompletion.TrySetException(exception);
-    }
-
-    private void ThrowIfFaulted()
-    {
-        var exception = Volatile.Read(ref _sessionFault);
-        if (exception is not null)
-            ExceptionDispatchInfo.Capture(exception).Throw();
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed)
-            return;
-
-        _disposed = true;
-        // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
-        _receiveCts.Cancel();
-        _terminalCompletion.TrySetResult();
-
-        if (_ws.State == WebSocketState.Open)
-        {
-            // Cap the graceful close handshake; a wedged remote could otherwise
-            // hang DisposeAsync indefinitely. On timeout or any failure, abort
-            // the socket so cleanup can proceed.
-            using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            try
-            {
-                await _ws.CloseAsync(
-                    WebSocketCloseStatus.NormalClosure,
-                    null,
-                    closeCts.Token
-                );
-            }
-            catch (Exception ex)
-                when (ex is OperationCanceledException or WebSocketException)
-            {
-                try { _ws.Abort(); } catch { /* best effort */ }
-            }
-            catch
-            { /* best effort */
-            }
-        }
-
-        if (_receiveTask is not null)
-        {
-            try
-            {
-                await _receiveTask;
-            }
-            catch
-            { /* expected */
-            }
-        }
-
-        _ = _terminalCompletion.Task.Exception;
-        // ReSharper disable once MethodHasAsyncOverload -- MemoryStream has no async disposal work; DisposeAsync would only add overhead here.
-        _audioBuffer.Dispose();
-        _receiveCts.Dispose();
-        _ws.Dispose();
     }
 }

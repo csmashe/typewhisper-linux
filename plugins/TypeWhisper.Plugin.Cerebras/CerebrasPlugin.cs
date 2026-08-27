@@ -30,7 +30,7 @@ public sealed class CerebrasPlugin : ILlmProviderPlugin, IPluginSettingsProvider
 
     public string PluginId => "com.typewhisper.cerebras";
     public string PluginName => "Cerebras";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {

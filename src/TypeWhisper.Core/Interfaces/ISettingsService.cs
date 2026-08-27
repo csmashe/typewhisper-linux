@@ -11,6 +11,8 @@ public interface ISettingsService
     AppSettings Current { get; }
 
     /// <summary>Reads settings from disk into <see cref="Current" /> and returns them.</summary>
+    // ReSharper disable once UnusedMethodReturnValue.Global -- callers today only want the reload
+    // side effect, but returning the loaded settings is part of the published contract.
     AppSettings Load();
 
     /// <summary>Persists <paramref name="settings" />, updates <see cref="Current" />, and raises <see cref="SettingsChanged" />.</summary>
@@ -25,7 +27,10 @@ public interface ISettingsService
     ///     implementers without locking (test doubles).
     /// </summary>
     // ReSharper disable once UnusedMemberInSuper.Global -- default interface method is a fallback for other implementers; the sole in-tree implementer overrides it.
+    // ReSharper disable once UnusedMember.Global -- same reason: callers reach Reload through the implementer, not this declaration.
     // ReSharper disable once UnusedMethodReturnValue.Global -- returns the reloaded settings for caller convenience; part of the public API contract.
+    // ReSharper disable once UnusedMember.Global -- no in-tree caller goes through the interface
+    // (implementers reload their own store directly); it stays part of the contract for external callers.
     AppSettings Reload()
     {
         var loaded = Load();

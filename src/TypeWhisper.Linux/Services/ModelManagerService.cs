@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -15,7 +16,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 {
     private readonly SystemCommandAvailabilityService? _commands;
     private readonly SemaphoreSlim _modelLock = new(1, 1);
-    private readonly Dictionary<string, ModelStatus> _modelStatuses = new();
+    private readonly ConcurrentDictionary<string, ModelStatus> _modelStatuses = new();
     private readonly ISettingsService _settings;
     private TranscriptionAccelerationPreference? _activeModelAccelerationPreference;
     private string? _activeModelId;
@@ -26,6 +27,15 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     private Timer? _autoUnloadTimer;
     private int _autoUnloadGeneration;
     private bool _disposed;
+    // Serializes status writes with the progress-generation check. Progress<T> posts its
+    // callbacks asynchronously (via the ThreadPool when no SynchronizationContext is
+    // captured), so a callback that already passed a plain pre-check could land after a
+    // terminal SetStatus/ClearStatus and re-insert a stale transient status — e.g. a
+    // permanent phantom "downloading" after a cancel with no operation in flight. The
+    // generation is advanced by every authoritative transition and validated inside the
+    // same lock as the progress write, closing that check-then-write gap.
+    private readonly Lock _statusGate = new();
+    private long _statusGeneration;
 
     public ModelManagerService(
         PluginManager pluginManager,
@@ -537,34 +547,18 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     /// </summary>
     public void MigrateSettings()
     {
-        var current = _settings.Current;
-        var changed = false;
-
-        var migratedModelId = MigrateModelId(current.SelectedModelId);
-        if (migratedModelId != current.SelectedModelId)
-        {
-            current = current with { SelectedModelId = migratedModelId };
-            changed = true;
-        }
-
-        var migratedFileOverride = MigrateOverrideModelId(current.FileTranscriptionModelOverride);
-        if (migratedFileOverride != current.FileTranscriptionModelOverride)
-        {
-            current = current with { FileTranscriptionModelOverride = migratedFileOverride };
-            changed = true;
-        }
-
-        var migratedWatchOverride = MigrateOverrideModelId(current.WatchFolderModelOverride);
-        if (migratedWatchOverride != current.WatchFolderModelOverride)
-        {
-            current = current with { WatchFolderModelOverride = migratedWatchOverride };
-            changed = true;
-        }
-
-        if (changed)
-        {
-            _settings.Save(current);
-        }
+        _settings.Update(current =>
+            current with
+            {
+                SelectedModelId = MigrateModelId(current.SelectedModelId),
+                FileTranscriptionModelOverride = MigrateOverrideModelId(
+                    current.FileTranscriptionModelOverride
+                ),
+                WatchFolderModelOverride = MigrateOverrideModelId(
+                    current.WatchFolderModelOverride
+                ),
+            }
+        );
     }
 
     private static string? MigrateModelId(string? modelId)
@@ -664,36 +658,37 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         {
             if (plugin.SupportsModelDownload && !plugin.IsModelDownloaded(pluginModelId))
             {
-                SetStatus(modelId, ModelStatus.DownloadingModel(0));
-
-                // Progress<T> posts callbacks asynchronously to the captured
-                // SynchronizationContext, so a late download report can run AFTER the load
-                // below sets the terminal Ready status and clobber it with a stale
-                // DownloadingModel(1.0) — leaving the UI pinned at 100% and never flipping to
-                // "Ready". Gate the handler so it no-ops once the download has returned
-                // (mirrors the load-progress gate in LoadModelCoreAsync).
-                var downloadInProgress = true;
+                // The generation captured here gates this download's progress callbacks
+                // (see _statusGate): every authoritative transition after this point — the
+                // load's LoadingModel/Ready, Failed, or the cancel path's ClearStatus —
+                // retires stragglers that would otherwise re-stick DownloadingModel.
+                var generation = SetStatus(modelId, ModelStatus.DownloadingModel(0));
                 var progress = new Progress<double>(p =>
-                {
-                    // ReSharper disable once AccessToModifiedClosure -- intentional gate: downloadInProgress is flipped under Volatile in the enclosing finally so a late Progress callback no-ops (see comment above).
-                    if (!Volatile.Read(ref downloadInProgress))
-                        return;
-                    SetStatus(modelId, ModelStatus.DownloadingModel(p));
-                });
-                try
-                {
-                    await plugin.DownloadModelAsync(pluginModelId, progress, cancellationToken);
-                }
-                finally
-                {
-                    Volatile.Write(ref downloadInProgress, false);
-                }
+                    SetStatusFromProgress(modelId, generation, ModelStatus.DownloadingModel(p))
+                );
+                await plugin.DownloadModelAsync(pluginModelId, progress, cancellationToken);
+
+                // A cancellation-ignoring plugin may have finished writing its artifact;
+                // that work is uninterruptible here, so checkpoint before the service
+                // transitions to loading and leave the artifact in place for GetStatus.
+                cancellationToken.ThrowIfCancellationRequested();
             }
 
             await LoadModelCoreAsync(modelId, cancellationToken);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            // Caller-requested cancellation: drop this operation's transient entry so
+            // GetStatus re-derives from the artifact state.
+            ClearStatus(modelId);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Includes an OperationCanceledException whose caller token is NOT requested:
+            // per the SDK cancellation-origin contract that is a dependency fault (e.g. a
+            // stalled third-party download surfacing as a bare TaskCanceledException) and
+            // must record Failed, never clear to an implied Ready.
             SetStatus(modelId, ModelStatus.Failed(ex.Message));
             throw;
         }
@@ -719,7 +714,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
 
         CancelAutoUnload();
-        SetStatus(modelId, ModelStatus.LoadingModel);
+        // The generation gates this load's progress callbacks; see _statusGate.
+        var generation = SetStatus(modelId, ModelStatus.LoadingModel);
         try
         {
             var requestedPreference = GetAccelerationPreference(
@@ -793,31 +789,16 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 // UI shows a real progress bar instead of the static LoadingModel spinner
                 // set above; when provisioning finishes (or none is needed) the plugin
                 // reports 1.0 and we drop back to LoadingModel for the native init.
-                //
-                // Progress<T> posts callbacks asynchronously to the captured
-                // SynchronizationContext, so a late report could otherwise run AFTER this
-                // load returns and clobber the terminal Ready status (set below) with a
-                // stale Loading/Downloading one. Gate the handler so it no-ops once the
-                // load has returned.
-                var loadInProgress = true;
                 var loadProgress = new Progress<double>(p =>
-                {
-                    // ReSharper disable once AccessToModifiedClosure -- intentional gate: loadInProgress is flipped under Volatile in the enclosing finally so a late Progress callback no-ops (see comment above).
-                    if (!Volatile.Read(ref loadInProgress))
-                        return;
-                    SetStatus(
+                    SetStatusFromProgress(
                         modelId,
+                        generation,
                         p >= 1.0 ? ModelStatus.LoadingModel : ModelStatus.DownloadingModel(p)
-                    );
-                });
-                try
-                {
-                    await plugin.LoadModelAsync(pluginModelId, loadProgress, cancellationToken);
-                }
-                finally
-                {
-                    Volatile.Write(ref loadInProgress, false);
-                }
+                    )
+                );
+                await plugin.LoadModelAsync(pluginModelId, loadProgress, cancellationToken);
+
+                cancellationToken.ThrowIfCancellationRequested();
             }
 
             plugin.SelectModel(pluginModelId);
@@ -825,8 +806,15 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             ActiveModelId = modelId;
             _activeModelAccelerationPreference = requestedPreference;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            ClearStatus(modelId);
+            throw;
+        }
         catch (Exception ex)
         {
+            // Unrequested OperationCanceledException lands here deliberately — a
+            // dependency fault must surface as Failed (cancellation-origin contract).
             SetStatus(modelId, ModelStatus.Failed(ex.Message));
             throw;
         }
@@ -862,8 +850,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
         // Unload succeeded: model is gone from memory but still on disk for download-capable
         // plugins, so drop the tracked status and let GetStatus recompute real availability.
-        _modelStatuses.Remove(modelId);
-        OnPropertyChanged(nameof(GetStatus));
+        ClearStatus(modelId);
         ActiveModelId = null;
         _activeModelAccelerationPreference = null;
     }
@@ -980,10 +967,73 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         return true;
     }
 
-    private void SetStatus(string modelId, ModelStatus status)
+    /// <summary>
+    ///     Authoritative status write from an operation flow (all flows are serialized under
+    ///     <c>_modelLock</c>). Advances the progress generation so every progress callback
+    ///     still in flight from before this transition becomes a no-op; returns the new
+    ///     generation for a progress scope opened by this write to capture.
+    /// </summary>
+    private long SetStatus(string modelId, ModelStatus status)
     {
-        _modelStatuses[modelId] = status;
+        long generation;
+        lock (_statusGate)
+        {
+            generation = ++_statusGeneration;
+            _modelStatuses[modelId] = status;
+        }
+
         OnPropertyChanged(nameof(GetStatus));
+        return generation;
+    }
+
+    private void ClearStatus(string modelId)
+    {
+        bool removed;
+        lock (_statusGate)
+        {
+            // Advance even when there is no entry to remove: a straggling progress
+            // callback must not re-insert a status after this terminal transition.
+            _statusGeneration++;
+            removed = _modelStatuses.TryRemove(modelId, out _);
+        }
+
+        if (removed)
+        {
+            OnPropertyChanged(nameof(GetStatus));
+        }
+    }
+
+    /// <summary>
+    ///     Status write from a progress callback: applies only while
+    ///     <paramref name="generation" /> is still current, checked atomically with the
+    ///     write so a straggler can never re-stick a status after its operation's terminal
+    ///     transition. Internal as a test seam (the Progress&lt;T&gt; wrappers delegate here).
+    /// </summary>
+    internal void SetStatusFromProgress(string modelId, long generation, ModelStatus status)
+    {
+        lock (_statusGate)
+        {
+            if (generation != _statusGeneration)
+            {
+                return;
+            }
+
+            _modelStatuses[modelId] = status;
+        }
+
+        OnPropertyChanged(nameof(GetStatus));
+    }
+
+    /// <summary>Test seam: the generation an open progress scope has captured.</summary>
+    internal long CurrentStatusGeneration
+    {
+        get
+        {
+            lock (_statusGate)
+            {
+                return _statusGeneration;
+            }
+        }
     }
 
     private void OnPropertyChanged([CallerMemberName] string? name = null)
@@ -1099,9 +1149,10 @@ internal sealed class PluginTranscriptionEngineAdapter : ITranscriptionEngine
     {
         var wavBytes = WavEncoder.Encode(audioSamples);
         var translate = task == TranscriptionTask.Translate;
+        var languageSelection = LanguageSelectionResolver.Resolve(language);
         var result = await _plugin.TranscribeAsync(
             wavBytes,
-            language,
+            languageSelection,
             translate,
             null,
             cancellationToken

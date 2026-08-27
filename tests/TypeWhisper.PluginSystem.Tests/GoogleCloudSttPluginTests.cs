@@ -264,9 +264,6 @@ public class GoogleCloudSttPluginTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    [InlineData("auto")]
-    [InlineData("AUTO")]
-    [InlineData(" AuTo ")]
     public async Task TranscribeAsync_AutomaticLanguage_ThrowsBeforeParsingAudioOrSendingRequest(
         string? language
     )

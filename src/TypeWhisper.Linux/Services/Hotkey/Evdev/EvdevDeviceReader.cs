@@ -5,9 +5,9 @@ namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 
 /// <summary>
 ///     Reads <see cref="InputEvent" /> records from a single
-///     <c>/dev/input/eventN</c> device. Opens read-only with
-///     <see cref="FileShare.ReadWrite" /> so the kernel keeps delivering to
-///     every other reader on the same node.
+///     <c>/dev/input/eventN</c> device. The native fd is read-only and does not
+///     request exclusive access, so the kernel keeps delivering to every other
+///     reader on the same node.
 /// </summary>
 internal sealed class EvdevDeviceReader : IEvdevDeviceReader
 {
@@ -51,49 +51,77 @@ internal sealed class EvdevDeviceReader : IEvdevDeviceReader
             return;
         }
 
-        // Dispose synchronously as a best-effort close before awaiting cancellation. On Unix this
-        // stream has a blocking fd, and an in-flight read holds a SafeFileHandle reference, so the
-        // actual close is deferred until the next device event releases that reference. Lock and
-        // session safety instead comes from EvdevGlobalShortcutBackend.OnKeyEvent: its cached and
-        // live input checks, lifecycle generation, and reader-membership guard drop stale events.
-        // The generation check alone rejects the old reader after the device is reattached on unlock.
-        var inputDevice = Interlocked.Exchange(ref _inputDevice, null);
-        try
-        {
-            // ReSharper disable once MethodHasAsyncOverload -- synchronous Dispose is deliberate:
-            // it closes promptly when no read is in flight; DisposeAsync would defer even that.
-            inputDevice?.Dispose();
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[EvdevReader] Dispose stream threw: {ex.Message}");
-        }
-
+        // Cancellation prevents a device event that races the wake from being delivered. The
+        // eventfd then interrupts poll so the dedicated worker can leave before both native handles
+        // are closed. Events already read or queued before the backend lock remain protected by
+        // EvdevGlobalShortcutBackend.OnKeyEvent's live-input, generation, and membership guards.
+        var inputDevice = Volatile.Read(ref _inputDevice);
         try
         {
             await _cts.CancelAsync();
-        }
-        catch
-        {
-            /* already disposed */
-        }
 
-        if (_readLoop is not null)
+            try
+            {
+                inputDevice?.Wake();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[EvdevReader] Wake invariant breach: {ex.Message}");
+            }
+
+            var readLoop = Volatile.Read(ref _readLoop);
+            if (readLoop is not null)
+            {
+                try
+                {
+                    // A healthy eventfd wake reclaims the worker promptly. This timeout bounds an
+                    // unexpected kernel or interop failure or scheduling starvation; finally still
+                    // closes the handles either way.
+                    await readLoop
+                        .WaitAsync(TimeSpan.FromMilliseconds(500))
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException ex)
+                {
+                    Trace.WriteLine(
+                        $"[EvdevReader] Read-loop wake invariant breach for {Path}: {ex.Message}"
+                    );
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine(
+                        $"[EvdevReader] Read loop completed unexpectedly for {Path}: {ex.Message}"
+                    );
+                }
+            }
+        }
+        finally
         {
             try
             {
-                // A parked blocking read is expected to outlive this best-effort wait. Its next
-                // event is dropped by the backend; cancellation then exits the loop, releasing the
-                // final handle reference so the fd closes.
-                await _readLoop.WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+                // The poller uses raw fds (DangerousGetHandle), so closing the handles
+                // while the worker is still parked past the wake budget could recycle
+                // those descriptor numbers under an in-flight poll/read. Dispose here
+                // only when the worker never started or has already returned; a
+                // timed-out worker's own finally disposes the device when it exits.
+                // An incomplete loop must also keep the field published: a worker that
+                // has not yet captured the device bails out on a null field before its
+                // try/finally, so nulling here would orphan the handles. Idempotent
+                // either way — both paths dispose under the device's lock.
+                var readLoop = Volatile.Read(ref _readLoop);
+                if (readLoop is null || readLoop.IsCompleted)
+                {
+                    Interlocked.CompareExchange(ref _inputDevice, null, inputDevice);
+                    inputDevice?.Dispose();
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                /* timeout or cancellation — best effort */
+                Trace.WriteLine($"[EvdevReader] Dispose native handles threw: {ex.Message}");
             }
-        }
 
-        _cts.Dispose();
+            _cts.Dispose();
+        }
     }
 
     public bool TryStart()
@@ -110,11 +138,19 @@ internal sealed class EvdevDeviceReader : IEvdevDeviceReader
             return false;
         }
 
-        _readLoop = Task.Run(() => RunAsync(_cts.Token));
+        Volatile.Write(
+            ref _readLoop,
+            Task.Factory.StartNew(
+                () => Run(_cts.Token),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default
+            )
+        );
         return true;
     }
 
-    private async Task RunAsync(CancellationToken ct)
+    private void Run(CancellationToken ct)
     {
         var inputDevice = _inputDevice;
         if (inputDevice is null)
@@ -135,9 +171,10 @@ internal sealed class EvdevDeviceReader : IEvdevDeviceReader
                     int n;
                     try
                     {
-                        n = await inputDevice
-                            .ReadAsync(buf.AsMemory(read, InputEvent.SizeBytes - read), ct)
-                            .ConfigureAwait(false);
+                        n = inputDevice.Read(
+                            buf.AsSpan(read, InputEvent.SizeBytes - read),
+                            ct
+                        );
                     }
                     catch (OperationCanceledException)
                     {
@@ -203,6 +240,16 @@ internal sealed class EvdevDeviceReader : IEvdevDeviceReader
         }
         finally
         {
+            try
+            {
+                inputDevice.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[EvdevReader] Dispose native handles threw: {ex.Message}");
+            }
+
+            Interlocked.CompareExchange(ref _inputDevice, null, inputDevice);
             if (terminating is not null && Volatile.Read(ref _disposed) == 0)
             {
                 try

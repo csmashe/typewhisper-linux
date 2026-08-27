@@ -23,6 +23,9 @@ Describe 'Publish plugin release transaction' {
         $script:projectName = 'TypeWhisper.Plugin.Example'
         $script:pluginId = 'example'
         $script:pluginVersion = '2.0.0'
+        $script:platform = 'linux'
+        $script:rid = 'linux-x64'
+        $script:sdkAbi = 'net10.0'
         $script:releaseState = 'missing'
         $script:releaseTarget = $script:commitSha
         $script:releaseAssets = @()
@@ -47,7 +50,8 @@ Describe 'Publish plugin release transaction' {
             minHostVersion = '1.0.0'
             author = 'TypeWhisper'
             description = 'Example plugin'
-            category = 'Utility'
+            categories = @('utility')
+            networkAccess = 'local'
             iconSystemName = 'PuzzlePiece'
             requiresApiKey = $false
             descriptions = [ordered]@{
@@ -58,7 +62,18 @@ Describe 'Publish plugin release transaction' {
         $script:manifestPath = Join-Path $script:fixtureRoot 'manifest.json'
         ConvertTo-Json -InputObject $manifest -Depth 10 |
             Set-Content -LiteralPath $script:manifestPath -Encoding utf8NoBOM
-        Copy-Item -LiteralPath $script:manifestPath -Destination (Join-Path $script:packageRoot 'manifest.json')
+        $packageManifest = Get-Content -LiteralPath $script:manifestPath -Raw | ConvertFrom-Json
+        $projection = Get-PluginRegistryProjection -Manifest $packageManifest
+        foreach ($property in $projection.PSObject.Properties) {
+            $packageManifest | Add-Member `
+                -NotePropertyName $property.Name `
+                -NotePropertyValue $property.Value `
+                -Force
+        }
+        ConvertTo-Json -InputObject $packageManifest -Depth 10 |
+            Set-Content `
+                -LiteralPath (Join-Path $script:packageRoot 'manifest.json') `
+                -Encoding utf8NoBOM
         Set-Content `
             -LiteralPath (Join-Path $script:packageRoot 'TypeWhisper.Plugin.Example.dll') `
             -Value 'deterministic test assembly' `
@@ -67,14 +82,22 @@ Describe 'Publish plugin release transaction' {
         $script:zipPath = Join-Path $script:fixtureRoot "$($script:pluginId)-$($script:pluginVersion).zip"
         Compress-Archive -Path (Join-Path $script:packageRoot '*') -DestinationPath $script:zipPath
         $script:zipSize = (Get-Item -LiteralPath $script:zipPath).Length
+        # What `gh release download` hands back; tests override it to model a published
+        # asset that a later rebuild no longer reproduces byte for byte.
+        $script:publishedZipPath = $script:zipPath
 
         $oldRegistry = @(
             [ordered]@{
                 id = $script:pluginId
-                name = 'Example'
+                name = 'Stale name'
                 version = '1.0.0'
                 size = 10
                 downloadUrl = 'https://example.invalid/old.zip'
+                sha256 = 'stale'
+                platform = 'windows'
+                rid = 'win-x64'
+                sdkAbi = 'net8.0'
+                timestamp = '2000-01-01T00:00:00Z'
             }
         )
         ConvertTo-Json -InputObject $oldRegistry -Depth 10 |
@@ -174,6 +197,22 @@ Describe 'Publish plugin release transaction' {
                 return New-CommandResult
             }
 
+            if ($command -match '^release download ') {
+                $directoryIndex = $Arguments.IndexOf('--dir')
+                if ($directoryIndex -lt 0) {
+                    throw 'release download requires --dir'
+                }
+
+                Copy-Item `
+                    -LiteralPath $script:publishedZipPath `
+                    -Destination (
+                        Join-Path $Arguments[$directoryIndex + 1] `
+                            ([System.IO.Path]::GetFileName($script:zipPath))
+                    )
+                $script:events.Add('asset-downloaded')
+                return New-CommandResult
+            }
+
             if ($command -match '^release edit ') {
                 if ($script:releaseState -ne 'draft') {
                     throw 'publication attempted for a non-draft release'
@@ -194,11 +233,84 @@ Describe 'Publish plugin release transaction' {
             ProjectName = $script:projectName
             PluginVersion = $script:pluginVersion
             PluginId = $script:pluginId
+            Platform = $script:platform
+            Rid = $script:rid
+            SdkAbi = $script:sdkAbi
             ZipPath = $script:zipPath
             ManifestPath = $script:manifestPath
             RegistryWorktreePath = $script:worktreePath
             MaxPushAttempts = 1
         }
+    }
+
+    It 'projects modern manifest metadata into typed and deterministic legacy fields' {
+        $manifest = [pscustomobject][ordered]@{
+            categories = @('utility', 'llm', 'transcription')
+            networkAccess = 'mixed'
+        }
+
+        $projection = Get-PluginRegistryProjection -Manifest $manifest
+
+        ($projection.categories -join ',') | Should -Be 'utility,llm,transcription'
+        $projection.networkAccess | Should -Be 'mixed'
+        $projection.category | Should -Be 'transcription'
+        $projection.isLocal | Should -BeFalse
+    }
+
+    It 'rejects manifests with missing, null-entry, or duplicate categories' {
+        { Get-PluginRegistryProjection -Manifest ([pscustomobject]@{ networkAccess = 'local' }) } |
+            Should -Throw '*at least one category*'
+        { Get-PluginRegistryProjection -Manifest ([pscustomobject]@{
+            categories = @('transcription', $null)
+            networkAccess = 'local'
+        }) } | Should -Throw '*must not contain null entries*'
+        { Get-PluginRegistryProjection -Manifest ([pscustomobject]@{
+            categories = @('llm', 'LLM')
+            networkAccess = 'local'
+        }) } | Should -Throw '*must not contain duplicates*'
+    }
+
+    It 'rejects a registry entry whose categories degraded to a scalar' {
+        $projection = Get-PluginRegistryProjection -Manifest ([pscustomobject]@{
+            categories = @('utility')
+            networkAccess = 'local'
+        })
+        $degraded = [pscustomobject]@{
+            categories = 'utility'
+            networkAccess = 'local'
+            category = 'utility'
+            isLocal = $true
+        }
+        { Assert-PluginRegistryProjection -Candidate $degraded -Expected $projection -Context 'test' } |
+            Should -Throw '*does not match*'
+    }
+
+    It 'projects local network access to the legacy local flag' {
+        $projection = Get-PluginRegistryProjection -Manifest ([pscustomobject]@{
+            categories = @('memory')
+            networkAccess = 'local'
+        })
+
+        $projection.isLocal | Should -BeTrue
+    }
+
+    It 'rejects a ZIP whose manifest omits a registry projection field' {
+        $archiveManifestPath = Join-Path $script:packageRoot 'manifest.json'
+        $archiveManifest = Get-Content -LiteralPath $archiveManifestPath -Raw | ConvertFrom-Json
+        $archiveManifest.PSObject.Properties.Remove('isLocal')
+        ConvertTo-Json -InputObject $archiveManifest -Depth 10 |
+            Set-Content -LiteralPath $archiveManifestPath -Encoding utf8NoBOM
+        $invalidZipPath = Join-Path $script:fixtureRoot 'invalid.zip'
+        Compress-Archive -Path (Join-Path $script:packageRoot '*') -DestinationPath $invalidZipPath
+        $sourceManifest = Read-JsonObjectFile -Path $script:manifestPath
+
+        {
+            Assert-ZipPackage `
+                -Path $invalidZipPath `
+                -Manifest $sourceManifest `
+                -ExpectedPluginId $script:pluginId `
+                -ExpectedVersion $script:pluginVersion
+        } | Should -Throw "*missing registry projection field 'isLocal'*"
     }
 
     It 'resumes a draft after a registry push failure and publishes only after repair' {
@@ -234,6 +346,20 @@ Describe 'Publish plugin release transaction' {
             ConvertFrom-Json
         $registry[0].version | Should -Be $script:pluginVersion
         [long]$registry[0].size | Should -Be $script:zipSize
+        $registry[0].name | Should -Be 'Example'
+        $registry[0].platform | Should -Be $script:platform
+        $registry[0].rid | Should -Be $script:rid
+        $registry[0].sdkAbi | Should -Be $script:sdkAbi
+        ($registry[0].categories -join ',') | Should -Be 'utility'
+        $registry[0].networkAccess | Should -Be 'local'
+        $registry[0].category | Should -Be 'utility'
+        $registry[0].isLocal | Should -BeTrue
+        $registry[0].sha256 | Should -Be (
+            (Get-FileHash -LiteralPath $script:zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        )
+        [DateTimeOffset]::Parse([string]$registry[0].timestamp) | Should -BeGreaterThan (
+            [DateTimeOffset]'2025-01-01T00:00:00Z'
+        )
     }
 
     It 'repairs the registry for a verified existing public release without recreating it' {
@@ -253,6 +379,42 @@ Describe 'Publish plugin release transaction' {
         @($script:ghCalls | Where-Object { $_ -match '^release create ' }).Count | Should -Be 0
         @($script:ghCalls | Where-Object { $_ -match '^release upload ' }).Count | Should -Be 0
         @($script:ghCalls | Where-Object { $_ -match '^release edit ' }).Count | Should -Be 0
+    }
+
+    It 'records the published asset hash when the rebuild is not byte-identical' {
+        $republishedRoot = Join-Path $script:fixtureRoot 'republished'
+        Copy-Item -LiteralPath $script:packageRoot -Destination $republishedRoot -Recurse
+        Get-ChildItem -LiteralPath $republishedRoot -File | ForEach-Object {
+            $_.LastWriteTime = $_.LastWriteTime.AddDays(-30)
+        }
+        $publishedZipPath = Join-Path $script:fixtureRoot 'published.zip'
+        Compress-Archive -Path (Join-Path $republishedRoot '*') -DestinationPath $publishedZipPath
+        $script:publishedZipPath = $publishedZipPath
+
+        $publishedSha256 = (
+            Get-FileHash -LiteralPath $publishedZipPath -Algorithm SHA256
+        ).Hash.ToLowerInvariant()
+        $localSha256 = (
+            Get-FileHash -LiteralPath $script:zipPath -Algorithm SHA256
+        ).Hash.ToLowerInvariant()
+        # Only the stored timestamps differ, so the two archives must be the same length.
+        (Get-Item -LiteralPath $publishedZipPath).Length | Should -Be $script:zipSize
+        $publishedSha256 | Should -Not -Be $localSha256
+
+        $script:releaseState = 'public'
+        $script:releaseAssets = @(
+            [ordered]@{
+                name = [System.IO.Path]::GetFileName($script:zipPath)
+                size = $script:zipSize
+                state = 'uploaded'
+            }
+        )
+
+        Invoke-PluginReleaseTransaction @script:transactionParameters
+
+        $registry = Get-Content -LiteralPath (Join-Path $script:worktreePath 'plugins.json') -Raw |
+            ConvertFrom-Json
+        $registry[0].sha256 | Should -Be $publishedSha256
     }
 
     It 'refuses to downgrade the registry when a newer version is already published' {

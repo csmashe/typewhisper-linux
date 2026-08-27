@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     concurrency:
       group: plugin-release-${{ github.ref_name }}
       cancel-in-progress: true
@@ -30,56 +30,32 @@ jobs:
           echo "PLUGIN_VERSION=$pluginVersion" >> $env:GITHUB_ENV
           echo "Plugin: $pluginName, Version: $pluginVersion"
 
+      - uses: actions/checkout@v7
+
       - name: Resolve project path
         shell: pwsh
         run: |
-          # Map plugin name to project directory
-          $map = @{
-            'sherpa-onnx'        = 'TypeWhisper.Plugin.SherpaOnnx'
-            'openai'             = 'TypeWhisper.Plugin.OpenAi'
-            'openai-compatible'  = 'TypeWhisper.Plugin.OpenAiCompatible'
-            'groq'               = 'TypeWhisper.Plugin.Groq'
-            'webhook'            = 'TypeWhisper.Plugin.Webhook'
-            'deepgram'           = 'TypeWhisper.Plugin.Deepgram'
-            'assemblyai'         = 'TypeWhisper.Plugin.AssemblyAi'
-            'gemini'             = 'TypeWhisper.Plugin.Gemini'
-            'linear'             = 'TypeWhisper.Plugin.Linear'
-            'obsidian'           = 'TypeWhisper.Plugin.Obsidian'
-            'script'             = 'TypeWhisper.Plugin.Script'
-            'gemma-local'        = 'TypeWhisper.Plugin.GemmaLocal'
-            'claude'             = 'TypeWhisper.Plugin.Claude'
-            'openrouter'         = 'TypeWhisper.Plugin.OpenRouter'
-            'cerebras'           = 'TypeWhisper.Plugin.Cerebras'
-            'cohere'             = 'TypeWhisper.Plugin.Cohere'
-            'fireworks'          = 'TypeWhisper.Plugin.Fireworks'
-            'gladia'             = 'TypeWhisper.Plugin.Gladia'
-            'speechmatics'       = 'TypeWhisper.Plugin.Speechmatics'
-            'soniox'             = 'TypeWhisper.Plugin.Soniox'
-            'reson8'             = 'TypeWhisper.Plugin.Reson8'
-            'cloudflare-asr'     = 'TypeWhisper.Plugin.CloudflareAsr'
-            'google-cloud-stt'   = 'TypeWhisper.Plugin.GoogleCloudStt'
-            'qwen3-stt'          = 'TypeWhisper.Plugin.Qwen3Stt'
-            'voxtral'            = 'TypeWhisper.Plugin.Voxtral'
-            'whisper-cpp'        = 'TypeWhisper.Plugin.WhisperCpp'
-            'file-memory'        = 'TypeWhisper.Plugin.FileMemory'
-            'openai-vector-memory' = 'TypeWhisper.Plugin.OpenAiVectorMemory'
-            'elevenlabs'         = 'TypeWhisper.Plugin.ElevenLabs'
-            'smallest-ai'        = 'TypeWhisper.Plugin.SmallestAi'
-            'supertonic-tts'     = 'TypeWhisper.Plugin.SupertonicTts'
-            'xai'                = 'TypeWhisper.Plugin.Xai'
-          }
-          $projectName = $map[$env:PLUGIN_NAME]
-          if (-not $projectName) {
+          $matrix = & ./scripts/plugin-catalog.ps1 -View ReleaseMatrix | ConvertFrom-Json
+          # Not $matches: that is PowerShell's automatic -match capture variable.
+          $slugMatches = @($matrix.include | Where-Object { $_.releaseSlug -ceq $env:PLUGIN_NAME })
+          if ($slugMatches.Count -ne 1) {
             throw "Unknown plugin: $env:PLUGIN_NAME"
           }
-          echo "PROJECT_NAME=$projectName" >> $env:GITHUB_ENV
-          echo "Project: $projectName"
-
-      - uses: actions/checkout@v7
+          $entry = $slugMatches[0]
+          if (@($entry.platforms).Count -ne 1 -or @($entry.rids).Count -ne 1) {
+            throw "Plugin releases currently require exactly one platform and RID."
+          }
+          echo "PROJECT_NAME=$($entry.projectName)" >> $env:GITHUB_ENV
+          echo "PROJECT_PATH=$($entry.projectPath)" >> $env:GITHUB_ENV
+          echo "PROJECT_DIRECTORY=$($entry.projectDirectory)" >> $env:GITHUB_ENV
+          echo "PLUGIN_PLATFORM=$($entry.platforms[0])" >> $env:GITHUB_ENV
+          echo "PLUGIN_RID=$($entry.rids[0])" >> $env:GITHUB_ENV
+          echo "PLUGIN_SDK_ABI=$($entry.sdkAbi)" >> $env:GITHUB_ENV
+          echo "Project: $($entry.projectPath)"
 
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
 
       - name: Test plugin system
         timeout-minutes: 15
@@ -88,25 +64,27 @@ jobs:
       - name: Patch manifest version
         shell: pwsh
         run: |
-          $manifestPath = "plugins/$env:PROJECT_NAME/manifest.json"
+          $manifestPath = Join-Path $env:PROJECT_DIRECTORY 'manifest.json'
           $manifest = Get-Content $manifestPath | ConvertFrom-Json
           $manifest.version = $env:PLUGIN_VERSION
           $manifest | ConvertTo-Json -Depth 4 | Set-Content $manifestPath
-          echo "Patched $manifestPath to version $env:PLUGIN_VERSION"
+          echo "Patched $manifestPath to version $env:PLUGIN_VERSION; the plugin build reads this value directly."
           Get-Content $manifestPath
 
       - name: Build Plugin
         shell: pwsh
         run: |
-          dotnet build "plugins/$env:PROJECT_NAME/$env:PROJECT_NAME.csproj" -c Release
+          dotnet build $env:PROJECT_PATH -c Release
           if ($LASTEXITCODE -ne 0) { throw "Build failed" }
 
       - name: Create ZIP
         shell: pwsh
         run: |
-          $outputDir = "plugins/$env:PROJECT_NAME/bin/Release/net10.0"
-          $manifestPath = "plugins/$env:PROJECT_NAME/manifest.json"
+          . ./scripts/publish-plugin-release.ps1
+          $outputDir = Join-Path $env:PROJECT_DIRECTORY 'bin/Release/net10.0'
+          $manifestPath = Join-Path $env:PROJECT_DIRECTORY 'manifest.json'
           $manifest = Get-Content $manifestPath | ConvertFrom-Json
+          $projection = Get-PluginRegistryProjection -Manifest $manifest
           $pluginId = $manifest.id
           $assemblyName = $manifest.assemblyName -replace '\.dll$',''
 
@@ -118,17 +96,21 @@ jobs:
           Copy-Item (Join-Path $outputDir "$assemblyName.dll") $stagingDir
           $depsFile = Join-Path $outputDir "$assemblyName.deps.json"
           if (Test-Path $depsFile) { Copy-Item $depsFile $stagingDir }
-          Copy-Item $manifestPath $stagingDir
+          foreach ($property in $projection.PSObject.Properties) {
+            $manifest | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value -Force
+          }
+          $manifest | ConvertTo-Json -Depth 20 |
+            Set-Content (Join-Path $stagingDir 'manifest.json') -Encoding utf8NoBOM
 
           # Copy Localization folder if present
-          $locDir = "plugins/$env:PROJECT_NAME/Localization"
+          $locDir = Join-Path $env:PROJECT_DIRECTORY 'Localization'
           if (Test-Path $locDir) {
             Copy-Item -Path $locDir -Destination "$stagingDir/Localization" -Recurse
           }
 
           # Copy plugin Scripts folder if present. Some local-model plugins need
           # these runtime files (e.g. Python) after the ZIP is installed from the registry.
-          $scriptsDir = "plugins/$env:PROJECT_NAME/Scripts"
+          $scriptsDir = Join-Path $env:PROJECT_DIRECTORY 'Scripts'
           if (Test-Path $scriptsDir) {
             Copy-Item -Path $scriptsDir -Destination "$stagingDir/Scripts" -Recurse
             Write-Host "  Included plugin scripts"
@@ -143,11 +125,13 @@ jobs:
             Write-Host "  Included dependency: $($_.Name)"
           }
 
-          # Copy native runtime directories (e.g. runtimes/win-x64/native/)
-          $runtimesDir = Join-Path $outputDir 'runtimes'
-          if (Test-Path $runtimesDir) {
-            Copy-Item -Path $runtimesDir -Destination "$stagingDir/runtimes" -Recurse
-            Write-Host "  Included native runtimes"
+          # Copy only the runtime declared by the catalog/release entry.
+          $runtimeRidDir = Join-Path $outputDir "runtimes/$env:PLUGIN_RID"
+          if (Test-Path $runtimeRidDir) {
+            $runtimeStagingDir = "$stagingDir/runtimes/$env:PLUGIN_RID"
+            New-Item -ItemType Directory -Path (Split-Path $runtimeStagingDir -Parent) -Force | Out-Null
+            Copy-Item -Path $runtimeRidDir -Destination $runtimeStagingDir -Recurse
+            Write-Host "  Included native runtime: $env:PLUGIN_RID"
           }
 
           # Fail closed: if the plugin ships a Scripts/ dir but it didn't reach
@@ -177,5 +161,8 @@ jobs:
             -ProjectName $env:PROJECT_NAME `
             -PluginVersion $env:PLUGIN_VERSION `
             -PluginId $env:PLUGIN_ID `
+            -Platform $env:PLUGIN_PLATFORM `
+            -Rid $env:PLUGIN_RID `
+            -SdkAbi $env:PLUGIN_SDK_ABI `
             -ZipPath $env:ZIP_NAME `
-            -ManifestPath "plugins/$env:PROJECT_NAME/manifest.json"
+            -ManifestPath (Join-Path $env:PROJECT_DIRECTORY 'manifest.json')

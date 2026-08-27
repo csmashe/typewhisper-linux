@@ -201,15 +201,14 @@ internal static class SpanishNumberWordParser
         IReadOnlyList<string> words,
         int startIndex)
     {
-        if (startIndex < words.Count &&
-            words[startIndex] == "y" &&
-            startIndex + 1 < words.Count &&
-            UnitValue(words[startIndex + 1], true) is { } unit and > 0)
-        {
-            return (baseValue + unit, startIndex + 2);
-        }
+        if (startIndex >= words.Count || words[startIndex] != "y")
+            return (baseValue, startIndex);
 
-        return (baseValue, startIndex);
+        var afterY = startIndex + 1;
+        return afterY < words.Count &&
+               UnitValue(words[afterY], true) is { } unit and > 0
+            ? (baseValue + unit, afterY + 1)
+            : (baseValue, startIndex);
     }
 
     private static (string Digits, int NextIndex) ParseDecimalDigits(IReadOnlyList<string> words, int startIndex)

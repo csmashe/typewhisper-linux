@@ -209,6 +209,27 @@ public sealed class ShortcutDispatcherTests
     }
 
     [Fact]
+    public void HybridAutoRepeat_DoesNotResetDownTimestamp_StopsAtThreshold()
+    {
+        var time = new ManualTimeProvider();
+        var d = new ShortcutDispatcher(time);
+        d.UpdateShortcuts(Set(RecordingMode.Hybrid));
+        var toggle = 0;
+        var stop = 0;
+        d.DictationToggleRequested += () => toggle++;
+        d.DictationStopRequested += () => stop++;
+
+        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        time.Advance(TimeSpan.FromMilliseconds(500));
+        d.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        time.Advance(TimeSpan.FromMilliseconds(100));
+        d.Handle(KeyCode.VcSpace, ModifierMask.None, false);
+
+        Assert.Equal(1, toggle);
+        Assert.Equal(1, stop);
+    }
+
+    [Fact]
     public void ResetState_WhilePushToTalkHeld_FiresDiscard()
     {
         // Session lock closes the input fd while the dictation key is held: no release event
@@ -601,6 +622,35 @@ public sealed class ShortcutDispatcherTests
 
         Assert.Equal(1, toggleCount);
         Assert.Equal(0, stopCount);
+    }
+
+    [Fact]
+    public void ProfileStartDictation_HybridAutoRepeat_DoesNotResetDownTimestamp_StopsAtThreshold()
+    {
+        var time = new ManualTimeProvider();
+        var d = new ShortcutDispatcher(time);
+        d.UpdateShortcuts(
+            SetWithProfileHotkey(
+                "email",
+                KeyCode.VcE,
+                ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+                ProfileHotkeyBehavior.StartDictation,
+                RecordingMode.Hybrid
+            )
+        );
+        var toggleCount = 0;
+        var stopCount = 0;
+        d.ProfileDictationToggleRequested += _ => toggleCount++;
+        d.ProfileDictationStopRequested += () => stopCount++;
+
+        d.Handle(KeyCode.VcE, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        time.Advance(TimeSpan.FromMilliseconds(500));
+        d.Handle(KeyCode.VcE, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        time.Advance(TimeSpan.FromMilliseconds(100));
+        d.Handle(KeyCode.VcE, ModifierMask.None, false);
+
+        Assert.Equal(1, toggleCount);
+        Assert.Equal(1, stopCount);
     }
 
     [Fact]

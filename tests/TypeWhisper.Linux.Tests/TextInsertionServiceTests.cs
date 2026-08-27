@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -767,6 +768,209 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task InsertTextAsync_recording_active_suppresses_focus_and_falls_back_to_clipboard()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "successor-window",
+        };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => true
+        );
+
+        var result = await sut.InsertTextAsync("new text", targetWindowId: "predecessor-window");
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal("new text", platform.Clipboard);
+        Assert.Equal(0, platform.ActivationAttemptCount);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("successor-window", platform.ActiveWindowId);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_recording_active_with_target_already_active_inserts_normally()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "target",
+        };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => true
+        );
+
+        var result = await sut.InsertTextAsync("new text", targetWindowId: "target");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(0, platform.ActivationAttemptCount);
+        Assert.True(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_recording_inactive_activates_target_as_before()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "other",
+        };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => false
+        );
+
+        var result = await sut.InsertTextAsync("new text", targetWindowId: "target");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(1, platform.ActivationAttemptCount);
+        Assert.Equal("target", platform.ActiveWindowId);
+        Assert.True(platform.PasteSent);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_recording_active_with_direct_typing_fails_closed()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "successor-window",
+        };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => true
+        );
+
+        var result = await sut.InsertTextAsync(
+            "new text",
+            targetWindowId: "predecessor-window",
+            strategy: TextInsertionStrategy.DirectTyping
+        );
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.Equal(0, platform.ActivationAttemptCount);
+        Assert.Null(platform.TypedText);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal("successor-window", platform.ActiveWindowId);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_recording_active_with_terminal_multiline_fails_closed()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "successor-window",
+        };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => true
+        );
+
+        var result = await sut.InsertTextAsync(
+            "line1\nline2",
+            targetWindowId: "predecessor-window",
+            targetProcessName: "konsole"
+        );
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.Equal(0, platform.ActivationAttemptCount);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal("successor-window", platform.ActiveWindowId);
+    }
+
+    [Fact]
+    public async Task FocusWindowAsync_recording_active_suppresses_activation()
+    {
+        var platform = new FakeTextInsertionPlatform { ActiveWindowId = "successor-window" };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => true
+        );
+
+        var focused = await sut.FocusWindowAsync("predecessor-window");
+
+        Assert.False(focused);
+        Assert.Equal(0, platform.ActivationAttemptCount);
+        Assert.Equal("successor-window", platform.ActiveWindowId);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_recording_active_with_enter_only_command_fails_closed()
+    {
+        var platform = new FakeTextInsertionPlatform { ActiveWindowId = "successor-window" };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => true
+        );
+
+        var result = await sut.InsertTextAsync(
+            "",
+            targetWindowId: "predecessor-window",
+            autoEnter: true
+        );
+
+        Assert.Equal(InsertionResult.ActionFailed, result);
+        Assert.False(platform.EnterSent);
+        Assert.Equal(0, platform.ActivationAttemptCount);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_without_target_window_never_consults_recording_predicate()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "successor-window",
+        };
+        var predicateCalls = 0;
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: () =>
+            {
+                predicateCalls++;
+                return true;
+            }
+        );
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(0, predicateCalls);
+        Assert.True(platform.PasteSent);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_recording_active_without_active_window_still_activates()
+    {
+        // Wayland without xdotool: the active window is unknowable and activation is a no-op,
+        // so suppression must not fire — it would only degrade a benign insertion.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = null,
+        };
+        var sut = new TextInsertionService(
+            platform,
+            isAnotherSessionRecording: static () => true
+        );
+
+        var result = await sut.InsertTextAsync("new text", targetWindowId: "predecessor-window");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(1, platform.ActivationAttemptCount);
+        Assert.True(platform.PasteSent);
+    }
+
+    [Fact]
     public async Task InsertTextAsync_partial_typing_failure_does_not_retry_via_clipboard_paste()
     {
         // Regression: once direct typing has already delivered part of the text
@@ -865,6 +1069,7 @@ public sealed class TextInsertionServiceTests
         Assert.Null(platform.TypedText);
         // The aborted insert restores the user's clipboard rather than leaving dictated text behind.
         Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal(2, platform.SetClipboardCount);
     }
 
     [Fact]
@@ -899,7 +1104,7 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
-    public async Task InsertTextAsync_terminal_multiline_fail_closed_keeps_staged_text_when_no_prior_clipboard()
+    public async Task InsertTextAsync_terminal_multiline_paste_failure_keeps_staged_text_when_no_prior_clipboard()
     {
         // The staged dictated text stays on the clipboard as a manual-paste fallback.
         var platform = new FakeTextInsertionPlatform
@@ -912,7 +1117,7 @@ public sealed class TextInsertionServiceTests
 
         var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
 
-        Assert.Equal(InsertionResult.Failed, result);
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
         Assert.False(platform.PasteSent);
         Assert.Null(platform.TypedText);
         Assert.Equal("line1\nline2", platform.Clipboard);
@@ -924,7 +1129,7 @@ public sealed class TextInsertionServiceTests
     {
         var platform = new FakeTextInsertionPlatform
         {
-            Clipboard = null,
+            Clipboard = "formatted previous text",
             ClipboardHasNonTextFormats = true,
             ActiveWindowId = "other",
             ActivateSucceeds = false,
@@ -934,7 +1139,7 @@ public sealed class TextInsertionServiceTests
 
         var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
 
-        Assert.Equal(InsertionResult.Failed, result);
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
         Assert.False(platform.PasteSent);
         Assert.Equal("line1\nline2", platform.Clipboard);
         Assert.Equal(1, platform.SetClipboardCount);
@@ -942,7 +1147,7 @@ public sealed class TextInsertionServiceTests
             errorLog.AddedEntries,
             entry =>
                 entry.Category == ErrorCategory.Insertion
-                && entry.Message.Contains("could not be restored", StringComparison.Ordinal)
+                && entry.Message.Contains("was not restored", StringComparison.Ordinal)
         );
     }
 
@@ -959,7 +1164,11 @@ public sealed class TextInsertionServiceTests
             ClipboardReadResults = new Queue<string?>(
                 [
                     "previous", // snapshot before staging
-                    "user-copied-this-later", // ownership check during fail-closed restore
+                    // ownership check during fail-closed restore — every retry sees the newer copy
+                    "user-copied-this-later",
+                    "user-copied-this-later",
+                    "user-copied-this-later",
+                    "user-copied-this-later",
                 ]
             ),
         };
@@ -972,6 +1181,134 @@ public sealed class TextInsertionServiceTests
         // Clipboard was last set to the staged text; the ownership check saw the newer copy
         // and declined to restore, so no further clipboard write occurred.
         Assert.Equal("line1\nline2", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_restore_failure_reports_retained_staged_text()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "other",
+            ActivateSucceeds = false,
+            ClipboardSetResults = new Queue<bool>([true, false]),
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("line1\nline2", platform.Clipboard);
+        Assert.Equal(2, platform.SetClipboardCount);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_restore_failure_without_staged_text_fails()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "other",
+            ActivateSucceeds = false,
+            ClipboardSetResults = new Queue<bool>([true, false]),
+            ClipboardReadResults = new Queue<string?>(
+                [
+                    "previous", // snapshot before staging
+                    "line1\nline2", // ownership check before the restore attempt
+                    "user-copied-this-later", // readback after the restore failed
+                ]
+            ),
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.False(platform.PasteSent);
+        Assert.Equal(2, platform.SetClipboardCount);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_predecessor_equal_to_staged_text_reports_clipboard_delivery()
+    {
+        // Restoring a predecessor identical to the dictated text leaves that text on the
+        // clipboard, so the user can still paste it — that is a clipboard delivery, not a failure.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "line1\nline2",
+            ActiveWindowId = "other",
+            ActivateSucceeds = false,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("line1\nline2", platform.Clipboard);
+        Assert.Equal(2, platform.SetClipboardCount);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_ownership_check_tolerates_lagged_clipboard_read()
+    {
+        // The ownership check is the first read after the staging write, so wl-paste can still
+        // report the pre-staging content; retrying settles on our text instead of declaring loss.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = null,
+            ActiveWindowId = "other",
+            ActivateSucceeds = false,
+            ClipboardReadResults = new Queue<string?>(
+                [
+                    null, // snapshot before staging
+                    "stale-pre-staging-content", // lagged first read of the ownership check
+                    "line1\nline2", // the staging write has settled
+                ]
+            ),
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("line1\nline2", platform.Clipboard);
+        Assert.Equal(1, platform.SetClipboardCount);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_terminal_multiline_uncapturable_nontext_clipboard_keeps_staged_text_and_logs()
+    {
+        // Previous clipboard held only a non-text format, so there is nothing to restore over
+        // the staged text.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = null,
+            ClipboardHasNonTextFormats = true,
+            ActiveWindowId = "other",
+            ActivateSucceeds = false,
+        };
+        var errorLog = new RecordingErrorLogService();
+        var sut = new TextInsertionService(platform, errorLog);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("line1\nline2", platform.Clipboard);
+        Assert.Equal(1, platform.SetClipboardCount);
+        Assert.Contains(
+            errorLog.AddedEntries,
+            entry =>
+                entry.Category == ErrorCategory.Insertion
+                && entry.Message.Contains(
+                    "could not be restored",
+                    StringComparison.Ordinal
+                )
+        );
     }
 
     [Fact]
@@ -1196,13 +1533,42 @@ public sealed class TextInsertionServiceTests
     [Fact]
     public async Task TypeStreamChunkAsync_terminal_multiline_never_reaches_direct_typing()
     {
-        var platform = new FakeTextInsertionPlatform();
+        var platform = new FakeTextInsertionPlatform
+        {
+            LastTypingDeliveredPartialText = true,
+        };
         var sut = new TextInsertionService(platform);
 
         var result = await sut.TypeStreamChunkAsync("line one\nline two", "kitty");
 
-        Assert.False(result);
+        Assert.False(result.Succeeded);
+        Assert.False(result.DeliveredPartialText);
         Assert.Null(platform.TypedText);
+    }
+
+    [Theory]
+    [InlineData(false, true, false, true)]
+    [InlineData(false, false, false, false)]
+    [InlineData(true, true, true, false)]
+    public async Task TypeStreamChunkAsync_reports_platform_delivery_outcome(
+        bool platformSucceeded,
+        bool platformDeliveredPartialText,
+        bool expectedSucceeded,
+        bool expectedDeliveredPartialText
+    )
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            TypeSucceeds = platformSucceeded,
+            LastTypingDeliveredPartialText = platformDeliveredPartialText,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.TypeStreamChunkAsync("streamed text");
+
+        Assert.Equal(expectedSucceeded, result.Succeeded);
+        Assert.Equal(expectedDeliveredPartialText, result.DeliveredPartialText);
+        Assert.Equal("streamed text", platform.TypedText);
     }
 
     [Theory]
@@ -1655,6 +2021,73 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_WaylandSessionWithXclipRoute_UsesXclipForAllClipboardOperations()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, args) =>
+                file == "xclip" && args.SequenceEqual(["-selection", "clipboard", "-o"]),
+            "clipboard text"
+        );
+        runner.RespondWith(
+            (file, args) =>
+                file == "xclip"
+                && args.SequenceEqual(
+                    ["-selection", "clipboard", "-o", "-t", "TARGETS"]
+                ),
+            "TARGETS\nUTF8_STRING\ntext/html\n"
+        );
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "xclip"),
+            runner
+        );
+
+        Assert.Equal("clipboard text", await platform.TryGetClipboardTextAsync());
+        Assert.True(await platform.ClipboardHasNonTextFormatsAsync());
+        Assert.True(await platform.SetClipboardTextAsync("replacement"));
+
+        Assert.Collection(
+            runner.Invocations,
+            call =>
+            {
+                Assert.Equal("xclip", call.FileName);
+                Assert.Equal(["-selection", "clipboard", "-o"], call.Args);
+            },
+            call =>
+            {
+                Assert.Equal("xclip", call.FileName);
+                Assert.Equal(
+                    ["-selection", "clipboard", "-o", "-t", "TARGETS"],
+                    call.Args
+                );
+            },
+            call =>
+            {
+                Assert.Equal("xclip", call.FileName);
+                Assert.Equal(["-selection", "clipboard"], call.Args);
+                Assert.Equal("replacement", call.StandardInput);
+            }
+        );
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_WaylandSessionWithXclipRoute_DoesNotUseXdotoolPaste()
+    {
+        // Deliberate degradation: a Wayland session whose only clipboard tool is
+        // xclip still never pastes via xdotool — XTEST can't reach native-Wayland
+        // surfaces, so the clipboard fallback covers delivery instead.
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", true, false, "xclip"),
+            runner.Run
+        );
+
+        Assert.False(platform.IsPasteAvailable);
+        Assert.False(await platform.SendPasteAsync());
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_ClipboardRead_UsesFiveSecondTimeout()
     {
         var runner = new FakeProcessRunner();
@@ -1683,6 +2116,36 @@ public sealed class TextInsertionServiceTests
 
         Assert.Null(result);
         Assert.Single(runner.Invocations);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardRead_StartFailureTracesAndReturnsNull()
+    {
+        var runner = new FakeProcessRunner { Default = FakeProcessRunner.NotStarted() };
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+        await using var traceOutput = new StringWriter();
+        using TraceListener traceListener = new TextWriterTraceListener(traceOutput);
+        Trace.Listeners.Add(traceListener);
+
+        string? result;
+        try
+        {
+            result = await platform.TryGetClipboardTextAsync();
+        }
+        finally
+        {
+            Trace.Listeners.Remove(traceListener);
+        }
+
+        Assert.Null(result);
+        Assert.Contains(
+            "[TextInsertionService] clipboard read failed: fake: process not started",
+            traceOutput.ToString(),
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -1719,6 +2182,36 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardWrite_StartFailureTracesAndReturnsFalse()
+    {
+        var runner = new FakeProcessRunner { Default = FakeProcessRunner.NotStarted() };
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+        await using var traceOutput = new StringWriter();
+        using TraceListener traceListener = new TextWriterTraceListener(traceOutput);
+        Trace.Listeners.Add(traceListener);
+
+        bool result;
+        try
+        {
+            result = await platform.SetClipboardTextAsync("hello");
+        }
+        finally
+        {
+            Trace.Listeners.Remove(traceListener);
+        }
+
+        Assert.False(result);
+        Assert.Contains(
+            "[TextInsertionService] clipboard write failed: fake: process not started",
+            traceOutput.ToString(),
+            StringComparison.Ordinal
+        );
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_ClipboardFormatListing_UsesFiveSecondTimeout()
     {
         var runner = new FakeProcessRunner();
@@ -1748,6 +2241,36 @@ public sealed class TextInsertionServiceTests
 
         Assert.False(result);
         Assert.Single(runner.Invocations);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardFormatListing_StartFailureTracesAndReturnsFalse()
+    {
+        var runner = new FakeProcessRunner { Default = FakeProcessRunner.NotStarted() };
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+        await using var traceOutput = new StringWriter();
+        using TraceListener traceListener = new TextWriterTraceListener(traceOutput);
+        Trace.Listeners.Add(traceListener);
+
+        bool result;
+        try
+        {
+            result = await platform.ClipboardHasNonTextFormatsAsync();
+        }
+        finally
+        {
+            Trace.Listeners.Remove(traceListener);
+        }
+
+        Assert.False(result);
+        Assert.Contains(
+            "[TextInsertionService] clipboard format listing failed: fake: process not started",
+            traceOutput.ToString(),
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -2603,20 +3126,23 @@ public sealed class TextInsertionServiceTests
     private static LinuxCapabilitySnapshot SnapshotFor(
         string sessionType,
         bool hasXdotool,
-        bool hasWtype
+        bool hasWtype,
+        string? clipboardToolName = null
     )
     {
-        // ReSharper disable once IntroduceOptionalParameters.Local — keeping the
-        // 3-arg X11 convenience overload separate reads clearer than three optional
-        // positional params on the 6-arg form; merging would also turn the existing
-        // "…, false, false" 6-arg call sites into redundant-argument warnings.
+        // ReSharper disable once IntroduceOptionalParameters.Local — keeping this
+        // convenience overload (three required flags plus an optional
+        // clipboardToolName) separate reads clearer than defaulting the
+        // compositor/ydotool params on the full form; merging would also turn the
+        // existing "…, false, false" call sites into redundant-argument warnings.
         return SnapshotFor(
             sessionType,
             hasXdotool,
             hasWtype,
             "unknown",
             false,
-            false
+            false,
+            clipboardToolName
         );
     }
 
@@ -2626,13 +3152,14 @@ public sealed class TextInsertionServiceTests
         bool hasWtype,
         string compositor,
         bool hasYdotool,
-        bool hasYdotoolSocket
+        bool hasYdotoolSocket,
+        string? clipboardToolName = null
     )
     {
         return new LinuxCapabilitySnapshot(
             sessionType,
             true,
-            sessionType == "Wayland" ? "wl-clipboard" : "xclip",
+            clipboardToolName ?? (sessionType == "Wayland" ? "wl-clipboard" : "xclip"),
             hasXdotool,
             hasWtype,
             false,
@@ -2757,6 +3284,7 @@ public sealed class TextInsertionServiceTests
         public Queue<bool>? PasteResults { get; init; }
         public bool PasteSent { get; private set; }
         public int PasteAttemptCount { get; private set; }
+        public int ActivationAttemptCount { get; private set; }
         public bool LastPasteUsedTerminalShortcut { get; private set; }
         public bool EnterSent { get; private set; }
         public string? TypedText { get; private set; }
@@ -2770,6 +3298,7 @@ public sealed class TextInsertionServiceTests
         // (models wl-paste racing wl-copy: reads that lag behind what was just set).
         // An exhausted queue falls back to the live Clipboard value.
         public Queue<string?>? ClipboardReadResults { get; init; }
+        public Queue<bool>? ClipboardSetResults { get; init; }
         public int SetClipboardCount { get; private set; }
 
         // Every DelayAsync is recorded so tests can assert which waits ran
@@ -2798,8 +3327,14 @@ public sealed class TextInsertionServiceTests
         public Task<bool> SetClipboardTextAsync(string text)
         {
             SetClipboardCount++;
-            Clipboard = text;
-            return Task.FromResult(true);
+            var succeeds =
+                ClipboardSetResults is not { Count: > 0 } || ClipboardSetResults.Dequeue();
+            if (succeeds)
+            {
+                Clipboard = text;
+            }
+
+            return Task.FromResult(succeeds);
         }
 
         public Task<bool> ClipboardHasNonTextFormatsAsync()
@@ -2821,6 +3356,7 @@ public sealed class TextInsertionServiceTests
 
         public Task<bool> ActivateWindowAsync(string windowId)
         {
+            ActivationAttemptCount++;
             if (ActivateSucceeds)
             {
                 ActiveWindowId = windowId;

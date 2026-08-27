@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using TypeWhisper.Core;
+using TypeWhisper.Linux.Services.ManagedArtifacts;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -17,6 +19,7 @@ public sealed record CliInstallState(
     // pre-copy foreign-entry check instead of re-reading the launcher file. Internal: an
     // implementation detail, not part of the public state contract.
     internal CliInstallService.LauncherEntryClassification LauncherEntry { get; init; }
+    internal bool BinaryOwned { get; init; }
 }
 
 public sealed class CliInstallService
@@ -42,24 +45,25 @@ public sealed class CliInstallService
     private readonly Func<string> _launcherDirectoryProvider;
     private readonly Func<string, UnixFileMode> _unixFileModeReader;
     private readonly Func<string, CliVerificationResult> _verificationRunner;
+    private readonly ManagedFileTransaction _managedFiles;
 
-    public CliInstallService()
+    public CliInstallService(IProcessRunner processRunner)
         : this(
             FindBundledCliPath,
             DefaultInstallDirectory,
             DefaultLauncherDirectory,
-            RunCliVerification,
-            ReadUnixFileMode
-        )
-    {
-    }
+            path => RunCliVerification(processRunner, path, s_verificationTimeout),
+            ReadUnixFileMode,
+            ManagedFileTransaction.DefaultStateRoot
+        ) { }
 
     internal CliInstallService(
         Func<string?> bundledPathProvider,
         Func<string> installDirectoryProvider,
         Func<string> launcherDirectoryProvider,
         Func<string, CliVerificationResult>? verificationRunner = null,
-        Func<string, UnixFileMode>? unixFileModeReader = null
+        Func<string, UnixFileMode>? unixFileModeReader = null,
+        string? managedArtifactStateRoot = null
     )
     {
         _bundledPathProvider = bundledPathProvider;
@@ -67,6 +71,17 @@ public sealed class CliInstallService
         _launcherDirectoryProvider = launcherDirectoryProvider;
         _verificationRunner = verificationRunner ?? RunCliVerification;
         _unixFileModeReader = unixFileModeReader ?? ReadUnixFileMode;
+        _managedFiles = new ManagedFileTransaction(
+            managedArtifactStateRoot ?? TestStateRoot(installDirectoryProvider())
+        );
+    }
+
+    // Only reached from tests, which install into a temp tree and want the manifest to live
+    // beside it rather than in the real per-user state directory.
+    private static string TestStateRoot(string installDirectory)
+    {
+        var full = Path.GetFullPath(installDirectory);
+        return Path.Join(Path.GetDirectoryName(full) ?? full, "managed-artifacts-test");
     }
 
     public CliInstallState GetState()
@@ -77,13 +92,15 @@ public sealed class CliInstallService
         var launcherPath = Path.Join(launcherDirectory, CliFileName);
         var bundledPath = _bundledPathProvider();
         var launcherEntry = ClassifyLauncherEntry(launcherPath, installPath);
+        var binaryOwned = ClassifyBinaryEntry(installPath, launcherPath, bundledPath);
 
         return CreateState(
             bundledPath,
             installPath,
             launcherPath,
             launcherDirectory,
-            launcherEntry
+            launcherEntry,
+            binaryOwned
         );
     }
 
@@ -108,7 +125,8 @@ public sealed class CliInstallService
                 state.InstallPath,
                 state.LauncherPath,
                 launcherDirectory,
-                launcherEntry
+                launcherEntry,
+                state.BinaryOwned
             );
         }
 
@@ -116,37 +134,39 @@ public sealed class CliInstallService
             Path.GetDirectoryName(state.InstallPath)
             ?? throw new InvalidOperationException("Missing CLI install directory.");
 
-        Directory.CreateDirectory(installDirectory);
-        Directory.CreateDirectory(launcherDirectory);
-
-        if (
-            !string.Equals(
-                Path.GetFullPath(state.BundledPath),
-                Path.GetFullPath(state.InstallPath),
-                StringComparison.Ordinal
-            )
-        )
-        {
-            InstallBundledCli(state.BundledPath, state.InstallPath, installDirectory);
-        }
-
-        launcherEntry = ClassifyLauncherEntry(state.LauncherPath, state.InstallPath);
-        if (launcherEntry == LauncherEntryClassification.Foreign)
+        var bundledBytes = File.ReadAllBytes(state.BundledPath);
+        var binaryResult = _managedFiles
+            .InstallAsync(BuildBinarySpec(state.InstallPath, state.LauncherPath, bundledBytes))
+            .GetAwaiter()
+            .GetResult();
+        if (!binaryResult.OwnsDestination)
         {
             return CreateState(
                 state.BundledPath,
                 state.InstallPath,
                 state.LauncherPath,
                 launcherDirectory,
-                launcherEntry
+                launcherEntry,
+                binaryOwned: false
             );
         }
 
-        WriteLauncherAtomically(
-            state.LauncherPath,
-            launcherDirectory,
-            BuildLauncherScript(state.InstallPath)
-        );
+        var launcherResult = _managedFiles
+            .InstallAsync(BuildLauncherSpec(state.LauncherPath, state.InstallPath))
+            .GetAwaiter()
+            .GetResult();
+        if (!launcherResult.OwnsDestination)
+        {
+            return CreateState(
+                state.BundledPath,
+                state.InstallPath,
+                state.LauncherPath,
+                launcherDirectory,
+                LauncherEntryClassification.Foreign,
+                binaryOwned: true
+            );
+        }
+
         RemoveLegacyLauncher(launcherDirectory, installDirectory);
 
         return GetState();
@@ -179,68 +199,6 @@ public sealed class CliInstallService
         ];
     }
 
-    private void InstallBundledCli(
-        string bundledPath,
-        string installPath,
-        string installDirectory
-    )
-    {
-        var tempPath = Path.Join(
-            installDirectory,
-            $".{CliFileName}.{Guid.NewGuid():N}.tmp"
-        );
-        try
-        {
-            File.Copy(bundledPath, tempPath);
-            SetExecutableAndVerify(tempPath);
-            VerifyCliIdentityAndVersion(tempPath);
-            File.Move(tempPath, installPath, true);
-        }
-        finally
-        {
-            TryDeleteTemporaryFile(tempPath);
-        }
-    }
-
-    // Commit by rename, like the binary above, so an interrupted install can't leave a
-    // truncated script at the name users type. The mode is verified before the rename:
-    // a fresh temp file starts non-executable, and committing one whose chmod failed
-    // would replace a working launcher with a broken one.
-    private void WriteLauncherAtomically(
-        string launcherPath,
-        string launcherDirectory,
-        string script
-    )
-    {
-        var tempPath = Path.Join(
-            launcherDirectory,
-            $".{CliFileName}.{Guid.NewGuid():N}.tmp"
-        );
-        try
-        {
-            File.WriteAllText(tempPath, script);
-            SetExecutableAndVerify(tempPath);
-            File.Move(tempPath, launcherPath, true);
-        }
-        finally
-        {
-            TryDeleteTemporaryFile(tempPath);
-        }
-    }
-
-    private static void TryDeleteTemporaryFile(string path)
-    {
-        try
-        {
-            File.Delete(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Cleanup must never replace the copy/chmod/verify failure that got us here.
-            Trace.WriteLine($"[CliInstallService] could not remove {path}: {ex.Message}");
-        }
-    }
-
     private void VerifyCliIdentityAndVersion(string path)
     {
         var result = _verificationRunner(path);
@@ -263,95 +221,63 @@ public sealed class CliInstallService
 
     private static CliVerificationResult RunCliVerification(string path)
     {
-        return RunCliVerification(path, s_verificationTimeout);
+        return RunCliVerification(new ProcessRunner(), path, s_verificationTimeout);
     }
 
     // Parameterized so tests can use a short deadline instead of the production one.
     internal static CliVerificationResult RunCliVerification(string path, TimeSpan timeout)
     {
-        using var process = new Process();
-        process.StartInfo = new ProcessStartInfo(path)
+        return RunCliVerification(new ProcessRunner(), path, timeout);
+    }
+
+    private static CliVerificationResult RunCliVerification(
+        IProcessRunner processRunner,
+        string path,
+        TimeSpan timeout
+    )
+    {
+        // One deadline covering process exit and both reads: a grandchild inheriting the
+        // redirected pipes would otherwise keep the drain blocked long after the CLI exited.
+        var result = processRunner.RunProbe(
+            new ProcessCommand(path, ["--version"]),
+            new ProcessOneShotOptions(Timeout: timeout)
+        );
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- guard chain reads
+        // better than a switch here.
+        if (result.Status == ProcessRunStatus.StartFailed)
         {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        process.StartInfo.ArgumentList.Add("--version");
-        bool started;
-        try
-        {
-            started = process.Start();
-        }
-        catch (System.ComponentModel.Win32Exception ex)
-        {
-            // exec fails here rather than at chmod when the install directory is mounted
-            // noexec or the copy is not a valid binary. Normalized because callers only
-            // filter on this type.
             throw new InvalidOperationException(
-                $"Could not start CLI verification: {ex.Message}",
-                ex
+                result.StartError ?? "Could not start CLI verification."
             );
         }
 
-        if (!started)
+        if (result.Status == ProcessRunStatus.TimedOut)
         {
-            throw new InvalidOperationException("Could not start CLI verification.");
-        }
-
-        // One deadline covering process exit *and* both reads. WaitForExit(int) does
-        // not drain redirected pipes, so a grandchild inheriting them keeps ReadToEnd
-        // blocked forever even after the CLI itself has exited.
-        using var deadline = new CancellationTokenSource(timeout);
-        var standardOutput = process.StandardOutput.ReadToEndAsync(deadline.Token);
-        var standardError = process.StandardError.ReadToEndAsync(deadline.Token);
-        try
-        {
-            process.WaitForExitAsync(deadline.Token).GetAwaiter().GetResult();
-            return new CliVerificationResult(
-                process.ExitCode,
-                standardOutput.GetAwaiter().GetResult(),
-                standardError.GetAwaiter().GetResult()
-            );
-        }
-        catch (OperationCanceledException)
-        {
-            try
-            {
-                process.Kill(true);
-                // Bounded: the parameterless overload also waits for pipe EOF, which is
-                // the very thing that may be stuck.
-                process.WaitForExit(5_000);
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
-            {
-                Trace.WriteLine($"[CliInstallService] could not stop CLI verification: {ex.Message}");
-            }
-
             throw new TimeoutException(
                 $"CLI verification did not complete within {timeout.TotalSeconds:0} seconds."
             );
         }
+
+        return new CliVerificationResult(
+            result.ExitCode ?? -1,
+            result.StandardOutputText,
+            result.StandardErrorText
+        );
     }
 
     // Earlier versions installed as "typewhisper", shadowing the desktop app's own command.
     // Renaming leaves that launcher behind, so delete it here — but only when it's provably
     // ours; e.g. the desktop app's own symlink at this name is foreign and left untouched.
-    private static void RemoveLegacyLauncher(string launcherDirectory, string installDirectory)
+    private void RemoveLegacyLauncher(string launcherDirectory, string installDirectory)
     {
         var legacyLauncherPath = Path.Join(launcherDirectory, LegacyCliFileName);
         var legacyInstallPath = Path.Join(installDirectory, LegacyCliFileName);
-        if (
-            ClassifyLauncherEntry(legacyLauncherPath, legacyInstallPath)
-            != LauncherEntryClassification.Owned
-        )
-        {
-            return;
-        }
-
         try
         {
-            File.Delete(legacyLauncherPath);
+            _managedFiles
+                .RemoveAsync(BuildLegacyLauncherSpec(legacyLauncherPath, legacyInstallPath))
+                .GetAwaiter()
+                .GetResult();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -395,42 +321,78 @@ public sealed class CliInstallService
 
     private static string? FindBundledCliPath()
     {
-        var baseDirectory = AppContext.BaseDirectory;
-        var candidates = new[]
+        return FindBundledCliPath(
+            AppContext.BaseDirectory,
+            FindDevelopmentSourceDirectory(AppContext.BaseDirectory)
+        );
+    }
+
+    // The output directory sits at varying depths under src/ (bin/<Config>/net10.0,
+    // plus optional RID and publish segments), so walk up until the directory holding
+    // the CLI project appears instead of counting a fixed number of parents.
+    internal static string? FindDevelopmentSourceDirectory(string baseDirectory)
+    {
+        var current = new DirectoryInfo(Path.GetFullPath(baseDirectory));
+        for (var depth = 0; current is not null && depth < 8; depth++)
         {
-            Path.Join(baseDirectory, "Cli", CliFileName),
-            Path.Join(baseDirectory, "..", "TypeWhisper.Cli", CliFileName), Path.Join(
-                baseDirectory,
-                "..",
-                "..",
-                "..",
-                "..",
-                "TypeWhisper.Cli",
-                "bin",
-                "Debug",
-                "net10.0",
-                CliFileName
-            ),
-            Path.Join(
-                baseDirectory,
-                "..",
-                "..",
-                "..",
-                "..",
-                "TypeWhisper.Cli",
-                "bin",
-                "Release",
-                "net10.0",
-                CliFileName
-            ),
-        };
+            if (Directory.Exists(Path.Join(current.FullName, "TypeWhisper.Cli")))
+            {
+                return current.FullName;
+            }
+
+            current = current.Parent;
+        }
+
+        return null;
+    }
+
+    // Parameterized only so tests can probe isolated package and source trees.
+    // A null sourceDirectory (packaged installs run outside any source tree)
+    // limits discovery to the packaged Cli/ candidate.
+    internal static string? FindBundledCliPath(string baseDirectory, string? sourceDirectory)
+    {
+        // For local development, prepare the CLI with:
+        // dotnet publish src/TypeWhisper.Cli/TypeWhisper.Cli.csproj -c Debug -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false
+        var candidates = new List<string> { Path.Join(baseDirectory, "Cli", CliFileName) };
+        if (sourceDirectory is not null)
+        {
+            candidates.Add(
+                Path.Join(
+                    sourceDirectory,
+                    "TypeWhisper.Cli",
+                    "bin",
+                    "Debug",
+                    "net10.0",
+                    "linux-x64",
+                    "publish",
+                    CliFileName
+                )
+            );
+            candidates.Add(
+                Path.Join(
+                    sourceDirectory,
+                    "TypeWhisper.Cli",
+                    "bin",
+                    "Release",
+                    "net10.0",
+                    "linux-x64",
+                    "publish",
+                    CliFileName
+                )
+            );
+        }
 
         return candidates.Select(Path.GetFullPath).FirstOrDefault(IsCliAppHost);
     }
 
     private static bool IsCliAppHost(string path)
     {
-        return FileExistsWithExactName(path);
+        // A single-file publish never has the managed assembly beside the apphost;
+        // every framework-dependent layout does. Rejecting the sibling keeps the
+        // single-file installer from staging an apphost whose DLLs stay behind.
+        // path already ends in the CliFileName segment, so path + ".dll" names the
+        // sibling managed assembly a single-file publish never leaves behind.
+        return FileExistsWithExactName(path) && !File.Exists(path + ".dll");
     }
 
     private static CliInstallState CreateState(
@@ -438,16 +400,19 @@ public sealed class CliInstallService
         string installPath,
         string launcherPath,
         string launcherDirectory,
-        LauncherEntryClassification launcherEntry
+        LauncherEntryClassification launcherEntry,
+        bool binaryOwned
     )
     {
         var launcherExists = launcherEntry != LauncherEntryClassification.Absent;
         var launcherOwned = launcherEntry == LauncherEntryClassification.Owned;
-        var installed = launcherOwned && FileExistsWithExactName(installPath);
+        var installed = launcherOwned && binaryOwned;
         var inPath = IsDirectoryInPath(launcherDirectory);
 
         var status = launcherExists && !launcherOwned
             ? $"Left {launcherPath} untouched — it is not managed by TypeWhisper and will not be overwritten."
+            : FileExistsWithExactName(installPath) && !binaryOwned
+                ? $"Left {installPath} untouched — it is not managed by TypeWhisper and will not be overwritten."
             : installed
                 ? inPath
                     ? $"Installed at {launcherPath}"
@@ -467,64 +432,27 @@ public sealed class CliInstallService
         )
         {
             LauncherEntry = launcherEntry,
+            BinaryOwned = binaryOwned,
         };
     }
 
-    private static LauncherEntryClassification ClassifyLauncherEntry(
+    private LauncherEntryClassification ClassifyLauncherEntry(
         string launcherPath,
         string installPath
     )
     {
         try
         {
-            var directory = Path.GetDirectoryName(launcherPath);
-            var fileName = Path.GetFileName(launcherPath);
-            if (
-                string.IsNullOrWhiteSpace(directory)
-                || string.IsNullOrWhiteSpace(fileName)
-                || !Directory.Exists(directory)
-            )
+            var classification = _managedFiles.Probe(
+                BuildLauncherSpec(launcherPath, installPath)
+            );
+            if (classification == ManagedFileClassification.Absent)
             {
                 return LauncherEntryClassification.Absent;
             }
 
-            // Enumerate case-insensitively so a differently-cased alias is returned even
-            // when the launcher directory sits on a case-folded filesystem (the process
-            // default casing follows the temp/root filesystem, not this directory). We then
-            // pick the ordinal-exact entry ourselves; if only an aliasing variant exists we
-            // refuse to overwrite it even though it is not our exact name.
-            var candidates = Directory
-                .EnumerateFileSystemEntries(
-                    directory,
-                    fileName,
-                    new EnumerationOptions
-                    {
-                        MatchCasing = MatchCasing.CaseInsensitive,
-                        AttributesToSkip = 0,
-                    }
-                )
-                .ToArray();
-            var entry = candidates.FirstOrDefault(candidate =>
-                string.Equals(Path.GetFileName(candidate), fileName, StringComparison.Ordinal)
-            );
-            if (entry is null)
-            {
-                return candidates.Length == 0
-                    ? LauncherEntryClassification.Absent
-                    : LauncherEntryClassification.Foreign;
-            }
-
-            var attributes = File.GetAttributes(entry);
-            if (
-                (attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0
-                || new FileInfo(entry).LinkTarget is not null
-            )
-            {
-                return LauncherEntryClassification.Foreign;
-            }
-
-            var contents = File.ReadAllText(entry);
-            return HasMarkedOwnershipHeader(contents) || IsLegacyOwnedLauncher(contents, installPath)
+            return classification is ManagedFileClassification.CurrentOwned
+                    or ManagedFileClassification.StaleOwned
                 ? LauncherEntryClassification.Owned
                 : LauncherEntryClassification.Foreign;
         }
@@ -533,6 +461,113 @@ public sealed class CliInstallService
             // Refuse destructive changes when the entry cannot be inspected safely.
             return LauncherEntryClassification.Foreign;
         }
+    }
+
+    private bool ClassifyBinaryEntry(string installPath, string launcherPath, string? bundledPath)
+    {
+        try
+        {
+            var desired = bundledPath is null ? [] : File.ReadAllBytes(bundledPath);
+            var classification = _managedFiles.Probe(
+                BuildBinarySpec(installPath, launcherPath, desired)
+            );
+            return classification is ManagedFileClassification.CurrentOwned
+                or ManagedFileClassification.StaleOwned;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    ///     Whether our public launcher vouches for the binary at <paramref name="installPath" />.
+    ///     A previous release's binary is an opaque ELF carrying no marker of its own, and its
+    ///     bytes differ every version, so the launcher is the only ownership evidence available
+    ///     for a CLI installed before the manifest existed.
+    /// </summary>
+    private static bool LauncherClaimsInstallPath(string launcherPath, string installPath)
+    {
+        try
+        {
+            if (!FileExistsWithExactName(launcherPath))
+            {
+                return false;
+            }
+
+            var contents = File.ReadAllText(launcherPath);
+            return (
+                    HasMarkedOwnershipHeader(contents)
+                    || IsLegacyOwnedLauncher(contents, installPath)
+                )
+                && contents.Contains(
+                    BuildLauncherExecLine(installPath),
+                    StringComparison.Ordinal
+                );
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private ManagedFileSpec BuildBinarySpec(
+        string installPath,
+        string launcherPath,
+        byte[] desiredBytes
+    )
+    {
+        return new ManagedFileSpec
+        {
+            ArtifactId = "cli-private-binary",
+            DestinationPath = installPath,
+            DesiredBytes = desiredBytes,
+            CreateMode = CliExecutableMode,
+            OwnershipProbe = bytes => bytes.Span.SequenceEqual(desiredBytes),
+            // Without this the first upgrade after the manifest lands sees a
+            // previous-version binary, matches no probe, calls it foreign, and refuses
+            // to update every existing CLI installation until the user deletes it by hand.
+            LegacyOwnershipProbe = _ => LauncherClaimsInstallPath(launcherPath, installPath),
+            StagedFileValidator = (path, _) =>
+            {
+                SetExecutableAndVerify(path);
+                VerifyCliIdentityAndVersion(path);
+                return Task.CompletedTask;
+            },
+        };
+    }
+
+    private static ManagedFileSpec BuildLauncherSpec(
+        string launcherPath,
+        string installPath
+    )
+    {
+        var desired = ManagedFileSpec.Utf8(BuildLauncherScript(installPath));
+        return new ManagedFileSpec
+        {
+            ArtifactId = "cli-public-launcher",
+            DestinationPath = launcherPath,
+            DesiredBytes = desired,
+            CreateMode = CliExecutableMode,
+            OwnershipProbe = bytes => HasMarkedOwnershipHeader(
+                System.Text.Encoding.UTF8.GetString(bytes.Span)
+            ),
+            LegacyOwnershipProbe = bytes => IsLegacyOwnedLauncher(
+                System.Text.Encoding.UTF8.GetString(bytes.Span),
+                installPath
+            ),
+        };
+    }
+
+    private static ManagedFileSpec BuildLegacyLauncherSpec(
+        string launcherPath,
+        string installPath
+    )
+    {
+        return BuildLauncherSpec(launcherPath, installPath) with
+        {
+            ArtifactId = "cli-legacy-launcher",
+        };
     }
 
     private static bool HasMarkedOwnershipHeader(string contents)

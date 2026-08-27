@@ -99,14 +99,12 @@ internal static class EnglishNumberWordParser
                 index++;
 
             var nextGroup = ParseGroup(words, index);
-            // ReSharper disable once InvertIf -- last statement in the loop body; inverting
-            // only buys a trailing `continue`.
-            if (nextGroup is not null)
-            {
-                group = nextGroup;
-                current = group.Value.Value;
-                index = group.Value.NextIndex;
-            }
+            if (nextGroup is null)
+                continue;
+
+            group = nextGroup;
+            current = group.Value.Value;
+            index = group.Value.NextIndex;
         }
 
         return (consumedScale ? total + current : current, index);
@@ -139,8 +137,11 @@ internal static class EnglishNumberWordParser
             index++;
             consumed = true;
 
-            // ReSharper disable once InvertIf -- no early exit in the tens branch to invert toward.
-            if (index < words.Count && s_unitValues.TryGetValue(words[index], out var unit) && unit > 0)
+            // ReSharper disable once InvertIf -- tail of the tens branch; the method continues past
+            // the if/else chain, so inverting would need a duplicated return.
+            if (index < words.Count &&
+                s_unitValues.TryGetValue(words[index], out var unit) &&
+                unit > 0)
             {
                 value += unit;
                 index++;

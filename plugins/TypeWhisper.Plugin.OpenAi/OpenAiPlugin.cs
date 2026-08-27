@@ -4,7 +4,6 @@
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Globalization;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
@@ -17,6 +16,7 @@ namespace TypeWhisper.Plugin.OpenAi;
 
 public sealed class OpenAiPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         ILlmProviderPlugin,
         ITtsProviderPlugin,
         IPluginSettingsProvider,
@@ -47,8 +47,6 @@ public sealed class OpenAiPlugin
         new() { PropertyNameCaseInsensitive = true };
 
     private readonly HttpClient _httpClient;
-    private readonly Func<byte[], ITtsPlaybackSession> _ttsPlaybackFactory;
-    private readonly Func<bool> _ttsPlaybackAvailableProbe;
     private IPluginHostServices? _host;
     private string? _selectedApiModelName;
     private string _selectedResponseFormat = "verbose_json";
@@ -117,23 +115,16 @@ public sealed class OpenAiPlugin
     {
     }
 
-    internal OpenAiPlugin(
-        HttpClient httpClient,
-        Func<byte[], ITtsPlaybackSession>? ttsPlaybackFactory = null,
-        Func<bool>? ttsPlaybackAvailableProbe = null)
+    internal OpenAiPlugin(HttpClient httpClient)
     {
         _httpClient = httpClient;
-        _ttsPlaybackFactory = ttsPlaybackFactory
-            ?? (pcm => OpenAiPcmTtsPlaybackSession.Create(pcm, OpenAiTtsConfiguration.SampleRate));
-        _ttsPlaybackAvailableProbe = ttsPlaybackAvailableProbe
-            ?? OpenAiPcmTtsPlaybackSession.IsPlaybackAvailable;
     }
 
     // ITypeWhisperPlugin
 
     public string PluginId => "com.typewhisper.openai";
     public string PluginName => "OpenAI / ChatGPT";
-    public string PluginVersion => "1.2.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -195,6 +186,9 @@ public sealed class OpenAiPlugin
 
     public bool SupportsTranslation =>
         IsConfigured && SelectedModelEntry is { SupportsTranslation: true };
+
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     // Realtime streaming uses an API-key-authenticated WebSocket. ChatGPT
     // OAuth tokens are scoped for the consumer chat backend and 401 at
@@ -425,21 +419,36 @@ public sealed class OpenAiPlugin
         if (string.IsNullOrWhiteSpace(text))
             return OpenAiInactiveTtsPlaybackSession.Instance;
 
-        // The OpenAI speech endpoint is a paid request. With no audio player on
-        // PATH the synthesized PCM could only be discarded (OpenAiPcmTtsPlaybackSession
-        // would return the inactive sentinel), so skip the request entirely.
-        if (!_ttsPlaybackAvailableProbe())
+        var host = _host
+                   ?? throw new InvalidOperationException(
+                       "OpenAI plugin is not activated."
+                   );
+        // Paid endpoint: preflight playback before issuing a request that couldn't be played.
+        if (!host.PcmPlayback.IsAvailable)
         {
-            _host?.Log(
+            host.Log(
                 PluginLogLevel.Warning,
-                "Skipping OpenAI TTS request: no audio player (paplay/aplay) found on PATH.");
+                "Skipping OpenAI TTS request: no supported PCM audio player is available."
+            );
             return OpenAiInactiveTtsPlaybackSession.Instance;
         }
 
         using var httpRequest = CreateTtsRequest(text);
-        var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, httpRequest, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient,
+            httpRequest,
+            ct
+        );
         var pcm = await response.Content.ReadAsByteArrayAsync(ct);
-        return _ttsPlaybackFactory(pcm);
+        return await host.PcmPlayback.PlayAsync(
+            new PcmPlaybackRequest(
+                pcm,
+                OpenAiTtsConfiguration.SampleRate,
+                1,
+                PcmSampleFormat.Signed16LittleEndian
+            ),
+            ct
+        );
     }
 
     // LLM model catalog
@@ -704,11 +713,18 @@ public sealed class OpenAiPlugin
         server.Start();
 
         var authUri = OpenAiOAuthClient.BuildAuthorizeUri(state, pkce);
-        Process.Start(new ProcessStartInfo
+        var launch = (
+            _host
+            ?? throw new InvalidOperationException("OpenAI plugin is not activated.")
+        ).Processes.LaunchUri(authUri);
+        if (!launch.Started)
         {
-            FileName = authUri.ToString(),
-            UseShellExecute = true,
-        });
+            // LaunchUri reports failure instead of throwing; re-raise as Win32Exception
+            // so existing catch sites still match.
+            throw new Win32Exception(
+                launch.StartError ?? "Could not open the authorization page."
+            );
+        }
 
         var code = await server.WaitForCodeAsync(ct);
         var tokens = await OpenAiOAuthClient.ExchangeAuthorizationCodeAsync(_httpClient, code, pkce, ct);
@@ -1005,10 +1021,15 @@ public sealed class OpenAiPlugin
     private static string? NormalizeApiKey(string? apiKey) =>
         string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
 
-    private static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
+    // The typed invoker maps "auto" to null already; this only catches direct/legacy callers.
+    private static string? NormalizeLanguage(string? language)
+    {
+        var trimmed = language?.Trim();
+        return string.IsNullOrEmpty(trimmed)
+            || trimmed.Equals("auto", StringComparison.OrdinalIgnoreCase)
             ? null
             : language;
+    }
 
     private static string NormalizeReasoningEffort(string? effort) =>
         effort is "low" or "medium" or "high" or "xhigh" ? effort : "medium";
@@ -1305,10 +1326,9 @@ public sealed class OpenAiPlugin
         }
         catch (Win32Exception ex)
         {
-            // Process.Start(UseShellExecute=true) launches the browser via
-            // xdg-open on Linux. On headless boxes or minimal installs with no
-            // default browser registered, that call throws Win32Exception and
-            // would otherwise fault the settings-validation command.
+            // The process supervisor launches the browser via xdg-open. On headless or
+            // minimal installs with no default browser, that handoff fails here instead
+            // of faulting the settings-validation command.
             return new PluginSettingsValidationResult(
                 false,
                 Loc.L("Settings.ChatGptLoginNoBrowser", ex.Message));

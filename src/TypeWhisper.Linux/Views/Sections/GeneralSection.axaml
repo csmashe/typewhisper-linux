@@ -86,6 +86,44 @@
                 </Grid>
             </Border>
 
+            <TextBlock Text="{loc:Str General.CudaEnvironment}"
+                       Classes="section-title"
+                       IsVisible="{Binding ShowCudaPathRemovalSurface}" />
+
+            <Border Classes="panel"
+                    IsVisible="{Binding ShowCudaPathRemovalSurface}">
+                <Grid RowDefinitions="Auto,Auto">
+                    <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="{loc:Str General.CudaPathIntegration}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{loc:Str General.CudaPathRemovalHint}"
+                                           FontSize="12"
+                                           Foreground="#8A9AAE"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    Content="{loc:Str General.RemoveCudaPath}"
+                                    Command="{Binding RemoveCudaLibraryPathCommand}"
+                                    IsVisible="{Binding CudaPathRemovalAvailable}"
+                                    VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                    <Border Grid.Row="1"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="0,1,0,0"
+                            Padding="18,12"
+                            IsVisible="{Binding CudaPathRemovalStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                        <TextBlock Text="{Binding CudaPathRemovalStatusText}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
+                    </Border>
+                </Grid>
+            </Border>
+
             <TextBlock Text="{loc:Str General.Window}"
                        Classes="section-title" />
 

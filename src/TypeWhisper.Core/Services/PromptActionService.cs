@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
@@ -15,31 +16,41 @@ public sealed class PromptActionService : IPromptActionService
 
     private readonly string _filePath;
     private readonly IErrorLogService? _errorLog;
-    private List<PromptAction> _cache = [];
-    private bool _cacheLoaded;
-    private bool _loadFailed;
+    private readonly AtomicJsonStore<ImmutableArray<PromptAction>> _store;
 
     public PromptActionService(string filePath, IErrorLogService? errorLog = null)
     {
-        _filePath = filePath;
+        _filePath = Path.GetFullPath(filePath);
         _errorLog = errorLog;
+        _store = new AtomicJsonStore<ImmutableArray<PromptAction>>(
+            _filePath,
+            static () => [],
+            new AtomicJsonStoreOptions<ImmutableArray<PromptAction>>
+            {
+                JsonOptions = s_jsonOptions,
+                CorruptFilePolicy = AtomicJsonCorruptFilePolicy.PreserveAndReset,
+                Deserialize = json =>
+                {
+                    var actions = JsonSerializer.Deserialize<ImmutableArray<PromptAction>>(
+                        json,
+                        s_jsonOptions
+                    );
+                    return actions.IsDefault
+                        ? throw new JsonException("Prompt-action JSON deserialized to null.")
+                        : actions;
+                },
+                Diagnostic = ReportDiagnostic,
+            }
+        );
     }
 
-    public IReadOnlyList<PromptAction> Actions
-    {
-        get
-        {
-            EnsureCacheLoaded();
-            return _cache;
-        }
-    }
+    public IReadOnlyList<PromptAction> Actions => _store.Current.ToArray();
 
     public IReadOnlyList<PromptAction> EnabledActions
     {
         get
         {
-            EnsureCacheLoaded();
-            return _cache.Where(a => a.IsEnabled).OrderBy(a => a.SortOrder).ToList();
+            return _store.Current.Where(a => a.IsEnabled).OrderBy(a => a.SortOrder).ToList();
         }
     }
 
@@ -47,55 +58,56 @@ public sealed class PromptActionService : IPromptActionService
 
     public void AddAction(PromptAction action)
     {
-        EnsureCacheLoaded();
-        var next = new List<PromptAction>(_cache) { action };
-        SaveToDisk(next);
-        _cache = next;
-        ActionsChanged?.Invoke();
+        Commit(current => current.Add(action));
     }
 
     public void UpdateAction(PromptAction action)
     {
-        EnsureCacheLoaded();
-        var updated = action with { UpdatedAt = DateTime.UtcNow };
-        var next = new List<PromptAction>(_cache);
-        var idx = next.FindIndex(a => a.Id == action.Id);
-        if (idx >= 0)
-        {
-            next[idx] = updated;
-        }
-
-        SaveToDisk(next);
-        _cache = next;
-        ActionsChanged?.Invoke();
+        Commit(
+            current =>
+            {
+                var idx = FindIndex(current, a => a.Id == action.Id);
+                return idx < 0
+                    ? current
+                    : current.SetItem(idx, action with { UpdatedAt = DateTime.UtcNow });
+            }
+        );
     }
 
     public void DeleteAction(string id)
     {
-        EnsureCacheLoaded();
-        var next = new List<PromptAction>(_cache);
-        next.RemoveAll(a => a.Id == id);
-        SaveToDisk(next);
-        _cache = next;
-        ActionsChanged?.Invoke();
+        Commit(
+            current =>
+            {
+                var next = current.Where(a => a.Id != id).ToImmutableArray();
+                return next.Length == current.Length ? current : next;
+            }
+        );
     }
 
     public void Reorder(IReadOnlyList<string> orderedIds)
     {
-        EnsureCacheLoaded();
-        var next = new List<PromptAction>(_cache);
-        for (var i = 0; i < orderedIds.Count; i++)
-        {
-            var idx = next.FindIndex(a => a.Id == orderedIds[i]);
-            if (idx >= 0)
+        Commit(
+            current =>
             {
-                next[idx] = next[idx] with { SortOrder = i };
-            }
-        }
+                var next = current;
+                var changed = false;
+                for (var i = 0; i < orderedIds.Count; i++)
+                {
+                    var orderedId = orderedIds[i];
+                    var idx = FindIndex(next, a => a.Id == orderedId);
+                    if (idx < 0 || next[idx].SortOrder == i)
+                    {
+                        continue;
+                    }
 
-        SaveToDisk(next);
-        _cache = next;
-        ActionsChanged?.Invoke();
+                    next = next.SetItem(idx, next[idx] with { SortOrder = i });
+                    changed = true;
+                }
+
+                return changed ? next : current;
+            }
+        );
     }
 
     public void SeedFirstRunDefaultsIfMissing()
@@ -108,26 +120,16 @@ public sealed class PromptActionService : IPromptActionService
             return;
         }
 
-        EnsureCacheLoaded();
-        if (_cache.Any(a => a.Id == FirstRunDefaults.AutoCleanupActionId))
-        {
-            return;
-        }
-
-        var next = new List<PromptAction>(_cache) { FirstRunDefaults.CreateAutoCleanupAction() };
-        SaveToDisk(next);
-        _cache = next;
-        ActionsChanged?.Invoke();
+        Commit(
+            current =>
+                current.Any(a => a.Id == FirstRunDefaults.AutoCleanupActionId)
+                    ? current
+                    : current.Add(FirstRunDefaults.CreateAutoCleanupAction())
+        );
     }
 
     public void SeedPresets()
     {
-        EnsureCacheLoaded();
-        if (_cache.Any(a => a.IsPreset))
-        {
-            return;
-        }
-
         var presets = new (string Name, string Icon, string Prompt)[]
         {
             (
@@ -157,102 +159,97 @@ public sealed class PromptActionService : IPromptActionService
             ),
         };
 
-        var next = new List<PromptAction>(_cache);
-        for (var i = 0; i < presets.Length; i++)
-        {
-            var (name, icon, prompt) = presets[i];
-            next.Add(
-                new PromptAction
+        Commit(
+            current =>
+            {
+                if (current.Any(a => a.IsPreset))
                 {
-                    Id = Guid.NewGuid().ToString(),
-                    Name = name,
-                    SystemPrompt = prompt,
-                    Icon = icon,
-                    IsPreset = true,
-                    SortOrder = i,
+                    return current;
+                }
+
+                var next = current;
+                for (var i = 0; i < presets.Length; i++)
+                {
+                    var (name, icon, prompt) = presets[i];
+                    next = next.Add(
+                        new PromptAction
+                        {
+                            Id = Guid.NewGuid().ToString(),
+                            Name = name,
+                            SystemPrompt = prompt,
+                            Icon = icon,
+                            IsPreset = true,
+                            SortOrder = i,
+                        }
+                    );
+                }
+
+                return next;
+            }
+        );
+    }
+
+    private void Commit(
+        Func<ImmutableArray<PromptAction>, ImmutableArray<PromptAction>> update
+    )
+    {
+        var changed = false;
+        try
+        {
+            _store.Update(
+                current =>
+                {
+                    var next = update(current);
+                    changed = !next.Equals(current);
+                    return next;
                 }
             );
         }
-
-        SaveToDisk(next);
-        _cache = next;
-        ActionsChanged?.Invoke();
-    }
-
-    private void EnsureCacheLoaded()
-    {
-        if (_cacheLoaded)
-        {
-            return;
-        }
-
-        try
-        {
-            if (File.Exists(_filePath))
-            {
-                var json = File.ReadAllText(_filePath);
-                // A blank file is a benign "no actions yet" state (e.g. freshly created), not
-                // corruption — leave the cache empty so normal saves still happen. Only non-empty
-                // content that fails to parse is treated as a load failure below.
-                if (!string.IsNullOrWhiteSpace(json))
-                {
-                    _cache = JsonSerializer.Deserialize<List<PromptAction>>(json) ?? [];
-                }
-            }
-        }
         catch (Exception ex)
         {
-            // The user's saved prompt actions are unreadable — they'll see only the
-            // built-in presets until the file is repaired, so make that visible.
-            _errorLog?.AddEntry(
-                $"Could not load saved prompt actions from {_filePath}: {ex.Message}",
-                ErrorCategory.Prompt
+            Trace.WriteLine(
+                $"[PromptActionService] Failed to save prompt actions to {_filePath}: {ex}"
             );
-            _cache = [];
-            // The file exists but couldn't be parsed. Treat the cache as untrustworthy so a
-            // later add/update doesn't overwrite the (possibly recoverable) file with an empty set.
-            _loadFailed = true;
-        }
-
-        _cacheLoaded = true;
-    }
-
-    private void SaveToDisk(IReadOnlyList<PromptAction> actions)
-    {
-        if (_loadFailed)
-        {
-            // The cache is a partial set (the file didn't load), so refuse until it loads cleanly
-            // rather than clobber the user's saved actions.
-            const string reason =
-                "the existing file could not be loaded, so writing now would overwrite saved actions";
-            _errorLog?.AddEntry(
-                $"Not saving prompt actions at {_filePath}: {reason}.",
-                ErrorCategory.Prompt
-            );
-            throw new InvalidOperationException(
-                $"Cannot save prompt actions at '{_filePath}': {reason}."
-            );
-        }
-
-        try
-        {
-            var dir = Path.GetDirectoryName(_filePath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
-
-            var json = JsonSerializer.Serialize(actions, s_jsonOptions);
-            AtomicFileWrite.WriteAllText(_filePath, json);
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[PromptActionService] Failed to save prompt actions to {_filePath}: {ex}");
             _errorLog?.AddEntry(
                 $"Could not save prompt actions to {_filePath}: {ex.Message}",
                 ErrorCategory.Prompt
             );
             throw;
         }
+
+        if (changed)
+        {
+            ActionsChanged?.Invoke();
+        }
+    }
+
+    private void ReportDiagnostic(AtomicJsonStoreDiagnostic diagnostic)
+    {
+        if (diagnostic.Kind != AtomicJsonStoreDiagnosticKind.PrimaryCorrupt)
+        {
+            return;
+        }
+
+        _errorLog?.AddEntry(
+            $"Could not load saved prompt actions from {_filePath}: "
+            + (diagnostic.Exception?.Message ?? "invalid JSON"),
+            ErrorCategory.Prompt
+        );
+    }
+
+    private static int FindIndex(
+        ImmutableArray<PromptAction> actions,
+        Func<PromptAction, bool> predicate
+    )
+    {
+        for (var index = 0; index < actions.Length; index++)
+        {
+            if (predicate(actions[index]))
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 }

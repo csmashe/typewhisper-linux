@@ -18,7 +18,7 @@ public class CudaRuntimeCacheClearTests
         {
             var cacheRoot = Path.Join(temp, "cuda");
             using var http = new HttpClient();
-            var provisioner = new Provisioner(cacheRoot, http);
+            var provisioner = CreateProvisioner(cacheRoot, http, temp);
 
             // CacheDirectory is cacheRoot/<BundleVersion>; ClearCache deletes its parent
             // (the whole cuda tree, all bundle versions).
@@ -46,7 +46,7 @@ public class CudaRuntimeCacheClearTests
         {
             var cacheRoot = Path.Join(temp, "cuda");
             using var http = new HttpClient();
-            var provisioner = new Provisioner(cacheRoot, http);
+            var provisioner = CreateProvisioner(cacheRoot, http, temp);
             Directory.CreateDirectory(provisioner.CacheDirectory);
             await File.WriteAllTextAsync(
                 Path.Join(provisioner.CacheDirectory, "libcudart.so.12"),
@@ -86,10 +86,12 @@ public class CudaRuntimeCacheClearTests
         {
             var cacheRoot = Path.Join(temp, "cuda");
             using var http = new HttpClient();
-            var provisioner = new Provisioner(cacheRoot, http)
-            {
-                MaintenanceLockTimeoutForTests = TimeSpan.FromMilliseconds(100),
-            };
+            var provisioner = CreateProvisioner(
+                cacheRoot,
+                http,
+                temp,
+                TimeSpan.FromMilliseconds(100)
+            );
             Directory.CreateDirectory(provisioner.CacheDirectory);
             await File.WriteAllTextAsync(
                 Path.Join(provisioner.CacheDirectory, "libcudart.so.12"),
@@ -118,6 +120,7 @@ public class CudaRuntimeCacheClearTests
             Assert.True(
                 File.Exists(Path.Join(provisioner.CacheDirectory, "libcudart.so.12"))
             );
+            Assert.False(File.Exists(provisioner.LegacyMigrationDisabledPathForTests));
         }
         finally
         {
@@ -185,6 +188,24 @@ public class CudaRuntimeCacheClearTests
         Directory.CreateDirectory(dir);
         return dir;
     }
+
+    private static Provisioner CreateProvisioner(
+        string cacheRoot,
+        HttpClient http,
+        string tempRoot,
+        TimeSpan? maintenanceLockTimeout = null
+    ) =>
+        new(
+            cacheRoot,
+            http,
+            null,
+            Path.Join(tempRoot, "legacy", "cuda"),
+            Directory.Move
+        )
+        {
+            MaintenanceLockTimeoutForTests =
+                maintenanceLockTimeout ?? TimeSpan.FromSeconds(30),
+        };
 
     private static void TryDeleteDir(string path)
     {

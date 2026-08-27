@@ -28,6 +28,16 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
         ("/org/gnome/Shell/Extensions/WindowsExt", "org.gnome.Shell.Extensions.WindowsExt"),
     ];
 
+    private readonly ProviderProcessRunner _processRunner;
+
+    public GnomeWindowCallsProvider()
+        : this(new ProcessRunner()) { }
+
+    public GnomeWindowCallsProvider(IProcessRunner processRunner)
+    {
+        _processRunner = new ProviderProcessRunner(processRunner);
+    }
+
     public string Name => "gnome-window-calls";
 
     public bool IsApplicable()
@@ -54,10 +64,19 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
             string? listOutput = null;
             foreach (var (path, iface) in s_endpoints)
             {
-                var (exit, output) = await ProviderProcessRunner
+                var (exit, output) = await _processRunner
                     .RunAsync(
                         "gdbus",
-                        $"call --session --dest {DBusDest} --object-path {path} --method {iface}.List",
+                        [
+                            "call",
+                            "--session",
+                            "--dest",
+                            DBusDest,
+                            "--object-path",
+                            path,
+                            "--method",
+                            $"{iface}.List",
+                        ],
                         ct
                     )
                     .ConfigureAwait(false);

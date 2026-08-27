@@ -125,6 +125,11 @@ public sealed class AtSpiUrlExtractorTests
 
     private static AtSpiUrlExtractor Build(Func<string, string?> walk)
     {
-        return new AtSpiUrlExtractor(errorLog: null, walkOverride: walk);
+        // Fake runner so the constructor's busctl/gdbus availability probes stay off the host.
+        return new AtSpiUrlExtractor(
+            new FakeProcessRunner(),
+            errorLog: null,
+            walkOverride: walk
+        );
     }
 }

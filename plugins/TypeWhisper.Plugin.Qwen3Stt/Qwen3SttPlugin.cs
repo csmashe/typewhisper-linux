@@ -9,7 +9,11 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Qwen3Stt;
 
-public sealed class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class Qwen3SttPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string DefaultBaseUrl = "http://localhost:8000";
     private const string DefaultModel = "Qwen/Qwen3-ASR";
@@ -31,7 +35,7 @@ public sealed class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPluginSettings
 
     public string PluginId => "com.typewhisper.qwen3-stt";
     public string PluginName => "Qwen3 STT";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -60,6 +64,8 @@ public sealed class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPluginSettings
     public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public void SelectModel(string modelId)
     {

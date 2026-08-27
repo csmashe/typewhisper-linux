@@ -1,12 +1,12 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Threading.Channels;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Outcome of a process invocation through <see cref="IProcessRunner" />.
-///     <see cref="Started" /> is false when the process could not be launched at
-///     all (bad path, fork failure); <see cref="TimedOut" /> is true when it
-///     launched but outlived its timeout and was killed.
+///     Compatibility outcome for callers using the original process-runner API.
 /// </summary>
 public sealed record ProcessRunResult(
     bool Started,
@@ -16,49 +16,21 @@ public sealed record ProcessRunResult(
     string StandardError
 )
 {
-    /// <summary>True only when the process ran to completion with exit code 0.</summary>
     public bool Succeeded => Started && !TimedOut && ExitCode == 0;
 
     internal static ProcessRunResult NotStarted(string error)
     {
-        return new ProcessRunResult(
-            false,
-            false,
-            -1,
-            string.Empty,
-            error
-        );
+        return new ProcessRunResult(false, false, -1, string.Empty, error);
     }
 }
 
 /// <summary>
-///     Seam over <see cref="System.Diagnostics.Process" /> so orchestrating services
-///     (ownership gating, command ordering, branch-on-failure) can be unit-tested
-///     with a recording fake. The production implementation is <see cref="ProcessRunner" />.
+///     Linux compatibility interface. New code should use the supervisor members inherited
+///     from <see cref="IPluginProcessSupervisor"/>; <see cref="RunAsync"/> remains while
+///     established callers migrate.
 /// </summary>
-public interface IProcessRunner
+public interface IProcessRunner : IPluginProcessSupervisor
 {
-    /// <summary>
-    ///     Run <paramref name="fileName" /> with <paramref name="args" /> (passed as
-    ///     a real argv — no shell, no quoting), capturing stdout and stderr.
-    /// </summary>
-    /// <param name="fileName">Executable to run, resolved via PATH (no shell).</param>
-    /// <param name="args">Arguments passed as a real argv — no shell, no quoting.</param>
-    /// <param name="environment">Extra variables merged onto the inherited environment.</param>
-    /// <param name="standardInput">When non-null, written to the process's stdin, which is then closed.</param>
-    /// <param name="timeout">
-    ///     When set, the process tree is killed if it outlives the window and the result is flagged
-    ///     <see cref="ProcessRunResult.TimedOut" />.
-    /// </param>
-    /// <param name="detachAfterExit">
-    ///     Set only for commands that fork a persistent descendant which keeps the redirected
-    ///     stdout/stderr pipes open after the parent exits (wl-copy/xclip spawn a daemon to serve
-    ///     the clipboard selection). Their output is uninteresting, so the run abandons the read a
-    ///     short grace after the parent exits instead of blocking the full timeout for an EOF that
-    ///     never comes. Leave false for any command whose output is parsed — that path drains up to
-    ///     the remaining timeout so no valid output is discarded.
-    /// </param>
-    /// <param name="ct">Cancels the run; the process tree is killed on cancellation.</param>
     Task<ProcessRunResult> RunAsync(
         string fileName,
         IReadOnlyList<string> args,
@@ -68,15 +40,310 @@ public interface IProcessRunner
         bool detachAfterExit = false,
         CancellationToken ct = default
     );
+
+    ProcessRunOutcome IPluginProcessSupervisor.RunProbe(
+        ProcessCommand command,
+        ProcessOneShotOptions options,
+        CancellationToken cancellationToken
+    )
+    {
+        return RunOneShotAsync(command, options, cancellationToken)
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    async Task<ProcessRunOutcome> IPluginProcessSupervisor.RunOneShotAsync(
+        ProcessCommand command,
+        ProcessOneShotOptions options,
+        CancellationToken cancellationToken
+    )
+    {
+        if (options.StandardInput is BinaryProcessInput)
+        {
+            throw new NotSupportedException(
+                "This legacy process runner does not support binary standard input."
+            );
+        }
+
+        if (
+            options.StandardOutput == ProcessCaptureMode.Binary
+            || options.StandardError == ProcessCaptureMode.Binary
+        )
+        {
+            throw new NotSupportedException(
+                "This legacy process runner does not support binary process capture."
+            );
+        }
+
+        var legacy = await RunAsync(
+                command.FileName,
+                command.Arguments,
+                command.Environment,
+                (options.StandardInput as Utf8ProcessInput)?.Value,
+                options.Timeout,
+                options.PostExitPipePolicy == ProcessPostExitPipePolicy.AbandonAfterGrace,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+
+        var status = legacy.Started
+            ? legacy.TimedOut
+                ? ProcessRunStatus.TimedOut
+                : ProcessRunStatus.Exited
+            : ProcessRunStatus.StartFailed;
+        return new ProcessRunOutcome(
+            status,
+            status == ProcessRunStatus.Exited ? legacy.ExitCode : null,
+            options.StandardOutput == ProcessCaptureMode.Discard
+                ? []
+                : System.Text.Encoding.UTF8.GetBytes(legacy.StandardOutput),
+            options.StandardError == ProcessCaptureMode.Discard
+                ? []
+                : System.Text.Encoding.UTF8.GetBytes(legacy.StandardError),
+            ProcessOutputStatus.Complete,
+            status == ProcessRunStatus.StartFailed ? legacy.StandardError : null
+        );
+    }
+
+    ProcessSessionStartOutcome IPluginProcessSupervisor.StartSession(
+        ProcessCommand command,
+        ProcessSessionOptions options
+    )
+    {
+        throw new NotSupportedException(
+            "This legacy process runner does not support long-lived sessions."
+        );
+    }
+
+    DetachedLaunchOutcome IPluginProcessSupervisor.LaunchDetached(ProcessCommand command)
+    {
+        throw new NotSupportedException(
+            "This legacy process runner does not support detached launches."
+        );
+    }
+
+    DetachedLaunchOutcome IPluginProcessSupervisor.LaunchUri(Uri uri)
+    {
+        throw new NotSupportedException(
+            "This legacy process runner does not support URI launches."
+        );
+    }
 }
 
 /// <summary>
-///     Production <see cref="IProcessRunner" /> — a deliberately logic-free wrapper
-///     over <see cref="Process" />. All conditional behavior lives in the callers.
+///     The sole production owner of launched child processes.
 /// </summary>
 public sealed class ProcessRunner : IProcessRunner
 {
-    private static readonly TimeSpan s_minimumDrainGrace = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan s_cleanupGrace = TimeSpan.FromMilliseconds(250);
+
+    public ProcessRunOutcome RunProbe(
+        ProcessCommand command,
+        ProcessOneShotOptions options,
+        CancellationToken cancellationToken = default
+    )
+    {
+        return RunOneShotAsync(command, options, cancellationToken).GetAwaiter().GetResult();
+    }
+
+    public async Task<ProcessRunOutcome> RunOneShotAsync(
+        ProcessCommand command,
+        ProcessOneShotOptions options,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(options);
+        // Validated before the child exists: an unusable delay must not surface only after a
+        // side-effecting command has already run, with its pumps left waiting.
+        ValidateDelay(options.Timeout, nameof(options.Timeout));
+        ValidateDelay(options.PostExitDrainGrace, nameof(options.PostExitDrainGrace));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        Process? process;
+        try
+        {
+            process = StartContainedProcess(CreateOneShotStartInfo(command, options));
+        }
+        catch (Exception ex)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return StartFailed(ex.Message);
+        }
+
+        if (process is null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return StartFailed($"Could not start {command.FileName}");
+        }
+
+        using (process)
+        using (var timeoutCts = options.Timeout is not null
+                   ? new CancellationTokenSource(options.Timeout.Value)
+                   : null)
+        using (var lifecycleCts = timeoutCts is not null
+                   ? CancellationTokenSource.CreateLinkedTokenSource(
+                       cancellationToken,
+                       timeoutCts.Token
+                   )
+                   : null)
+        {
+            // The private deadline is armed above before pumps, input, or exit waiting begin.
+            var lifecycleToken = lifecycleCts?.Token ?? cancellationToken;
+            var stdout = new CapturedPipe(options.StandardOutput);
+            var stderr = new CapturedPipe(options.StandardError);
+            var stdoutTask = PumpAsync(process.StandardOutput.BaseStream, stdout);
+            var stderrTask = PumpAsync(process.StandardError.BaseStream, stderr);
+            var inputTask = WriteInputAsync(process, options.StandardInput, lifecycleToken);
+            var exitTask = process.WaitForExitAsync(lifecycleToken);
+
+            try
+            {
+                await Task.WhenAll(exitTask, inputTask).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // WhenAll reports a fault ahead of a sibling's cancellation, so an unexpected
+                // stdin failure would otherwise escape with the deadline unenforced and the
+                // child still running: every post-start exit reaps before leaving.
+                await TerminateAndReapAsync(process).ConfigureAwait(false);
+                await AbandonPumpsAsync(process, stdoutTask, stderrTask).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (ex is not OperationCanceledException)
+                {
+                    throw;
+                }
+
+                return TimedOut(stdout, stderr);
+            }
+
+            var exitCode = process.ExitCode;
+            if (options.PostExitPipePolicy == ProcessPostExitPipePolicy.AbandonAfterGrace)
+            {
+                var drainGrace = options.PostExitDrainGrace ?? s_cleanupGrace;
+                var allPumps = Task.WhenAll(stdoutTask, stderrTask);
+                try
+                {
+                    await allPumps.WaitAsync(drainGrace, cancellationToken).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    await AbandonPumpsAsync(process, stdoutTask, stderrTask).ConfigureAwait(false);
+                    // A stubborn inherited pipe keeps the cleanup above running for its whole
+                    // grace; a cancel landing in that window must not be reported as success.
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return Exited(
+                        exitCode,
+                        stdout,
+                        stderr,
+                        ProcessOutputStatus.AbandonedAfterExit
+                    );
+                }
+                catch (OperationCanceledException)
+                {
+                    await TerminateAndReapAsync(process).ConfigureAwait(false);
+                    await AbandonPumpsAsync(process, stdoutTask, stderrTask).ConfigureAwait(false);
+                    throw;
+                }
+            }
+            else
+            {
+                try
+                {
+                    await Task.WhenAll(stdoutTask, stderrTask)
+                        .WaitAsync(lifecycleToken)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    await TerminateAndReapAsync(process).ConfigureAwait(false);
+                    await AbandonPumpsAsync(process, stdoutTask, stderrTask).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return TimedOut(stdout, stderr);
+                }
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            return Exited(exitCode, stdout, stderr, ProcessOutputStatus.Complete);
+        }
+    }
+
+    public ProcessSessionStartOutcome StartSession(
+        ProcessCommand command,
+        ProcessSessionOptions options
+    )
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(options);
+        try
+        {
+            var process = StartContainedProcess(CreateSessionStartInfo(command, options));
+            return process is null
+                ? new ProcessSessionStartOutcome(
+                    null,
+                    $"Could not start {command.FileName}"
+                )
+                : new ProcessSessionStartOutcome(
+                    new ProcessSession(process, options),
+                    null
+                );
+        }
+        catch (Exception ex)
+        {
+            return new ProcessSessionStartOutcome(null, ex.Message);
+        }
+    }
+
+    public DetachedLaunchOutcome LaunchDetached(ProcessCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        try
+        {
+            var process = StartDetachedProcess(CreateDetachedStartInfo(command));
+            if (process is null)
+            {
+                return new DetachedLaunchOutcome(
+                    false,
+                    $"Could not start {command.FileName}"
+                );
+            }
+
+            ObserveDetachedLauncher(process);
+            return new DetachedLaunchOutcome(true, null);
+        }
+        catch (Exception ex)
+        {
+            return new DetachedLaunchOutcome(false, ex.Message);
+        }
+    }
+
+    public DetachedLaunchOutcome LaunchUri(Uri uri)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+        try
+        {
+            var process = StartDetachedProcess(
+                new ProcessStartInfo(uri.AbsoluteUri)
+                {
+                    UseShellExecute = true,
+                }
+            );
+            if (process is null)
+            {
+                return new DetachedLaunchOutcome(
+                    false,
+                    $"Could not launch {uri.AbsoluteUri}"
+                );
+            }
+
+            ObserveDetachedLauncher(process);
+            return new DetachedLaunchOutcome(true, null);
+        }
+        catch (Exception ex)
+        {
+            return new DetachedLaunchOutcome(false, ex.Message);
+        }
+    }
 
     public async Task<ProcessRunResult> RunAsync(
         string fileName,
@@ -88,300 +355,594 @@ public sealed class ProcessRunner : IProcessRunner
         CancellationToken ct = default
     )
     {
-        Process? process = null;
-        StreamWriter? standardInputWriter = null;
-        StreamReader? standardOutputReader = null;
-        StreamReader? standardErrorReader = null;
-        Task<string>? stdoutTask = null;
-        Task<string>? stderrTask = null;
-        try
-        {
-            ct.ThrowIfCancellationRequested();
-
-            var psi = new ProcessStartInfo(fileName)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                RedirectStandardInput = standardInput is not null,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            foreach (var arg in args)
-            {
-                psi.ArgumentList.Add(arg);
-            }
-
-            if (environment is not null)
-            {
-                foreach (var (key, value) in environment)
-                {
-                    psi.Environment[key] = value;
-                }
-            }
-
-            process = Process.Start(psi);
-            if (process is null)
-            {
-                ct.ThrowIfCancellationRequested();
-                return ProcessRunResult.NotStarted($"Could not start {fileName}");
-            }
-
-            using var timeoutCts = timeout is not null
-                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
-                : null;
-            var timeoutStopwatch = timeout is not null ? Stopwatch.StartNew() : null;
-            if (timeout is { } limit)
-            {
-                timeoutCts!.CancelAfter(limit);
-            }
-
-            var lifecycleToken = timeoutCts?.Token ?? ct;
-            standardInputWriter = standardInput is not null
-                ? process.StandardInput
-                : null;
-            if (standardInput is not null)
-            {
-                try
-                {
-                    await standardInputWriter!
-                        .WriteAsync(standardInput.AsMemory(), lifecycleToken)
-                        .ConfigureAwait(false);
-                    standardInputWriter.Close();
-                }
-                catch (OperationCanceledException) when (
-                    timeoutCts?.IsCancellationRequested == true && !ct.IsCancellationRequested
-                )
-                {
-                    await KillAndReapProcessTreeAsync(process).ConfigureAwait(false);
-                    ct.ThrowIfCancellationRequested();
-                    return TimedOutResult();
-                }
-            }
-
-            standardOutputReader = process.StandardOutput;
-            standardErrorReader = process.StandardError;
-            stdoutTask = standardOutputReader.ReadToEndAsync(ct);
-            stderrTask = standardErrorReader.ReadToEndAsync(ct);
-
-            try
-            {
-                await process.WaitForExitAsync(lifecycleToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (
-                timeoutCts?.IsCancellationRequested == true && !ct.IsCancellationRequested
+        var outcome = await RunOneShotAsync(
+                new ProcessCommand(fileName, args, environment),
+                new ProcessOneShotOptions(
+                    timeout,
+                    standardInput is null ? null : new Utf8ProcessInput(standardInput),
+                    ProcessCaptureMode.Utf8Text,
+                    ProcessCaptureMode.Utf8Text,
+                    detachAfterExit
+                        ? ProcessPostExitPipePolicy.AbandonAfterGrace
+                        : ProcessPostExitPipePolicy.RequireEof
+                ),
+                ct
             )
-            {
-                // Inner timeout fired (not the caller's ct) — kill and return TimedOut
-                // so the caller can distinguish a timeout from a hard cancellation.
-                await KillAndReapProcessTreeAsync(process).ConfigureAwait(false);
-                AbandonRead(standardOutputReader, stdoutTask);
-                AbandonRead(standardErrorReader, stderrTask);
-                ct.ThrowIfCancellationRequested();
-                return TimedOutResult();
-            }
+            .ConfigureAwait(false);
 
-            var exitCode = process.ExitCode;
-
-            // How long to drain the reads now that the process has exited (a descendant may still
-            // hold the pipe): the short grace when the caller opted into detachment, otherwise the
-            // remaining timeout so valid parent output isn't dropped, or unbounded when neither.
-            TimeSpan? drainLimit;
-            if (detachAfterExit)
-            {
-                drainLimit = s_minimumDrainGrace;
-            }
-            else if (timeout is { } timeoutLimit)
-            {
-                var remaining = timeoutLimit - timeoutStopwatch!.Elapsed;
-                drainLimit = remaining > s_minimumDrainGrace ? remaining : s_minimumDrainGrace;
-            }
-            else
-            {
-                drainLimit = null;
-            }
-
-            if (drainLimit is not { } drainWindow)
-            {
-                var standardOutput = await stdoutTask.ConfigureAwait(false);
-                var standardError = await stderrTask.ConfigureAwait(false);
-                ct.ThrowIfCancellationRequested();
-                return new ProcessRunResult(
-                    true,
-                    false,
-                    exitCode,
-                    standardOutput,
-                    standardError
-                );
-            }
-
-            using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            drainCts.CancelAfter(drainWindow);
-            try
-            {
-                await Task.WhenAll(stdoutTask, stderrTask)
-                    .WaitAsync(drainCts.Token)
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                // The process itself exited, so its exit code is authoritative. A
-                // descendant may still hold the pipe writers (wl-copy/xclip do this).
-                // Close our redirected stream handles and observe any resulting
-                // background read faults rather than surfacing a false process timeout
-                // or waiting for the descendant.
-                AbandonRead(standardOutputReader, stdoutTask);
-                AbandonRead(standardErrorReader, stderrTask);
-            }
-
-            ct.ThrowIfCancellationRequested();
-            return new ProcessRunResult(
+        return outcome.Status switch
+        {
+            ProcessRunStatus.StartFailed => ProcessRunResult.NotStarted(
+                outcome.StartError ?? $"Could not start {fileName}"
+            ),
+            ProcessRunStatus.TimedOut => new ProcessRunResult(
+                true,
+                true,
+                -1,
+                string.Empty,
+                string.Empty
+            ),
+            _ => new ProcessRunResult(
                 true,
                 false,
-                exitCode,
-                CompletedOutput(stdoutTask),
-                CompletedOutput(stderrTask)
+                outcome.ExitCode ?? -1,
+                outcome.StandardOutputText,
+                outcome.StandardErrorText
+            ),
+        };
+    }
+
+    private static void ValidateDelay(TimeSpan? delay, string name)
+    {
+        if (delay is not { } value || value == Timeout.InfiniteTimeSpan)
+        {
+            return;
+        }
+
+        if (value < TimeSpan.Zero || value.TotalMilliseconds > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                name,
+                value,
+                $"{name} must be non-negative and within the timer range."
             );
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // This is caller cancellation, not the inner timeout — kill and reap
-            // before rethrowing so no child is left running.
-            if (process is not null)
-            {
-                await KillAndReapProcessTreeAsync(process).ConfigureAwait(false);
-            }
-
-            if (standardOutputReader is not null && stdoutTask is not null)
-            {
-                AbandonRead(standardOutputReader, stdoutTask);
-            }
-
-            if (standardErrorReader is not null && stderrTask is not null)
-            {
-                AbandonRead(standardErrorReader, stderrTask);
-            }
-
-            throw;
-        }
-        catch (Exception ex)
-        {
-            // Any failure after Start leaves a live child: Process.Dispose only releases the
-            // handle, so without this the child keeps running past the failed run.
-            if (process is not null)
-            {
-                await KillAndReapProcessTreeAsync(process).ConfigureAwait(false);
-            }
-
-            // ReSharper disable once InvertIf -- inverting would duplicate the `return ProcessRunResult.NotStarted(...)` tail.
-            if (ct.IsCancellationRequested)
-            {
-                if (standardOutputReader is not null && stdoutTask is not null)
-                {
-                    AbandonRead(standardOutputReader, stdoutTask);
-                }
-
-                if (standardErrorReader is not null && stderrTask is not null)
-                {
-                    AbandonRead(standardErrorReader, stderrTask);
-                }
-
-                ct.ThrowIfCancellationRequested();
-            }
-
-            return ProcessRunResult.NotStarted(ex.Message);
-        }
-        finally
-        {
-            DisposeSafely(standardInputWriter);
-            DisposeSafely(standardOutputReader);
-            DisposeSafely(standardErrorReader);
-            DisposeSafely(process);
         }
     }
 
-    private static async Task KillAndReapProcessTreeAsync(Process process)
+    private static ProcessStartInfo CreateOneShotStartInfo(
+        ProcessCommand command,
+        ProcessOneShotOptions options
+    )
     {
-        KillProcessTree(process);
-        using var reapCts = new CancellationTokenSource(s_minimumDrainGrace);
+        var startInfo = CreateNonShellStartInfo(command);
+        startInfo.RedirectStandardInput = options.StandardInput is not null;
+        startInfo.RedirectStandardOutput = true;
+        startInfo.RedirectStandardError = true;
+        return startInfo;
+    }
+
+    private static ProcessStartInfo CreateSessionStartInfo(
+        ProcessCommand command,
+        ProcessSessionOptions options
+    )
+    {
+        var startInfo = CreateNonShellStartInfo(command);
+        startInfo.RedirectStandardInput = options.RedirectStandardInput;
+        // Even discarded session output is redirected and continuously drained.
+        startInfo.RedirectStandardOutput = true;
+        startInfo.RedirectStandardError = true;
+        return startInfo;
+    }
+
+    private static ProcessStartInfo CreateDetachedStartInfo(ProcessCommand command)
+    {
+        return CreateNonShellStartInfo(command);
+    }
+
+    private static ProcessStartInfo CreateNonShellStartInfo(ProcessCommand command)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.FileName);
+        var startInfo = new ProcessStartInfo(command.FileName)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var argument in command.Arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        if (command.Environment is not null)
+        {
+            foreach (var (name, value) in command.Environment)
+            {
+                startInfo.Environment[name] = value;
+            }
+        }
+
+        if (command.WorkingDirectory is not null)
+        {
+            startInfo.WorkingDirectory = command.WorkingDirectory;
+        }
+
+        return startInfo;
+    }
+
+    // PA32 containment seam: today this is the platform's best-effort tree ownership while
+    // the leader lives. A future process-group launcher can replace this method without callers
+    // changing; exited-leader/re-parented descendants are deliberately not claimed as contained.
+    private static Process? StartContainedProcess(ProcessStartInfo startInfo)
+    {
+        return Process.Start(startInfo);
+    }
+
+    private static Process? StartDetachedProcess(ProcessStartInfo startInfo)
+    {
+        return Process.Start(startInfo);
+    }
+
+    // Shared cleanup hook for expected timeout/cancellation/termination paths and unexpected
+    // post-start faults; once a child starts, it is reaped before the original exception propagates.
+    private static async Task TerminateAndReapAsync(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // Best effort while PA32 retains the platform tree-kill strategy.
+        }
+
+        using var reapCts = new CancellationTokenSource(s_cleanupGrace);
         try
         {
             await process.WaitForExitAsync(reapCts.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch
         {
-            // Reaping is bounded; Process.Dispose remains the final best effort.
+            // Bounded best-effort reaping must not replace the caller's result/exception.
+        }
+    }
+
+    private static async Task WriteInputAsync(
+        Process process,
+        ProcessInput? input,
+        CancellationToken cancellationToken
+    )
+    {
+        if (input is null)
+        {
+            return;
+        }
+
+        try
+        {
+            switch (input)
+            {
+                case Utf8ProcessInput text:
+                    await process.StandardInput.WriteAsync(
+                            text.Value.AsMemory(),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    break;
+                case BinaryProcessInput binary:
+                    await process.StandardInput.BaseStream.WriteAsync(
+                            binary.Value,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(input));
+            }
+
+            await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
+            process.StandardInput.Close();
+        }
+        catch (IOException)
+        {
+            // A process may deliberately close stdin and keep running; exit code and
+            // captured output are still the caller's answer, and the deadline still governs.
+        }
+        catch (ObjectDisposedException)
+        {
+            // The child closed its end while exiting.
+        }
+    }
+
+    private static async Task PumpAsync(Stream source, CapturedPipe destination)
+    {
+        var buffer = new byte[16 * 1024];
+        try
+        {
+            while (true)
+            {
+                var read = await source.ReadAsync(buffer).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    return;
+                }
+
+                destination.Append(buffer.AsSpan(0, read));
+            }
+        }
+        catch (IOException)
+        {
+            // Closing an abandoned redirected pipe completes its pump.
+        }
+        catch (ObjectDisposedException)
+        {
+            // Closing an abandoned redirected pipe completes its pump.
+        }
+    }
+
+    private static async Task AbandonPumpsAsync(
+        Process process,
+        Task stdoutTask,
+        Task stderrTask
+    )
+    {
+        CloseSafely(process.StandardOutput.BaseStream);
+        CloseSafely(process.StandardError.BaseStream);
+        try
+        {
+            await Task.WhenAll(stdoutTask, stderrTask)
+                .WaitAsync(s_cleanupGrace)
+                .ConfigureAwait(false);
         }
         catch
         {
-            // Reaping is bounded and best effort; cleanup must not replace the
-            // original timeout, cancellation, or process failure.
+            ObserveFault(stdoutTask);
+            ObserveFault(stderrTask);
         }
     }
 
-    private static string CompletedOutput(Task<string> readTask)
-    {
-        return readTask.Status == TaskStatus.RanToCompletion
-            ? readTask.Result
-            : string.Empty;
-    }
-
-    private static void KillProcessTree(Process process)
+    private static void CloseSafely(Stream stream)
     {
         try
         {
-            process.Kill(true);
+            stream.Close();
         }
         catch
         {
-            /* best effort */
-        }
-    }
-
-    private static void DisposeSafely(IDisposable? resource)
-    {
-        try
-        {
-            resource?.Dispose();
-        }
-        catch
-        {
-            /* best effort */
-        }
-    }
-
-    private static void AbandonRead(StreamReader reader, Task readTask)
-    {
-        ObserveFault(readTask);
-        try
-        {
-            // Process.Dispose does not close a redirected stream once its reader
-            // has been accessed; close the caller-owned pipe handle explicitly.
-            reader.BaseStream.Close();
-        }
-        catch
-        {
-            /* best effort */
+            // Best effort abandonment.
         }
     }
 
     private static void ObserveFault(Task task)
     {
         _ = task.ContinueWith(
-            static completedTask => _ = completedTask.Exception,
+            static completed => _ = completed.Exception,
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default
         );
     }
 
-    private static ProcessRunResult TimedOutResult()
+    private static void ObserveDetachedLauncher(Process process)
     {
-        return new ProcessRunResult(
-            true,
-            true,
-            -1,
-            string.Empty,
-            string.Empty
+        _ = ObserveDetachedLauncherAsync(process);
+    }
+
+    private static async Task ObserveDetachedLauncherAsync(Process process)
+    {
+        using (process)
+        {
+            try
+            {
+                await process.WaitForExitAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // Launch acceptance is already reported; background observation is best effort.
+            }
+        }
+    }
+
+    private static ProcessRunOutcome StartFailed(string error)
+    {
+        return new ProcessRunOutcome(
+            ProcessRunStatus.StartFailed,
+            null,
+            [],
+            [],
+            ProcessOutputStatus.Complete,
+            error
         );
+    }
+
+    private static ProcessRunOutcome TimedOut(CapturedPipe stdout, CapturedPipe stderr)
+    {
+        return new ProcessRunOutcome(
+            ProcessRunStatus.TimedOut,
+            null,
+            stdout.Snapshot(),
+            stderr.Snapshot(),
+            ProcessOutputStatus.Complete,
+            null
+        );
+    }
+
+    private static ProcessRunOutcome Exited(
+        int exitCode,
+        CapturedPipe stdout,
+        CapturedPipe stderr,
+        ProcessOutputStatus outputStatus
+    )
+    {
+        return new ProcessRunOutcome(
+            ProcessRunStatus.Exited,
+            exitCode,
+            stdout.Snapshot(),
+            stderr.Snapshot(),
+            outputStatus,
+            null
+        );
+    }
+
+    private sealed class CapturedPipe(ProcessCaptureMode captureMode)
+    {
+        private readonly Lock _lock = new();
+        private readonly MemoryStream? _capture =
+            captureMode == ProcessCaptureMode.Discard ? null : new MemoryStream();
+
+        public void Append(ReadOnlySpan<byte> value)
+        {
+            // ReSharper disable once InconsistentlySynchronizedField -- readonly reference set
+            // once in the initializer; the lock guards the stream's contents, not the field.
+            if (_capture is null)
+            {
+                return;
+            }
+
+            lock (_lock)
+            {
+                _capture.Write(value);
+            }
+        }
+
+        public byte[] Snapshot()
+        {
+            // ReSharper disable once InconsistentlySynchronizedField -- readonly reference set
+            // once in the initializer; the lock guards the stream's contents, not the field.
+            if (_capture is null)
+            {
+                return [];
+            }
+
+            lock (_lock)
+            {
+                return _capture.ToArray();
+            }
+        }
+    }
+
+    private sealed class ProcessSession : IPluginProcessSession
+    {
+        private readonly Lock _lock = new();
+        private readonly Process _process;
+        private readonly Channel<ProcessOutputLine> _output =
+            Channel.CreateUnbounded<ProcessOutputLine>(
+                new UnboundedChannelOptions
+                {
+                    SingleReader = false,
+                    SingleWriter = false,
+                    AllowSynchronousContinuations = false,
+                }
+            );
+        private readonly Task _stdoutPump;
+        private readonly Task _stderrPump;
+        private bool _terminationRequested;
+        private Task? _terminationTask;
+        private int _disposed;
+
+        // Set before _process.Dispose(), which runs in ObserveCompletionAsync's finally —
+        // before Completion itself transitions. Guarding on Completion.IsCompleted would
+        // leave that window throwing the raw ObjectDisposedException.
+        private int _processDisposed;
+
+        private bool IsProcessDisposed => Volatile.Read(ref _processDisposed) == 1;
+
+        public ProcessSession(Process process, ProcessSessionOptions options)
+        {
+            _process = process;
+            ProcessId = process.Id;
+            _stdoutPump = PumpSessionOutputAsync(
+                process.StandardOutput,
+                ProcessStream.StandardOutput,
+                options.StandardOutput
+            );
+            _stderrPump = PumpSessionOutputAsync(
+                process.StandardError,
+                ProcessStream.StandardError,
+                options.StandardError
+            );
+            Completion = ObserveCompletionAsync();
+        }
+
+        public int ProcessId { get; }
+
+        public bool IsRunning => !Completion.IsCompleted;
+
+        public Task<ProcessExitOutcome> Completion { get; }
+
+        public async IAsyncEnumerable<ProcessOutputLine> ReadOutputAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken = default
+        )
+        {
+            await foreach (
+                var line in _output.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false)
+            )
+            {
+                yield return line;
+            }
+        }
+
+        // A write racing the exit hits either a broken pipe or an already-disposed Process
+        // depending only on timing; both normalize to IOException — see IPluginProcessSession.
+        public async ValueTask WriteStandardInputAsync(
+            ReadOnlyMemory<byte> data,
+            CancellationToken cancellationToken = default
+        )
+        {
+            try
+            {
+                await _process.StandardInput.BaseStream.WriteAsync(data, cancellationToken)
+                    .ConfigureAwait(false);
+                await _process.StandardInput.BaseStream.FlushAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (
+                ex is InvalidOperationException or ObjectDisposedException
+                && IsProcessDisposed
+            )
+            {
+                // Gated on disposal so "stdin was never redirected" still surfaces as the
+                // caller error it is, rather than being reported as a late write.
+                throw new IOException("The process session has already exited.", ex);
+            }
+        }
+
+        public ValueTask CompleteStandardInputAsync(
+            CancellationToken cancellationToken = default
+        )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                _process.StandardInput.Close();
+            }
+            catch (Exception ex) when (
+                ex is InvalidOperationException or ObjectDisposedException
+                && IsProcessDisposed
+            )
+            {
+                // Already closed with the exited session; nothing left to complete.
+            }
+
+            return ValueTask.CompletedTask;
+        }
+
+        public void Terminate()
+        {
+            _ = EnsureTerminationTask();
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            _ = EnsureTerminationTask();
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                await EnsureTerminationTask().ConfigureAwait(false);
+            }
+
+            try
+            {
+                await Completion.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Disposal reaps; it must not replace the caller's exception with a drain
+                // failure. Completion stays faulted for anyone who awaits it directly.
+                Trace.WriteLine($"[ProcessRunner] Session completion faulted: {ex.Message}");
+            }
+        }
+
+        private Task EnsureTerminationTask()
+        {
+            lock (_lock)
+            {
+                _terminationRequested = true;
+                return _terminationTask ??= TerminateAndReapAsync(_process);
+            }
+        }
+
+        private async Task<ProcessExitOutcome> ObserveCompletionAsync()
+        {
+            try
+            {
+                await _process.WaitForExitAsync().ConfigureAwait(false);
+                var exitCode = _process.ExitCode;
+                await DrainPumpsAsync().ConfigureAwait(false);
+                lock (_lock)
+                {
+                    return new ProcessExitOutcome(
+                        _terminationRequested
+                            ? ProcessExitReason.Terminated
+                            : ProcessExitReason.Exited,
+                        exitCode
+                    );
+                }
+            }
+            finally
+            {
+                _output.Writer.TryComplete();
+                Volatile.Write(ref _processDisposed, 1);
+                _process.Dispose();
+            }
+        }
+
+        // A descendant can inherit the redirected pipes and hold them open long after the
+        // leader exits, so draining is bounded: Completion — and the DisposeAsync that awaits
+        // it — must always reach a terminal state, even when the pipes never see EOF.
+        private async Task DrainPumpsAsync()
+        {
+            try
+            {
+                await Task.WhenAll(_stdoutPump, _stderrPump)
+                    .WaitAsync(s_cleanupGrace)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                await AbandonPumpsAsync(_process, _stdoutPump, _stderrPump)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        private async Task PumpSessionOutputAsync(
+            StreamReader reader,
+            ProcessStream stream,
+            ProcessSessionOutputMode mode
+        )
+        {
+            try
+            {
+                if (mode == ProcessSessionOutputMode.Discard)
+                {
+                    await reader.BaseStream.CopyToAsync(Stream.Null)
+                        .ConfigureAwait(false);
+                    return;
+                }
+
+                while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
+                {
+                    await _output.Writer.WriteAsync(new ProcessOutputLine(stream, line))
+                        .ConfigureAwait(false);
+                }
+            }
+            catch (IOException)
+            {
+                // Termination can close a redirected stream while its pump is reading.
+            }
+            catch (ObjectDisposedException)
+            {
+                // Termination can close a redirected stream while its pump is reading.
+            }
+        }
     }
 }

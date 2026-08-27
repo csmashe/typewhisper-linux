@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.WebSockets;
 using TypeWhisper.Linux.Services;
@@ -21,7 +22,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, "en", 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Explicit("en"), 1, (_, _) => { }, _ => { });
 
         var startTask = coord.StartAsync(CancellationToken.None);
 
@@ -49,7 +50,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
 
@@ -62,6 +63,35 @@ public sealed class StreamingTranscriptionCoordinatorTests
     }
 
     [Fact]
+    public async Task FinalizeAsync_TwoResampledFrames_SendBatchEquivalentPcm16()
+    {
+        const int sourceSampleRate = 48000;
+        var session = new FakeStreamingSession();
+        var plugin = new FakePlugin
+        {
+            OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session),
+        };
+        var input = CreateSignal(1024, sourceSampleRate);
+        var expectedSamples = AudioRecordingService.ResampleToSampleRate(
+            input,
+            sourceSampleRate,
+            16000
+        );
+        var expectedPcm16 = ToPcm16(expectedSamples);
+
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
+
+        await coord.StartAsync(CancellationToken.None);
+        coord.AcceptAudioFrame(input[..512], sourceSampleRate);
+        coord.AcceptAudioFrame(input[512..], sourceSampleRate);
+        await coord.FinalizeAsync(CancellationToken.None);
+
+        var actualPcm16 = session.SentChunks.SelectMany(static chunk => chunk).ToArray();
+        Assert.Equal(expectedPcm16, actualPcm16);
+    }
+
+    [Fact]
     public async Task PendingBuffer_AtCapacity_DropsOldest()
     {
         var session = new FakeStreamingSession();
@@ -70,7 +100,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => connectTcs.Task };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         var startTask = coord.StartAsync(CancellationToken.None);
 
@@ -121,7 +151,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
 
@@ -162,7 +192,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, ex => observedFault = ex);
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, ex => observedFault = ex);
 
         await coord.StartAsync(CancellationToken.None);
 
@@ -189,7 +219,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
 
@@ -219,7 +249,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, ex => faultTcs.TrySetResult(ex));
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, ex => faultTcs.TrySetResult(ex));
 
         await coord.StartAsync(CancellationToken.None);
         coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
@@ -243,7 +273,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, ex => faultTcs.TrySetResult(ex));
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, ex => faultTcs.TrySetResult(ex));
 
         await coord.StartAsync(CancellationToken.None);
         coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
@@ -251,6 +281,120 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var observed = await faultTcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.IsType<HttpRequestException>(observed);
         Assert.True(coord.Faulted);
+    }
+
+    [Fact]
+    public async Task Sender_ProviderCancellationWithLiveToken_RoutesViaOnFault()
+    {
+        var session = new FakeStreamingSession
+        {
+            OnSendAudio = _ => throw new OperationCanceledException("provider canceled"),
+        };
+        var faultTcs = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var plugin = new FakePlugin
+        {
+            OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session),
+        };
+
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, ex => faultTcs.TrySetResult(ex));
+        await coord.StartAsync(CancellationToken.None);
+        coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
+
+        var observed = await faultTcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.IsType<OperationCanceledException>(observed);
+        Assert.True(coord.Faulted);
+    }
+
+    [Fact]
+    public async Task Sender_PrivateTimeout_RoutesViaOnFault()
+    {
+        var session = new FakeStreamingSession
+        {
+            OnSendAudio = _ => throw new TimeoutException("provider deadline"),
+        };
+        var faultTcs = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var plugin = new FakePlugin
+        {
+            OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session),
+        };
+
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, ex => faultTcs.TrySetResult(ex));
+        await coord.StartAsync(CancellationToken.None);
+        coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
+
+        var observed = await faultTcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.IsType<TimeoutException>(observed);
+        Assert.True(coord.Faulted);
+    }
+
+    [Fact]
+    public async Task Sender_DisposeCancellation_DoesNotFault()
+    {
+        var sendEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var session = new FakeStreamingSession
+        {
+            OnSendAudioWithCancellation = async (_, ct) =>
+            {
+                sendEntered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            },
+        };
+        var faults = new ConcurrentBag<Exception>();
+        var plugin = new FakePlugin
+        {
+            OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session),
+        };
+        var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, faults.Add);
+
+        await coord.StartAsync(CancellationToken.None);
+        coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
+        await sendEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await coord.DisposeAsync();
+
+        Assert.Empty(faults);
+        Assert.False(coord.Faulted);
+    }
+
+    [Fact]
+    public async Task Sender_DependencyFaultRacingCallerCancellation_CancellationWins()
+    {
+        using var callerCts = new CancellationTokenSource();
+        var session = new FakeStreamingSession
+        {
+            OnSendAudioWithCancellation = async (_, _) =>
+            {
+                // ReSharper disable once AccessToDisposedClosure -- the coordinator is declared after
+                // callerCts, so it is disposed (stopping the sender) before callerCts goes away.
+                await callerCts.CancelAsync();
+                await Task.Yield();
+                throw new HttpRequestException("provider failed during cancellation");
+            },
+        };
+        var faults = new ConcurrentBag<Exception>();
+        var plugin = new FakePlugin
+        {
+            OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session),
+        };
+
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, faults.Add);
+        await coord.StartAsync(callerCts.Token);
+        coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
+        // ReSharper disable once MethodSupportsCancellation -- callerCts is cancelled by the send
+        // hook, so passing it here would abort the very wait that lets the sender settle.
+        await Task.Delay(100);
+
+        Assert.Empty(faults);
+        Assert.False(coord.Faulted);
     }
 
     [Fact]
@@ -265,7 +409,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, ex => faultTcs.TrySetResult(ex));
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, ex => faultTcs.TrySetResult(ex));
 
         // StartAsync swallows the connect exception and routes it via onFault.
         await coord.StartAsync(CancellationToken.None);
@@ -296,7 +440,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
         coord.AcceptAudioFrame(MakeMarkedFrame(1), 16000);
@@ -306,6 +450,28 @@ public sealed class StreamingTranscriptionCoordinatorTests
         Assert.Contains("faulted during finalize", ex.Message);
         Assert.NotNull(ex.InnerException);
         Assert.Contains("simulated provider error event", ex.InnerException!.Message);
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_ProviderCancellationWithLiveCaller_IsProviderFault()
+    {
+        var session = new FakeStreamingSession
+        {
+            OnFinalize = _ => throw new OperationCanceledException("provider canceled finalize"),
+        };
+        var plugin = new FakePlugin
+        {
+            OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session),
+        };
+
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
+        await coord.StartAsync(CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coord.FinalizeAsync(CancellationToken.None));
+        Assert.IsType<OperationCanceledException>(ex.InnerException);
+        Assert.Contains("provider canceled finalize", ex.InnerException!.Message);
     }
 
     [Fact]
@@ -325,7 +491,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
 
         var coord = new StreamingTranscriptionCoordinator(
             plugin,
-            null,
+            LanguageSelection.Automatic,
             1,
             (_, _) => { },
             _ => { },
@@ -384,7 +550,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var timeout = TimeSpan.FromMilliseconds(100);
         var coord = new StreamingTranscriptionCoordinator(
             plugin,
-            null,
+            LanguageSelection.Automatic,
             1,
             (_, _) => { },
             _ => { },
@@ -437,7 +603,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, ex => faultTcs.TrySetResult(ex));
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, ex => faultTcs.TrySetResult(ex));
 
         await coord.StartAsync(CancellationToken.None);
         session.RaiseFinal("earlier final");
@@ -468,7 +634,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
 
         var coord = new StreamingTranscriptionCoordinator(
             plugin,
-            null,
+            LanguageSelection.Automatic,
             1,
             (_, _) => { },
             _ => { },
@@ -527,7 +693,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
 
         var coord = new StreamingTranscriptionCoordinator(
             plugin,
-            null,
+            LanguageSelection.Automatic,
             1,
             (_, _) => { },
             _ => { },
@@ -578,7 +744,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
 
@@ -624,7 +790,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => connectTcs.Task };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         var startTask = coord.StartAsync(CancellationToken.None);
 
@@ -652,7 +818,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
 
@@ -671,7 +837,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
 
@@ -700,7 +866,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
 
@@ -729,7 +895,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
 
@@ -758,7 +924,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
         session.RaiseFinal("earlier final");
@@ -782,7 +948,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
     {
         var plugin = new FakePlugin();
         var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         await coord.DisposeAsync();
         // Second dispose should also be safe.
@@ -798,7 +964,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
                 new HttpRequestException("simulated")),
         };
         var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
         Assert.True(coord.Faulted);
@@ -820,7 +986,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => connectTcs.Task };
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         var startTask = coord.StartAsync(CancellationToken.None);
 
@@ -861,7 +1027,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         };
 
         var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => faultCalled = true);
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => faultCalled = true);
 
         var startTask = coord.StartAsync(CancellationToken.None);
 
@@ -894,7 +1060,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         };
 
         var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         var startTask = coord.StartAsync(CancellationToken.None);
 
@@ -919,7 +1085,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
 
         var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1, (_, _) => { }, _ => { });
+            plugin, LanguageSelection.Automatic, 1, (_, _) => { }, _ => { });
 
         await coord.StartAsync(CancellationToken.None);
 
@@ -942,7 +1108,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         (int Version, string Text)? observed = null;
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 42, (v, t) => observed = (v, t), _ => { });
+            plugin, LanguageSelection.Automatic, 42, (v, t) => observed = (v, t), _ => { });
 
         await coord.StartAsync(CancellationToken.None);
         session.RaisePartial("ping");
@@ -962,7 +1128,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var partialCount = 0;
 
         await using var coord = new StreamingTranscriptionCoordinator(
-            plugin, null, 1,
+            plugin, LanguageSelection.Automatic, 1,
             (_, _) =>
             {
                 Interlocked.Increment(ref partialCount);
@@ -1002,6 +1168,34 @@ public sealed class StreamingTranscriptionCoordinatorTests
         return (int)Math.Round(s / 32767f * 1000f) - 1;
     }
 
+    private static float[] CreateSignal(int sampleCount, int sampleRate)
+    {
+        var samples = new float[sampleCount];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            samples[i] = (float)(
+                0.55 * Math.Sin(2 * Math.PI * 997 * i / sampleRate)
+                + 0.25 * Math.Sin(2 * Math.PI * 5107 * i / sampleRate)
+                + 0.0001 * (i % 29)
+            );
+        }
+
+        return samples;
+    }
+
+    private static byte[] ToPcm16(float[] samples)
+    {
+        var pcm16 = new byte[samples.Length * 2];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var sample = AudioRecordingService.ToPcm16(samples[i]);
+            pcm16[i * 2] = (byte)(sample & 0xFF);
+            pcm16[i * 2 + 1] = (byte)((sample >> 8) & 0xFF);
+        }
+
+        return pcm16;
+    }
+
     private static async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)
     {
         var sw = Stopwatch.StartNew();
@@ -1024,6 +1218,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         public readonly List<byte[]> SentChunks = [];
         private readonly SemaphoreSlim _sendConcurrencyGuard = new(1, 1);
         public Func<byte[], Task>? OnSendAudio;
+        public Func<byte[], CancellationToken, Task>? OnSendAudioWithCancellation;
         public Func<CancellationToken, Task>? OnFinalize;
         public Func<Task>? OnDispose;
         public bool Disposed;
@@ -1047,6 +1242,10 @@ public sealed class StreamingTranscriptionCoordinatorTests
                 Interlocked.Increment(ref _sendInFlight);
                 var copy = pcm16.ToArray();
                 lock (SentChunks) SentChunks.Add(copy);
+                if (OnSendAudioWithCancellation is not null)
+                {
+                    await OnSendAudioWithCancellation(copy, ct);
+                }
                 if (OnSendAudio is not null) await OnSendAudio(copy);
             }
             finally

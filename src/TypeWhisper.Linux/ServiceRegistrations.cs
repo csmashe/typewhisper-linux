@@ -141,6 +141,8 @@ internal static class ServiceRegistrations
         services.AddSingleton<IMediaPauseService, MediaPauseService>();
         services.AddSingleton<SystemCommandAvailabilityService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
+        services.AddSingleton<UrlLauncher>();
+        services.AddSingleton<ActionPluginExecutionHost>();
         // Reactive OS-default capture-device watcher (pactl subscribe); AudioRecordingService
         // starts/stops it as follow-default mode toggles and disposes it on teardown.
         services.AddSingleton<IDefaultDeviceChangeWatcher, PactlDefaultDeviceWatcher>();
@@ -173,14 +175,21 @@ internal static class ServiceRegistrations
         services.AddSingleton<IDeShortcutWriter, HyprlandShortcutWriter>();
         services.AddSingleton<IDeShortcutWriter, SwayShortcutWriter>();
 
-        services.AddSingleton(sp => new TextInsertionService(
-            sp.GetRequiredService<IErrorLogService>(),
-            sp.GetRequiredService<SystemCommandAvailabilityService>(),
-            sp.GetRequiredService<IPasteConfirmationSource>()
-        ));
+        services.AddSingleton(sp =>
+        {
+            var audioRecording = sp.GetRequiredService<AudioRecordingService>();
+            return new TextInsertionService(
+                sp.GetRequiredService<IErrorLogService>(),
+                sp.GetRequiredService<SystemCommandAvailabilityService>(),
+                sp.GetRequiredService<IPasteConfirmationSource>(),
+                sp.GetRequiredService<IProcessRunner>(),
+                isAnotherSessionRecording: () => audioRecording.IsRecording
+            );
+        });
         services.AddSingleton<YdotoolSetupHelper>();
         services.AddSingleton<InputAccessSetupHelper>();
         services.AddSingleton<BrowserAccessibilitySetupHelper>();
+        services.AddSingleton<CudaLibraryPathSetupService>();
         services.AddSingleton<GnomeWindowCallsSetupHelper>();
 
         // Onboarding checklist tasks. Each self-gates via AppliesToThisMachine();
@@ -193,6 +202,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<ISetupTask, KwinActiveWindowSetupTask>();
         services.AddSingleton<ISetupTask, FfmpegSetupTask>();
         services.AddSingleton<TrayIconService>();
+        services.AddSingleton<OverlayCoordinator>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
         services.AddSingleton<LlmCleanupService>();

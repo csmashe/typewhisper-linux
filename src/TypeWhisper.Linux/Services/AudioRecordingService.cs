@@ -38,6 +38,29 @@ public sealed class AudioRecordingService : IDisposable
         int CaptureSampleRate
     );
 
+    private sealed class LevelDeliveryGeneration(
+        long diagnosticId,
+        bool acceptsFrameUpdates,
+        AudioCaptureSession? captureSession
+    )
+    {
+        // ReSharper disable once UnusedMember.Local -- mirrors AudioCaptureSession.DiagnosticId
+        // for debugger identification; deliberately unread by production code.
+        internal long DiagnosticId { get; } = diagnosticId;
+        internal bool AcceptsFrameUpdates { get; } = acceptsFrameUpdates;
+        internal AudioCaptureSession? CaptureSession { get; } = captureSession;
+
+        // Fields rather than properties: both are mutated in place through
+        // Volatile/Interlocked, which need a `ref` to the storage location.
+        internal float _currentRmsLevel;
+        internal long _lastAdmittedTimestamp = long.MinValue;
+    }
+
+    private readonly record struct CaptureCallbackContext(
+        AudioCaptureSession? CaptureSession,
+        LevelDeliveryGeneration LevelGeneration
+    );
+
     private const int SampleRate = 16000;
     private const int Channels = 1;
     private const uint FramesPerBuffer = 512;
@@ -45,6 +68,7 @@ public sealed class AudioRecordingService : IDisposable
     private const float AgcMaxGain = 20f;
     private const float AgcMinGain = 1f;
     private const float SpeechEnergyThreshold = 0.01f;
+    private static readonly TimeSpan s_levelPostInterval = TimeSpan.FromMilliseconds(66);
     private static readonly TimeSpan s_stopDrainDuration = TimeSpan.FromMilliseconds(120);
 
     private static int s_paInitCount;
@@ -76,18 +100,20 @@ public sealed class AudioRecordingService : IDisposable
     private bool _preferredDeviceMigrationPending;
     private bool _followSystemDefault;
     private readonly Action<int> _openInputStream;
+    private readonly Action<Action> _postToUiThread;
     private readonly List<float[]> _sampleChunks = [];
     private readonly Lock _sampleLock = new();
     private readonly Action _stopAndDisposeInputStreamCore;
     private readonly bool _terminatePortAudioOnDispose;
+    private readonly TimeProvider _timeProvider;
     private readonly Action<bool>? _wavMaterializationObserver;
     private AudioCaptureSession? _activeCaptureSession;
     private long _captureSessionGeneration;
-    private float _currentRmsLevel;
     private int _disposed;
     private int _isPreviewing;
     private int _isRecording;
-    private long _lastLevelPostedTicksUtc;
+    private LevelDeliveryGeneration _levelDeliveryGeneration;
+    private long _levelDeliveryGenerationId;
 
     // Per-frame tap fired from the PortAudio realtime thread during an owned capture.
     // Must be allocation-free and non-blocking; sink borrows processedBuffer (no copy).
@@ -122,9 +148,16 @@ public sealed class AudioRecordingService : IDisposable
         _inputDeviceListProvider =
             deviceEnumerator is null ? GetInputDevices : deviceEnumerator.GetDevices;
         _openInputStream = OpenInputStream;
+        _postToUiThread = static action => Dispatcher.UIThread.Post(action);
         _stopAndDisposeInputStreamCore = StopAndDisposeInputStreamCore;
         _terminatePortAudioOnDispose = true;
+        _timeProvider = TimeProvider.System;
         _wavMaterializationObserver = null;
+        _levelDeliveryGeneration = new LevelDeliveryGeneration(
+            ++_levelDeliveryGenerationId,
+            acceptsFrameUpdates: false,
+            captureSession: null
+        );
     }
 
     // Test seam: exercises the production device-selection and ownership state machines
@@ -134,7 +167,9 @@ public sealed class AudioRecordingService : IDisposable
         Func<int> defaultInputDeviceIndexProvider,
         Action stopAndDisposeInputStream,
         IErrorLogService? errorLog = null,
-        Action<bool>? wavMaterializationObserver = null
+        Action<bool>? wavMaterializationObserver = null,
+        TimeProvider? timeProvider = null,
+        Action<Action>? postToUiThread = null
     )
         : this(
             static () => [],
@@ -142,7 +177,9 @@ public sealed class AudioRecordingService : IDisposable
             defaultInputDeviceIndexProvider,
             stopAndDisposeInputStream,
             errorLog,
-            wavMaterializationObserver
+            wavMaterializationObserver,
+            timeProvider,
+            postToUiThread
         )
     {
     }
@@ -155,7 +192,9 @@ public sealed class AudioRecordingService : IDisposable
         Func<int> defaultInputDeviceIndexProvider,
         Action stopAndDisposeInputStream,
         IErrorLogService? errorLog = null,
-        Action<bool>? wavMaterializationObserver = null
+        Action<bool>? wavMaterializationObserver = null,
+        TimeProvider? timeProvider = null,
+        Action<Action>? postToUiThread = null
     )
     {
         _errorLog = errorLog;
@@ -163,14 +202,29 @@ public sealed class AudioRecordingService : IDisposable
         _ensurePortAudioInitialized = static () => { };
         _inputDeviceListProvider = inputDeviceListProvider;
         _openInputStream = openInputStream;
+        _postToUiThread =
+            postToUiThread ?? (static action => Dispatcher.UIThread.Post(action));
         _stopAndDisposeInputStreamCore = stopAndDisposeInputStream;
         _terminatePortAudioOnDispose = false;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _wavMaterializationObserver = wavMaterializationObserver;
+        _levelDeliveryGeneration = new LevelDeliveryGeneration(
+            ++_levelDeliveryGenerationId,
+            acceptsFrameUpdates: false,
+            captureSession: null
+        );
     }
 
     public bool IsRecording => Volatile.Read(ref _isRecording) == 1;
     private bool IsPreviewing => Volatile.Read(ref _isPreviewing) == 1;
-    public float CurrentRmsLevel => Volatile.Read(ref _currentRmsLevel);
+    public float CurrentRmsLevel
+    {
+        get
+        {
+            var generation = Volatile.Read(ref _levelDeliveryGeneration);
+            return Volatile.Read(ref generation._currentRmsLevel);
+        }
+    }
     public bool HasSpeechEnergy => CurrentRmsLevel >= SpeechEnergyThreshold;
 
     public int? SelectedDeviceIndex
@@ -224,6 +278,8 @@ public sealed class AudioRecordingService : IDisposable
 
     public void Dispose()
     {
+        LevelDeliveryGeneration disposedLevelGeneration;
+
         // Stop the reactive watcher before taking the capture lock so no debounced
         // callback can be mid-CheckForDefaultDeviceChange against a disposing service.
         try
@@ -250,9 +306,13 @@ public sealed class AudioRecordingService : IDisposable
             Volatile.Write(ref _isPreviewing, 0);
             Volatile.Write(ref _isRecording, 0);
             StopAndDisposeInputStream();
+            disposedLevelGeneration = PublishLevelGenerationLocked(
+                acceptsFrameUpdates: false,
+                captureSession: null
+            );
         }
 
-        UpdateLevel(0f);
+        UpdateLevel(disposedLevelGeneration, 0f, allowClosingGeneration: true);
 
         if (_terminatePortAudioOnDispose)
         {
@@ -361,6 +421,7 @@ public sealed class AudioRecordingService : IDisposable
             var session = new AudioCaptureSession(++_captureSessionGeneration);
             Volatile.Write(ref _activeCaptureSession, session);
             Volatile.Write(ref _isRecording, 1);
+            PublishLevelGenerationLocked(acceptsFrameUpdates: true, session);
 
             Trace.WriteLine(
                 $"[AudioRecordingService] Recording started: session={session.DiagnosticId}, "
@@ -423,6 +484,10 @@ public sealed class AudioRecordingService : IDisposable
             Volatile.Write(ref _activeCaptureSession, null);
             Volatile.Write(ref _liveFrameSink, null);
             Volatile.Write(ref _isRecording, 0);
+            PublishLevelGenerationLocked(
+                acceptsFrameUpdates: IsPreviewing,
+                captureSession: null
+            );
 
             if (!IsPreviewing)
             {
@@ -451,9 +516,16 @@ public sealed class AudioRecordingService : IDisposable
         CancellationToken cancellationToken = default
     )
     {
-        if (!IsRecordingOwnedBy(session))
+        lock (_captureLock)
         {
-            return [];
+            if (!ReferenceEquals(_activeCaptureSession, session))
+            {
+                return [];
+            }
+
+            // Accept the stop synchronously so frames captured during the deliberate
+            // drain continue filling the owned sample buffer without updating the meter.
+            PublishLevelGenerationLocked(acceptsFrameUpdates: false, session);
         }
 
         try
@@ -505,6 +577,10 @@ public sealed class AudioRecordingService : IDisposable
                 }
 
                 Volatile.Write(ref _isPreviewing, 1);
+                PublishLevelGenerationLocked(
+                    acceptsFrameUpdates: true,
+                    captureSession: null
+                );
                 return true;
             }
             catch (Exception ex)
@@ -527,6 +603,8 @@ public sealed class AudioRecordingService : IDisposable
 
     public void StopPreview()
     {
+        LevelDeliveryGeneration stoppedPreviewGeneration;
+
         lock (_captureLock)
         {
             if (!IsPreviewing)
@@ -539,9 +617,26 @@ public sealed class AudioRecordingService : IDisposable
             {
                 StopAndDisposeInputStream();
             }
+
+            var activeCaptureSession = _activeCaptureSession;
+            var currentLevelGeneration = Volatile.Read(ref _levelDeliveryGeneration);
+            stoppedPreviewGeneration = PublishLevelGenerationLocked(
+                acceptsFrameUpdates: activeCaptureSession is not null
+                    && currentLevelGeneration.AcceptsFrameUpdates
+                    && ReferenceEquals(
+                        currentLevelGeneration.CaptureSession,
+                        activeCaptureSession
+                    ),
+                activeCaptureSession
+            );
         }
 
-        UpdateLevel(0f);
+        // Only zero the meter when nothing is still feeding it. A recording that outlives the
+        // preview keeps publishing its own levels, and a 0 here would blank the meter mid-take.
+        if (!stoppedPreviewGeneration.AcceptsFrameUpdates)
+        {
+            UpdateLevel(stoppedPreviewGeneration, 0f, allowClosingGeneration: true);
+        }
     }
 
     public AudioInputDevice? ResolveConfiguredDevice(int? preferredIndex, string? preferredDeviceId)
@@ -555,8 +650,8 @@ public sealed class AudioRecordingService : IDisposable
             return ResolveSystemDefault(devices);
         }
 
-        // ReSharper disable once InvertIf -- keeps the three resolution cases as a flat
-        // ladder; inverting pulls the last case's return into the middle branch.
+        // ReSharper disable once InvertIf -- keeps the ladder ordered most-specific-first
+        // (sentinel, then pinned id, then fallback); inverting would strand the fallback mid-method.
         if (!string.IsNullOrWhiteSpace(preferredDeviceId))
         {
             var matches = devices
@@ -642,9 +737,8 @@ public sealed class AudioRecordingService : IDisposable
         return (float)Math.Sqrt(sumSquares / samples.Length);
     }
 
-    // Downsampling applies a symmetric Blackman-windowed sinc low-pass with a
-    // 0.40-to-0.50 target-rate transition band before retaining the existing
-    // linear interpolation and sample alignment. Upsampling uses interpolation alone.
+    // The snapshot path deliberately uses the streaming implementation too, so
+    // frame boundaries cannot change its filtering, phase, or rounded output length.
     internal static float[] ResampleToSampleRate(
         float[] samples,
         int sourceSampleRate,
@@ -656,121 +750,44 @@ public sealed class AudioRecordingService : IDisposable
             return samples;
         }
 
-        var outputLength = Math.Max(
-            1,
-            (int)Math.Round(samples.Length * (double)targetSampleRate / sourceSampleRate)
+        // Feed the snapshot through the shared converter in bounded blocks so its
+        // internal history is trimmed as it goes instead of holding a second copy of
+        // the whole recording (this path runs on every 3-second preview poll). The
+        // output is identical to a one-shot append by the converter's
+        // streaming==batch contract, which the equivalence tests pin.
+        const int blockSize = 8192;
+        var expectedLength = (int)Math.Max(
+            1L,
+            (long)Math.Round(samples.Length * (double)targetSampleRate / sourceSampleRate)
         );
-        var output = new float[outputLength];
-        var ratio = (double)sourceSampleRate / targetSampleRate;
-
-        if (targetSampleRate > 0 && sourceSampleRate > targetSampleRate)
+        var output = new List<float>(expectedLength);
+        var converter = new StreamingSampleRateConverter(targetSampleRate);
+        for (var offset = 0; offset < samples.Length; offset += blockSize)
         {
-            var filterRadius = (int)Math.Ceiling(24 * ratio);
-            var coefficientCount = filterRadius + 1;
-            const int maxStackAllocatedCoefficientCount = 256;
-            // ReSharper disable once SuggestVarOrType_Elsewhere -- the explicit Span<double> is the shared target type that unifies the stackalloc and heap arms.
-            Span<double> coefficients = coefficientCount <= maxStackAllocatedCoefficientCount
-                ? stackalloc double[coefficientCount]
-                : new double[coefficientCount];
-            CreateDownsamplingFilter(
-                coefficients,
-                filterRadius,
-                sourceSampleRate,
-                targetSampleRate
-            );
-
-            for (var i = 0; i < output.Length; i++)
-            {
-                var sourceIndex = i * ratio;
-                var leftIndex = (int)Math.Floor(sourceIndex);
-                var rightIndex = Math.Min(leftIndex + 1, samples.Length - 1);
-                var fraction = (float)(sourceIndex - leftIndex);
-                var leftSample = EvaluateFirAtIndex(samples, leftIndex, coefficients);
-
-                if (rightIndex != leftIndex && fraction != 0f)
-                {
-                    var rightSample = EvaluateFirAtIndex(samples, rightIndex, coefficients);
-                    leftSample += (rightSample - leftSample) * fraction;
-                }
-
-                output[i] = (float)leftSample;
-            }
-
-            return output;
+            var length = Math.Min(blockSize, samples.Length - offset);
+            var block = new float[length];
+            Array.Copy(samples, offset, block, 0, length);
+            output.AddRange(converter.Append(block, sourceSampleRate));
         }
 
-        for (var i = 0; i < output.Length; i++)
-        {
-            var sourceIndex = i * ratio;
-            var leftIndex = (int)Math.Floor(sourceIndex);
-            var rightIndex = Math.Min(leftIndex + 1, samples.Length - 1);
-            var fraction = (float)(sourceIndex - leftIndex);
-
-            output[i] = samples[leftIndex] + (samples[rightIndex] - samples[leftIndex]) * fraction;
-        }
-
-        return output;
+        output.AddRange(converter.Complete());
+        return [.. output];
     }
 
-    private static void CreateDownsamplingFilter(
-        Span<double> coefficients,
-        int filterRadius,
-        int sourceSampleRate,
-        int targetSampleRate
+    internal StreamCallbackResult ProcessAudioBufferForTest(
+        float[] frame,
+        Action? afterCallbackContextCaptured = null
     )
-    {
-        var normalizedCutoff = 0.45 * targetSampleRate / sourceSampleRate;
-        double coefficientSum = 0;
-
-        for (var offset = 0; offset <= filterRadius; offset++)
-        {
-            var sincArgument = 2 * normalizedCutoff * offset;
-            var sinc = offset == 0
-                ? 1
-                : Math.Sin(Math.PI * sincArgument) / (Math.PI * sincArgument);
-            var ideal = 2 * normalizedCutoff * sinc;
-            var window = 0.42
-                + 0.50 * Math.Cos(Math.PI * offset / filterRadius)
-                + 0.08 * Math.Cos(2 * Math.PI * offset / filterRadius);
-            var coefficient = ideal * window;
-            coefficients[offset] = coefficient;
-            coefficientSum += offset == 0 ? coefficient : 2 * coefficient;
-        }
-
-        for (var offset = 0; offset < coefficients.Length; offset++)
-        {
-            coefficients[offset] /= coefficientSum;
-        }
-    }
-
-    private static double EvaluateFirAtIndex(
-        float[] samples,
-        int index,
-        ReadOnlySpan<double> coefficients
-    )
-    {
-        var result = coefficients[0] * samples[index];
-        var finalIndex = samples.Length - 1;
-
-        for (var offset = 1; offset < coefficients.Length; offset++)
-        {
-            var leftIndex = Math.Max(index - offset, 0);
-            var rightIndex = Math.Min(index + offset, finalIndex);
-            result += coefficients[offset] * (samples[leftIndex] + samples[rightIndex]);
-        }
-
-        return result;
-    }
-
-    internal StreamCallbackResult ProcessAudioBufferForTest(float[] frame)
     {
         var handle = GCHandle.Alloc(frame, GCHandleType.Pinned);
         try
         {
+            var callbackContext = CaptureCurrentCallbackContext();
+            afterCallbackContextCaptured?.Invoke();
             return ProcessAudioBuffer(
                 handle.AddrOfPinnedObject(),
                 (uint)frame.Length,
-                Volatile.Read(ref _activeCaptureSession)
+                callbackContext
             );
         }
         finally
@@ -796,17 +813,13 @@ public sealed class AudioRecordingService : IDisposable
         IntPtr userData
     )
     {
-        return ProcessAudioBuffer(
-            input,
-            frameCount,
-            Volatile.Read(ref _activeCaptureSession)
-        );
+        return ProcessAudioBuffer(input, frameCount, CaptureCurrentCallbackContext());
     }
 
     private StreamCallbackResult ProcessAudioBuffer(
         IntPtr input,
         uint frameCount,
-        AudioCaptureSession? captureSession
+        CaptureCallbackContext callbackContext
     )
     {
         if (input == IntPtr.Zero || frameCount == 0)
@@ -819,11 +832,16 @@ public sealed class AudioRecordingService : IDisposable
 
         var processedBuffer = ApplyWhisperModeGain(
             buffer,
-            captureSession is not null && Volatile.Read(ref _whisperModeEnabled) == 1
+            callbackContext.CaptureSession is not null
+                && Volatile.Read(ref _whisperModeEnabled) == 1
         );
-        UpdateLevel(ComputeRmsLevel(processedBuffer));
+        UpdateLevel(
+            callbackContext.LevelGeneration,
+            ComputeRmsLevel(processedBuffer),
+            allowClosingGeneration: false
+        );
 
-        if (captureSession is null)
+        if (callbackContext.CaptureSession is not { } captureSession)
         {
             return StreamCallbackResult.Continue;
         }
@@ -868,18 +886,51 @@ public sealed class AudioRecordingService : IDisposable
         return StreamCallbackResult.Continue;
     }
 
-    private void UpdateLevel(float level)
+    // Seqlock-style read: re-reading _levelDeliveryGeneration after the session proves the two
+    // came from the same publication under _captureLock, rather than straddling one. This holds
+    // only because every session change publishes a matching generation — keep that invariant.
+    private CaptureCallbackContext CaptureCurrentCallbackContext()
     {
-        Volatile.Write(ref _currentRmsLevel, level);
+        while (true)
+        {
+            var levelGeneration = Volatile.Read(ref _levelDeliveryGeneration);
+            var captureSession = Volatile.Read(ref _activeCaptureSession);
+            if (ReferenceEquals(levelGeneration, Volatile.Read(ref _levelDeliveryGeneration)))
+            {
+                return new CaptureCallbackContext(captureSession, levelGeneration);
+            }
+        }
+    }
 
-        var nowTicks = DateTime.UtcNow.Ticks;
-        if (level > 0f && !ShouldPostLevelUpdate(nowTicks))
+    private void UpdateLevel(
+        LevelDeliveryGeneration generation,
+        float level,
+        bool allowClosingGeneration
+    )
+    {
+        if (
+            (!generation.AcceptsFrameUpdates && !allowClosingGeneration)
+            || !ReferenceEquals(Volatile.Read(ref _levelDeliveryGeneration), generation)
+        )
         {
             return;
         }
 
-        Dispatcher.UIThread.Post(() =>
+        Volatile.Write(ref generation._currentRmsLevel, level);
+
+        var nowTimestamp = _timeProvider.GetTimestamp();
+        if (!ShouldPostLevelUpdate(generation, nowTimestamp))
         {
+            return;
+        }
+
+        _postToUiThread(() =>
+        {
+            if (!ReferenceEquals(Volatile.Read(ref _levelDeliveryGeneration), generation))
+            {
+                return;
+            }
+
             try
             {
                 LevelChanged?.Invoke(this, level);
@@ -891,29 +942,51 @@ public sealed class AudioRecordingService : IDisposable
         });
     }
 
-    private bool ShouldPostLevelUpdate(long nowTicks)
+    private bool ShouldPostLevelUpdate(
+        LevelDeliveryGeneration generation,
+        long nowTimestamp
+    )
     {
-        // Rate-limit UI posts to ~15 Hz (66 ms): the PortAudio callback fires
-        // at ~30 Hz and flooding the dispatcher causes visible input lag.
-        // CAS loop ensures only one concurrent caller wins.
-        var minIntervalTicks = TimeSpan.FromMilliseconds(66).Ticks;
-
+        // All levels share the same ~15 Hz (66 ms) admission window. Keeping the
+        // timestamp on the generation makes its first update eligible and prevents
+        // an old preview/recording from throttling its replacement.
         while (true)
         {
-            var lastTicks = Interlocked.Read(ref _lastLevelPostedTicksUtc);
-            if (nowTicks - lastTicks < minIntervalTicks)
+            var lastTimestamp = Interlocked.Read(ref generation._lastAdmittedTimestamp);
+            if (
+                lastTimestamp != long.MinValue
+                && _timeProvider.GetElapsedTime(lastTimestamp, nowTimestamp)
+                    < s_levelPostInterval
+            )
             {
                 return false;
             }
 
             if (
-                Interlocked.CompareExchange(ref _lastLevelPostedTicksUtc, nowTicks, lastTicks)
-                == lastTicks
+                Interlocked.CompareExchange(
+                    ref generation._lastAdmittedTimestamp,
+                    nowTimestamp,
+                    lastTimestamp
+                ) == lastTimestamp
             )
             {
                 return true;
             }
         }
+    }
+
+    private LevelDeliveryGeneration PublishLevelGenerationLocked(
+        bool acceptsFrameUpdates,
+        AudioCaptureSession? captureSession
+    )
+    {
+        var generation = new LevelDeliveryGeneration(
+            ++_levelDeliveryGenerationId,
+            acceptsFrameUpdates,
+            captureSession
+        );
+        Volatile.Write(ref _levelDeliveryGeneration, generation);
+        return generation;
     }
 
     private int? ResolveSelectedDeviceIndex()
@@ -1165,6 +1238,10 @@ public sealed class AudioRecordingService : IDisposable
             return;
         }
 
+        PublishLevelGenerationLocked(
+            acceptsFrameUpdates: false,
+            captureSession: null
+        );
         StopAndDisposeInputStream();
 
         if (!wasPreviewing)
@@ -1181,7 +1258,13 @@ public sealed class AudioRecordingService : IDisposable
                     "[AudioRecordingService] Preview stream could not reopen on the new default device."
                 );
                 Volatile.Write(ref _isPreviewing, 0);
+                return;
             }
+
+            PublishLevelGenerationLocked(
+                acceptsFrameUpdates: true,
+                captureSession: null
+            );
         }
         catch (Exception ex)
         {
@@ -1309,7 +1392,7 @@ public sealed class AudioRecordingService : IDisposable
         }
     }
 
-    // ---- Test seams for the migration state machine -----------------------
+    // ---- Test seams for the migration and level-delivery state machines ---
     // Exercised through the injected device enumerator with no real PortAudio stream:
     // _stream stays null (so MigrateActiveCaptureToDevice only updates the target
     // index/id) and RefreshPortAudioDeviceTable no-ops (PortAudio uninitialized).
@@ -1333,6 +1416,15 @@ public sealed class AudioRecordingService : IDisposable
             {
                 return _preferredDeviceMigrationPending;
             }
+        }
+    }
+
+    internal bool CurrentLevelGenerationHasAdmittedUpdateForTest
+    {
+        get
+        {
+            var generation = Volatile.Read(ref _levelDeliveryGeneration);
+            return Interlocked.Read(ref generation._lastAdmittedTimestamp) != long.MinValue;
         }
     }
 

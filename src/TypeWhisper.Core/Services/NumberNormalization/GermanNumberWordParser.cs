@@ -86,9 +86,9 @@ internal static class GermanNumberWordParser
         {
             var word = words[index];
 
-            // ReSharper disable once ConvertIfStatementToSwitchStatement -- the branches test
-            // different subjects (connector plus parser state, then bare scale words), so a
-            // switch on `word` could not carry them.
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- the branches guard on
+            // more than `word`, and each one `continue`s the enclosing while; a switch would need
+            // when-clauses and read worse.
             if (word == "und" &&
                 current is > 0 and < 10 &&
                 index + 1 < words.Count &&
@@ -176,8 +176,8 @@ internal static class GermanNumberWordParser
         }
 
         var hundredIndex = word.IndexOf("hundert", StringComparison.Ordinal);
-        // ReSharper disable once InvertIf -- kept parallel to the "tausend" block above, which
-        // cannot be inverted; both decompose a fused word the same way.
+        // ReSharper disable once InvertIf -- mirrors the "tausend" branch above; inverting would
+        // hoist prefix/suffix to method scope and collide with that branch's locals (CS0136).
         if (hundredIndex >= 0)
         {
             var prefix = word[..hundredIndex];

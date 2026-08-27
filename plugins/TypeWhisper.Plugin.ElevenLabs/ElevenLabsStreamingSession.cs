@@ -2,39 +2,42 @@
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
-using System.Diagnostics;
 using System.Net.WebSockets;
-using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.ElevenLabs;
 
 internal sealed class ElevenLabsStreamingSession : IStreamingSession
 {
-    internal const int MinimumBufferedChunkBytes = 3200; // 100ms at 16kHz, 16-bit mono
+    internal const int MinimumBufferedChunkBytes = 3200;
 
-    private readonly WebSocket _ws;
-    private readonly CancellationTokenSource _receiveCts = new();
-    private readonly SemaphoreSlim _sendLock = new(1, 1);
-    private readonly MemoryStream _audioBuffer = new();
-    private readonly TaskCompletionSource _terminalCompletion =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private Exception? _sessionFault;
-    private readonly Task? _receiveTask;
-    private int _finalCommitSent;
-    private int _finalCommitPending;
-    private int _terminalCommitReceived;
-    private bool _disposed;
+    private readonly WebSocketSessionPump _pump;
 
-    internal ElevenLabsStreamingSession(WebSocket ws)
+    private ElevenLabsStreamingSession(WebSocketSessionPump pump)
     {
-        _ws = ws;
-        _receiveTask = ReceiveLoopAsync(_receiveCts.Token);
+        _pump = pump;
     }
 
-    public event Action<StreamingTranscriptEvent>? TranscriptReceived;
+    internal static async Task<ElevenLabsStreamingSession> CreateConnectedSessionForTests(
+        WebSocket ws
+    )
+    {
+        var pump = await WebSocketSessionPump.StartConnectedAsync(
+            new ElevenLabsWebSocketAdapter("", "scribe_v2_realtime", null),
+            new ClientWebSocketTransport(ws),
+            CancellationToken.None
+        );
+        return new ElevenLabsStreamingSession(pump);
+    }
+
+    public event Action<StreamingTranscriptEvent>? TranscriptReceived
+    {
+        add => _pump.TranscriptReceived += value;
+        remove => _pump.TranscriptReceived -= value;
+    }
 
     public static async Task<ElevenLabsStreamingSession> ConnectAsync(
         string apiKey,
@@ -43,167 +46,19 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
         CancellationToken ct
     )
     {
-        var ws = new ClientWebSocket();
-        ws.Options.SetRequestHeader("xi-api-key", apiKey);
-        try
-        {
-            await ws.ConnectAsync(BuildRealtimeUri(realtimeModelId, language), ct);
-            return new ElevenLabsStreamingSession(ws);
-        }
-        catch
-        {
-            ws.Dispose();
-            throw;
-        }
+        var pump = await WebSocketSessionPump.ConnectAsync(
+            new ElevenLabsWebSocketAdapter(apiKey, realtimeModelId, language),
+            ct
+        );
+        return new ElevenLabsStreamingSession(pump);
     }
 
-    public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
-    {
-        if (_disposed)
-            return;
+    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct) =>
+        _pump.SendAudioAsync(pcm16Audio, ct);
 
-        ThrowIfFaulted();
-        if (_ws.State != WebSocketState.Open)
-        {
-            ThrowIfClosedBeforeTerminalCommit();
-            return;
-        }
+    public Task FinalizeAsync(CancellationToken ct) => _pump.FinalizeAsync(ct);
 
-        if (pcm16Audio.Length == 0)
-            return;
-
-        try
-        {
-            await _sendLock.WaitAsync(ct);
-        }
-        catch (ObjectDisposedException)
-        {
-            return;
-        }
-
-        try
-        {
-            if (_disposed)
-                return;
-
-            ThrowIfFaulted();
-            if (_ws.State != WebSocketState.Open)
-            {
-                ThrowIfClosedBeforeTerminalCommit();
-                return;
-            }
-
-            _audioBuffer.Write(pcm16Audio.Span);
-            if (_audioBuffer.Length < MinimumBufferedChunkBytes)
-                return;
-
-            var chunk = _audioBuffer.ToArray();
-            _audioBuffer.SetLength(0);
-            try
-            {
-                await SendAudioPayloadAsync(chunk, commit: false, ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                CaptureFault(
-                    new InvalidOperationException(
-                        "ElevenLabs streaming audio send failed.",
-                        ex
-                    )
-                );
-                throw;
-            }
-        }
-        finally
-        {
-            try
-            {
-                _sendLock.Release();
-            }
-            catch (ObjectDisposedException) { }
-        }
-    }
-
-    public async Task FinalizeAsync(CancellationToken ct)
-    {
-        if (_disposed)
-            return;
-
-        ThrowIfFaulted();
-        if (Volatile.Read(ref _finalCommitSent) == 0)
-        {
-            try
-            {
-                await _sendLock.WaitAsync(ct);
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
-            }
-
-            try
-            {
-                if (_disposed)
-                    return;
-
-                ThrowIfFaulted();
-                if (Volatile.Read(ref _finalCommitSent) == 0)
-                {
-                    if (_ws.State != WebSocketState.Open)
-                    {
-                        ThrowIfClosedBeforeTerminalCommit();
-                        return;
-                    }
-
-                    // Arm the response waiter before sending so a fast provider
-                    // response cannot race past it. Earlier VAD commits do not
-                    // complete this source because it is armed only for the
-                    // explicit final commit.
-                    Volatile.Write(ref _finalCommitPending, 1);
-                    Volatile.Write(ref _finalCommitSent, 1);
-
-                    // Always send a terminal commit, including an empty chunk.
-                    // An exact chunk-boundary flush still needs a committed
-                    // response before the coordinator may accept the stream.
-                    var chunk = _audioBuffer.Length == 0 ? [] : _audioBuffer.ToArray();
-                    _audioBuffer.SetLength(0);
-                    try
-                    {
-                        await SendAudioPayloadAsync(chunk, commit: true, ct);
-                    }
-                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                    {
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        CaptureFault(
-                            new InvalidOperationException(
-                                "ElevenLabs final commit send failed.",
-                                ex
-                            )
-                        );
-                        throw;
-                    }
-                }
-            }
-            finally
-            {
-                try
-                {
-                    _sendLock.Release();
-                }
-                catch (ObjectDisposedException) { }
-            }
-        }
-
-        await _terminalCompletion.Task.WaitAsync(ct);
-        ThrowIfFaulted();
-    }
+    public ValueTask DisposeAsync() => _pump.DisposeAsync();
 
     internal static Uri BuildRealtimeUri(string realtimeModelId, string? language)
     {
@@ -220,7 +75,8 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
             query.Add($"language_code={Uri.EscapeDataString(language)}");
 
         return new Uri(
-            "wss://api.elevenlabs.io/v1/speech-to-text/realtime?" + string.Join("&", query)
+            "wss://api.elevenlabs.io/v1/speech-to-text/realtime?"
+                + string.Join("&", query)
         );
     }
 
@@ -244,36 +100,38 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
             json,
             out transcriptEvent,
             out error,
+            out _,
             out _
         );
 
-    private static bool TryParseTranscriptEvent(
+    internal static bool TryParseTranscriptEvent(
         string json,
         out StreamingTranscriptEvent? transcriptEvent,
         out string? error,
-        out bool isCommittedTranscript
+        out bool isCommittedTranscript,
+        out string? messageType
     )
     {
         transcriptEvent = null;
         error = null;
         isCommittedTranscript = false;
+        messageType = null;
 
         try
         {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
             if (
                 root.ValueKind != JsonValueKind.Object
-                || !root.TryGetProperty("message_type", out var messageTypeEl)
-                || messageTypeEl.ValueKind != JsonValueKind.String
+                || !root.TryGetProperty("message_type", out var messageTypeElement)
+                || messageTypeElement.ValueKind != JsonValueKind.String
             )
             {
                 error = "ElevenLabs sent a malformed message without a message_type.";
                 return false;
             }
 
-            var messageType = messageTypeEl.GetString();
+            messageType = messageTypeElement.GetString();
             if (string.IsNullOrWhiteSpace(messageType))
             {
                 error = "ElevenLabs sent a malformed message with an empty message_type.";
@@ -289,8 +147,10 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
                 return false;
             }
 
-            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
-            if (messageType is "partial_transcript")
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- the middle
+            // arm (IsErrorMessageType) is a predicate call, so only the tail could
+            // become a switch; splitting would read worse.
+            if (messageType == "partial_transcript")
             {
                 if (!TryGetText(root, out var text))
                 {
@@ -305,7 +165,11 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
                 return true;
             }
 
-            if (messageType is "committed_transcript" or "committed_transcript_with_timestamps")
+            if (
+                messageType
+                is "committed_transcript"
+                    or "committed_transcript_with_timestamps"
+            )
             {
                 isCommittedTranscript = true;
                 if (!TryGetText(root, out var text))
@@ -314,8 +178,6 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
                     return false;
                 }
 
-                // An empty committed transcript is still the acknowledgement for
-                // an empty final commit and must unblock FinalizeAsync.
                 if (string.IsNullOrWhiteSpace(text))
                     return false;
 
@@ -363,142 +225,18 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
             _ => messageType.Contains("error", StringComparison.OrdinalIgnoreCase),
         };
 
-    private async Task SendAudioPayloadAsync(byte[] chunk, bool commit, CancellationToken ct)
-    {
-        var payload = Encoding.UTF8.GetBytes(BuildAudioChunkPayload(chunk, commit));
-        await _ws.SendAsync(payload, WebSocketMessageType.Text, true, ct);
-    }
-
-    private async Task ReceiveLoopAsync(CancellationToken ct)
-    {
-        var buffer = new byte[8192];
-        using var messageBuffer = new MemoryStream();
-
-        try
-        {
-            while (true)
-            {
-                messageBuffer.SetLength(0);
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await _ws.ReceiveAsync(buffer, ct);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        CaptureFault(CreatePrematureCloseException(result));
-                        return;
-                    }
-
-                    messageBuffer.Write(buffer, 0, result.Count);
-                } while (!result.EndOfMessage);
-
-                if (result.MessageType != WebSocketMessageType.Text)
-                    continue;
-
-                var json = Encoding.UTF8.GetString(
-                    messageBuffer.GetBuffer(),
-                    0,
-                    (int)messageBuffer.Length
-                );
-                if (
-                    TryParseTranscriptEvent(
-                        json,
-                        out var transcriptEvent,
-                        out var error,
-                        out var isCommittedTranscript
-                    )
-                )
-                {
-                    Emit(transcriptEvent!);
-                }
-
-                if (!string.IsNullOrWhiteSpace(error))
-                    throw new InvalidOperationException(
-                        $"ElevenLabs streaming provider error: {error}"
-                    );
-
-                // ReSharper disable once InvertIf -- the positive form states the terminal-commit case that ends the receive loop.
-                if (
-                    isCommittedTranscript
-                    && Volatile.Read(ref _finalCommitPending) != 0
-                )
-                {
-                    Volatile.Write(ref _terminalCommitReceived, 1);
-                    _terminalCompletion.TrySetResult();
-                    return;
-                }
-            }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // DisposeAsync owns this token. Local teardown is not a stream fault.
-        }
-        catch (OperationCanceledException ex)
-        {
-            CaptureFault(
-                new InvalidOperationException("ElevenLabs streaming receive was canceled.", ex)
-            );
-        }
-        catch (WebSocketException ex)
-        {
-            CaptureFault(
-                new InvalidOperationException("ElevenLabs streaming transport failed.", ex)
-            );
-        }
-        catch (InvalidOperationException ex)
-        {
-            CaptureFault(ex);
-        }
-        catch (Exception ex)
-        {
-            CaptureFault(
-                new InvalidOperationException("ElevenLabs streaming receive failed.", ex)
-            );
-        }
-        finally
-        {
-            if (ct.IsCancellationRequested)
-            {
-                _terminalCompletion.TrySetResult();
-            }
-            else if (
-                Volatile.Read(ref _terminalCommitReceived) == 0
-                && Volatile.Read(ref _sessionFault) is null
-            )
-            {
-                CaptureFault(
-                    new InvalidOperationException(
-                        "ElevenLabs streaming receive ended before the final committed transcript."
-                    )
-                );
-            }
-        }
-    }
-
-    private void Emit(StreamingTranscriptEvent transcriptEvent)
-    {
-        try
-        {
-            TranscriptReceived?.Invoke(transcriptEvent);
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"ElevenLabs realtime subscriber failed: {ex.Message}");
-        }
-    }
-
     private static bool TryGetText(JsonElement root, out string text)
     {
         text = "";
         if (
-            !root.TryGetProperty("text", out var textEl)
-            || textEl.ValueKind != JsonValueKind.String
+            !root.TryGetProperty("text", out var textElement)
+            || textElement.ValueKind != JsonValueKind.String
         )
         {
             return false;
         }
 
-        text = textEl.GetString() ?? "";
+        text = textElement.GetString() ?? "";
         return true;
     }
 
@@ -518,104 +256,161 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
 
         return null;
     }
+}
 
-    private static InvalidOperationException CreatePrematureCloseException(
-        WebSocketReceiveResult result
+internal sealed class ElevenLabsWebSocketAdapter(
+    string apiKey,
+    string realtimeModelId,
+    string? language
+) : IWebSocketSessionAdapter
+{
+    private readonly MemoryStream _audioBuffer = new();
+    private int _finalCommitPending;
+    private string? _lastCommittedText;
+    private string? _lastCommittedMessageType;
+
+    public string ProviderName => "ElevenLabs";
+    public WebSocketReadinessPolicy Readiness => WebSocketReadinessPolicy.Immediate;
+    public WebSocketTerminalPolicy Terminal =>
+        WebSocketTerminalPolicy.Require("the final committed transcript");
+    public WebSocketKeepAlivePolicy? KeepAlive => null;
+    public WebSocketClosePolicy ClosePolicy => WebSocketClosePolicy.Default;
+
+    public ValueTask<WebSocketConnectionOptions> GetConnectionOptionsAsync(
+        CancellationToken ct
     )
     {
-        var status = result.CloseStatus is { } closeStatus
-            ? $"{(int)closeStatus} ({closeStatus})"
-            : "without a close status";
-        var reason = string.IsNullOrWhiteSpace(result.CloseStatusDescription)
-            ? ""
-            : $": {result.CloseStatusDescription}";
-        return new InvalidOperationException(
-            $"ElevenLabs streaming socket closed {status}{reason} before the final committed transcript."
-        );
-    }
-
-    private void ThrowIfClosedBeforeTerminalCommit()
-    {
-        ThrowIfFaulted();
-        if (Volatile.Read(ref _terminalCommitReceived) != 0)
-            return;
-
-        CaptureFault(
-            new InvalidOperationException(
-                $"ElevenLabs streaming socket is {_ws.State} before the final committed transcript."
+        IReadOnlyDictionary<string, string> headers =
+            new Dictionary<string, string>
+            {
+                ["xi-api-key"] = apiKey,
+            };
+        return ValueTask.FromResult(
+            new WebSocketConnectionOptions(
+                ElevenLabsStreamingSession.BuildRealtimeUri(
+                    realtimeModelId,
+                    language
+                ),
+                headers
             )
         );
-        ThrowIfFaulted();
     }
 
-    private void CaptureFault(Exception exception)
+    public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> OnConnectedAsync(
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>([]);
+
+    public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> EncodeAudioAsync(
+        ReadOnlyMemory<byte> pcm16Audio,
+        CancellationToken ct
+    )
     {
-        if (Interlocked.CompareExchange(ref _sessionFault, exception, null) is null)
-            _terminalCompletion.TrySetException(exception);
-    }
-
-    private void ThrowIfFaulted()
-    {
-        var exception = Volatile.Read(ref _sessionFault);
-        if (exception is not null)
-            ExceptionDispatchInfo.Capture(exception).Throw();
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed)
-            return;
-
-        _disposed = true;
-        // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
-        _receiveCts.Cancel();
-        _terminalCompletion.TrySetResult();
-
-        await _sendLock.WaitAsync(CancellationToken.None);
-        try
+        if (pcm16Audio.Length == 0)
         {
-            if (_ws.State == WebSocketState.Open)
-            {
-                // Bound the handshake: an unresponsive peer with CancellationToken.None
-                // would otherwise hang Dispose indefinitely. Abort is the fallback
-                // when the close handshake fails or times out.
-                using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                try
-                {
-                    await _ws.CloseAsync(
-                        WebSocketCloseStatus.NormalClosure,
-                        null,
-                        closeCts.Token
-                    );
-                }
-                catch
-                {
-                    try { _ws.Abort(); } catch { /* best effort */ }
-                }
-            }
-
-            if (_receiveTask is not null)
-            {
-                try
-                {
-                    await _receiveTask;
-                }
-                catch
-                { /* expected */
-                }
-            }
-
-            // ReSharper disable once MethodHasAsyncOverload -- MemoryStream has no async disposal work; DisposeAsync would only add overhead here.
-            _audioBuffer.Dispose();
-        }
-        finally
-        {
-            _sendLock.Release();
-            _sendLock.Dispose();
-            _receiveCts.Dispose();
-            _ws.Dispose();
+            return ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
+                []
+            );
         }
 
-        _ = _terminalCompletion.Task.Exception;
+        _audioBuffer.Write(pcm16Audio.Span);
+        if (_audioBuffer.Length < ElevenLabsStreamingSession.MinimumBufferedChunkBytes)
+        {
+            return ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
+                []
+            );
+        }
+
+        var chunk = _audioBuffer.ToArray();
+        _audioBuffer.SetLength(0);
+        return ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
+            [CreateAudioMessage(chunk, commit: false)]
+        );
     }
+
+    public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct)
+    {
+        Volatile.Write(ref _finalCommitPending, 1);
+        var chunk = _audioBuffer.Length == 0 ? [] : _audioBuffer.ToArray();
+        _audioBuffer.SetLength(0);
+        return ValueTask.FromResult(
+            new WebSocketFinalizePlan(
+                [CreateAudioMessage(chunk, commit: true)]
+            )
+        );
+    }
+
+    public WebSocketInboundResult HandleMessage(
+        WebSocketMessageType type,
+        ReadOnlyMemory<byte> completePayload
+    )
+    {
+        if (type != WebSocketMessageType.Text)
+            return WebSocketInboundResult.Empty;
+
+        var json = Encoding.UTF8.GetString(completePayload.Span);
+        var parsed = ElevenLabsStreamingSession.TryParseTranscriptEvent(
+            json,
+            out var transcript,
+            out var error,
+            out var committed,
+            out var messageType
+        );
+        if (!string.IsNullOrWhiteSpace(error))
+        {
+            return new WebSocketInboundResult(
+                [],
+                Fault: new InvalidOperationException(
+                    $"ElevenLabs streaming provider error: {error}"
+                )
+            );
+        }
+
+        IReadOnlyList<StreamingTranscriptEvent> transcripts = [];
+        if (parsed && transcript is not null)
+        {
+            var duplicateVariant =
+                committed
+                && string.Equals(
+                    transcript.Text,
+                    _lastCommittedText,
+                    StringComparison.Ordinal
+                )
+                && !string.Equals(
+                    messageType,
+                    _lastCommittedMessageType,
+                    StringComparison.Ordinal
+                );
+            if (!duplicateVariant)
+                transcripts = [transcript];
+
+            if (duplicateVariant)
+            {
+                _lastCommittedText = null;
+                _lastCommittedMessageType = null;
+            }
+            else if (committed)
+            {
+                _lastCommittedText = transcript.Text;
+                _lastCommittedMessageType = messageType;
+            }
+        }
+
+        var signals =
+            committed && Volatile.Read(ref _finalCommitPending) != 0
+                ? WebSocketSessionSignal.Terminal
+                : WebSocketSessionSignal.None;
+        return new WebSocketInboundResult(transcripts, signals);
+    }
+
+    private static WebSocketOutboundMessage CreateAudioMessage(
+        byte[] audio,
+        bool commit
+    ) =>
+        new(
+            Encoding.UTF8.GetBytes(
+                ElevenLabsStreamingSession.BuildAudioChunkPayload(audio, commit)
+            ),
+            WebSocketMessageType.Text
+        );
 }

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -12,17 +13,9 @@ public sealed class ProfileService : IProfileService
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
-    private readonly Action<string, string> _atomicWrite;
-    private readonly string _filePath;
     private readonly IErrorLogService? _errorLog;
-    private readonly Lock _gate = new();
-
-    // Serializes notification delivery; never taken while _gate is held.
-    private readonly Lock _notifyGate = new();
-    private List<Profile> _cache = [];
-    private bool _cacheLoaded;
-    private bool _loadFailed;
-    private bool _loadFailureReported;
+    private readonly string _filePath;
+    private readonly AtomicJsonStore<ImmutableArray<Profile>> _store;
 
     public ProfileService(string filePath, IErrorLogService? errorLog = null)
         : this(filePath, AtomicFileWrite.WriteAllText, errorLog) { }
@@ -33,117 +26,100 @@ public sealed class ProfileService : IProfileService
         IErrorLogService? errorLog = null
     )
     {
-        _filePath = filePath;
-        _atomicWrite = atomicWrite ?? AtomicFileWrite.WriteAllText;
+        _filePath = Path.GetFullPath(filePath);
         _errorLog = errorLog;
+        var options = new AtomicJsonStoreOptions<ImmutableArray<Profile>>
+        {
+            JsonOptions = s_jsonOptions,
+            CorruptFilePolicy = AtomicJsonCorruptFilePolicy.PreserveAndReset,
+            Deserialize = json =>
+            {
+                var profiles = JsonSerializer.Deserialize<ImmutableArray<Profile>>(
+                    json,
+                    s_jsonOptions
+                );
+                return profiles.IsDefault
+                    ? throw new JsonException("Profile JSON deserialized to null.")
+                    : Sort(profiles);
+            },
+        };
+        _store = new AtomicJsonStore<ImmutableArray<Profile>>(
+            _filePath,
+            static () => [],
+            options,
+            atomicWrite ?? AtomicFileWrite.WriteAllText
+        );
     }
 
-    public IReadOnlyList<Profile> Profiles
-    {
-        get
-        {
-            lock (_gate)
-            {
-                EnsureCacheLoadedLocked();
-                return _cache;
-            }
-        }
-    }
+    public IReadOnlyList<Profile> Profiles => _store.Current.ToArray();
 
     public event Action? ProfilesChanged;
 
     public void SeedFirstRunDefaultsIfMissing()
     {
-        lock (_gate)
+        // Seed only when the file has never been written; if the user later deletes
+        // the seeded profile the file still exists, so we never resurrect it.
+        if (File.Exists(_filePath))
         {
-            // Seed only when the file has never been written; if the user later deletes
-            // the seeded profile the file still exists, so we never resurrect it.
-            if (File.Exists(_filePath))
-            {
-                return;
-            }
-
-            EnsureCacheLoadedLocked();
-            if (_cache.Any(p => p.Id == FirstRunDefaults.AutoFormatProfileId))
-            {
-                return;
-            }
-
-            var newCache = new List<Profile>(_cache) { FirstRunDefaults.CreateAutoFormatProfile() };
-            CommitLocked(newCache);
+            return;
         }
 
-        NotifyProfilesChanged();
+        Commit(
+            current =>
+                current.Any(p => p.Id == FirstRunDefaults.AutoFormatProfileId)
+                    ? current
+                    : current.Add(FirstRunDefaults.CreateAutoFormatProfile())
+        );
     }
 
     public void AddProfile(Profile profile)
     {
-        lock (_gate)
-        {
-            EnsureCacheLoadedLocked();
-            var newCache = new List<Profile>(_cache) { profile };
-            CommitLocked(newCache);
-        }
-
-        NotifyProfilesChanged();
+        Commit(current => current.Add(profile));
     }
 
     public void UpdateProfile(Profile profile)
     {
-        lock (_gate)
-        {
-            EnsureCacheLoadedLocked();
-            var updated = profile with { UpdatedAt = DateTime.UtcNow };
-            var newCache = new List<Profile>(_cache);
-            var idx = newCache.FindIndex(p => p.Id == profile.Id);
-            if (idx < 0)
+        Commit(
+            current =>
             {
-                return;
+                var updated = profile with { UpdatedAt = DateTime.UtcNow };
+                var idx = FindIndex(current, p => p.Id == profile.Id);
+                return idx < 0 ? current : current.SetItem(idx, updated);
             }
-
-            newCache[idx] = updated;
-            CommitLocked(newCache);
-        }
-
-        NotifyProfilesChanged();
+        );
     }
 
     public void DeleteProfile(string id)
     {
-        lock (_gate)
-        {
-            EnsureCacheLoadedLocked();
-            var newCache = new List<Profile>(_cache);
-            newCache.RemoveAll(p => p.Id == id);
-            CommitLocked(newCache);
-        }
-
-        NotifyProfilesChanged();
+        Commit(
+            current =>
+            {
+                var next = current.Where(p => p.Id != id).ToImmutableArray();
+                return next.Length == current.Length ? current : next;
+            }
+        );
     }
 
     public Profile? ToggleProfileEnabled(string id)
     {
-        Profile updated;
-        lock (_gate)
-        {
-            EnsureCacheLoadedLocked();
-            var newCache = new List<Profile>(_cache);
-            var idx = newCache.FindIndex(profile => profile.Id == id);
-            if (idx < 0)
+        Profile? updated = null;
+        Commit(
+            current =>
             {
-                return null;
-            }
+                var idx = FindIndex(current, profile => profile.Id == id);
+                if (idx < 0)
+                {
+                    return current;
+                }
 
-            updated = newCache[idx] with
-            {
-                IsEnabled = !newCache[idx].IsEnabled,
+                updated = current[idx] with
+                {
+                    IsEnabled = !current[idx].IsEnabled,
                 UpdatedAt = DateTime.UtcNow,
-            };
-            newCache[idx] = updated;
-            CommitLocked(newCache);
-        }
-
-        NotifyProfilesChanged();
+                };
+                return current.SetItem(idx, updated);
+            }
+        );
         return updated;
     }
 
@@ -153,14 +129,11 @@ public sealed class ProfileService : IProfileService
         string? forcedProfileId = null
     )
     {
-        lock (_gate)
-        {
-            EnsureCacheLoadedLocked();
-            return MatchProfileLocked(processName, url, forcedProfileId);
-        }
+        return MatchProfile(_store.Current, processName, url, forcedProfileId);
     }
 
-    private MatchResult MatchProfileLocked(
+    private static MatchResult MatchProfile(
+        ImmutableArray<Profile> profiles,
         string? processName,
         string? url,
         string? forcedProfileId
@@ -170,14 +143,14 @@ public sealed class ProfileService : IProfileService
         {
             // A forced selection pointing at a disabled profile should still fall through —
             // don't activate a profile the user has explicitly turned off.
-            var forced = _cache.FirstOrDefault(p => p.Id == forcedProfileId && p.IsEnabled);
+            var forced = profiles.FirstOrDefault(p => p.Id == forcedProfileId && p.IsEnabled);
             if (forced is not null)
             {
                 return new MatchResult(forced, MatchKind.ManualOverride, null, 1, false);
             }
         }
 
-        var enabled = _cache.Where(p => p.IsEnabled).ToList();
+        var enabled = profiles.Where(p => p.IsEnabled).ToList();
         var host = url is not null ? ExtractHost(url) : null;
 
         var appAndWebsite = new List<(Profile Profile, string? MatchedPattern)>();
@@ -308,109 +281,59 @@ public sealed class ProfileService : IProfileService
         // Plain pattern (e.g. "example.com") also matches any subdomain
     }
 
-    private static void SortList(List<Profile> profiles)
+    private static ImmutableArray<Profile> Sort(ImmutableArray<Profile> profiles)
     {
-        profiles.Sort((a, b) => b.Priority.CompareTo(a.Priority));
-    }
-
-    private void EnsureCacheLoadedLocked()
-    {
-        // Retry while a previous load failed rather than staying poisoned for the process
-        // lifetime; the cause may be transient or since repaired. It has to retry *here*: callers
-        // build their next list from _cache, so recovering later would still write the stale set.
-        if (_cacheLoaded && !_loadFailed)
+        for (var index = 1; index < profiles.Length; index++)
         {
-            return;
+            if (profiles[index - 1].Priority < profiles[index].Priority)
+            {
+                return [.. profiles.OrderByDescending(p => p.Priority)];
+            }
         }
 
+        return profiles;
+    }
+
+    private void Commit(Func<ImmutableArray<Profile>, ImmutableArray<Profile>> update)
+    {
+        var changed = false;
         try
         {
-            _cache = [];
-            if (File.Exists(_filePath))
-            {
-                var json = File.ReadAllText(_filePath);
-                // A blank file is a benign "no profiles yet" state, not corruption — leave the
-                // cache empty so normal saves still happen. Only non-empty content that fails to
-                // parse is treated as a load failure below.
-                if (!string.IsNullOrWhiteSpace(json))
+            _store.Update(
+                current =>
                 {
-                    _cache = JsonSerializer.Deserialize<List<Profile>>(json) ?? [];
+                    var next = Sort(update(current));
+                    changed = !next.Equals(current);
+                    return next;
                 }
-            }
-
-            _loadFailed = false;
+            );
         }
         catch (Exception ex)
         {
-            // Report once per failure streak: this runs on the dictation path via MatchProfile,
-            // so logging every retry would flood the error log.
-            if (!_loadFailureReported)
-            {
-                _errorLog?.AddEntry(
-                    $"Could not load saved profiles from {_filePath}: {ex.Message}"
-                );
-                _loadFailureReported = true;
-            }
-
-            _cache = [];
-            // The file exists but couldn't be read or parsed. Treat the cache as untrustworthy so
-            // a later add/update doesn't overwrite the (possibly recoverable) file.
-            _loadFailed = true;
+            // The store refuses to publish over a file it could not load, so surface *why* the
+            // user's edit did not stick; callers still see the exception.
+            _errorLog?.AddEntry($"Could not save profiles to {_filePath}: {ex.Message}");
+            throw;
         }
 
-        if (!_loadFailed)
-        {
-            _loadFailureReported = false;
-        }
-
-        SortList(_cache);
-        _cacheLoaded = true;
-    }
-
-    private void SaveToDisk(IReadOnlyList<Profile> profiles)
-    {
-        if (_loadFailed)
-        {
-            // The cache is a partial set (the file didn't load), so refuse until it loads cleanly
-            // rather than clobber the user's saved profiles.
-            const string reason =
-                "the existing file could not be loaded, so writing now would overwrite saved profiles";
-            _errorLog?.AddEntry($"Not saving profiles at {_filePath}: {reason}.");
-            throw new InvalidOperationException(
-                $"Cannot save profiles at '{_filePath}': {reason}."
-            );
-        }
-
-        var dir = Path.GetDirectoryName(_filePath);
-        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-        {
-            Directory.CreateDirectory(dir);
-        }
-
-        var json = JsonSerializer.Serialize(profiles, s_jsonOptions);
-        _atomicWrite(_filePath, json);
-    }
-
-    private void CommitLocked(List<Profile> newCache)
-    {
-        SortList(newCache);
-        // Persist before swapping _cache so a save failure can't leave a published-but-unsaved
-        // cache; on throw _cache keeps its prior list and the caller never reaches its notify.
-        SaveToDisk(newCache);
-        _cache = newCache;
-    }
-
-    /// <summary>
-    ///     Raised outside <c>_gate</c> because subscribers run arbitrary code and re-enter this
-    ///     service, and serialized on <c>_notifyGate</c> so two callbacks can't interleave.
-    ///     Subscribers re-read <see cref="Profiles" />, so whichever runs last still sees the
-    ///     newest list.
-    /// </summary>
-    private void NotifyProfilesChanged()
-    {
-        lock (_notifyGate)
+        if (changed)
         {
             ProfilesChanged?.Invoke();
         }
+    }
+
+    private static int FindIndex(
+        ImmutableArray<Profile> profiles,
+        Func<Profile, bool> predicate
+    )
+    {
+        for (var index = 0; index < profiles.Length; index++)
+        {
+            if (predicate(profiles[index]))
+            {
+                return index;
+            }
+        }
+        return -1;
     }
 }

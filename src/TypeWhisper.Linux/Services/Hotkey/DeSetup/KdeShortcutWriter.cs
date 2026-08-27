@@ -1,25 +1,44 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
+using TypeWhisper.Linux.Services.ManagedArtifacts;
 
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 /// <summary>
 ///     Writes a <c>.desktop</c> entry into <c>~/.local/share/kglobalaccel/</c>.
-///     KGlobalAccel scans that directory on session start; the user can override the
-///     trigger from System Settings → Shortcuts.
+///     KGlobalAccel scans that directory on session start, so dropped or removed
+///     entries take effect only after a daemon reload or re-login.
+///     The user can override the trigger from System Settings → Shortcuts.
 ///     Existing targets are changed only when the ownership marker and shortcut ID match.
 ///     The live D-Bus path (<c>org.kde.kglobalaccel.registerShortcut</c>) is avoided
 ///     because it's fragile across Plasma versions and a static toggle doesn't need
-///     the immediate-effect property. Cost: user must log out once to activate.
+///     the immediate-effect property.
 /// </summary>
 public sealed class KdeShortcutWriter : IDeShortcutWriter
 {
+    private const UnixFileMode DesktopMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite
+        | UnixFileMode.GroupRead | UnixFileMode.OtherRead;
+    private readonly ManagedFileTransaction _managedFiles;
+
+    public KdeShortcutWriter()
+        : this(new ManagedFileTransaction()) { }
+
+    internal KdeShortcutWriter(string managedArtifactStateRoot)
+        : this(new ManagedFileTransaction(managedArtifactStateRoot)) { }
+
+    private KdeShortcutWriter(ManagedFileTransaction managedFiles)
+    {
+        _managedFiles = managedFiles;
+    }
+
     public string DesktopId => "kde";
     public string DisplayName => "KDE Plasma";
     public bool SupportsPushToTalk => false;
 
-    // KGlobalAccel only loads a dropped .desktop on the next login / daemon
-    // restart, so the bind isn't live the moment we write it.
+    // KGlobalAccel does not observe a dropped or removed .desktop until its next daemon reload or
+    // re-login, so both install and removal are deferred.
     public bool RequiresSessionRestartToApply => true;
 
     public bool IsCurrentDesktop()
@@ -32,66 +51,67 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
         return $"~/.local/share/kglobalaccel/{FileName(spec.ShortcutId)}\n" + BuildDesktopFile(spec);
     }
 
-    public Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct)
+    // Reports the persisted managed-file classification, even when the live route still differs.
+    public async Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct)
     {
-        var (_, target) = ResolveTargetPath(spec.ShortcutId);
-        if (!File.Exists(target))
-        {
-            return Task.FromResult(false);
-        }
-
-        // BuildDesktopFile is deterministic (no timestamp), so an exact byte match confirms
-        // this spec is installed; a changed hotkey or partial write reads as not-installed.
         try
         {
-            return Task.FromResult(File.ReadAllText(target) == BuildDesktopFile(spec));
+            return await _managedFiles.ProbeAsync(BuildManagedSpec(spec), ct)
+                    .ConfigureAwait(false)
+                == ManagedFileClassification.CurrentOwned;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return Task.FromResult(false);
+            return false;
         }
     }
 
-    public Task<bool> IsManagedShortcutPresentAsync(string shortcutId, CancellationToken ct)
+    public async Task<bool> IsManagedShortcutPresentAsync(
+        string shortcutId,
+        CancellationToken ct
+    )
     {
-        ct.ThrowIfCancellationRequested();
-        var (_, target) = ResolveTargetPath(shortcutId);
-        return Task.FromResult(
-            File.Exists(target) && IsOwnedByTypeWhisper(target, shortcutId)
-        );
+        try
+        {
+            var classification = await _managedFiles
+                .ProbeAsync(BuildManagedSpec(shortcutId, []), ct)
+                .ConfigureAwait(false);
+            if (
+                classification is ManagedFileClassification.CurrentOwned
+                    or ManagedFileClassification.StaleOwned
+            )
+            {
+                return true;
+            }
+
+            // CustomizedOwned is reached without consulting the ownership probe, so a file
+            // replaced outright lands here too. The markers decide whether it is still ours.
+            return classification == ManagedFileClassification.CustomizedOwned
+                && DestinationCarriesMarkers(shortcutId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return false;
+        }
     }
 
     public async Task<DeShortcutWriteResult> WriteAsync(DeShortcutSpec spec, CancellationToken ct)
     {
-        var (dir, target) = ResolveTargetPath(spec.ShortcutId);
-        if (File.Exists(target) && !IsOwnedByTypeWhisper(target, spec.ShortcutId))
-        {
-            return new DeShortcutWriteResult(
-                false,
-                $"Left {target} untouched — it doesn't carry TypeWhisper's ownership markers, so we won't overwrite it. Remove or rename it manually, then try again.",
-                []
-            );
-        }
-
+        var target = ResolveTargetPath(spec.ShortcutId);
         try
         {
-            Directory.CreateDirectory(dir);
+            var result = await _managedFiles.InstallAsync(BuildManagedSpec(spec), ct)
+                .ConfigureAwait(false);
+            if (!result.OwnsDestination)
+            {
+                return new DeShortcutWriteResult(
+                    false,
+                    $"Left {target} untouched — it doesn't carry TypeWhisper's ownership markers, so we won't overwrite it. Remove or rename it manually, then try again.",
+                    []
+                );
+            }
         }
-        catch (Exception ex)
-        {
-            return new DeShortcutWriteResult(
-                false,
-                $"Could not create {dir}: {ex.Message}",
-                []
-            );
-        }
-
-        var contents = BuildDesktopFile(spec);
-        try
-        {
-            await AtomicFileWriter.WriteAsync(target, contents, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return new DeShortcutWriteResult(
                 false,
@@ -107,62 +127,76 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
         );
     }
 
-    public Task<DeShortcutWriteResult> RemoveAsync(string shortcutId, CancellationToken ct)
+    public async Task<DeShortcutWriteResult> RemoveAsync(
+        string shortcutId,
+        CancellationToken ct
+    )
     {
-        var (_, target) = ResolveTargetPath(shortcutId);
-        if (!File.Exists(target))
+        var target = ResolveTargetPath(shortcutId);
+        try
         {
-            return Task.FromResult(
-                new DeShortcutWriteResult(
-                    true,
-                    "No KDE integration to remove.",
-                    []
-                )
-            );
-        }
+            var result = await _managedFiles
+                .RemoveAsync(BuildManagedSpec(shortcutId, []), ct)
+                .ConfigureAwait(false);
+            if (result.Classification == ManagedFileClassification.Absent)
+            {
+                return new DeShortcutWriteResult(true, "No KDE integration to remove.", []);
+            }
 
-        if (!IsOwnedByTypeWhisper(target, shortcutId))
-        {
-            return Task.FromResult(
-                new DeShortcutWriteResult(
+            if (!result.Changed)
+            {
+                return new DeShortcutWriteResult(
                     true,
                     "KDE shortcut file left in place.",
                     [],
                     $"Left {target} untouched — it doesn't carry TypeWhisper's ownership markers, so we won't delete it. Remove it manually if you want to."
-                )
-            );
-        }
+                );
+            }
 
-        try
-        {
-            File.Delete(target);
-            return Task.FromResult(
-                new DeShortcutWriteResult(
-                    true,
-                    "KDE shortcut file removed. Restart the KGlobalAccel daemon or log out and back in to drop the registration.",
-                    [target]
-                )
+            return new DeShortcutWriteResult(
+                true,
+                "KDE shortcut file removed. Restart the KGlobalAccel daemon or log out and back in to drop the registration.",
+                [target]
             );
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return Task.FromResult(
-                new DeShortcutWriteResult(
-                    false,
-                    $"Could not delete {target}: {ex.Message}",
-                    []
-                )
+            return new DeShortcutWriteResult(
+                false,
+                $"Could not delete {target}: {ex.Message}",
+                []
             );
         }
     }
 
-    private static (string dir, string file) ResolveTargetPath(string shortcutId)
+    private static bool DestinationCarriesMarkers(string shortcutId)
     {
-        var dir = Path.Join(XdgPaths.ResolveDataHome(), "kglobalaccel");
-        return (dir, Path.Join(dir, FileName(shortcutId)));
+        try
+        {
+            // The transaction already refused symlinks and non-regular entries before this
+            // classification, so a plain read is safe here.
+            return IsOwnedByTypeWhisper(
+                File.ReadAllBytes(ResolveTargetPath(shortcutId)),
+                shortcutId
+            );
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static string ResolveTargetPath(string shortcutId)
+    {
+        return Path.Join(XdgPaths.ResolveDataHome(), "kglobalaccel", FileName(shortcutId));
     }
 
     private static string FileName(string shortcutId)
+    {
+        return $"{SanitizeId(shortcutId)}.desktop";
+    }
+
+    private static string SanitizeId(string shortcutId)
     {
         // KGlobalAccel uses the basename as the identifier; sanitize to guard against ids like "foo/bar".
         var safe = new StringBuilder();
@@ -178,7 +212,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
             }
         }
 
-        return $"{safe}.desktop";
+        return safe.ToString();
     }
 
     private static string BuildDesktopFile(DeShortcutSpec spec)
@@ -202,26 +236,52 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
         );
     }
 
-    // Require both exact lines: a marker alone could belong to a different shortcut,
-    // while full-file equality would reject legitimate trigger updates.
-    private static bool IsOwnedByTypeWhisper(string target, string shortcutId)
+    private static ManagedFileSpec BuildManagedSpec(DeShortcutSpec spec)
     {
-        string contents;
-        try
-        {
-            contents = File.ReadAllText(target);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // Refuse destructive changes when ownership cannot be proven.
-            return false;
-        }
+        return BuildManagedSpec(spec.ShortcutId, ManagedFileSpec.Utf8(BuildDesktopFile(spec)));
+    }
 
+    private static ManagedFileSpec BuildManagedSpec(string shortcutId, byte[] desiredBytes)
+    {
+        var target = ResolveTargetPath(shortcutId);
+        return new ManagedFileSpec
+        {
+            ArtifactId = $"kde-shortcut-{ArtifactSuffix(shortcutId)}",
+            DestinationPath = target,
+            DesiredBytes = desiredBytes,
+            CreateMode = DesktopMode,
+            OwnershipProbe = bytes => IsOwnedByTypeWhisper(bytes, shortcutId),
+            // Shortcuts written before the managed-artifact manifest carry no recorded
+            // state, and removal probes with empty desired bytes, so the marker match
+            // is the only ownership evidence there is. Without this a pre-upgrade
+            // shortcut classifies as customized and can be neither rewritten (new
+            // trigger) nor removed — both of which the previous release allowed.
+            LegacyOwnershipProbe = bytes => IsOwnedByTypeWhisper(bytes, shortcutId),
+        };
+    }
+
+    // Require both exact lines: a marker alone could belong to a different shortcut.
+    private static bool IsOwnedByTypeWhisper(
+        ReadOnlyMemory<byte> bytes,
+        string shortcutId
+    )
+    {
+        var contents = Encoding.UTF8.GetString(bytes.Span);
         var lines = contents.Split('\n').Select(line => line.TrimEnd('\r'));
         var lineSet = lines.ToHashSet(StringComparer.Ordinal);
         const string managedLine = "X-TypeWhisper-Managed=true";
         var idLine = $"X-TypeWhisper-ShortcutId={EscapeDesktopValue(shortcutId)}";
         return lineSet.Contains(managedLine) && lineSet.Contains(idLine);
+    }
+
+    // Hashes the sanitized id, not the raw one: "foo/bar" and "foo-bar" resolve to the same
+    // destination file, so they must also resolve to the same managed-artifact identity.
+    private static string ArtifactSuffix(string shortcutId)
+    {
+        return Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(SanitizeId(shortcutId)))
+            )
+            .ToLowerInvariant();
     }
 
     private static string EscapeDesktopValue(string value)

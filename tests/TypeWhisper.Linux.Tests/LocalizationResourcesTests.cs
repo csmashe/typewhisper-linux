@@ -44,6 +44,57 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    public void Catalogs_HaveLanguageSelectionAndRecorderOutcomeStringsWithPlaceholders(
+        string language
+    )
+    {
+        var catalog = Load(language);
+        var keys = new[]
+        {
+            "Dictation.LanguageSelectionRequired",
+            "Dictation.LanguageSelectionRequiredAuto",
+            "LanguageSelection.LanguageNotSupported",
+            "Plugins.RevealSecretMultiline",
+            "Recorder.StatusSavedNoTranscript",
+            "Recorder.StatusSavedTranscriptionFailed",
+        };
+
+        foreach (var key in keys)
+        {
+            Assert.True(
+                catalog.TryGetValue(key, out var value),
+                $"Missing {language} key: {key}"
+            );
+            Assert.False(string.IsNullOrWhiteSpace(value), $"{language} key is empty: {key}");
+        }
+
+        var languageNotSupported = catalog["LanguageSelection.LanguageNotSupported"];
+        Assert.Contains("{0}", languageNotSupported, StringComparison.Ordinal);
+        Assert.Contains("{1}", languageNotSupported, StringComparison.Ordinal);
+        Assert.Contains("{2}", languageNotSupported, StringComparison.Ordinal);
+        Assert.Contains(
+            "{0}",
+            catalog["Recorder.StatusSavedTranscriptionFailed"],
+            StringComparison.Ordinal
+        );
+
+        if (language == CanonicalLanguage)
+        {
+            return;
+        }
+
+        var en = Load(CanonicalLanguage);
+        foreach (var key in keys)
+        {
+            Assert.NotEqual(en[key], catalog[key]);
+        }
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
     public void Catalogs_HaveUiOperationFailureStringsWithRequiredPlaceholders(
         string language
     )
@@ -121,6 +172,25 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    public void Catalogs_HaveTerminalClipboardFallback(string language)
+    {
+        var catalog = Load(language);
+
+        Assert.True(
+            catalog.TryGetValue("TextInsertion.TerminalClipboardFallback", out var value),
+            $"Missing {language} key: TextInsertion.TerminalClipboardFallback"
+        );
+        Assert.False(
+            string.IsNullOrWhiteSpace(value),
+            $"{language} key is empty: TextInsertion.TerminalClipboardFallback"
+        );
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
     public void Catalogs_HaveRecentTranscriptionFeedbackStringsWithRequiredPlaceholders(
         string language
     )
@@ -178,6 +248,87 @@ public sealed class LocalizationResourcesTests
         Assert.DoesNotContain("Shortcuts.EvdevStillOffAfterRemoval", en.Keys);
     }
 
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
+    public void Catalogs_HaveNativeDictationHeuristicDisclosures(string language)
+    {
+        var catalog = Load(language);
+        var disclosureKeys = new[]
+        {
+            "Shortcuts.NativeDictationInstallDeferred",
+            "Shortcuts.NativeDictationRemovalDeferred",
+            "Shortcuts.DesktopIntegrationStaleHint",
+            "Shortcuts.DesktopIntegrationStaleUnsupported",
+        };
+
+        foreach (var key in disclosureKeys)
+        {
+            Assert.True(catalog.TryGetValue(key, out var value), $"Missing {language} key: {key}");
+            Assert.False(string.IsNullOrWhiteSpace(value), $"{language} key is empty: {key}");
+        }
+
+        var unsupported = catalog["Shortcuts.DesktopIntegrationStaleUnsupported"];
+        Assert.Contains("{0}", unsupported, StringComparison.Ordinal);
+        Assert.Contains("{1}", unsupported, StringComparison.Ordinal);
+
+        if (language != CanonicalLanguage)
+        {
+            return;
+        }
+
+        foreach (
+            var key in new[]
+            {
+                "Shortcuts.NativeDictationInstallDeferred",
+                "Shortcuts.NativeDictationRemovalDeferred",
+            }
+        )
+        {
+            Assert.Contains("reload or re-login", catalog[key], StringComparison.Ordinal);
+            Assert.DoesNotContain("startup", catalog[key], StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
+    public void Catalogs_HaveDynamicHotkeyRejectionStrings(string language)
+    {
+        var catalog = Load(language);
+        // Loc.GetString swallows FormatException, so a dropped placeholder degrades
+        // silently at runtime — assert the format args survive translation.
+        var blankIdKeys = new[]
+        {
+            "Shortcuts.ProfileHotkeyInactiveBlankId",
+            "Shortcuts.PromptActionHotkeyInactiveBlankId",
+        };
+        var conflictKeys = new[]
+        {
+            "Shortcuts.ProfileHotkeyInactiveConflict",
+            "Shortcuts.PromptActionHotkeyInactiveConflict",
+        };
+
+        foreach (var key in blankIdKeys.Concat(conflictKeys))
+        {
+            Assert.True(
+                catalog.TryGetValue(key, out var value),
+                $"Missing {language} key: {key}"
+            );
+            Assert.False(string.IsNullOrWhiteSpace(value), $"{language} key is empty: {key}");
+            Assert.Contains("{0}", value, StringComparison.Ordinal);
+        }
+
+        foreach (var key in conflictKeys)
+        {
+            Assert.Contains("{1}", catalog[key], StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public void CanonicalCatalog_HasGlobalHotkeyOptOutMessages()
     {
@@ -189,13 +340,43 @@ public sealed class LocalizationResourcesTests
             "Setup.GlobalHotkeyOptedOut",
             "Setup.GlobalHotkeyOptedOutRuleInstalled",
             "Setup.GlobalHotkeyOptedOutRuleInstalledDetail",
-            "Setup.GlobalHotkeyRevokeButton"
+            "Setup.GlobalHotkeyRevokeButton",
         };
 
         foreach (var key in keys)
         {
             Assert.True(en.TryGetValue(key, out var value), $"Missing canonical key: {key}");
             Assert.False(string.IsNullOrWhiteSpace(value), $"Canonical key is empty: {key}");
+        }
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
+    public void Catalogs_HaveGlobalHotkeyRevocationMessages(string language)
+    {
+        var catalog = Load(language);
+        var keys = new[]
+        {
+            "Setup.GlobalHotkeyAccessRevoked",
+            "Setup.GlobalHotkeyAddedRelogin",
+            "Setup.GlobalHotkeyGroupRevokeFailedDetail",
+            "Setup.GlobalHotkeyGroupRevokedDetail",
+            "Setup.GlobalHotkeyOptedOutRuleInstalled",
+            "Setup.GlobalHotkeyOptedOutRuleInstalledDetail",
+            "Setup.GlobalHotkeyReloginToRevoke",
+            "Setup.GlobalHotkeyRevokeFailed",
+        };
+
+        foreach (var key in keys)
+        {
+            Assert.True(
+                catalog.TryGetValue(key, out var value),
+                $"Missing {language} key: {key}"
+            );
+            Assert.False(string.IsNullOrWhiteSpace(value), $"{language} key is empty: {key}");
         }
     }
 
@@ -218,7 +399,7 @@ public sealed class LocalizationResourcesTests
         }
 
         Assert.Contains("older hotkey or activation mode", en["Shortcuts.DesktopIntegrationStaleHint"]);
-        Assert.Contains("old desktop shortcut may remain active", en["Shortcuts.DesktopIntegrationStaleHint"]);
+        Assert.Contains("old desktop shortcut may stay authoritative", en["Shortcuts.DesktopIntegrationStaleHint"]);
         Assert.Contains("Refresh desktop integration", en["Shortcuts.RefreshDesktopIntegrationOn"]);
     }
 

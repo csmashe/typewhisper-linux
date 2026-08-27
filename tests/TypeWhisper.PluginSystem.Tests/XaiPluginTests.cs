@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using TypeWhisper.Plugin.Xai;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 // The CapturingHandler lambdas assert on the outgoing 'request' (method, URI,
@@ -166,6 +167,7 @@ public class XaiPluginTests
             "data: {\"type\":\"response.completed\"}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -277,6 +279,7 @@ public class XaiPluginTests
         var sse = string.Join(
             "\n",
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
+            "",
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -290,7 +293,7 @@ public class XaiPluginTests
         await sut.ActivateAsync(host);
 
         var chunks = new List<string>();
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(async () =>
         {
             await foreach (var chunk in sut.ProcessStreamingAsync(
                 "system", "user", "", CancellationToken.None))
@@ -300,9 +303,8 @@ public class XaiPluginTests
         });
 
         Assert.Equal(["partial"], chunks);
-        Assert.Equal(
-            "xAI stream ended before response.completed was received.",
-            ex.Message);
+        Assert.Equal("xAI stream", ex.StreamName);
+        Assert.Equal("response.completed", ex.ExpectedTerminal);
     }
 
     [Fact]
@@ -313,6 +315,7 @@ public class XaiPluginTests
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -326,7 +329,7 @@ public class XaiPluginTests
         await sut.ActivateAsync(host);
 
         var chunks = new List<string>();
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(async () =>
         {
             await foreach (var chunk in sut.ProcessStreamingAsync(
                 "system", "user", "", CancellationToken.None))
@@ -336,9 +339,8 @@ public class XaiPluginTests
         });
 
         Assert.Equal(["partial"], chunks);
-        Assert.Equal(
-            "xAI stream ended with [DONE] before response.completed was received.",
-            ex.Message);
+        Assert.Equal("xAI stream", ex.StreamName);
+        Assert.Equal("response.completed", ex.ExpectedTerminal);
     }
 
     [Theory]
@@ -365,6 +367,7 @@ public class XaiPluginTests
             $"data: {terminalPayload}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -506,6 +509,23 @@ public class XaiPluginTests
         var sent = Assert.Single(socket.SentFrames);
         Assert.Equal(WebSocketMessageType.Binary, sent.MessageType);
         Assert.Equal([1, 2, 3, 4], sent.Payload);
+    }
+
+    [Fact]
+    public async Task StreamingSession_DisposeWithStuckHandshake_CancelsStartupAndReleasesTheSocket()
+    {
+        // The peer never sends transcript.created and never closes, so nothing but disposal can
+        // end the handshake. Disposal must actually tear the socket down, not just stop waiting.
+        var socket = new FakeStreamingWebSocket();
+        var session = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            disposePumpWait: TimeSpan.FromMilliseconds(200)
+        );
+
+        await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(socket.DisposeCalled);
+        Assert.NotEqual(WebSocketState.Open, socket.State);
     }
 
     [Fact]
@@ -863,9 +883,8 @@ public class XaiPluginTests
     }
 
     [Fact]
-    public async Task SpeakAsync_PostsPcmTtsRequestAndUsesPlaybackFactory()
+    public async Task SpeakAsync_PostsPcmTtsRequestAndUsesHostPcmPlayback()
     {
-        byte[]? playbackBytes = null;
         var handler = new CapturingHandler((request, body) =>
         {
             Assert.Equal(HttpMethod.Post, request.Method);
@@ -888,17 +907,15 @@ public class XaiPluginTests
             };
         });
 
-        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        var playback = new RecordingPcmPlaybackService();
+        var host = new TestPluginHostServices
+        {
+            PcmPlayback = playback,
+            Secrets = { ["api-key"] = "xai-key" },
+        };
         using var httpClient = new HttpClient(handler);
         httpClient.Timeout = TimeSpan.FromSeconds(5);
-        var sut = new XaiPlugin(
-            httpClient,
-            pcm =>
-            {
-                playbackBytes = pcm;
-                return new FakeTtsPlaybackSession();
-            },
-            ttsPlaybackAvailableProbe: () => true);
+        var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
         sut.SelectVoice("rex");
         sut.SetTtsLowLatency(true);
@@ -907,7 +924,11 @@ public class XaiPluginTests
         var session = await sut.SpeakAsync(new TtsSpeakRequest("Read this", "de"), CancellationToken.None);
 
         Assert.NotNull(session);
-        Assert.Equal([0, 1, 2, 3], playbackBytes);
+        var playbackRequest = Assert.Single(playback.Requests);
+        Assert.Equal([0, 1, 2, 3], playbackRequest.Payload.ToArray());
+        Assert.Equal(24_000, playbackRequest.SampleRate);
+        Assert.Equal(1, playbackRequest.Channels);
+        Assert.Equal(PcmSampleFormat.Signed16LittleEndian, playbackRequest.Format);
     }
 
     [Fact]
@@ -926,7 +947,7 @@ public class XaiPluginTests
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
         using var httpClient = new HttpClient(handler);
         httpClient.Timeout = TimeSpan.FromSeconds(5);
-        var sut = new XaiPlugin(httpClient, ttsPlaybackAvailableProbe: () => false);
+        var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var session = await sut.SpeakAsync(new TtsSpeakRequest("Read this", "en"), CancellationToken.None);
@@ -1241,6 +1262,8 @@ public class XaiPluginTests
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
+        public IPluginPcmPlaybackService PcmPlayback { get; init; } =
+            UnavailablePluginPcmPlaybackService.Instance;
         public string? ActiveAppProcessName => null;
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();
@@ -1271,16 +1294,4 @@ public class XaiPluginTests
         public void Dispose() { }
     }
 
-    private sealed class FakeTtsPlaybackSession : ITtsPlaybackSession
-    {
-        public bool IsActive => false;
-
-        public event EventHandler? Completed
-        {
-            add { value?.Invoke(this, EventArgs.Empty); }
-            remove { }
-        }
-
-        public void Stop() { }
-    }
 }

@@ -146,7 +146,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                 return;
             }
 
-            _settings.Save(_settings.Current with { DefaultLlmProvider = value });
+            _settings.Update(current => current with { DefaultLlmProvider = value });
             OnPropertyChanged();
         }
     }
@@ -197,7 +197,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                 return;
             }
 
-            _settings.Save(_settings.Current with { SpokenCommandLlmProvider = value?.Value });
+            _settings.Update(current => current with { SpokenCommandLlmProvider = value?.Value });
             OnPropertyChanged();
         }
     }
@@ -236,7 +236,7 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { CommandModeEnabled = value });
+        _settings.Update(current => current with { CommandModeEnabled = value });
     }
 
     partial void OnCommandKeyphraseChanged(string value)
@@ -262,7 +262,7 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { CommandKeyphrase = normalized });
+        _settings.Update(current => current with { CommandKeyphrase = normalized });
     }
 
     partial void OnSelectedActionChanged(PromptAction? value)
@@ -323,24 +323,39 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
-        var hotkeyValidation = _hotkeys.ValidatePromptActionHotkeyCandidate(
-            EditHotkeyKey,
-            _editingActionId,
-            _prompts.Actions,
-            _profiles.Profiles
-        );
-        if (!hotkeyValidation.IsValid)
+        var existing = _editingActionId is null
+            ? null
+            : _prompts.Actions.FirstOrDefault(action => action.Id == _editingActionId);
+        if (!IsCreatingNew && existing is null)
         {
-            HotkeyValidationMessage = hotkeyValidation.Status switch
-            {
-                HotkeyCandidateValidationStatus.Malformed =>
-                    Loc.Instance["Prompts.HotkeyMalformed"],
-                _ => Loc.Instance["Prompts.HotkeyCollision"],
-            };
             return;
         }
 
-        EditHotkeyKey = hotkeyValidation.NormalizedHotkey;
+        // Disabled outcomes keep the draft chord unvalidated; the enable gate
+        // (ToggleEnabled here) validates it before it can ever bind.
+        string? hotkeyKey;
+        if (!IsCreatingNew && existing is { IsEnabled: false })
+        {
+            hotkeyKey = string.IsNullOrWhiteSpace(EditHotkeyKey) ? null : EditHotkeyKey;
+        }
+        else
+        {
+            var hotkeyValidation = _hotkeys.ValidatePromptActionHotkeyCandidate(
+                EditHotkeyKey,
+                _editingActionId,
+                _prompts.Actions,
+                _profiles.Profiles
+            );
+            if (!hotkeyValidation.IsValid)
+            {
+                HotkeyValidationMessage = GetHotkeyValidationMessage(hotkeyValidation.Status);
+                return;
+            }
+
+            hotkeyKey = hotkeyValidation.NormalizedHotkey;
+        }
+
+        EditHotkeyKey = hotkeyKey;
         HotkeyValidationMessage = null;
 
         if (IsCreatingNew)
@@ -353,7 +368,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                 Icon = EditIcon,
                 ProviderOverride = EditProviderOverride,
                 TargetActionPluginId = EditTargetActionPluginId,
-                HotkeyKey = hotkeyValidation.NormalizedHotkey,
+                HotkeyKey = hotkeyKey,
                 IsManualOnly = EditIsManualOnly,
                 IsEnabled = true,
                 SortOrder = _prompts.Actions.Count,
@@ -369,12 +384,6 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
-        if (_editingActionId is null)
-        {
-            return;
-        }
-
-        var existing = _prompts.Actions.FirstOrDefault(action => action.Id == _editingActionId);
         if (existing is null)
         {
             return;
@@ -391,7 +400,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                             Icon = EditIcon,
                             ProviderOverride = EditProviderOverride,
                             TargetActionPluginId = EditTargetActionPluginId,
-                            HotkeyKey = hotkeyValidation.NormalizedHotkey,
+                            HotkeyKey = hotkeyKey,
                             IsManualOnly = EditIsManualOnly,
                         }
                     ),
@@ -443,6 +452,22 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
+        if (!action.IsEnabled)
+        {
+            var hotkeyValidation = _hotkeys.ValidatePromptActionHotkeyCandidate(
+                action.HotkeyKey,
+                action.Id,
+                _prompts.Actions,
+                _profiles.Profiles
+            );
+            if (!hotkeyValidation.IsValid)
+            {
+                SelectById(action.Id);
+                HotkeyValidationMessage = GetHotkeyValidationMessage(hotkeyValidation.Status);
+                return;
+            }
+        }
+
         if (
             !TryMutate(
                 () => _prompts.UpdateAction(action with { IsEnabled = !action.IsEnabled }),
@@ -454,6 +479,16 @@ public partial class PromptsSectionViewModel : ObservableObject
         }
 
         RefreshActions();
+    }
+
+    private static string GetHotkeyValidationMessage(HotkeyCandidateValidationStatus status)
+    {
+        return status switch
+        {
+            HotkeyCandidateValidationStatus.Malformed =>
+                Loc.Instance["Prompts.HotkeyMalformed"],
+            _ => Loc.Instance["Prompts.HotkeyCollision"],
+        };
     }
 
     [RelayCommand]

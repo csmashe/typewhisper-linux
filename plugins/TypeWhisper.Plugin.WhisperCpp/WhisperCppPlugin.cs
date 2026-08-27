@@ -23,6 +23,7 @@ internal sealed record WhisperCppTranscriptionSegment(
 
 public sealed class WhisperCppPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         IPluginSettingsProvider,
         IPluginLocalizationAware
 {
@@ -251,7 +252,7 @@ public sealed class WhisperCppPlugin
 
     public string PluginId => "com.typewhisper.whisper-cpp";
     public string PluginName => "whisper.cpp (Local)";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public string ProviderId => "whisper-cpp";
     public string ProviderDisplayName => "Local (whisper.cpp)";
@@ -269,6 +270,8 @@ public sealed class WhisperCppPlugin
     public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public bool SupportsModelDownload => true;
     public IReadOnlyList<string> SupportedLanguages => [];
 
@@ -317,20 +320,29 @@ public sealed class WhisperCppPlugin
         return Task.CompletedTask;
     }
 
-    private void InitializeCudaDependencies(IPluginHostServices host)
+    // Also serves the not-yet-activated path, where host is null.
+    private (CudaRuntimeProvisioner Provisioner, WhisperCudaRuntimeInstaller Installer)
+        InitializeCudaDependencies(IPluginHostServices? host)
     {
         _cudaProvisioner ??= new CudaRuntimeProvisioner(
             CudaRuntimeProvisioner.CacheRootForPluginAssetDirectory(
-                host.PluginAssetDirectory
+                host?.PluginAssetDirectory
             ),
             _httpClient,
-            msg => host.Log(PluginLogLevel.Info, msg)
+            msg => _host?.Log(PluginLogLevel.Info, msg),
+            // Resolved per call, not captured: the provisioner outlives a disable/re-enable
+            // cycle, and the first activation's process scope is retired by then.
+            () => _host?.Processes
+                  ?? throw new NotSupportedException(
+                      "The plugin host does not provide process supervision."
+                  )
         );
         _whisperCudaInstaller ??= new WhisperCudaRuntimeInstaller(
-            host.PluginAssetDirectory,
+            host?.PluginAssetDirectory ?? ".",
             _httpClient,
-            msg => host.Log(PluginLogLevel.Info, msg)
+            msg => _host?.Log(PluginLogLevel.Info, msg)
         );
+        return (_cudaProvisioner, _whisperCudaInstaller);
     }
 
     private static float ReadNoSpeechThreshold(IPluginHostServices host)
@@ -931,23 +943,12 @@ public sealed class WhisperCppPlugin
                 "NVIDIA CUDA acceleration for whisper.cpp is only available on Linux x64."
             );
 
-        _cudaProvisioner ??= new CudaRuntimeProvisioner(
-            CudaRuntimeProvisioner.CacheRootForPluginAssetDirectory(
-                _host?.PluginAssetDirectory
-            ),
-            _httpClient,
-            msg => _host?.Log(PluginLogLevel.Info, msg)
-        );
-        _whisperCudaInstaller ??= new WhisperCudaRuntimeInstaller(
-            _host?.PluginAssetDirectory ?? ".",
-            _httpClient,
-            msg => _host?.Log(PluginLogLevel.Info, msg)
-        );
+        var (provisioner, installer) = InitializeCudaDependencies(_host);
 
         // The two stages map to a single monotonic 0→1 bar for the host: cudart + cuBLAS
         // are the bulk on a cold host, so weight them 70% and the native build 30%.
         // 1. Preload cudart + cuBLAS, downloading any the host doesn't provide.
-        await _cudaProvisioner
+        await provisioner
             .EnsureReadyAsync(
                 CudaRuntimeProfile.WhisperCublas,
                 ProvisionProgress("CUDA libraries", progress, 0.0, 0.7),
@@ -956,7 +957,7 @@ public sealed class WhisperCppPlugin
             .ConfigureAwait(false);
 
         // 2. Download + extract whisper.cpp's CUDA native build on first use.
-        await _whisperCudaInstaller
+        await installer
             .EnsureInstalledAsync(
                 ProvisionProgress("whisper.cpp GPU runtime", progress, 0.7, 1.0),
                 ct
@@ -1279,8 +1280,11 @@ public sealed class WhisperCppPlugin
 
     // Test seam: exercise the same eager construction path as ActivateAsync without
     // invoking unrelated activation work.
-    internal void InitializeCudaDependenciesForTests(IPluginHostServices host) =>
+    internal void InitializeCudaDependenciesForTests(IPluginHostServices host)
+    {
+        _host = host;
         InitializeCudaDependencies(host);
+    }
 
     internal string? CudaRuntimeCacheRootForTests =>
         _cudaProvisioner is null

@@ -135,6 +135,27 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
                     continue;
                 }
 
+                // playerctl reports a vanished player on stderr with a trailing newline;
+                // trim before the exact match or the classifier never fires in production.
+                if (
+                    string.Equals(
+                        result.StandardError.Trim(),
+                        "No players found",
+                        StringComparison.Ordinal
+                    )
+                )
+                {
+                    WriteDiagnostic(
+                        $"[MediaPauseService] Player {player} vanished; treating resume as completed."
+                    );
+                    lock (_playersGate)
+                    {
+                        _pausedPlayers.Remove(player);
+                    }
+
+                    continue;
+                }
+
                 failure = DescribeFailure(result);
             }
             catch (Exception ex)
@@ -165,6 +186,8 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
             retired = attempts >= MaxResumeAttempts;
             if (retired)
             {
+                // A generation token would be needed to eliminate recycled player-name
+                // restores; bounded eviction only limits that stale-identity exposure.
                 _pausedPlayers.Remove(player);
             }
             else

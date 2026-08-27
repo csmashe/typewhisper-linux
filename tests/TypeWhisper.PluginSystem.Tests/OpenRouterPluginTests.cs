@@ -429,7 +429,7 @@ public class OpenRouterPluginTests
     }
 
     [Fact]
-    public async Task TranscribeAsync_OmitsAutoLanguageAndRejectsTranslation()
+    public async Task TranscribeAsync_OmitsUnspecifiedLanguageAndRejectsTranslation()
     {
         var handler = new CapturingHandler((request, body) =>
         {
@@ -445,7 +445,7 @@ public class OpenRouterPluginTests
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
-        await sut.TranscribeAsync([1], "auto", translate: false, prompt: null, CancellationToken.None);
+        await sut.TranscribeAsync([1], null, translate: false, prompt: null, CancellationToken.None);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             sut.TranscribeAsync([1], "en", translate: true, prompt: null, CancellationToken.None));
         Assert.Contains("does not support translation", ex.Message);
@@ -533,6 +533,7 @@ public class OpenRouterPluginTests
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -574,7 +575,7 @@ public class OpenRouterPluginTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n",
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n\n",
                     Encoding.UTF8, "text/event-stream"),
             };
         });

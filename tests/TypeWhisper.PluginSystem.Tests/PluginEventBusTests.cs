@@ -164,7 +164,11 @@ public class PluginEventBusTests
     [Fact]
     public async Task ConcurrentPublishAndSubscribe_DoesNotThrow()
     {
-        var received = 0;
+        // Delivery is fire-and-forget, so churn-phase events can still be draining
+        // after WhenAll returns. The liveness probe is identified by reference so
+        // straggler deliveries can neither satisfy nor overshoot its count.
+        var probe = new RecordingStartedEvent();
+        var probeSeen = 0;
 
         var subscriptions = new List<IDisposable>();
         var subscribeTasks = Enumerable
@@ -172,9 +176,14 @@ public class PluginEventBusTests
             .Select(_ =>
                 Task.Run(() =>
                 {
-                    var sub = _bus.Subscribe<RecordingStartedEvent>(_ =>
+                    var sub = _bus.Subscribe<RecordingStartedEvent>(e =>
                     {
-                        Interlocked.Increment(ref received);
+                        // ReSharper disable once AccessToModifiedClosure -- probeSeen is deliberately shared: Interlocked-written here, Volatile-read by the assertions after delivery settles.
+                        if (ReferenceEquals(e, probe))
+                        {
+                            Interlocked.Increment(ref probeSeen);
+                        }
+
                         return Task.CompletedTask;
                     });
                     lock (subscriptions)
@@ -199,6 +208,19 @@ public class PluginEventBusTests
         });
 
         Assert.Null(ex);
+        Assert.Equal(10, subscriptions.Count);
+
+        // Publishing the probe once the churn is over must reach every one of the
+        // ten surviving subscriptions, proving they are live rather than lost
+        // during the concurrent registration. One instance, ten subscriptions:
+        // the count cannot exceed ten, so equality is a real claim.
+        _bus.Publish(probe);
+        await WaitUntilAsync(
+            () => Volatile.Read(ref probeSeen) >= 10,
+            TimeSpan.FromSeconds(2),
+            "the liveness probe did not reach all ten subscriptions"
+        );
+        Assert.Equal(10, Volatile.Read(ref probeSeen));
 
         foreach (var sub in subscriptions)
         {
@@ -794,6 +816,24 @@ public class PluginEventBusTests
         finally
         {
             handlerGate.TrySetResult(true);
+        }
+    }
+
+    private static async Task WaitUntilAsync(
+        Func<bool> condition,
+        TimeSpan timeout,
+        string timeoutMessage
+    )
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                Assert.Fail($"Timed out after {timeout.TotalSeconds}s: {timeoutMessage}");
+            }
+
+            await Task.Delay(10);
         }
     }
 

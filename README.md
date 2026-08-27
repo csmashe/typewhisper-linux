@@ -57,11 +57,24 @@ I keep the rest deliberately minimal for latency and predictability — audio du
 
 Tagged releases on [GitHub Releases](https://github.com/csmashe/typewhisper-linux/releases) ship four `linux-x64` formats — **AppImage**, Debian/Ubuntu **`.deb`**, Fedora/RHEL **`.rpm`**, and a no-root **tarball** — each bundling the self-contained .NET runtime and the Linux plugins. See **[Installation](https://github.com/csmashe/typewhisper-linux/wiki/Installation)** for which format to pick and the per-format commands, and **[Requirements](https://github.com/csmashe/typewhisper-linux/wiki/Requirements)** for the optional desktop helpers (`pactl`, `playerctl`, `wtype` / `ydotool` / `xdotool`, `pw-play` / `paplay` / `aplay`, …).
 
+### Tarball and AppImage system libraries
+
+The `.deb` and `.rpm` install required system libraries through the package manager; tarball and AppImage users must install the equivalent libraries from the [Requirements](https://github.com/csmashe/typewhisper-linux/wiki/Requirements) page first.
+
 Whichever format you install, the first-run [Setup Wizard](https://github.com/csmashe/typewhisper-linux/wiki/Setup-Wizard) checks what's needed and gets you set up with everything required — the typing/paste backend, the global-dictation hotkey, active-window detection, and more — so you don't have to wire it up by hand.
 
 ### Build from source
 
-Requires the **.NET 10 SDK**.
+Requires the **.NET 10 SDK** and `python3`. `global.json` pins a 10.0.100 floor so CI is reproducible, and rolls forward from there — your distribution's package is enough:
+
+```bash
+sudo dnf install dotnet-sdk-10.0      # Fedora / RHEL
+sudo apt install dotnet-sdk-10.0      # Debian / Ubuntu
+```
+
+The floor is deliberately on the `10.0.1xx` feature band. Fedora, RHEL and Debian ship *source-built* .NET, which only ever tracks that band, so pinning one of Microsoft's `10.0.2xx`/`10.0.3xx` bands would lock every distro contributor out — `rollForward` only rolls forward, never back. Microsoft's own builds are newer bands and satisfy the pin too, if you prefer one.
+
+The build bundles the Linux plugins, reading the authoritative list in `plugins/catalog.json` via `scripts/plugin-catalog-deploy-map.py`. Skip that step with `-p:DeployBundledLinuxPlugins=false`.
 
 ```bash
 git clone https://github.com/csmashe/typewhisper-linux.git

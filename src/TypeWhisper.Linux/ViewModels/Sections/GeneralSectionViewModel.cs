@@ -1,7 +1,7 @@
-using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using Avalonia.Threading;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -13,6 +13,7 @@ public partial class GeneralSectionViewModel : ObservableObject
 {
     private readonly HttpApiService _api;
     private readonly CliInstallService _cliInstall;
+    private readonly CudaLibraryPathSetupService _cudaLibraryPathSetup;
     private readonly LinuxPreferencesService _linuxPrefs;
     private readonly ISettingsService _settings;
     private readonly TrayIconService _tray;
@@ -52,6 +53,14 @@ public partial class GeneralSectionViewModel : ObservableObject
     private bool _closeToTray;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowCudaPathRemovalSurface))]
+    private bool _cudaPathRemovalAvailable;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowCudaPathRemovalSurface))]
+    private string _cudaPathRemovalStatusText = "";
+
+    [ObservableProperty]
     private bool _startWithSystem;
 
     [ObservableProperty]
@@ -64,6 +73,7 @@ public partial class GeneralSectionViewModel : ObservableObject
         ISettingsService settings,
         HttpApiService api,
         CliInstallService cliInstall,
+        CudaLibraryPathSetupService cudaLibraryPathSetup,
         LinuxPreferencesService linuxPrefs,
         TrayIconService tray
     )
@@ -71,6 +81,7 @@ public partial class GeneralSectionViewModel : ObservableObject
         _settings = settings;
         _api = api;
         _cliInstall = cliInstall;
+        _cudaLibraryPathSetup = cudaLibraryPathSetup;
         _linuxPrefs = linuxPrefs;
         _tray = tray;
         Refresh(settings.Current);
@@ -93,6 +104,11 @@ public partial class GeneralSectionViewModel : ObservableObject
             Dispatcher.UIThread.Post(() => ApiStatusText = _api.StatusText);
         ApiStatusText = _api.StatusText;
         RefreshCliState();
+        CudaPathRemovalAvailable = _cudaLibraryPathSetup.HasInstalledChanges();
+        _cudaLibraryPathSetup.InstalledChangesChanged += (_, _) =>
+            Dispatcher.UIThread.Post(() =>
+                CudaPathRemovalAvailable = _cudaLibraryPathSetup.HasInstalledChanges()
+            );
     }
 
     public ObservableCollection<CommandExample> CurlExamples { get; } = [];
@@ -133,6 +149,9 @@ public partial class GeneralSectionViewModel : ObservableObject
     public bool IsTrayAvailable => _tray.IsTrayAvailable;
 
     public bool IsTrayUnavailable => !_tray.IsTrayAvailable;
+
+    public bool ShowCudaPathRemovalSurface =>
+        CudaPathRemovalAvailable || !string.IsNullOrWhiteSpace(CudaPathRemovalStatusText);
 
     private void Refresh(AppSettings s)
     {
@@ -177,6 +196,37 @@ public partial class GeneralSectionViewModel : ObservableObject
         }
     }
 
+    [RelayCommand]
+    private async Task RemoveCudaLibraryPathAsync()
+    {
+        try
+        {
+            var result = await _cudaLibraryPathSetup.RemoveAsync(CancellationToken.None);
+            CudaPathRemovalStatusText = result.Success
+                ? Loc.Instance["General.CudaPathRemoved"]
+                : Loc.Instance.GetString(
+                    "General.CudaPathRemoveFailed",
+                    result.Detail ?? string.Empty
+                );
+        }
+        catch (Exception ex)
+            when (ex is InvalidOperationException
+                or IOException
+                or UnauthorizedAccessException
+                or InvalidDataException)
+        {
+            CudaPathRemovalStatusText = Loc.Instance.GetString(
+                "General.CudaPathRemoveFailed",
+                ex.Message
+            );
+        }
+        finally
+        {
+            // Refresh either way: a partial removal still changes what is left to revert.
+            CudaPathRemovalAvailable = _cudaLibraryPathSetup.HasInstalledChanges();
+        }
+    }
+
     private void ApplyCliState(CliInstallState state)
     {
         CliStatusText = state.StatusText;
@@ -211,7 +261,7 @@ public partial class GeneralSectionViewModel : ObservableObject
         // Applying the language still runs while hydrating; only the write-back is suppressed.
         if (!_hydratingFromSettings)
         {
-            _settings.Save(_settings.Current with { UiLanguage = value });
+            _settings.Update(current => current with { UiLanguage = value });
         }
 
         Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(value);
@@ -253,7 +303,7 @@ public partial class GeneralSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { ApiServerEnabled = value });
+        _settings.Update(current => current with { ApiServerEnabled = value });
     }
 
     partial void OnApiServerPortChanged(int value)
@@ -266,7 +316,7 @@ public partial class GeneralSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { ApiServerPort = value });
+        _settings.Update(current => current with { ApiServerPort = value });
     }
 
     partial void OnCloseToTrayChanged(bool value)

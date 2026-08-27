@@ -10,7 +10,11 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Voxtral;
 
-public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class VoxtralPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.mistral.ai";
     private const string ModelId = "voxtral-mini-latest";
@@ -32,7 +36,7 @@ public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginSettingsP
 
     public string PluginId => "com.typewhisper.voxtral";
     public string PluginName => "Voxtral";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -72,6 +76,8 @@ public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginSettingsP
 
     // Mistral documents no OpenAI-style translations endpoint; re-enable only with a documented implementation.
     public bool SupportsTranslation => false;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public void SelectModel(string modelId)
     {
@@ -112,9 +118,7 @@ public sealed class VoxtralPlugin : ITranscriptionEnginePlugin, IPluginSettingsP
         // (its documented response example), so ask for segment timestamps explicitly.
         content.Add(new StringContent("segment"), "timestamp_granularities");
 
-        // "auto" is TypeWhisper's sentinel; omit it so Mistral detects the language.
-        if (!string.IsNullOrWhiteSpace(language)
-            && !language.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(language))
         {
             content.Add(new StringContent(language), "language");
         }

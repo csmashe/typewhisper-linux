@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Text;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.ManagedArtifacts;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -13,6 +15,11 @@ public static class StartupService
 {
     private const string DesktopFileName = "typewhisper.desktop";
     private const string ManagedLine = "X-TypeWhisper-Managed=true";
+    private const UnixFileMode DesktopMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite
+        | UnixFileMode.GroupRead | UnixFileMode.OtherRead;
+
+    internal static string? ManagedArtifactStateRootOverride { get; set; }
 
     private static string AutostartDir
     {
@@ -33,39 +40,69 @@ public static class StartupService
 
     private static string DesktopFilePath => Path.Join(AutostartDir, DesktopFileName);
 
-    public static bool IsEnabled =>
-        File.Exists(DesktopFilePath) && IsOwnedByTypeWhisper(DesktopFilePath);
+    public static bool IsEnabled
+    {
+        get
+        {
+            try
+            {
+                var spec = BuildManagedSpec();
+                var classification = CreateTransaction().Probe(spec);
+                return classification is ManagedFileClassification.CurrentOwned
+                    or ManagedFileClassification.StaleOwned;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Trace.WriteLine($"[StartupService] could not inspect autostart entry: {ex.Message}");
+                return false;
+            }
+        }
+    }
 
     public static StartupOperationResult Enable()
     {
-        Directory.CreateDirectory(AutostartDir);
-        var execPath = ResolveExecutablePath();
-        var iconPath = ResolveIconPath();
-        var content = BuildDesktopFile(execPath, iconPath, includeManagedMarker: true);
-
-        if (File.Exists(DesktopFilePath) && !IsOwnedByTypeWhisper(DesktopFilePath))
+        try
         {
-            return RefusedResult();
+            var result = CreateTransaction().InstallAsync(BuildManagedSpec())
+                .GetAwaiter()
+                .GetResult();
+            return result.OwnsDestination ? SuccessResult(isEnabled: true) : RefusedResult();
         }
-
-        File.WriteAllText(DesktopFilePath, content);
-        return SuccessResult(isEnabled: true);
+        catch (Exception ex) when (IsReportableFailure(ex))
+        {
+            return FailedResult(ex.Message);
+        }
     }
 
     public static StartupOperationResult Disable()
     {
-        if (!File.Exists(DesktopFilePath))
+        try
         {
-            return SuccessResult(isEnabled: false);
+            var result = CreateTransaction().RemoveAsync(BuildManagedSpec())
+                .GetAwaiter()
+                .GetResult();
+            return result.Classification is ManagedFileClassification.Absent
+                || result.Changed
+                ? SuccessResult(isEnabled: false)
+                : RefusedResult();
         }
-
-        if (!IsOwnedByTypeWhisper(DesktopFilePath))
+        catch (Exception ex) when (IsReportableFailure(ex))
         {
-            return RefusedResult();
+            return FailedResult(ex.Message);
         }
+    }
 
-        File.Delete(DesktopFilePath);
-        return SuccessResult(isEnabled: false);
+    /// <summary>
+    ///     Both operations run from a bound property setter, so an unresolvable executable
+    ///     path, a journal conflict (an <see cref="IOException" /> subclass) or a corrupt
+    ///     manifest has to come back as a result rather than fault the binding.
+    /// </summary>
+    private static bool IsReportableFailure(Exception ex)
+    {
+        return ex is IOException
+            or UnauthorizedAccessException
+            or InvalidDataException
+            or InvalidOperationException;
     }
 
     internal static string BuildDesktopFile(
@@ -87,37 +124,46 @@ public static class StartupService
         return includeManagedMarker ? $"{content}\n{ManagedLine}" : content;
     }
 
-    private static bool IsOwnedByTypeWhisper(string target)
+    private static bool HasManagedLine(ReadOnlyMemory<byte> bytes)
     {
-        string contents;
         try
         {
-            contents = File.ReadAllText(target);
+            var contents = Encoding.UTF8.GetString(bytes.Span);
+            return contents
+                .Split('\n')
+                .Select(line => line.TrimEnd('\r'))
+                .Contains(ManagedLine, StringComparer.Ordinal);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return false;
         }
+    }
 
-        var lines = contents.Split('\n').Select(line => line.TrimEnd('\r'));
-        if (lines.Contains(ManagedLine, StringComparer.Ordinal))
+    private static ManagedFileSpec BuildManagedSpec()
+    {
+        var execPath = ResolveExecutablePath();
+        var iconPath = ResolveIconPath();
+        var desired = BuildDesktopFile(execPath, iconPath, includeManagedMarker: true);
+        var legacy = ManagedFileSpec.Utf8(
+            BuildDesktopFile(execPath, iconPath, includeManagedMarker: false)
+        );
+        return new ManagedFileSpec
         {
-            return true;
-        }
+            ArtifactId = "xdg-autostart",
+            DestinationPath = DesktopFilePath,
+            DesiredBytes = ManagedFileSpec.Utf8(desired),
+            CreateMode = DesktopMode,
+            OwnershipProbe = HasManagedLine,
+            LegacyOwnershipProbe = bytes => bytes.Span.SequenceEqual(legacy),
+        };
+    }
 
-        try
-        {
-            var legacyContent = BuildDesktopFile(
-                ResolveExecutablePath(),
-                ResolveIconPath(),
-                includeManagedMarker: false
-            );
-            return string.Equals(contents, legacyContent, StringComparison.Ordinal);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            return false;
-        }
+    private static ManagedFileTransaction CreateTransaction()
+    {
+        return ManagedArtifactStateRootOverride is { } stateRoot
+            ? new ManagedFileTransaction(stateRoot)
+            : new ManagedFileTransaction();
     }
 
     private static string ResolveExecutablePath()
@@ -147,6 +193,13 @@ public static class StartupService
             isEnabled,
             Loc.Instance["General.AutostartHint"]
         );
+    }
+
+    private static StartupOperationResult FailedResult(string detail)
+    {
+        // IsEnabled swallows its own inspection failures, so it is safe here and reports the
+        // entry's real state rather than assuming the operation left it off.
+        return new StartupOperationResult(false, IsEnabled, detail);
     }
 
     private static StartupOperationResult RefusedResult()

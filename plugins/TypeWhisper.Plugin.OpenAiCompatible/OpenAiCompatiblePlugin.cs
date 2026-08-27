@@ -14,6 +14,7 @@ namespace TypeWhisper.Plugin.OpenAiCompatible;
 
 public sealed class OpenAiCompatiblePlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         ILlmProviderPlugin,
         IPluginSettingsProvider,
         IModelCatalogProvider,
@@ -40,6 +41,12 @@ public sealed class OpenAiCompatiblePlugin
     private readonly Dictionary<string, OpenAiCompatibleProfileRole> _profileRoles =
         new(StringComparer.Ordinal);
 
+    // Fences fetch-then-apply work for the default endpoint. The revision is an
+    // identity token rather than a value comparison, so A -> B -> A is still a
+    // connection change and an older A response cannot become current again.
+    private readonly Lock _defaultConnectionLock = new();
+    private long _defaultConnectionRevision;
+
     // Guards _profileRoles: the capability getters populate it lazily (a read that
     // mutates) while model-selection, catalog refresh, and invalidation remove from it,
     // and these run on different threads (host capability rebuilds vs. UI/async paths).
@@ -57,7 +64,7 @@ public sealed class OpenAiCompatiblePlugin
 
     public string PluginId => "com.typewhisper.openai-compatible";
     public string PluginName => "OpenAI Compatible";
-    public string PluginVersion => "1.0.1";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -124,6 +131,8 @@ public sealed class OpenAiCompatiblePlugin
     }
 
     public bool SupportsTranslation => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
         byte[] wavAudio,
@@ -252,20 +261,28 @@ public sealed class OpenAiCompatiblePlugin
         // include "/v1", so strip a trailing "/v1" segment to avoid building
         // "/v1/v1/models" and similar paths.
         var normalized = NormalizeBaseUrl(url);
-        var changed = !string.Equals(BaseUrl, normalized, StringComparison.Ordinal);
-        BaseUrl = normalized;
-        _host?.SetSetting("baseUrl", normalized);
+        lock (_defaultConnectionLock)
+        {
+            var changed = !string.Equals(BaseUrl, normalized, StringComparison.Ordinal);
+            BaseUrl = normalized;
+            if (changed)
+            {
+                // Bump and invalidate before the host persist: if the settings write
+                // throws, the new URL must not stay live at the old revision with the
+                // old catalog still applied.
+                _defaultConnectionRevision++;
+                SetFetchedModels([], notifyCapabilitiesChanged: false);
+            }
 
-        if (changed)
-            SetFetchedModels([]);
-        else
-            _host?.NotifyCapabilitiesChanged();
+            _host?.SetSetting("baseUrl", normalized);
+        }
+
+        _host?.NotifyCapabilitiesChanged();
     }
 
     internal async Task SetApiKeyAsync(string key)
     {
         var apiKey = string.IsNullOrWhiteSpace(key) ? null : key;
-        var changed = !string.Equals(ApiKey, apiKey, StringComparison.Ordinal);
 
         if (_host is not null)
         {
@@ -275,11 +292,18 @@ public sealed class OpenAiCompatiblePlugin
                 await _host.StoreSecretAsync("api-key", apiKey);
         }
 
-        ApiKey = apiKey;
-        if (changed)
-            SetFetchedModels([]);
-        else
-            _host?.NotifyCapabilitiesChanged();
+        lock (_defaultConnectionLock)
+        {
+            var changed = !string.Equals(ApiKey, apiKey, StringComparison.Ordinal);
+            ApiKey = apiKey;
+            if (changed)
+            {
+                _defaultConnectionRevision++;
+                SetFetchedModels([], notifyCapabilitiesChanged: false);
+            }
+        }
+
+        _host?.NotifyCapabilitiesChanged();
     }
 
     internal void SelectLlmModel(string modelId)
@@ -297,7 +321,7 @@ public sealed class OpenAiCompatiblePlugin
     private static bool ParseBool(string? value) =>
         string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
 
-    internal void SetFetchedModels(List<FetchedModel> models, bool notifyCapabilitiesChanged = true)
+    internal void SetFetchedModels(List<FetchedModel> models, bool notifyCapabilitiesChanged)
     {
         var selectedModelId = NormalizeModelSelection(SelectedModelId, models);
         var selectedLlmModelId = NormalizeModelSelection(SelectedLlmModelId, models);
@@ -328,42 +352,8 @@ public sealed class OpenAiCompatiblePlugin
     // from "couldn't reach/parse the server."
     internal async Task<List<FetchedModel>?> FetchModelsAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrEmpty(BaseUrl))
-            return null;
-
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
-            if (!string.IsNullOrEmpty(ApiKey))
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
-
-            using var response = await _httpClient.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
-                return null;
-
-            var json = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(json);
-
-            if (!doc.RootElement.TryGetProperty("data", out var data))
-                return null;
-
-            return data.EnumerateArray()
-                .Select(e => new FetchedModel(
-                    e.GetProperty("id").GetString() ?? "",
-                    e.TryGetProperty("owned_by", out var ob) ? ob.GetString() : null
-                ))
-                .Where(m => !string.IsNullOrEmpty(m.Id))
-                .OrderBy(m => m.Id)
-                .ToList();
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
-        {
-            return null;
-        }
+        var connection = CaptureDefaultConnection();
+        return await FetchModelsForAsync(connection.BaseUrl, connection.ApiKey, ct);
     }
 
     internal async Task<bool> ValidateConnectionAsync(CancellationToken ct = default)
@@ -380,9 +370,13 @@ public sealed class OpenAiCompatiblePlugin
             using var response = await _httpClient.SendAsync(request, ct);
             return response.IsSuccessStatusCode;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(ct);
         }
         catch
         {
@@ -485,15 +479,22 @@ public sealed class OpenAiCompatiblePlugin
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(BaseUrl))
+        var connection = CaptureDefaultConnection();
+        if (string.IsNullOrWhiteSpace(connection.BaseUrl))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterBaseUrl"));
 
-        var models = await FetchModelsAsync(ct);
-        if (models is null)
+        var models = await FetchModelsForAsync(connection.BaseUrl, connection.ApiKey, ct);
+        var isCurrent = TryApplyDefaultCatalog(
+            connection,
+            models,
+            onlyIfChanged: false,
+            out var applied
+        );
+        if (!isCurrent || models is null)
             return new PluginSettingsValidationResult(false, Loc.L("Settings.CouldNotConnect"));
 
-        SetFetchedModels(models, notifyCapabilitiesChanged: false);
-        _host?.NotifyCapabilitiesChanged();
+        if (applied)
+            _host?.NotifyCapabilitiesChanged();
 
         return new PluginSettingsValidationResult(
             true,
@@ -506,11 +507,13 @@ public sealed class OpenAiCompatiblePlugin
     // failure leaves all three untouched.
     public async Task RefreshModelCatalogAsync(CancellationToken ct = default)
     {
-        if (!string.IsNullOrEmpty(BaseUrl))
+        var connection = CaptureDefaultConnection();
+        if (!string.IsNullOrEmpty(connection.BaseUrl))
         {
-            var models = await FetchModelsAsync(ct);
-            if (models is not null && DefaultCatalogStateChanged(models))
-                SetFetchedModels(models);
+            var models = await FetchModelsForAsync(connection.BaseUrl, connection.ApiKey, ct);
+            TryApplyDefaultCatalog(connection, models, onlyIfChanged: true, out var applied);
+            if (applied)
+                _host?.NotifyCapabilitiesChanged();
         }
 
         // Refresh additional profiles on the same dropdown-open path so their
@@ -542,6 +545,38 @@ public sealed class OpenAiCompatiblePlugin
 
     private static bool CatalogChanged(List<FetchedModel> fetched, List<FetchedModel> current) =>
         !fetched.SequenceEqual(current);
+
+    private DefaultConnectionSnapshot CaptureDefaultConnection()
+    {
+        lock (_defaultConnectionLock)
+        {
+            return new DefaultConnectionSnapshot(BaseUrl, ApiKey, _defaultConnectionRevision);
+        }
+    }
+
+    // A null catalog is a fetch failure. It still passes through the revision
+    // check so validation can distinguish a current failure from a stale result.
+    private bool TryApplyDefaultCatalog(
+        DefaultConnectionSnapshot connection,
+        List<FetchedModel>? models,
+        bool onlyIfChanged,
+        out bool applied
+    )
+    {
+        lock (_defaultConnectionLock)
+        {
+            applied = false;
+            if (connection.Revision != _defaultConnectionRevision)
+                return false;
+
+            if (models is null || (onlyIfChanged && !DefaultCatalogStateChanged(models)))
+                return true;
+
+            SetFetchedModels(models, notifyCapabilitiesChanged: false);
+            applied = true;
+            return true;
+        }
+    }
 
     private bool DefaultCatalogStateChanged(List<FetchedModel> models) =>
         CatalogChanged(models, _fetchedModels)
@@ -723,11 +758,26 @@ public sealed class OpenAiCompatiblePlugin
 
             var id = NormalizeProfileId(Get(item, "__id"), seenIds);
 
-            var key = NullIfWhiteSpace(Get(item, "api-key"));
-            var keyChanged = key is not null
-                && !string.Equals(GetProfileApiKey(id), key, StringComparison.Ordinal);
-            if (keyChanged)
-                keyUpdates[id] = key;
+            var submittedKey = Get(item, "api-key");
+            var key = NullIfWhiteSpace(submittedKey);
+            var storedKey = GetProfileApiKey(id);
+            var keyChanged = false;
+            if (submittedKey is not null)
+            {
+                if (key is null)
+                {
+                    if (storedKey is not null)
+                    {
+                        keyUpdates[id] = null;
+                        keyChanged = true;
+                    }
+                }
+                else if (!string.Equals(storedKey, key, StringComparison.Ordinal))
+                {
+                    keyUpdates[id] = key;
+                    keyChanged = true;
+                }
+            }
 
             // A changed endpoint (base URL or credentials) may point at a different
             // server, so drop the stale catalog and this save's submitted selections
@@ -755,31 +805,60 @@ public sealed class OpenAiCompatiblePlugin
             });
         }
 
-        // Do the fallible host secret-store writes before swapping the shared
-        // profile set, so a failure here can't leave _additionalProfiles half
-        // updated. Each _additionalApiKeys mutation is paired with its host op,
-        // so the cache stays consistent with the store even on a mid-loop throw.
-        if (_host is not null)
+        // Secrets and profile metadata are separate writes and the host store has no multi-key
+        // transaction. Persisting a rotated key but not the endpoint it belongs to would, after a
+        // restart, send the new credential to the profile's previous URL — so every committed step
+        // records its inverse and any failure replays them in reverse. Compensation goes through
+        // the same store, so a persistent failure (read-only mount, disk full) can still leave the
+        // two out of step; that is logged, and closing it needs an atomic multi-key host API.
+        var previousProfiles = _additionalProfiles.ToList();
+        var undo = new List<Func<Task>>();
+        try
         {
-            foreach (var removedId in previousById.Keys.Where(k => !seenIds.Contains(k)))
+            if (_host is not null)
             {
-                await _host.DeleteSecretAsync(SecretKeyFor(removedId));
-                _additionalApiKeys.Remove(removedId);
+                foreach (var removedId in previousById.Keys.Where(k => !seenIds.Contains(k)))
+                    await ApplyProfileSecretAsync(removedId, null, undo);
+
+                foreach (var (id, key) in keyUpdates)
+                    await ApplyProfileSecretAsync(id, key, undo);
             }
 
-            foreach (var (id, key) in keyUpdates)
+            _additionalProfiles.Clear();
+            _additionalProfiles.AddRange(newProfiles);
+            undo.Add(() =>
             {
-                await _host.StoreSecretAsync(SecretKeyFor(id), key!);
-                _additionalApiKeys[id] = key;
+                _additionalProfiles.Clear();
+                _additionalProfiles.AddRange(previousProfiles);
+                PersistAdditionalProfiles(notify: false);
+                return Task.CompletedTask;
+            });
+
+            // State is now persisted; the best-effort model fetch below may fail or be
+            // cancelled, but that must not revert the saved profiles.
+            PersistAdditionalProfiles(notify: false);
+        }
+        catch
+        {
+            for (var i = undo.Count - 1; i >= 0; i--)
+            {
+                try
+                {
+                    await undo[i]();
+                }
+                catch (Exception rollbackFailure)
+                {
+                    // Nothing better to try: report the original failure, not this one.
+                    _host?.Log(
+                        PluginLogLevel.Error,
+                        $"Could not roll back a profile save: {rollbackFailure.Message}"
+                    );
+                }
             }
+
+            throw;
         }
 
-        _additionalProfiles.Clear();
-        _additionalProfiles.AddRange(newProfiles);
-
-        // State is now persisted; the best-effort model fetch below may fail or be
-        // cancelled, but that must not revert the saved profiles.
-        PersistAdditionalProfiles(notify: false);
         InvalidateChangedProfileRoles(previousById, keyUpdates.Keys);
 
         // Best-effort: populate model catalogs so prompts/dictation can list each
@@ -798,6 +877,49 @@ public sealed class OpenAiCompatiblePlugin
         _host?.NotifyCapabilitiesChanged();
 
         return new PluginSettingsValidationResult(true, $"Saved {_additionalProfiles.Count} profile(s).");
+    }
+
+    /// <summary>
+    ///     Writes one profile's API key (<paramref name="key" /> null deletes it) and appends the
+    ///     inverse operation to <paramref name="undo" />. The cache mutation stays paired with the
+    ///     host op so the two can never disagree, in either direction.
+    /// </summary>
+    private async Task ApplyProfileSecretAsync(
+        string id,
+        string? key,
+        List<Func<Task>> undo)
+    {
+        var host = _host!;
+        var secretKey = SecretKeyFor(id);
+        var hadPrevious = _additionalApiKeys.TryGetValue(id, out var previous);
+
+        if (key is null)
+        {
+            await host.DeleteSecretAsync(secretKey);
+            _additionalApiKeys.Remove(id);
+        }
+        else
+        {
+            await host.StoreSecretAsync(secretKey, key);
+            _additionalApiKeys[id] = key;
+        }
+
+        undo.Add(async () =>
+        {
+            if (hadPrevious && previous is not null)
+            {
+                await host.StoreSecretAsync(secretKey, previous);
+                _additionalApiKeys[id] = previous;
+            }
+            else
+            {
+                await host.DeleteSecretAsync(secretKey);
+                if (hadPrevious)
+                    _additionalApiKeys[id] = null;
+                else
+                    _additionalApiKeys.Remove(id);
+            }
+        });
     }
 
     internal string ProfileDisplayName(string id) => FindAdditional(id)?.DisplayName ?? "Custom Server";
@@ -961,13 +1083,68 @@ public sealed class OpenAiCompatiblePlugin
         // way back through the UI.
         var stored = host.GetSetting<List<OpenAiCompatibleProfile?>>(AdditionalProfilesSettingKey) ?? [];
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var repaired = false;
+        var secretMigrations = new List<(string OldId, string NewId)>();
+        var claimedLegacyIds = new HashSet<string>(StringComparer.Ordinal);
+        var assignedIds = new string?[stored.Count];
 
-        foreach (var profile in stored)
+        // Reserve IDs that are already stored in their final form for the profiles
+        // holding them, before repairing anything else. A padded or malformed
+        // neighbour would otherwise normalize onto an ID another profile owns
+        // outright and inherit its secret, sending that credential to a different
+        // endpoint. Order within the file must not decide who keeps an exact ID.
+        for (var i = 0; i < stored.Count; i++)
         {
+            var storedId = stored[i]?.Id;
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- profiles are JSON-deserialized from persisted settings, so Id arrives null despite its non-nullable annotation.
+            if (storedId is not null
+                && string.Equals(storedId, storedId.Trim(), StringComparison.Ordinal)
+                && IsValidProfileId(storedId)
+                && seen.Add(storedId))
+            {
+                assignedIds[i] = storedId;
+            }
+        }
+
+        for (var i = 0; i < stored.Count; i++)
+        {
+            // A null element is dropped below, so it must not consume an ID another
+            // profile could keep.
+            if (stored[i] is not null)
+                assignedIds[i] ??= NormalizeProfileId(stored[i]!.Id, seen);
+        }
+
+        for (var i = 0; i < stored.Count; i++)
+        {
+            var profile = stored[i];
             if (profile is null)
                 continue;
 
-            profile.Id = NormalizeProfileId(profile.Id, seen);
+            var oldRawId = profile.Id;
+            var normalizedId = assignedIds[i]!;
+
+            // A missing ID addresses the same secret key as an empty one, so both
+            // legacy forms share a single claim. Secrets are addressed by the exact
+            // stored ID, so a duplicate shares a key with the profile that kept the ID
+            // only when the raw IDs match; a padded or malformed variant addresses a
+            // key of its own.
+            // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- same JSON-deserialized null as above; the fallback is what makes a missing ID share the empty ID's secret key.
+            var legacyId = oldRawId ?? "";
+            var sharesKeeperSecretKey = IsValidProfileId(legacyId) && seen.Contains(legacyId);
+            if (!string.Equals(oldRawId, normalizedId, StringComparison.Ordinal))
+            {
+                repaired = true;
+
+                // Exactly one profile may claim a legacy key: the keeper owns a shared
+                // one, and a repeated raw ID is ambiguous, so only its first claimant
+                // migrates. Copying it again would hand one credential to a second,
+                // possibly unrelated, base URL. Every other legacy key is orphaned by
+                // the repair, so move its secret before retiring the old key.
+                if (!sharesKeeperSecretKey && claimedLegacyIds.Add(legacyId))
+                    secretMigrations.Add((legacyId, normalizedId));
+            }
+
+            profile.Id = normalizedId;
 
             profile.Name = string.IsNullOrWhiteSpace(profile.Name) ? "Custom Server" : profile.Name.Trim();
             // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- the annotation states the C# contract; the deserializer that produced this value ignores it.
@@ -984,10 +1161,56 @@ public sealed class OpenAiCompatiblePlugin
                 .ToList();
 
             _additionalProfiles.Add(profile);
+        }
 
+        var migratedOldSecretKeys = new List<string>();
+        foreach (var (oldId, newId) in secretMigrations)
+        {
+            var oldSecretKey = SecretKeyFor(oldId);
+            var keyToMigrate = await host.LoadSecretAsync(oldSecretKey);
+            if (string.IsNullOrEmpty(keyToMigrate))
+                continue;
+
+            // A destination that already holds a secret is the credential the
+            // repaired ID has been using, and the legacy entry is the stale copy.
+            // Overwriting it and then retiring the old key would destroy the
+            // working credential, so leave both entries alone.
+            var newSecretKey = SecretKeyFor(newId);
+            if (!string.IsNullOrEmpty(await host.LoadSecretAsync(newSecretKey)))
+                continue;
+
+            // Keep every old key until all fallible stores and the repaired
+            // profile-list write succeed. A later failure then leaves every
+            // legacy credential addressable through the still-persisted IDs.
+            await host.StoreSecretAsync(newSecretKey, keyToMigrate);
+            migratedOldSecretKeys.Add(oldSecretKey);
+        }
+
+        foreach (var profile in _additionalProfiles)
+        {
             var key = await host.LoadSecretAsync(SecretKeyFor(profile.Id));
             if (!string.IsNullOrEmpty(key))
                 _additionalApiKeys[profile.Id] = key;
+        }
+
+        if (repaired)
+            host.SetSetting(AdditionalProfilesSettingKey, _additionalProfiles);
+
+        // The migration is durable once the repaired list is written, so retiring the
+        // legacy keys is cleanup: a failure here must not fail activation, and the
+        // next activation sees valid IDs with nothing left to migrate.
+        foreach (var oldSecretKey in migratedOldSecretKeys)
+        {
+            try
+            {
+                await host.DeleteSecretAsync(oldSecretKey);
+            }
+            catch (Exception ex)
+            {
+                host.Log(
+                    PluginLogLevel.Warning,
+                    $"Failed to retire a migrated legacy secret: {ex.Message}");
+            }
         }
 
         var changedApiKeyIds = previousApiKeys
@@ -1043,9 +1266,13 @@ public sealed class OpenAiCompatiblePlugin
                 .OrderBy(m => m.Id)
                 .ToList();
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(ct);
         }
         catch
         {
@@ -1139,10 +1366,7 @@ public sealed class OpenAiCompatiblePlugin
     private string NormalizeProfileId(string? rawId, HashSet<string> taken)
     {
         var id = (rawId ?? "").Trim();
-        if (id.Length == 0
-            || id.Contains(':')
-            || !id.StartsWith(ProfileIdPrefix, StringComparison.Ordinal)
-            || taken.Contains(id))
+        if (!IsValidProfileId(id) || taken.Contains(id))
         {
             id = CreateProfileId(taken);
         }
@@ -1150,6 +1374,11 @@ public sealed class OpenAiCompatiblePlugin
         taken.Add(id);
         return id;
     }
+
+    private static bool IsValidProfileId(string id) =>
+        id.Length > 0
+        && !id.Contains(':')
+        && id.StartsWith(ProfileIdPrefix, StringComparison.Ordinal);
 
     private string CreateProfileId(HashSet<string> taken)
     {
@@ -1167,12 +1396,19 @@ public sealed class OpenAiCompatiblePlugin
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    private readonly record struct DefaultConnectionSnapshot(
+        string? BaseUrl,
+        string? ApiKey,
+        long Revision
+    );
+
     // Cached wrapper that presents one additional profile as a standalone
     // transcription engine / LLM provider. Its selection identity is the profile
     // ID; PluginId stays the owner's so host lookups (enable-state, settings)
     // still resolve to the real plugin. The owner is its only lifetime authority.
     private sealed class OpenAiCompatibleProfileRole(OpenAiCompatiblePlugin owner, string profileId)
         : ITranscriptionEngineRole,
+            ITranscriptionLanguageSelectionCapabilities,
             ILlmProviderRole,
             ITranscriptionEngineSelectionIdentity,
             ILlmProviderSelectionIdentity
@@ -1186,6 +1422,8 @@ public sealed class OpenAiCompatiblePlugin
         public IReadOnlyList<PluginModelInfo> TranscriptionModels => owner.ProfileTranscriptionModels(profileId);
         public string? SelectedModelId => owner.ProfileSelectedModel(profileId);
         public bool SupportsTranslation => true;
+        public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+        public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
         public string ProviderName => owner.ProfileDisplayName(profileId);
         public bool IsAvailable => owner.ProfileLlmAvailable(profileId);
         public IReadOnlyList<PluginModelInfo> SupportedModels => owner.ProfileLlmModels(profileId);

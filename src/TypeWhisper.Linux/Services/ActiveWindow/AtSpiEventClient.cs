@@ -266,6 +266,11 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     private AtSpiElementRef? _currentFocused;
 
+    // Advances for every valid focused gain/loss and fences a cold-start scan against focus
+    // changes observed after that scan began. Guarded by _focusLock and deliberately never reset:
+    // connection-lifecycle invalidation remains the bootstrap CTS's responsibility.
+    private long _focusEventGeneration;
+
     // In-flight cold-start focus scan, so concurrent bootstrap callers share one walk
     // instead of each traversing the bus. Behind _focusLock; cleared when the scan settles.
     private Task<AtSpiElementRef?>? _focusBootstrap;
@@ -888,8 +893,9 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             }
 
             var cts = new CancellationTokenSource(s_bootstrapDeadline);
+            var bootstrapGeneration = _focusEventGeneration;
             _focusBootstrapCts = cts;
-            return _focusBootstrap = BootstrapFocusAsync(conn, cts);
+            return _focusBootstrap = BootstrapFocusAsync(conn, cts, bootstrapGeneration);
         }
     }
 
@@ -916,14 +922,19 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     // leading Yield forces asynchronous completion so a synchronously-failing scan can't run
     // its finally BEFORE the caller's slot assignment lands — that would cache a settled task
     // forever and disable every future bootstrap on this connection.
-    private async Task<AtSpiElementRef?> BootstrapFocusAsync(DBusConnection conn, CancellationTokenSource cts)
+    private async Task<AtSpiElementRef?> BootstrapFocusAsync(
+        DBusConnection conn,
+        CancellationTokenSource cts,
+        long bootstrapGeneration
+    )
     {
         await Task.Yield();
         try
         {
             // A real focus event that landed while the walk ran is authoritative — prefer it
             // over the walk's own (possibly empty) result rather than reporting no focus.
-            return await ScanForFocusedElementAsync(conn, cts.Token).ConfigureAwait(false)
+            return await ScanForFocusedElementAsync(conn, bootstrapGeneration, cts.Token)
+                .ConfigureAwait(false)
                 ?? CurrentFocusedElement;
         }
         catch (OperationCanceledException)
@@ -972,6 +983,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     // on; the bounded walk works everywhere.
     private async Task<AtSpiElementRef?> ScanForFocusedElementAsync(
         DBusConnection conn,
+        long bootstrapGeneration,
         CancellationToken ct
     )
     {
@@ -1001,7 +1013,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                 // SeedFocus re-checks cancellation while holding _focusLock — the same lock
                 // StopAsync cancels under — so a reset racing this walk can't have its cleared
                 // focus repopulated with an element from the torn-down connection.
-                return SeedFocus(focused, ct);
+                return SeedFocus(focused, bootstrapGeneration, ct);
             }
         }
 
@@ -1123,13 +1135,28 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     // itself); every match lands in the recent history so consumers' candidate fallback can
     // probe the one with readable text. FocusChanged is deliberately NOT raised: this
     // reconstructs state a missed past event should have left behind — focus didn't move now.
-    private AtSpiElementRef SeedFocus(List<AtSpiElementRef> found, CancellationToken ct)
+    private AtSpiElementRef? SeedFocus(
+        List<AtSpiElementRef> found,
+        long bootstrapGeneration,
+        CancellationToken ct
+    )
     {
         lock (_focusLock)
         {
             // Atomic with StopAsync's cancel+clear (both under _focusLock): if a reset already
             // won the lock, bail instead of seeding an element from the dead connection.
             ct.ThrowIfCancellationRequested();
+
+            // Any valid focus event after this scan began makes its observation stale, including
+            // a loss that had no current element to clear. Return only the live event-sourced
+            // state and leave both focus fields untouched so the next cold arm can retry safely.
+            if (bootstrapGeneration != _focusEventGeneration)
+            {
+                Trace.WriteLine(
+                    "[AtSpiEventClient] bootstrap scan rejected: focus changed while scanning (stale generation)."
+                );
+                return _currentFocused;
+            }
 
             if (_currentFocused is { } raced)
             {
@@ -1150,6 +1177,22 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             _currentFocused = found[^1];
             return found[^1];
         }
+    }
+
+    internal long CaptureFocusGenerationForTest()
+    {
+        lock (_focusLock)
+        {
+            return _focusEventGeneration;
+        }
+    }
+
+    internal AtSpiElementRef? SeedFocusForTest(
+        List<AtSpiElementRef> found,
+        long capturedGeneration
+    )
+    {
+        return SeedFocus(found, capturedGeneration, CancellationToken.None);
     }
 
     private static async Task<uint> GetStateWord0Async(
@@ -1414,6 +1457,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             // lost focus; a stale loss must not clobber the newer focus anchor.
             lock (_focusLock)
             {
+                _focusEventGeneration++;
                 if (_currentFocused == element)
                 {
                     _currentFocused = null;
@@ -1425,6 +1469,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
         lock (_focusLock)
         {
+            _focusEventGeneration++;
             _currentFocused = element;
             _recentFocused.Remove(element);
             _recentFocused.Insert(0, element);

@@ -7,6 +7,9 @@ namespace TypeWhisper.Plugin.Xai;
 
 internal sealed class XaiResponsesClient
 {
+    private static readonly ISseEventPolicy<string> s_streamPolicy =
+        new XaiResponsesSsePolicy();
+
     private readonly HttpClient _httpClient;
     private readonly string _baseUrl;
     private readonly string _apiKey;
@@ -88,44 +91,8 @@ internal sealed class XaiResponsesClient
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        var receivedCompleted = false;
-        while (await reader.ReadLineAsync(ct) is { } rawLine)
-        {
-            var line = rawLine.Trim();
-            if (!line.StartsWith("data: ", StringComparison.Ordinal))
-                continue;
-
-            var payload = line[6..];
-            if (payload == "[DONE]")
-            {
-                if (!receivedCompleted)
-                {
-                    throw new InvalidOperationException(
-                        "xAI stream ended with [DONE] before response.completed was received.");
-                }
-
-                yield break;
-            }
-
-            // The Responses stream returns 200 before generation finishes, so a
-            // mid-stream failure arrives as a typed lifecycle frame rather than
-            // an HTTP error. Throw so the pump faults and the caller falls back
-            // to batch instead of silently committing partial deltas.
-            if (ParseStreamError(payload) is { } error)
-                throw new InvalidOperationException(error);
-
-            if (IsStreamCompletion(payload))
-                receivedCompleted = true;
-
-            if (ParseStreamDelta(payload) is { Length: > 0 } delta)
-                yield return delta;
-        }
-
-        if (!receivedCompleted)
-        {
-            throw new InvalidOperationException(
-                "xAI stream ended before response.completed was received.");
-        }
+        await foreach (var delta in SseEventDecoder.ReadValidatedAsync(reader, s_streamPolicy, ct))
+            yield return delta;
     }
 
     /// <summary>
@@ -229,17 +196,44 @@ internal sealed class XaiResponsesClient
         }
     }
 
-    private static bool IsStreamCompletion(string dataPayload)
+    private static string? ParseStreamEventType(string dataPayload)
     {
         try
         {
             using var doc = JsonDocument.Parse(dataPayload);
             var root = doc.RootElement;
-            return TryGetString(root, "type") == "response.completed";
+            return TryGetString(root, "type");
         }
         catch (JsonException)
         {
-            return false;
+            return null;
+        }
+    }
+
+    private sealed class XaiResponsesSsePolicy : ISseEventPolicy<string>
+    {
+        public string StreamName => "xAI stream";
+        public string ExpectedTerminal => "response.completed";
+
+        public SsePolicyDecision<string> Evaluate(SseEvent sseEvent)
+        {
+            // The Responses stream returns 200 before generation finishes, so a
+            // mid-stream failure arrives as a typed lifecycle frame rather than
+            // an HTTP error. Error validation must precede completion acceptance.
+            if (ParseStreamError(sseEvent.Data) is { } error)
+            {
+                return new SsePolicyDecision<string>(
+                    Error: new InvalidOperationException(error));
+            }
+
+            if (sseEvent.Data == "[DONE]")
+                return new SsePolicyDecision<string>(EndStream: true);
+
+            var delta = ParseStreamDelta(sseEvent.Data);
+            return new SsePolicyDecision<string>(
+                HasDelta: delta is { Length: > 0 },
+                Delta: delta,
+                AcceptTerminal: ParseStreamEventType(sseEvent.Data) == "response.completed");
         }
     }
 

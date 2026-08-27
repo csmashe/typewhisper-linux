@@ -7,9 +7,11 @@
     </Folder>
     <Folder Name="/tests/">
         <Project Path="tests/TypeWhisper.Core.Tests/TypeWhisper.Core.Tests.csproj"/>
+        <Project Path="tests/TypeWhisper.Integration.Tests/TypeWhisper.Integration.Tests.csproj"/>
         <Project Path="tests/TypeWhisper.Linux.Tests/TypeWhisper.Linux.Tests.csproj"/>
         <Project Path="tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj"/>
         <Project Path="tests/TypeWhisper.Cli.Tests/TypeWhisper.Cli.Tests.csproj"/>
+        <Project Path="tests/TypeWhisper.ProcessTestChild/TypeWhisper.ProcessTestChild.csproj"/>
     </Folder>
     <Folder Name="/plugins/">
         <Project Path="plugins/TypeWhisper.Plugin.AssemblyAi/TypeWhisper.Plugin.AssemblyAi.csproj"/>

@@ -251,7 +251,7 @@ public class Reson8PluginTests
     }
 
     [Fact]
-    public async Task TranscribeAsync_UsesCustomBaseUrlAndAuthHeaderAndOmitsAutoLanguage()
+    public async Task TranscribeAsync_UsesCustomBaseUrlAndAuthHeaderAndOmitsUnspecifiedLanguage()
     {
         var handler = new CapturingHandler((request, _) =>
         {
@@ -273,7 +273,7 @@ public class Reson8PluginTests
         var sut = new Reson8Plugin(httpClient);
         await sut.ActivateAsync(host);
 
-        var result = await sut.TranscribeAsync(BuildPcm16Wav([0x00, 0x00]), "auto", false, null, CancellationToken.None);
+        var result = await sut.TranscribeAsync(BuildPcm16Wav([0x00, 0x00]), null, false, null, CancellationToken.None);
 
         Assert.Equal("Hello", result.Text);
     }
@@ -335,6 +335,122 @@ public class Reson8PluginTests
     }
 
     [Fact]
+    public async Task StreamingAdapter_ProviderCancellation_RetriesBatchExactlyOnce()
+    {
+        var batchCalls = 0;
+
+        var result = await Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+            _ => Task.FromException<string?>(
+                new OperationCanceledException("provider canceled")
+            ),
+            () =>
+            {
+                batchCalls++;
+                return Task.FromResult("batch");
+            },
+            CancellationToken.None
+        );
+
+        Assert.Equal("batch", result);
+        Assert.Equal(1, batchCalls);
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_PrivateTimeout_RetriesBatchExactlyOnce()
+    {
+        var batchCalls = 0;
+
+        var result = await Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+            _ => Task.FromException<string?>(new TimeoutException("provider deadline")),
+            () =>
+            {
+                batchCalls++;
+                return Task.FromResult("batch");
+            },
+            CancellationToken.None
+        );
+
+        Assert.Equal("batch", result);
+        Assert.Equal(1, batchCalls);
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_CallerCancellation_DoesNotRetryBatch()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var batchCalls = 0;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+                _ => Task.FromException<string?>(new HttpRequestException("provider raced")),
+                () =>
+                {
+                    batchCalls++;
+                    return Task.FromResult("batch");
+                },
+                cts.Token
+            ));
+
+        Assert.Equal(0, batchCalls);
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_ProgressStop_DoesNotRetryBatch()
+    {
+        var batchCalls = 0;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+                markProgressStopped =>
+                {
+                    markProgressStopped();
+                    return Task.FromException<string?>(
+                        new OperationCanceledException("progress stopped")
+                    );
+                },
+                () =>
+                {
+                    batchCalls++;
+                    return Task.FromResult("batch");
+                },
+                CancellationToken.None
+            ));
+
+        Assert.Equal(0, batchCalls);
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_CallerAndProgressRace_CallerWinsWithoutRetry()
+    {
+        using var cts = new CancellationTokenSource();
+        var batchCalls = 0;
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+                markProgressStopped =>
+                {
+                    markProgressStopped();
+                    // ReSharper disable once AccessToDisposedClosure -- the callback runs inside the
+                    // awaited call, which completes before the using-scope disposes cts.
+                    cts.Cancel();
+                    return Task.FromException<string?>(
+                        new TimeoutException("provider deadline")
+                    );
+                },
+                () =>
+                {
+                    batchCalls++;
+                    return Task.FromResult("batch");
+                },
+                cts.Token
+            ));
+
+        Assert.Equal(cts.Token, exception.CancellationToken);
+        Assert.Equal(0, batchCalls);
+    }
+
+    [Fact]
     public void StreamingSession_BuildsExpectedUrisHeadersAndCollectsTranscriptEvents()
     {
         var uri = Reson8StreamingSession.BuildRealtimeUri("https://api.reson8.dev", "domain-model", "de");
@@ -348,12 +464,19 @@ public class Reson8PluginTests
         Assert.Contains("language=de", uri.Query);
         Assert.Contains("custom_model_id=domain-model", uri.Query);
 
-        var localUri = Reson8StreamingSession.BuildRealtimeUri("http://localhost:8080/base", "__default__", "auto");
+        var localUri = Reson8StreamingSession.BuildRealtimeUri("http://localhost:8080/base", "__default__", null);
         Assert.Equal("ws", localUri.Scheme);
         Assert.Equal(8080, localUri.Port);
         Assert.Equal("/base/v1/speech-to-text/realtime", localUri.AbsolutePath);
         Assert.DoesNotContain("language=", localUri.Query);
         Assert.DoesNotContain("custom_model_id=", localUri.Query);
+
+        // An explicitly plaintext base URL must not be silently upgraded to wss, or a
+        // self-hosted ws:// endpoint becomes unreachable.
+        var plaintextWs = Reson8StreamingSession.BuildRealtimeUri("ws://localhost:8080", null, null);
+        Assert.Equal("ws", plaintextWs.Scheme);
+        var secureWs = Reson8StreamingSession.BuildRealtimeUri("wss://localhost:8080", null, null);
+        Assert.Equal("wss", secureWs.Scheme);
 
         var headers = Reson8StreamingSession.CreateStreamingHeaders("reson-key", "Authorization");
         Assert.Equal("ApiKey reson-key", headers["Authorization"]);

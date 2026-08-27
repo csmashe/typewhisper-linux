@@ -7,6 +7,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Claude;
@@ -14,6 +15,9 @@ namespace TypeWhisper.Plugin.Claude;
 public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.anthropic.com";
+
+    private static readonly ISseEventPolicy<string> s_streamPolicy =
+        new ClaudeMessagesSsePolicy();
 
     // Anthropic requires an anthropic-version header on every request; this is
     // the stable version that covers the Messages API used here.
@@ -38,7 +42,7 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
 
     public string PluginId => "com.typewhisper.claude";
     public string PluginName => "Claude";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -167,52 +171,24 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        // The Anthropic Messages stream has no [DONE] sentinel; it ends with a
-        // message_stop frame and then EOF. Treat that frame as the semantic
-        // success marker so a truncated stream cannot commit its partial text.
-        var receivedMessageStop = false;
-        while (await reader.ReadLineAsync(ct) is { } rawLine)
-        {
-            var line = rawLine.Trim();
-            if (!line.StartsWith("data: ", StringComparison.Ordinal))
-                continue;
-
-            var payload = line[6..];
-
-            // A Messages stream returns 200 then can fail mid-flight via an
-            // `event: error` frame. Throw so LlmStreamPump faults and the caller
-            // falls back to batch, instead of committing the partial deltas seen
-            // so far as a successful result.
-            if (ParseStreamError(payload) is { } error)
-                throw new InvalidOperationException(error);
-
-            if (IsMessageStop(payload))
-                receivedMessageStop = true;
-
-            if (ParseStreamDelta(payload) is { Length: > 0 } delta)
-                yield return delta;
-        }
-
-        if (!receivedMessageStop)
-        {
-            throw new InvalidOperationException(
-                "Anthropic stream ended before a message_stop event was received.");
-        }
+        await foreach (var delta in SseEventDecoder.ReadValidatedAsync(reader, s_streamPolicy, ct))
+            yield return delta;
     }
 
-    private static bool IsMessageStop(string dataPayload)
+    private static string? ParseStreamEventType(string dataPayload)
     {
         try
         {
             using var doc = JsonDocument.Parse(dataPayload);
             var root = doc.RootElement;
             return root.TryGetProperty("type", out var type)
-                && type.ValueKind == JsonValueKind.String
-                && type.GetString() == "message_stop";
+                   && type.ValueKind == JsonValueKind.String
+                ? type.GetString()
+                : null;
         }
         catch (JsonException)
         {
-            return false;
+            return null;
         }
     }
 
@@ -293,6 +269,36 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
             }
 
             return "Anthropic streaming error.";
+        }
+    }
+
+    private sealed class ClaudeMessagesSsePolicy : ISseEventPolicy<string>
+    {
+        public string StreamName => "Anthropic stream";
+        public string ExpectedTerminal => "a message_stop event";
+
+        public SsePolicyDecision<string> Evaluate(SseEvent sseEvent)
+        {
+            // Also catch `event: error` frames whose payload isn't parseable
+            // JSON, which ParseStreamError alone would miss.
+            if (ParseStreamError(sseEvent.Data) is { } error)
+            {
+                return new SsePolicyDecision<string>(
+                    Error: new InvalidOperationException(error));
+            }
+
+            if (sseEvent.EventType == "error")
+            {
+                return new SsePolicyDecision<string>(
+                    Error: new InvalidOperationException("Anthropic streaming error."));
+            }
+
+            var payloadType = ParseStreamEventType(sseEvent.Data);
+            var delta = ParseStreamDelta(sseEvent.Data);
+            return new SsePolicyDecision<string>(
+                HasDelta: delta is { Length: > 0 },
+                Delta: delta,
+                AcceptTerminal: payloadType == "message_stop");
         }
     }
 

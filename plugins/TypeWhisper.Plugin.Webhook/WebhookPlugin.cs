@@ -615,7 +615,7 @@ public sealed class WebhookPlugin
 
     public string PluginId => "com.typewhisper.webhook";
     public string PluginName => "Webhook";
-    public string PluginVersion => "2.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public WebhookService? Service { get; private set; }
 

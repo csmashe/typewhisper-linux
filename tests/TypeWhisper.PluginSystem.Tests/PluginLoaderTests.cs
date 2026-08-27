@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
@@ -68,11 +69,44 @@ public sealed class PluginLoaderTests : IDisposable
     }
 
     [Fact]
+    public void DiscoverAndLoad_PluginDirWithOnlyPluginJson_SkipsWithDiagnostic()
+    {
+        var pluginDir = Path.Join(_tempDir, "com.test.wrongmanifestname");
+        Directory.CreateDirectory(pluginDir);
+        File.WriteAllText(
+            Path.Join(pluginDir, "plugin.json"),
+            JsonSerializer.Serialize(CreateManifest("com.test.wrongmanifestname"))
+        );
+        using var traceWriter = new StringWriter();
+        using var traceListener = new TextWriterTraceListener(traceWriter);
+        Trace.Listeners.Add(traceListener);
+
+        try
+        {
+            var result = _loader.DiscoverAndLoad([_tempDir]);
+            Trace.Flush();
+
+            Assert.Empty(result);
+            Assert.Contains(
+                $"[PluginLoader] No {PluginManifest.FileName} in {pluginDir}, skipping",
+                traceWriter.ToString()
+            );
+        }
+        finally
+        {
+            Trace.Listeners.Remove(traceListener);
+        }
+    }
+
+    [Fact]
     public void DiscoverAndLoad_InvalidManifestJson_ReturnsEmpty()
     {
         var pluginDir = Path.Join(_tempDir, "com.test.badjson");
         Directory.CreateDirectory(pluginDir);
-        File.WriteAllText(Path.Join(pluginDir, "manifest.json"), "{ not valid json!!!");
+        File.WriteAllText(
+            Path.Join(pluginDir, PluginManifest.FileName),
+            "{ not valid json!!!"
+        );
 
         var result = _loader.DiscoverAndLoad([_tempDir]);
         Assert.Empty(result);
@@ -94,7 +128,7 @@ public sealed class PluginLoaderTests : IDisposable
         };
 
         File.WriteAllText(
-            Path.Join(pluginDir, "manifest.json"),
+            Path.Join(pluginDir, PluginManifest.FileName),
             JsonSerializer.Serialize(manifest)
         );
 
@@ -114,7 +148,7 @@ public sealed class PluginLoaderTests : IDisposable
     {
         var badPluginDir = Path.Join(_tempDir, "com.test.bad");
         Directory.CreateDirectory(badPluginDir);
-        File.WriteAllText(Path.Join(badPluginDir, "manifest.json"), "null");
+        File.WriteAllText(Path.Join(badPluginDir, PluginManifest.FileName), "null");
 
         var result = _loader.DiscoverAndLoad([_tempDir, Path.Join(_tempDir, "nonexistent")]);
 
@@ -126,7 +160,7 @@ public sealed class PluginLoaderTests : IDisposable
     {
         var pluginDir = Path.Join(_tempDir, "com.test.nullmanifest");
         Directory.CreateDirectory(pluginDir);
-        File.WriteAllText(Path.Join(pluginDir, "manifest.json"), "null");
+        File.WriteAllText(Path.Join(pluginDir, PluginManifest.FileName), "null");
 
         var result = _loader.DiscoverAndLoad([_tempDir]);
         Assert.Empty(result);
@@ -370,7 +404,7 @@ public sealed class PluginLoaderTests : IDisposable
         }
 
         File.WriteAllText(
-            Path.Join(pluginDir, "manifest.json"),
+            Path.Join(pluginDir, PluginManifest.FileName),
             JsonSerializer.Serialize(manifest)
         );
         return pluginDir;

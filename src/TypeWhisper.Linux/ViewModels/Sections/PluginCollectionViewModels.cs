@@ -179,6 +179,14 @@ public class PluginCollectionItemRow : ObservableObject
             }
         }
 
+        // Identity repair above is part of initial population, not a user edit.
+        // Reset every field after the item has been fully initialized so only
+        // subsequent changes made through the bound Value setter are tracked.
+        foreach (var field in Fields)
+        {
+            field.ResetUserModifiedState();
+        }
+
         if (string.IsNullOrEmpty(itemLabelFieldKey))
         {
             return;
@@ -228,5 +236,15 @@ public class PluginCollectionItemRow : ObservableObject
         {
             OnPropertyChanged(nameof(HeaderText));
         }
+    }
+}
+
+public sealed partial class PluginSettingFieldRow
+{
+    public bool IsUserModified { get; private set; }
+
+    internal void ResetUserModifiedState()
+    {
+        IsUserModified = false;
     }
 }

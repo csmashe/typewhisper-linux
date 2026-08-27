@@ -10,7 +10,11 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.SmallestAi;
 
-public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class SmallestAiPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.smallest.ai";
     private const string PulseEndpoint = $"{BaseUrl}/waves/v1/pulse/get_text";
@@ -48,7 +52,7 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     public string PluginId => "com.typewhisper.smallest-ai";
     public string PluginName => "Smallest AI Pulse";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -74,6 +78,8 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public IReadOnlyList<string> SupportedLanguages => s_languages;
 
     public void SelectModel(string modelId)
@@ -303,9 +309,7 @@ public sealed class SmallestAiPlugin : ITranscriptionEnginePlugin, IPluginSettin
         string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
 
     internal static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
-            ? null
-            : language.Trim();
+        string.IsNullOrWhiteSpace(language) ? null : language.Trim();
 
     private static bool IsApiError(JsonElement root)
     {

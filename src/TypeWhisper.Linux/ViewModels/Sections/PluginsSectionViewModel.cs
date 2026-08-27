@@ -322,7 +322,13 @@ public partial class PluginsSectionViewModel : ObservableObject
             {
                 var items = collection
                     .Items.Select(item => new PluginCollectionItem(
-                        item.Fields.ToDictionary(field => field.Key, string? (field) => field.Value)
+                        item.Fields.ToDictionary(
+                            field => field.Key,
+                            string? (field) =>
+                                field is { IsSecretKind: true, IsUserModified: false }
+                                    ? null
+                                    : field.Value
+                        )
                     ))
                     .ToList();
 
@@ -864,7 +870,6 @@ public partial class PluginRow : ObservableObject
             .OrderBy(category => category.SortOrder)
             .First();
         CategoryKey = descriptor.Key;
-        CategoryLabel = descriptor.DisplayName;
         CategorySortOrder = descriptor.SortOrder;
     }
 
@@ -873,7 +878,6 @@ public partial class PluginRow : ObservableObject
     public string Version { get; }
     public string Description { get; }
     public string CategoryKey { get; }
-    public string CategoryLabel { get; }
     public int CategorySortOrder { get; }
     public IReadOnlySet<PluginCategory> Categories { get; }
     public PluginNetworkAccess NetworkAccess { get; }
@@ -953,7 +957,8 @@ public partial class PluginRow : ObservableObject
                     fieldIndex,
                     field.Key,
                     field.Value,
-                    field.SelectedOption
+                    field.SelectedOption,
+                    field is { IsSecretKind: true, IsUserModified: true }
                 )
             );
         }
@@ -969,7 +974,8 @@ public partial class PluginRow : ObservableObject
                     -1,
                     collection.Key,
                     null,
-                    null
+                    null,
+                    false
                 )
             );
 
@@ -988,7 +994,8 @@ public partial class PluginRow : ObservableObject
                             fieldIndex,
                             field.Key,
                             field.Value,
-                            field.SelectedOption
+                            field.SelectedOption,
+                            field is { IsSecretKind: true, IsUserModified: true }
                         )
                     );
                 }
@@ -1025,7 +1032,10 @@ public partial class PluginRow : ObservableObject
         int FieldIndex,
         string Key,
         string? Value,
-        PluginSettingOption? SelectedOption
+        PluginSettingOption? SelectedOption,
+        // A secret edited back to its baseline text still differs from an
+        // untouched one, and only the draft carries that distinction until save.
+        bool SecretModified
     );
 }
 
@@ -1070,6 +1080,8 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
         Description = description;
         Placeholder = placeholder;
         Kind = ResolveKind(kind, options, isSecret);
+        IsSecretMultiline = isSecret && Kind == PluginSettingKind.Multiline;
+        MultilinePasswordChar = IsSecretMultiline ? '•' : '\0';
         _advertisedOptions = options.ToArray();
         _options = new ObservableCollection<PluginSettingOption>(_advertisedOptions);
         Options = new ReadOnlyObservableCollection<PluginSettingOption>(_options);
@@ -1102,6 +1114,14 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
     public string Placeholder { get; }
     public ReadOnlyObservableCollection<PluginSettingOption> Options { get; }
     public PluginSettingKind Kind { get; }
+    public char MultilinePasswordChar { get; }
+    public bool IsSecretMultiline { get; }
+
+    // Fluent's built-in reveal button cannot attach to a multiline TextBox
+    // (its style requires AcceptsReturn=False), so secret multiline fields get
+    // an explicit toggle bound to RevealPassword instead.
+    [ObservableProperty]
+    private bool _revealSecretMultiline;
 
     public bool IsTextKind => Kind == PluginSettingKind.Text;
     public bool IsSecretKind => Kind == PluginSettingKind.Secret;
@@ -1161,6 +1181,10 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
 
     partial void OnValueChanged(string value)
     {
+        // Only edits routed through the bound setter reach here; initial population
+        // assigns the backing field directly and then resets this flag.
+        IsUserModified = true;
+
         if (Kind == PluginSettingKind.Dropdown && !_syncingOptionValue)
         {
             _syncingOptionValue = true;

@@ -28,6 +28,8 @@ public class App : Application
     ///     better than any other default on Linux, so we migrate past it.
     /// </summary>
     private const string UpstreamDefaultHotkey = "Ctrl+Shift+F9";
+    private static readonly TimeSpan s_shutdownQuiesceBudget = TimeSpan.FromSeconds(5);
+    private static int s_skipProviderDisposal;
 
     /// <summary>
     ///     Tray-menu Exit flips this; Close-button handler checks it to decide
@@ -72,7 +74,7 @@ public class App : Application
             BootTrace.Stage("Loc.Initialize");
 
             var secretMigration = services.GetRequiredService<SecretProtectionMigrationService>();
-            var secretMigrationResult = secretMigration.MigrateAll();
+            var secretMigrationResult = secretMigration.MigrateAllAtStartup();
             if (secretMigrationResult.RootSettingsChanged)
             {
                 settings.Load();
@@ -105,9 +107,9 @@ public class App : Application
                 _ = uiOperations.ReportDispatcherFailureAsync(args.Exception, "TypeWhisper");
             };
 
-            // Reconcile configured state and verify native ownership before DictationOrchestrator
-            // starts HotkeyService. This keeps the first backend snapshot free of a duplicate
-            // app-owned dictation route when the current desktop spec is installed.
+            // Reconcile configured state and infer native ownership from the persisted spec before
+            // DictationOrchestrator starts HotkeyService. A matching deferred KDE entry is treated
+            // as desktop-owned even before KGlobalAccel loads it.
             var hotkey = services.GetRequiredService<HotkeyService>();
             ReconcileHotkeyOnStartup(hotkey, settings);
             var shortcuts = services.GetRequiredService<ShortcutsSectionViewModel>();
@@ -336,11 +338,13 @@ public class App : Application
             // raises its change event while holding its own gate.
             var reconcileLock = new object();
             var reconcileRevision = 0L;
+            IReadOnlySet<DynamicHotkeyRejection> activeRejections =
+                new HashSet<DynamicHotkeyRejection>();
 
             void ReconcileDynamicHotkeys()
             {
                 var revision = Interlocked.Increment(ref reconcileRevision);
-                IReadOnlyList<string> rejections;
+                IReadOnlyList<DynamicHotkeyRejection> newlyActiveRejections;
                 lock (reconcileLock)
                 {
                     // A reconcile that started later snapshotted at least as fresh a state,
@@ -350,15 +354,25 @@ public class App : Application
                         return;
                     }
 
-                    rejections = hotkey.SetDynamicHotkeys(
-                        HotkeyService.ParsePromptActionHotkeys(promptActions.Actions),
-                        HotkeyService.ParseProfileHotkeys(profileService.Profiles)
+                    var rejections = hotkey.SetDynamicHotkeysDetailed(
+                        HotkeyService.ParsePromptActionHotkeyCandidates(
+                            promptActions.Actions
+                        ),
+                        HotkeyService.ParseProfileHotkeyCandidates(
+                            profileService.Profiles
+                        )
                     );
+                    var transition = TransitionDynamicHotkeyRejections(
+                        activeRejections,
+                        rejections
+                    );
+                    newlyActiveRejections = transition.NewlyActive;
+                    activeRejections = transition.Active;
                 }
 
-                foreach (var message in rejections)
+                foreach (var rejection in newlyActiveRejections)
                 {
-                    errorLog.AddEntry(message);
+                    errorLog.AddEntry(FormatDynamicHotkeyRejection(rejection));
                 }
             }
 
@@ -373,6 +387,11 @@ public class App : Application
             settings.SettingsChanged += s =>
             {
                 hotkey.Mode = s.Mode;
+                var toggleHotkeyChanged = false;
+                var promptPaletteHotkeyChanged = false;
+                var recentTranscriptionsHotkeyChanged = false;
+                var copyLastTranscriptionHotkeyChanged = false;
+                var transformSelectionHotkeyChanged = false;
                 if (
                     !string.IsNullOrWhiteSpace(s.ToggleHotkey)
                     && s.ToggleHotkey != lastApplied
@@ -380,6 +399,7 @@ public class App : Application
                 )
                 {
                     lastApplied = hotkey.CurrentHotkeyString;
+                    toggleHotkeyChanged = true;
                 }
 
                 if (
@@ -388,6 +408,7 @@ public class App : Application
                 )
                 {
                     lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
+                    promptPaletteHotkeyChanged = true;
                 }
 
                 if (
@@ -399,6 +420,7 @@ public class App : Application
                 {
                     lastRecentTranscriptionsApplied =
                         hotkey.CurrentRecentTranscriptionsHotkeyString;
+                    recentTranscriptionsHotkeyChanged = true;
                 }
 
                 if (
@@ -410,6 +432,7 @@ public class App : Application
                 {
                     lastCopyLastTranscriptionApplied =
                         hotkey.CurrentCopyLastTranscriptionHotkeyString;
+                    copyLastTranscriptionHotkeyChanged = true;
                 }
 
                 if (
@@ -418,6 +441,20 @@ public class App : Application
                 )
                 {
                     lastTransformSelectionApplied = hotkey.CurrentTransformSelectionHotkeyString;
+                    transformSelectionHotkeyChanged = true;
+                }
+
+                if (
+                    ShouldReconcileDynamicHotkeys(
+                        toggleHotkeyChanged,
+                        promptPaletteHotkeyChanged,
+                        recentTranscriptionsHotkeyChanged,
+                        copyLastTranscriptionHotkeyChanged,
+                        transformSelectionHotkeyChanged
+                    )
+                )
+                {
+                    ReconcileDynamicHotkeys();
                 }
             };
 
@@ -498,6 +535,93 @@ public class App : Application
         BootTrace.Stage("base.OnFrameworkInitializationCompleted returned");
     }
 
+    internal sealed record DynamicHotkeyRejectionTransition(
+        IReadOnlyList<DynamicHotkeyRejection> NewlyActive,
+        IReadOnlySet<DynamicHotkeyRejection> Active
+    );
+
+    internal static DynamicHotkeyRejectionTransition TransitionDynamicHotkeyRejections(
+        IReadOnlySet<DynamicHotkeyRejection> previous,
+        IEnumerable<DynamicHotkeyRejection> current
+    )
+    {
+        var active = new HashSet<DynamicHotkeyRejection>();
+        var newlyActive = new List<DynamicHotkeyRejection>();
+        foreach (var rejection in current)
+        {
+            if (!active.Add(rejection))
+            {
+                continue;
+            }
+
+            if (!previous.Contains(rejection))
+            {
+                newlyActive.Add(rejection);
+            }
+        }
+
+        return new(newlyActive, active);
+    }
+
+    internal static bool ShouldReconcileDynamicHotkeys(
+        bool toggleHotkeyChanged,
+        bool promptPaletteHotkeyChanged,
+        bool recentTranscriptionsHotkeyChanged,
+        bool copyLastTranscriptionHotkeyChanged,
+        bool transformSelectionHotkeyChanged
+    )
+    {
+        return toggleHotkeyChanged
+            || promptPaletteHotkeyChanged
+            || recentTranscriptionsHotkeyChanged
+            || copyLastTranscriptionHotkeyChanged
+            || transformSelectionHotkeyChanged;
+    }
+
+    private static string FormatDynamicHotkeyRejection(
+        DynamicHotkeyRejection rejection
+    )
+    {
+        var key = (rejection.Kind, rejection.Reason) switch
+        {
+            (
+                DynamicHotkeyBindingKind.PromptAction,
+                DynamicHotkeyRejectionReason.BlankId
+            ) => "Shortcuts.PromptActionHotkeyInactiveBlankId",
+            (
+                DynamicHotkeyBindingKind.PromptAction,
+                DynamicHotkeyRejectionReason.Conflict
+            ) => "Shortcuts.PromptActionHotkeyInactiveConflict",
+            (
+                DynamicHotkeyBindingKind.Profile,
+                DynamicHotkeyRejectionReason.BlankId
+            ) => "Shortcuts.ProfileHotkeyInactiveBlankId",
+            (
+                DynamicHotkeyBindingKind.Profile,
+                DynamicHotkeyRejectionReason.Conflict
+            ) => "Shortcuts.ProfileHotkeyInactiveConflict",
+            _ => null,
+        };
+
+        if (key is null)
+        {
+            // A kind/reason this formatter does not know yet must still produce a log
+            // entry — throwing here would abort the whole hotkey-apply pass over a
+            // diagnostic string. No localization key covers the combination, so the
+            // fallback stays English.
+            return $"Hotkey binding rejected ({rejection.Kind}/{rejection.Reason}): "
+                   + $"'{rejection.DisplayName}' {rejection.NormalizedChord}";
+        }
+
+        return rejection.Reason == DynamicHotkeyRejectionReason.BlankId
+            ? Loc.Instance.GetString(key, rejection.NormalizedChord)
+            : Loc.Instance.GetString(
+                key,
+                rejection.DisplayName,
+                rejection.NormalizedChord
+            );
+    }
+
     private static void ReconcileHotkeyOnStartup(HotkeyService hotkey, ISettingsService settings)
     {
         var s = settings.Current;
@@ -516,13 +640,13 @@ public class App : Application
 
         if (shouldMigrate)
         {
-            settings.Save(s with { ToggleHotkey = linuxDefault });
+            settings.Update(current => current with { ToggleHotkey = linuxDefault });
         }
         else if (!hotkey.TrySetHotkeyFromString(persisted))
         {
             // User-set but unparseable — keep the service default and fix
             // settings so UI/state agree.
-            settings.Save(s with { ToggleHotkey = linuxDefault });
+            settings.Update(current => current with { ToggleHotkey = linuxDefault });
         }
     }
 
@@ -615,7 +739,7 @@ public class App : Application
     ///     Runs before desktop.Shutdown() so the Host isn't left racing
     ///     libuiohook / PortAudio on exit.
     /// </summary>
-    private static async Task TearDownAsync(IServiceProvider services)
+    internal static async Task TearDownAsync(IServiceProvider services)
     {
         try
         {
@@ -638,6 +762,73 @@ public class App : Application
 
         try
         {
+            var tray = services.GetService<TrayIconService>();
+            tray?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Tray dispose failed: {ex.Message}");
+        }
+
+        var recorder = services.GetService<RecorderSectionViewModel>();
+        var recorderDrained = true;
+        try
+        {
+            if (recorder is not null)
+            {
+                recorderDrained = await recorder
+                    .QuiesceAsync(s_shutdownQuiesceBudget)
+                    .WaitAsync(s_shutdownQuiesceBudget + TimeSpan.FromSeconds(1))
+                    .ConfigureAwait(false);
+                if (!recorderDrained)
+                {
+                    Debug.WriteLine(
+                        "[App] Recorder quiesce did not settle within the shutdown budget."
+                    );
+                }
+            }
+        }
+        catch (TimeoutException ex)
+        {
+            recorderDrained = false;
+            Debug.WriteLine($"[App] Recorder quiesce timed out: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            recorderDrained = false;
+            Debug.WriteLine($"[App] Recorder quiesce failed: {ex.Message}");
+        }
+
+        var httpApi = services.GetService<HttpApiService>();
+        var httpApiDrained = true;
+        try
+        {
+            if (httpApi is not null)
+            {
+                httpApiDrained = await httpApi
+                    .QuiesceAsync(s_shutdownQuiesceBudget)
+                    .WaitAsync(s_shutdownQuiesceBudget + TimeSpan.FromSeconds(1))
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (TimeoutException ex)
+        {
+            httpApiDrained = false;
+            Debug.WriteLine($"[App] HTTP API quiesce timed out: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            httpApiDrained = false;
+            Debug.WriteLine($"[App] HTTP API quiesce failed: {ex.Message}");
+        }
+
+        // After the HTTP quiesce: an admitted PUT /v1/profiles/toggle handler calls
+        // into HotkeyService, so disposing it (or the control socket) before the
+        // drain completes would let a live request touch a disposed service. Still
+        // unconditional — even on a failed drain the libuiohook threads must not
+        // race process exit, and a handler that outlived its budget is already lost.
+        try
+        {
             var hotkey = services.GetService<HotkeyService>();
             hotkey?.Dispose();
         }
@@ -658,38 +849,9 @@ public class App : Application
 
         try
         {
-            var tray = services.GetService<TrayIconService>();
-            tray?.Dispose();
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[App] Tray dispose failed: {ex.Message}");
-        }
-
-        DisposeDictationBeforeAudio(
-            services.GetService<DictationOrchestrator>(),
-            services.GetService<AudioRecordingService>()
-        );
-
-        try
-        {
-            var models = services.GetService<ModelManagerService>();
-            if (models is not null)
-            {
-                await models.UnloadModelAsync().ConfigureAwait(false);
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[App] Model unload failed: {ex.Message}");
-        }
-
-        try
-        {
-            // Kill the pactl subscribe child process if it's still running.
-            // DisposeDictationBeforeAudio already Stop()s it; this is a belt-and-braces
-            // cleanup of the singleton in case follow-default was never active on the
-            // audio service.
+            // Reap the pactl subscribe child even when an HTTP handler outlives the drain budget.
+            // Audio disposal also stops it when follow-default is active; disposing the singleton
+            // here covers every configuration and prevents the child from being orphaned to init.
             var deviceWatcher = services.GetService<IDefaultDeviceChangeWatcher>();
             deviceWatcher?.Dispose();
         }
@@ -708,10 +870,57 @@ public class App : Application
             Debug.WriteLine($"[App] Playback dispose failed: {ex.Message}");
         }
 
+        var shutdownDecision = ApplyHttpApiDrainResult(httpApiDrained, recorderDrained);
+        if (!shutdownDecision.DisposeDependencies)
+        {
+            // Fail fast into process exit after a recorder or HTTP drain failure and after
+            // reaping the default-device watcher and playback. Deliberately skip dictation,
+            // audio, and model cleanup; Program observes SkipProviderDisposal and skips the
+            // provider too, so those DI-owned dependencies are not disposed underneath the
+            // recorder workflow or admitted HTTP handler that outlived its drain budget.
+            Debug.WriteLine(
+                "[App] Recorder or HTTP API drain failed; skipping dependent and provider disposal before process exit."
+            );
+            return;
+        }
+
+        var dictation = services.GetService<DictationOrchestrator>();
         try
         {
-            var api = services.GetService<HttpApiService>();
-            api?.Dispose();
+            if (dictation is not null
+                && !await dictation.CloseToggleGateAsync().ConfigureAwait(false))
+            {
+                Debug.WriteLine(
+                    "[App] Dictation toggle gate did not go idle within the close budget."
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Dictation toggle-gate close failed: {ex.Message}");
+        }
+
+        DisposeDictationBeforeAudio(
+            dictation,
+            services.GetService<AudioRecordingService>()
+        );
+
+        try
+        {
+            var models = services.GetService<ModelManagerService>();
+            if (models is not null)
+            {
+                await models.UnloadModelAsync().ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Model unload failed: {ex.Message}");
+        }
+
+        try
+        {
+            httpApi?.Dispose();
         }
         catch (Exception ex)
         {
@@ -728,6 +937,38 @@ public class App : Application
             Debug.WriteLine($"[App] Dictation session result store dispose failed: {ex.Message}");
         }
     }
+
+    internal static bool SkipProviderDisposal =>
+        Volatile.Read(ref s_skipProviderDisposal) != 0;
+
+    internal static ShutdownDisposalDecision ApplyHttpApiDrainResult(
+        bool httpApiDrained,
+        bool recorderDrained
+    )
+    {
+        var drainsSettled = httpApiDrained && recorderDrained;
+        var decision = new ShutdownDisposalDecision(
+            DisposeDependencies: drainsSettled,
+            SkipProviderDisposal: !drainsSettled
+        );
+        Volatile.Write(
+            ref s_skipProviderDisposal,
+            decision.SkipProviderDisposal ? 1 : 0
+        );
+        return decision;
+    }
+
+    internal static void ResetShutdownDisposalDecisionForTests()
+    {
+        Volatile.Write(ref s_skipProviderDisposal, 0);
+    }
+
+    internal readonly record struct ShutdownDisposalDecision(
+        bool DisposeDependencies,
+        // ReSharper disable once MemberHidesStaticFromOuterClass -- deliberately mirrors the
+        // App.SkipProviderDisposal flag this decision component feeds.
+        bool SkipProviderDisposal
+    );
 
     internal static void DisposeDictationBeforeAudio(
         IDisposable? dictation,
@@ -826,8 +1067,20 @@ public class App : Application
                 Required: false
             ),
             new(
-                BootstrapStageNames.BundledPluginDeployment,
+                BootstrapStageNames.PluginRegistryRecovery,
                 [],
+                async () =>
+                {
+                    await services
+                        .GetRequiredService<PluginRegistryService>()
+                        .RecoverInterruptedInstallsAsync();
+                    BootTrace.Stage("PluginRegistryService.RecoverInterruptedInstallsAsync");
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.BundledPluginDeployment,
+                [BootstrapStageNames.PluginRegistryRecovery],
                 () =>
                 {
                     _ = services.GetRequiredService<BundledPluginDeployer>();
@@ -848,9 +1101,18 @@ public class App : Application
                 },
                 Required: false
             ),
-            // PluginRegistryService targets the upstream Windows registry (Windows-built
-            // artifacts); the Linux fork ships its own plugins via BundledPluginDeployer,
-            // so the registry is not used.
+            new(
+                BootstrapStageNames.PluginRegistryBootstrap,
+                [BootstrapStageNames.PluginInitialization],
+                async () =>
+                {
+                    await services
+                        .GetRequiredService<PluginRegistryService>()
+                        .FirstRunAutoInstallAsync();
+                    BootTrace.Stage("PluginRegistryService.FirstRunAutoInstallAsync");
+                },
+                Required: false
+            ),
             new(
                 BootstrapStageNames.RetentionInitialization,
                 [],
@@ -992,7 +1254,9 @@ public class App : Application
         public const string SessionCleanup = "Session cleanup";
         public const string AudioConfiguration = "Audio configuration";
         public const string BundledPluginDeployment = "Bundled-plugin deployment";
+        public const string PluginRegistryRecovery = "Plugin-registry recovery";
         public const string PluginInitialization = "Plugin initialization";
+        public const string PluginRegistryBootstrap = "Plugin-registry bootstrap";
         public const string RetentionInitialization = "Retention initialization";
         public const string ModelMigration = "Model migration";
         public const string ModelAutoLoad = "Model auto-load";
@@ -1208,13 +1472,37 @@ public class App : Application
 
             if (resolved.Index != configuredIndex || resolved.PersistentId != configuredId)
             {
-                settings.Save(
-                    settings.Current with
+                var raced = false;
+                settings.Update(current =>
+                {
+                    if (
+                        current.SelectedMicrophoneDevice != configuredIndex
+                        || current.SelectedMicrophoneDeviceId != configuredId
+                    )
+                    {
+                        // A newer selection landed after this restore captured its
+                        // inputs; persisting the stale resolution would overwrite
+                        // the user's choice.
+                        raced = true;
+                        return current;
+                    }
+
+                    // Update may retry the delegate; only the final run decides.
+                    raced = false;
+                    return current with
                     {
                         SelectedMicrophoneDevice = resolved.Index,
                         SelectedMicrophoneDeviceId = resolved.PersistentId,
-                    }
-                );
+                    };
+                });
+
+                if (raced)
+                {
+                    // Re-run against the newer selection so the audio service does
+                    // not keep the stale device applied above. Recurs only while
+                    // yet-newer selections keep landing, so it is self-limiting.
+                    ApplyConfiguredMicrophone(audio, settings);
+                }
             }
         }
         catch (Exception ex)

@@ -14,6 +14,16 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 /// </summary>
 public sealed partial class GnomeShellActiveWindowProvider : IActiveWindowProvider
 {
+    private readonly ProviderProcessRunner _processRunner;
+
+    public GnomeShellActiveWindowProvider()
+        : this(new ProcessRunner()) { }
+
+    public GnomeShellActiveWindowProvider(IProcessRunner processRunner)
+    {
+        _processRunner = new ProviderProcessRunner(processRunner);
+    }
+
     public string Name => "gnome-shell";
 
     public bool IsApplicable()
@@ -37,10 +47,19 @@ public sealed partial class GnomeShellActiveWindowProvider : IActiveWindowProvid
     {
         try
         {
-            var (exit, output) = await ProviderProcessRunner
+            var (exit, output) = await _processRunner
                 .RunAsync(
                     "gdbus",
-                    "call --session --dest org.gnome.Shell --object-path /org/gnome/Shell/Introspect --method org.gnome.Shell.Introspect.GetWindows",
+                    [
+                        "call",
+                        "--session",
+                        "--dest",
+                        "org.gnome.Shell",
+                        "--object-path",
+                        "/org/gnome/Shell/Introspect",
+                        "--method",
+                        "org.gnome.Shell.Introspect.GetWindows",
+                    ],
                     ct
                 )
                 .ConfigureAwait(false);

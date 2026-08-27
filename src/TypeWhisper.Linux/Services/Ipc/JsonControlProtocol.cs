@@ -29,9 +29,10 @@ internal static class JsonControlProtocol
     ///     <c>state</c>/<c>prev</c> vocabulary is additive, so this stays at 1.
     /// </summary>
     /// <remarks>
-    ///     <c>state</c>/<c>prev</c> may carry <c>starting</c> alongside <c>idle</c> and
-    ///     <c>recording</c>: an accepted start reports it until capture is observably open or
-    ///     the start settles.
+    ///     <c>state</c>/<c>prev</c> may carry <c>starting</c> alongside <c>idle</c>,
+    ///     <c>recording</c>, <c>transcribing</c>, and <c>injecting</c>: an accepted start
+    ///     reports it only while the orchestrator is otherwise idle — any real active state
+    ///     supersedes it.
     /// </remarks>
     public const int CurrentVersion = 1;
 
@@ -44,10 +45,8 @@ internal static class JsonControlProtocol
     public const string StateIdle = "idle";
     public const string StateStarting = "starting";
     public const string StateRecording = "recording";
-    // ReSharper disable once UnusedMember.Global  IPC control-protocol state string (status wire vocabulary, mirrors StateIdle/StateRecording); part of the protocol surface even if not emitted in-tree
     public const string StateTranscribing = "transcribing";
 
-    // ReSharper disable once UnusedMember.Global  IPC control-protocol state string (status wire vocabulary, mirrors StateIdle/StateRecording); part of the protocol surface even if not emitted in-tree
     public const string StateInjecting = "injecting";
 
     public const string ErrUnknownCommand = "unknown-command";

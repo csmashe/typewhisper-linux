@@ -1,30 +1,36 @@
-using System.Diagnostics;
 using System.Net.WebSockets;
-using System.Runtime.ExceptionServices;
-using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.Deepgram;
 
 internal sealed class DeepgramStreamingSession : IStreamingSession
 {
-    private readonly WebSocket _ws;
-    private readonly CancellationTokenSource _receiveCts = new();
-    private readonly TaskCompletionSource _terminalCompletion =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private Exception? _sessionFault;
-    private readonly Task? _receiveTask;
-    private int _metadataReceived;
-    private bool _disposed;
+    private readonly WebSocketSessionPump _pump;
 
-    internal DeepgramStreamingSession(WebSocket ws)
+    private DeepgramStreamingSession(WebSocketSessionPump pump)
     {
-        _ws = ws;
-        _receiveTask = ReceiveLoopAsync(_receiveCts.Token);
+        _pump = pump;
     }
 
-    public event Action<StreamingTranscriptEvent>? TranscriptReceived;
+    internal static async Task<DeepgramStreamingSession> CreateConnectedSessionForTests(
+        WebSocket ws
+    )
+    {
+        var pump = await WebSocketSessionPump.StartConnectedAsync(
+            new DeepgramWebSocketAdapter("", "nova-3", null),
+            new ClientWebSocketTransport(ws),
+            CancellationToken.None
+        );
+        return new DeepgramStreamingSession(pump);
+    }
+
+    public event Action<StreamingTranscriptEvent>? TranscriptReceived
+    {
+        add => _pump.TranscriptReceived += value;
+        remove => _pump.TranscriptReceived -= value;
+    }
 
     public static async Task<DeepgramStreamingSession> ConnectAsync(
         string apiKey,
@@ -33,223 +39,134 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
         CancellationToken ct
     )
     {
-        var ws = new ClientWebSocket();
+        var pump = await WebSocketSessionPump.ConnectAsync(
+            new DeepgramWebSocketAdapter(apiKey, model, language),
+            ct
+        );
+        return new DeepgramStreamingSession(pump);
+    }
 
-        // Deepgram's streaming WebSocket does not accept detect_language=true
-        // (it's batch-only). For an unspecified language Nova-3 supports
-        // language=multi for code-switching; older models default to English
-        // when language is omitted, so Nova-2 has no auto-detect option here.
-        var isUnspecified =
-            string.IsNullOrEmpty(language)
-            || string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase);
-        var langParam = isUnspecified
+    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct) =>
+        _pump.SendAudioAsync(pcm16Audio, ct);
+
+    public Task FinalizeAsync(CancellationToken ct) => _pump.FinalizeAsync(ct);
+
+    public ValueTask DisposeAsync() => _pump.DisposeAsync();
+}
+
+internal sealed class DeepgramWebSocketAdapter(
+    string apiKey,
+    string model,
+    string? language
+) : IWebSocketSessionAdapter
+{
+    public string ProviderName => "Deepgram";
+    public WebSocketReadinessPolicy Readiness => WebSocketReadinessPolicy.Immediate;
+    public WebSocketTerminalPolicy Terminal =>
+        WebSocketTerminalPolicy.Require("Metadata");
+    public WebSocketKeepAlivePolicy? KeepAlive => null;
+    public WebSocketClosePolicy ClosePolicy => WebSocketClosePolicy.Default;
+
+    public ValueTask<WebSocketConnectionOptions> GetConnectionOptionsAsync(
+        CancellationToken ct
+    )
+    {
+        var isUnspecified = string.IsNullOrEmpty(language);
+        var languageParameter = isUnspecified
             ? model.StartsWith("nova-3", StringComparison.OrdinalIgnoreCase)
                 ? "&language=multi"
                 : string.Empty
             : $"&language={Uri.EscapeDataString(language!)}";
-        var url =
-            $"wss://api.deepgram.com/v1/listen?model={Uri.EscapeDataString(model)}&encoding=linear16&sample_rate=16000&interim_results=true&punctuate=true&smart_format=true{langParam}";
-
-        ws.Options.SetRequestHeader("Authorization", $"Token {apiKey}");
-        try
-        {
-            await ws.ConnectAsync(new Uri(url), ct);
-            return new DeepgramStreamingSession(ws);
-        }
-        catch
-        {
-            ws.Dispose();
-            throw;
-        }
+        var uri = new Uri(
+            $"wss://api.deepgram.com/v1/listen?model={Uri.EscapeDataString(model)}"
+                + "&encoding=linear16&sample_rate=16000&interim_results=true"
+                + $"&punctuate=true&smart_format=true{languageParameter}"
+        );
+        IReadOnlyDictionary<string, string> headers =
+            new Dictionary<string, string>
+            {
+                ["Authorization"] = $"Token {apiKey}",
+            };
+        return ValueTask.FromResult(new WebSocketConnectionOptions(uri, headers));
     }
 
-    public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
+    public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> OnConnectedAsync(
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>([]);
+
+    public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> EncodeAudioAsync(
+        ReadOnlyMemory<byte> pcm16Audio,
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
+            [
+                new WebSocketOutboundMessage(
+                    pcm16Audio.ToArray(),
+                    WebSocketMessageType.Binary
+                ),
+            ]
+        );
+
+    public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct) =>
+        ValueTask.FromResult(
+            new WebSocketFinalizePlan(
+                [
+                    new WebSocketOutboundMessage(
+                        """{"type":"CloseStream"}"""u8.ToArray(),
+                        WebSocketMessageType.Text
+                    ),
+                ]
+            )
+        );
+
+    public WebSocketInboundResult HandleMessage(
+        WebSocketMessageType type,
+        ReadOnlyMemory<byte> completePayload
+    )
     {
-        if (_disposed)
-            return;
-
-        ThrowIfFaulted();
-        if (_ws.State != WebSocketState.Open)
-        {
-            ThrowIfClosedBeforeMetadata();
-            return;
-        }
-
-        try
-        {
-            await _ws.SendAsync(pcm16Audio, WebSocketMessageType.Binary, true, ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            CaptureFault(
-                new InvalidOperationException("Deepgram streaming audio send failed.", ex)
-            );
-            throw;
-        }
-    }
-
-    public async Task FinalizeAsync(CancellationToken ct)
-    {
-        if (_disposed)
-            return;
-
-        ThrowIfFaulted();
-        if (Volatile.Read(ref _metadataReceived) == 0)
-        {
-            if (_ws.State != WebSocketState.Open)
-            {
-                ThrowIfClosedBeforeMetadata();
-                return;
-            }
-
-            var msg = """{"type":"CloseStream"}"""u8.ToArray();
-            try
-            {
-                await _ws.SendAsync(msg, WebSocketMessageType.Text, true, ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                CaptureFault(
-                    new InvalidOperationException(
-                        "Deepgram CloseStream send failed.",
-                        ex
-                    )
-                );
-                throw;
-            }
-        }
-
-        await _terminalCompletion.Task.WaitAsync(ct);
-        ThrowIfFaulted();
-    }
-
-    private async Task ReceiveLoopAsync(CancellationToken ct)
-    {
-        var buffer = new byte[8192];
-        using var messageBuffer = new MemoryStream();
+        if (type != WebSocketMessageType.Text)
+            return WebSocketInboundResult.Empty;
 
         try
         {
-            while (true)
+            using var document = JsonDocument.Parse(completePayload);
+            var root = document.RootElement;
+            if (
+                root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("type", out var typeElement)
+                || typeElement.ValueKind != JsonValueKind.String
+            )
             {
-                messageBuffer.SetLength(0);
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await _ws.ReceiveAsync(buffer, ct);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        CaptureFault(CreatePrematureCloseException(result));
-                        return;
-                    }
-
-                    messageBuffer.Write(buffer, 0, result.Count);
-                } while (!result.EndOfMessage);
-
-                if (result.MessageType != WebSocketMessageType.Text)
-                    continue;
-
-                var json = Encoding.UTF8.GetString(
-                    messageBuffer.GetBuffer(),
-                    0,
-                    (int)messageBuffer.Length
-                );
-                ProcessMessage(json);
-
-                if (Volatile.Read(ref _metadataReceived) != 0)
-                    return;
+                return Fault("Deepgram sent a malformed streaming message.");
             }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // DisposeAsync owns this token. Local teardown is not a stream fault.
-        }
-        catch (OperationCanceledException ex)
-        {
-            CaptureFault(
-                new InvalidOperationException("Deepgram streaming receive was canceled.", ex)
-            );
-        }
-        catch (WebSocketException ex)
-        {
-            CaptureFault(
-                new InvalidOperationException("Deepgram streaming transport failed.", ex)
-            );
+
+            return typeElement.GetString() switch
+            {
+                "Results" => HandleResults(root),
+                "Metadata" => new WebSocketInboundResult(
+                    [],
+                    WebSocketSessionSignal.Terminal
+                ),
+                "Error" => Fault(
+                    $"Deepgram streaming provider error: {ExtractError(root)}"
+                ),
+                _ => WebSocketInboundResult.Empty,
+            };
         }
         catch (JsonException ex)
         {
-            CaptureFault(new InvalidOperationException("Deepgram sent malformed JSON.", ex));
-        }
-        catch (InvalidOperationException ex)
-        {
-            CaptureFault(ex);
-        }
-        catch (Exception ex)
-        {
-            CaptureFault(
-                new InvalidOperationException("Deepgram streaming receive failed.", ex)
+            return new WebSocketInboundResult(
+                [],
+                Fault: new InvalidOperationException(
+                    "Deepgram sent malformed JSON.",
+                    ex
+                )
             );
-        }
-        finally
-        {
-            if (ct.IsCancellationRequested)
-            {
-                _terminalCompletion.TrySetResult();
-            }
-            else if (
-                Volatile.Read(ref _metadataReceived) == 0
-                && Volatile.Read(ref _sessionFault) is null
-            )
-            {
-                CaptureFault(
-                    new InvalidOperationException(
-                        "Deepgram streaming receive ended before Metadata."
-                    )
-                );
-            }
         }
     }
 
-    private void ProcessMessage(string json)
-    {
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-        if (
-            root.ValueKind != JsonValueKind.Object
-            || !root.TryGetProperty("type", out var typeEl)
-            || typeEl.ValueKind != JsonValueKind.String
-        )
-        {
-            throw new InvalidOperationException(
-                "Deepgram sent a malformed streaming message."
-            );
-        }
-
-        switch (typeEl.GetString())
-        {
-            case "Results":
-                ProcessResults(root);
-                break;
-            case "Metadata":
-                Volatile.Write(ref _metadataReceived, 1);
-                _terminalCompletion.TrySetResult();
-                break;
-            case "Error":
-                throw new InvalidOperationException(
-                    $"Deepgram streaming provider error: {ExtractError(root)}"
-                );
-        }
-    }
-
-    private void ProcessResults(JsonElement root)
+    private static WebSocketInboundResult HandleResults(JsonElement root)
     {
         if (
             !root.TryGetProperty("channel", out var channel)
@@ -258,35 +175,28 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
             || alternatives.ValueKind != JsonValueKind.Array
             || alternatives.GetArrayLength() == 0
             || alternatives[0].ValueKind != JsonValueKind.Object
-            || !alternatives[0].TryGetProperty("transcript", out var transcriptEl)
-            || transcriptEl.ValueKind != JsonValueKind.String
+            || !alternatives[0].TryGetProperty("transcript", out var transcriptElement)
+            || transcriptElement.ValueKind != JsonValueKind.String
         )
         {
-            throw new InvalidOperationException("Deepgram sent a malformed Results message.");
+            return Fault("Deepgram sent a malformed Results message.");
         }
 
-        var transcript = transcriptEl.GetString() ?? "";
+        var transcript = transcriptElement.GetString() ?? "";
         if (string.IsNullOrWhiteSpace(transcript))
-            return;
+            return WebSocketInboundResult.Empty;
 
         var isFinal =
-            root.TryGetProperty("is_final", out var finalEl)
-            && finalEl.ValueKind is JsonValueKind.True or JsonValueKind.False
-            && finalEl.GetBoolean();
-        Emit(new StreamingTranscriptEvent(transcript, isFinal));
+            root.TryGetProperty("is_final", out var finalElement)
+            && finalElement.ValueKind is JsonValueKind.True or JsonValueKind.False
+            && finalElement.GetBoolean();
+        return new WebSocketInboundResult(
+            [new StreamingTranscriptEvent(transcript, isFinal)]
+        );
     }
 
-    private void Emit(StreamingTranscriptEvent transcriptEvent)
-    {
-        try
-        {
-            TranscriptReceived?.Invoke(transcriptEvent);
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Deepgram streaming subscriber failed: {ex.Message}");
-        }
-    }
+    private static WebSocketInboundResult Fault(string message) =>
+        new([], Fault: new InvalidOperationException(message));
 
     private static string ExtractError(JsonElement root)
     {
@@ -303,93 +213,5 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
         }
 
         return "Unknown provider error.";
-    }
-
-    private static InvalidOperationException CreatePrematureCloseException(
-        WebSocketReceiveResult result
-    )
-    {
-        var status = result.CloseStatus is { } closeStatus
-            ? $"{(int)closeStatus} ({closeStatus})"
-            : "without a close status";
-        var reason = string.IsNullOrWhiteSpace(result.CloseStatusDescription)
-            ? ""
-            : $": {result.CloseStatusDescription}";
-        return new InvalidOperationException(
-            $"Deepgram streaming socket closed {status}{reason} before Metadata."
-        );
-    }
-
-    private void ThrowIfClosedBeforeMetadata()
-    {
-        ThrowIfFaulted();
-        if (Volatile.Read(ref _metadataReceived) != 0)
-            return;
-
-        CaptureFault(
-            new InvalidOperationException(
-                $"Deepgram streaming socket is {_ws.State} before Metadata."
-            )
-        );
-        ThrowIfFaulted();
-    }
-
-    private void CaptureFault(Exception exception)
-    {
-        if (Interlocked.CompareExchange(ref _sessionFault, exception, null) is null)
-            _terminalCompletion.TrySetException(exception);
-    }
-
-    private void ThrowIfFaulted()
-    {
-        var exception = Volatile.Read(ref _sessionFault);
-        if (exception is not null)
-            ExceptionDispatchInfo.Capture(exception).Throw();
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed)
-            return;
-
-        _disposed = true;
-        // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
-        _receiveCts.Cancel();
-        _terminalCompletion.TrySetResult();
-
-        if (_ws.State == WebSocketState.Open)
-        {
-            // Bound the handshake: an unresponsive peer with CancellationToken.None
-            // would otherwise hang Dispose indefinitely. Abort is the fallback
-            // when the close handshake fails or times out.
-            using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            try
-            {
-                await _ws.CloseAsync(
-                    WebSocketCloseStatus.NormalClosure,
-                    null,
-                    closeCts.Token
-                );
-            }
-            catch
-            {
-                try { _ws.Abort(); } catch { /* best effort */ }
-            }
-        }
-
-        if (_receiveTask is not null)
-        {
-            try
-            {
-                await _receiveTask;
-            }
-            catch
-            { /* expected */
-            }
-        }
-
-        _ = _terminalCompletion.Task.Exception;
-        _receiveCts.Dispose();
-        _ws.Dispose();
     }
 }

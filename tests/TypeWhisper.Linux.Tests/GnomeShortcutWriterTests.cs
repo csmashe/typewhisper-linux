@@ -389,7 +389,7 @@ public sealed class GnomeShortcutWriterTests : IDisposable
                     $"'{GnomeShortcutWriter.FormatGnomeAccel(spec.Trigger)}'",
                     string.Empty
                 ),
-                _ => null
+                _ => null,
             }
         );
         var writer = new GnomeShortcutWriter(

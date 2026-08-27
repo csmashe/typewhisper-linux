@@ -36,7 +36,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     private readonly StringBuilder _finalSegments = new();
     private readonly TimeSpan _finalizeSenderTimeout;
     private readonly TimeSpan _finalizeSessionTimeout;
-    private readonly string? _language;
+    private readonly LanguageSelection _languageSelection;
 
     private readonly Lock _lock = new();
     private readonly Action<Exception> _onFault;
@@ -44,6 +44,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     private readonly Queue<byte[]> _pending = new();
 
     private readonly ITranscriptionEngineRole _plugin;
+    private readonly StreamingSampleRateConverter _sampleRateConverter = new(16000);
     private readonly int _sessionVersion;
     private Channel<byte[]>? _channel;
     private CancellationTokenSource? _cts;
@@ -69,7 +70,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
     public StreamingTranscriptionCoordinator(
         ITranscriptionEngineRole plugin,
-        string? language,
+        LanguageSelection languageSelection,
         int sessionVersion,
         Action<int, string> onPartial,
         Action<Exception> onFault,
@@ -77,7 +78,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
         TimeSpan? finalizeSessionTimeout = null)
     {
         _plugin = plugin;
-        _language = language;
+        _languageSelection = languageSelection;
         _sessionVersion = sessionVersion;
         _onPartial = onPartial;
         _onFault = onFault;
@@ -139,6 +140,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             _open = false;
             _pending.Clear();
             _pendingBytes = 0;
+            _sampleRateConverter.Reset();
         }
 
         channel?.Writer.TryComplete();
@@ -190,8 +192,10 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
-            var lang = _language == "auto" ? null : _language;
-            var session = await _plugin.StartStreamingAsync(lang, _cts.Token);
+            var session = await _plugin.StartStreamingAsync(
+                _languageSelection,
+                _cts.Token
+            );
 
             var channel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(ChannelCapacity)
             {
@@ -244,36 +248,22 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             return;
         }
 
-        var sixteen = sampleRate != 16000
-            ? AudioRecordingService.ResampleToSampleRate(samples, sampleRate, 16000)
-            : samples;
-
-        var pcm16 = new byte[sixteen.Length * 2];
-        for (var i = 0; i < sixteen.Length; i++)
-        {
-            var s = AudioRecordingService.ToPcm16(sixteen[i]);
-            pcm16[i * 2] = (byte)(s & 0xFF);
-            pcm16[i * 2 + 1] = (byte)((s >> 8) & 0xFF);
-        }
-
-        Channel<byte[]>? channel;
         lock (_lock)
         {
-            channel = _open ? _channel : null;
-            if (channel is null)
+            if (_disposed || _finalizing || Faulted)
             {
-                _pending.Enqueue(pcm16);
-                _pendingBytes += pcm16.Length;
-                while (_pendingBytes > MaxPendingBytes && _pending.TryDequeue(out var dropped))
-                {
-                    _pendingBytes -= dropped.Length;
-                }
-
                 return;
             }
-        }
 
-        channel.Writer.TryWrite(pcm16);
+            if (sampleRate == 16000 || sampleRate <= 0)
+            {
+                EnqueueSamplesUnderLock(_sampleRateConverter.Complete());
+                EnqueueSamplesUnderLock(samples);
+                return;
+            }
+
+            EnqueueSamplesUnderLock(_sampleRateConverter.Append(samples, sampleRate));
+        }
     }
 
     public async Task<string> FinalizeAsync(CancellationToken ct)
@@ -291,6 +281,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             // Set _finalizing under lock so StartAsync's publish guard sees it atomically.
             // Any session that connects after this will be torn down by StartAsync, not published.
             _finalizing = true;
+            EnqueueSamplesUnderLock(_sampleRateConverter.Complete());
             channel = _channel;
             session = _session;
             senderTask = _senderTask;
@@ -542,14 +533,19 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
                 await session.SendAudioAsync(chunk, ct);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             // Normal teardown — Finalize or Dispose closed the writer.
         }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            // Teardown/caller cancellation wins a race with a dependency fault.
+        }
         catch (Exception ex)
         {
-            // Plugin SendAudioAsync is external and can throw arbitrary types;
-            // route all non-cancel failures through HandleFault so batch fallback fires.
+            // Plugin SendAudioAsync is external and can throw arbitrary types,
+            // including an OCE while the sender token is still live; route every
+            // dependency fault through HandleFault so batch fallback fires.
             HandleFault(ex);
         }
     }
@@ -616,6 +612,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             _transcriptHandler = null;
             _pending.Clear();
             _pendingBytes = 0;
+            _sampleRateConverter.Reset();
             _open = false;
         }
 
@@ -719,6 +716,36 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             {
                 Trace.WriteLine("[StreamingCoordinator] FlushPending TryWrite returned false");
             }
+        }
+    }
+
+    private void EnqueueSamplesUnderLock(float[] samples)
+    {
+        if (samples.Length == 0)
+        {
+            return;
+        }
+
+        var pcm16 = new byte[samples.Length * 2];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var sample = AudioRecordingService.ToPcm16(samples[i]);
+            pcm16[i * 2] = (byte)(sample & 0xFF);
+            pcm16[i * 2 + 1] = (byte)((sample >> 8) & 0xFF);
+        }
+
+        var channel = _open ? _channel : null;
+        if (channel is not null)
+        {
+            channel.Writer.TryWrite(pcm16);
+            return;
+        }
+
+        _pending.Enqueue(pcm16);
+        _pendingBytes += pcm16.Length;
+        while (_pendingBytes > MaxPendingBytes && _pending.TryDequeue(out var dropped))
+        {
+            _pendingBytes -= dropped.Length;
         }
     }
 }

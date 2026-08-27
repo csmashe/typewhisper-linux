@@ -120,7 +120,7 @@ public partial class AppearanceSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { OverlayCustomLeft = null, OverlayCustomTop = null });
+        _settings.Update(current => current with { OverlayCustomLeft = null, OverlayCustomTop = null });
     }
 
     private void OnLanguageChanged(object? sender, EventArgs e)
@@ -245,7 +245,7 @@ public partial class AppearanceSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { OverlayPosition = value.Value });
+        _settings.Update(current => current with { OverlayPosition = value.Value });
     }
 
     partial void OnSelectedLeftWidgetChanged(OverlayWidgetOption? value)
@@ -255,7 +255,7 @@ public partial class AppearanceSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { OverlayLeftWidget = value.Value });
+        _settings.Update(current => current with { OverlayLeftWidget = value.Value });
     }
 
     partial void OnSelectedRightWidgetChanged(OverlayWidgetOption? value)
@@ -265,7 +265,7 @@ public partial class AppearanceSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { OverlayRightWidget = value.Value });
+        _settings.Update(current => current with { OverlayRightWidget = value.Value });
     }
 
     partial void OnPreviewBubbleAutoHideSecondsChanged(double value)
@@ -281,8 +281,8 @@ public partial class AppearanceSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(
-            _settings.Current with { PreviewBubbleAutoHideMilliseconds = milliseconds });
+        _settings.Update(current =>
+            current with { PreviewBubbleAutoHideMilliseconds = milliseconds });
     }
 }
 

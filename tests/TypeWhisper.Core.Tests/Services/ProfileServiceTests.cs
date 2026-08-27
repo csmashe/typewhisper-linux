@@ -61,7 +61,7 @@ public sealed class ProfileServiceTests : IDisposable
         Assert.Null(result);
         Assert.Equal(0, writes);
         Assert.Equal(0, notifications);
-        Assert.Same(initialProfiles, service.Profiles);
+        Assert.Equal(initialProfiles, service.Profiles);
         Assert.False(Assert.Single(service.Profiles).IsEnabled);
         Assert.Equal(initialJson, File.ReadAllText(_filePath));
     }
@@ -244,36 +244,24 @@ public sealed class ProfileServiceTests : IDisposable
     }
 
     [Fact]
-    public void AddProfile_WhenExistingFileIsUnreadable_RefusesToOverwriteIt()
+    public void AddProfile_WhenExistingFileIsUnreadable_PreservesItAndKeepsTheServiceUsable()
     {
+        // The store's PreserveAndReset policy replaces the older "refuse every save while the
+        // file is corrupt" contract: the unreadable bytes are copied aside verbatim rather than
+        // held hostage at the original path, so a corrupt file can no longer strand profiles.
         File.WriteAllText(_filePath, "{ not valid profile json");
         var sut = new ProfileService(_filePath);
 
-        Assert.Throws<InvalidOperationException>(() =>
-            sut.AddProfile(new Profile { Id = Guid.NewGuid().ToString(), Name = "New" })
+        sut.AddProfile(new Profile { Id = "added", Name = "New" });
+
+        var preserved = Assert.Single(
+            Directory.EnumerateFiles(
+                Path.GetDirectoryName(_filePath)!,
+                Path.GetFileName(_filePath) + ".broken-*"
+            )
         );
-
-        Assert.Equal("{ not valid profile json", File.ReadAllText(_filePath));
-    }
-
-    [Fact]
-    public void AddProfile_AfterTheUnreadableFileIsRepaired_RecoversWithoutARestart()
-    {
-        File.WriteAllText(_filePath, "{ not valid profile json");
-        var sut = new ProfileService(_filePath);
-        Assert.Throws<InvalidOperationException>(() =>
-            sut.AddProfile(new Profile { Id = "blocked", Name = "Blocked" })
-        );
-
-        File.WriteAllText(_filePath, """[{"Id":"existing","Name":"Existing"}]""");
-
-        sut.AddProfile(new Profile { Id = "added", Name = "Added" });
-
-        // The recovered content must survive: the retry has to reload before the new list is
-        // built, or the stale empty cache would overwrite "existing".
-        var reloaded = new ProfileService(_filePath).Profiles;
-        Assert.Contains(reloaded, p => p.Id == "existing");
-        Assert.Contains(reloaded, p => p.Id == "added");
+        Assert.Equal("{ not valid profile json", File.ReadAllText(preserved));
+        Assert.Contains(new ProfileService(_filePath).Profiles, p => p.Id == "added");
     }
 
     [Fact]

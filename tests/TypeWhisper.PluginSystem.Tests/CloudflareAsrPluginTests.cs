@@ -77,9 +77,10 @@ public class CloudflareAsrPluginTests
         });
         using var sut = await CreateConfiguredPluginAsync(handler);
 
+        // Null, like the host sends: raw audio, no language parameter, explicit selection off.
         var result = await sut.TranscribeAsync(
             [1, 2, 3, 4],
-            "de",
+            null,
             translate: false,
             prompt: "ignored",
             CancellationToken.None
@@ -225,6 +226,56 @@ public class CloudflareAsrPluginTests
             exception.Message
         );
         Assert.Equal(0, handler.CallCount);
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData(" de-DE ")]
+    public async Task TranscribeAsync_RejectsExplicitLanguageBeforeSendingHttpRequest(
+        string language
+    )
+    {
+        var handler = new StubHttpMessageHandler((_, _) =>
+            Task.FromResult(JsonResponse("""{ "result": { "text": "unexpected" } }"""))
+        );
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        await Assert.ThrowsAsync<NotSupportedException>(
+            () =>
+                sut.TranscribeAsync(
+                    [1],
+                    language,
+                    translate: false,
+                    prompt: null,
+                    CancellationToken.None
+                )
+        );
+
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("auto")]
+    [InlineData(" AUTO ")]
+    public async Task TranscribeAsync_TreatsBlankAndAutoAsAutomaticDetection(string? language)
+    {
+        var handler = new StubHttpMessageHandler((_, _) =>
+            Task.FromResult(JsonResponse("""{ "result": { "text": "ok" } }"""))
+        );
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var result = await sut.TranscribeAsync(
+            [1],
+            language,
+            translate: false,
+            prompt: null,
+            CancellationToken.None
+        );
+
+        Assert.Equal("ok", result.Text);
+        Assert.Equal(1, handler.CallCount);
     }
 
     [Fact]

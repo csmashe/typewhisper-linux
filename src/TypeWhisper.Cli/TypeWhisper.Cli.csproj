@@ -21,4 +21,7 @@
     <ItemGroup>
         <InternalsVisibleTo Include="TypeWhisper.Cli.Tests"/>
     </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj"/>
+    </ItemGroup>
 </Project>

@@ -1,6 +1,7 @@
 using Moq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -45,7 +46,7 @@ public sealed class WelcomeWizardViewModelTests
         await nextTask.WaitAsync(s_testTimeout);
 
         harness.Settings.Verify(
-            settings => settings.Save(It.IsAny<AppSettings>()),
+            settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
             Times.Never
         );
         Assert.Equal(0, harness.ViewModel.StepIndex);
@@ -119,7 +120,7 @@ public sealed class WelcomeWizardViewModelTests
             harness.ViewModel.ModelStatus
         );
         harness.Settings.Verify(
-            settings => settings.Save(It.IsAny<AppSettings>()),
+            settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
             Times.Never
         );
     }
@@ -157,11 +158,153 @@ public sealed class WelcomeWizardViewModelTests
         );
         harness.Settings.Verify(
             settings =>
-                settings.Save(
-                    It.Is<AppSettings>(saved => saved.SelectedModelId == plugin.FullModelId)
+                settings.Update(
+                    It.Is<Func<AppSettings, AppSettings>>(mutate =>
+                        mutate(new AppSettings()).SelectedModelId == plugin.FullModelId)
                 ),
             Times.Once
         );
+    }
+
+    [Fact]
+    public async Task NextCommand_WhenModelDownloadThrows_ShowsModelFailureAndDoesNotAdvance()
+    {
+        const string expectedError = "download failed";
+        var plugin = new FakeTranscriptionPlugin
+        {
+            DownloadImplementation = _ =>
+                Task.FromException(new InvalidOperationException(expectedError)),
+        };
+        using var harness = CreateHarness(plugin);
+
+        await harness.ViewModel.NextCommand.ExecuteAsync(null);
+
+        Assert.Equal(0, harness.ViewModel.StepIndex);
+        Assert.False(harness.ViewModel.IsModelDownloading);
+        Assert.Equal(
+            Loc.Instance.GetString("Wizard.ModelFailed", expectedError),
+            harness.ViewModel.ModelStatus
+        );
+        Assert.False(Assert.Single(harness.ViewModel.AvailableModels).IsDownloaded);
+        harness.Settings.Verify(
+            settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
+            Times.Never
+        );
+    }
+
+    [Fact]
+    public async Task ToggleFirstDictationCommand_WhenAudioAlreadyOwned_ShowsStartFailureWithoutAdoptingOwner()
+    {
+        using var harness = CreateHarness();
+        var foreignSession = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            harness.Audio.TryStartRecording(whisperModeEnabled: false)
+        );
+
+        await harness.ViewModel.ToggleFirstDictationCommand.ExecuteAsync(null);
+
+        Assert.Equal(
+            Loc.Instance["Wizard.FirstDictationStartFailedGeneric"],
+            harness.ViewModel.FirstDictationStatus
+        );
+        Assert.False(harness.ViewModel.IsFirstDictationRecording);
+        Assert.True(harness.Audio.IsRecordingOwnedBy(foreignSession));
+
+        harness.Audio.ProcessAudioBufferForTest([0.1f, -0.1f]);
+        // ReSharper disable once MethodHasAsyncOverload -- synchronous teardown keeps this focused on ownership; StopRecordingAsync would add its 120ms drain for nothing.
+        Assert.True(harness.Audio.StopRecording(foreignSession).Length > 44);
+    }
+
+    [Fact]
+    public async Task ToggleFirstDictationCommand_WhenOwnedStopThrows_ShowsRecordingFailedAndLeavesRecordingFalse()
+    {
+        const string expectedError = "stop failed";
+        var audio = new AudioRecordingService(
+            _ => { },
+            () => 0,
+            () => throw new InvalidOperationException(expectedError)
+        );
+        using var harness = CreateHarness(audio: audio);
+        await harness.ViewModel.ToggleFirstDictationCommand.ExecuteAsync(null);
+        harness.Audio.ProcessAudioBufferForTest([0.1f, -0.1f]);
+
+        var exception = await Record.ExceptionAsync(
+            () => harness.ViewModel.ToggleFirstDictationCommand.ExecuteAsync(null)
+        );
+
+        Assert.Null(exception);
+        Assert.Equal(
+            Loc.Instance.GetString("Wizard.RecordingFailed", expectedError),
+            harness.ViewModel.FirstDictationStatus
+        );
+        Assert.False(harness.ViewModel.IsFirstDictationRecording);
+    }
+
+    [Fact]
+    public async Task ToggleFirstDictationCommand_WhenCaptureSessionIsStale_ShowsNoAudioCaptured()
+    {
+        using var harness = CreateHarness();
+        await harness.ViewModel.ToggleFirstDictationCommand.ExecuteAsync(null);
+        harness.Audio.ProcessAudioBufferForTest([0.1f, -0.1f]);
+        harness.Audio.Dispose();
+
+        await harness.ViewModel.ToggleFirstDictationCommand.ExecuteAsync(null);
+
+        Assert.Equal(
+            Loc.Instance["Wizard.NoAudioCaptured"],
+            harness.ViewModel.FirstDictationStatus
+        );
+        Assert.False(harness.ViewModel.IsFirstDictationRecording);
+    }
+
+    [Fact]
+    public async Task ToggleFirstDictationCommand_WhenNoModelCanBeAcquired_ShowsModelLoadFailed()
+    {
+        using var harness = CreateHarness();
+        await harness.ViewModel.ToggleFirstDictationCommand.ExecuteAsync(null);
+        harness.Audio.ProcessAudioBufferForTest([0.1f, -0.1f]);
+
+        await harness.ViewModel.ToggleFirstDictationCommand.ExecuteAsync(null);
+
+        Assert.Equal(
+            Loc.Instance["Wizard.ModelLoadFailed"],
+            harness.ViewModel.FirstDictationStatus
+        );
+        Assert.False(harness.ViewModel.IsFirstDictationRecording);
+        Assert.Equal("", harness.ViewModel.FirstDictationText);
+    }
+
+    [Fact]
+    public async Task ToggleFirstDictationCommand_WhenPluginTranscriptionThrows_ShowsTranscriptionFailed()
+    {
+        const string expectedError = "transcription failed";
+        byte[]? transcribedAudio = null;
+        var transcriptionInvocations = 0;
+        var plugin = new FakeTranscriptionPlugin
+        {
+            TranscribeImplementation = (wav, _) =>
+            {
+                transcribedAudio = wav;
+                transcriptionInvocations++;
+                return Task.FromException<PluginTranscriptionResult>(
+                    new InvalidOperationException(expectedError)
+                );
+            },
+        };
+        using var harness = CreateHarness(plugin);
+        await harness.ViewModel.NextCommand.ExecuteAsync(null);
+        await harness.ViewModel.ToggleFirstDictationCommand.ExecuteAsync(null);
+        harness.Audio.ProcessAudioBufferForTest([0.1f, -0.1f]);
+
+        await harness.ViewModel.ToggleFirstDictationCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, transcriptionInvocations);
+        Assert.True(Assert.IsType<byte[]>(transcribedAudio).Length > 44);
+        Assert.Equal(
+            Loc.Instance.GetString("Wizard.TranscriptionFailed", expectedError),
+            harness.ViewModel.FirstDictationStatus
+        );
+        Assert.False(harness.ViewModel.IsFirstDictationRecording);
+        Assert.Equal("", harness.ViewModel.FirstDictationText);
     }
 
     [Fact]
@@ -192,6 +335,46 @@ public sealed class WelcomeWizardViewModelTests
         Assert.False(row.RanLocally);
     }
 
+    [Fact]
+    public async Task AudioLevel_DeliveryIsDirectAndActivityCleanupGatesLaterLevels()
+    {
+        var timeProvider = new ManualTimeProvider();
+        var serviceJobs = new List<Action>();
+        using var harness = CreateHarness(
+            audioTimeProvider: timeProvider,
+            audioPostToUiThread: serviceJobs.Add
+        );
+
+        harness.ViewModel.ToggleMicTestCommand.Execute(null);
+        Assert.True(harness.ViewModel.IsMicTestRunning);
+        harness.Audio.ProcessAudioBufferForTest([0.1f]);
+        serviceJobs[0]();
+        Assert.Equal(0.8, harness.ViewModel.MicLevel, precision: 5);
+
+        harness.ViewModel.IsMicTestRunning = false;
+        harness.ViewModel.MicLevel = 0;
+        timeProvider.Advance(TimeSpan.FromMilliseconds(66));
+        harness.Audio.ProcessAudioBufferForTest([0.2f]);
+        serviceJobs[1]();
+        Assert.Equal(0, harness.ViewModel.MicLevel);
+
+        harness.ViewModel.Cleanup();
+        timeProvider.Advance(TimeSpan.FromMilliseconds(66));
+        harness.Audio.ProcessAudioBufferForTest([0.3f]);
+        serviceJobs[2]();
+        Assert.Equal(0, harness.ViewModel.MicLevel);
+
+        var firstDictationJobs = new List<Action>();
+        using var firstDictationHarness = CreateHarness(
+            audioPostToUiThread: firstDictationJobs.Add
+        );
+        await firstDictationHarness.ViewModel.ToggleFirstDictationCommand.ExecuteAsync(null);
+        Assert.True(firstDictationHarness.ViewModel.IsFirstDictationRecording);
+        firstDictationHarness.Audio.ProcessAudioBufferForTest([0.2f]);
+        firstDictationJobs[0]();
+        Assert.Equal(1, firstDictationHarness.ViewModel.MicLevel);
+    }
+
     private static Mock<ISetupTask> CreateSetupTask()
     {
         var setupTask = new Mock<ISetupTask>();
@@ -208,7 +391,10 @@ public sealed class WelcomeWizardViewModelTests
     private static TestHarness CreateHarness(
         FakeTranscriptionPlugin? plugin = null,
         IReadOnlyList<ISetupTask>? setupTasks = null,
-        IReadOnlyList<LoadedPlugin>? loadedPlugins = null
+        IReadOnlyList<LoadedPlugin>? loadedPlugins = null,
+        TimeProvider? audioTimeProvider = null,
+        Action<Action>? audioPostToUiThread = null,
+        AudioRecordingService? audio = null
     )
     {
         var settings = TestPluginManagerFactory.CreateSettings(AppSettings.Default);
@@ -224,7 +410,17 @@ public sealed class WelcomeWizardViewModelTests
         var hotkey = new HotkeyService(
             new BackendSelector(static () => new TestShortcutBackend())
         );
-        var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
+        Debug.Assert(
+            audio is null || (audioTimeProvider is null && audioPostToUiThread is null),
+            "audio overrides the timeProvider/postToUiThread seams"
+        );
+        audio ??= new AudioRecordingService(
+            _ => { },
+            () => 0,
+            () => { },
+            timeProvider: audioTimeProvider,
+            postToUiThread: audioPostToUiThread
+        );
         var commands = CreateCommandsWithoutHostProbes();
         var textInsertion = new TextInsertionService(new NoOpTextInsertionPlatform());
         var dictionary = new Mock<IDictionaryService>();
@@ -301,6 +497,21 @@ public sealed class WelcomeWizardViewModelTests
         return new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+
+        public override long GetTimestamp()
+        {
+            return _timestamp;
+        }
+
+        public void Advance(TimeSpan elapsed)
+        {
+            _timestamp += (long)(elapsed.TotalSeconds * TimestampFrequency);
+        }
+    }
+
     private sealed class TestHarness : IDisposable
     {
         public TestHarness(
@@ -325,7 +536,7 @@ public sealed class WelcomeWizardViewModelTests
         private ModelManagerService Models { get; }
         private PluginManager PluginManager { get; }
         private HotkeyService Hotkey { get; }
-        private AudioRecordingService Audio { get; }
+        public AudioRecordingService Audio { get; }
 
         public void Dispose()
         {
@@ -346,6 +557,13 @@ public sealed class WelcomeWizardViewModelTests
 
         public Func<CancellationToken, Task> DownloadImplementation { get; init; } =
             _ => Task.CompletedTask;
+
+        public Func<byte[], CancellationToken, Task<PluginTranscriptionResult>>
+            TranscribeImplementation { get; init; } =
+            (_, _) =>
+                Task.FromResult(
+                    new PluginTranscriptionResult("", DetectedLanguage: null, 0)
+                );
 
         public TaskCompletionSource<CancellationToken> DownloadStarted { get; } =
             NewCompletionSource<CancellationToken>();
@@ -412,9 +630,7 @@ public sealed class WelcomeWizardViewModelTests
             CancellationToken ct
         )
         {
-            return Task.FromResult(
-                new PluginTranscriptionResult("", DetectedLanguage: null, 0)
-            );
+            return TranscribeImplementation(wavAudio, ct);
         }
 
         public void Dispose() { }

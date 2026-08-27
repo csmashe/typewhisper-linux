@@ -18,19 +18,35 @@ public sealed class AudioPlaybackService : IDisposable
     private static readonly Lock s_paInitLock = new();
 
     private readonly Lock _gate = new();
+    private readonly Action _terminateNative;
+    private readonly Action<string>? _playNative;
     private readonly bool _portAudioReady;
     private int _position;
     private float[] _samples = [];
     private PaStream? _stream;
 
     public AudioPlaybackService()
+        : this(EnsurePortAudioInitialized, EnsurePortAudioTerminated, null)
     {
+    }
+
+    internal AudioPlaybackService(
+        Action initializeNative,
+        Action terminateNative,
+        Action<string>? playNative
+    )
+    {
+        ArgumentNullException.ThrowIfNull(initializeNative);
+        ArgumentNullException.ThrowIfNull(terminateNative);
+        _terminateNative = terminateNative;
+        _playNative = playNative;
+
         // DI resolves this during startup, so a missing native audio stack must not throw
         // here: the exception would unwind out of the app before a window ever shows. Play
         // already treats PortAudio failing at call time as a no-op with a trace line.
         try
         {
-            EnsurePortAudioInitialized();
+            initializeNative();
             _portAudioReady = true;
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
@@ -48,7 +64,7 @@ public sealed class AudioPlaybackService : IDisposable
         // Only balance the reference count we actually took.
         if (_portAudioReady)
         {
-            EnsurePortAudioTerminated();
+            _terminateNative();
         }
     }
 
@@ -60,6 +76,12 @@ public sealed class AudioPlaybackService : IDisposable
 
     public void Play(string audioFileName)
     {
+        if (_playNative is not null)
+        {
+            _playNative(audioFileName);
+            return;
+        }
+
         if (ResolveAudioPath(audioFileName) is not { } path || !File.Exists(path))
         {
             return;

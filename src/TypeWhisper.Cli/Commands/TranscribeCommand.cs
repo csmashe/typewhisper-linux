@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using TypeWhisper.Cli.Models;
 using TypeWhisper.Cli.Output;
 using TypeWhisper.Cli.Services;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Cli.Commands;
 
@@ -34,6 +35,19 @@ internal static partial class TranscribeCommand
         if (!string.IsNullOrEmpty(options.Language) && options.LanguageHints.Count > 0)
         {
             return ConsoleOutput.Error("--language and --language-hint cannot be used together.");
+        }
+
+        string? canonicalLanguage = null;
+        if (!string.IsNullOrWhiteSpace(options.Language))
+        {
+            if (!LanguageSelection.TryParse(options.Language, out var selection))
+            {
+                return ConsoleOutput.Error(
+                    $"Invalid value '{options.Language.Trim()}' for --language. Use 'auto' or a valid BCP-47 tag."
+                );
+            }
+
+            canonicalLanguage = selection.ToString();
         }
 
         var file = options.Positionals.FirstOrDefault();
@@ -79,7 +93,7 @@ internal static partial class TranscribeCommand
             // forwards the body verbatim, so trim here to keep --engine " whisper " working.
             var request = new LocalFileTranscribeRequest(
                 localPath,
-                Clean(options.Language),
+                canonicalLanguage,
                 [.. options.LanguageHints.Select(Clean).OfType<string>()],
                 Clean(options.Task),
                 Clean(options.TranslateTo),
