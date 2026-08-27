@@ -150,6 +150,8 @@ function Get-PluginRegistryProjection {
     [pscustomobject][ordered]@{
         categories = $categories
         networkAccess = $networkAccess
+        # Canonical $categoryNames precedence (not manifest declaration order)
+        # decides which category becomes the legacy singular field.
         category = @($categoryNames.Values | Where-Object { $_ -in $categories })[0]
         isLocal = $networkAccess -eq 'local'
     }

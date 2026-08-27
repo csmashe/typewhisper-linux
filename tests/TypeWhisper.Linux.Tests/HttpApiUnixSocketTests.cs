@@ -421,6 +421,32 @@ public sealed class HttpApiUnixSocketTests
     }
 
     [Fact]
+    public async Task LocalFileEndpointKnownExtensionWithoutFfmpegReturnsServiceUnavailable()
+    {
+        using var fixture = new ApiFixture(ffmpegAvailable: false);
+        fixture.Start();
+        var audioPath = fixture.CreateSupportedAudioFile();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = new StringContent(
+            $$"""{"path":{{JsonSerializer.Serialize(audioPath)}}}""",
+            Encoding.UTF8,
+            "application/json"
+        );
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        // A recognized extension passes the format gate without ffmpeg; the
+        // conversion requires it, so the endpoint answers 503 with a stable
+        // reason instead of the loader's failure surfacing as a generic 500.
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "audio_importer_unavailable",
+            json.RootElement.GetProperty("reason").GetString()
+        );
+    }
+
+    [Fact]
     public async Task LocalFileEndpointProbeTimeoutReturnsServiceUnavailable()
     {
         using var fixture = new ApiFixture(
@@ -452,6 +478,74 @@ public sealed class HttpApiUnixSocketTests
         );
         Assert.Equal(
             "audio_probe_timeout",
+            json.RootElement.GetProperty("reason").GetString()
+        );
+    }
+
+    [Fact]
+    public async Task LocalFileEndpointRejectsFifoWithoutInvokingFfmpeg()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        // A FIFO passes File.Exists, and ffmpeg opening it would block until a
+        // writer appears — pinning a dispatcher slot for the client's lifetime.
+        var fifoPath = fixture.CreateFifo("pipe.wav");
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = new StringContent(
+            $$"""{"path":{{JsonSerializer.Serialize(fifoPath)}}}""",
+            Encoding.UTF8,
+            "application/json"
+        );
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "Not a regular file",
+            json.RootElement.GetProperty("error").GetString()
+        );
+        Assert.Equal(
+            "not_a_regular_file",
+            json.RootElement.GetProperty("reason").GetString()
+        );
+        Assert.Empty(fixture.ProcessRunner.SupervisorInvocations);
+    }
+
+    [Fact]
+    public async Task LocalFileEndpointConversionTimeoutReturnsServiceUnavailable()
+    {
+        using var fixture = new ApiFixture(
+            audioProbeResult: new ProcessRunOutcome(
+                ProcessRunStatus.TimedOut,
+                null,
+                [],
+                [],
+                ProcessOutputStatus.Complete,
+                null
+            )
+        );
+        fixture.Start();
+        // The recognized .wav extension skips the probe, so the staged TimedOut
+        // outcome is consumed by the conversion run.
+        var audioPath = fixture.CreateSupportedAudioFile();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = new StringContent(
+            $$"""{"path":{{JsonSerializer.Serialize(audioPath)}}}""",
+            Encoding.UTF8,
+            "application/json"
+        );
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "Audio conversion timed out",
+            json.RootElement.GetProperty("error").GetString()
+        );
+        Assert.Equal(
+            "audio_conversion_timeout",
             json.RootElement.GetProperty("reason").GetString()
         );
     }
@@ -608,7 +702,8 @@ public sealed class HttpApiUnixSocketTests
         internal ApiFixture(
             Func<Socket, bool>? validateUnixPeer = null,
             Mock<IHistoryService>? history = null,
-            ProcessRunOutcome? audioProbeResult = null
+            ProcessRunOutcome? audioProbeResult = null,
+            bool ffmpegAvailable = true
         )
         {
             Port = GetFreeTcpPort();
@@ -655,9 +750,10 @@ public sealed class HttpApiUnixSocketTests
             };
             var commands = new SystemCommandAvailabilityService(ProcessRunner);
             // The content probe short-circuits to "unsupported" when ffmpeg is
-            // absent, so probe-path tests need it declared available.
+            // absent, so probe-path tests need it declared available; the
+            // importer-unavailable tests opt out.
             commands.RaiseSnapshotChangedForTests(
-                commands.GetSnapshot() with { HasFfmpeg = true }
+                commands.GetSnapshot() with { HasFfmpeg = ffmpegAvailable }
             );
             ProcessRunner.Invocations.Clear();
             ProcessRunner.SupervisorInvocations.Clear();
@@ -719,6 +815,15 @@ public sealed class HttpApiUnixSocketTests
         {
             var path = Path.Join(_tempDirectory, fileName);
             File.WriteAllBytes(path, []);
+            return path;
+        }
+
+        internal string CreateFifo(string fileName)
+        {
+            var path = Path.Join(_tempDirectory, fileName);
+            using var mkfifo = System.Diagnostics.Process.Start("mkfifo", [path]);
+            mkfifo.WaitForExit();
+            Assert.Equal(0, mkfifo.ExitCode);
             return path;
         }
 

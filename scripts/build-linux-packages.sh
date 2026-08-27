@@ -72,21 +72,71 @@ compute_bundle_identity() {
 
 compute_glibc_floor() {
   local payload_root="$1"
-  local candidate floor
+  local candidate candidate_list verneed verneeds floors floor
 
-  floor="$(
+  # Enumerate through a checked find first: process substitution would hide a
+  # partial enumeration failure and silently under-floor the packages.
+  candidate_list="$(mktemp)"
+  if ! find "$payload_root" \( -type f -o -type l \) -print0 >"$candidate_list"; then
+    rm -f "$candidate_list"
+    echo "ERROR: failed to enumerate payload files under $payload_root" >&2
+    return 1
+  fi
+
+  # One "GLIBC_<name> <path>" line per distinct GLIBC_* verneed per ELF, so an
+  # unrecognized name can be reported with the binary that requires it. A
+  # failing readelf -V is fatal: tolerating it would drop that ELF's verneeds
+  # and silently under-floor the packages. grep exit 1 is tolerated — it
+  # just means the ELF has no GLIBC verneeds (e.g. a static binary).
+  if ! verneeds="$(
     while IFS= read -r -d '' candidate; do
       if readelf -h "$candidate" >/dev/null 2>&1; then
-        readelf -V "$candidate" 2>/dev/null || true
+        if ! version_info="$(readelf -V "$candidate" 2>/dev/null)"; then
+          echo "ERROR: readelf -V failed for $candidate" >&2
+          exit 1
+        fi
+        grep_status=0
+        candidate_verneeds="$(grep -oE 'GLIBC_[0-9A-Za-z_.]+' <<<"$version_info")" \
+          || grep_status=$?
+        if [ "$grep_status" -gt 1 ]; then
+          echo "ERROR: scanning GLIBC verneeds failed for $candidate" >&2
+          exit 1
+        fi
+        if [ -n "$candidate_verneeds" ]; then
+          LC_ALL=C sort -u <<<"$candidate_verneeds" \
+            | while IFS= read -r verneed; do
+                printf '%s %s\n' "$verneed" "$candidate"
+              done
+        fi
       fi
-    done < <(find "$payload_root" \( -type f -o -type l \) -print0) \
-      | grep -oE 'GLIBC_2\.[0-9]+' \
-      | LC_ALL=C sort -Vu \
-      | tail -n 1 \
-      || true
-  )"
-  floor="${floor#GLIBC_}"
-  [[ "$floor" =~ ^2\.[0-9]+$ ]] \
+    done <"$candidate_list"
+  )"; then
+    rm -f "$candidate_list"
+    return 1
+  fi
+  rm -f "$candidate_list"
+
+  # Verneed names are not all numeric versions, and numeric ones may carry
+  # three components (x86-64's glibc baseline is GLIBC_2.2.5). GLIBC_ABI_DT_RELR
+  # marks packed DT_RELR relocations, which glibc first loads at 2.36, so it
+  # competes as a 2.36 floor candidate. Any other name (GLIBC_PRIVATE included)
+  # has no known version mapping and must fail here rather than silently
+  # under-floor the packages.
+  floors=""
+  while IFS=' ' read -r verneed candidate; do
+    [ -n "$verneed" ] || continue
+    if [[ "$verneed" =~ ^GLIBC_2\.[0-9]+(\.[0-9]+)?$ ]]; then
+      floors+="${verneed#GLIBC_}"$'\n'
+    elif [ "$verneed" = "GLIBC_ABI_DT_RELR" ]; then
+      floors+="2.36"$'\n'
+    else
+      echo "ERROR: unrecognized GLIBC verneed '$verneed' required by $candidate; map it to a glibc version floor before shipping" >&2
+      return 1
+    fi
+  done <<<"$verneeds"
+
+  floor="$(printf '%s' "$floors" | LC_ALL=C sort -Vu | tail -n 1)"
+  [[ "$floor" =~ ^2\.[0-9]+(\.[0-9]+)?$ ]] \
     || { echo "ERROR: could not determine the staged payload's GLIBC floor" >&2; return 1; }
   printf '%s\n' "$floor"
 }

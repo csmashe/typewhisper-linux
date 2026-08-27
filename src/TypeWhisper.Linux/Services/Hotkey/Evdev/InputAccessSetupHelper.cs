@@ -785,9 +785,11 @@ public sealed partial class InputAccessSetupHelper
               set -f
               for input_group_name in $input_group_names; do
                 if [ "$input_group_name" = input ]; then
+                  set +f
                   return 0
                 fi
               done
+              set +f
               return 1
             }
 

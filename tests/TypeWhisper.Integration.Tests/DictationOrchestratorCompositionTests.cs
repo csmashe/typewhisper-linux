@@ -1,13 +1,12 @@
 using Microsoft.Extensions.DependencyInjection;
-using System.Reflection;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
-using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.Tests;
 using Xunit;
 
 namespace TypeWhisper.Integration.Tests;
@@ -287,7 +286,7 @@ public sealed class DictationOrchestratorCompositionTests
                 focusedApp: ("language-app", "Language app — integration")
             );
             var constrained = new LanguageConstrainedRole(fixture.Plugin);
-            SetTranscriptionEngines(fixture.PluginManager, [constrained]);
+            PluginManagerTestAccess.SetTranscriptionEngines(fixture.PluginManager, [constrained]);
             var profiles = fixture.Provider.GetRequiredService<IProfileService>();
             profiles.AddProfile(
                 new Profile
@@ -327,23 +326,6 @@ public sealed class DictationOrchestratorCompositionTests
             Assert.Empty(fixture.InsertionPlatform.Typed);
             Assert.Empty(fixture.History.Records);
         });
-    }
-
-    private static void SetTranscriptionEngines(
-        PluginManager pluginManager,
-        IReadOnlyList<ITranscriptionEngineRole> engines
-    )
-    {
-        var field =
-            typeof(PluginManager).GetField(
-                "_transcriptionEngines",
-                BindingFlags.Instance | BindingFlags.NonPublic
-            )
-            ?? throw new MissingFieldException(
-                typeof(PluginManager).FullName,
-                "_transcriptionEngines"
-            );
-        field.SetValue(pluginManager, engines.ToList());
     }
 
     private sealed class LanguageConstrainedRole(ITranscriptionEngineRole inner)

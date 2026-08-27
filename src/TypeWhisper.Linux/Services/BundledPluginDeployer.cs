@@ -457,6 +457,8 @@ public sealed class BundledPluginDeployer
         return new Fingerprints(content.GetHashAndReset(), stat.GetHashAndReset());
     }
 
+    // Retained solely so tests can fabricate a published identity; production markers
+    // come from the packaging script, whose hash algorithm differs from this one.
     internal static byte[] ComputeContentFingerprint(string root)
     {
         return ComputeFingerprints(root).Content;

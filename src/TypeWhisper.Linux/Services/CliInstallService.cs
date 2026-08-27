@@ -321,39 +321,66 @@ public sealed class CliInstallService
 
     private static string? FindBundledCliPath()
     {
-        var sourceDirectory = Path.Join(AppContext.BaseDirectory, "..", "..", "..", "..");
-        return FindBundledCliPath(AppContext.BaseDirectory, sourceDirectory);
+        return FindBundledCliPath(
+            AppContext.BaseDirectory,
+            FindDevelopmentSourceDirectory(AppContext.BaseDirectory)
+        );
+    }
+
+    // The output directory sits at varying depths under src/ (bin/<Config>/net10.0,
+    // plus optional RID and publish segments), so walk up until the directory holding
+    // the CLI project appears instead of counting a fixed number of parents.
+    internal static string? FindDevelopmentSourceDirectory(string baseDirectory)
+    {
+        var current = new DirectoryInfo(Path.GetFullPath(baseDirectory));
+        for (var depth = 0; current is not null && depth < 8; depth++)
+        {
+            if (Directory.Exists(Path.Join(current.FullName, "TypeWhisper.Cli")))
+            {
+                return current.FullName;
+            }
+
+            current = current.Parent;
+        }
+
+        return null;
     }
 
     // Parameterized only so tests can probe isolated package and source trees.
-    internal static string? FindBundledCliPath(string baseDirectory, string sourceDirectory)
+    // A null sourceDirectory (packaged installs run outside any source tree)
+    // limits discovery to the packaged Cli/ candidate.
+    internal static string? FindBundledCliPath(string baseDirectory, string? sourceDirectory)
     {
         // For local development, prepare the CLI with:
         // dotnet publish src/TypeWhisper.Cli/TypeWhisper.Cli.csproj -c Debug -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false
-        var candidates = new[]
+        var candidates = new List<string> { Path.Join(baseDirectory, "Cli", CliFileName) };
+        if (sourceDirectory is not null)
         {
-            Path.Join(baseDirectory, "Cli", CliFileName),
-            Path.Join(
-                sourceDirectory,
-                "TypeWhisper.Cli",
-                "bin",
-                "Debug",
-                "net10.0",
-                "linux-x64",
-                "publish",
-                CliFileName
-            ),
-            Path.Join(
-                sourceDirectory,
-                "TypeWhisper.Cli",
-                "bin",
-                "Release",
-                "net10.0",
-                "linux-x64",
-                "publish",
-                CliFileName
-            ),
-        };
+            candidates.Add(
+                Path.Join(
+                    sourceDirectory,
+                    "TypeWhisper.Cli",
+                    "bin",
+                    "Debug",
+                    "net10.0",
+                    "linux-x64",
+                    "publish",
+                    CliFileName
+                )
+            );
+            candidates.Add(
+                Path.Join(
+                    sourceDirectory,
+                    "TypeWhisper.Cli",
+                    "bin",
+                    "Release",
+                    "net10.0",
+                    "linux-x64",
+                    "publish",
+                    CliFileName
+                )
+            );
+        }
 
         return candidates.Select(Path.GetFullPath).FirstOrDefault(IsCliAppHost);
     }

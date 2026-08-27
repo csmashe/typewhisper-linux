@@ -8,6 +8,8 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class OverlayCoordinatorTests
 {
+    private const int ConfiguredAutoHideMilliseconds = 1500;
+
     [Fact]
     public void ForeignStaleAndReleasedTokens_AreNoOps()
     {
@@ -127,6 +129,60 @@ public sealed class OverlayCoordinatorTests
     }
 
     [Fact]
+    public void PostWorkflowToast_RanksTransientAndPresentedTerminalFeedbackSurvives()
+    {
+        var scheduler = new ManualScheduler();
+        var sut = CreateCoordinator(scheduler);
+        var dictation = sut.Acquire(OverlayRequester.Dictation);
+        Assert.True(sut.Show(dictation, Recording("dictation recording")));
+        Assert.True(sut.Hide(dictation));
+
+        var transform = sut.Acquire(OverlayRequester.Transform);
+        Assert.True(sut.Show(transform, Processing("transform processing")));
+        Assert.True(sut.Show(transform, Feedback("transform done")));
+        Assert.Equal("transform done", sut.PresentedState.FeedbackText);
+
+        // The dictation claim is deliberately OLDER: if its ended workflow wrongly kept
+        // terminal rank, this toast would win the age tie and the arbitration pass would
+        // permanently discard the presented transform outcome.
+        Assert.True(sut.Show(dictation, Feedback("dictation toast")));
+
+        Assert.Equal("transform done", sut.PresentedState.FeedbackText);
+
+        scheduler.Fire(0);
+
+        Assert.Equal("dictation toast", sut.PresentedState.FeedbackText);
+
+        scheduler.Fire(1);
+
+        Assert.Equal(DictationOverlayState.Hidden, sut.PresentedState);
+    }
+
+    [Fact]
+    public void SettingsReadFailure_ArmsDefaultExpiryInsteadOfStickingFeedback()
+    {
+        var scheduler = new ManualScheduler();
+        var sut = new OverlayCoordinator(
+            new ThrowingSettingsService(),
+            static action => action(),
+            scheduler.Schedule
+        );
+        var token = sut.Acquire(OverlayRequester.Dictation);
+
+        Assert.True(sut.Show(token, Feedback("feedback")));
+
+        Assert.Equal("feedback", sut.PresentedState.FeedbackText);
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(AppSettings.DefaultPreviewBubbleAutoHideMilliseconds),
+            scheduler.LastDelay
+        );
+
+        scheduler.Fire(0);
+
+        Assert.Equal(DictationOverlayState.Hidden, sut.PresentedState);
+    }
+
+    [Fact]
     public void PresentedFeedbackExpiry_FallsBackToOtherLiveTokenThenHidden()
     {
         var scheduler = new ManualScheduler();
@@ -148,24 +204,60 @@ public sealed class OverlayCoordinatorTests
     }
 
     [Fact]
-    public void SuppressedFeedbackExpiry_DoesNotTouchPresentation()
+    public void SuppressedFeedback_KeepsItsBudgetAndPresentsAfterTheWinnerEnds()
     {
         var scheduler = new ManualScheduler();
-        var presentations = new List<OverlayPresentationChangedEventArgs>();
         var sut = CreateCoordinator(scheduler);
-        sut.PresentationChanged += (_, presentation) => presentations.Add(presentation);
         var recording = sut.Acquire(OverlayRequester.Dictation);
         var transient = sut.Acquire(OverlayRequester.Transform);
         Assert.True(sut.Show(recording, Recording("recording")));
         Assert.True(sut.Show(transient, Feedback("transient")));
-        var revision = sut.Revision;
-        var presentationCount = presentations.Count;
+
+        // The suppressed toast must not burn its display budget while it waits:
+        // no expiry is armed until it actually presents, so it cannot expire
+        // retired without ever having been seen behind a long recording.
+        Assert.False(scheduler.HasLiveEntries);
+        Assert.Equal("recording", sut.PresentedState.StatusText);
+
+        Assert.True(sut.Hide(recording));
+
+        Assert.Equal("transient", sut.PresentedState.FeedbackText);
+        Assert.True(scheduler.HasLiveEntries);
+        // The budget armed at presentation is the FULL configured duration, not a
+        // remainder discounted by the time spent suppressed.
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(ConfiguredAutoHideMilliseconds),
+            scheduler.LastDelay
+        );
 
         scheduler.Fire(0);
 
-        Assert.Equal("recording", sut.PresentedState.StatusText);
-        Assert.Equal(revision, sut.Revision);
-        Assert.Equal(presentationCount, presentations.Count);
+        Assert.Equal(DictationOverlayState.Hidden, sut.PresentedState);
+    }
+
+    [Fact]
+    public void MidWorkflowStateBlank_KeepsTerminalRankForTheWorkflowOutcome()
+    {
+        var scheduler = new ManualScheduler();
+        var sut = CreateCoordinator(scheduler);
+        var transform = sut.Acquire(OverlayRequester.Transform);
+        var dictation = sut.Acquire(OverlayRequester.Dictation);
+        Assert.True(sut.Show(dictation, Recording("dictation recording")));
+
+        // The producer blanks the overlay MID-workflow via a state publication
+        // (e.g. while a command streams its output into the page). Unlike Hide,
+        // this must not end the workflow.
+        Assert.True(sut.Update(dictation, _ => DictationOverlayState.Hidden));
+
+        // A deliberately OLDER transient toast would win an age tie between
+        // equal ranks, so a wrongly demoted outcome could never present.
+        Assert.True(sut.Show(transform, Feedback("transform transient")));
+        Assert.Equal("transform transient", sut.PresentedState.FeedbackText);
+
+        // The workflow's real terminal outcome arrives through the same token
+        // and must still rank TerminalFeedback, preempting the transient toast.
+        Assert.True(sut.Show(dictation, Feedback("dictation outcome")));
+        Assert.Equal("dictation outcome", sut.PresentedState.FeedbackText);
     }
 
     [Fact]
@@ -210,7 +302,10 @@ public sealed class OverlayCoordinatorTests
     private static OverlayCoordinator CreateCoordinator(ManualScheduler? scheduler = null)
     {
         var settings = new FakeSettingsService(
-            AppSettings.Default with { PreviewBubbleAutoHideMilliseconds = 1500 }
+            AppSettings.Default with
+            {
+                PreviewBubbleAutoHideMilliseconds = ConfiguredAutoHideMilliseconds,
+            }
         );
         return new OverlayCoordinator(
             settings,
@@ -270,8 +365,11 @@ public sealed class OverlayCoordinatorTests
 
         public bool HasLiveEntries => _entries.Any(entry => !entry.IsCancelled);
 
+        public TimeSpan? LastDelay { get; private set; }
+
         public IDisposable Schedule(TimeSpan delay, Action callback)
         {
+            LastDelay = delay;
             var entry = new ScheduledEntry(callback);
             _entries.Add(entry);
             return entry;
@@ -298,6 +396,32 @@ public sealed class OverlayCoordinatorTests
             {
                 IsCancelled = true;
             }
+        }
+    }
+
+    // Models AtomicJsonStore.Current failing its lazy reload from disk.
+    private sealed class ThrowingSettingsService : ISettingsService
+    {
+        public AppSettings Current => throw new IOException("settings reload failed");
+
+        public AppSettings Load()
+        {
+            throw new IOException("settings reload failed");
+        }
+
+        public void Save(AppSettings settings)
+        {
+        }
+
+        public AppSettings Update(Func<AppSettings, AppSettings> mutate)
+        {
+            throw new IOException("settings reload failed");
+        }
+
+        public event Action<AppSettings>? SettingsChanged
+        {
+            add { }
+            remove { }
         }
     }
 

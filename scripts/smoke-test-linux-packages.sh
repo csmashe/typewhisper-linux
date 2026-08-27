@@ -52,21 +52,71 @@ compute_bundle_identity() {
 
 compute_glibc_floor() {
   local payload_root="$1"
-  local candidate floor
+  local candidate candidate_list verneed verneeds floors floor
 
-  floor="$(
+  # Enumerate through a checked find first: process substitution would hide a
+  # partial enumeration failure and silently under-floor the packages.
+  candidate_list="$(mktemp)"
+  if ! find "$payload_root" \( -type f -o -type l \) -print0 >"$candidate_list"; then
+    rm -f "$candidate_list"
+    echo "ERROR: failed to enumerate payload files under $payload_root" >&2
+    return 1
+  fi
+
+  # One "GLIBC_<name> <path>" line per distinct GLIBC_* verneed per ELF, so an
+  # unrecognized name can be reported with the binary that requires it. A
+  # failing readelf -V is fatal: tolerating it would drop that ELF's verneeds
+  # and silently under-floor the packages. grep exit 1 is tolerated — it
+  # just means the ELF has no GLIBC verneeds (e.g. a static binary).
+  if ! verneeds="$(
     while IFS= read -r -d '' candidate; do
       if readelf -h "$candidate" >/dev/null 2>&1; then
-        readelf -V "$candidate" 2>/dev/null || true
+        if ! version_info="$(readelf -V "$candidate" 2>/dev/null)"; then
+          echo "ERROR: readelf -V failed for $candidate" >&2
+          exit 1
+        fi
+        grep_status=0
+        candidate_verneeds="$(grep -oE 'GLIBC_[0-9A-Za-z_.]+' <<<"$version_info")" \
+          || grep_status=$?
+        if [ "$grep_status" -gt 1 ]; then
+          echo "ERROR: scanning GLIBC verneeds failed for $candidate" >&2
+          exit 1
+        fi
+        if [ -n "$candidate_verneeds" ]; then
+          LC_ALL=C sort -u <<<"$candidate_verneeds" \
+            | while IFS= read -r verneed; do
+                printf '%s %s\n' "$verneed" "$candidate"
+              done
+        fi
       fi
-    done < <(find "$payload_root" \( -type f -o -type l \) -print0) \
-      | grep -oE 'GLIBC_2\.[0-9]+' \
-      | LC_ALL=C sort -Vu \
-      | tail -n 1 \
-      || true
-  )"
-  floor="${floor#GLIBC_}"
-  [[ "$floor" =~ ^2\.[0-9]+$ ]] \
+    done <"$candidate_list"
+  )"; then
+    rm -f "$candidate_list"
+    return 1
+  fi
+  rm -f "$candidate_list"
+
+  # Verneed names are not all numeric versions, and numeric ones may carry
+  # three components (x86-64's glibc baseline is GLIBC_2.2.5). GLIBC_ABI_DT_RELR
+  # marks packed DT_RELR relocations, which glibc first loads at 2.36, so it
+  # competes as a 2.36 floor candidate. Any other name (GLIBC_PRIVATE included)
+  # has no known version mapping and must fail here rather than silently
+  # under-floor the packages.
+  floors=""
+  while IFS=' ' read -r verneed candidate; do
+    [ -n "$verneed" ] || continue
+    if [[ "$verneed" =~ ^GLIBC_2\.[0-9]+(\.[0-9]+)?$ ]]; then
+      floors+="${verneed#GLIBC_}"$'\n'
+    elif [ "$verneed" = "GLIBC_ABI_DT_RELR" ]; then
+      floors+="2.36"$'\n'
+    else
+      echo "ERROR: unrecognized GLIBC verneed '$verneed' required by $candidate; map it to a glibc version floor before shipping" >&2
+      return 1
+    fi
+  done <<<"$verneeds"
+
+  floor="$(printf '%s' "$floors" | LC_ALL=C sort -Vu | tail -n 1)"
+  [[ "$floor" =~ ^2\.[0-9]+(\.[0-9]+)?$ ]] \
     || { echo "ERROR: could not determine the staged payload's GLIBC floor" >&2; return 1; }
   printf '%s\n' "$floor"
 }
@@ -249,7 +299,8 @@ install_ubuntu_runtime() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
   # Tarballs and AppImages have no package resolver, so install the full hard
-  # closure plus the weak desktop integrations used by the execution probes.
+  # closure plus the weak desktop integrations. Probe-only tooling (Xvfb,
+  # dbus-run-session) comes from install_ubuntu_probe_infrastructure instead.
   apt-get install -y --no-install-recommends \
     ca-certificates \
     dbus-x11 \
@@ -286,8 +337,7 @@ install_ubuntu_runtime() {
     libxtst6 \
     tar \
     tzdata \
-    zlib1g \
-    xvfb
+    zlib1g
 }
 
 install_ubuntu_probe_infrastructure() {
@@ -311,6 +361,7 @@ container_smoke_tarball() {
   local app_root extracted install_script
 
   install_ubuntu_runtime
+  install_ubuntu_probe_infrastructure
   assert_no_system_dotnet
   prepare_isolated_profile
 
@@ -380,6 +431,7 @@ container_smoke_appimage() {
   local app_run cli_executable
 
   install_ubuntu_runtime
+  install_ubuntu_probe_infrastructure
   assert_no_system_dotnet
   prepare_isolated_profile
 
@@ -747,9 +799,12 @@ mkdir -p "$TARBALL_EXTRACT" "$APPIMAGE_EXTRACT" "$DEB_EXTRACT" "$RPM_EXTRACT"
 echo "==> Extracting every package format on the runner"
 tar -xzf "$EXPECTED_TARBALL" --no-same-owner -C "$TARBALL_EXTRACT"
 dpkg-deb --extract "$EXPECTED_DEB" "$DEB_EXTRACT"
+# Staged, not piped: cpio stops reading at the archive trailer, so under `pipefail`
+# a still-writing rpm2cpio takes SIGPIPE and fails the gate on a valid RPM.
+rpm2cpio "$EXPECTED_RPM" >"$EXTRACT_ROOT/rpm-payload.cpio"
 (
   cd "$RPM_EXTRACT"
-  rpm2cpio "$EXPECTED_RPM" | cpio --quiet -idmu --no-absolute-filenames
+  cpio --quiet -idmu --no-absolute-filenames <"$EXTRACT_ROOT/rpm-payload.cpio"
 )
 if ! (
   cd "$APPIMAGE_EXTRACT"

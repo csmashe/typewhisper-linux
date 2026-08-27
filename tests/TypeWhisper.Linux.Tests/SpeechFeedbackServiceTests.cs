@@ -936,6 +936,68 @@ public sealed class SpeechFeedbackServiceTests
     }
 
     [Fact]
+    public async Task Dispose_does_not_block_on_a_hanging_plugin_stop()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var session = new ControlledPlaybackSession(blockStop: true);
+        var provider = new ControlledTtsProvider(session);
+        var sut = new SpeechFeedbackService(settings.Object, manager, provider);
+        sut.AnnounceError("playing");
+
+        try
+        {
+            // The blocking Stop() crosses the plugin trust boundary; Dispose
+            // must hand it to the stop worker instead of hanging app shutdown.
+            await Task.Run(sut.Dispose).WaitAsync(s_testGuard);
+            await session.StopCalled.Task.WaitAsync(s_testGuard);
+        }
+        finally
+        {
+            session.ReleaseStop();
+        }
+    }
+
+    [Fact]
+    public async Task Capture_wait_completes_a_prior_request_whose_session_never_completes()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenFeedbackEnabled = true }
+        );
+        var manager = TestPluginManagerFactory.Create();
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        using var sut = new SpeechFeedbackService(settings.Object, manager, provider);
+
+        sut.AnnounceError("prior");
+        var call = await provider.NextRequestAsync();
+        var reservation = sut.ReserveStartupFeedback();
+
+        await reservation.StopPriorPlaybackAsync().WaitAsync(s_testGuard);
+
+        // Completing the detached request lets its CTS dispose once the stop
+        // worker finishes — observable as the provider's captured token dying.
+        // Without the completion the CTS (and every ct.Register) leaks per toggle.
+        var disposed = false;
+        for (var attempt = 0; attempt < 100 && !disposed; attempt++)
+        {
+            try
+            {
+                _ = call.CancellationToken.WaitHandle;
+                await Task.Delay(20);
+            }
+            catch (ObjectDisposedException)
+            {
+                disposed = true;
+            }
+        }
+
+        Assert.True(disposed, "The prior request's CancellationTokenSource was never disposed.");
+        reservation.Dispose();
+    }
+
+    [Fact]
     public void BeginAnnounce_registers_only_and_defers_provider_calls_until_launch()
     {
         var settings = TestPluginManagerFactory.CreateSettings(

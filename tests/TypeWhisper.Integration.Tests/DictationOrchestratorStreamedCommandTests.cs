@@ -48,6 +48,8 @@ public sealed class DictationOrchestratorStreamedCommandTests
 
             Assert.Equal("ready", streamedResult.Status);
             Assert.Equal(FirstDelta + SecondDelta + ThirdDelta, streamedResult.Text);
+            // Typed is cumulative across both phases: the leading FirstDelta is the
+            // phase-one partial delivery, followed by phase two's three chunks.
             Assert.Equal(
                 [FirstDelta, FirstDelta, SecondDelta, ThirdDelta],
                 fixture.InsertionPlatform.Typed

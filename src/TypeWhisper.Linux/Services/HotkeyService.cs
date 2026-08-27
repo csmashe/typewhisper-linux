@@ -48,6 +48,9 @@ internal sealed record PromptActionHotkeyCandidate(
     string DisplayName
 );
 
+// DisplayName intentionally falls back to the action/profile identifier at the
+// SetPromptActionHotkeys / SetProfileHotkeys / SetDynamicHotkeys call sites when no
+// friendlier name is available; rejection messages interpolate it as-is.
 internal sealed record ProfileHotkeyCandidate(ProfileHotkey Hotkey, string DisplayName);
 
 /// <summary>
