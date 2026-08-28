@@ -6,7 +6,6 @@
         <LangVersion>latest</LangVersion>
         <IsPackable>false</IsPackable>
         <IsTestProject>true</IsTestProject>
-        <DeployBundledLinuxPlugins>false</DeployBundledLinuxPlugins>
     </PropertyGroup>
 
     <ItemGroup>
@@ -17,8 +16,13 @@
 
     <ItemGroup>
         <FrameworkReference Include="Microsoft.AspNetCore.App"/>
-        <ProjectReference Include="..\..\src\TypeWhisper.Linux\TypeWhisper.Linux.csproj"
-                          AdditionalProperties="DeployBundledLinuxPlugins=false"/>
+        <!-- No AdditionalProperties here: differing global properties make MSBuild
+             treat TypeWhisper.Linux as a second, distinct build that shares the same
+             obj/bin directories with the plain reference the other test projects
+             carry. In a solution build the two run concurrently and collide on
+             typewhisper.pdb. Skip the plugin deployment with
+             -p:DeployBundledLinuxPlugins=false on the command line instead. -->
+        <ProjectReference Include="..\..\src\TypeWhisper.Linux\TypeWhisper.Linux.csproj"/>
     </ItemGroup>
 
     <ItemGroup>
