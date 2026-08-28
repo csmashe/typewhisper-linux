@@ -401,13 +401,8 @@ container_smoke_tarball() {
   env "${SMOKE_PROFILE_ENV[@]}" bash "$install_script"
   app_root="$SMOKE_DATA_ROOT/typewhisper-app"
 
-  # The app writes its user data INTO the install root, so the installer's KEEP list is
-  # all that stands between a reinstall/uninstall and permanent data loss.
-  mkdir -p "$app_root/Data"
-  printf 'preserve user data\n' >"$app_root/Data/smoke-user-data"
-
+  # A second run must upgrade the recorded install in place, not refuse it as foreign.
   env "${SMOKE_PROFILE_ENV[@]}" bash "$install_script"
-  require_file "$app_root/Data/smoke-user-data"
   require_executable "$SMOKE_HOME_ROOT/.local/bin/typewhisper"
   require_executable "$app_root/Cli/typewhisper-cli"
   require_file "$SMOKE_DATA_ROOT/applications/typewhisper.desktop"
@@ -433,19 +428,16 @@ container_smoke_tarball() {
   assert_removed "$SMOKE_HOME_ROOT/.local/bin/typewhisper"
   assert_removed "$SMOKE_DATA_ROOT/applications/typewhisper.desktop"
   assert_removed "$SMOKE_DATA_ROOT/icons/hicolor/128x128/apps/typewhisper.png"
-  # Not assert_removed "$app_root": a plain --uninstall preserves user data, and in
-  # this layout INSTALL_ROOT is also where the app writes it. Plugins/ is on the
-  # installer's KEEP list (it holds user-installed plugins alongside the bundled
-  # ones), so the root legitimately survives. Assert the program payload is gone.
-  assert_removed "$app_root/typewhisper"
-  assert_removed "$app_root/Cli/typewhisper-cli"
-  require_file "$app_root/Data/smoke-user-data"
+  # The install root carries program payload only: recordings, history, models, keys
+  # and settings live in $XDG_DATA_HOME/TypeWhisper, which a plain --uninstall keeps.
+  assert_removed "$app_root"
   require_file "$SMOKE_DATA_ROOT/TypeWhisper/smoke-sentinel"
 
-  # --purge is the path that must leave nothing behind.
+  # --purge is the path that must leave nothing behind, user data included.
   echo "==> Purging tarball install from isolated HOME/XDG roots"
   env "${SMOKE_PROFILE_ENV[@]}" bash "$install_script" --uninstall --purge
   assert_removed "$app_root"
+  assert_removed "$SMOKE_DATA_ROOT/TypeWhisper"
 }
 
 container_smoke_appimage() {
