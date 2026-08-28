@@ -193,6 +193,9 @@ public sealed class AtomicJsonStore<T>
 
     public T Update(Func<T, T> update) => Update(update, out _);
 
+    /// <summary>
+    ///     Applies <paramref name="update" /> to the current snapshot and publishes the result.
+    /// </summary>
     /// <param name="update">Produces the next snapshot from the current one.</param>
     /// <param name="changed">
     ///     Whether the stored value itself changed. False for a no-op update even when the

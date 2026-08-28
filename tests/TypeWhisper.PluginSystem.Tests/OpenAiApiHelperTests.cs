@@ -80,6 +80,7 @@ public sealed class OpenAiApiHelperTests
                                CancellationToken.None
                            ))
             {
+                // Draining the stream is what surfaces the error; the chunks themselves are moot.
             }
         });
     }
