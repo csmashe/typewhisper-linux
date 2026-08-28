@@ -312,12 +312,16 @@ mark_runtime_installed() {
   printf 'typewhisper smoke runtime dependencies installed\n' >"$RUNTIME_READY_MARKER"
 }
 
+# A flaky or throttled mirror otherwise fails the whole smoke run on a single
+# dropped connection.
+configure_apt_retries() {
+  printf 'Acquire::Retries "3";\n' >/etc/apt/apt.conf.d/99-typewhisper-smoke-retries
+}
+
 install_ubuntu_runtime() {
   runtime_already_installed && return 0
   export DEBIAN_FRONTEND=noninteractive
-  # A flaky or throttled mirror otherwise fails the whole smoke run on a single
-  # dropped connection.
-  printf 'Acquire::Retries "3";\n' >/etc/apt/apt.conf.d/99-typewhisper-smoke-retries
+  configure_apt_retries
   apt-get update
   # Tarballs and AppImages have no package resolver, so install the full hard
   # closure plus the weak desktop integrations. Probe-only tooling (Xvfb,
@@ -471,6 +475,7 @@ container_smoke_deb() {
 
   echo "==> Installing deb in disposable Ubuntu container"
   export DEBIAN_FRONTEND=noninteractive
+  configure_apt_retries
   apt-get update
   apt-get install -y --no-install-recommends "$package"
   ! dpkg -s libgl1 >/dev/null 2>&1 \
@@ -1205,10 +1210,10 @@ cleanup_images() {
   done
 }
 
-# Bake the runtime dependencies into one image per distribution up front. Three
-# Ubuntu formats otherwise download the same ~95 MB three times, and because that
-# used to happen inside the per-format timeout a slow mirror killed the run
-# before a single assertion executed.
+# Bake the runtime dependencies into one image per distribution up front. The
+# resolver-less Ubuntu formats otherwise download the same ~95 MB twice, and
+# because that used to happen inside the per-format timeout a slow mirror killed
+# the run before a single assertion executed.
 build_smoke_image() {
   local distribution="$1"
   local base_image="$2"
@@ -1239,9 +1244,11 @@ run_container_smoke() {
   local container_name="typewhisper-package-smoke-${format}-$$"
   local status
 
-  echo "==> Running $format smoke test in prepared image $image"
-  # The dependencies are already baked in, so this budget now covers only the
-  # install/execute assertions, which take well under a minute.
+  echo "==> Running $format smoke test in image $image"
+  # For the prepared images the dependencies are already baked in, so this budget
+  # covers only the install/execute assertions. The deb runs on the bare base
+  # image and still resolves its own Depends here, which is the point of that
+  # format's test.
   set +e
   timeout --signal=INT --kill-after=30s 10m \
     docker run --name "$container_name" --rm \
@@ -1266,7 +1273,10 @@ build_smoke_image fedora "$FEDORA_BASE_IMAGE" "$FEDORA_IMAGE"
 # operations never overlap on the runner.
 run_container_smoke "tarball" "$UBUNTU_IMAGE" "$EXPECTED_TARBALL"
 run_container_smoke "appimage" "$UBUNTU_IMAGE" "$EXPECTED_APPIMAGE"
-run_container_smoke "deb" "$UBUNTU_IMAGE" "$EXPECTED_DEB"
+# The deb runs on the bare base image: the prepared image has the whole runtime
+# closure baked in, which would both hide a missing Depends and make the
+# assertions that no Recommends-demoted library was pulled in fail outright.
+run_container_smoke "deb" "$UBUNTU_BASE_IMAGE" "$EXPECTED_DEB"
 run_container_smoke "rpm" "$FEDORA_IMAGE" "$EXPECTED_RPM"
 
 echo "==> All Linux package smoke tests passed."
