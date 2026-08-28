@@ -1,8 +1,11 @@
 using System.Net;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using TypeWhisper.Plugin.Xai;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 // The CapturingHandler lambdas assert on the outgoing 'request' (method, URI,
@@ -32,7 +35,7 @@ public class XaiPluginTests
 
         Assert.Equal("com.typewhisper.xai", manifest.GetProperty("id").GetString());
         Assert.Equal("xAI / Grok", manifest.GetProperty("name").GetString());
-        Assert.Equal("transcription", manifest.GetProperty("category").GetString());
+        Assert.Equal(["transcription", "llm", "tts"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
         Assert.Equal(
             "TypeWhisper.Plugin.Xai.dll",
             manifest.GetProperty("assemblyName").GetString()
@@ -164,6 +167,7 @@ public class XaiPluginTests
             "data: {\"type\":\"response.completed\"}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -171,7 +175,7 @@ public class XaiPluginTests
             Assert.Equal("https://api.x.ai/v1/responses", request.RequestUri?.ToString());
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -249,7 +253,7 @@ public class XaiPluginTests
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
@@ -267,6 +271,127 @@ public class XaiPluginTests
 
         Assert.Equal(["Hel"], chunks);
         Assert.Contains("server overloaded", ex.Message);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ThrowsWhenEofPrecedesResponseCompleted()
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
+            "",
+            "");
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync(
+                "system", "user", "", CancellationToken.None))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Equal(["partial"], chunks);
+        Assert.Equal("xAI stream", ex.StreamName);
+        Assert.Equal("response.completed", ex.ExpectedTerminal);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ThrowsWhenDonePrecedesResponseCompleted()
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
+            "",
+            "data: [DONE]",
+            "",
+            "");
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync(
+                "system", "user", "", CancellationToken.None))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Equal(["partial"], chunks);
+        Assert.Equal("xAI stream", ex.StreamName);
+        Assert.Equal("response.completed", ex.ExpectedTerminal);
+    }
+
+    [Theory]
+    [InlineData(
+        """{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}""",
+        "max_output_tokens")]
+    [InlineData(
+        """{"type":"response.cancelled","response":{"status":"cancelled","error":{"message":"cancelled upstream"}}}""",
+        "cancelled upstream")]
+    [InlineData(
+        """{"type":"response.canceled","response":{"status":"canceled"}}""",
+        "canceled")]
+    [InlineData(
+        """{"type":"response.completed","response":{"status":"cancelled"}}""",
+        "cancelled")]
+    public async Task ProcessStreamingAsync_ThrowsOnIncompleteOrCancelledTerminalFrame(
+        string terminalPayload,
+        string expectedDetail)
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
+            "",
+            $"data: {terminalPayload}",
+            "",
+            "data: [DONE]",
+            "",
+            "");
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync(
+                "system", "user", "", CancellationToken.None))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Equal(["partial"], chunks);
+        Assert.Contains(expectedDetail, ex.Message);
     }
 
     [Fact]
@@ -362,6 +487,171 @@ public class XaiPluginTests
 
         var headers = XaiStreamingSession.CreateStreamingHeaders("xai-key");
         Assert.Equal("Bearer xai-key", headers["Authorization"]);
+    }
+
+    [Fact]
+    public async Task StreamingSession_SendAudioWaitsForTranscriptCreated()
+    {
+        var socket = new FakeStreamingWebSocket();
+        await using var session =
+            XaiStreamingSession.CreateConnectedSessionForTests(socket);
+
+        var sendTask = session.SendAudioAsync(
+            new byte[] { 1, 2, 3, 4 },
+            CancellationToken.None);
+
+        Assert.False(sendTask.IsCompleted);
+        Assert.Empty(socket.SentFrames);
+
+        socket.EnqueueText("""{"type":"transcript.created"}""");
+
+        await sendTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var sent = Assert.Single(socket.SentFrames);
+        Assert.Equal(WebSocketMessageType.Binary, sent.MessageType);
+        Assert.Equal([1, 2, 3, 4], sent.Payload);
+    }
+
+    [Fact]
+    public async Task StreamingSession_DisposeWithStuckHandshake_CancelsStartupAndReleasesTheSocket()
+    {
+        // The peer never sends transcript.created and never closes, so nothing but disposal can
+        // end the handshake. Disposal must actually tear the socket down, not just stop waiting.
+        var socket = new FakeStreamingWebSocket();
+        var session = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            disposePumpWait: TimeSpan.FromMilliseconds(200)
+        );
+
+        await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(socket.DisposeCalled);
+        Assert.NotEqual(WebSocketState.Open, socket.State);
+    }
+
+    [Fact]
+    public async Task StreamingSession_ConnectedFactoryWaitsForTranscriptCreated()
+    {
+        var socket = new FakeStreamingWebSocket();
+        var connectTask = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            TimeSpan.FromSeconds(5),
+            CancellationToken.None);
+
+        Assert.False(connectTask.IsCompleted);
+
+        socket.EnqueueText("""{"type":"transcript.created"}""");
+
+        await using var session = await connectTask.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(WebSocketState.Open, socket.State);
+    }
+
+    [Theory]
+    [InlineData(false, "before transcript.created")]
+    [InlineData(true, "quota exceeded")]
+    public async Task StreamingSession_CloseOrErrorBeforeReadinessFaultsConnect(
+        bool providerError,
+        string expectedMessage)
+    {
+        var socket = new FakeStreamingWebSocket();
+        var connectTask = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            TimeSpan.FromSeconds(5),
+            CancellationToken.None);
+
+        if (providerError)
+        {
+            socket.EnqueueText(
+                """{"type":"error","error":{"message":"quota exceeded"}}""");
+        }
+        else
+        {
+            socket.EnqueueClose(
+                WebSocketCloseStatus.EndpointUnavailable,
+                "provider unavailable");
+        }
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await connectTask.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Contains(expectedMessage, exception.Message);
+        Assert.True(socket.AbortCalled);
+        Assert.True(socket.DisposeCalled);
+    }
+
+    [Fact]
+    public async Task StreamingSession_CallerCancellationDuringReadinessWaitIsCleanAndTearsDown()
+    {
+        using var startupCts = new CancellationTokenSource();
+        var socket = new FakeStreamingWebSocket();
+        var connectTask = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            TimeSpan.FromSeconds(5),
+            startupCts.Token);
+
+        // ReSharper disable once MethodHasAsyncOverload -- the assertion requires cancellation to be observable immediately.
+        startupCts.Cancel();
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            // ReSharper disable once MethodSupportsCancellation -- must not pass startupCts.Token: it is already canceled here, so WaitAsync would throw before connectTask propagates its own cancellation, hollowing out the token assertion below. The TimeSpan is only a hang guard.
+            async () => await connectTask.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Equal(startupCts.Token, exception.CancellationToken);
+        Assert.True(socket.AbortCalled);
+        Assert.True(socket.DisposeCalled);
+        Assert.True(socket.ReceiveExited.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task StreamingSession_ReadinessTimeoutFaultsAndTearsDown()
+    {
+        var socket = new FakeStreamingWebSocket();
+        var connectTask = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            TimeSpan.FromMilliseconds(50),
+            CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(
+            async () => await connectTask.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Contains("transcript.created", exception.Message);
+        Assert.True(socket.AbortCalled);
+        Assert.True(socket.DisposeCalled);
+        Assert.True(socket.ReceiveExited.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task StreamingSession_CloseBeforeTranscriptDoneFaultsFinalize()
+    {
+        // Regression: after transcript.created the readiness signal is already
+        // completed, so a graceful Close frame arriving before transcript.done
+        // must still be recorded as a session fault. Otherwise FinalizeAsync
+        // returns cleanly and the coordinator commits the partial transcript
+        // as success instead of falling back to the complete-WAV batch path,
+        // silently truncating dictation.
+        var socket = new FakeStreamingWebSocket();
+        var connectTask = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            TimeSpan.FromSeconds(5),
+            CancellationToken.None);
+
+        socket.EnqueueText("""{"type":"transcript.created"}""");
+        await using var session = await connectTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // A final segment lands, then FinalizeAsync parks on the terminal wait
+        // (socket still open) before the server closes mid-stream — no
+        // transcript.done ever arrives.
+        socket.EnqueueText(
+            """{"type":"transcript.partial","text":"hello","is_final":true,"speech_final":false}""");
+        var finalizeTask = session.FinalizeAsync(CancellationToken.None);
+        socket.EnqueueClose(
+            WebSocketCloseStatus.EndpointUnavailable,
+            "mid-stream disconnect");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await finalizeTask.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Contains("faulted", exception.Message);
+        Assert.Contains("transcript.done", exception.Message);
     }
 
     [Fact]
@@ -593,9 +883,8 @@ public class XaiPluginTests
     }
 
     [Fact]
-    public async Task SpeakAsync_PostsPcmTtsRequestAndUsesPlaybackFactory()
+    public async Task SpeakAsync_PostsPcmTtsRequestAndUsesHostPcmPlayback()
     {
-        byte[]? playbackBytes = null;
         var handler = new CapturingHandler((request, body) =>
         {
             Assert.Equal(HttpMethod.Post, request.Method);
@@ -614,21 +903,19 @@ public class XaiPluginTests
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent([0, 1, 2, 3])
+                Content = new ByteArrayContent([0, 1, 2, 3]),
             };
         });
 
-        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        var playback = new RecordingPcmPlaybackService();
+        var host = new TestPluginHostServices
+        {
+            PcmPlayback = playback,
+            Secrets = { ["api-key"] = "xai-key" },
+        };
         using var httpClient = new HttpClient(handler);
         httpClient.Timeout = TimeSpan.FromSeconds(5);
-        var sut = new XaiPlugin(
-            httpClient,
-            pcm =>
-            {
-                playbackBytes = pcm;
-                return new FakeTtsPlaybackSession();
-            },
-            ttsPlaybackAvailableProbe: () => true);
+        var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
         sut.SelectVoice("rex");
         sut.SetTtsLowLatency(true);
@@ -637,7 +924,11 @@ public class XaiPluginTests
         var session = await sut.SpeakAsync(new TtsSpeakRequest("Read this", "de"), CancellationToken.None);
 
         Assert.NotNull(session);
-        Assert.Equal([0, 1, 2, 3], playbackBytes);
+        var playbackRequest = Assert.Single(playback.Requests);
+        Assert.Equal([0, 1, 2, 3], playbackRequest.Payload.ToArray());
+        Assert.Equal(24_000, playbackRequest.SampleRate);
+        Assert.Equal(1, playbackRequest.Channels);
+        Assert.Equal(PcmSampleFormat.Signed16LittleEndian, playbackRequest.Format);
     }
 
     [Fact]
@@ -649,14 +940,14 @@ public class XaiPluginTests
             requestCount++;
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent([0, 1, 2, 3])
+                Content = new ByteArrayContent([0, 1, 2, 3]),
             };
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
         using var httpClient = new HttpClient(handler);
         httpClient.Timeout = TimeSpan.FromSeconds(5);
-        var sut = new XaiPlugin(httpClient, ttsPlaybackAvailableProbe: () => false);
+        var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var session = await sut.SpeakAsync(new TtsSpeakRequest("Read this", "en"), CancellationToken.None);
@@ -683,7 +974,7 @@ public class XaiPluginTests
                 "selectedVoice",
                 "customVoiceId",
                 "ttsLowLatency",
-                "ttsTextNormalization"
+                "ttsTextNormalization",
             ],
             keys);
     }
@@ -721,7 +1012,7 @@ public class XaiPluginTests
                 "https://api.x.ai/v1/tts/voices" => JsonResponse("""
                     { "voices": [ { "voice_id": "leo", "name": "Leo" } ] }
                     """),
-                _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
             });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
@@ -752,7 +1043,7 @@ public class XaiPluginTests
     private static HttpResponseMessage JsonResponse(string json) =>
         new(HttpStatusCode.OK)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
 
     private sealed class CapturingHandler(
@@ -769,11 +1060,178 @@ public class XaiPluginTests
         }
     }
 
+    private abstract record StreamingReceiveItem
+    {
+        public sealed record Frame(
+            byte[] Payload,
+            WebSocketMessageType MessageType,
+            WebSocketCloseStatus? CloseStatus = null,
+            string? CloseDescription = null) : StreamingReceiveItem;
+    }
+
+    private sealed record SentStreamingFrame(
+        byte[] Payload,
+        WebSocketMessageType MessageType);
+
+    private sealed class FakeStreamingWebSocket : WebSocket
+    {
+        private readonly Channel<StreamingReceiveItem> _receives =
+            Channel.CreateUnbounded<StreamingReceiveItem>();
+        private readonly List<SentStreamingFrame> _sentFrames = [];
+        private readonly Lock _sentLock = new();
+        private readonly TaskCompletionSource _receiveExited =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private WebSocketState _state = WebSocketState.Open;
+        private WebSocketCloseStatus? _closeStatus;
+        private string? _closeDescription;
+
+        public IReadOnlyList<SentStreamingFrame> SentFrames
+        {
+            get
+            {
+                lock (_sentLock)
+                {
+                    return _sentFrames.ToArray();
+                }
+            }
+        }
+
+        public Task ReceiveExited => _receiveExited.Task;
+        public bool AbortCalled { get; private set; }
+        public bool DisposeCalled { get; private set; }
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- WebSocket declares these get-only, so an override cannot add a private setter.
+        public override WebSocketCloseStatus? CloseStatus => _closeStatus;
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- WebSocket declares these get-only, so an override cannot add a private setter.
+        public override string? CloseStatusDescription => _closeDescription;
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- WebSocket declares these get-only, so an override cannot add a private setter.
+        public override WebSocketState State => _state;
+        public override string? SubProtocol => null;
+
+        public void EnqueueText(string json) =>
+            _receives.Writer.TryWrite(new StreamingReceiveItem.Frame(
+                Encoding.UTF8.GetBytes(json),
+                WebSocketMessageType.Text));
+
+        public void EnqueueClose(
+            WebSocketCloseStatus closeStatus,
+            string? closeDescription) =>
+            _receives.Writer.TryWrite(new StreamingReceiveItem.Frame(
+                [],
+                WebSocketMessageType.Close,
+                closeStatus,
+                closeDescription));
+
+        public override void Abort()
+        {
+            AbortCalled = true;
+            _state = WebSocketState.Aborted;
+            _receives.Writer.TryComplete();
+        }
+
+        public override Task CloseAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _closeStatus = closeStatus;
+            _closeDescription = statusDescription;
+            _state = WebSocketState.Closed;
+            _receives.Writer.TryComplete();
+            return Task.CompletedTask;
+        }
+
+        public override Task CloseOutputAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken) =>
+            CloseAsync(closeStatus, statusDescription, cancellationToken);
+
+        public override void Dispose()
+        {
+            DisposeCalled = true;
+            _state = WebSocketState.Closed;
+            _receives.Writer.TryComplete();
+        }
+
+        public override async Task<WebSocketReceiveResult> ReceiveAsync(
+            ArraySegment<byte> buffer,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                var item = await _receives.Reader.ReadAsync(cancellationToken);
+                var frame = Assert.IsType<StreamingReceiveItem.Frame>(item);
+                if (frame.MessageType == WebSocketMessageType.Close)
+                {
+                    _closeStatus = frame.CloseStatus;
+                    _closeDescription = frame.CloseDescription;
+                    _state = WebSocketState.CloseReceived;
+                    return new WebSocketReceiveResult(
+                        0,
+                        WebSocketMessageType.Close,
+                        endOfMessage: true,
+                        frame.CloseStatus,
+                        frame.CloseDescription);
+                }
+
+                Assert.True(frame.Payload.Length <= buffer.Count);
+                frame.Payload.CopyTo(buffer.Array!, buffer.Offset);
+                return new WebSocketReceiveResult(
+                    frame.Payload.Length,
+                    frame.MessageType,
+                    endOfMessage: true);
+            }
+            finally
+            {
+                _receiveExited.TrySetResult();
+            }
+        }
+
+        public override Task SendAsync(
+            ArraySegment<byte> buffer,
+            WebSocketMessageType messageType,
+            bool endOfMessage,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal(WebSocketState.Open, _state);
+            Assert.True(endOfMessage);
+            lock (_sentLock)
+            {
+                _sentFrames.Add(new SentStreamingFrame(
+                    buffer.AsSpan().ToArray(),
+                    messageType));
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public override ValueTask SendAsync(
+            ReadOnlyMemory<byte> buffer,
+            WebSocketMessageType messageType,
+            bool endOfMessage,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal(WebSocketState.Open, _state);
+            Assert.True(endOfMessage);
+            lock (_sentLock)
+            {
+                _sentFrames.Add(new SentStreamingFrame(
+                    buffer.ToArray(),
+                    messageType));
+            }
+
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private sealed class TestPluginHostServices : IPluginHostServices
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];
@@ -804,6 +1262,8 @@ public class XaiPluginTests
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
+        public IPluginPcmPlaybackService PcmPlayback { get; init; } =
+            UnavailablePluginPcmPlaybackService.Instance;
         public string? ActiveAppProcessName => null;
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();
@@ -834,16 +1294,4 @@ public class XaiPluginTests
         public void Dispose() { }
     }
 
-    private sealed class FakeTtsPlaybackSession : ITtsPlaybackSession
-    {
-        public bool IsActive => false;
-
-        public event EventHandler? Completed
-        {
-            add { value?.Invoke(this, EventArgs.Empty); }
-            remove { }
-        }
-
-        public void Stop() { }
-    }
 }

@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "author": "TypeWhisper",
   "description": "Cloud transcription via ElevenLabs Scribe with real-time WebSocket streaming",
-  "category": "transcription",
-  "isLocal": false,
+  "networkAccess": "network",
+  "categories": ["transcription"],
   "requiresApiKey": true,
   "iconSystemName": "waveform.badge.mic",
   "descriptions": {

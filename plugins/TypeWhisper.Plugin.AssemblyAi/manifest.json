@@ -4,6 +4,8 @@
   "version": "1.1.2",
   "author": "TypeWhisper",
   "description": "AssemblyAI Universal-2 transcription engine",
+  "networkAccess": "network",
+  "categories": ["transcription"],
   "assemblyName": "TypeWhisper.Plugin.AssemblyAi.dll",
   "pluginClass": "TypeWhisper.Plugin.AssemblyAi.AssemblyAiPlugin"
 }

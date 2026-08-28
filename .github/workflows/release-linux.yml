@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
@@ -94,7 +94,9 @@ jobs:
 
   build:
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # 30m unit-test cap + 30m package-smoke cap + 30m setup/build/upload allowance.
+    timeout-minutes: 90
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
 
@@ -105,28 +107,41 @@ jobs:
 
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
           cache: true
           cache-dependency-path: |
             **/*.csproj
             Directory.Build.props
+            tests/Directory.Packages.props
+            **/packages.lock.json
 
       - name: Install packaging tooling
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            dpkg-dev rpm wget desktop-file-utils
+            binutils cpio dpkg-dev file rpm wget desktop-file-utils
 
       - name: Run unit tests
+        timeout-minutes: 30
         run: |
-          dotnet restore TypeWhisper.slnx
+          # Locked: a release must build the reviewed dependency graph, and unlike PR CI
+          # this job has no lock-file drift gate to catch a silently updated lock file.
+          dotnet restore TypeWhisper.slnx --locked-mode
           dotnet build TypeWhisper.slnx -c Release --no-restore -p:Version=${VERSION}
-          dotnet test tests/TypeWhisper.Core.Tests/TypeWhisper.Core.Tests.csproj -c Release --no-build
-          dotnet test tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj -c Release --no-build
-          dotnet test tests/TypeWhisper.Linux.Tests/TypeWhisper.Linux.Tests.csproj -c Release --no-build
+          dotnet test tests/TypeWhisper.Core.Tests/TypeWhisper.Core.Tests.csproj -c Release --no-build --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
+          dotnet test tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj -c Release --no-build --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
+          dotnet test tests/TypeWhisper.Linux.Tests/TypeWhisper.Linux.Tests.csproj -c Release --no-build --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
+          dotnet test tests/TypeWhisper.Cli.Tests/TypeWhisper.Cli.Tests.csproj -c Release --no-build --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
 
       - name: Build all Linux packages
         run: bash scripts/build-linux-packages.sh "$VERSION" dist
+
+      - name: Smoke test all Linux packages
+        # Covers building the two prepared images as well as the smoke runs
+        # themselves; a throttled distro mirror has pushed the dependency
+        # download alone past twenty minutes.
+        timeout-minutes: 45
+        run: bash scripts/smoke-test-linux-packages.sh "$VERSION" dist
 
       - uses: actions/upload-artifact@v7
         with:
@@ -138,7 +153,7 @@ jobs:
     needs:
       - prepare
       - build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Serialize same-tag runs so an overlapping re-push / dispatch can't race through
     # verification and release creation; different tags still proceed independently.
     concurrency:

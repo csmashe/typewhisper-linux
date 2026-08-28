@@ -1,23 +1,33 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Claude;
 
-public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.anthropic.com";
+
+    private static readonly ISseEventPolicy<string> s_streamPolicy =
+        new ClaudeMessagesSsePolicy();
 
     // Anthropic requires an anthropic-version header on every request; this is
     // the stable version that covers the Messages API used here.
     private const string AnthropicVersion = "2023-06-01";
 
+    private static readonly JsonSerializerOptions s_jsonOptions =
+        new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
-    private string? _apiKey;
     private bool _streamResponses = true;
 
     public ClaudePlugin()
@@ -32,12 +42,12 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
 
     public string PluginId => "com.typewhisper.claude";
     public string PluginName => "Claude";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
+        ApiKey = await host.LoadSecretAsync("api-key");
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
@@ -53,8 +63,8 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
 
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
     [
-        new PluginModelInfo("claude-sonnet-4-20250514", "Claude Sonnet 4"),
-        new PluginModelInfo("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+        new("claude-sonnet-4-20250514", "Claude Sonnet 4"),
+        new("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
     ];
 
     public async Task<string> ProcessAsync(
@@ -75,14 +85,11 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
             messages = new[] { new { role = "user", content = userText } },
         };
 
-        var json = JsonSerializer.Serialize(
-            requestBody,
-            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }
-        );
+        var json = JsonSerializer.Serialize(requestBody, s_jsonOptions);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/messages");
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
-        request.Headers.Add("x-api-key", _apiKey);
+        request.Headers.Add("x-api-key", ApiKey);
         request.Headers.Add("anthropic-version", AnthropicVersion);
 
         var response = await _httpClient.SendAsync(request, ct);
@@ -133,14 +140,11 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
             messages = new[] { new { role = "user", content = userText } },
         };
 
-        var json = JsonSerializer.Serialize(
-            requestBody,
-            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }
-        );
+        var json = JsonSerializer.Serialize(requestBody, s_jsonOptions);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/messages");
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
-        request.Headers.Add("x-api-key", _apiKey);
+        request.Headers.Add("x-api-key", ApiKey);
         request.Headers.Add("anthropic-version", AnthropicVersion);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
 
@@ -167,26 +171,24 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        // The Anthropic Messages stream has no [DONE] sentinel; it ends with a
-        // message_stop frame and then EOF, so the loop runs until ReadLineAsync
-        // returns null.
-        while (await reader.ReadLineAsync(ct) is { } rawLine)
+        await foreach (var delta in SseEventDecoder.ReadValidatedAsync(reader, s_streamPolicy, ct))
+            yield return delta;
+    }
+
+    private static string? ParseStreamEventType(string dataPayload)
+    {
+        try
         {
-            var line = rawLine.Trim();
-            if (!line.StartsWith("data: ", StringComparison.Ordinal))
-                continue;
-
-            var payload = line[6..];
-
-            // A Messages stream returns 200 then can fail mid-flight via an
-            // `event: error` frame. Throw so LlmStreamPump faults and the caller
-            // falls back to batch, instead of committing the partial deltas seen
-            // so far as a successful result.
-            if (ParseStreamError(payload) is { } error)
-                throw new InvalidOperationException(error);
-
-            if (ParseStreamDelta(payload) is { Length: > 0 } delta)
-                yield return delta;
+            using var doc = JsonDocument.Parse(dataPayload);
+            var root = doc.RootElement;
+            return root.TryGetProperty("type", out var type)
+                   && type.ValueKind == JsonValueKind.String
+                ? type.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 
@@ -270,8 +272,39 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
         }
     }
 
-    internal bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
-    internal string? ApiKey => _apiKey;
+    private sealed class ClaudeMessagesSsePolicy : ISseEventPolicy<string>
+    {
+        public string StreamName => "Anthropic stream";
+        public string ExpectedTerminal => "a message_stop event";
+
+        public SsePolicyDecision<string> Evaluate(SseEvent sseEvent)
+        {
+            // Also catch `event: error` frames whose payload isn't parseable
+            // JSON, which ParseStreamError alone would miss.
+            if (ParseStreamError(sseEvent.Data) is { } error)
+            {
+                return new SsePolicyDecision<string>(
+                    Error: new InvalidOperationException(error));
+            }
+
+            if (sseEvent.EventType == "error")
+            {
+                return new SsePolicyDecision<string>(
+                    Error: new InvalidOperationException("Anthropic streaming error."));
+            }
+
+            var payloadType = ParseStreamEventType(sseEvent.Data);
+            var delta = ParseStreamDelta(sseEvent.Data);
+            return new SsePolicyDecision<string>(
+                HasDelta: delta is { Length: > 0 },
+                Delta: delta,
+                AcceptTerminal: payloadType == "message_stop");
+        }
+    }
+
+    internal bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -287,8 +320,8 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
         // Trim defensively at the internal entry too: SetSettingValueAsync
         // already trims, but a future direct caller could re-introduce
         // trailing whitespace that breaks the x-api-key header.
-        var trimmed = apiKey?.Trim();
-        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
+        var trimmed = apiKey.Trim();
+        ApiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {
             if (string.IsNullOrEmpty(trimmed))
@@ -300,7 +333,7 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
         }
     }
 
-    internal bool ValidateApiKeyFormat(string apiKey)
+    internal static bool ValidateApiKeyFormat(string apiKey)
     {
         return !string.IsNullOrWhiteSpace(apiKey) && apiKey.StartsWith("sk-ant-");
     }
@@ -331,7 +364,7 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
         Task.FromResult(
             key switch
             {
-                "api-key" => _apiKey,
+                "api-key" => ApiKey,
                 LlmStreamingSettings.StreamResponsesSettingKey
                     => _streamResponses ? "true" : "false",
                 _ => null,
@@ -368,12 +401,12 @@ public sealed partial class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsPr
 
     public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return Task.FromResult<PluginSettingsValidationResult?>(
                 new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"))
             );
 
-        var valid = ValidateApiKeyFormat(_apiKey);
+        var valid = ValidateApiKeyFormat(ApiKey);
         return Task.FromResult<PluginSettingsValidationResult?>(
             valid
                 ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyFormatValid"))

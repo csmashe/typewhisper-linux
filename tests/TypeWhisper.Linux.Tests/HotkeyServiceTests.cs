@@ -40,6 +40,253 @@ public sealed class HotkeyServiceTests
     }
 
     [Fact]
+    public void ValidatePromptActionHotkeyCandidate_ReportsMalformedNonblankChord()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+
+        var result = hotkey.ValidatePromptActionHotkeyCandidate(
+            "Ctrl+DefinitelyNotAKey",
+            null,
+            [],
+            []
+        );
+
+        Assert.Equal(HotkeyCandidateValidationStatus.Malformed, result.Status);
+        Assert.False(result.IsValid);
+        Assert.Null(result.NormalizedHotkey);
+    }
+
+    [Fact]
+    public void ValidatePromptActionHotkeyCandidate_RejectsFixedShortcutCollision()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+
+        var result = hotkey.ValidatePromptActionHotkeyCandidate(
+            "Control+Shift+Space",
+            null,
+            [],
+            []
+        );
+
+        Assert.Equal(
+            HotkeyCandidateValidationStatus.CollidesWithFixedBinding,
+            result.Status
+        );
+    }
+
+    [Fact]
+    public void ValidatePromptActionHotkeyCandidate_RejectsEnabledPromptActionCollision()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var actions = new[]
+        {
+            new PromptAction
+            {
+                Id = "other",
+                Name = "Other",
+                SystemPrompt = "x",
+                HotkeyKey = "Alt+F8",
+            },
+        };
+
+        var result = hotkey.ValidatePromptActionHotkeyCandidate(
+            " alt + f8 ",
+            "edited",
+            actions,
+            []
+        );
+
+        Assert.Equal(
+            HotkeyCandidateValidationStatus.CollidesWithPromptAction,
+            result.Status
+        );
+    }
+
+    [Fact]
+    public void ValidatePromptActionHotkeyCandidate_UsesCrossSideModifierPrefixForProfiles()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var profiles = new[]
+        {
+            new Profile
+            {
+                Id = "other",
+                Name = "Other",
+                HotkeyData = "Right Ctrl",
+            },
+        };
+
+        var result = hotkey.ValidatePromptActionHotkeyCandidate(
+            "Ctrl+Alt+R",
+            "edited",
+            [],
+            profiles
+        );
+
+        Assert.Equal(
+            HotkeyCandidateValidationStatus.CollidesWithProfile,
+            result.Status
+        );
+    }
+
+    [Fact]
+    public void ValidateCandidates_AllowOwnUnchangedBindingAndIgnoreDisabledOthers()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var actions = new[]
+        {
+            new PromptAction
+            {
+                Id = "edited-action",
+                Name = "Edited",
+                SystemPrompt = "x",
+                HotkeyKey = "alt+f8",
+            },
+            new PromptAction
+            {
+                Id = "disabled-action",
+                Name = "Disabled",
+                SystemPrompt = "x",
+                HotkeyKey = "Alt+F8",
+                IsEnabled = false,
+            },
+        };
+        var profiles = new[]
+        {
+            new Profile
+            {
+                Id = "edited-profile",
+                Name = "Edited",
+                HotkeyData = "Meta+F9",
+            },
+            new Profile
+            {
+                Id = "disabled-profile",
+                Name = "Disabled",
+                HotkeyData = "Meta+F9",
+                IsEnabled = false,
+            },
+        };
+
+        var actionResult = hotkey.ValidatePromptActionHotkeyCandidate(
+            " ALT + f8 ",
+            "edited-action",
+            actions,
+            []
+        );
+        var profileResult = hotkey.ValidateProfileHotkeyCandidate(
+            " super + f9 ",
+            ProfileHotkeyBehavior.StartDictation,
+            null,
+            "edited-profile",
+            [],
+            profiles
+        );
+
+        Assert.True(actionResult.IsValid);
+        Assert.Equal("Alt+F8", actionResult.NormalizedHotkey);
+        Assert.True(profileResult.IsValid);
+        Assert.Equal("Meta+F9", profileResult.NormalizedHotkey);
+    }
+
+    [Fact]
+    public async Task ValidatePromptActionHotkeyCandidate_DoesNotRegisterOrMutateBindings()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+        var registerCount = backend.RegisterCount;
+        var originalHotkey = hotkey.CurrentHotkeyString;
+
+        var result = hotkey.ValidatePromptActionHotkeyCandidate(
+            "Alt+F8",
+            null,
+            [],
+            []
+        );
+        await backend.WaitUntilSettledAsync();
+
+        Assert.True(result.IsValid);
+        Assert.Equal(registerCount, backend.RegisterCount);
+        Assert.Equal(originalHotkey, hotkey.CurrentHotkeyString);
+        Assert.Empty(backend.LastSet?.PromptActionHotkeys ?? []);
+        Assert.Empty(backend.LastSet?.ProfileHotkeys ?? []);
+    }
+
+    [Fact]
+    public void ValidateProfileHotkeyCandidate_RequiresUsableSelectedTextDestination()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var disabled = new PromptAction
+        {
+            Id = "disabled",
+            Name = "Disabled",
+            SystemPrompt = "x",
+            IsEnabled = false,
+        };
+        var enabled = disabled with { Id = "enabled", Name = "Enabled", IsEnabled = true };
+
+        var nullResult = hotkey.ValidateProfileHotkeyCandidate(
+            "Meta+F9",
+            ProfileHotkeyBehavior.ProcessSelectedText,
+            null,
+            "profile",
+            [disabled, enabled],
+            []
+        );
+        var missingResult = hotkey.ValidateProfileHotkeyCandidate(
+            "Meta+F9",
+            ProfileHotkeyBehavior.ProcessSelectedText,
+            "missing",
+            "profile",
+            [disabled, enabled],
+            []
+        );
+        var disabledResult = hotkey.ValidateProfileHotkeyCandidate(
+            "Meta+F9",
+            ProfileHotkeyBehavior.ProcessSelectedText,
+            "disabled",
+            "profile",
+            [disabled, enabled],
+            []
+        );
+        var enabledResult = hotkey.ValidateProfileHotkeyCandidate(
+            " super + f9 ",
+            ProfileHotkeyBehavior.ProcessSelectedText,
+            "enabled",
+            "profile",
+            [disabled, enabled],
+            []
+        );
+        var blankResult = hotkey.ValidateProfileHotkeyCandidate(
+            "   ",
+            ProfileHotkeyBehavior.ProcessSelectedText,
+            null,
+            "profile",
+            [],
+            []
+        );
+
+        Assert.Equal(
+            HotkeyCandidateValidationStatus.MissingEnabledPromptAction,
+            nullResult.Status
+        );
+        Assert.Equal(
+            HotkeyCandidateValidationStatus.MissingEnabledPromptAction,
+            missingResult.Status
+        );
+        Assert.Equal(
+            HotkeyCandidateValidationStatus.MissingEnabledPromptAction,
+            disabledResult.Status
+        );
+        Assert.True(enabledResult.IsValid);
+        Assert.Equal("Meta+F9", enabledResult.NormalizedHotkey);
+        Assert.True(blankResult.IsValid);
+        Assert.Null(blankResult.NormalizedHotkey);
+    }
+
+    [Fact]
     public async Task Initialize_RecordsRequiresToggleModeFromBackend()
     {
         var backend = new TestShortcutBackend
@@ -50,7 +297,7 @@ public sealed class HotkeyServiceTests
                 null,
                 true,
                 null
-            )
+            ),
         };
         using var hotkey = new HotkeyService(new BackendSelector(() => backend));
 
@@ -72,7 +319,7 @@ public sealed class HotkeyServiceTests
                 "boom",
                 false,
                 null
-            )
+            ),
         };
         using var hotkey = new HotkeyService(new BackendSelector(() => backend));
         string? observed = null;
@@ -149,7 +396,7 @@ public sealed class HotkeyServiceTests
                     "keeper",
                     KeyCode.VcR,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt
-                )
+                ),
             ]
         );
 
@@ -178,7 +425,7 @@ public sealed class HotkeyServiceTests
                     "second",
                     KeyCode.VcR,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt
-                )
+                ),
             ]
         );
 
@@ -214,7 +461,7 @@ public sealed class HotkeyServiceTests
                     "ctrl-chord",
                     KeyCode.VcF12,
                     ModifierMask.LeftCtrl
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -265,7 +512,7 @@ public sealed class HotkeyServiceTests
                     "alpha",
                     KeyCode.VcR,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -289,7 +536,7 @@ public sealed class HotkeyServiceTests
         var entries = new[]
         {
             new PromptActionHotkey("alpha", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt),
-            new PromptActionHotkey("beta", KeyCode.VcT, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)
+            new PromptActionHotkey("beta", KeyCode.VcT, ModifierMask.LeftCtrl | ModifierMask.LeftAlt),
         };
 
         hotkey.SetPromptActionHotkeys(entries);
@@ -312,7 +559,7 @@ public sealed class HotkeyServiceTests
                     Id = "enabled",
                     Name = "E",
                     SystemPrompt = "x",
-                    HotkeyKey = "Ctrl+Alt+R"
+                    HotkeyKey = "Ctrl+Alt+R",
                 },
                 new PromptAction
                 {
@@ -320,21 +567,21 @@ public sealed class HotkeyServiceTests
                     Name = "D",
                     SystemPrompt = "x",
                     IsEnabled = false,
-                    HotkeyKey = "Ctrl+Alt+T"
+                    HotkeyKey = "Ctrl+Alt+T",
                 },
                 new PromptAction
                 {
                     Id = "no-hotkey",
                     Name = "N",
-                    SystemPrompt = "x"
+                    SystemPrompt = "x",
                 },
                 new PromptAction
                 {
                     Id = "bad",
                     Name = "B",
                     SystemPrompt = "x",
-                    HotkeyKey = "Not+a+real+combo"
-                }
+                    HotkeyKey = "Not+a+real+combo",
+                },
             ]
         );
 
@@ -358,7 +605,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcE,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                     ProfileHotkeyBehavior.StartDictation
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -386,7 +633,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcS,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                     ProfileHotkeyBehavior.ProcessSelectedText
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -419,7 +666,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcE,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                     ProfileHotkeyBehavior.StartDictation
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -455,7 +702,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcE,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                     ProfileHotkeyBehavior.StartDictation
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -485,7 +732,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcE,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                     ProfileHotkeyBehavior.ProcessSelectedText
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -494,6 +741,366 @@ public sealed class HotkeyServiceTests
         Assert.NotNull(snapshot);
         var kept = Assert.Single(snapshot.ProfileHotkeys);
         Assert.Equal("first", kept.ProfileId);
+    }
+
+    [Fact]
+    public async Task DynamicHotkeys_CrossListWinnerIsIndependentOfSetterOrder()
+    {
+        var action = new PromptActionHotkey(
+            "action",
+            KeyCode.VcR,
+            ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+        );
+        var profile = new ProfileHotkey(
+            "profile",
+            KeyCode.VcR,
+            ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+            ProfileHotkeyBehavior.StartDictation
+        );
+        var actionFirstBackend = new TestShortcutBackend();
+        var profileFirstBackend = new TestShortcutBackend();
+        using var actionFirst = new HotkeyService(
+            new BackendSelector(() => actionFirstBackend)
+        );
+        using var profileFirst = new HotkeyService(
+            new BackendSelector(() => profileFirstBackend)
+        );
+        actionFirst.Initialize();
+        profileFirst.Initialize();
+
+        actionFirst.SetPromptActionHotkeys([action]);
+        actionFirst.SetProfileHotkeys([profile]);
+        profileFirst.SetProfileHotkeys([profile]);
+        profileFirst.SetPromptActionHotkeys([action]);
+        await Task.WhenAll(
+            actionFirstBackend.WaitUntilSettledAsync(),
+            profileFirstBackend.WaitUntilSettledAsync()
+        );
+
+        foreach (var snapshot in new[]
+                 {
+                     actionFirstBackend.LastSet,
+                     profileFirstBackend.LastSet,
+                 })
+        {
+            Assert.NotNull(snapshot);
+            Assert.Equal(
+                ["action"],
+                snapshot.PromptActionHotkeys.Select(entry => entry.ActionId)
+            );
+            Assert.Empty(snapshot.ProfileHotkeys);
+        }
+    }
+
+    [Fact]
+    public async Task DynamicHotkeys_RemovingWinnerResurrectsRetainedProfileCandidate()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        hotkey.SetPromptActionHotkeys(
+            [new PromptActionHotkey("action", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)]
+        );
+        hotkey.SetProfileHotkeys(
+            [
+                new ProfileHotkey(
+                    "profile",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                    ProfileHotkeyBehavior.StartDictation
+                ),
+            ]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        hotkey.SetPromptActionHotkeys([]);
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Empty(snapshot.PromptActionHotkeys);
+        var resurrected = Assert.Single(snapshot.ProfileHotkeys);
+        Assert.Equal("profile", resurrected.ProfileId);
+    }
+
+    [Fact]
+    public async Task DynamicHotkeys_IncrementalResultMatchesFreshCombinedReconciliation()
+    {
+        PromptActionHotkey[] actions =
+        [
+            new("action-winner", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt),
+            new("action-only", KeyCode.VcT, ModifierMask.LeftCtrl | ModifierMask.LeftAlt),
+        ];
+        ProfileHotkey[] profiles =
+        [
+            new(
+                "profile-loser",
+                KeyCode.VcR,
+                ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                ProfileHotkeyBehavior.StartDictation
+            ),
+            new(
+                "profile-only",
+                KeyCode.VcE,
+                ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                ProfileHotkeyBehavior.ProcessSelectedText
+            ),
+        ];
+        var incrementalBackend = new TestShortcutBackend();
+        var freshBackend = new TestShortcutBackend();
+        using var incremental = new HotkeyService(
+            new BackendSelector(() => incrementalBackend)
+        );
+        using var fresh = new HotkeyService(new BackendSelector(() => freshBackend));
+        incremental.Initialize();
+        fresh.Initialize();
+
+        incremental.SetProfileHotkeys(profiles);
+        incremental.SetPromptActionHotkeys(actions);
+        fresh.SetDynamicHotkeys(actions, profiles);
+        await Task.WhenAll(
+            incrementalBackend.WaitUntilSettledAsync(),
+            freshBackend.WaitUntilSettledAsync()
+        );
+
+        var incrementalSnapshot = incrementalBackend.LastSet;
+        var freshSnapshot = freshBackend.LastSet;
+        Assert.NotNull(incrementalSnapshot);
+        Assert.NotNull(freshSnapshot);
+        Assert.Equal(
+            freshSnapshot.PromptActionHotkeys.Select(entry => entry.ActionId),
+            incrementalSnapshot.PromptActionHotkeys.Select(entry => entry.ActionId)
+        );
+        Assert.Equal(
+            freshSnapshot.ProfileHotkeys.Select(entry => entry.ProfileId),
+            incrementalSnapshot.ProfileHotkeys.Select(entry => entry.ProfileId)
+        );
+    }
+
+    [Fact]
+    public async Task SetDynamicHotkeys_ReturnsIdentifyingMessageForEveryRejection()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        var rejections = hotkey.SetDynamicHotkeys(
+            [
+                new PromptActionHotkey(
+                    "action-winner",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+                ),
+                new PromptActionHotkey(
+                    "duplicate-action",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+                ),
+                new PromptActionHotkey(
+                    "fixed-action",
+                    KeyCode.VcSpace,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftShift
+                ),
+                new PromptActionHotkey(
+                    "",
+                    KeyCode.VcT,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt
+                ),
+            ],
+            [
+                new ProfileHotkey(
+                    "colliding-profile",
+                    KeyCode.VcR,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                    ProfileHotkeyBehavior.StartDictation
+                ),
+                new ProfileHotkey(
+                    "profile-winner",
+                    KeyCode.VcE,
+                    ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                    ProfileHotkeyBehavior.ProcessSelectedText
+                ),
+            ]
+        );
+        await backend.WaitUntilSettledAsync();
+
+        Assert.Equal(4, rejections.Count);
+        Assert.Equal(rejections.Count, rejections.Distinct().Count());
+        Assert.Contains(
+            rejections,
+            message =>
+                message.Contains("duplicate-action", StringComparison.Ordinal)
+                && message.Contains("Ctrl+Alt+R", StringComparison.Ordinal)
+                && message.Contains("higher-priority", StringComparison.Ordinal)
+        );
+        Assert.Contains(
+            rejections,
+            message =>
+                message.Contains("colliding-profile", StringComparison.Ordinal)
+                && message.Contains("Ctrl+Alt+R", StringComparison.Ordinal)
+                && message.Contains("higher-priority", StringComparison.Ordinal)
+        );
+        Assert.Contains(
+            rejections,
+            message =>
+                message.Contains("fixed-action", StringComparison.Ordinal)
+                && message.Contains("Ctrl+Shift+Space", StringComparison.Ordinal)
+                && message.Contains("higher-priority", StringComparison.Ordinal)
+        );
+        Assert.Contains(
+            rejections,
+            message =>
+                message.Contains("Prompt-action", StringComparison.Ordinal)
+                && message.Contains("Ctrl+Alt+T", StringComparison.Ordinal)
+                && message.Contains("blank", StringComparison.Ordinal)
+        );
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(
+            ["action-winner"],
+            snapshot.PromptActionHotkeys.Select(entry => entry.ActionId)
+        );
+        Assert.Equal(
+            ["profile-winner"],
+            snapshot.ProfileHotkeys.Select(entry => entry.ProfileId)
+        );
+    }
+
+    [Fact]
+    public void SetDynamicHotkeysDetailed_ReturnsStructuredBlankAndConflictRejections()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var actions = HotkeyService.ParsePromptActionHotkeyCandidates(
+            [
+                new PromptAction
+                {
+                    Id = "fixed-action",
+                    Name = "Fixed action",
+                    SystemPrompt = "x",
+                    HotkeyKey = "Ctrl+Shift+Space",
+                },
+                new PromptAction
+                {
+                    Id = "",
+                    Name = "Blank action",
+                    SystemPrompt = "x",
+                    HotkeyKey = "Ctrl+Alt+T",
+                },
+            ]
+        );
+        var profiles = HotkeyService.ParseProfileHotkeyCandidates(
+            [
+                new Profile
+                {
+                    Id = "fixed-profile",
+                    Name = "Fixed profile",
+                    HotkeyData = "Ctrl+Shift+Space",
+                },
+                new Profile
+                {
+                    Id = "",
+                    Name = "Blank profile",
+                    HotkeyData = "Ctrl+Alt+E",
+                },
+            ]
+        );
+
+        var rejections = hotkey.SetDynamicHotkeysDetailed(actions, profiles);
+
+        Assert.Equal(
+            [
+                new DynamicHotkeyRejection(
+                    DynamicHotkeyBindingKind.PromptAction,
+                    DynamicHotkeyRejectionReason.Conflict,
+                    "fixed-action",
+                    "Fixed action",
+                    "Ctrl+Shift+Space"
+                ),
+                new DynamicHotkeyRejection(
+                    DynamicHotkeyBindingKind.PromptAction,
+                    DynamicHotkeyRejectionReason.BlankId,
+                    "",
+                    "Blank action",
+                    "Ctrl+Alt+T"
+                ),
+                new DynamicHotkeyRejection(
+                    DynamicHotkeyBindingKind.Profile,
+                    DynamicHotkeyRejectionReason.Conflict,
+                    "fixed-profile",
+                    "Fixed profile",
+                    "Ctrl+Shift+Space"
+                ),
+                new DynamicHotkeyRejection(
+                    DynamicHotkeyBindingKind.Profile,
+                    DynamicHotkeyRejectionReason.BlankId,
+                    "",
+                    "Blank profile",
+                    "Ctrl+Alt+E"
+                ),
+            ],
+            rejections
+        );
+    }
+
+    [Fact]
+    public async Task FixedHotkeyChange_ThenReconcile_ActivatesRetainedRejectedCandidate()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        var candidate = new PromptActionHotkey(
+            "action",
+            KeyCode.VcSpace,
+            ModifierMask.LeftCtrl | ModifierMask.LeftShift
+        );
+
+        var initialRejections = hotkey.SetPromptActionHotkeys([candidate]);
+        await backend.WaitUntilSettledAsync();
+        Assert.Single(initialRejections);
+        Assert.Empty(Assert.IsType<GlobalShortcutSet>(backend.LastSet).PromptActionHotkeys);
+
+        Assert.True(hotkey.TrySetHotkeyFromString("Alt+F8"));
+        var afterFixedChange = hotkey.SetProfileHotkeys([]);
+        await backend.WaitUntilSettledAsync();
+
+        Assert.Empty(afterFixedChange);
+        var accepted = Assert.Single(
+            Assert.IsType<GlobalShortcutSet>(backend.LastSet).PromptActionHotkeys
+        );
+        Assert.Equal("action", accepted.ActionId);
+    }
+
+    [Fact]
+    public async Task DynamicHotkeys_DefensivelySnapshotsRetainedCandidates()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        var profiles = new List<ProfileHotkey>
+        {
+            new(
+                "profile",
+                KeyCode.VcR,
+                ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
+                ProfileHotkeyBehavior.StartDictation
+            ),
+        };
+        hotkey.SetProfileHotkeys(profiles);
+
+        profiles.Clear();
+        hotkey.SetPromptActionHotkeys(
+            [new PromptActionHotkey("action", KeyCode.VcR, ModifierMask.LeftCtrl | ModifierMask.LeftAlt)]
+        );
+        hotkey.SetPromptActionHotkeys([]);
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(
+            ["profile"],
+            snapshot.ProfileHotkeys.Select(entry => entry.ProfileId)
+        );
     }
 
     [Fact]
@@ -506,33 +1113,33 @@ public sealed class HotkeyServiceTests
                     Id = "dictate",
                     Name = "Dictate",
                     HotkeyData = "Ctrl+Alt+E",
-                    HotkeyBehavior = ProfileHotkeyBehavior.StartDictation
+                    HotkeyBehavior = ProfileHotkeyBehavior.StartDictation,
                 },
                 new Profile
                 {
                     Id = "selection",
                     Name = "Selection",
                     HotkeyData = "Ctrl+Alt+S",
-                    HotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText
+                    HotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
                 },
                 new Profile
                 {
                     Id = "disabled",
                     Name = "Disabled",
                     IsEnabled = false,
-                    HotkeyData = "Ctrl+Alt+T"
+                    HotkeyData = "Ctrl+Alt+T",
                 },
                 new Profile
                 {
                     Id = "no-hotkey",
-                    Name = "None"
+                    Name = "None",
                 },
                 new Profile
                 {
                     Id = "bad",
                     Name = "Bad",
-                    HotkeyData = "Not+a+real+combo"
-                }
+                    HotkeyData = "Not+a+real+combo",
+                },
             ]
         );
 
@@ -561,7 +1168,7 @@ public sealed class HotkeyServiceTests
                     KeyCode.VcR,
                     ModifierMask.LeftCtrl | ModifierMask.LeftAlt,
                     ProfileHotkeyBehavior.StartDictation
-                )
+                ),
             ]
         );
         await backend.WaitUntilSettledAsync();
@@ -805,7 +1412,7 @@ public sealed class HotkeyServiceTests
                     "keeper",
                     KeyCode.VcR,
                     ModifierMask.LeftAlt | ModifierMask.LeftMeta
-                )
+                ),
             ]
         );
 
@@ -815,6 +1422,246 @@ public sealed class HotkeyServiceTests
         Assert.NotNull(snapshot);
         var kept = Assert.Single(snapshot.PromptActionHotkeys);
         Assert.Equal("keeper", kept.ActionId);
+    }
+
+    [Fact]
+    public async Task NativeDictationActive_SuppressesOnlyDictationAndPreservesEveryOtherRoute()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        Assert.True(hotkey.TrySetHotkeyFromString("Ctrl+Shift+F9"));
+        Assert.True(hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Alt+P"));
+        Assert.True(hotkey.TrySetRecentTranscriptionsHotkeyFromString("Ctrl+Alt+R"));
+        Assert.True(hotkey.TrySetCopyLastTranscriptionHotkeyFromString("Ctrl+Alt+C"));
+        Assert.True(hotkey.TrySetTransformSelectionHotkeyFromString("Ctrl+Alt+T"));
+        hotkey.SetDynamicHotkeys(
+            [new PromptActionHotkey("action", KeyCode.VcF10, ModifierMask.LeftMeta)],
+            [
+                new ProfileHotkey(
+                    "profile",
+                    KeyCode.VcF11,
+                    ModifierMask.LeftMeta,
+                    ProfileHotkeyBehavior.StartDictation
+                ),
+            ]
+        );
+        hotkey.IsCancelShortcutEnabled = true;
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+        var configured = backend.LastSet;
+        Assert.NotNull(configured);
+
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+
+        var suppressed = backend.LastSet;
+        var registerCount = backend.RegisterCount;
+        Assert.NotNull(suppressed);
+        Assert.True(hotkey.NativeDictationBindingActive);
+        Assert.Equal(KeyCode.VcUndefined, suppressed.DictationKey);
+        Assert.Equal(ModifierMask.None, suppressed.DictationModifiers);
+        Assert.Equal(configured.PromptPaletteKey, suppressed.PromptPaletteKey);
+        Assert.Equal(configured.PromptPaletteModifiers, suppressed.PromptPaletteModifiers);
+        Assert.Equal(configured.RecentTranscriptionsKey, suppressed.RecentTranscriptionsKey);
+        Assert.Equal(
+            configured.RecentTranscriptionsModifiers,
+            suppressed.RecentTranscriptionsModifiers
+        );
+        Assert.Equal(
+            configured.CopyLastTranscriptionKey,
+            suppressed.CopyLastTranscriptionKey
+        );
+        Assert.Equal(
+            configured.CopyLastTranscriptionModifiers,
+            suppressed.CopyLastTranscriptionModifiers
+        );
+        Assert.Equal(configured.TransformSelectionKey, suppressed.TransformSelectionKey);
+        Assert.Equal(
+            configured.TransformSelectionModifiers,
+            suppressed.TransformSelectionModifiers
+        );
+        Assert.Equal(configured.CancelKey, suppressed.CancelKey);
+        Assert.Equal(configured.CancelModifiers, suppressed.CancelModifiers);
+        Assert.Equal(configured.Mode, suppressed.Mode);
+        Assert.Equal(configured.IsCancelEnabled, suppressed.IsCancelEnabled);
+        Assert.Equal(configured.PromptActionHotkeys.ToArray(), suppressed.PromptActionHotkeys);
+        Assert.Equal(configured.ProfileHotkeys.ToArray(), suppressed.ProfileHotkeys);
+        Assert.Equal("Ctrl+Shift+F9", hotkey.CurrentHotkeyString);
+
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+        Assert.Equal(registerCount, backend.RegisterCount);
+    }
+
+    [Theory]
+    [InlineData(RecordingMode.PushToTalk, KeyCode.VcUndefined, false)]
+    [InlineData(RecordingMode.Toggle, KeyCode.VcEscape, true)]
+    public async Task NativeDictationActive_ProjectsCancelOnlyForPushToTalk(
+        RecordingMode mode,
+        KeyCode expectedCancelKey,
+        bool expectedCancelEnabled
+    )
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Mode = mode;
+        hotkey.IsCancelShortcutEnabled = true;
+        hotkey.Initialize();
+
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(expectedCancelKey, snapshot.CancelKey);
+        Assert.Equal(ModifierMask.None, snapshot.CancelModifiers);
+        Assert.Equal(expectedCancelEnabled, snapshot.IsCancelEnabled);
+        Assert.True(hotkey.IsCancelShortcutEnabled);
+    }
+
+    [Fact]
+    public async Task NativeDictationActive_KeepsAppCancelWhenToggleHotkeyEndsInEscape()
+    {
+        // DictationShortcutSpecFactory drops the native cancel bind when the trigger already
+        // ends in Escape, so suppressing the app-owned cancel would leave no way to cancel.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Mode = RecordingMode.PushToTalk;
+        hotkey.IsCancelShortcutEnabled = true;
+        Assert.True(hotkey.TrySetHotkeyFromString("Ctrl+Shift+Escape"));
+        hotkey.Initialize();
+
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(KeyCode.VcUndefined, snapshot.DictationKey);
+        Assert.Equal(KeyCode.VcEscape, snapshot.CancelKey);
+        Assert.Equal(ModifierMask.None, snapshot.CancelModifiers);
+        Assert.True(snapshot.IsCancelEnabled);
+    }
+
+    [Fact]
+    public async Task NativeDictationActive_SuppressesAppCancelWhenToggleHotkeyIsBareEscape()
+    {
+        // Nothing distinguishes the app's bare-Escape cancel from a native trigger that is also
+        // bare Escape, so one press would start a native recording and cancel it at the same time.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Mode = RecordingMode.PushToTalk;
+        hotkey.IsCancelShortcutEnabled = true;
+        Assert.True(hotkey.TrySetHotkeyFromString("Escape"));
+        hotkey.Initialize();
+
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(KeyCode.VcUndefined, snapshot.DictationKey);
+        Assert.Equal(KeyCode.VcUndefined, snapshot.CancelKey);
+        Assert.False(snapshot.IsCancelEnabled);
+    }
+
+    [Fact]
+    public async Task NativeDictationInactive_RestoresConfiguredDictationAndCancelWithoutChangingOthers()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Mode = RecordingMode.PushToTalk;
+        hotkey.IsCancelShortcutEnabled = true;
+        Assert.True(hotkey.TrySetHotkeyFromString("Alt+F8"));
+        Assert.True(hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+P"));
+        Assert.True(hotkey.TrySetRecentTranscriptionsHotkeyFromString("Ctrl+R"));
+        Assert.True(hotkey.TrySetCopyLastTranscriptionHotkeyFromString("Ctrl+C"));
+        Assert.True(hotkey.TrySetTransformSelectionHotkeyFromString("Ctrl+T"));
+        hotkey.SetDynamicHotkeys(
+            [new PromptActionHotkey("action", KeyCode.VcF10, ModifierMask.LeftMeta)],
+            [
+                new ProfileHotkey(
+                    "profile",
+                    KeyCode.VcF11,
+                    ModifierMask.LeftMeta,
+                    ProfileHotkeyBehavior.StartDictation
+                ),
+            ]
+        );
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+        var configured = backend.LastSet;
+        Assert.NotNull(configured);
+
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+        Assert.Equal(KeyCode.VcUndefined, backend.LastSet?.DictationKey);
+        Assert.Equal(KeyCode.VcUndefined, backend.LastSet?.CancelKey);
+
+        hotkey.SetNativeDictationBindingActive(false);
+        await backend.WaitUntilSettledAsync();
+
+        var restored = backend.LastSet;
+        Assert.NotNull(restored);
+        Assert.False(hotkey.NativeDictationBindingActive);
+        Assert.Equal(KeyCode.VcF8, restored.DictationKey);
+        Assert.Equal(ModifierMask.LeftAlt, restored.DictationModifiers);
+        Assert.Equal(KeyCode.VcEscape, restored.CancelKey);
+        Assert.Equal(ModifierMask.None, restored.CancelModifiers);
+        Assert.True(restored.IsCancelEnabled);
+        Assert.Equal(configured.PromptPaletteKey, restored.PromptPaletteKey);
+        Assert.Equal(configured.PromptPaletteModifiers, restored.PromptPaletteModifiers);
+        Assert.Equal(configured.RecentTranscriptionsKey, restored.RecentTranscriptionsKey);
+        Assert.Equal(
+            configured.RecentTranscriptionsModifiers,
+            restored.RecentTranscriptionsModifiers
+        );
+        Assert.Equal(
+            configured.CopyLastTranscriptionKey,
+            restored.CopyLastTranscriptionKey
+        );
+        Assert.Equal(
+            configured.CopyLastTranscriptionModifiers,
+            restored.CopyLastTranscriptionModifiers
+        );
+        Assert.Equal(configured.TransformSelectionKey, restored.TransformSelectionKey);
+        Assert.Equal(
+            configured.TransformSelectionModifiers,
+            restored.TransformSelectionModifiers
+        );
+        Assert.Equal(configured.PromptActionHotkeys.ToArray(), restored.PromptActionHotkeys);
+        Assert.Equal(configured.ProfileHotkeys.ToArray(), restored.ProfileHotkeys);
+    }
+
+    [Fact]
+    public async Task NativeDictationActiveBeforeInitialize_SuppressesFirstSnapshot()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+
+        hotkey.SetNativeDictationBindingActive(true);
+        hotkey.Initialize();
+        await backend.WaitUntilSettledAsync();
+
+        Assert.Equal(1, backend.RegisterCount);
+        Assert.Equal(KeyCode.VcUndefined, backend.LastSet?.DictationKey);
+        Assert.Equal(ModifierMask.None, backend.LastSet?.DictationModifiers);
+    }
+
+    [Fact]
+    public async Task NativeDictationActive_CollisionChecksStillReserveConfiguredChord()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+
+        var accepted = hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Shift+Space");
+
+        Assert.False(accepted);
+        Assert.Equal("Ctrl+Shift+Space", hotkey.CurrentHotkeyString);
+        Assert.Equal("", hotkey.CurrentPromptPaletteHotkeyString);
+        Assert.Equal(KeyCode.VcUndefined, backend.LastSet?.DictationKey);
     }
 
 }

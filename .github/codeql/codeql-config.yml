@@ -33,6 +33,38 @@ query-filters:
       id: cs/unused-label
   - exclude:
       id: cs/nested-if-statements
+  - exclude:
+      id: cs/complex-block
+  # Every hit is a cast the compiler needs: `_ => (PluginCategory?)null` to give a
+  # switch expression its natural type, `(string?)null` to pick a Moq Returns
+  # overload, `(Exception?)null` to infer a tuple element as nullable (dropping it
+  # is CS8619). "Useless" is wrong here in every instance.
+  - exclude:
+      id: cs/useless-upcast
+  # Fires wherever a disposable is released in a finally block rather than by a
+  # using statement. That shape is deliberate: ownership transfers to a returned
+  # wrapper (ManagedFileTransaction's ArtifactLock), or a test disposes mid-body
+  # to assert idempotent disposal and re-acquisition, which a using cannot express.
+  - exclude:
+      id: cs/missed-using-statement
+  # Restructuring preferences over LINQ and conditional shape. Real-source style is
+  # settled by jb inspectcode, and several of these sites already carry an explicit
+  # `// ReSharper disable` with the reason the current form was chosen; re-flagging
+  # them here only reopens decisions the tree has already made.
+  - exclude:
+      id: cs/linq/missed-where
+  - exclude:
+      id: cs/linq/missed-select
+  - exclude:
+      id: cs/missed-ternary-operator
+  - exclude:
+      id: cs/simplifiable-boolean-expression
+  - exclude:
+      id: cs/complex-condition
+  # Reports "ContainsKey and indexer" when the two calls read *different* keys, as
+  # in the CUDA preload assertions. There is no lookup to fold away.
+  - exclude:
+      id: cs/inefficient-containskey
   # P/Invoke is intrinsic to this native-interop Linux desktop app (evdev, X11,
   # PortAudio, libnotify, gsettings, …). Flagging every unmanaged call is noise.
   - exclude:

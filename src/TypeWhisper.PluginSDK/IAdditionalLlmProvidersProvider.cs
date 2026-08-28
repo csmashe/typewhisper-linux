@@ -4,11 +4,16 @@
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
-/// Optional capability expansion for plugins that expose additional LLM provider roles.
+///     Optional capability expansion for plugins that expose additional LLM provider roles.
+///     The parent plugin owns every returned role's lifetime; the host never activates,
+///     deactivates, or disposes returned objects.
 /// </summary>
 // ReSharper disable once UnusedType.Global
 public interface IAdditionalLlmProvidersProvider
 {
-    /// <summary>Additional LLM provider roles exposed by this plugin.</summary>
-    IReadOnlyList<ILlmProviderPlugin> AdditionalLlmProviders { get; }
+    /// <summary>
+    ///     Additional LLM provider roles exposed by this plugin. Returned role instances
+    ///     MUST be stable across calls so capability-index rebuilds reuse the same objects.
+    /// </summary>
+    IReadOnlyList<ILlmProviderRole> AdditionalLlmProviders { get; }
 }

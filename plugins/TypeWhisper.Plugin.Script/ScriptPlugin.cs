@@ -1,11 +1,14 @@
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Collections.ObjectModel;
-using System.Diagnostics;
-using System.IO;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Plugin.Script;
 
@@ -85,10 +88,12 @@ internal sealed class ScriptStore
         }
         catch
         {
-            if (File.Exists(tempPath))
+            if (!File.Exists(tempPath))
             {
-                try { File.Delete(tempPath); } catch { /* best effort */ }
+                throw;
             }
+
+            try { File.Delete(tempPath); } catch { /* best effort */ }
             throw;
         }
     }
@@ -118,44 +123,52 @@ public sealed class ScriptService
     public void RemoveScript(Guid id)
     {
         var script = Scripts.FirstOrDefault(s => s.Id == id);
-        if (script is not null)
+        if (script is null)
         {
-            Scripts.Remove(script);
-            Save();
+            return;
         }
+
+        Scripts.Remove(script);
+        Save();
     }
 
     public void UpdateScript(ScriptEntry updated)
     {
         for (var i = 0; i < Scripts.Count; i++)
         {
-            if (Scripts[i].Id == updated.Id)
+            if (Scripts[i].Id != updated.Id)
             {
-                Scripts[i] = updated;
-                Save();
-                return;
+                continue;
             }
+
+            Scripts[i] = updated;
+            Save();
+            return;
         }
     }
 
     public void MoveUp(Guid id)
     {
         var index = IndexOf(id);
-        if (index > 0)
+        if (index <= 0)
         {
-            Scripts.Move(index, index - 1);
-            Save();
+            return;
         }
+
+        Scripts.Move(index, index - 1);
+        Save();
     }
 
     public void MoveDown(Guid id)
     {
         var index = IndexOf(id);
-        if (index >= 0 && index < Scripts.Count - 1)
+        if (index < 0 || index >= Scripts.Count - 1)
         {
-            Scripts.Move(index, index + 1);
-            Save();
+            return;
         }
+
+        Scripts.Move(index, index + 1);
+        Save();
     }
 
     public async Task<string> RunScriptsAsync(
@@ -166,6 +179,7 @@ public sealed class ScriptService
     {
         var current = text;
 
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- explicit loop kept; the LINQ form switches enumerators and obscures the side effects.
         foreach (var script in Scripts.ToList())
         {
             if (!script.IsEnabled)
@@ -189,7 +203,9 @@ public sealed class ScriptService
         return current;
     }
 
-    private static (string FileName, string Arguments) ResolveShell(ScriptEntry script)
+    private static (string FileName, IReadOnlyList<string> Arguments) ResolveShell(
+        ScriptEntry script
+    )
     {
         var shell = string.IsNullOrWhiteSpace(script.Shell)
             ? "bash"
@@ -197,10 +213,13 @@ public sealed class ScriptService
 
         return shell switch
         {
-            "pwsh" or "powershell" => ("pwsh", $"-NoProfile -Command {script.Command}"),
-            "sh" => ("sh", $"-c \"{script.Command.Replace("\"", "\\\"")}\""),
+            "pwsh" or "powershell" => (
+                "pwsh",
+                ["-NoProfile", "-Command", script.Command]
+            ),
+            "sh" => ("sh", ["-c", script.Command]),
             // bash + any legacy/unknown value (e.g. an old "cmd" entry).
-            _ => ("bash", $"-c \"{script.Command.Replace("\"", "\\\"")}\""),
+            _ => ("bash", ["-c", script.Command]),
         };
     }
 
@@ -213,88 +232,53 @@ public sealed class ScriptService
     {
         var (fileName, arguments) = ResolveShell(script);
 
-        var psi = new ProcessStartInfo
+        var environment = new Dictionary<string, string>
         {
-            FileName = fileName,
-            Arguments = arguments,
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-            StandardInputEncoding = Encoding.UTF8,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
+            ["TYPEWHISPER_APP_NAME"] = context.ActiveAppName ?? "",
+            ["TYPEWHISPER_LANGUAGE"] = context.SourceLanguage ?? "",
+            ["TYPEWHISPER_PROFILE"] = context.ProfileName ?? "",
         };
 
-        psi.Environment["TYPEWHISPER_APP_NAME"] = context.ActiveAppName ?? "";
-        psi.Environment["TYPEWHISPER_LANGUAGE"] = context.SourceLanguage ?? "";
-        psi.Environment["TYPEWHISPER_PROFILE"] = context.ProfileName ?? "";
-
-        using var process = new Process { StartInfo = psi };
-        process.Start();
-
-        // Create the 5s watchdog BEFORE the stdin write so a wedged child
-        // (e.g. one that never drains its stdin) can't block WriteAsync
-        // indefinitely. The same token also bounds the concurrent reads.
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
-
-        // Read stdout and stderr concurrently to avoid deadlocks. Starting
-        // the reads before stdin is written keeps a chatty script that prints
-        // a prologue before reading from wedging our WriteAsync on a full
-        // output pipe buffer.
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-        var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
-
-        string stdout;
-        string stderr;
+        ProcessRunOutcome result;
         try
         {
-            // Inside the watchdog try block: a child that wedges on stdin
-            // (or never exits) must trigger kill, not propagate OCE while
-            // the process keeps running and pipes stay open.
-            await process.StandardInput.WriteAsync(text.AsMemory(), timeoutCts.Token);
-            process.StandardInput.Close();
-
-            await process.WaitForExitAsync(timeoutCts.Token);
-
-            stdout = await stdoutTask;
-            stderr = await stderrTask;
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            // Timeout — kill the process and return original text
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            { /* best effort */
-            }
-            _host.Log(PluginLogLevel.Warning, $"Script '{script.Name}' timed out after 5 seconds");
-            return text;
+            result = await _host.Processes.RunOneShotAsync(
+                new ProcessCommand(fileName, arguments, environment),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(5),
+                    StandardInput: new Utf8ProcessInput(text)
+                ),
+                ct
+            );
         }
         catch (OperationCanceledException)
         {
-            // Caller cancelled (ct) — kill the child so it doesn't outlive the
-            // dictation flow as a leaked process, then propagate the cancellation.
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            { /* best effort */
-            }
+            // The supervisor terminates and reaps the child.
             _host.Log(PluginLogLevel.Info, $"Script '{script.Name}' cancelled by caller.");
             throw;
         }
 
-        if (process.ExitCode != 0)
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- part of a guard chain; a switch would only cover this branch.
+        if (result.Status == ProcessRunStatus.TimedOut)
+        {
+            _host.Log(PluginLogLevel.Warning, $"Script '{script.Name}' timed out after 5 seconds");
+            return text;
+        }
+
+        if (result.Status == ProcessRunStatus.StartFailed)
+        {
+            throw new InvalidOperationException(
+                result.StartError ?? $"Could not start {fileName}."
+            );
+        }
+
+        var stdout = result.StandardOutputText;
+        var stderr = result.StandardErrorText;
+        if (result.ExitCode != 0)
         {
             _host.Log(
                 PluginLogLevel.Warning,
-                $"Script '{script.Name}' exited with code {process.ExitCode}: {stderr}"
+                $"Script '{script.Name}' exited with code {result.ExitCode}: {stderr}"
             );
             return text;
         }
@@ -415,7 +399,7 @@ public sealed class ScriptPlugin
 
     public string PluginId => "com.typewhisper.script";
     public string PluginName => "Script Runner";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
     public string ProcessorName => "Script Runner";
     public int Priority => 400;
 

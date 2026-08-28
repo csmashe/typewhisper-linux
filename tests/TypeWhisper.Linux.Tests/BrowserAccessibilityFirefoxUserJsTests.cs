@@ -265,6 +265,68 @@ public sealed class BrowserAccessibilityFirefoxUserJsTests : IDisposable
         Assert.Equal(original + "\n" + appended, reverted);
     }
 
+    [Fact]
+    public void ExistingUserJs_PatchAndRevertPreserveExactMode()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var userJsPath = NewUserJsPath();
+        const string original = "user_pref(\"browser.keep_this\", true);\n";
+        const UnixFileMode mode =
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead;
+        File.WriteAllText(userJsPath, original);
+        File.SetUnixFileMode(userJsPath, mode);
+
+        Assert.True(BrowserAccessibilitySetupHelper.PatchFirefoxUserJs(userJsPath));
+        Assert.Equal(mode, File.GetUnixFileMode(userJsPath));
+        Assert.True(BrowserAccessibilitySetupHelper.RevertFirefoxUserJs(userJsPath));
+        Assert.Equal(mode, File.GetUnixFileMode(userJsPath));
+        Assert.Equal(original, File.ReadAllText(userJsPath));
+    }
+
+    [Fact]
+    public void SymlinkedUserJs_PatchAndRevertPreserveLinkAndFinalFile()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var userJsPath = NewUserJsPath();
+        var realPath = Path.Join(_tempDir, "dotfiles-user.js");
+        const string original = "user_pref(\"accessibility.force_disabled\", 0);\n";
+        File.WriteAllText(realPath, original);
+        File.CreateSymbolicLink(userJsPath, realPath);
+
+        Assert.True(BrowserAccessibilitySetupHelper.PatchFirefoxUserJs(userJsPath));
+        Assert.NotNull(new FileInfo(userJsPath).LinkTarget);
+        Assert.Contains(OwnedPreference, File.ReadAllText(realPath));
+
+        Assert.True(BrowserAccessibilitySetupHelper.RevertFirefoxUserJs(userJsPath));
+        Assert.NotNull(new FileInfo(userJsPath).LinkTarget);
+        Assert.Equal(original, File.ReadAllText(realPath));
+    }
+
+    [Fact]
+    public void BrokenUserJsSymlink_IsRefusedWithoutReplacingIt()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var userJsPath = NewUserJsPath();
+        File.CreateSymbolicLink(userJsPath, Path.Join(_tempDir, "missing-user.js"));
+
+        Assert.Throws<IOException>(() =>
+            BrowserAccessibilitySetupHelper.PatchFirefoxUserJs(userJsPath)
+        );
+        Assert.NotNull(new FileInfo(userJsPath).LinkTarget);
+    }
+
     private string NewUserJsPath()
     {
         var profileDir = Path.Join(_tempDir, Guid.NewGuid().ToString("N"));

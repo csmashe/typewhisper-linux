@@ -42,20 +42,16 @@ internal sealed class ControlSocketServer : IDisposable
 
     private readonly DictationOrchestrator _orchestrator;
     private readonly ISettingsService? _settings;
+    private readonly ControlSocketStartCoordinator _startCoordinator;
+    private readonly Lock _lifecycleGate = new();
     private Task? _acceptLoop;
 
-    // True after a successful bind — lets Dispose distinguish "we own this path" from
-    // "we never bound", while the live-probe guard still covers a successor stealing the path.
+    // True only after the complete bind/listen startup has been published.
     private bool _bound;
     private CancellationTokenSource? _cts;
     private int _disposed;
-    private Task? _lastStartTask;
-
-    // UTC ticks of the last accepted record.start; used by the tap race guard to decide
-    // whether an arriving record.stop should await the in-flight start before calling StopAsync.
-    // Stored as ticks so reads are atomic without a lock.
-    private long _lastStartTicks;
     private Socket? _listener;
+    private ControlSocketOwnership? _ownership;
 
     // ReSharper disable once IntroduceOptionalParameters.Global -- kept as explicit overloads; collapsing into optional parameters would delete a member.
     public ControlSocketServer(DictationOrchestrator orchestrator)
@@ -72,6 +68,13 @@ internal sealed class ControlSocketServer : IDisposable
         _orchestrator = orchestrator;
         _hotkey = hotkey;
         _settings = settings;
+        _startCoordinator = new ControlSocketStartCoordinator(
+            () => _orchestrator.CurrentStateLabel,
+            ex =>
+                Trace.WriteLine(
+                    $"[ControlSocketServer] StartAsync faulted: {ex.GetBaseException().Message}"
+                )
+        );
         SocketPath = SocketPathResolver.ResolveControlSocketPath();
     }
 
@@ -85,20 +88,234 @@ internal sealed class ControlSocketServer : IDisposable
             return;
         }
 
-        // Order: cancel → close listener (unblocks in-flight AcceptAsync) → await loop → unlink.
-        // Reversing close/wait risks an indefinite accept block; reversing wait/unlink risks
-        // deleting the file while the loop still holds it.
+        lock (_lifecycleGate)
+        {
+            var listener = _listener;
+            var cts = _cts;
+            var acceptLoop = _acceptLoop;
+            var ownership = _ownership;
+
+            _listener = null;
+            _cts = null;
+            _acceptLoop = null;
+            _ownership = null;
+
+            // Order: cancel → close → await loop → unlink → release, all under _lifecycleGate.
+            // Reversing close/wait risks an indefinite accept block; unlinking before the loop
+            // drains risks deleting the file while a handler still holds it.
+            try
+            {
+                cts?.Cancel();
+            }
+            catch
+            {
+                /* ignored */
+            }
+
+            try
+            {
+                listener?.Close();
+            }
+            catch
+            {
+                /* ignored */
+            }
+
+            try
+            {
+                listener?.Dispose();
+            }
+            catch
+            {
+                /* ignored */
+            }
+
+            try
+            {
+                acceptLoop?.Wait(TimeSpan.FromMilliseconds(500));
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[ControlSocketServer] Accept loop wait threw: {ex.Message}");
+            }
+
+            try
+            {
+                cts?.Dispose();
+            }
+            catch
+            {
+                /* ignored */
+            }
+
+            try
+            {
+                // ReSharper disable once InvertIf -- inverting would early-return out of a multi-stage cleanup and skip the stages below.
+                if (_bound && ownership is not null)
+                {
+                    var cleanup = ownership.CleanupStaleSocket();
+                    if (cleanup is ControlSocketCleanupResult.Live)
+                    {
+                        Trace.WriteLine(
+                            $"[ControlSocketServer] Socket path {SocketPath} is held by another listener; leaving it in place."
+                        );
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine(
+                    $"[ControlSocketServer] Could not remove socket file on dispose: {ex.Message}"
+                );
+            }
+            finally
+            {
+                _bound = false;
+                try
+                {
+                    ownership?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine(
+                        $"[ControlSocketServer] Could not release socket ownership: {ex.Message}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Binds the socket and starts the accept loop. Throws
+    ///     <see cref="SocketException" /> with
+    ///     <see cref="SocketError.AddressAlreadyInUse" /> when another live
+    ///     instance owns the path, and — failing closed — whenever ownership
+    ///     cannot be established (lock contention or an indeterminate probe);
+    ///     callers should treat that as the single-instance signal and exit.
+    /// </summary>
+    public void Start()
+    {
+        lock (_lifecycleGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+
+            if (_listener is not null)
+            {
+                return;
+            }
+
+            ControlSocketOwnership ownership;
+            try
+            {
+                if (!ControlSocketOwnership.TryAcquire(SocketPath, out var acquiredOwnership))
+                {
+                    throw AddressAlreadyInUse();
+                }
+
+                ownership = acquiredOwnership;
+            }
+            catch (SocketException ex)
+                when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Lock uncertainty must fail closed; App already treats this socket error as
+                // the authoritative single-instance signal.
+                Trace.WriteLine(
+                    $"[ControlSocketServer] Could not acquire socket ownership: {ex.Message}"
+                );
+                throw AddressAlreadyInUse();
+            }
+
+            Socket? listener = null;
+            CancellationTokenSource? cts = null;
+            Task? acceptLoop = null;
+            var boundThisAttempt = false;
+            try
+            {
+                var cleanup = ownership.CleanupStaleSocket();
+                if (
+                    cleanup
+                    is not (
+                        ControlSocketCleanupResult.Missing
+                        or ControlSocketCleanupResult.Removed
+                    )
+                )
+                {
+                    throw AddressAlreadyInUse();
+                }
+
+                listener = new Socket(
+                    AddressFamily.Unix,
+                    SocketType.Stream,
+                    ProtocolType.Unspecified
+                );
+                listener.Bind(new UnixDomainSocketEndPoint(SocketPath));
+                boundThisAttempt = true;
+
+                // 0600: owner-only read/write. Defense in depth on shared /tmp; on
+                // XDG_RUNTIME_DIR the parent dir is already 0700.
+                SocketPathResolver.TryChmod(SocketPath, 0b110_000_000); // 0600
+                listener.Listen(8);
+
+                cts = new CancellationTokenSource();
+                var token = cts.Token;
+                acceptLoop = Task.Run(() => AcceptLoopAsync(listener, token), token);
+
+                // Publish only after bind, chmod, listen, and accept-loop creation succeed.
+                _ownership = ownership;
+                _listener = listener;
+                _cts = cts;
+                _acceptLoop = acceptLoop;
+                _bound = true;
+
+                Trace.WriteLine($"[ControlSocketServer] Listening on {SocketPath}");
+            }
+            catch
+            {
+                CleanupFailedStart(
+                    ownership,
+                    listener,
+                    cts,
+                    acceptLoop,
+                    boundThisAttempt
+                );
+                throw;
+            }
+        }
+    }
+
+    private static SocketException AddressAlreadyInUse()
+    {
+        return new SocketException((int)SocketError.AddressAlreadyInUse);
+    }
+
+    /// <summary>Callers must hold <c>_lifecycleGate</c>.</summary>
+    private void CleanupFailedStart(
+        ControlSocketOwnership ownership,
+        Socket? listener,
+        CancellationTokenSource? cts,
+        Task? acceptLoop,
+        bool boundThisAttempt
+    )
+    {
+        _listener = null;
+        _cts = null;
+        _acceptLoop = null;
+        _ownership = null;
+        _bound = false;
+
         try
         {
-            _cts?.Cancel();
+            cts?.Cancel();
         }
         catch
         {
             /* ignored */
         }
 
-        var listener = _listener;
-        _listener = null;
         try
         {
             listener?.Close();
@@ -119,95 +336,52 @@ internal sealed class ControlSocketServer : IDisposable
 
         try
         {
-            _acceptLoop?.Wait(TimeSpan.FromMilliseconds(500));
+            acceptLoop?.Wait(TimeSpan.FromMilliseconds(500));
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[ControlSocketServer] Accept loop wait threw: {ex.Message}");
+            Trace.WriteLine(
+                $"[ControlSocketServer] Failed-start accept loop wait threw: {ex.Message}"
+            );
         }
 
         try
         {
-            _cts?.Dispose();
+            cts?.Dispose();
         }
         catch
         {
             /* ignored */
         }
 
-        // Unlink only if we own the path AND no live peer is listening — a successor instance
-        // may have already taken it over before our Dispose reaches this point.
-        try
+        if (boundThisAttempt)
         {
-            if (!_bound || !File.Exists(SocketPath))
+            try
             {
-                return;
+                ownership.CleanupStaleSocket();
             }
-
-            if (NoLivePeer(SocketPath))
-            {
-                File.Delete(SocketPath);
-            }
-            else
+            catch (Exception ex)
             {
                 Trace.WriteLine(
-                    $"[ControlSocketServer] Socket path {SocketPath} is held by another listener; leaving it in place."
+                    $"[ControlSocketServer] Failed-start socket cleanup threw: {ex.Message}"
                 );
             }
+        }
+
+        try
+        {
+            ownership.Dispose();
         }
         catch (Exception ex)
         {
             Trace.WriteLine(
-                $"[ControlSocketServer] Could not remove socket file on dispose: {ex.Message}"
+                $"[ControlSocketServer] Failed-start ownership release threw: {ex.Message}"
             );
         }
     }
 
-    /// <summary>
-    ///     Binds the socket and starts the accept loop. Throws
-    ///     <see cref="SocketException" /> with
-    ///     <see cref="SocketError.AddressAlreadyInUse" /> when another live
-    ///     instance owns the path; callers should treat that as the
-    ///     single-instance signal and exit.
-    /// </summary>
-    public void Start()
+    private async Task AcceptLoopAsync(Socket listener, CancellationToken ct)
     {
-        ObjectDisposedException.ThrowIf(_disposed != 0, this);
-
-        if (_listener is not null)
-        {
-            return;
-        }
-
-        TryRemoveStaleSocket(SocketPath);
-
-        var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        try
-        {
-            listener.Bind(new UnixDomainSocketEndPoint(SocketPath));
-        }
-        catch
-        {
-            listener.Dispose();
-            throw;
-        }
-
-        // 0600: owner-only read/write. Defense in depth on shared /tmp; on
-        // XDG_RUNTIME_DIR the parent dir is already 0700.
-        SocketPathResolver.TryChmod(SocketPath, 0b110_000_000); // 0600
-        _bound = true;
-        listener.Listen(8);
-
-        _listener = listener;
-        _cts = new CancellationTokenSource();
-        _acceptLoop = Task.Run(() => AcceptLoopAsync(_cts.Token));
-
-        Trace.WriteLine($"[ControlSocketServer] Listening on {SocketPath}");
-    }
-
-    private async Task AcceptLoopAsync(CancellationToken ct)
-    {
-        var listener = _listener!;
         while (!ct.IsCancellationRequested)
         {
             Socket client;
@@ -403,7 +577,7 @@ internal sealed class ControlSocketServer : IDisposable
                 JsonControlProtocol.CmdRecordCancel => await HandleCancelAsync()
                     .ConfigureAwait(false),
                 JsonControlProtocol.CmdStatus => HandleStatus(),
-                _ => JsonControlProtocol.SerializeError(JsonControlProtocol.ErrUnknownCommand)
+                _ => JsonControlProtocol.SerializeError(JsonControlProtocol.ErrUnknownCommand),
             };
 
             await writer.WriteLineAsync(response).ConfigureAwait(false);
@@ -417,32 +591,9 @@ internal sealed class ControlSocketServer : IDisposable
         }
     }
 
-    private async Task<string> HandleStartAsync()
+    private Task<string> HandleStartAsync()
     {
-        var prev = SnapshotState();
-
-        // Publish the TCS BEFORE invoking the orchestrator: StartAsync runs synchronously
-        // until its first real await and can hold _toggleGate before yielding. A concurrent
-        // record.stop would otherwise see IsRecording==false and no-op. HandleStopAsync awaits
-        // this TCS to ensure the start has completed before calling StopAsync.
-        var startCompletion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        Interlocked.Exchange(ref _lastStartTicks, DateTime.UtcNow.Ticks);
-        _lastStartTask = startCompletion.Task;
-
-        try
-        {
-            await _orchestrator.StartAsync().ConfigureAwait(false);
-            startCompletion.TrySetResult();
-        }
-        catch (Exception ex)
-        {
-            startCompletion.TrySetException(ex);
-            throw;
-        }
-
-        return JsonControlProtocol.SerializeAction(prev, SnapshotState());
+        return _startCoordinator.DispatchStart(() => _orchestrator.StartAsync());
     }
 
     private async Task<string> HandleStopAsync()
@@ -452,11 +603,10 @@ internal sealed class ControlSocketServer : IDisposable
         // Hyprland `bindr` tap guard: a record.stop within StartStopRaceWindow of a start is
         // treated as a tap. Await the in-flight start's TCS so StopAsync sees IsRecording==true;
         // without this, _toggleGate.WaitAsync(0) fails and the user ends up with a stuck recording.
-        var startTicks = Interlocked.Read(ref _lastStartTicks);
+        var (startTicks, pendingStart) = _startCoordinator.GetLastStart();
         var elapsed = DateTime.UtcNow - new DateTime(startTicks, DateTimeKind.Utc);
         if (elapsed < s_startStopRaceWindow)
         {
-            var pendingStart = _lastStartTask;
             if (pendingStart is not null && !pendingStart.IsCompleted)
             {
                 try
@@ -535,82 +685,152 @@ internal sealed class ControlSocketServer : IDisposable
             Backend = _hotkey?.ActiveBackendId,
             SupportsPressRelease = _hotkey?.ActiveBackendSupportsPressRelease ?? false,
             ActiveBinding = _hotkey?.CurrentHotkeyString,
-            Mode = _settings?.Current.Mode.ToString()
+            Mode = _settings?.Current.Mode.ToString(),
         };
         return JsonControlProtocol.SerializeStatus(response);
     }
 
-    /// <summary>Maps observable orchestrator state to the wire string via <see cref="DictationOrchestrator.CurrentStateLabel" />.</summary>
+    /// <summary>
+    ///     Projects an accepted start as <c>starting</c> only while the orchestrator is
+    ///     otherwise idle; any real active state (recording, transcribing, injecting)
+    ///     supersedes the pending projection.
+    /// </summary>
     private string SnapshotState()
     {
-        return _orchestrator.CurrentStateLabel;
+        return _startCoordinator.SnapshotState();
+    }
+
+}
+
+/// <summary>
+///     Coordinates the one accepted control-socket start phase. The published completion is
+///     a tap-stop ordering signal; the separately observed orchestrator task carries failures.
+/// </summary>
+internal sealed class ControlSocketStartCoordinator
+{
+    private readonly Lock _gate = new();
+    private readonly Action<Exception> _onFault;
+    private readonly Func<string> _readState;
+    private Task? _lastStartTask;
+    private long _lastStartTicks;
+
+    public ControlSocketStartCoordinator(Func<string> readState, Action<Exception> onFault)
+    {
+        _readState = readState;
+        _onFault = onFault;
     }
 
     /// <summary>
-    ///     If the socket path exists but no live peer is listening, deletes it.
-    ///     Never deletes a path that has a live peer — that would silently
-    ///     detach another running instance.
+    ///     Accepts one start at a time and returns its action response without awaiting the
+    ///     complete orchestrator operation. The delegate is invoked directly so its synchronous
+    ///     startup-gate prefix runs on the request handler rather than being deferred to the pool.
     /// </summary>
-    private static void TryRemoveStaleSocket(string path)
+    public Task<string> DispatchStart(Func<Task> start)
     {
-        if (!File.Exists(path))
+        var prev = SnapshotState();
+        TaskCompletionSource? startCompletion = null;
+
+        lock (_gate)
         {
-            return;
+            if (_lastStartTask is null || _lastStartTask.IsCompleted)
+            {
+                startCompletion = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                _lastStartTask = startCompletion.Task;
+                _lastStartTicks = DateTime.UtcNow.Ticks;
+            }
         }
 
+        if (startCompletion is null)
+        {
+            return Task.FromResult(JsonControlProtocol.SerializeAction(prev, SnapshotState()));
+        }
+
+        Task startTask;
         try
         {
-            using var probe = new Socket(
-                AddressFamily.Unix,
-                SocketType.Stream,
-                ProtocolType.Unspecified
-            );
-            probe.Connect(new UnixDomainSocketEndPoint(path));
-            // A live peer accepted us; do NOT delete.
-        }
-        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
-        {
-            try
-            {
-                File.Delete(path);
-                Trace.WriteLine($"[ControlSocketServer] Removed stale socket at {path}.");
-            }
-            catch (Exception delEx)
-            {
-                Trace.WriteLine(
-                    $"[ControlSocketServer] Failed to remove stale socket {path}: {delEx.Message}"
-                );
-            }
+            startTask = start();
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[ControlSocketServer] Probe of {path} threw: {ex.Message}");
+            ReportFault(ex);
+            startCompletion.TrySetResult();
+            return Task.FromResult(
+                JsonControlProtocol.SerializeError(JsonControlProtocol.ErrInternal)
+            );
+        }
+
+        _ = ObserveStartAsync(startTask, startCompletion);
+
+        // A failure that settled synchronously is known before the response is committed.
+        return startTask is { IsCompleted: true, IsCompletedSuccessfully: false }
+            ? Task.FromResult(
+                JsonControlProtocol.SerializeError(JsonControlProtocol.ErrInternal)
+            )
+            : Task.FromResult(JsonControlProtocol.SerializeAction(prev, SnapshotState()));
+    }
+
+    /// <summary>
+    ///     Returns the timestamp/task pair used by the server's 100 ms tap-stop guard under the
+    ///     same synchronization boundary that publishes a new accepted start.
+    /// </summary>
+    public (long Ticks, Task? Completion) GetLastStart()
+    {
+        lock (_gate)
+        {
+            return (_lastStartTicks, _lastStartTask);
         }
     }
 
-    /// <summary>True when ECONNREFUSED — no live listener, safe to unlink. False on any other outcome.</summary>
-    private static bool NoLivePeer(string path)
+    /// <summary>Returns the real state, augmented only by the pending startup phase.</summary>
+    public string SnapshotState()
+    {
+        var state = _readState();
+        if (
+            state
+            is JsonControlProtocol.StateRecording
+                or JsonControlProtocol.StateTranscribing
+                or JsonControlProtocol.StateInjecting
+        )
+        {
+            return state;
+        }
+
+        lock (_gate)
+        {
+            return _lastStartTask is { IsCompleted: false }
+                ? JsonControlProtocol.StateStarting
+                : state;
+        }
+    }
+
+    private async Task ObserveStartAsync(Task startTask, TaskCompletionSource startCompletion)
     {
         try
         {
-            using var probe = new Socket(
-                AddressFamily.Unix,
-                SocketType.Stream,
-                ProtocolType.Unspecified
-            );
-            probe.Connect(new UnixDomainSocketEndPoint(path));
-            return false;
+            await startTask.ConfigureAwait(false);
         }
-        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
+        catch (Exception ex)
         {
-            return true;
+            ReportFault(ex);
+        }
+        finally
+        {
+            // Tap-stop waiters need ordering completion, not the orchestrator's fault.
+            startCompletion.TrySetResult();
+        }
+    }
+
+    private void ReportFault(Exception ex)
+    {
+        try
+        {
+            _onFault(ex);
         }
         catch
         {
-            // Any other error (e.g. permission denied) — refuse to delete
-            // out of paranoia; leaking a socket file is fine, deleting
-            // someone else's is not.
-            return false;
+            // Diagnostics must never turn the observer into an unobserved faulted task.
         }
     }
 }

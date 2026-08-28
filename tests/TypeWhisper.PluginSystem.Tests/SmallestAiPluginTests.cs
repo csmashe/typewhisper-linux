@@ -32,7 +32,7 @@ public class SmallestAiPluginTests
 
         Assert.Equal("com.typewhisper.smallest-ai", manifest.GetProperty("id").GetString());
         Assert.Equal("Smallest AI Pulse", manifest.GetProperty("name").GetString());
-        Assert.Equal("transcription", manifest.GetProperty("category").GetString());
+        Assert.Equal(["transcription"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
         Assert.Equal(
             "TypeWhisper.Plugin.SmallestAi.dll",
             manifest.GetProperty("assemblyName").GetString()
@@ -96,7 +96,7 @@ public class SmallestAiPluginTests
     {
         var host = new TestPluginHostServices
         {
-            SecretWriteDelay = TimeSpan.FromMilliseconds(30)
+            SecretWriteDelay = TimeSpan.FromMilliseconds(30),
         };
         var sut = new SmallestAiPlugin();
         await sut.ActivateAsync(host);
@@ -219,7 +219,7 @@ public class SmallestAiPluginTests
     }
 
     [Fact]
-    public async Task TranscribeAsync_OmitsLanguageForAuto()
+    public async Task TranscribeAsync_OmitsLanguageWhenUnspecified()
     {
         var handler = new CapturingHandler((request, _) =>
         {
@@ -232,7 +232,7 @@ public class SmallestAiPluginTests
         var sut = new SmallestAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
-        var result = await sut.TranscribeAsync([1, 2, 3], "auto", translate: false, prompt: null, CancellationToken.None);
+        var result = await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
 
         Assert.Equal("Hello", result.Text);
     }
@@ -282,7 +282,7 @@ public class SmallestAiPluginTests
         Assert.Contains("sample_rate=16000", uri.Query);
         Assert.Contains("word_timestamps=true", uri.Query);
 
-        var autoUri = SmallestAiStreamingSession.BuildStreamingUri("auto", wordTimestamps: true);
+        var autoUri = SmallestAiStreamingSession.BuildStreamingUri(null, wordTimestamps: true);
         Assert.DoesNotContain("language=", autoUri.Query);
 
         var headers = SmallestAiStreamingSession.CreateStreamingHeaders("smallest-key");
@@ -358,7 +358,7 @@ public class SmallestAiPluginTests
     private static HttpResponseMessage JsonResponse(string json, HttpStatusCode statusCode = HttpStatusCode.OK) =>
         new(statusCode)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
 
     private sealed class CapturingHandler(
@@ -379,7 +379,7 @@ public class SmallestAiPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

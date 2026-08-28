@@ -30,9 +30,19 @@ public static class Program
         BootTrace.Initialize();
         BootTrace.Stage("EnsureDirectories");
 
+        // EnsureDirectories runs before the boot trace exists, so re-report its one privacy-
+        // relevant outcome here.
+        if (!TypeWhisperEnvironment.AudioDirectoryIsOwnerOnly)
+        {
+            BootTrace.Stage(
+                $"WARNING: '{TypeWhisperEnvironment.AudioPath}' is not owner-only; "
+                + "recordings stored there may be readable by other local users"
+            );
+        }
+
         // GNOME launches menu apps at nice 6 / ionice idle, which throttles cold start ~60×
         // for a CPU+IO-heavy .NET app. Restore defaults so menu launch matches terminal launch.
-        var priorityResult = ProcessPriority.ResetToDefaults();
+        var priorityResult = ProcessPriority.ResetToDefaults(new ProcessRunner());
         BootTrace.Stage($"ProcessPriority reset ({priorityResult})");
 
         var action = CommandLineParser.Parse(args);
@@ -82,6 +92,8 @@ public static class Program
                 if (!string.IsNullOrEmpty(probeError))
                 {
                     Trace.WriteLine($"[Program] Control socket probe: {probeError}");
+                    StartupCancellation.NotifyUnverifiedInstance();
+                    return 1;
                 }
 
                 BootTrace.Stage("ControlSocketClient.TrySendToggle (no live peer)");
@@ -92,6 +104,11 @@ public static class Program
                 LinuxStartupNotification.NotifyComplete(); // clear launcher's busy cursor
                 return 0;
             }
+            else if (File.Exists(socketPath))
+            {
+                StartupCancellation.NotifyUnverifiedInstance();
+                return 1;
+            }
             else
             {
                 BootTrace.Stage("ControlSocketClient.IsLivePeer (none)");
@@ -101,6 +118,60 @@ public static class Program
         {
             Trace.WriteLine($"[Program] Control socket probe failed: {ex.Message}");
             BootTrace.Stage($"control socket probe threw: {ex.GetType().Name}");
+            StartupCancellation.NotifyUnverifiedInstance();
+            return 1;
+        }
+
+        var restoreResult = SettingsBackupService.ApplyPendingRestoreAtStartup(
+            TypeWhisperEnvironment.BasePath
+        );
+        switch (restoreResult.Status)
+        {
+            case StartupRestoreStatus.None:
+                break;
+
+            case StartupRestoreStatus.Applied:
+                Console.WriteLine("Applied the staged settings restore.");
+                Trace.WriteLine("[Program] Applied the staged settings restore.");
+                BootTrace.Stage("staged settings restore applied");
+                break;
+
+            case StartupRestoreStatus.PriorGenerationRestored:
+                Console.Error.WriteLine(
+                    "The staged settings restore could not be applied. The prior settings generation was restored."
+                );
+                if (restoreResult.Error is not null)
+                {
+                    Trace.WriteLine(
+                        $"[Program] Settings restore rolled back: {restoreResult.Error}"
+                    );
+                }
+
+                BootTrace.Stage("staged settings restore rolled back");
+                break;
+
+            case StartupRestoreStatus.LockUnavailable:
+                Console.Error.WriteLine(
+                    "Another TypeWhisper startup is applying a staged settings restore. Startup was canceled."
+                );
+                Trace.WriteLine($"[Program] Restore lock unavailable: {restoreResult.Error}");
+                LinuxStartupNotification.NotifyComplete();
+                return 1;
+
+            case StartupRestoreStatus.UnresolvedFailure:
+                Console.Error.WriteLine(
+                    "TypeWhisper could not safely recover the staged settings restore. Startup was canceled."
+                );
+                Trace.WriteLine($"[Program] Settings restore recovery failed: {restoreResult.Error}");
+                LinuxStartupNotification.NotifyComplete();
+                return 1;
+
+            default:
+                Console.Error.WriteLine(
+                    "TypeWhisper encountered an unknown staged restore state. Startup was canceled."
+                );
+                LinuxStartupNotification.NotifyComplete();
+                return 1;
         }
 
         Services = BuildServices();
@@ -120,9 +191,14 @@ public static class Program
         }
         finally
         {
-            // DisposeAsync: some DI services are IAsyncDisposable-only (e.g. XdgPortalGlobalShortcutsBackend);
-            // sync Dispose() throws InvalidOperationException for those.
-            Services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            // A timed-out HTTP handler may still be using DI-owned services. The process is
+            // exiting, so skipping provider disposal here cannot leak anything beyond its life.
+            if (!App.SkipProviderDisposal)
+            {
+                // DisposeAsync: some DI services are IAsyncDisposable-only (e.g. XdgPortalGlobalShortcutsBackend);
+                // sync Dispose() throws InvalidOperationException for those.
+                Services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
         }
     }
 
@@ -144,7 +220,7 @@ public static class Program
                     // throws a per-frame SynchronizationLockException from GlxContext.RestoreContext.Dispose,
                     // but only after rendering — transparency works and the log noise is filtered by
                     // SuppressGlxRenderExceptionLogSink. EGL is the fallback if GLX init fails.
-                    RenderingMode = [X11RenderingMode.Glx, X11RenderingMode.Egl, X11RenderingMode.Software]
+                    RenderingMode = [X11RenderingMode.Glx, X11RenderingMode.Egl, X11RenderingMode.Software],
                 }
             )
 #if DEBUG

@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using Avalonia.Threading;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -12,9 +13,17 @@ public partial class GeneralSectionViewModel : ObservableObject
 {
     private readonly HttpApiService _api;
     private readonly CliInstallService _cliInstall;
+    private readonly CudaLibraryPathSetupService _cudaLibraryPathSetup;
     private readonly LinuxPreferencesService _linuxPrefs;
     private readonly ISettingsService _settings;
     private readonly TrayIconService _tray;
+    private bool _updatingStartWithSystem;
+    private bool _autostartStatusIsHint = true;
+
+    // Set while Refresh hydrates from persisted settings so the generated On<Property>Changed
+    // hooks don't write the value straight back. Delivery is deferred to the UI thread, so
+    // without this a refresh could persist its snapshot over a newer commit.
+    private bool _hydratingFromSettings;
 
     [ObservableProperty]
     private string _apiBearerToken = "";
@@ -44,7 +53,18 @@ public partial class GeneralSectionViewModel : ObservableObject
     private bool _closeToTray;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowCudaPathRemovalSurface))]
+    private bool _cudaPathRemovalAvailable;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowCudaPathRemovalSurface))]
+    private string _cudaPathRemovalStatusText = "";
+
+    [ObservableProperty]
     private bool _startWithSystem;
+
+    [ObservableProperty]
+    private string _autostartStatusText = Loc.Instance["General.AutostartHint"];
 
     [ObservableProperty]
     private string? _uiLanguage;
@@ -53,6 +73,7 @@ public partial class GeneralSectionViewModel : ObservableObject
         ISettingsService settings,
         HttpApiService api,
         CliInstallService cliInstall,
+        CudaLibraryPathSetupService cudaLibraryPathSetup,
         LinuxPreferencesService linuxPrefs,
         TrayIconService tray
     )
@@ -60,15 +81,34 @@ public partial class GeneralSectionViewModel : ObservableObject
         _settings = settings;
         _api = api;
         _cliInstall = cliInstall;
+        _cudaLibraryPathSetup = cudaLibraryPathSetup;
         _linuxPrefs = linuxPrefs;
         _tray = tray;
         Refresh(settings.Current);
-        StartWithSystem = StartupService.IsEnabled;
+        _startWithSystem = StartupService.IsEnabled;
         CloseToTray = _linuxPrefs.Current.CloseToTray;
-        _settings.SettingsChanged += Refresh;
-        _api.StateChanged += () => ApiStatusText = _api.StatusText;
+        // Both fire on whichever thread wrote — a background Save, or the teardown continuation
+        // left on the pool by the awaited model unload — so hop to the UI thread rather than
+        // mutating bound properties off it. Re-read Current when the post runs instead of
+        // capturing the payload, so queued refreshes coalesce onto the newest commit.
+        _settings.SettingsChanged += _ =>
+            Dispatcher.UIThread.Post(() => Refresh(_settings.Current));
+        Loc.Instance.LanguageChanged += (_, _) =>
+        {
+            if (_autostartStatusIsHint)
+            {
+                AutostartStatusText = Loc.Instance["General.AutostartHint"];
+            }
+        };
+        _api.StateChanged += () =>
+            Dispatcher.UIThread.Post(() => ApiStatusText = _api.StatusText);
         ApiStatusText = _api.StatusText;
         RefreshCliState();
+        CudaPathRemovalAvailable = _cudaLibraryPathSetup.HasInstalledChanges();
+        _cudaLibraryPathSetup.InstalledChangesChanged += (_, _) =>
+            Dispatcher.UIThread.Post(() =>
+                CudaPathRemovalAvailable = _cudaLibraryPathSetup.HasInstalledChanges()
+            );
     }
 
     public ObservableCollection<CommandExample> CurlExamples { get; } = [];
@@ -110,14 +150,25 @@ public partial class GeneralSectionViewModel : ObservableObject
 
     public bool IsTrayUnavailable => !_tray.IsTrayAvailable;
 
+    public bool ShowCudaPathRemovalSurface =>
+        CudaPathRemovalAvailable || !string.IsNullOrWhiteSpace(CudaPathRemovalStatusText);
+
     private void Refresh(AppSettings s)
     {
-        UiLanguage = s.UiLanguage;
-        ApiServerEnabled = s.ApiServerEnabled;
-        ApiServerPort = s.ApiServerPort;
-        ApiBearerToken = HttpApiService.ReadBearerToken(s);
-        RefreshExamples(s.ApiServerPort);
-        OnPropertyChanged(nameof(SelectedUiLanguageOption));
+        _hydratingFromSettings = true;
+        try
+        {
+            UiLanguage = s.UiLanguage;
+            ApiServerEnabled = s.ApiServerEnabled;
+            ApiServerPort = s.ApiServerPort;
+            ApiBearerToken = HttpApiService.ReadBearerToken(s);
+            RefreshExamples(s.ApiServerPort);
+            OnPropertyChanged(nameof(SelectedUiLanguageOption));
+        }
+        finally
+        {
+            _hydratingFromSettings = false;
+        }
     }
 
     [RelayCommand]
@@ -127,16 +178,52 @@ public partial class GeneralSectionViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void InstallCli()
+    private async Task InstallCliAsync()
     {
         try
         {
-            ApplyCliState(_cliInstall.Install());
+            // Install copies the ~17 MB CLI and runs it once to verify, on a 10-second
+            // deadline — far too long to hold the UI thread.
+            ApplyCliState(await Task.Run(_cliInstall.Install));
         }
         catch (Exception ex)
-            when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+            when (ex is InvalidOperationException
+                or IOException
+                or UnauthorizedAccessException
+                or TimeoutException)
         {
             CliStatusText = ex.Message;
+        }
+    }
+
+    [RelayCommand]
+    private async Task RemoveCudaLibraryPathAsync()
+    {
+        try
+        {
+            var result = await _cudaLibraryPathSetup.RemoveAsync(CancellationToken.None);
+            CudaPathRemovalStatusText = result.Success
+                ? Loc.Instance["General.CudaPathRemoved"]
+                : Loc.Instance.GetString(
+                    "General.CudaPathRemoveFailed",
+                    result.Detail ?? string.Empty
+                );
+        }
+        catch (Exception ex)
+            when (ex is InvalidOperationException
+                or IOException
+                or UnauthorizedAccessException
+                or InvalidDataException)
+        {
+            CudaPathRemovalStatusText = Loc.Instance.GetString(
+                "General.CudaPathRemoveFailed",
+                ex.Message
+            );
+        }
+        finally
+        {
+            // Refresh either way: a partial removal still changes what is left to revert.
+            CudaPathRemovalAvailable = _cudaLibraryPathSetup.HasInstalledChanges();
         }
     }
 
@@ -171,46 +258,65 @@ public partial class GeneralSectionViewModel : ObservableObject
 
     partial void OnUiLanguageChanged(string? value)
     {
-        _settings.Save(_settings.Current with { UiLanguage = value });
+        // Applying the language still runs while hydrating; only the write-back is suppressed.
+        if (!_hydratingFromSettings)
+        {
+            _settings.Update(current => current with { UiLanguage = value });
+        }
+
         Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(value);
         OnPropertyChanged(nameof(SelectedUiLanguageOption));
     }
 
     partial void OnStartWithSystemChanged(bool value)
     {
-        if (value == StartupService.IsEnabled)
+        if (_updatingStartWithSystem)
         {
             return;
         }
 
-        if (value)
+        _updatingStartWithSystem = true;
+        try
         {
-            StartupService.Enable();
+            var result = value ? StartupService.Enable() : StartupService.Disable();
+            AutostartStatusText = result.StatusText;
+            _autostartStatusIsHint = result.Success;
+            StartWithSystem = result.IsEnabled;
         }
-        else
+        catch (Exception ex)
+            when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            StartupService.Disable();
+            AutostartStatusText = ex.Message;
+            _autostartStatusIsHint = false;
+            StartWithSystem = StartupService.IsEnabled;
+        }
+        finally
+        {
+            _updatingStartWithSystem = false;
         }
     }
 
     partial void OnApiServerEnabledChanged(bool value)
     {
-        if (_settings.Current.ApiServerEnabled == value)
+        if (_hydratingFromSettings || _settings.Current.ApiServerEnabled == value)
         {
             return;
         }
 
-        _settings.Save(_settings.Current with { ApiServerEnabled = value });
+        _settings.Update(current => current with { ApiServerEnabled = value });
     }
 
     partial void OnApiServerPortChanged(int value)
     {
-        if (value <= 0 || value > 65535 || _settings.Current.ApiServerPort == value)
+        if (_hydratingFromSettings
+            || value <= 0
+            || value > 65535
+            || _settings.Current.ApiServerPort == value)
         {
             return;
         }
 
-        _settings.Save(_settings.Current with { ApiServerPort = value });
+        _settings.Update(current => current with { ApiServerPort = value });
     }
 
     partial void OnCloseToTrayChanged(bool value)
@@ -220,7 +326,23 @@ public partial class GeneralSectionViewModel : ObservableObject
             return;
         }
 
-        _linuxPrefs.Save(_linuxPrefs.Current with { CloseToTray = value });
+        try
+        {
+            _linuxPrefs.Update(current => current with { CloseToTray = value });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A read-only or full disk must not throw out of a property setter into the binding.
+            System.Diagnostics.Trace.WriteLine(
+                $"[General] Could not persist the close-to-tray preference: {ex.Message}"
+            );
+
+            // The generated setter already published `value`, but the close handler reads
+            // LinuxPreferences.Current, which a failed write leaves untouched — roll the toggle
+            // back so it can't advertise behavior the app won't honor. The re-entrant call stops
+            // at the equality guard above.
+            CloseToTray = _linuxPrefs.Current.CloseToTray;
+        }
     }
 }
 

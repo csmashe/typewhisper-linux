@@ -1,4 +1,8 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedType.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -6,25 +10,35 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.CloudflareAsr;
 
-public sealed partial class CloudflareAsrPlugin
+public sealed class CloudflareAsrPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         IPluginSettingsProvider,
         IPluginLocalizationAware
 {
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(120) };
+    private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
     private string? _apiToken;
     private string? _accountId;
-    private string? _selectedModelId;
 
-    private static readonly IReadOnlyList<PluginModelInfo> Models =
+    public CloudflareAsrPlugin()
+        : this(new HttpClient { Timeout = TimeSpan.FromSeconds(120) })
+    {
+    }
+
+    internal CloudflareAsrPlugin(HttpClient httpClient)
+    {
+        _httpClient = httpClient;
+    }
+
+    private static readonly IReadOnlyList<PluginModelInfo> s_models =
     [
         new("whisper", "Whisper (Cloudflare)"),
     ];
 
     public string PluginId => "com.typewhisper.cloudflare-asr";
     public string PluginName => "Cloudflare ASR";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -36,7 +50,7 @@ public sealed partial class CloudflareAsrPlugin
         _apiToken = string.IsNullOrWhiteSpace(loadedToken) ? null : loadedToken.Trim();
         var loadedAccount = await host.LoadSecretAsync("account-id");
         _accountId = string.IsNullOrWhiteSpace(loadedAccount) ? null : loadedAccount.Trim();
-        _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
+        SelectedModelId = host.GetSetting<string>("selectedModel") ?? s_models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -51,17 +65,19 @@ public sealed partial class CloudflareAsrPlugin
     public bool IsConfigured =>
         !string.IsNullOrEmpty(_apiToken) && !string.IsNullOrEmpty(_accountId);
 
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels => Models;
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_models;
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Unsupported;
 
     public void SelectModel(string modelId)
     {
-        if (Models.All(m => m.Id != modelId))
+        if (s_models.All(m => m.Id != modelId))
             throw new ArgumentException($"Unknown model: {modelId}");
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
@@ -73,10 +89,24 @@ public sealed partial class CloudflareAsrPlugin
         CancellationToken ct
     )
     {
-        if (!IsConfigured)
-            throw new InvalidOperationException(
-                "Plugin not configured. Account ID and API token required."
+        if (translate)
+            throw new NotSupportedException(
+                "Translation is not supported by the Cloudflare ASR plugin."
             );
+
+        // Defense in depth for direct/legacy callers; the typed host invoker rejects explicit
+        // selection before entering the plugin. "auto" is the sentinel for "no explicit language".
+        var normalized = language?.Trim();
+        if (
+            !string.IsNullOrEmpty(normalized)
+            && !normalized.Equals("auto", StringComparison.OrdinalIgnoreCase)
+        )
+            throw new NotSupportedException(
+                "Cloudflare ASR does not support explicit language selection. Use automatic detection for this profile."
+            );
+
+        if (!IsConfigured)
+            throw new InvalidOperationException(Loc.L("Settings.EnterAccountIdAndApiToken"));
 
         var url =
             $"https://api.cloudflare.com/client/v4/accounts/{_accountId}/ai/run/@cf/openai/whisper";
@@ -107,15 +137,20 @@ public sealed partial class CloudflareAsrPlugin
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        var text = "";
         if (
-            root.TryGetProperty("result", out var result)
-            && result.ValueKind == JsonValueKind.Object
-            && result.TryGetProperty("text", out var textEl)
+            root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("result", out var result)
+            || result.ValueKind != JsonValueKind.Object
+            || !result.TryGetProperty("text", out var textEl)
+            || textEl.ValueKind != JsonValueKind.String
         )
         {
-            text = textEl.GetString() ?? "";
+            throw new InvalidOperationException(
+                "Invalid Cloudflare transcription response: required field 'result.text' must be a string."
+            );
         }
+
+        var text = textEl.GetString() ?? "";
 
         // Language and duration are nested under result.language / result.duration;
         // both fields are optional and absent when Cloudflare can't determine them.
@@ -180,7 +215,7 @@ public sealed partial class CloudflareAsrPlugin
 
     internal async Task SetApiTokenAsync(string apiToken)
     {
-        var trimmed = apiToken?.Trim();
+        var trimmed = apiToken.Trim();
         _apiToken = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {
@@ -213,7 +248,7 @@ public sealed partial class CloudflareAsrPlugin
                 "selectedModel",
                 Loc.L("Settings.TranscriptionModel"),
                 Description: Loc.L("Settings.ModelDescription"),
-                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+                Options: s_models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
             ),
         ];
 
@@ -223,7 +258,7 @@ public sealed partial class CloudflareAsrPlugin
             {
                 "account-id" => _accountId,
                 "api-token" => _apiToken,
-                "selectedModel" => _selectedModelId,
+                "selectedModel" => SelectedModelId,
                 _ => null,
             }
         );

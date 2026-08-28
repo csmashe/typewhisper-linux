@@ -1,7 +1,11 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using TypeWhisper.PluginSDK.Helpers;
 
 namespace TypeWhisper.Plugin.OpenAi;
 
@@ -41,7 +45,7 @@ internal sealed class OpenAiChatGptClient
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException(ParseErrorMessage(body, (int)response.StatusCode));
 
-        return ParseResponseText(body)
+        return await ParseResponseTextAsync(body, ct)
             ?? throw new InvalidOperationException("The ChatGPT response could not be parsed.");
     }
 
@@ -66,9 +70,9 @@ internal sealed class OpenAiChatGptClient
                     role = "user",
                     content = new[]
                     {
-                        new { type = "input_text", text = userText }
-                    }
-                }
+                        new { type = "input_text", text = userText },
+                    },
+                },
             }),
             ["store"] = OpenAiJson.Element(false),
             ["stream"] = OpenAiJson.Element(true),
@@ -80,60 +84,33 @@ internal sealed class OpenAiChatGptClient
         return body;
     }
 
-    internal static string? ParseResponseText(string body) =>
-        ParseJsonResponseText(body) ?? ParseEventStreamResponseText(body);
+    internal static async Task<string?> ParseResponseTextAsync(
+        string body,
+        CancellationToken cancellationToken = default)
+    {
+        if (TryParseJsonResponseText(body, out var responseText))
+            return responseText;
 
-    private static string? ParseEventStreamResponseText(string body)
+        using var reader = new StringReader(body);
+        return await ParseEventStreamResponseTextAsync(reader, cancellationToken);
+    }
+
+    private static async Task<string?> ParseEventStreamResponseTextAsync(
+        TextReader reader,
+        CancellationToken cancellationToken)
     {
         var deltaBuffer = new StringBuilder();
         var completedParts = new List<string>();
 
-        foreach (var rawLine in body.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        await foreach (var part in SseEventDecoder.ReadValidatedAsync(
+                           reader,
+                           ChatGptSsePolicy.Instance,
+                           cancellationToken))
         {
-            var line = rawLine.Trim();
-            if (!line.StartsWith("data: ", StringComparison.Ordinal))
-                continue;
-
-            var payload = line[6..];
-            if (payload == "[DONE]")
-                continue;
-
-            JsonDocument doc;
-            try
-            {
-                doc = JsonDocument.Parse(payload);
-            }
-            catch (JsonException)
-            {
-                // SSE streams may contain comments, heartbeats, or malformed
-                // frames; skipping them keeps parsing of valid frames alive.
-                continue;
-            }
-            using (doc)
-            {
-                var root = doc.RootElement;
-                if (!root.TryGetProperty("type", out var typeEl))
-                    continue;
-
-                switch (typeEl.GetString())
-                {
-                    case "response.output_text.delta":
-                        if (GetString(root, "delta") is { } delta)
-                            deltaBuffer.Append(delta);
-                        break;
-                    case "response.output_text.done":
-                        if (GetString(root, "text") is { Length: > 0 } text)
-                            completedParts.Add(text);
-                        break;
-                    case "response.content_part.done":
-                        if (root.TryGetProperty("part", out var part)
-                            && GetString(part, "text") is { Length: > 0 } partText)
-                        {
-                            completedParts.Add(partText);
-                        }
-                        break;
-                }
-            }
+            if (part.IsIncremental)
+                deltaBuffer.Append(part.Text);
+            else
+                completedParts.Add(part.Text);
         }
 
         if (deltaBuffer.Length > 0)
@@ -143,7 +120,119 @@ internal sealed class OpenAiChatGptClient
         return string.IsNullOrEmpty(completed) ? null : completed;
     }
 
-    private static string? ParseJsonResponseText(string json)
+    private readonly record struct ChatGptTextPart(string Text, bool IsIncremental);
+
+    private sealed class ChatGptSsePolicy : ISseEventPolicy<ChatGptTextPart>
+    {
+        public static ChatGptSsePolicy Instance { get; } = new();
+
+        public string StreamName => "ChatGPT SSE stream";
+        public string ExpectedTerminal => "[DONE]";
+
+        public SsePolicyDecision<ChatGptTextPart> Evaluate(SseEvent sseEvent)
+        {
+            if (sseEvent.Data == "[DONE]")
+            {
+                return new SsePolicyDecision<ChatGptTextPart>(
+                    AcceptTerminal: true,
+                    EndStream: true);
+            }
+
+            JsonDocument doc;
+            try
+            {
+                doc = JsonDocument.Parse(sseEvent.Data);
+            }
+            catch (JsonException)
+            {
+                return default;
+            }
+
+            using (doc)
+            {
+                var root = doc.RootElement;
+                if (GetString(root, "type") is not { } type)
+                    return default;
+
+                if (GetSseFailure(root, type) is { } failure)
+                {
+                    return new SsePolicyDecision<ChatGptTextPart>(
+                        Error: new InvalidOperationException(failure));
+                }
+
+                switch (type)
+                {
+                    case "response.output_text.delta":
+                        if (GetString(root, "delta") is { } delta)
+                        {
+                            return new SsePolicyDecision<ChatGptTextPart>(
+                                HasDelta: true,
+                                Delta: new ChatGptTextPart(delta, true));
+                        }
+
+                        break;
+                    case "response.output_text.done":
+                        if (GetString(root, "text") is { Length: > 0 } text)
+                        {
+                            return new SsePolicyDecision<ChatGptTextPart>(
+                                HasDelta: true,
+                                Delta: new ChatGptTextPart(text, false));
+                        }
+
+                        break;
+                    case "response.content_part.done":
+                        if (root.TryGetProperty("part", out var part)
+                            && GetString(part, "text") is { Length: > 0 } partText)
+                        {
+                            return new SsePolicyDecision<ChatGptTextPart>(
+                                HasDelta: true,
+                                Delta: new ChatGptTextPart(partText, false));
+                        }
+
+                        break;
+                }
+            }
+
+            return default;
+        }
+    }
+
+    private static string? GetSseFailure(JsonElement root, string type)
+    {
+        var status = root.TryGetProperty("response", out var response)
+            && response.ValueKind == JsonValueKind.Object
+            ? GetString(response, "status")
+            : GetString(root, "status");
+
+        if (type == "response.completed")
+        {
+            // The event type is itself the success signal, so only an explicitly
+            // contradictory status is a failure — a missing one must not be.
+            if (status is not null
+                && !string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"ChatGPT SSE event 'response.completed' had non-completed status "
+                    + $"'{status}'.";
+            }
+
+            return null;
+        }
+
+        if (type is not ("error"
+            or "response.failed"
+            or "response.incomplete"
+            or "response.cancelled"
+            or "response.canceled"))
+        {
+            return null;
+        }
+
+        return status is null
+            ? $"ChatGPT SSE event '{type}' indicated failure."
+            : $"ChatGPT SSE event '{type}' indicated terminal status '{status}'.";
+    }
+
+    private static bool TryParseJsonResponseText(string json, out string? responseText)
     {
         try
         {
@@ -151,7 +240,10 @@ internal sealed class OpenAiChatGptClient
             var root = doc.RootElement;
 
             if (GetString(root, "output_text") is { Length: > 0 } outputText)
-                return outputText.Trim();
+            {
+                responseText = outputText.Trim();
+                return true;
+            }
 
             if (root.TryGetProperty("choices", out var choices)
                 && choices.ValueKind == JsonValueKind.Array
@@ -159,7 +251,8 @@ internal sealed class OpenAiChatGptClient
                 && choices[0].TryGetProperty("message", out var message)
                 && GetString(message, "content") is { Length: > 0 } messageContent)
             {
-                return messageContent.Trim();
+                responseText = messageContent.Trim();
+                return true;
             }
 
             if (root.TryGetProperty("output", out var output)
@@ -181,15 +274,20 @@ internal sealed class OpenAiChatGptClient
 
                 var joined = string.Join("\n", parts).Trim();
                 if (!string.IsNullOrEmpty(joined))
-                    return joined;
+                {
+                    responseText = joined;
+                    return true;
+                }
             }
+
+            responseText = null;
+            return true;
         }
         catch (JsonException)
         {
-            return null;
+            responseText = null;
+            return false;
         }
-
-        return null;
     }
 
     private static string ParseErrorMessage(string body, int statusCode)

@@ -9,7 +9,7 @@ internal static class UsageText
             """
             TypeWhisper CLI - Speech-to-Text from the command line
 
-            Usage: typewhisper <command> [options]
+            Usage: typewhisper-cli <command> [options]
 
             Commands:
               status                    Show TypeWhisper status
@@ -17,12 +17,12 @@ internal static class UsageText
               transcribe <file|->       Transcribe an audio file, or - for stdin
 
             Global options:
-              --port <N>                API server port (default: 9876, or auto-discovered)
               --token <token>           API bearer token, or TYPEWHISPER_API_TOKEN
               --api-token <token>       Alias of --token (Mac CLI parity)
               --json                    Output as JSON
               --version                 Show version
               --help, -h                Show this help
+              --                        Treat remaining arguments as file operands
 
             Transcribe options:
               --language <code>         Source language (e.g. en, de)
@@ -36,12 +36,12 @@ internal static class UsageText
               --await-download          Wait for local model restore/download
 
             Examples:
-              typewhisper status --token "$TYPEWHISPER_API_TOKEN"
-              typewhisper transcribe recording.wav
-              typewhisper transcribe recording.wav --language de --json
-              typewhisper transcribe recording.wav --language-hint de --language-hint en
-              typewhisper transcribe recording.wav --engine groq --model whisper-large-v3-turbo
-              typewhisper transcribe - < audio.wav
+              typewhisper-cli status --token "$TYPEWHISPER_API_TOKEN"
+              typewhisper-cli transcribe recording.wav
+              typewhisper-cli transcribe recording.wav --language de --json
+              typewhisper-cli transcribe recording.wav --language-hint de --language-hint en
+              typewhisper-cli transcribe recording.wav --engine groq --model whisper-large-v3-turbo
+              typewhisper-cli transcribe - < audio.wav
             """
         );
     }

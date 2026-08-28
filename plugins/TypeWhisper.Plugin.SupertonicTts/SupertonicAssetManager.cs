@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.IO;
-using System.Net.Http;
 using System.Text;
 
 namespace TypeWhisper.Plugin.SupertonicTts;
@@ -88,6 +86,7 @@ internal sealed class SupertonicAssetManager : ISupertonicAssetManager, IDisposa
                         fileBytesRead += read;
 
                         var now = DateTime.UtcNow;
+                        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                         if ((now - lastReport).TotalMilliseconds >= 250)
                         {
                             progress?.Report(ClampProgress((completedBytes + Math.Min(fileBytesRead, expectedBytes)) / (double)totalBytes));

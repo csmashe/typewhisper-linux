@@ -1,5 +1,7 @@
-using System.IO;
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Security.Cryptography;
 using SharpCompress.Readers;
 using TypeWhisper.Plugins.Shared.Net;
@@ -46,13 +48,14 @@ internal class SherpaCudaRuntimeInstaller
     // use the CUDA execution provider, and it adds nothing but bulk.
     // internal (not private) so a regression test can assert the CUDA provider is
     // extracted here even though it must never be preloaded (see SherpaOnnxNativeRuntime).
+    // ReSharper disable once InconsistentNaming -- internal static field is part of the test-observable API; PascalCase intended.
     internal static readonly string[] CoreRuntimeFiles =
     [
         "libsherpa-onnx-c-api.so",
         "libsherpa-onnx-cxx-api.so",
         "libonnxruntime.so",
         "libonnxruntime_providers_shared.so",
-        "libonnxruntime_providers_cuda.so"
+        "libonnxruntime_providers_cuda.so",
     ];
 
     private readonly string _runtimeRoot;
@@ -194,9 +197,11 @@ internal class SherpaCudaRuntimeInstaller
         // report (the resume baseline jump) always fires.
         var lastReport = DateTime.MinValue;
 
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- local function kept near its point of use for readability.
         void OnBytesOnDisk(long onDisk)
         {
             var now = DateTime.UtcNow;
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if ((now - lastReport).TotalMilliseconds > 250)
             {
                 progress?.Report(Math.Min(1.0, (double)onDisk / ApproxDownloadBytes));

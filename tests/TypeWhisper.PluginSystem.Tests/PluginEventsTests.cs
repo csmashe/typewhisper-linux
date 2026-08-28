@@ -36,7 +36,7 @@ public class PluginEventsTests
             Text = "Hello",
             DetectedLanguage = "en",
             DurationSeconds = 2.3,
-            ModelId = "whisper-1"
+            ModelId = "whisper-1",
         };
 
         Assert.Equal("Hello", evt.Text);
@@ -61,7 +61,7 @@ public class PluginEventsTests
         var evt = new TranscriptionFailedEvent
         {
             ErrorMessage = "API timeout",
-            ModelId = "groq-whisper"
+            ModelId = "groq-whisper",
         };
 
         Assert.Equal("API timeout", evt.ErrorMessage);

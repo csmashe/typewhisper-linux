@@ -4,7 +4,8 @@
   "version": "1.2.0",
   "author": "TypeWhisper",
   "description": "OpenAI transcription, ChatGPT/OpenAI prompt processing, and text-to-speech. Use an API key for STT/TTS or ChatGPT login for prompts.",
-  "category": "transcription",
+  "networkAccess": "network",
+  "categories": ["transcription", "llm", "tts"],
   "assemblyName": "TypeWhisper.Plugin.OpenAi.dll",
   "pluginClass": "TypeWhisper.Plugin.OpenAi.OpenAiPlugin"
 }

@@ -1,7 +1,9 @@
 using System.Reflection;
 using Moq;
+using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -11,6 +13,8 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class PromptsSectionViewModelTests : IDisposable
 {
+    private readonly HotkeyService _hotkeys;
+    private readonly ProfileService _profiles;
     private readonly string _tempDir;
 
     public PromptsSectionViewModelTests()
@@ -20,10 +24,13 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             "TypeWhisper.Linux.PromptVmTests_" + Guid.NewGuid().ToString("N")
         );
         Directory.CreateDirectory(_tempDir);
+        _profiles = new ProfileService(Path.Join(_tempDir, "profiles.json"));
+        _hotkeys = TestShortcutBackend.CreateHotkeyService();
     }
 
     public void Dispose()
     {
+        _hotkeys.Dispose();
         try
         {
             if (Directory.Exists(_tempDir))
@@ -44,7 +51,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.StartCreateCommand.Execute(null);
         sut.EditName = "Rewrite";
         sut.EditSystemPrompt = "Rewrite this";
@@ -64,11 +71,11 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.StartCreateCommand.Execute(null);
         sut.EditName = "Manual rewrite";
         sut.EditSystemPrompt = "Do it";
-        sut.EditHotkeyKey = " Ctrl+Alt+R ";
+        sut.EditHotkeyKey = " control + ALT + r ";
         sut.EditIsManualOnly = true;
         sut.SaveActionCommand.Execute(null);
 
@@ -86,13 +93,13 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             {
                 Id = "existing",
                 Name = "Existing",
-                SystemPrompt = "x"
+                SystemPrompt = "x",
             }
         );
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.SelectedAction = sut.Actions.Single(a => a.Id == "existing");
         sut.EditHotkeyKey = "Ctrl+Alt+T";
         sut.EditIsManualOnly = true;
@@ -114,13 +121,13 @@ public sealed class PromptsSectionViewModelTests : IDisposable
                 Name = "Existing",
                 SystemPrompt = "x",
                 HotkeyKey = "Ctrl+Alt+R",
-                IsManualOnly = true
+                IsManualOnly = true,
             }
         );
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.SelectedAction = sut.Actions.Single(a => a.Id == "existing");
 
         Assert.Equal("Ctrl+Alt+R", sut.EditHotkeyKey);
@@ -134,7 +141,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.StartCreateCommand.Execute(null);
         sut.EditName = "Blank";
         sut.EditSystemPrompt = "x";
@@ -143,6 +150,240 @@ public sealed class PromptsSectionViewModelTests : IDisposable
 
         var action = Assert.Single(prompts.Actions);
         Assert.Null(action.HotkeyKey);
+    }
+
+    [Fact]
+    public void SaveAction_MalformedNewDraftDoesNotPersistAndShowsFeedback()
+    {
+        var prompts = new Mock<IPromptActionService>();
+        prompts.SetupGet(service => service.Actions).Returns([]);
+        prompts.SetupGet(service => service.EnabledActions).Returns([]);
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts.Object,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+        sut.StartCreateCommand.Execute(null);
+        sut.EditName = "Invalid";
+        sut.EditSystemPrompt = "x";
+        sut.EditHotkeyKey = "Ctrl+DefinitelyNotAKey";
+
+        sut.SaveActionCommand.Execute(null);
+
+        prompts.Verify(service => service.AddAction(It.IsAny<PromptAction>()), Times.Never);
+        Assert.True(sut.ShowEditor);
+        Assert.True(sut.IsCreatingNew);
+        Assert.Equal("Ctrl+DefinitelyNotAKey", sut.EditHotkeyKey);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
+    }
+
+    [Fact]
+    public void SaveAction_MalformedExistingDraftDoesNotUpdate()
+    {
+        var existing = new PromptAction
+        {
+            Id = "existing",
+            Name = "Existing",
+            SystemPrompt = "x",
+            HotkeyKey = "Alt+F8",
+        };
+        var prompts = new Mock<IPromptActionService>();
+        prompts.SetupGet(service => service.Actions).Returns([existing]);
+        prompts.SetupGet(service => service.EnabledActions).Returns([existing]);
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts.Object,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+        sut.SelectedAction = Assert.Single(sut.Actions);
+        sut.EditHotkeyKey = "Ctrl+NoSuchKey";
+
+        sut.SaveActionCommand.Execute(null);
+
+        prompts.Verify(service => service.UpdateAction(It.IsAny<PromptAction>()), Times.Never);
+        Assert.Equal("Ctrl+NoSuchKey", sut.EditHotkeyKey);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
+    }
+
+    [Fact]
+    public void SaveAction_DisabledExistingWithCollidingRetainedHotkey_PersistsNonHotkeyEdits()
+    {
+        _profiles.AddProfile(
+            new Profile
+            {
+                Id = "enabled-profile",
+                Name = "Enabled profile",
+                HotkeyData = "Alt+F8",
+            }
+        );
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "disabled-action",
+                Name = "Before",
+                SystemPrompt = "x",
+                HotkeyKey = "Alt+F8",
+                IsEnabled = false,
+            }
+        );
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+        sut.SelectedAction = Assert.Single(sut.Actions);
+        sut.EditName = "After";
+
+        sut.SaveActionCommand.Execute(null);
+
+        var updated = Assert.Single(prompts.Actions);
+        Assert.Equal("After", updated.Name);
+        Assert.Equal("Alt+F8", updated.HotkeyKey);
+        Assert.False(updated.IsEnabled);
+        Assert.Null(sut.HotkeyValidationMessage);
+    }
+
+    [Fact]
+    public void ToggleEnabled_DisabledActionWithCollidingHotkey_DoesNotPersistAndShowsEditorFeedback()
+    {
+        _profiles.AddProfile(
+            new Profile
+            {
+                Id = "enabled-profile",
+                Name = "Enabled profile",
+                HotkeyData = "Alt+F8",
+            }
+        );
+        var disabled = new PromptAction
+        {
+            Id = "disabled-action",
+            Name = "Disabled action",
+            SystemPrompt = "x",
+            HotkeyKey = "Alt+F8",
+            IsEnabled = false,
+        };
+        var prompts = new Mock<IPromptActionService>();
+        prompts.SetupGet(service => service.Actions).Returns([disabled]);
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts.Object,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+
+        sut.ToggleEnabledCommand.Execute(disabled);
+
+        prompts.Verify(service => service.UpdateAction(It.IsAny<PromptAction>()), Times.Never);
+        Assert.Equal(disabled, sut.SelectedAction);
+        Assert.True(sut.ShowEditor);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
+    }
+
+    [Fact]
+    public void ToggleEnabled_EnabledActionWithMalformedHotkey_StillDisables()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "enabled-action",
+                Name = "Enabled action",
+                SystemPrompt = "x",
+                HotkeyKey = "Ctrl+NoSuchKey",
+                IsEnabled = true,
+            }
+        );
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+
+        sut.ToggleEnabledCommand.Execute(Assert.Single(sut.Actions));
+
+        Assert.False(Assert.Single(prompts.Actions).IsEnabled);
+        Assert.Null(sut.HotkeyValidationMessage);
+    }
+
+    [Fact]
+    public void ToggleEnabled_DisabledActionWithValidHotkey_Enables()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "disabled-action",
+                Name = "Disabled action",
+                SystemPrompt = "x",
+                HotkeyKey = "Alt+F8",
+                IsEnabled = false,
+            }
+        );
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+
+        sut.ToggleEnabledCommand.Execute(Assert.Single(sut.Actions));
+
+        Assert.True(Assert.Single(prompts.Actions).IsEnabled);
+    }
+
+    [Fact]
+    public void SaveAction_CrossDynamicPrefixCollisionDoesNotPersist()
+    {
+        _profiles.AddProfile(
+            new Profile
+            {
+                Id = "profile",
+                Name = "Profile",
+                HotkeyData = "Right Ctrl",
+            }
+        );
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+        sut.StartCreateCommand.Execute(null);
+        sut.EditName = "Collision";
+        sut.EditSystemPrompt = "x";
+        sut.EditHotkeyKey = "Ctrl+Alt+R";
+
+        sut.SaveActionCommand.Execute(null);
+
+        Assert.Empty(prompts.Actions);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
     }
 
     [Fact]
@@ -158,12 +399,12 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             [provider],
             loadedPlugins:
             [
-                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider)
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
             ]
         );
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         var option = Assert.Single(
             sut.AvailableProviders,
             candidate => candidate.Value == "plugin:com.typewhisper.openai:gpt-4.1-mini"
@@ -188,12 +429,12 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             [provider],
             loadedPlugins:
             [
-                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider)
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
             ]
         );
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         var option = Assert.Single(
             sut.AvailableProviders,
             candidate => candidate.Value == "plugin:com.typewhisper.openai:gpt-4.1-mini"
@@ -227,13 +468,13 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             [provider],
             loadedPlugins:
             [
-                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider)
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
             ]
         );
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
-            EditProviderOverride = "plugin:com.typewhisper.openai:gpt-4.1-mini"
+            EditProviderOverride = "plugin:com.typewhisper.openai:gpt-4.1-mini",
         };
         // Simulate the guard flag that the view-model sets while it rebuilds
         // the provider list — a null selection during that window must not
@@ -254,12 +495,12 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             new AppSettings { CommandModeEnabled = true, CommandKeyphrase = "Jarvis" }
         );
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
 
         Assert.True(sut.CommandModeEnabled);
         Assert.Equal("Jarvis", sut.CommandKeyphrase);
         // Hydration must not write the values it just read back to settings.
-        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     [Fact]
@@ -271,7 +512,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             new AppSettings { CommandKeyphrase = "   " }
         );
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
 
         Assert.Equal(AppSettings.DefaultCommandKeyphrase, sut.CommandKeyphrase);
     }
@@ -283,15 +524,17 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
-            CommandModeEnabled = true
+            CommandModeEnabled = true,
         };
 
         Assert.True(sut.CommandModeEnabled);
         Assert.True(settings.Object.Current.CommandModeEnabled);
         settings.Verify(
-            service => service.Save(It.Is<AppSettings>(saved => saved.CommandModeEnabled)),
+            service => service.Update(
+                It.Is<Func<AppSettings, AppSettings>>(mutate =>
+                    mutate(new AppSettings()).CommandModeEnabled)),
             Times.Once
         );
     }
@@ -303,16 +546,18 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
-            CommandKeyphrase = "  Jarvis  "
+            CommandKeyphrase = "  Jarvis  ",
         };
 
         // The re-entrant normalization must land the trimmed value and persist it exactly once.
         Assert.Equal("Jarvis", sut.CommandKeyphrase);
         Assert.Equal("Jarvis", settings.Object.Current.CommandKeyphrase);
         settings.Verify(
-            service => service.Save(It.Is<AppSettings>(saved => saved.CommandKeyphrase == "Jarvis")),
+            service => service.Update(
+                It.Is<Func<AppSettings, AppSettings>>(mutate =>
+                    mutate(new AppSettings()).CommandKeyphrase == "Jarvis")),
             Times.Once
         );
     }
@@ -326,9 +571,9 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             new AppSettings { CommandKeyphrase = "Jarvis" }
         );
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
-            CommandKeyphrase = "   "
+            CommandKeyphrase = "   ",
         };
 
         Assert.Equal(AppSettings.DefaultCommandKeyphrase, sut.CommandKeyphrase);
@@ -344,14 +589,14 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             new AppSettings { CommandKeyphrase = "Jarvis" }
         );
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
             // Whitespace that normalizes back to the already-saved value: no persist.
-            CommandKeyphrase = "  Jarvis  "
+            CommandKeyphrase = "  Jarvis  ",
         };
 
         Assert.Equal("Jarvis", sut.CommandKeyphrase);
-        settings.Verify(service => service.Save(It.IsAny<AppSettings>()), Times.Never);
+        settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     private static void SetPrivateField(object target, string fieldName, object value)

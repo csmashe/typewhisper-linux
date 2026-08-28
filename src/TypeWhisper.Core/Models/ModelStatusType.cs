@@ -7,5 +7,5 @@ public enum ModelStatusType
     Downloading,
     Loading,
     Ready,
-    Error
+    Error,
 }

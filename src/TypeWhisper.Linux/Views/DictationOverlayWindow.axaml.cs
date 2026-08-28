@@ -15,6 +15,7 @@ public partial class DictationOverlayWindow : Window
 {
     private readonly ISettingsService? _settings;
     private readonly DictationOverlayViewModel? _viewModel;
+    private readonly DictationOverlayPlacementState _placementState = new();
     private bool _userDragging;
     private bool _programmaticPositionChange;
     private DispatcherTimer? _dragSaveTimer;
@@ -160,23 +161,58 @@ public partial class DictationOverlayWindow : Window
         // WORKAROUND (backlog item 16): Show() once and drive visibility via Opacity instead of
         // Hide() — Avalonia's Show() after Hide() is unreliable on GNOME Mutter for utility windows
         // (ShowActivated=False / Topmost / ShowInTaskbar=False): some shows leave the window
-        // invisible until restart. Fully transparent surface is free; inner Border bindings
-        // still control which content is drawn.
+        // invisible until restart. Inner Border bindings still control which content is drawn.
         var hasContent = _viewModel.HasVisibleContent;
 
         if (!IsVisible)
         {
+            // Keep the first mapping transparent too: OnOverlayOpened parks it before
+            // _placementState.Show() runs, so a content-bearing first show is only revealed
+            // by the Loaded-priority reposition below.
+            Opacity = 0.0;
+            IsHitTestVisible = false;
             Show();
             MakeStickyAcrossWorkspaces();
         }
 
-        Opacity = hasContent ? 1.0 : 0.0;
-        IsHitTestVisible = hasContent;
-
         if (hasContent)
         {
-            Dispatcher.UIThread.Post(PositionOverlay, DispatcherPriority.Loaded);
+            _placementState.Show();
+
+            // Post at Loaded so a size-changing transition uses final dimensions; staying
+            // transparent at the parked position until this runs avoids a visible jump.
+            Dispatcher.UIThread.Post(
+                () =>
+                {
+                    if (!_placementState.IsShown)
+                    {
+                        return;
+                    }
+
+                    PositionOverlay();
+                    if (!_placementState.IsShown)
+                    {
+                        return;
+                    }
+
+                    Opacity = 1.0;
+                    IsHitTestVisible = true;
+                },
+                DispatcherPriority.Loaded
+            );
+            return;
         }
+
+        // Opacity and Avalonia's IsHitTestVisible do not clear a mapped toplevel's native X11
+        // input region. Leaving this Topmost window at its visible coordinates would therefore
+        // create a transparent dead-click rectangle on X11/XWayland. Keep it mapped for the
+        // Mutter workaround, but park it beyond every monitor while hidden, like the correction
+        // toast. Wayland may ignore client positioning, where this remains a harmless best effort.
+        Opacity = 0.0;
+        IsHitTestVisible = false;
+        SetPositionProgrammatically(
+            _placementState.Hide(CollectScreenBounds(), Position)
+        );
     }
 
     // Cached — the desktop environment can't change within a session.
@@ -204,7 +240,25 @@ public partial class DictationOverlayWindow : Window
 
     private void PositionOverlay()
     {
-        if (!IsVisible || _settings is null)
+        if (!IsVisible)
+        {
+            return;
+        }
+
+        var screenBounds = CollectScreenBounds();
+
+        // IsVisible stays true for the mapped-once Mutter workaround. Consult our own content
+        // state instead, so settings, screen, and size events recompute (or preserve) an offscreen
+        // parked position rather than moving the transparent X11 input rectangle back on-screen.
+        if (!_placementState.IsShown)
+        {
+            SetPositionProgrammatically(
+                _placementState.Reposition(Position, screenBounds, Position)
+            );
+            return;
+        }
+
+        if (_settings is null)
         {
             return;
         }
@@ -248,20 +302,62 @@ public partial class DictationOverlayWindow : Window
                 width,
                 height);
             SetPositionProgrammatically(
-                new PixelPoint(
-                    (int)Math.Round(clampedLeft),
-                    (int)Math.Round(clampedTop)));
+                _placementState.Reposition(
+                    new PixelPoint(
+                        (int)Math.Round(clampedLeft),
+                        (int)Math.Round(clampedTop)
+                    ),
+                    screenBounds,
+                    Position
+                )
+            );
             return;
         }
 
         var workArea = primaryScreen.WorkingArea;
-        var x = workArea.X + (workArea.Width - (int)Math.Ceiling(width)) / 2;
-        var y =
-            _settings.Current.OverlayPosition == OverlayPosition.Top
-                ? workArea.Y + 12
-                : workArea.Bottom - (int)Math.Ceiling(height) - 12;
+        var configuredPosition = DictationOverlayPlacementState.ComputeConfiguredPosition(
+            _settings.Current.OverlayPosition,
+            workArea,
+            new PixelSize(
+                (int)Math.Ceiling(width),
+                (int)Math.Ceiling(height)
+            )
+        );
 
-        SetPositionProgrammatically(new PixelPoint(x, y));
+        SetPositionProgrammatically(
+            _placementState.Reposition(
+                configuredPosition,
+                screenBounds,
+                Position
+            )
+        );
+    }
+
+    private List<PixelRect> CollectScreenBounds()
+    {
+        var result = new List<PixelRect>();
+
+        var screens = Screens;
+        // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- Avalonia annotates Screens non-null, but it can be null before the platform window is realized; the placement state tolerates an empty list (mirrors LearnedCorrectionToastWindow).
+        if (screens is null)
+        {
+            return result;
+        }
+
+        // Put the primary first so parking uses a stable Y coordinate, matching the correction
+        // toast's documented native-X11 workaround.
+        if (screens.Primary is { } primary)
+        {
+            result.Add(primary.Bounds);
+        }
+
+        result.AddRange(
+            screens.All
+                .Where(screen => !ReferenceEquals(screen, screens.Primary))
+                .Select(screen => screen.Bounds)
+        );
+
+        return result;
     }
 
     private void SetPositionProgrammatically(PixelPoint point)
@@ -279,7 +375,7 @@ public partial class DictationOverlayWindow : Window
 
     private void OnUserPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (_settings is null)
+        if (_settings is null || ActionResultButton?.IsPointerOver == true)
         {
             return;
         }
@@ -295,17 +391,41 @@ public partial class DictationOverlayWindow : Window
 
     private void OnUserPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        _userDragging = false;
+        EndUserDrag();
     }
 
     private void OnUserPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
     {
+        EndUserDrag();
+    }
+
+    private void EndUserDrag()
+    {
         _userDragging = false;
+
+        // A move-drag that outlived a hide (content cleared mid-drag) leaves the still-mapped
+        // window on-screen wherever the WM's interactive move dropped it — that grab overrides
+        // our one-off park while active. Its native X11 input region stays live regardless of
+        // IsHitTestVisible, so re-park now rather than waiting for a later screen/settings/size event.
+        if (!_placementState.IsShown)
+        {
+            PositionOverlay();
+        }
     }
 
     private void OnUserPositionChanged(object? sender, PixelPointEventArgs e)
     {
         if (_programmaticPositionChange || _settings is null)
+        {
+            return;
+        }
+
+        // A hidden overlay is only ever moved programmatically (parked off-screen). On X11 the
+        // move's PositionChanged arrives asynchronously — after SetPositionProgrammatically has
+        // cleared _programmaticPositionChange — so if content clears mid-drag the parked sentinel
+        // could be mistaken for a user drag and persisted as the saved position. Never persist a
+        // position while parked.
+        if (!_placementState.IsShown)
         {
             return;
         }
@@ -337,10 +457,76 @@ public partial class DictationOverlayWindow : Window
         var pos = _pendingDragPosition.Value;
         _pendingDragPosition = null;
 
-        _settings.Save(_settings.Current with
+        _settings.Update(current => current with
         {
             OverlayCustomLeft = (double)pos.X,
-            OverlayCustomTop = (double)pos.Y
+            OverlayCustomTop = (double)pos.Y,
         });
+    }
+}
+
+/// <summary>
+///     Deterministic visibility and placement decisions for the mapped-once dictation overlay,
+///     kept independent of Window/Screens so it can be unit tested without a live compositor.
+/// </summary>
+internal sealed class DictationOverlayPlacementState
+{
+    private const int ScreenEdgeInset = 12;
+
+    public bool IsShown { get; private set; }
+
+    public void Show()
+    {
+        IsShown = true;
+    }
+
+    public PixelPoint Hide(
+        IReadOnlyList<PixelRect> screenBounds,
+        PixelPoint currentPosition
+    )
+    {
+        IsShown = false;
+        return ComputeParkedPosition(screenBounds, currentPosition);
+    }
+
+    public PixelPoint Reposition(
+        PixelPoint configuredPosition,
+        IReadOnlyList<PixelRect> screenBounds,
+        PixelPoint currentPosition
+    )
+    {
+        return IsShown
+            ? configuredPosition
+            : ComputeParkedPosition(screenBounds, currentPosition);
+    }
+
+    public static PixelPoint ComputeConfiguredPosition(
+        OverlayPosition overlayPosition,
+        PixelRect workArea,
+        PixelSize overlaySize
+    )
+    {
+        var x = workArea.X + (workArea.Width - overlaySize.Width) / 2;
+        var y = overlayPosition == OverlayPosition.Top
+            ? workArea.Y + ScreenEdgeInset
+            : workArea.Bottom - overlaySize.Height - ScreenEdgeInset;
+
+        return new PixelPoint(x, y);
+    }
+
+    private static PixelPoint ComputeParkedPosition(
+        IReadOnlyList<PixelRect> screenBounds,
+        PixelPoint currentPosition
+    )
+    {
+        if (screenBounds.Count == 0)
+        {
+            return currentPosition;
+        }
+
+        // Match LearnedCorrectionToastWindow: the left edge just beyond the union's right boundary
+        // puts the entire mapped window outside every monitor, including negative-origin layouts.
+        var right = screenBounds.Max(bounds => bounds.Right);
+        return new PixelPoint(right + 1, screenBounds[0].Y);
     }
 }

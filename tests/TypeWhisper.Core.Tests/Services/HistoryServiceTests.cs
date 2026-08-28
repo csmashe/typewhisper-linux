@@ -43,7 +43,7 @@ public sealed class HistoryServiceTests : IDisposable
             RawText = "hello",
             FinalText = "hello",
             EngineUsed = "plugin:com.test:model-1",
-            ModelUsed = "plugin:com.test:model-1"
+            ModelUsed = "plugin:com.test:model-1",
         };
 
         _sut.AddRecord(record);
@@ -61,7 +61,7 @@ public sealed class HistoryServiceTests : IDisposable
             Id = Guid.NewGuid().ToString(),
             Timestamp = DateTime.UtcNow,
             RawText = "test",
-            FinalText = "test"
+            FinalText = "test",
         };
 
         _sut.AddRecord(record);
@@ -81,7 +81,7 @@ public sealed class HistoryServiceTests : IDisposable
             RawText = "hello",
             FinalText = "hello",
             InsertionStatus = TextInsertionStatus.MissingPasteTool,
-            InsertionFailureReason = "Automatic paste tool is unavailable."
+            InsertionFailureReason = "Automatic paste tool is unavailable.",
         };
 
         _sut.AddRecord(record);
@@ -100,7 +100,7 @@ public sealed class HistoryServiceTests : IDisposable
             Id = Guid.NewGuid().ToString(),
             Timestamp = DateTime.UtcNow,
             RawText = "hello",
-            FinalText = "hello"
+            FinalText = "hello",
         };
         _sut.AddRecord(record);
 
@@ -130,8 +130,8 @@ public sealed class HistoryServiceTests : IDisposable
                 FinalText = "Hello, world!",
                 AppProcessName = "notepad",
                 DurationSeconds = 2.5,
-                Language = "en"
-            }
+                Language = "en",
+            },
         };
 
         var result = _sut.ExportToMarkdown(records);
@@ -155,8 +155,8 @@ public sealed class HistoryServiceTests : IDisposable
                 FinalText = "Hello, \"world\"",
                 AppProcessName = "browser, tab",
                 DurationSeconds = 1.5,
-                Language = "en,us"
-            }
+                Language = "en,us",
+            },
         };
 
         var result = _sut.ExportToCsv(records);
@@ -180,8 +180,8 @@ public sealed class HistoryServiceTests : IDisposable
                 AppProcessName = "code",
                 DurationSeconds = 1.0,
                 Language = "en",
-                InsertionStatus = TextInsertionStatus.Pasted
-            }
+                InsertionStatus = TextInsertionStatus.Pasted,
+            },
         };
 
         var result = _sut.ExportToJson(records);
@@ -259,7 +259,7 @@ public sealed class HistoryServiceTests : IDisposable
             CreatedAt = createdAt,
             RawText = "test",
             FinalText = "test",
-            AudioFileName = audioFileName
+            AudioFileName = audioFileName,
         };
     }
 }

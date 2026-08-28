@@ -20,8 +20,8 @@ public sealed class RecentTranscriptionStoreTests
                 Id = "same",
                 Timestamp = timestamp.AddSeconds(-1),
                 RawText = "raw",
-                FinalText = "history text"
-            }
+                FinalText = "history text",
+            },
         };
 
         var entries = store.MergedEntries(history, 10);
@@ -72,7 +72,7 @@ public sealed class RecentTranscriptionStoreTests
                 "Browser",
                 "firefox",
                 RecentTranscriptionSource.Session
-            )
+            ),
         };
         var sut = new RecentTranscriptionsPaletteViewModel(entries, _ => { }) { SearchQuery = "firefox" };
 

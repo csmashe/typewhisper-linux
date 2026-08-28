@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using TypeWhisper.Plugin.Claude;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 // The CapturingHandler lambdas assert on the outgoing request (method, URI,
@@ -42,6 +43,7 @@ public sealed class ClaudePluginTests
             "",
             "event: message_stop",
             "data: {\"type\":\"message_stop\"}",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -49,7 +51,7 @@ public sealed class ClaudePluginTests
             Assert.Equal("https://api.anthropic.com/v1/messages", request.RequestUri?.ToString());
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -79,7 +81,7 @@ public sealed class ClaudePluginTests
         {
             Content = new StringContent(
                 """{"content":[{"type":"text","text":"bulk"}]}""",
-                Encoding.UTF8, "application/json")
+                Encoding.UTF8, "application/json"),
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-ant-test" } };
@@ -113,10 +115,11 @@ public sealed class ClaudePluginTests
             "",
             "event: error",
             "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}",
+            "",
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-ant-test" } };
@@ -137,6 +140,41 @@ public sealed class ClaudePluginTests
 
         Assert.Equal(["Hel"], chunks);
         Assert.Equal("Overloaded", ex.Message);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ThrowsWhenEofPrecedesMessageStop()
+    {
+        var sse = string.Join(
+            "\n",
+            "event: content_block_delta",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}",
+            "",
+            "");
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-ant-test" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new ClaudePlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync(
+                "system", "user", "model", CancellationToken.None))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Equal(["partial"], chunks);
+        Assert.Equal("Anthropic stream", ex.StreamName);
+        Assert.Equal("a message_stop event", ex.ExpectedTerminal);
     }
 
     [Theory]
@@ -179,7 +217,7 @@ public sealed class ClaudePluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

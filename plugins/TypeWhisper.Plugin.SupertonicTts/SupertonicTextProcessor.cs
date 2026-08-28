@@ -1,4 +1,3 @@
-using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -12,7 +11,7 @@ internal sealed partial class SupertonicTextProcessor
     {
         "en", "ko", "ja", "ar", "bg", "cs", "da", "de", "el", "es", "et", "fi", "fr", "hi",
         "hr", "hu", "id", "it", "lt", "lv", "nl", "pl", "pt", "ro", "ru", "sk", "sl",
-        "sv", "tr", "uk", "vi"
+        "sv", "tr", "uk", "vi",
     };
 
     private readonly long[] _indexer;
@@ -57,7 +56,7 @@ internal sealed partial class SupertonicTextProcessor
 
         // Embed a deterministic lower-case tag so callers that pass "EN"/"En"
         // don't produce a different token sequence than "en".
-        language = (language ?? "").Trim().ToLowerInvariant();
+        language = language.Trim().ToLowerInvariant();
 
         text = text.Normalize(NormalizationForm.FormKD);
         text = RemoveEmojiCodePoints(text);
@@ -114,6 +113,7 @@ internal sealed partial class SupertonicTextProcessor
 
     private static bool IsEmoji(int codePoint) =>
         codePoint is >= 0x1F600 and <= 0x1F64F
+        // ReSharper disable once MergeIntoLogicalPattern -- subjective style; kept as-is.
         || codePoint is >= 0x1F300 and <= 0x1F5FF
         || codePoint is >= 0x1F680 and <= 0x1F6FF
         || codePoint is >= 0x1F700 and <= 0x1F77F

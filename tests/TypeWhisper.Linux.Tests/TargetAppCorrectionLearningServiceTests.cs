@@ -70,7 +70,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         // of silently skipping (the "first dictation is a dud" bug).
         var client = new FakeAtSpiEventClient
         {
-            CurrentFocusedElement = null, BootstrapResult = s_field
+            CurrentFocusedElement = null, BootstrapResult = s_field,
         };
         using var service = CreateService(client, enabled: true);
 
@@ -206,6 +206,42 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ReArm_WhenAtSpiBecomesUnavailable_DisarmsPreviousSession()
+    {
+        // A re-arm that fails because AT-SPI became unavailable must still disarm the
+        // previous session, or its lease and timer stay live.
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(client, enabled: true);
+
+        client.TextToReturn = "I deployed to kubernets today";
+        await service.ArmAsync("I deployed to kubernets today");
+        Assert.Equal(1, client.ActiveAcquisitions);
+
+        client.Available = false;
+        await service.ArmAsync("a fresh unrelated dictation");
+
+        Assert.Equal(0, client.ActiveAcquisitions);
+    }
+
+    [Fact]
+    public async Task ReArm_WhenFocusedElementBecomesInvalid_DisarmsPreviousSession()
+    {
+        // A re-arm that fails because no focused element can be found must still disarm the
+        // previous session, or its lease and timer stay live.
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(client, enabled: true);
+
+        client.TextToReturn = "I deployed to kubernets today";
+        await service.ArmAsync("I deployed to kubernets today");
+        Assert.Equal(1, client.ActiveAcquisitions);
+
+        client.CurrentFocusedElement = null; // BootstrapResult stays null: bootstrap finds nothing
+        await service.ArmAsync("a fresh unrelated dictation");
+
+        Assert.Equal(0, client.ActiveAcquisitions);
+    }
+
+    [Fact]
     public async Task Disable_MidWindow_ReleasesTextChangedLease()
     {
         // Disabling the feature disarms via the reconcile; the lease must be released so the
@@ -252,7 +288,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         var client = new FakeAtSpiEventClient
         {
             CurrentFocusedElement = pane,
-            TextProvider = e => e.Equals(s_field) ? "I deployed to kubernets today" : null
+            TextProvider = e => e.Equals(s_field) ? "I deployed to kubernets today" : null,
         };
         client.RecentFocusedElements.AddRange([pane, s_field]);
         using var service = CreateService(client, enabled: true);
@@ -279,7 +315,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         var client = new FakeAtSpiEventClient
         {
             CurrentFocusedElement = pane,
-            TextProvider = e => e.Equals(foreignField) ? "hello world" : null
+            TextProvider = e => e.Equals(foreignField) ? "hello world" : null,
         };
         client.RecentFocusedElements.AddRange([pane, foreignField]);
         using var service = CreateService(client, enabled: true);
@@ -410,7 +446,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     {
         var client = new FakeAtSpiEventClient
         {
-            CurrentFocusedElement = s_field, PasswordResult = true
+            CurrentFocusedElement = s_field, PasswordResult = true,
         };
         using var service = CreateService(client, enabled: true);
 
@@ -439,7 +475,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         {
             CurrentFocusedElement = password,
             PasswordProvider = e => e.Equals(password),
-            TextProvider = _ => "hunter2"
+            TextProvider = _ => "hunter2",
         };
         client.RecentFocusedElements.AddRange([password, sibling]);
         using var service = CreateService(client, enabled: true);
@@ -467,7 +503,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         {
             CurrentFocusedElement = pane,
             PasswordProvider = e => e.Equals(pane) ? null : false,
-            TextProvider = e => e.Equals(sibling) ? "hello world" : null
+            TextProvider = e => e.Equals(sibling) ? "hello world" : null,
         };
         client.RecentFocusedElements.AddRange([pane, sibling]);
         using var service = CreateService(client, enabled: true);
@@ -489,7 +525,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         var client = new FakeAtSpiEventClient
         {
             CurrentFocusedElement = s_field,
-            PasswordProvider = _ => isPassword ? true : (bool?)false
+            PasswordProvider = _ => isPassword ? true : (bool?)false,
         };
         using var service = CreateService(client, enabled: true);
 
@@ -513,7 +549,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         // never proceed to read the field text.
         var client = new FakeAtSpiEventClient
         {
-            CurrentFocusedElement = s_field, PasswordResult = null
+            CurrentFocusedElement = s_field, PasswordResult = null,
         };
         using var service = CreateService(client, enabled: true);
 
@@ -837,7 +873,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         var startGate = new TaskCompletionSource();
         var client = new FakeAtSpiEventClient
         {
-            CurrentFocusedElement = s_field, StartGate = startGate
+            CurrentFocusedElement = s_field, StartGate = startGate,
         };
         var settings = new FakeSettingsService(
             AppSettings.Default with { TargetAppCorrectionLearningEnabled = true }
@@ -865,7 +901,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         var startGate = new TaskCompletionSource();
         var client = new FakeAtSpiEventClient
         {
-            CurrentFocusedElement = s_field, StartGate = startGate
+            CurrentFocusedElement = s_field, StartGate = startGate,
         };
         var settings = new FakeSettingsService(
             AppSettings.Default with { TargetAppCorrectionLearningEnabled = true }
@@ -1210,7 +1246,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         var client = new FakeAtSpiEventClient
         {
             CurrentFocusedElement = s_field,
-            ExtentsToReturn = new AtSpiScreenRect(100, 200, 300, 40)
+            ExtentsToReturn = new AtSpiScreenRect(100, 200, 300, 40),
         };
         using var service = CreateService(client, enabled: true);
 
@@ -1393,7 +1429,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
     private sealed class FakeAtSpiEventClient : IAtSpiEventClient
     {
-        public bool Available { get; init; } = true;
+        public bool Available { get; set; } = true;
 
         // null models a role read that could not be determined (fail-closed path).
         public bool? PasswordResult { get; init; } = false;
@@ -1544,6 +1580,9 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
     private sealed class FakeSettingsService(AppSettings current) : ISettingsService
     {
+        // ISettingsService.Update must read and persist under the same gate as Save.
+        private readonly Lock _gate = new();
+
         public AppSettings Current { get; private set; } = current;
 
         public AppSettings Load()
@@ -1553,8 +1592,21 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
         public void Save(AppSettings settings)
         {
-            Current = settings;
-            SettingsChanged?.Invoke(settings);
+            lock (_gate)
+            {
+                Current = settings;
+                SettingsChanged?.Invoke(settings);
+            }
+        }
+
+        public AppSettings Update(Func<AppSettings, AppSettings> mutate)
+        {
+            lock (_gate)
+            {
+                var updated = mutate(Current);
+                Save(updated);
+                return updated;
+            }
         }
 
         public event Action<AppSettings>? SettingsChanged;

@@ -97,7 +97,7 @@ public sealed class LearnedCorrectionsNotificationService : IDisposable
         // wraps a System.Threading.Timer; tests inject a hand-fired scheduler.
         var schedule = scheduleDelay
             ?? ((delay, callback) => new PostingTimer(delay, () => _post(callback)));
-        _presenter = new LearnedCorrectionsFeedbackPresenter(dictionary, schedule);
+        _presenter = new LearnedCorrectionsFeedbackPresenter(dictionary, errorLog, schedule);
     }
 
     public void Dispose()
@@ -534,7 +534,7 @@ public sealed class LearnedCorrectionsNotificationService : IDisposable
                             Sender = NotificationsService,
                             Interface = NotificationsInterface,
                             Path = NotificationsPath,
-                            Member = "ActionInvoked"
+                            Member = "ActionInvoked",
                         },
                         s_readActionInvoked,
                         HandleActionInvoked,
@@ -549,7 +549,7 @@ public sealed class LearnedCorrectionsNotificationService : IDisposable
                             Sender = NotificationsService,
                             Interface = NotificationsInterface,
                             Path = NotificationsPath,
-                            Member = "NotificationClosed"
+                            Member = "NotificationClosed",
                         },
                         s_readClosed,
                         HandleClosed,

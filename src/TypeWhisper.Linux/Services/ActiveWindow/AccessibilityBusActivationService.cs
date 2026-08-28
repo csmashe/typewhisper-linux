@@ -117,7 +117,7 @@ public sealed class AccessibilityBusActivationService : IAccessibilityBusActivat
                     StatusInterface,
                     property,
                     "b",
-                    value ? "true" : "false"
+                    value ? "true" : "false",
                 ],
                 timeout: s_timeout,
                 ct: ct

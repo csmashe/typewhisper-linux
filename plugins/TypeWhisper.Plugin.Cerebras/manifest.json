@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "author": "TypeWhisper",
   "description": "Cerebras fast LLM inference",
+  "networkAccess": "network",
+  "categories": ["llm"],
   "assemblyName": "TypeWhisper.Plugin.Cerebras.dll",
   "pluginClass": "TypeWhisper.Plugin.Cerebras.CerebrasPlugin"
 }

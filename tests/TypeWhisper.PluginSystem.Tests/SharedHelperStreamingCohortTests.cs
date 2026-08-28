@@ -6,6 +6,7 @@ using TypeWhisper.Plugin.Cohere;
 using TypeWhisper.Plugin.Fireworks;
 using TypeWhisper.Plugin.Gemini;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSystem.Tests;
@@ -87,10 +88,11 @@ public sealed class SharedHelperStreamingCohortTests
             "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}",
             "",
             "data: {\"error\":{\"message\":\"server had an error\",\"type\":\"server_error\"}}",
+            "",
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "test-key" } };
@@ -121,15 +123,16 @@ public sealed class SharedHelperStreamingCohortTests
             "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}",
             "",
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":null}]}",
+            "",
             "");
         var chunks = new List<string>();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(
             () => StreamCerebrasSseAsync(sse, chunks));
 
         Assert.Equal(["Hel", "lo"], chunks);
-        Assert.Contains("Incomplete chat completion stream", ex.Message);
-        Assert.Contains("without a terminal frame", ex.Message);
+        Assert.Equal("chat completion stream", ex.StreamName);
+        Assert.Equal("[DONE] or a non-empty finish_reason", ex.ExpectedTerminal);
     }
 
     [Fact]
@@ -142,6 +145,7 @@ public sealed class SharedHelperStreamingCohortTests
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
             "",
             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}",
+            "",
             "");
         var chunks = new List<string>();
 
@@ -162,6 +166,7 @@ public sealed class SharedHelperStreamingCohortTests
             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}",
             "",
             "data: [DONE]",
+            "",
             "");
         var chunks = new List<string>();
 
@@ -187,14 +192,15 @@ public sealed class SharedHelperStreamingCohortTests
             $"data: {{\"choices\":[{{\"delta\":{{\"content\":\"Hel\"}},\"finish_reason\":{finishReasonJson}}}]}}",
             "",
             $"data: {{\"choices\":[{{\"delta\":{{\"content\":\"lo\"}},\"finish_reason\":{finishReasonJson}}}]}}",
+            "",
             "");
         var chunks = new List<string>();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(
             () => StreamCerebrasSseAsync(sse, chunks));
 
         Assert.Equal(["Hel", "lo"], chunks);
-        Assert.Contains("Incomplete chat completion stream", ex.Message);
+        Assert.Equal("chat completion stream", ex.StreamName);
     }
 
     [Fact]
@@ -204,11 +210,11 @@ public sealed class SharedHelperStreamingCohortTests
         // makes LlmStreamPump fault, preserving the callers' existing batch-fallback intent.
         var chunks = new List<string>();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(
             () => StreamCerebrasSseAsync("", chunks));
 
         Assert.Empty(chunks);
-        Assert.Contains("Incomplete chat completion stream", ex.Message);
+        Assert.Equal("chat completion stream", ex.StreamName);
     }
 
     private static void AssertStreamBody(string? body, string expectedModel)
@@ -232,6 +238,7 @@ public sealed class SharedHelperStreamingCohortTests
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -239,7 +246,7 @@ public sealed class SharedHelperStreamingCohortTests
             capturedUrl = request.RequestUri?.ToString();
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -268,7 +275,7 @@ public sealed class SharedHelperStreamingCohortTests
         {
             Content = new StringContent(
                 """{"choices":[{"message":{"content":"bulk"}}]}""",
-                Encoding.UTF8, "application/json")
+                Encoding.UTF8, "application/json"),
         });
 
         var host = new TestPluginHostServices { Secrets = { [secretKey] = "test-key" } };
@@ -294,7 +301,7 @@ public sealed class SharedHelperStreamingCohortTests
     {
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "test-key" } };
@@ -328,7 +335,7 @@ public sealed class SharedHelperStreamingCohortTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

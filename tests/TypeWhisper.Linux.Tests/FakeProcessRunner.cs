@@ -1,4 +1,5 @@
 using TypeWhisper.Linux.Services;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Tests;
 
@@ -15,9 +16,22 @@ internal sealed class FakeProcessRunner : IProcessRunner
         )> _overrides = [];
 
     public List<Invocation> Invocations { get; } = [];
+    public List<SupervisorInvocation> SupervisorInvocations { get; } = [];
+    public List<SessionInvocation> SessionInvocations { get; } = [];
+    public List<Uri> LaunchedUris { get; } = [];
 
     /// <summary>Result for any call that matches no override.</summary>
     public ProcessRunResult Default { get; init; } = Success();
+    public ProcessRunOutcome? SupervisorDefault { get; init; }
+    // ReSharper disable once MemberCanBePrivate.Global
+    // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global  init-settable like Default/SupervisorDefault; get-only would block initializer syntax.
+    public DetachedLaunchOutcome DetachedDefault { get; init; } =
+        new(true, null);
+    public Func<
+        ProcessCommand,
+        ProcessSessionOptions,
+        ProcessSessionStartOutcome
+    >? SessionFactory { get; init; }
 
     /// <summary>The <c>standardInput</c> piped to the most recent invocation (e.g. a pkexec heredoc).</summary>
     // ReSharper disable once UnusedAutoPropertyAccessor.Global  recording surface for stdin assertions; kept even when a given run only checks Invocations
@@ -29,6 +43,7 @@ internal sealed class FakeProcessRunner : IProcessRunner
         IReadOnlyDictionary<string, string>? environment = null,
         string? standardInput = null,
         TimeSpan? timeout = null,
+        bool detachAfterExit = false,
         CancellationToken ct = default
     )
     {
@@ -43,6 +58,81 @@ internal sealed class FakeProcessRunner : IProcessRunner
         }
 
         return Task.FromResult(Default);
+    }
+
+    public ProcessRunOutcome RunProbe(
+        ProcessCommand command,
+        ProcessOneShotOptions options,
+        CancellationToken cancellationToken = default
+    )
+    {
+        return RunOneShotAsync(command, options, cancellationToken)
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    public async Task<ProcessRunOutcome> RunOneShotAsync(
+        ProcessCommand command,
+        ProcessOneShotOptions options,
+        CancellationToken cancellationToken = default
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        SupervisorInvocations.Add(new SupervisorInvocation(command, options));
+        if (SupervisorDefault is not null)
+        {
+            return SupervisorDefault;
+        }
+
+        var legacy = await RunAsync(
+            command.FileName,
+            command.Arguments,
+            command.Environment,
+            (options.StandardInput as Utf8ProcessInput)?.Value,
+            options.Timeout,
+            options.PostExitPipePolicy == ProcessPostExitPipePolicy.AbandonAfterGrace,
+            cancellationToken
+        );
+        var status = legacy.Started
+            ? legacy.TimedOut
+                ? ProcessRunStatus.TimedOut
+                : ProcessRunStatus.Exited
+            : ProcessRunStatus.StartFailed;
+        return new ProcessRunOutcome(
+            status,
+            status == ProcessRunStatus.Exited ? legacy.ExitCode : null,
+            options.StandardOutput == ProcessCaptureMode.Discard
+                ? []
+                : System.Text.Encoding.UTF8.GetBytes(legacy.StandardOutput),
+            options.StandardError == ProcessCaptureMode.Discard
+                ? []
+                : System.Text.Encoding.UTF8.GetBytes(legacy.StandardError),
+            ProcessOutputStatus.Complete,
+            status == ProcessRunStatus.StartFailed ? legacy.StandardError : null
+        );
+    }
+
+    public ProcessSessionStartOutcome StartSession(
+        ProcessCommand command,
+        ProcessSessionOptions options
+    )
+    {
+        SessionInvocations.Add(new SessionInvocation(command, options));
+        return SessionFactory?.Invoke(command, options)
+               ?? throw new NotSupportedException(
+                   "This fake has no session configured."
+               );
+    }
+
+    public DetachedLaunchOutcome LaunchDetached(ProcessCommand command)
+    {
+        return DetachedDefault;
+    }
+
+    public DetachedLaunchOutcome LaunchUri(Uri uri)
+    {
+        LaunchedUris.Add(uri);
+        return DetachedDefault;
     }
 
     /// <summary>Make calls matching <paramref name="match" /> exit non-zero.</summary>
@@ -130,5 +220,15 @@ internal sealed class FakeProcessRunner : IProcessRunner
         // ReSharper disable once NotAccessedPositionalProperty.Global  part of the recorded invocation shape; available for stdin assertions
         string? StandardInput = null,
         TimeSpan? Timeout = null
+    );
+
+    public sealed record SupervisorInvocation(
+        ProcessCommand Command,
+        ProcessOneShotOptions Options
+    );
+
+    public sealed record SessionInvocation(
+        ProcessCommand Command,
+        ProcessSessionOptions Options
     );
 }

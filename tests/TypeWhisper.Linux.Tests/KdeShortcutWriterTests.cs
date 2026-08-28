@@ -1,0 +1,328 @@
+// ReSharper disable MethodHasAsyncOverload -- synchronous file operations keep the assertions direct.
+using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Tests;
+using Xunit;
+
+namespace TypeWhisper.Linux.Tests;
+
+public sealed class KdeShortcutWriterTests : IDisposable
+{
+    private const string ShortcutId = "typewhisper.dictation.toggle";
+    private readonly string? _originalXdgDataHome = Environment.GetEnvironmentVariable(
+        "XDG_DATA_HOME"
+    );
+    private readonly string _tempDir = TestPaths.CreateTempDirectory("kde-shortcut-writer");
+
+    public KdeShortcutWriterTests()
+    {
+        Environment.SetEnvironmentVariable("XDG_DATA_HOME", _tempDir);
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable("XDG_DATA_HOME", _originalXdgDataHome);
+        try
+        {
+            TestPaths.DeleteDirectory(_tempDir);
+        }
+        catch
+        {
+            // Best-effort cleanup for temp test directories.
+        }
+    }
+
+    [Fact]
+    public async Task WriteAsync_writes_the_file_when_none_exists()
+    {
+        var writer = CreateWriter();
+
+        var result = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.True(File.Exists(TargetPath));
+        Assert.Equal(ExpectedDesktopContents(), File.ReadAllText(TargetPath));
+    }
+
+    [Fact]
+    public async Task WriteAsync_overwrites_a_file_it_previously_wrote_with_a_different_trigger()
+    {
+        var writer = CreateWriter();
+        var firstResult = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
+
+        var result = await writer.WriteAsync(
+            CreateSpec("Alt+Shift+Space"),
+            CancellationToken.None
+        );
+
+        Assert.True(firstResult.Success);
+        Assert.True(result.Success);
+        Assert.Equal(
+            ExpectedDesktopContents("Alt+Shift+Space"),
+            File.ReadAllText(TargetPath)
+        );
+    }
+
+    [Fact]
+    public async Task WriteAsync_refuses_to_overwrite_a_foreign_file_at_the_same_path()
+    {
+        const string foreignContents = "[Desktop Entry]\nName=Foreign shortcut\n";
+        WriteTarget(foreignContents);
+        var writer = CreateWriter();
+
+        var result = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(foreignContents, File.ReadAllText(TargetPath));
+        Assert.False(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+    }
+
+    [Fact]
+    public async Task WriteAsync_refuses_when_marker_present_but_shortcut_id_does_not_match()
+    {
+        const string mismatchedContents =
+            "[Desktop Entry]\nX-TypeWhisper-Managed=true\nX-TypeWhisper-ShortcutId=another.shortcut\n";
+        WriteTarget(mismatchedContents);
+        var writer = CreateWriter();
+
+        var result = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(mismatchedContents, File.ReadAllText(TargetPath));
+        Assert.False(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+    }
+
+    [Fact]
+    public async Task ManagedPresence_DistinguishesAbsentCurrentAndStale()
+    {
+        var writer = CreateWriter();
+        var installed = CreateSpec();
+        var changed = CreateSpec("Alt+F8");
+
+        Assert.False(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+        Assert.False(await writer.IsInstalledAsync(installed, CancellationToken.None));
+
+        var write = await writer.WriteAsync(installed, CancellationToken.None);
+
+        Assert.True(write.Success);
+        Assert.True(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+        Assert.True(await writer.IsInstalledAsync(installed, CancellationToken.None));
+        Assert.False(await writer.IsInstalledAsync(changed, CancellationToken.None));
+        Assert.True(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+    }
+
+    [Fact]
+    public async Task RemoveAsync_deletes_a_file_it_previously_wrote()
+    {
+        var writer = CreateWriter();
+        var writeResult = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
+
+        var result = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
+
+        Assert.True(writeResult.Success);
+        Assert.True(result.Success);
+        Assert.False(File.Exists(TargetPath));
+    }
+
+    [Fact]
+    public async Task Customized_recorded_file_is_not_updated_or_removed()
+    {
+        var writer = CreateWriter();
+        Assert.True((await writer.WriteAsync(CreateSpec(), CancellationToken.None)).Success);
+        await File.AppendAllTextAsync(TargetPath, "X-User-Customization=true\n");
+
+        var update = await writer.WriteAsync(
+            CreateSpec("Alt+Shift+Space"),
+            CancellationToken.None
+        );
+        var removal = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
+
+        Assert.False(update.Success);
+        Assert.True(removal.Success);
+        Assert.NotNull(removal.Warning);
+        Assert.Contains("X-User-Customization=true", File.ReadAllText(TargetPath));
+    }
+
+    // Drift from the recorded publication alone does not make a file ours: a shortcut we
+    // published and the user then replaced outright must read as absent, not stale.
+    [Fact]
+    public async Task Recorded_file_replaced_by_a_foreign_one_is_not_reported_as_present()
+    {
+        var writer = CreateWriter();
+        Assert.True((await writer.WriteAsync(CreateSpec(), CancellationToken.None)).Success);
+
+        await File.WriteAllTextAsync(
+            TargetPath,
+            "[Desktop Entry]\nName=Foreign replacement\n"
+        );
+
+        Assert.False(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+    }
+
+    // Whereas an edit that keeps our markers is still ours, and the UI has to offer it.
+    [Fact]
+    public async Task Recorded_file_customized_but_still_marked_is_reported_as_present()
+    {
+        var writer = CreateWriter();
+        Assert.True((await writer.WriteAsync(CreateSpec(), CancellationToken.None)).Success);
+
+        await File.AppendAllTextAsync(TargetPath, "X-User-Customization=true\n");
+
+        Assert.True(
+            await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None)
+        );
+    }
+
+    [Fact]
+    public async Task WriteAsync_refuses_symlink_and_preserves_its_target()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(TargetPath)!);
+        var target = Path.Join(_tempDir, "foreign-kde.desktop");
+        const string targetContent = "[Desktop Entry]\nName=Foreign\n";
+        await File.WriteAllTextAsync(target, targetContent);
+        File.CreateSymbolicLink(TargetPath, target);
+
+        var writer = CreateWriter();
+        var result = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(new FileInfo(TargetPath).LinkTarget);
+        Assert.Equal(targetContent, File.ReadAllText(target));
+
+        // Removal must refuse before deleting, or the symlink itself would go even though
+        // its target was never ours. Like every other refusal here, that is a warning.
+        var removal = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
+
+        Assert.NotNull(removal.Warning);
+        Assert.NotNull(new FileInfo(TargetPath).LinkTarget);
+        Assert.Equal(targetContent, File.ReadAllText(target));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_returns_success_no_op_when_nothing_installed()
+    {
+        var writer = CreateWriter();
+
+        var result = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.False(File.Exists(TargetPath));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_leaves_a_foreign_file_in_place()
+    {
+        const string foreignContents = "[Desktop Entry]\nName=Foreign shortcut\n";
+        WriteTarget(foreignContents);
+        var writer = CreateWriter();
+
+        var result = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Warning);
+        Assert.Contains(TargetPath, result.Warning);
+        Assert.True(File.Exists(TargetPath));
+        Assert.Equal(foreignContents, File.ReadAllText(TargetPath));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_leaves_a_managed_file_in_place_when_shortcut_id_does_not_match()
+    {
+        const string mismatchedContents =
+            "[Desktop Entry]\nX-TypeWhisper-Managed=true\nX-TypeWhisper-ShortcutId=another.shortcut\n";
+        WriteTarget(mismatchedContents);
+        var writer = CreateWriter();
+
+        var result = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Warning);
+        Assert.Contains(TargetPath, result.Warning);
+        Assert.True(File.Exists(TargetPath));
+        Assert.Equal(mismatchedContents, File.ReadAllText(TargetPath));
+    }
+
+    // A shortcut dropped by a release that predates the managed-artifact manifest has no
+    // recorded state, so its markers are the only ownership evidence. It must still be
+    // removable and rewritable after the upgrade — the previous release allowed both.
+    [Fact]
+    public async Task RemoveAsync_removes_a_pre_manifest_shortcut_carrying_our_markers()
+    {
+        var legacy = ExpectedDesktopContents("Meta+Z");
+        WriteTarget(legacy);
+        var writer = CreateWriter();
+
+        Assert.True(await writer.IsManagedShortcutPresentAsync(ShortcutId, CancellationToken.None));
+
+        var result = await writer.RemoveAsync(ShortcutId, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.False(File.Exists(TargetPath));
+    }
+
+    [Fact]
+    public async Task WriteAsync_rewrites_a_pre_manifest_shortcut_carrying_our_markers()
+    {
+        WriteTarget(ExpectedDesktopContents("Meta+Z"));
+        var writer = CreateWriter();
+
+        var result = await writer.WriteAsync(CreateSpec(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(ExpectedDesktopContents(), File.ReadAllText(TargetPath));
+    }
+
+    private string TargetPath => Path.Join(_tempDir, "kglobalaccel", $"{ShortcutId}.desktop");
+
+    private KdeShortcutWriter CreateWriter()
+    {
+        return new KdeShortcutWriter(Path.Join(_tempDir, "managed-state"));
+    }
+
+    private void WriteTarget(string contents)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(TargetPath)!);
+        File.WriteAllText(TargetPath, contents);
+    }
+
+    private static DeShortcutSpec CreateSpec(string trigger = "Ctrl+Shift+Space")
+    {
+        return new DeShortcutSpec(
+            ShortcutId,
+            "TypeWhisper Dictation",
+            trigger,
+            "typewhisper record toggle",
+            null,
+            null,
+            null
+        );
+    }
+
+    private static string ExpectedDesktopContents(string trigger = "Ctrl+Shift+Space")
+    {
+        return "[Desktop Entry]\n"
+               + "Type=Service\n"
+               + "Name=TypeWhisper Dictation\n"
+               + "Exec=typewhisper record toggle\n"
+               + $"X-KDE-Shortcuts={trigger}\n"
+               + "X-KDE-StartupNotify=false\n"
+               + "X-TypeWhisper-Managed=true\n"
+               + $"X-TypeWhisper-ShortcutId={ShortcutId}\n";
+    }
+}

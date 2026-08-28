@@ -96,6 +96,55 @@ public sealed class LlmStreamPumpTests
     }
 
     [Fact]
+    public async Task RunAsync_DependencyCancellationWithLiveCaller_IsFaultResult()
+    {
+        var pump = new LlmStreamPump(_ => { });
+
+        var result = await pump.RunAsync(
+            FaultAfter("partial", new OperationCanceledException("provider canceled")),
+            CancellationToken.None
+        );
+
+        Assert.Equal("partial", result);
+        Assert.True(pump.Faulted);
+        Assert.True(pump.ReceivedAnyChunk);
+    }
+
+    [Fact]
+    public async Task RunAsync_PrivateTimeout_IsFaultResult()
+    {
+        var pump = new LlmStreamPump(_ => { });
+
+        var result = await pump.RunAsync(
+            FaultAfter("partial", new TimeoutException("provider deadline")),
+            CancellationToken.None
+        );
+
+        Assert.Equal("partial", result);
+        Assert.True(pump.Faulted);
+    }
+
+    [Fact]
+    public async Task RunAsync_DependencyFaultRacingCallerCancellation_CallerWins()
+    {
+        using var cts = new CancellationTokenSource();
+        var pump = new LlmStreamPump(_ => { });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            pump.RunAsync(RacingFault(cts), cts.Token));
+
+        Assert.False(pump.Faulted);
+        return;
+
+        async IAsyncEnumerable<string> RacingFault(CancellationTokenSource source)
+        {
+            yield return "partial";
+            await source.CancelAsync();
+            throw new HttpRequestException("provider failed at cancellation");
+        }
+    }
+
+    [Fact]
     public async Task RunAsync_EmptyStream_ReturnsEmpty()
     {
         var emissions = new List<string>();
@@ -134,5 +183,15 @@ public sealed class LlmStreamPumpTests
             await Task.Yield();
             yield return d;
         }
+    }
+
+    private static async IAsyncEnumerable<string> FaultAfter(
+        string delta,
+        Exception exception
+    )
+    {
+        yield return delta;
+        await Task.Yield();
+        throw exception;
     }
 }

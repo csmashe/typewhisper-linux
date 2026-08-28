@@ -269,7 +269,8 @@
                 <Grid RowDefinitions="Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
-                        <Grid ColumnDefinitions="*,240">
+                        <Grid ColumnDefinitions="*,240"
+                              RowDefinitions="Auto,Auto">
                             <TextBlock Text="{loc:Str Dictation.SpokenLanguage}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
@@ -282,6 +283,14 @@
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
+                            <TextBlock Grid.Row="1"
+                                       Grid.ColumnSpan="2"
+                                       Text="{Binding LanguageSelectionWarning}"
+                                       IsVisible="{Binding LanguageSelectionRequired}"
+                                       FontSize="12"
+                                       Foreground="#D6B45F"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
                         </Grid>
                     </Border>
 
@@ -311,7 +320,7 @@
             <TextBlock Text="{loc:Str Dictation.Settings}"
                        Classes="group-title" />
             <Border Classes="settings-panel">
-                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
@@ -631,10 +640,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="23"
+                    <Border Grid.Row="25"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="24"
+                    <Border Grid.Row="26"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">

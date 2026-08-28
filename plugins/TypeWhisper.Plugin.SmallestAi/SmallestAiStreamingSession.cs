@@ -1,41 +1,51 @@
-using System.Diagnostics;
-using System.IO;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.SmallestAi;
 
 internal sealed class SmallestAiStreamingSession : IStreamingSession
 {
-    private readonly ClientWebSocket _ws;
-    private readonly SmallestAiTranscriptCollector _collector;
-    private readonly CancellationTokenSource _receiveCts = new();
-    private readonly SemaphoreSlim _sendLock = new(1, 1);
-    private readonly TaskCompletionSource _lastResponseReceived = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private Task? _receiveTask;
-    private bool _disposed;
+    private readonly WebSocketSessionPump _pump;
 
-    private SmallestAiStreamingSession(ClientWebSocket ws, SmallestAiTranscriptCollector collector)
+    private SmallestAiStreamingSession(WebSocketSessionPump pump)
     {
-        _ws = ws;
-        _collector = collector;
+        _pump = pump;
     }
 
-    public event Action<StreamingTranscriptEvent>? TranscriptReceived;
+    public event Action<StreamingTranscriptEvent>? TranscriptReceived
+    {
+        add => _pump.TranscriptReceived += value;
+        remove => _pump.TranscriptReceived -= value;
+    }
 
     public static async Task<SmallestAiStreamingSession> ConnectAsync(
         string apiKey,
         string? language,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
-        var ws = CreateConfiguredWebSocket(apiKey);
-        await ws.ConnectAsync(BuildStreamingUri(language, wordTimestamps: true), ct);
+        var pump = await WebSocketSessionPump.ConnectAsync(
+            new SmallestAiWebSocketAdapter(apiKey, language),
+            ct
+        );
+        return new SmallestAiStreamingSession(pump);
+    }
 
-        var session = new SmallestAiStreamingSession(ws, new SmallestAiTranscriptCollector());
-        session._receiveTask = session.ReceiveLoopAsync(session._receiveCts.Token);
-        return session;
+    internal static async Task<SmallestAiStreamingSession> CreateConnectedSessionForTests(
+        WebSocket ws
+    )
+    {
+        if (ws.State != WebSocketState.Open)
+            throw new InvalidOperationException("The test WebSocket must already be open.");
+
+        var pump = await WebSocketSessionPump.StartConnectedAsync(
+            new SmallestAiWebSocketAdapter("", null),
+            new ClientWebSocketTransport(ws),
+            CancellationToken.None
+        );
+        return new SmallestAiStreamingSession(pump);
     }
 
     public static Uri BuildStreamingUri(string? language, bool wordTimestamps)
@@ -43,7 +53,7 @@ internal sealed class SmallestAiStreamingSession : IStreamingSession
         var query = new List<string>
         {
             "encoding=linear16",
-            "sample_rate=16000"
+            "sample_rate=16000",
         };
 
         var normalizedLanguage = SmallestAiPlugin.NormalizeLanguage(language);
@@ -53,184 +63,124 @@ internal sealed class SmallestAiStreamingSession : IStreamingSession
         if (wordTimestamps)
             query.Add("word_timestamps=true");
 
-        return new Uri("wss://api.smallest.ai/waves/v1/pulse/get_text?" + string.Join("&", query));
+        return new Uri(
+            "wss://api.smallest.ai/waves/v1/pulse/get_text?"
+                + string.Join("&", query)
+        );
     }
 
-    public static IReadOnlyDictionary<string, string> CreateStreamingHeaders(string apiKey) =>
+    public static IReadOnlyDictionary<string, string> CreateStreamingHeaders(
+        string apiKey
+    ) =>
         new Dictionary<string, string>
         {
-            ["Authorization"] = $"Bearer {apiKey}"
+            ["Authorization"] = $"Bearer {apiKey}",
         };
 
-    private static ClientWebSocket CreateConfiguredWebSocket(string apiKey)
-    {
-        var ws = new ClientWebSocket();
-        foreach (var header in CreateStreamingHeaders(apiKey))
-            ws.Options.SetRequestHeader(header.Key, header.Value);
-        return ws;
-    }
+    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct) =>
+        _pump.SendAudioAsync(pcm16Audio, ct);
 
-    public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
-    {
-        if (_disposed || _ws.State != WebSocketState.Open || pcm16Audio.Length == 0)
-            return;
+    public Task FinalizeAsync(CancellationToken ct) => _pump.FinalizeAsync(ct);
 
-        await _sendLock.WaitAsync(ct);
+    public ValueTask DisposeAsync() => _pump.DisposeAsync();
+}
+
+internal sealed class SmallestAiWebSocketAdapter(
+    string apiKey,
+    string? language
+) : IWebSocketSessionAdapter
+{
+    private readonly SmallestAiTranscriptCollector _collector = new();
+
+    public string ProviderName => "Smallest AI Pulse";
+    public WebSocketReadinessPolicy Readiness => WebSocketReadinessPolicy.Immediate;
+    public WebSocketTerminalPolicy Terminal =>
+        WebSocketTerminalPolicy.Require("is_last");
+    public WebSocketKeepAlivePolicy? KeepAlive => null;
+    public WebSocketClosePolicy ClosePolicy => WebSocketClosePolicy.Default;
+
+    public ValueTask<WebSocketConnectionOptions> GetConnectionOptionsAsync(
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult(
+            new WebSocketConnectionOptions(
+                SmallestAiStreamingSession.BuildStreamingUri(
+                    language,
+                    wordTimestamps: true
+                ),
+                SmallestAiStreamingSession.CreateStreamingHeaders(apiKey)
+            )
+        );
+
+    public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> OnConnectedAsync(
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>([]);
+
+    public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> EncodeAudioAsync(
+        ReadOnlyMemory<byte> pcm16Audio,
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
+            pcm16Audio.Length == 0
+                ? []
+                : [
+                    new WebSocketOutboundMessage(
+                        pcm16Audio.ToArray(),
+                        WebSocketMessageType.Binary
+                    ),
+                ]
+        );
+
+    public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct) =>
+        ValueTask.FromResult(
+            new WebSocketFinalizePlan(
+                [
+                    new WebSocketOutboundMessage(
+                        """{"type":"close_stream"}"""u8.ToArray(),
+                        WebSocketMessageType.Text
+                    ),
+                ]
+            )
+        );
+
+    public WebSocketInboundResult HandleMessage(
+        WebSocketMessageType type,
+        ReadOnlyMemory<byte> completePayload
+    )
+    {
+        if (type != WebSocketMessageType.Text)
+            return WebSocketInboundResult.Empty;
+
         try
         {
-            if (_ws.State != WebSocketState.Open)
-                return;
-
-            await _ws.SendAsync(pcm16Audio, WebSocketMessageType.Binary, true, ct);
-        }
-        finally
-        {
-            _sendLock.Release();
-        }
-    }
-
-    public async Task FinalizeAsync(CancellationToken ct)
-    {
-        if (_disposed || _ws.State != WebSocketState.Open)
-            return;
-
-        await _sendLock.WaitAsync(ct);
-        try
-        {
-            if (_ws.State != WebSocketState.Open)
-                return;
-
-            await SendTextAsync("""{"type":"close_stream"}""", ct);
-        }
-        finally
-        {
-            _sendLock.Release();
-        }
-
-        await _lastResponseReceived.Task.WaitAsync(ct);
-    }
-
-    private async Task SendTextAsync(string json, CancellationToken ct)
-    {
-        var bytes = Encoding.UTF8.GetBytes(json);
-        await _ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
-    }
-
-    private async Task ReceiveLoopAsync(CancellationToken ct)
-    {
-        var buffer = new byte[8192];
-        using var messageBuffer = new MemoryStream();
-
-        try
-        {
-            while (!ct.IsCancellationRequested && _ws.State == WebSocketState.Open)
-            {
-                messageBuffer.SetLength(0);
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await _ws.ReceiveAsync(buffer, ct);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        _lastResponseReceived.TrySetResult();
-                        return;
-                    }
-                    messageBuffer.Write(buffer, 0, result.Count);
-                } while (!result.EndOfMessage);
-
-                if (result.MessageType != WebSocketMessageType.Text)
-                    continue;
-
-                var json = Encoding.UTF8.GetString(messageBuffer.GetBuffer(), 0, (int)messageBuffer.Length);
-                var transcriptEvent = _collector.ApplyEvent(json);
-                if (transcriptEvent is not null)
-                    TranscriptReceived?.Invoke(transcriptEvent);
-
-                if (_collector.IsLastReceived)
-                    _lastResponseReceived.TrySetResult();
-            }
-        }
-        catch (OperationCanceledException ex)
-        {
-            Debug.WriteLine($"Smallest AI Pulse receive loop canceled: {ex.Message}");
-        }
-        catch (WebSocketException ex)
-        {
-            Debug.WriteLine($"Smallest AI Pulse WebSocket error: {ex.Message}");
-            _lastResponseReceived.TrySetException(ex);
+            var transcript = _collector.ApplyEvent(
+                System.Text.Encoding.UTF8.GetString(completePayload.Span)
+            );
+            var transcripts =
+                transcript is null
+                    ? (IReadOnlyList<StreamingTranscriptEvent>)[]
+                    : [transcript];
+            var signals =
+                _collector.IsLastReceived
+                    ? WebSocketSessionSignal.Terminal
+                    : WebSocketSessionSignal.None;
+            return new WebSocketInboundResult(transcripts, signals);
         }
         catch (JsonException ex)
         {
-            Debug.WriteLine($"Smallest AI Pulse parse error: {ex.Message}");
-            // Surface the parse failure so a malformed frame arriving before the
-            // terminal is_last event does not leave FinalizeAsync waiting forever.
-            _lastResponseReceived.TrySetException(ex);
+            return new WebSocketInboundResult(
+                [],
+                Fault: new InvalidOperationException(
+                    "Smallest AI Pulse sent malformed JSON.",
+                    ex
+                )
+            );
         }
         catch (InvalidOperationException ex)
         {
-            Debug.WriteLine($"Smallest AI Pulse stream error: {ex.Message}");
-            _lastResponseReceived.TrySetException(ex);
+            return new WebSocketInboundResult([], Fault: ex);
         }
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed)
-            return;
-
-        _disposed = true;
-        _receiveCts.Cancel();
-        _lastResponseReceived.TrySetResult();
-
-        await _sendLock.WaitAsync(CancellationToken.None);
-        try
-        {
-            if (_ws.State == WebSocketState.Open)
-            {
-                try { await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); }
-                catch (OperationCanceledException ex)
-                {
-                    Debug.WriteLine($"Smallest AI Pulse WebSocket close canceled: {ex.Message}");
-                }
-                catch (WebSocketException ex)
-                {
-                    Debug.WriteLine($"Smallest AI Pulse WebSocket close error: {ex.Message}");
-                }
-                catch (InvalidOperationException ex)
-                {
-                    Debug.WriteLine($"Smallest AI Pulse WebSocket close skipped: {ex.Message}");
-                }
-            }
-        }
-        finally
-        {
-            _sendLock.Release();
-        }
-
-        if (_receiveTask is not null)
-        {
-            try { await _receiveTask; }
-            catch (OperationCanceledException ex)
-            {
-                Debug.WriteLine($"Smallest AI Pulse receive loop canceled during dispose: {ex.Message}");
-            }
-            catch (WebSocketException ex)
-            {
-                Debug.WriteLine($"Smallest AI Pulse receive loop closed during dispose: {ex.Message}");
-            }
-            catch (JsonException ex)
-            {
-                Debug.WriteLine($"Smallest AI Pulse receive loop parse error during dispose: {ex.Message}");
-            }
-            catch (InvalidOperationException ex)
-            {
-                Debug.WriteLine($"Smallest AI Pulse receive loop stopped during dispose: {ex.Message}");
-            }
-        }
-
-        _sendLock.Dispose();
-        _receiveCts.Dispose();
-        _ws.Dispose();
     }
 }
 
@@ -248,43 +198,51 @@ internal sealed class SmallestAiTranscriptCollector
             throw new InvalidOperationException(SmallestAiPlugin.ExtractApiError(root));
 
         var type = GetString(root, "type");
-        if (!string.IsNullOrWhiteSpace(type)
-            && !type.Equals("transcription", StringComparison.OrdinalIgnoreCase))
+        if (
+            !string.IsNullOrWhiteSpace(type)
+            && !type.Equals("transcription", StringComparison.OrdinalIgnoreCase)
+        )
         {
             return null;
         }
 
         var isFinal = GetBool(root, "is_final");
         var isLast = GetBool(root, "is_last");
-        // Record the terminal signal before bailing on an empty transcript: a
-        // no-speech / trailing-silence stream can end with an is_last message
-        // that carries no text, and FinalizeAsync blocks until IsLastReceived.
         IsLastReceived = IsLastReceived || isLast;
 
-        if ((isFinal || isLast)
-            && (GetString(root, "language") ?? GetFirstString(root, "languages")) is { } language
-            && !string.IsNullOrWhiteSpace(language))
+        if (
+            (isFinal || isLast)
+            && (
+                GetString(root, "language")
+                ?? GetFirstString(root, "languages")
+            )
+                is { } detectedLanguage
+            && !string.IsNullOrWhiteSpace(detectedLanguage)
+        )
         {
-            DetectedLanguage = language;
+            DetectedLanguage = detectedLanguage;
         }
 
         var transcript = GetString(root, "transcript")?.Trim() ?? "";
-        if (string.IsNullOrWhiteSpace(transcript))
-            return null;
-
-        return new StreamingTranscriptEvent(transcript, isFinal || isLast);
+        return string.IsNullOrWhiteSpace(transcript)
+            ? null
+            : new StreamingTranscriptEvent(transcript, isFinal || isLast);
     }
 
     private static bool IsError(JsonElement root)
     {
-        if (GetString(root, "type") is { } type
-            && type.Equals("error", StringComparison.OrdinalIgnoreCase))
+        if (
+            GetString(root, "type") is { } type
+            && type.Equals("error", StringComparison.OrdinalIgnoreCase)
+        )
         {
             return true;
         }
 
-        if (GetString(root, "status") is { } status
-            && status.Equals("error", StringComparison.OrdinalIgnoreCase))
+        if (
+            GetString(root, "status") is { } status
+            && status.Equals("error", StringComparison.OrdinalIgnoreCase)
+        )
         {
             return true;
         }
@@ -303,15 +261,21 @@ internal sealed class SmallestAiTranscriptCollector
             ? element.GetString()
             : null;
 
-    private static string? GetFirstString(JsonElement element, string propertyName)
+    private static string? GetFirstString(
+        JsonElement element,
+        string propertyName
+    )
     {
-        if (!element.TryGetProperty(propertyName, out var property)
-            || property.ValueKind != JsonValueKind.Array)
+        if (
+            !element.TryGetProperty(propertyName, out var property)
+            || property.ValueKind != JsonValueKind.Array
+        )
         {
             return null;
         }
 
-        return property.EnumerateArray()
+        return property
+            .EnumerateArray()
             .Where(item => item.ValueKind == JsonValueKind.String)
             .Select(item => item.GetString())
             .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));

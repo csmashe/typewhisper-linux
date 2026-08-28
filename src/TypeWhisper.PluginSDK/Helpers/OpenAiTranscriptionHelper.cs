@@ -22,12 +22,21 @@ public static class OpenAiTranscriptionHelper
     /// <param name="apiKey">Bearer token for authentication.</param>
     /// <param name="model">Model identifier (e.g. "whisper-1").</param>
     /// <param name="wavAudio">WAV-encoded audio bytes.</param>
-    /// <param name="language">Language hint (ISO code) or null for auto-detection.</param>
+    /// <param name="language">
+    ///     Language hint (ISO code). Null, blank, or the <c>"auto"</c> sentinel omits the field
+    ///     so the provider detects the language itself.
+    /// </param>
     /// <param name="translate">If true, uses the translations endpoint (audio to English).</param>
-    /// <param name="responseFormat">Response format (e.g. "verbose_json", "json", "text").</param>
+    /// <param name="responseFormat">
+    ///     Response format. Supported values are <c>"verbose_json"</c>, <c>"json"</c>,
+    ///     and <c>"text"</c>.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <param name="prompt">Optional text to bias the model toward specific spelling, vocabulary, or style; null to omit.</param>
-    /// <returns>Transcription result with text, detected language, and duration.</returns>
+    /// <returns>
+    ///     Transcription result with text, detected language, and duration. The <c>"text"</c>
+    ///     format supplies only text, so language, duration, and segments use their default values.
+    /// </returns>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedParameter.Global
     public static async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -43,6 +52,17 @@ public static class OpenAiTranscriptionHelper
         string? prompt = null
     )
     {
+        var parseAsPlainText = responseFormat switch
+        {
+            "text" => true,
+            "json" or "verbose_json" => false,
+            _ => throw new ArgumentException(
+                $"Unsupported transcription response format: '{responseFormat}'. "
+                + "Supported formats are 'verbose_json', 'json', and 'text'.",
+                nameof(responseFormat)
+            ),
+        };
+
         var endpoint = translate
             ? $"{baseUrl}/v1/audio/translations"
             : $"{baseUrl}/v1/audio/transcriptions";
@@ -54,10 +74,14 @@ public static class OpenAiTranscriptionHelper
         content.Add(new StringContent(model), "model");
         content.Add(new StringContent(responseFormat), "response_format");
 
-        // "auto" is a TypeWhisper sentinel; omit the field to let the API detect language.
-        if (!string.IsNullOrEmpty(language) && language != "auto")
+        // "auto" is a sentinel, not a language code: Whisper-compatible endpoints reject it.
+        var languageHint = language?.Trim();
+        if (
+            !string.IsNullOrEmpty(languageHint)
+            && !languageHint.Equals("auto", StringComparison.OrdinalIgnoreCase)
+        )
         {
-            content.Add(new StringContent(language), "language");
+            content.Add(new StringContent(languageHint), "language");
         }
 
         if (!string.IsNullOrWhiteSpace(prompt))
@@ -70,8 +94,20 @@ public static class OpenAiTranscriptionHelper
         request.Content = content;
 
         var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(httpClient, request, ct);
-        var json = await response.Content.ReadAsStringAsync(ct);
-        return ParseTranscriptionResponse(json);
+        var responseBody = await response.Content.ReadAsStringAsync(ct);
+        return parseAsPlainText
+            ? ParsePlainTextTranscriptionResponse(responseBody)
+            : ParseTranscriptionResponse(responseBody);
+    }
+
+    private static PluginTranscriptionResult ParsePlainTextTranscriptionResponse(string responseBody)
+    {
+        var text = responseBody.EndsWith("\r\n", StringComparison.Ordinal)
+            ? responseBody[..^2]
+            : responseBody.EndsWith('\n') || responseBody.EndsWith('\r')
+                ? responseBody[..^1]
+                : responseBody;
+        return new PluginTranscriptionResult(text, null, 0, null);
     }
 
     /// <summary>
@@ -84,7 +120,14 @@ public static class OpenAiTranscriptionHelper
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        var text = root.TryGetProperty("text", out var textEl) ? textEl.GetString() ?? "" : "";
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("text", out var textEl)
+            || textEl.ValueKind != JsonValueKind.String)
+        {
+            throw CreateInvalidResponseException(json, root);
+        }
+
+        var text = textEl.GetString() ?? "";
         var language = root.TryGetProperty("language", out var langEl) ? langEl.GetString() : null;
         var duration = root.TryGetProperty("duration", out var durEl) ? durEl.GetDouble() : 0;
         var segments = new List<PluginTranscriptionSegment>();
@@ -96,7 +139,7 @@ public static class OpenAiTranscriptionHelper
         {
             return new PluginTranscriptionResult(text.Trim(), language, duration, minNoSpeechProb)
             {
-                Segments = segments
+                Segments = segments,
             };
         }
 
@@ -121,5 +164,40 @@ public static class OpenAiTranscriptionHelper
         }
 
         return new PluginTranscriptionResult(text.Trim(), language, duration, minNoSpeechProb) { Segments = segments };
+    }
+
+    private static InvalidOperationException CreateInvalidResponseException(
+        string json,
+        JsonElement root
+    )
+    {
+        var providerError = TryGetProviderErrorMessage(root);
+        var providerErrorDetail = providerError is null
+            ? ""
+            : $" Provider error: {providerError}";
+        return new InvalidOperationException(
+            "Invalid transcription response: required field 'text' must be a string."
+            + $"{providerErrorDetail} Body: {GetBodySnippet(json)}"
+        );
+    }
+
+    private static string? TryGetProviderErrorMessage(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Object
+            && root.TryGetProperty("error", out var error)
+            && error.ValueKind == JsonValueKind.Object
+            && error.TryGetProperty("message", out var message)
+            && message.ValueKind == JsonValueKind.String)
+        {
+            return message.GetString();
+        }
+
+        return null;
+    }
+
+    private static string GetBodySnippet(string json)
+    {
+        const int maxLength = 200;
+        return json.Length > maxLength ? $"{json[..maxLength]}..." : json;
     }
 }

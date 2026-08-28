@@ -59,12 +59,7 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
     ///     Global on X11; focus-only on Wayland. Reported honestly so the status
     ///     panel doesn't mislead Wayland users.
     /// </summary>
-    public bool IsGlobalScope =>
-        !string.Equals(
-            Environment.GetEnvironmentVariable("XDG_SESSION_TYPE"),
-            "wayland",
-            StringComparison.OrdinalIgnoreCase
-        );
+    public bool IsGlobalScope => !WaylandSessionDetector.IsWaylandSession();
 
     public bool IsAvailable()
     {
@@ -208,7 +203,7 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
             KeyCode.VcRightAlt => ModifierMask.RightAlt,
             KeyCode.VcLeftMeta => ModifierMask.LeftMeta,
             KeyCode.VcRightMeta => ModifierMask.RightMeta,
-            _ => ModifierMask.None
+            _ => ModifierMask.None,
         };
         return modBit == ModifierMask.None ? mask : mask & ~modBit;
     }

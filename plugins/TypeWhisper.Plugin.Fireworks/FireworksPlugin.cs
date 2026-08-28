@@ -1,4 +1,8 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
@@ -6,9 +10,8 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Fireworks;
 
-public sealed partial class FireworksPlugin
+public sealed class FireworksPlugin
     : ILlmProviderPlugin,
-        IDisposable,
         IPluginSettingsProvider,
         IPluginLocalizationAware
 {
@@ -30,7 +33,7 @@ public sealed partial class FireworksPlugin
 
     public string PluginId => "com.typewhisper.fireworks";
     public string PluginName => "Fireworks";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -61,7 +64,7 @@ public sealed partial class FireworksPlugin
 
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
     [
-        new PluginModelInfo(
+        new(
             "accounts/fireworks/models/llama4-scout-instruct-basic",
             "Llama 4 Scout"
         )
@@ -117,7 +120,7 @@ public sealed partial class FireworksPlugin
             ct
         );
 
-        await foreach (var delta in source.WithCancellation(ct))
+        await foreach (var delta in source)
             yield return delta;
     }
 

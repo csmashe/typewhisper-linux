@@ -17,10 +17,10 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class AboutSectionViewModel : ObservableObject
 {
     private readonly IErrorLogService _errorLog;
-    private readonly LinuxPreferencesService _linuxPreferences;
-    private readonly ISettingsService _settings;
     private readonly SettingsBackupService _settingsBackup;
+    private readonly TimeZoneInfo _timeZone;
     private readonly UpdateCheckService _updateCheck;
+    private readonly UrlLauncher _urlLauncher;
 
     [ObservableProperty]
     private string _backupStatusText = Loc.Instance["About.BackupStatusDefault"];
@@ -50,17 +50,39 @@ public partial class AboutSectionViewModel : ObservableObject
 
     public AboutSectionViewModel(
         IErrorLogService errorLog,
-        ISettingsService settings,
-        LinuxPreferencesService linuxPreferences,
         SettingsBackupService settingsBackup,
-        UpdateCheckService updateCheck
+        UpdateCheckService updateCheck,
+        UrlLauncher urlLauncher
+    )
+        : this(errorLog, settingsBackup, updateCheck, urlLauncher, TimeZoneInfo.Local) { }
+
+    internal AboutSectionViewModel(
+        IErrorLogService errorLog,
+        SettingsBackupService settingsBackup,
+        UpdateCheckService updateCheck,
+        TimeZoneInfo timeZone
+    )
+        : this(
+            errorLog,
+            settingsBackup,
+            updateCheck,
+            new UrlLauncher(new ProcessRunner()),
+            timeZone
+        ) { }
+
+    internal AboutSectionViewModel(
+        IErrorLogService errorLog,
+        SettingsBackupService settingsBackup,
+        UpdateCheckService updateCheck,
+        UrlLauncher urlLauncher,
+        TimeZoneInfo timeZone
     )
     {
         _errorLog = errorLog;
-        _settings = settings;
-        _linuxPreferences = linuxPreferences;
         _settingsBackup = settingsBackup;
         _updateCheck = updateCheck;
+        _urlLauncher = urlLauncher;
+        _timeZone = timeZone;
         RefreshErrors();
         // EntriesChanged fires synchronously on whichever thread called AddEntry —
         // and producers now log from background threads (transcription, detection,
@@ -104,10 +126,10 @@ public partial class AboutSectionViewModel : ObservableObject
     public bool CanCheckForUpdates => !IsCheckingForUpdates;
 
     // Full, unfiltered backing list; drives HasErrors and the category options.
-    private ObservableCollection<ErrorLogEntry> ErrorEntries { get; } = [];
+    private ObservableCollection<ErrorLogEntryRow> ErrorEntries { get; } = [];
 
     // The entries actually shown — ErrorEntries narrowed by SelectedCategoryFilter.
-    public ObservableCollection<ErrorLogEntry> FilteredErrorEntries { get; } = [];
+    public ObservableCollection<ErrorLogEntryRow> FilteredErrorEntries { get; } = [];
 
     // "All categories" + one option per category currently present in the log.
     public ObservableCollection<CategoryFilterOption> CategoryFilters { get; } = [];
@@ -156,13 +178,9 @@ public partial class AboutSectionViewModel : ObservableObject
         BackupStatusText = Loc.Instance["About.RestoringBackup"];
         try
         {
-            var result = await Task.Run(() => _settingsBackup.RestoreBackup(path));
-            // Re-load and re-save each settings file so in-memory state
-            // reflects the just-restored files and SettingsChanged is fired.
-            _settings.Save(_settings.Load());
-            _linuxPreferences.Save(_linuxPreferences.Load());
+            var result = await Task.Run(() => _settingsBackup.StageRestore(path));
             BackupStatusText =
-                Loc.Instance.GetString("About.BackupRestored", result.FileCount);
+                Loc.Instance.GetString("About.BackupStaged", result.FileCount);
             return result;
         }
         finally
@@ -195,7 +213,7 @@ public partial class AboutSectionViewModel : ObservableObject
     [RelayCommand]
     private void OpenReleasePage()
     {
-        UrlLauncher.Open(LatestReleaseUrl);
+        _urlLauncher.Open(LatestReleaseUrl);
     }
 
     private void OnUpdateResultChanged(UpdateCheckResult result)
@@ -272,7 +290,12 @@ public partial class AboutSectionViewModel : ObservableObject
         ErrorEntries.Clear();
         foreach (var entry in _errorLog.Entries)
         {
-            ErrorEntries.Add(entry);
+            ErrorEntries.Add(
+                new ErrorLogEntryRow(
+                    entry,
+                    PresentationDateTime.ToLocal(entry.Timestamp, _timeZone)
+                )
+            );
         }
 
         RebuildCategoryFilters();
@@ -292,7 +315,7 @@ public partial class AboutSectionViewModel : ObservableObject
 
         var desired = new List<CategoryFilterOption>
         {
-            new(null, Loc.Instance["About.ErrorFilterAll"])
+            new(null, Loc.Instance["About.ErrorFilterAll"]),
         };
         desired.AddRange(present.Select(c => new CategoryFilterOption(c, FormatCategory(c))));
 
@@ -358,4 +381,18 @@ public partial class AboutSectionViewModel : ObservableObject
             return Display;
         }
     }
+}
+
+public sealed class ErrorLogEntryRow
+{
+    public ErrorLogEntryRow(ErrorLogEntry record, DateTime localTimestamp)
+    {
+        Record = record;
+        LocalTimestamp = localTimestamp;
+    }
+
+    public ErrorLogEntry Record { get; }
+    public DateTime LocalTimestamp { get; }
+    public string Category => Record.Category;
+    public string Message => Record.Message;
 }

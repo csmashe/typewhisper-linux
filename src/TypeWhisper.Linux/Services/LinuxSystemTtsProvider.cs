@@ -9,17 +9,45 @@ namespace TypeWhisper.Linux.Services;
 public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
 {
     private const string BuiltInProviderId = AppSettings.DefaultSpokenFeedbackProviderId;
-    private readonly SystemCommandAvailabilityService _commands;
+    private const long PlaybackStartupMilliseconds = 5_000;
+    private const long PlaybackMillisecondsPerUtf16Character = 200;
+    private const long MinimumPlaybackMilliseconds = 15_000;
+    private const long MaximumPlaybackMilliseconds = 10 * 60 * 1_000;
+    private static readonly TimeSpan s_dispatcherCancellationTimeout = TimeSpan.FromMilliseconds(
+        500
+    );
 
-    private readonly ISettingsService _settings;
+    private readonly Func<string?> _speechFeedbackCommand;
+    private readonly IProcessRunner _processRunner;
+    private string? _selectedVoiceId;
 
     public LinuxSystemTtsProvider(
         ISettingsService settings,
-        SystemCommandAvailabilityService commands
+        SystemCommandAvailabilityService commands,
+        IProcessRunner processRunner
+    )
+        : this(settings, processRunner, () => commands.SpeechFeedbackCommand)
+    {
+    }
+
+    internal LinuxSystemTtsProvider(
+        ISettingsService settings,
+        IProcessRunner processRunner,
+        string? speechFeedbackCommand
+    )
+        : this(settings, processRunner, () => speechFeedbackCommand)
+    {
+    }
+
+    private LinuxSystemTtsProvider(
+        ISettingsService settings,
+        IProcessRunner processRunner,
+        Func<string?> speechFeedbackCommand
     )
     {
-        _settings = settings;
-        _commands = commands;
+        _selectedVoiceId = settings.Current.SpokenFeedbackVoiceId;
+        _processRunner = processRunner;
+        _speechFeedbackCommand = speechFeedbackCommand;
     }
 
     public string PluginId => "com.typewhisper.tts.linux-system";
@@ -27,8 +55,8 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
     public string PluginVersion => "1.0.0";
     public string ProviderId => BuiltInProviderId;
     public string ProviderDisplayName => "Linux system voice";
-    public bool IsConfigured => _commands.SpeechFeedbackCommand is not null;
-    public string? SelectedVoiceId => _settings.Current.SpokenFeedbackVoiceId;
+    public bool IsConfigured => _speechFeedbackCommand() is not null;
+    public string? SelectedVoiceId => _selectedVoiceId;
     public string SettingsSummary => SelectedVoiceId ?? "System default voice";
 
     public IReadOnlyList<PluginVoiceInfo> AvailableVoices => [];
@@ -45,13 +73,7 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
 
     public void SelectVoice(string? voiceId)
     {
-        var normalized = string.IsNullOrWhiteSpace(voiceId) ? null : voiceId;
-        if (_settings.Current.SpokenFeedbackVoiceId == normalized)
-        {
-            return;
-        }
-
-        _settings.Save(_settings.Current with { SpokenFeedbackVoiceId = normalized });
+        _selectedVoiceId = string.IsNullOrWhiteSpace(voiceId) ? null : voiceId;
     }
 
     public Task<ITtsPlaybackSession> SpeakAsync(TtsSpeakRequest request, CancellationToken ct)
@@ -61,7 +83,7 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
             return Task.FromResult<ITtsPlaybackSession>(InactiveTtsPlaybackSession.Instance);
         }
 
-        var command = _commands.SpeechFeedbackCommand;
+        var command = _speechFeedbackCommand();
         if (command is null)
         {
             return Task.FromResult<ITtsPlaybackSession>(InactiveTtsPlaybackSession.Instance);
@@ -69,111 +91,178 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
 
         ct.ThrowIfCancellationRequested();
 
-        var startInfo = new ProcessStartInfo(command)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
+        var language = NormalizeLanguageHint(request.Language);
+        var args = BuildArguments(command, request.Text, language);
+        // ReSharper disable once SuggestVarOrType_Elsewhere -- the collection-expression arm has no natural type; `var` would not compile.
+        IReadOnlyList<string>? fallbackArgs = language is not null && args.Count > 1
+            ? BuildDefaultArguments(command, request.Text)
+            : null;
+        IReadOnlyList<string>? cancellationArgs = command == "spd-say" ? ["-C"] : null;
 
-        // spd-say handles its own audio output; espeak/espeak-ng use --stdout
-        // and are piped into paplay/aplay (see StartEspeakPlayback).
-        if (command == "spd-say")
-        {
-            startInfo.ArgumentList.Add(request.Text);
-            var process = Process.Start(startInfo);
-            return Task.FromResult<ITtsPlaybackSession>(
-                process is null
-                    ? InactiveTtsPlaybackSession.Instance
-                    : new ProcessTtsPlaybackSession(process, ct)
-            );
-        }
-
-        startInfo.ArgumentList.Add("--stdout");
-        startInfo.ArgumentList.Add(request.Text);
-        var espeakProcess = StartEspeakPlayback(startInfo);
-        return Task.FromResult<ITtsPlaybackSession>(
-            espeakProcess is null
-                ? InactiveTtsPlaybackSession.Instance
-                : new ProcessTtsPlaybackSession(espeakProcess, ct)
+        // espeak/espeak-ng and spd-say both own their audio output. Arguments
+        // remain separate argv items so no shell or intermediate audio is needed.
+        // spd-say waits for END/CANCEL so the session tracks the utterance. Its
+        // stock CLI exposes only global CANCEL ALL for discarding both current
+        // and queued messages, so cancellation can affect other dispatcher clients.
+        // If a backend rejects a requested language/voice with a nonzero exit,
+        // the session makes one best-effort default-voice attempt within the same
+        // timeout budget. Launch failures, timeouts, and cancellation never retry.
+        var session = new TaskBackedTtsPlaybackSession(
+            _processRunner,
+            command,
+            args,
+            fallbackArgs,
+            cancellationArgs,
+            s_dispatcherCancellationTimeout,
+            CalculatePlaybackTimeout(request.Text.Length),
+            ct
         );
+        return Task.FromResult<ITtsPlaybackSession>(session);
     }
 
     public void Dispose() { }
 
-    private static Process? StartEspeakPlayback(ProcessStartInfo espeakStartInfo)
+    private static string? NormalizeLanguageHint(string? language)
     {
-        // Pipe espeak stdout into paplay/aplay so we don't depend on espeak's
-        // built-in audio library. `sh -c '...' sh "$text"` avoids word-splitting
-        // on the TTS text while still supporting the shell pipe operator.
-        var player = ResolvePlayer();
-        if (player is null)
+        var normalized = language?.Trim();
+        return string.IsNullOrEmpty(normalized)
+               || string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : normalized;
+    }
+
+    private static IReadOnlyList<string> BuildArguments(
+        string command,
+        string text,
+        string? language
+    )
+    {
+        if (language is null)
         {
-            return Process.Start(espeakStartInfo);
+            return BuildDefaultArguments(command, text);
         }
 
-        var shell = new ProcessStartInfo("sh")
+        return command switch
         {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
+            "espeak" or "espeak-ng" => ["-v", language, text],
+            "spd-say" => ["--wait", "-l", language, text],
+            _ => BuildDefaultArguments(command, text),
         };
-        shell.ArgumentList.Add("-c");
-        shell.ArgumentList.Add($"{Quote(espeakStartInfo.FileName)} --stdout \"$1\" | {player}");
-        shell.ArgumentList.Add("sh");
-        shell.ArgumentList.Add(espeakStartInfo.ArgumentList.LastOrDefault() ?? "");
-        return Process.Start(shell);
     }
 
-    private static string? ResolvePlayer()
+    private static IReadOnlyList<string> BuildDefaultArguments(string command, string text)
     {
-        if (CommandExists("paplay"))
-        {
-            return "paplay";
-        }
-
-        return CommandExists("aplay") ? "aplay" : null;
+        return command == "spd-say" ? ["--wait", text] : [text];
     }
 
-    private static bool CommandExists(string name)
+    internal static TimeSpan CalculatePlaybackTimeout(int utf16CharacterCount)
     {
-        var path = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return false;
-        }
+        ArgumentOutOfRangeException.ThrowIfNegative(utf16CharacterCount);
 
-        return path
-            .Split(
-                Path.PathSeparator,
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(dir => File.Exists(Path.Join(dir, name)));
-    }
-
-    private static string Quote(string value)
-    {
-        return "'" + value.Replace("'", "'\\''") + "'";
+        var calculatedMilliseconds = PlaybackStartupMilliseconds
+                                     // ReSharper disable once RedundantCast -- explicit long cast documents that the per-character scaling stays in the long domain; part of the deliberate overflow-safe timeout arithmetic.
+                                     + (long)utf16CharacterCount
+                                     * PlaybackMillisecondsPerUtf16Character;
+        return TimeSpan.FromMilliseconds(
+            Math.Clamp(
+                calculatedMilliseconds,
+                MinimumPlaybackMilliseconds,
+                MaximumPlaybackMilliseconds
+            )
+        );
     }
 }
 
-internal sealed class ProcessTtsPlaybackSession : ITtsPlaybackSession, IDisposable
+internal sealed class TaskBackedTtsPlaybackSession : ITtsPlaybackSession, IDisposable
 {
-    private readonly Process _process;
-    private readonly CancellationTokenRegistration _registration;
+    private readonly Lock _sync = new();
+    private readonly CancellationTokenSource _invocationCts;
+    private readonly Task<ProcessRunResult> _runnerTask;
+    private EventHandler? _completedHandlers;
     private int _completed;
+    private int _resourcesDisposed;
+    private int _stopRequested;
 
-    public ProcessTtsPlaybackSession(Process process, CancellationToken ct)
+    public TaskBackedTtsPlaybackSession(
+        IProcessRunner processRunner,
+        string command,
+        IReadOnlyList<string> args,
+        IReadOnlyList<string>? fallbackArgs,
+        IReadOnlyList<string>? cancellationArgs,
+        TimeSpan cancellationTimeout,
+        TimeSpan timeout,
+        CancellationToken ct
+    )
     {
-        _process = process;
-        _process.EnableRaisingEvents = true;
-        _process.Exited += OnExited;
-        _registration = ct.Register(Stop);
+        _invocationCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _runnerTask = RunInvocationSequenceAsync(
+            processRunner,
+            command,
+            args,
+            fallbackArgs,
+            cancellationArgs,
+            cancellationTimeout,
+            timeout,
+            _invocationCts.Token
+        );
+        _ = ObserveRunnerAsync(command);
+    }
 
-        if (_process.HasExited)
+    public bool IsActive => !_runnerTask.IsCompleted;
+
+    public event EventHandler? Completed
+    {
+        add
         {
-            Finish();
+            if (value is null)
+            {
+                return;
+            }
+
+            var alreadyCompleted = false;
+            lock (_sync)
+            {
+                if (_completed != 0)
+                {
+                    alreadyCompleted = true;
+                }
+                else
+                {
+                    _completedHandlers += value;
+                }
+            }
+
+            if (alreadyCompleted)
+            {
+                InvokeCompletedHandler(value);
+            }
+        }
+        remove
+        {
+            lock (_sync)
+            {
+                _completedHandlers -= value;
+            }
+        }
+    }
+
+    public void Stop()
+    {
+        if (
+            Volatile.Read(ref _completed) != 0
+            || Interlocked.Exchange(ref _stopRequested, 1) != 0
+        )
+        {
+            return;
+        }
+
+        try
+        {
+            _invocationCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Runner completion won the race and already released the source.
         }
     }
 
@@ -182,48 +271,234 @@ internal sealed class ProcessTtsPlaybackSession : ITtsPlaybackSession, IDisposab
         Stop();
     }
 
-    public bool IsActive => Volatile.Read(ref _completed) == 0 && !_process.HasExited;
-
-    public event EventHandler? Completed;
-
-    public void Stop()
+    private static async Task<ProcessRunResult> RunInvocationSequenceAsync(
+        IProcessRunner processRunner,
+        string command,
+        IReadOnlyList<string> args,
+        IReadOnlyList<string>? fallbackArgs,
+        IReadOnlyList<string>? cancellationArgs,
+        TimeSpan cancellationTimeout,
+        TimeSpan timeout,
+        CancellationToken ct
+    )
     {
-        if (Volatile.Read(ref _completed) != 0)
+        try
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var result = await RunInvocationAsync(processRunner, command, args, timeout, ct)
+                .ConfigureAwait(false);
+            if (result.TimedOut)
+            {
+                await RunCancellationAsync(
+                        processRunner,
+                        command,
+                        cancellationArgs,
+                        cancellationTimeout
+                    )
+                    .ConfigureAwait(false);
+                return result;
+            }
+
+            if (fallbackArgs is null || !result.Started || result.ExitCode == 0)
+            {
+                return result;
+            }
+
+            ct.ThrowIfCancellationRequested();
+            var remainingTimeout = timeout - stopwatch.Elapsed;
+            if (remainingTimeout <= TimeSpan.Zero)
+            {
+                return result;
+            }
+
+            var fallbackResult = await RunInvocationAsync(
+                    processRunner,
+                    command,
+                    fallbackArgs,
+                    remainingTimeout,
+                    ct
+                )
+                .ConfigureAwait(false);
+            if (fallbackResult.TimedOut)
+            {
+                await RunCancellationAsync(
+                        processRunner,
+                        command,
+                        cancellationArgs,
+                        cancellationTimeout
+                    )
+                    .ConfigureAwait(false);
+            }
+
+            return fallbackResult;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await RunCancellationAsync(
+                    processRunner,
+                    command,
+                    cancellationArgs,
+                    cancellationTimeout
+                )
+                .ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async Task RunCancellationAsync(
+        IProcessRunner processRunner,
+        string command,
+        IReadOnlyList<string>? cancellationArgs,
+        TimeSpan cancellationTimeout
+    )
+    {
+        if (cancellationArgs is null)
         {
             return;
         }
 
         try
         {
-            if (!_process.HasExited)
+            var result = await processRunner
+                .RunAsync(
+                    command,
+                    cancellationArgs,
+                    timeout: cancellationTimeout,
+                    ct: CancellationToken.None
+                )
+                .ConfigureAwait(false);
+            if (result.Succeeded)
             {
-                _process.Kill(true);
+                return;
+            }
+
+            if (result.TimedOut)
+            {
+                Debug.WriteLine(
+                    "[LinuxSystemTtsProvider] Speech Dispatcher cancellation timed out."
+                );
+            }
+            else if (!result.Started)
+            {
+                Debug.WriteLine(
+                    "[LinuxSystemTtsProvider] Speech Dispatcher cancellation did not start."
+                );
+            }
+            else
+            {
+                Debug.WriteLine(
+                    $"[LinuxSystemTtsProvider] Speech Dispatcher cancellation exited with code {result.ExitCode}."
+                );
             }
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[ProcessTtsPlaybackSession] stop failed: {ex.Message}");
+            Debug.WriteLine(
+                $"[LinuxSystemTtsProvider] Speech Dispatcher cancellation failed ({ex.GetType().Name})."
+            );
         }
-
-        Finish();
     }
 
-    private void OnExited(object? sender, EventArgs e)
+    private static async Task<ProcessRunResult> RunInvocationAsync(
+        IProcessRunner processRunner,
+        string command,
+        IReadOnlyList<string> args,
+        TimeSpan timeout,
+        CancellationToken ct
+    )
     {
-        Finish();
+        // Turns a synchronous launch exception into a faulted task instead of a
+        // throw from the constructor.
+        return await processRunner
+            .RunAsync(command, args, timeout: timeout, ct: ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task ObserveRunnerAsync(string command)
+    {
+        try
+        {
+            var result = await _runnerTask.ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                return;
+            }
+
+            if (result.TimedOut)
+            {
+                Debug.WriteLine($"[LinuxSystemTtsProvider] {command} playback timed out.");
+            }
+            else if (!result.Started)
+            {
+                Debug.WriteLine($"[LinuxSystemTtsProvider] {command} playback did not start.");
+            }
+            else
+            {
+                Debug.WriteLine(
+                    $"[LinuxSystemTtsProvider] {command} playback exited with code {result.ExitCode}."
+                );
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Debug.WriteLine($"[LinuxSystemTtsProvider] {command} playback was canceled.");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine(
+                $"[LinuxSystemTtsProvider] {command} playback failed ({ex.GetType().Name})."
+            );
+        }
+        finally
+        {
+            Finish();
+        }
     }
 
     private void Finish()
     {
-        if (Interlocked.Exchange(ref _completed, 1) != 0)
+        EventHandler? handlers;
+        lock (_sync)
+        {
+            if (_completed != 0)
+            {
+                return;
+            }
+
+            Volatile.Write(ref _completed, 1);
+            handlers = _completedHandlers;
+            _completedHandlers = null;
+        }
+
+        if (Interlocked.Exchange(ref _resourcesDisposed, 1) == 0)
+        {
+            _invocationCts.Dispose();
+        }
+
+        if (handlers is null)
         {
             return;
         }
 
-        _process.Exited -= OnExited;
-        _registration.Dispose();
-        _process.Dispose();
-        Completed?.Invoke(this, EventArgs.Empty);
+        // ReSharper disable once PossibleInvalidCastExceptionInForeachLoop -- handlers is an EventHandler-typed multicast delegate, so its invocation list contains only EventHandler instances; the cast cannot fail.
+        foreach (EventHandler handler in handlers.GetInvocationList())
+        {
+            InvokeCompletedHandler(handler);
+        }
+    }
+
+    private void InvokeCompletedHandler(EventHandler handler)
+    {
+        try
+        {
+            handler(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine(
+                $"[LinuxSystemTtsProvider] playback completion handler failed ({ex.GetType().Name})."
+            );
+        }
     }
 }
 

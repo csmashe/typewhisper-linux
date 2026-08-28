@@ -16,9 +16,21 @@ public sealed class LlmCleanupServiceTests
     {
         var sut = CreateService([]);
 
-        var result = await sut.CleanAsync("um hello", CleanupLevel.Light);
+        var result = await sut.CleanAsync("uh hello", CleanupLevel.Light);
 
         Assert.Equal("Hello", result);
+    }
+
+    [Fact]
+    public async Task CleanAsync_Light_KeepsBareUm_ButStripsDoubledUmm()
+    {
+        var sut = CreateService([]);
+
+        // Bare "um" is a real word in German/Dutch/Swedish/Danish/Portuguese, so the
+        // language-agnostic deterministic pass deliberately leaves it alone and only strips the
+        // doubled spelling that collides with nothing (audit §1 M4).
+        Assert.Equal("Um hello", await sut.CleanAsync("um hello", CleanupLevel.Light));
+        Assert.Equal("Hello", await sut.CleanAsync("umm hello", CleanupLevel.Light));
     }
 
     [Fact]
@@ -27,7 +39,7 @@ public sealed class LlmCleanupServiceTests
         var provider = new FakeLlmProviderPlugin("polished text");
         var sut = CreateService([provider]);
 
-        var result = await sut.CleanAsync("um hello", CleanupLevel.Medium);
+        var result = await sut.CleanAsync("uh hello", CleanupLevel.Medium);
 
         Assert.Equal("polished text", result);
         Assert.Equal(CleanupService.MediumSystemPrompt, provider.LastSystemPrompt);
@@ -54,7 +66,7 @@ public sealed class LlmCleanupServiceTests
         var sut = CreateService([]);
 
         var result = await sut.CleanAsync(
-            "um hello",
+            "uh hello",
             CleanupLevel.Medium,
             message =>
             {
@@ -75,7 +87,7 @@ public sealed class LlmCleanupServiceTests
         var sut = CreateService([provider]);
 
         var result = await sut.CleanAsync(
-            "um hello",
+            "uh hello",
             CleanupLevel.Medium,
             message =>
             {
@@ -89,12 +101,93 @@ public sealed class LlmCleanupServiceTests
     }
 
     [Fact]
+    public async Task CleanAsync_DependencyCancellationWithLiveCaller_FallsBackToLight()
+    {
+        var statuses = new List<string>();
+        var provider = new FakeLlmProviderPlugin("unused")
+        {
+            ProcessException = new OperationCanceledException("provider canceled"),
+        };
+        var sut = CreateService([provider]);
+
+        var result = await sut.CleanAsync(
+            "uh hello",
+            CleanupLevel.Medium,
+            message =>
+            {
+                statuses.Add(message);
+                return Task.CompletedTask;
+            },
+            ct: CancellationToken.None
+        );
+
+        Assert.Equal("Hello", result);
+        Assert.Contains("Cleanup failed. Using Light cleanup.", statuses);
+    }
+
+    [Fact]
+    public async Task CleanAsync_PrivateTimeout_FallsBackToLight()
+    {
+        var statuses = new List<string>();
+        var provider = new FakeLlmProviderPlugin("unused")
+        {
+            ProcessException = new TimeoutException("provider deadline"),
+        };
+        var sut = CreateService([provider]);
+
+        var result = await sut.CleanAsync(
+            "uh hello",
+            CleanupLevel.High,
+            message =>
+            {
+                statuses.Add(message);
+                return Task.CompletedTask;
+            }
+        );
+
+        Assert.Equal("Hello", result);
+        Assert.Contains("Cleanup failed. Using Light cleanup.", statuses);
+    }
+
+    [Fact]
+    public async Task CleanAsync_GenuineCallerCancellation_Throws()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var provider = new FakeLlmProviderPlugin("unused")
+        {
+            ProcessException = new OperationCanceledException(cts.Token),
+        };
+        var sut = CreateService([provider]);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.CleanAsync("uh hello", CleanupLevel.Medium, ct: cts.Token));
+    }
+
+    [Fact]
+    public async Task CleanAsync_DependencyFaultRacingCallerCancellation_CallerWins()
+    {
+        using var cts = new CancellationTokenSource();
+        var provider = new FakeLlmProviderPlugin("unused")
+        {
+            // ReSharper disable once AccessToDisposedClosure -- the hook only runs inside the awaited
+            // CleanAsync call below, which completes before the using-scope disposes cts.
+            BeforeProcess = _ => cts.Cancel(),
+            ProcessException = new HttpRequestException("provider fault"),
+        };
+        var sut = CreateService([provider]);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.CleanAsync("uh hello", CleanupLevel.Medium, ct: cts.Token));
+    }
+
+    [Fact]
     public async Task CleanAsync_Medium_FallsBackToLightWhenUnavailableStatusCallbackFails()
     {
         var sut = CreateService([]);
 
         var result = await sut.CleanAsync(
-            "um hello",
+            "uh hello",
             CleanupLevel.Medium,
             _ => throw new InvalidOperationException("Status failed.")
         );
@@ -109,7 +202,7 @@ public sealed class LlmCleanupServiceTests
         var sut = CreateService([provider]);
 
         var result = await sut.CleanAsync(
-            "um hello",
+            "uh hello",
             CleanupLevel.Medium,
             _ => throw new InvalidOperationException("Status failed.")
         );
@@ -117,7 +210,7 @@ public sealed class LlmCleanupServiceTests
         Assert.Equal("Hello", result);
     }
 
-    private static LlmCleanupService CreateService(IReadOnlyList<ILlmProviderPlugin> providers)
+    private static LlmCleanupService CreateService(IReadOnlyList<ILlmProviderRole> providers)
     {
         var pluginManager = TestPluginManagerFactory.Create(providers);
         var settings = new Mock<ISettingsService>();
@@ -143,6 +236,8 @@ public sealed class LlmCleanupServiceTests
         public string? LastSystemPrompt { get; private set; }
         public string? LastUserText { get; private set; }
         public bool ThrowOnProcess { get; init; }
+        public Exception? ProcessException { get; init; }
+        public Action<CancellationToken>? BeforeProcess { get; init; }
 
         public string PluginId => "com.test.cleanup";
         public string PluginName => "Cleanup Provider";
@@ -170,6 +265,12 @@ public sealed class LlmCleanupServiceTests
         {
             LastSystemPrompt = systemPrompt;
             LastUserText = userText;
+            BeforeProcess?.Invoke(ct);
+
+            if (ProcessException is not null)
+            {
+                throw ProcessException;
+            }
 
             return ThrowOnProcess ? throw new InvalidOperationException("Provider failed.") : Task.FromResult(_result);
         }

@@ -9,17 +9,20 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*"/>
-        <PackageReference Include="xunit" Version="2.*"/>
-        <PackageReference Include="xunit.runner.visualstudio" Version="2.*"/>
-        <PackageReference Include="Moq" Version="4.*"/>
+        <PackageReference Include="Microsoft.NET.Test.Sdk"/>
+        <PackageReference Include="xunit"/>
+        <PackageReference Include="xunit.runner.visualstudio"/>
+        <PackageReference Include="Moq"/>
     </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="..\..\src\TypeWhisper.Linux\TypeWhisper.Linux.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Webhook\TypeWhisper.Plugin.Webhook.csproj"/>
+        <ProjectReference Include="..\TypeWhisper.ProcessTestChild\TypeWhisper.ProcessTestChild.csproj"/>
     </ItemGroup>
 
     <ItemGroup>
         <Compile Include="../TestPaths.cs" Link="TestPaths.cs"/>
+        <Compile Include="../PluginManagerTestAccess.cs" Link="PluginManagerTestAccess.cs"/>
     </ItemGroup>
 </Project>

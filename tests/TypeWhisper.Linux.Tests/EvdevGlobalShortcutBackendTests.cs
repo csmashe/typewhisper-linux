@@ -9,6 +9,127 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class EvdevGlobalShortcutBackendTests
 {
     [Fact]
+    public async Task SameModifierHeldByTwoReaders_OneReleaseKeepsRemainingChordUsable()
+    {
+        var monitor = new FakeSessionActivityMonitor(true);
+        var enumerator = new FakeKeyboardEnumerator("/dev/input/event1", "/dev/input/event2");
+        var factory = new FakeReaderFactory();
+        await using var backend = new EvdevGlobalShortcutBackend(monitor, enumerator, factory);
+        var toggleCount = 0;
+        backend.DictationToggleRequested += (_, _) => toggleCount++;
+
+        var shortcuts = DefaultShortcuts() with
+        {
+            DictationModifiers = ModifierMask.LeftCtrl,
+        };
+        Assert.True((await backend.RegisterAsync(shortcuts, CancellationToken.None)).Success);
+        var readers = factory.Readers;
+
+        readers[0].Emit(LinuxKeyMap.KeyLeftctrl, true);
+        readers[1].Emit(LinuxKeyMap.KeyLeftctrl, true);
+        readers[0].Emit(LinuxKeyMap.KeyLeftctrl, false);
+        readers[1].Emit(57, true); // KEY_SPACE
+
+        // A global bitmask clears LeftCtrl on reader 0's release and misses this chord.
+        Assert.Equal(1, toggleCount);
+    }
+
+    [Fact]
+    public async Task ReaderFailure_SubtractsOnlyFailedReaderState()
+    {
+        var monitor = new FakeSessionActivityMonitor(true);
+        var enumerator = new FakeKeyboardEnumerator("/dev/input/event1", "/dev/input/event2");
+        var factory = new FakeReaderFactory();
+        await using var backend = new EvdevGlobalShortcutBackend(monitor, enumerator, factory);
+        var toggleCount = 0;
+        backend.DictationToggleRequested += (_, _) => toggleCount++;
+
+        var shortcuts = DefaultShortcuts() with
+        {
+            DictationModifiers = ModifierMask.LeftCtrl,
+        };
+        Assert.True((await backend.RegisterAsync(shortcuts, CancellationToken.None)).Success);
+        var readers = factory.Readers;
+
+        readers[0].Emit(LinuxKeyMap.KeyLeftshift, true);
+        readers[1].Emit(LinuxKeyMap.KeyLeftctrl, true);
+        readers[0].Fail();
+        readers[1].Emit(57, true); // KEY_SPACE
+
+        // Clearing the old process-wide mask on any failure loses reader 1's held LeftCtrl.
+        Assert.Equal(1, toggleCount);
+        Assert.True(readers[0].IsDisposed);
+    }
+
+    [Fact]
+    public async Task ReaderFailure_ReleasesSoleModifierAndPreventsFalseLaterChord()
+    {
+        var monitor = new FakeSessionActivityMonitor(true);
+        var enumerator = new FakeKeyboardEnumerator("/dev/input/event1", "/dev/input/event2");
+        var factory = new FakeReaderFactory();
+        await using var backend = new EvdevGlobalShortcutBackend(monitor, enumerator, factory);
+        var paletteCount = 0;
+        var toggleCount = 0;
+        backend.PromptPaletteRequested += (_, _) => paletteCount++;
+        backend.DictationToggleRequested += (_, _) => toggleCount++;
+
+        var shortcuts = DefaultShortcuts() with
+        {
+            DictationModifiers = ModifierMask.LeftCtrl,
+            PromptPaletteKey = KeyCode.VcLeftControl,
+            PromptPaletteModifiers = ModifierMask.None,
+        };
+        Assert.True((await backend.RegisterAsync(shortcuts, CancellationToken.None)).Success);
+        var readers = factory.Readers;
+
+        readers[0].Emit(LinuxKeyMap.KeyLeftctrl, true);
+        Assert.Equal(0, paletteCount); // Selection workflows remain release-gated.
+        readers[0].Fail();
+        readers[1].Emit(57, true); // KEY_SPACE
+
+        // The palette proves detach emitted the modifier release; clearing only a mask leaves the
+        // workflow pending. The later Space proves the lost modifier no longer forms a chord.
+        Assert.Equal(1, paletteCount);
+        Assert.Equal(0, toggleCount);
+    }
+
+    [Fact]
+    public async Task ReaderFailure_ReleasesHeldDictationKeyUsingPressTimeMode()
+    {
+        var monitor = new FakeSessionActivityMonitor(true);
+        var enumerator = new FakeKeyboardEnumerator("/dev/input/event1", "/dev/input/event2");
+        var factory = new FakeReaderFactory();
+        await using var backend = new EvdevGlobalShortcutBackend(monitor, enumerator, factory);
+        var startCount = 0;
+        var stopCount = 0;
+        var toggleCount = 0;
+        backend.DictationStartRequested += (_, _) => startCount++;
+        backend.DictationStopRequested += (_, _) => stopCount++;
+        backend.DictationToggleRequested += (_, _) => toggleCount++;
+
+        var pushToTalk = DefaultShortcuts() with
+        {
+            DictationModifiers = ModifierMask.None,
+            Mode = RecordingMode.PushToTalk,
+        };
+        Assert.True((await backend.RegisterAsync(pushToTalk, CancellationToken.None)).Success);
+        var readers = factory.Readers;
+
+        readers[0].Emit(57, true); // KEY_SPACE
+        Assert.Equal(1, startCount);
+
+        var rebound = pushToTalk with { Mode = RecordingMode.Toggle };
+        Assert.True((await backend.RegisterAsync(rebound, CancellationToken.None)).Success);
+        readers[0].Fail();
+        readers[1].Emit(57, true);
+
+        // Detach must release the captured PTT hold even after the mode changes, and the next
+        // aggregate press must not be stranded behind the old dispatcher's key-down guard.
+        Assert.Equal(1, stopCount);
+        Assert.Equal(1, toggleCount);
+    }
+
+    [Fact]
     public async Task Lock_DisposesAllReaders_ResetsState_AndDropsStaleEvents()
     {
         var monitor = new FakeSessionActivityMonitor(true);
@@ -49,6 +170,300 @@ public sealed class EvdevGlobalShortcutBackendTests
         reopened.Emit(LinuxKeyMap.KeyLeftshift, true);
         reopened.Emit(57, true);
         Assert.Equal(1, toggleCount);
+    }
+
+    [Fact]
+    public async Task LockReset_CompletesBeforeUnlockedReaderAttaches()
+    {
+        var monitor = new FakeSessionActivityMonitor(true);
+        var enumerator = new FakeKeyboardEnumerator("/dev/input/event1");
+        var factory = new FakeReaderFactory();
+        var resetBlocker = new BlockingResetHook();
+        var backend = new EvdevGlobalShortcutBackend(
+            monitor,
+            enumerator,
+            factory,
+            beforeSessionResetState: resetBlocker.Block
+        );
+        Task? lockTransition = null;
+
+        try
+        {
+            var startCount = 0;
+            var stopCount = 0;
+            var discardCount = 0;
+            backend.DictationStartRequested += (_, _) => startCount++;
+            backend.DictationStopRequested += (_, _) => stopCount++;
+            backend.DictationDiscardRequested += (_, _) => discardCount++;
+
+            var shortcuts = DefaultShortcuts() with
+            {
+                DictationModifiers = ModifierMask.None,
+                Mode = RecordingMode.PushToTalk,
+            };
+            Assert.True((await backend.RegisterAsync(shortcuts, CancellationToken.None)).Success);
+            Assert.Single(factory.Readers);
+
+            enumerator.BlockNextEnumeration();
+            lockTransition = Task.Run(() => monitor.SetInputAllowed(false));
+            Assert.True(resetBlocker.WaitUntilBlocked());
+
+            monitor.SetInputAllowed(true);
+
+            // The unlock callback has run, but its reopen must remain behind the parked reset.
+            Assert.False(
+                enumerator.WaitForBlockedEnumeration(TimeSpan.FromMilliseconds(100))
+            );
+            Assert.Equal(1, enumerator.EnumerationCount);
+            Assert.Single(factory.Readers);
+
+            resetBlocker.Release();
+            await lockTransition.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(enumerator.WaitForBlockedEnumeration());
+            enumerator.ReleaseBlockedEnumeration();
+            await WaitUntilAsync(() => factory.Readers.Length == 2);
+
+            var reopened = factory.Readers[1];
+            reopened.Emit(57, true); // KEY_SPACE
+            reopened.Emit(57, false);
+
+            // A reset delayed past this fresh PTT press would clear its hold and lose the stop.
+            Assert.Equal(1, discardCount);
+            Assert.Equal(1, startCount);
+            Assert.Equal(1, stopCount);
+        }
+        finally
+        {
+            resetBlocker.Release();
+            enumerator.ReleaseBlockedEnumeration();
+            if (lockTransition is not null)
+            {
+                await lockTransition.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            await backend.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Rescan_WhileResetBarrierPending_DoesNotAttach()
+    {
+        var monitor = new FakeSessionActivityMonitor(true);
+        var enumerator = new FakeKeyboardEnumerator("/dev/input/event1");
+        var factory = new FakeReaderFactory();
+        var resetBlocker = new BlockingResetHook();
+        var backend = new EvdevGlobalShortcutBackend(
+            monitor,
+            enumerator,
+            factory,
+            beforeSessionResetState: resetBlocker.Block
+        );
+        Task? lockTransition = null;
+
+        try
+        {
+            Assert.True(
+                (await backend.RegisterAsync(DefaultShortcuts(), CancellationToken.None)).Success
+            );
+            Assert.Single(factory.Readers);
+
+            enumerator.Add("/dev/input/event2");
+            lockTransition = Task.Run(() => monitor.SetInputAllowed(false));
+            Assert.True(resetBlocker.WaitUntilBlocked());
+
+            monitor.SetInputAllowed(true);
+
+            Assert.False(backend.Rescan());
+            Assert.Single(factory.Readers);
+
+            resetBlocker.Release();
+            await lockTransition.WaitAsync(TimeSpan.FromSeconds(2));
+            await WaitUntilAsync(() => factory.Readers.Length == 3);
+
+            Assert.Equal(2, factory.Readers.Count(reader => !reader.IsDisposed));
+        }
+        finally
+        {
+            resetBlocker.ReleaseAll();
+            if (lockTransition is not null)
+            {
+                await lockTransition.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            await backend.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Unlock_AwaitsAllOutstandingResets_AcrossOverlappingCycles()
+    {
+        var monitor = new FakeSessionActivityMonitor(true);
+        var enumerator = new FakeKeyboardEnumerator("/dev/input/event1");
+        var factory = new FakeReaderFactory();
+        var resetBlocker = new BlockingResetHook(2);
+        var backend = new EvdevGlobalShortcutBackend(
+            monitor,
+            enumerator,
+            factory,
+            beforeSessionResetState: resetBlocker.Block
+        );
+        Task? lockA = null;
+        Task? lockB = null;
+
+        try
+        {
+            var startCount = 0;
+            var stopCount = 0;
+            var discardCount = 0;
+            backend.DictationStartRequested += (_, _) => startCount++;
+            backend.DictationStopRequested += (_, _) => stopCount++;
+            backend.DictationDiscardRequested += (_, _) => discardCount++;
+
+            var shortcuts = DefaultShortcuts() with
+            {
+                DictationModifiers = ModifierMask.None,
+                Mode = RecordingMode.PushToTalk,
+            };
+            Assert.True((await backend.RegisterAsync(shortcuts, CancellationToken.None)).Success);
+            Assert.Single(factory.Readers);
+
+            lockA = Task.Run(() => monitor.SetInputAllowed(false));
+            // ReSharper disable once RedundantArgumentDefaultValue -- explicit cycle index pairs with the (1) calls; naming both cycles is what makes the ordering readable.
+            Assert.True(resetBlocker.WaitUntilBlocked(0));
+            monitor.SetInputAllowed(true);
+
+            lockB = Task.Run(() => monitor.SetInputAllowed(false));
+            Assert.True(resetBlocker.WaitUntilBlocked(1));
+            monitor.SetInputAllowed(true);
+
+            enumerator.BlockNextEnumeration();
+            resetBlocker.Release(1);
+            await lockB.WaitAsync(TimeSpan.FromSeconds(2));
+
+            // Reopen B must still wait for reset A, not merely the latest reset B.
+            Assert.False(
+                enumerator.WaitForBlockedEnumeration(TimeSpan.FromMilliseconds(100))
+            );
+            Assert.Single(factory.Readers);
+
+            // ReSharper disable once RedundantArgumentDefaultValue -- explicit cycle index pairs with Release(1) above; releasing B then A in that order is the assertion.
+            resetBlocker.Release(0);
+            await lockA.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(enumerator.WaitForBlockedEnumeration());
+            enumerator.ReleaseBlockedEnumeration();
+            await WaitUntilAsync(() => factory.Readers.Length == 2);
+
+            var reopened = Assert.Single(factory.Readers, reader => !reader.IsDisposed);
+            reopened.Emit(57, true); // KEY_SPACE
+            reopened.Emit(57, false);
+
+            Assert.Equal(2, discardCount);
+            Assert.Equal(1, startCount);
+            Assert.Equal(1, stopCount);
+        }
+        finally
+        {
+            resetBlocker.ReleaseAll();
+            enumerator.ReleaseBlockedEnumeration();
+            if (lockA is not null)
+            {
+                await lockA.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            if (lockB is not null)
+            {
+                await lockB.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            await backend.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task UnlockWithoutPriorLock_AttachesImmediately()
+    {
+        var monitor = new FakeSessionActivityMonitor(false);
+        var enumerator = new FakeKeyboardEnumerator("/dev/input/event1");
+        var factory = new FakeReaderFactory();
+        await using var backend = new EvdevGlobalShortcutBackend(monitor, enumerator, factory);
+
+        Assert.True((await backend.RegisterAsync(DefaultShortcuts(), CancellationToken.None)).Success);
+        Assert.Empty(factory.Readers);
+
+        monitor.SetInputAllowed(true);
+
+        await WaitUntilAsync(() => factory.Readers.Length == 1);
+        Assert.Equal(1, enumerator.EnumerationCount);
+        Assert.False(factory.Readers[0].IsDisposed);
+    }
+
+    [Fact]
+    public async Task RapidLockUnlockCycles_NeverDeadlockAndAlwaysReattach()
+    {
+        var monitor = new FakeSessionActivityMonitor(true);
+        var enumerator = new FakeKeyboardEnumerator("/dev/input/event1");
+        var factory = new FakeReaderFactory();
+        await using var backend = new EvdevGlobalShortcutBackend(monitor, enumerator, factory);
+
+        Assert.True((await backend.RegisterAsync(DefaultShortcuts(), CancellationToken.None)).Success);
+
+        var transitions = Task.Run(async () =>
+        {
+            for (var cycle = 0; cycle < 3; cycle++)
+            {
+                monitor.SetInputAllowed(false);
+                monitor.SetInputAllowed(true);
+                await WaitUntilAsync(
+                    () => factory.Readers.Count(reader => !reader.IsDisposed) == 1
+                );
+            }
+        });
+
+        await transitions.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(4, enumerator.EnumerationCount);
+        Assert.Single(factory.Readers, reader => !reader.IsDisposed);
+    }
+
+    [Fact]
+    public async Task Dispose_WithPendingResetBarrier_VetoesQueuedReopen()
+    {
+        var monitor = new FakeSessionActivityMonitor(true);
+        var enumerator = new FakeKeyboardEnumerator("/dev/input/event1");
+        var factory = new FakeReaderFactory();
+        var resetBlocker = new BlockingResetHook();
+        var backend = new EvdevGlobalShortcutBackend(
+            monitor,
+            enumerator,
+            factory,
+            beforeSessionResetState: resetBlocker.Block
+        );
+        Task? lockTransition = null;
+
+        try
+        {
+            Assert.True(
+                (await backend.RegisterAsync(DefaultShortcuts(), CancellationToken.None)).Success
+            );
+            lockTransition = Task.Run(() => monitor.SetInputAllowed(false));
+            Assert.True(resetBlocker.WaitUntilBlocked());
+
+            // Queue an unlock behind the still-pending reset, then dispose while it is waiting.
+            monitor.SetInputAllowed(true);
+            await backend.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.Equal(0, monitor.SubscriberCount);
+            Assert.Single(factory.Readers);
+        }
+        finally
+        {
+            resetBlocker.Release();
+            if (lockTransition is not null)
+            {
+                await lockTransition.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            await backend.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -196,9 +611,17 @@ public sealed class EvdevGlobalShortcutBackendTests
     private static async Task WaitUntilAsync(Func<bool> predicate)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        while (!predicate())
+        try
         {
-            await Task.Delay(10, timeout.Token);
+            while (!predicate())
+            {
+                await Task.Delay(10, timeout.Token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // A bare "task was canceled" says nothing about which condition never held.
+            Assert.Fail("Timed out after 2s waiting for the predicate to become true.");
         }
     }
 
@@ -206,7 +629,11 @@ public sealed class EvdevGlobalShortcutBackendTests
     {
         private EventHandler? _inputAllowedChanged;
 
-        public bool IsInputAllowed { get; private set; } = inputAllowed;
+        // Written by the test thread, read by the backend's reader threads and WaitUntilAsync's
+        // polling loop, so both sides go through Volatile.
+        private bool _isInputAllowed = inputAllowed;
+
+        public bool IsInputAllowed => Volatile.Read(ref _isInputAllowed);
 
         public int SubscriberCount => _inputAllowedChanged?.GetInvocationList().Length ?? 0;
 
@@ -233,7 +660,7 @@ public sealed class EvdevGlobalShortcutBackendTests
                 return;
             }
 
-            IsInputAllowed = allowed;
+            Volatile.Write(ref _isInputAllowed, allowed);
             _inputAllowedChanged?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -287,14 +714,66 @@ public sealed class EvdevGlobalShortcutBackendTests
             Interlocked.Exchange(ref _blockNext, 1);
         }
 
-        public bool WaitForBlockedEnumeration()
+        public bool WaitForBlockedEnumeration(TimeSpan? timeout = null)
         {
-            return _blockedEnumeration.Wait(TimeSpan.FromSeconds(2));
+            return _blockedEnumeration.Wait(timeout ?? TimeSpan.FromSeconds(2));
         }
 
         public void ReleaseBlockedEnumeration()
         {
             _releaseEnumeration.Set();
+        }
+    }
+
+    private sealed class BlockingResetHook
+    {
+        private readonly ManualResetEventSlim[] _blocked;
+        private readonly ManualResetEventSlim[] _release;
+        private int _nextInvocation;
+
+        public BlockingResetHook(int invocationCount = 1)
+        {
+            _blocked = Enumerable.Range(0, invocationCount)
+                .Select(_ => new ManualResetEventSlim())
+                .ToArray();
+            _release = Enumerable.Range(0, invocationCount)
+                .Select(_ => new ManualResetEventSlim())
+                .ToArray();
+        }
+
+        public void Block()
+        {
+            var invocation = Interlocked.Increment(ref _nextInvocation) - 1;
+            if (invocation >= _blocked.Length)
+            {
+                return;
+            }
+
+            _blocked[invocation].Set();
+            if (!_release[invocation].Wait(TimeSpan.FromSeconds(5)))
+            {
+                throw new TimeoutException(
+                    $"Timed out waiting to release reset hook invocation {invocation}."
+                );
+            }
+        }
+
+        public bool WaitUntilBlocked(int invocation = 0)
+        {
+            return _blocked[invocation].Wait(TimeSpan.FromSeconds(2));
+        }
+
+        public void Release(int invocation = 0)
+        {
+            _release[invocation].Set();
+        }
+
+        public void ReleaseAll()
+        {
+            foreach (var release in _release)
+            {
+                release.Set();
+            }
         }
     }
 
@@ -320,7 +799,7 @@ public sealed class EvdevGlobalShortcutBackendTests
             Action<string, Exception> onFailure
         )
         {
-            var reader = new FakeReader(path, onKeyEvent);
+            var reader = new FakeReader(path, onKeyEvent, onFailure);
             lock (_lock)
             {
                 _readers.Add(reader);
@@ -330,11 +809,18 @@ public sealed class EvdevGlobalShortcutBackendTests
         }
     }
 
-    private sealed class FakeReader(string path, Action<string, int, bool> onKeyEvent)
+    private sealed class FakeReader(
+        string path,
+        Action<string, int, bool> onKeyEvent,
+        Action<string, Exception> onFailure
+    )
         : IEvdevDeviceReader
     {
+        // Set on whichever thread tears the backend down, polled from the test thread.
+        private bool _isDisposed;
+
         public string Path { get; } = path;
-        public bool IsDisposed { get; private set; }
+        public bool IsDisposed => Volatile.Read(ref _isDisposed);
 
         public bool TryStart()
         {
@@ -343,13 +829,18 @@ public sealed class EvdevGlobalShortcutBackendTests
 
         public ValueTask DisposeAsync()
         {
-            IsDisposed = true;
+            Volatile.Write(ref _isDisposed, true);
             return ValueTask.CompletedTask;
         }
 
         public void Emit(int linuxKeyCode, bool pressed)
         {
             onKeyEvent(Path, linuxKeyCode, pressed);
+        }
+
+        public void Fail(Exception? exception = null)
+        {
+            onFailure(Path, exception ?? new IOException("Fake evdev reader failure."));
         }
     }
 }

@@ -27,6 +27,9 @@ public sealed class MarianTokenizer
         _eosTokenId = eosTokenId;
     }
 
+    /// <summary>
+    /// Loads persisted state from storage.
+    /// </summary>
     public static MarianTokenizer Load(string tokenizerJsonPath, int eosTokenId)
     {
         var json = File.ReadAllText(tokenizerJsonPath);
@@ -91,7 +94,7 @@ public sealed class MarianTokenizer
 
         var tokens = new List<int>();
 
-        var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         foreach (var t in words)
         {
             var word = MetaspacePrefix + t;

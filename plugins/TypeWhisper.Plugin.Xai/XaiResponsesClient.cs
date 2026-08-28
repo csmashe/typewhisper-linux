@@ -1,6 +1,4 @@
-using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Linq;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK.Helpers;
@@ -9,6 +7,9 @@ namespace TypeWhisper.Plugin.Xai;
 
 internal sealed class XaiResponsesClient
 {
+    private static readonly ISseEventPolicy<string> s_streamPolicy =
+        new XaiResponsesSsePolicy();
+
     private readonly HttpClient _httpClient;
     private readonly string _baseUrl;
     private readonly string _apiKey;
@@ -82,7 +83,7 @@ internal sealed class XaiResponsesClient
             {
                 401 => "Invalid API key",
                 429 => "Rate limit reached, please wait",
-                _ => $"API error {(int)response.StatusCode}: {OpenAiApiHelper.ExtractErrorMessage(errorBody)}"
+                _ => $"API error {(int)response.StatusCode}: {OpenAiApiHelper.ExtractErrorMessage(errorBody)}",
             };
             throw new InvalidOperationException(message);
         }
@@ -90,27 +91,8 @@ internal sealed class XaiResponsesClient
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        while (await reader.ReadLineAsync(ct) is { } rawLine)
-        {
-            var line = rawLine.Trim();
-            if (!line.StartsWith("data: ", StringComparison.Ordinal))
-                continue;
-
-            var payload = line[6..];
-            if (payload == "[DONE]")
-                yield break;
-
-            // The Responses stream returns 200 before generation finishes, so a
-            // mid-stream failure arrives as a typed `error` / `response.failed`
-            // frame rather than an HTTP error. Throw on those so the pump faults
-            // and the caller falls back to batch, instead of silently committing
-            // the partial deltas seen so far as a successful result.
-            if (ParseStreamError(payload) is { } error)
-                throw new InvalidOperationException(error);
-
-            if (ParseStreamDelta(payload) is { Length: > 0 } delta)
-                yield return delta;
-        }
+        await foreach (var delta in SseEventDecoder.ReadValidatedAsync(reader, s_streamPolicy, ct))
+            yield return delta;
     }
 
     /// <summary>
@@ -149,8 +131,9 @@ internal sealed class XaiResponsesClient
 
     /// <summary>
     ///     Returns a provider error message when a single Responses SSE
-    ///     <c>data:</c> payload is a failure frame — a top-level <c>error</c> event
-    ///     or a <c>response.failed</c> lifecycle frame — otherwise <c>null</c>.
+    ///     <c>data:</c> payload is a failure frame — a top-level <c>error</c> event,
+    ///     a failed/incomplete/cancelled lifecycle frame, or a nested terminal
+    ///     failure status — otherwise <c>null</c>.
     ///     Used by the streaming reader to surface a post-200 stream failure as a
     ///     thrown exception. Reflection-free (A18) via <see cref="JsonDocument" />.
     /// </summary>
@@ -175,23 +158,142 @@ internal sealed class XaiResponsesClient
                 return null;
             }
 
-            switch (typeEl.GetString())
+            var type = typeEl.GetString();
+            if (TryGetResponse(root, out var response)
+                && TryGetString(response, "status") is { } status
+                && IsFailureStatus(status))
+            {
+                return ExtractFailureDetail(root)
+                    ?? $"xAI response ended with status '{status}'.";
+            }
+
+            // ReSharper disable once ConvertSwitchStatementToSwitchExpression -- subjective style; the statement switch reads fine here.
+            switch (type)
             {
                 case "error":
                     return ExtractErrorMessage(root) ?? "xAI streaming error.";
                 case "response.failed":
-                    return root.TryGetProperty("response", out var resp)
-                        && resp.ValueKind == JsonValueKind.Object
-                        ? ExtractErrorMessage(resp) ?? "xAI response failed."
-                        : "xAI response failed.";
+                    return ExtractFailureDetail(root) ?? "xAI response failed.";
+                case "response.incomplete":
+                    return ExtractFailureDetail(root) ?? "xAI response incomplete.";
+                case "response.cancelled":
+                    return ExtractFailureDetail(root) ?? "xAI response cancelled.";
+                case "response.canceled":
+                    return ExtractFailureDetail(root) ?? "xAI response canceled.";
+                case "response.completed":
+                    if (TryGetResponse(root, out response)
+                        && TryGetString(response, "status") is { } completedStatus
+                        && !completedStatus.Equals("completed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return ExtractFailureDetail(root)
+                            ?? $"xAI response.completed had non-completed status '{completedStatus}'.";
+                    }
+
+                    return null;
                 default:
                     return null;
             }
         }
     }
 
+    private static string? ParseStreamEventType(string dataPayload)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(dataPayload);
+            var root = doc.RootElement;
+            return TryGetString(root, "type");
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private sealed class XaiResponsesSsePolicy : ISseEventPolicy<string>
+    {
+        public string StreamName => "xAI stream";
+        public string ExpectedTerminal => "response.completed";
+
+        public SsePolicyDecision<string> Evaluate(SseEvent sseEvent)
+        {
+            // The Responses stream returns 200 before generation finishes, so a
+            // mid-stream failure arrives as a typed lifecycle frame rather than
+            // an HTTP error. Error validation must precede completion acceptance.
+            if (ParseStreamError(sseEvent.Data) is { } error)
+            {
+                return new SsePolicyDecision<string>(
+                    Error: new InvalidOperationException(error));
+            }
+
+            if (sseEvent.Data == "[DONE]")
+                return new SsePolicyDecision<string>(EndStream: true);
+
+            var delta = ParseStreamDelta(sseEvent.Data);
+            return new SsePolicyDecision<string>(
+                HasDelta: delta is { Length: > 0 },
+                Delta: delta,
+                AcceptTerminal: ParseStreamEventType(sseEvent.Data) == "response.completed");
+        }
+    }
+
+    private static bool IsFailureStatus(string status) =>
+        status.Equals("failed", StringComparison.OrdinalIgnoreCase)
+        || status.Equals("incomplete", StringComparison.OrdinalIgnoreCase)
+        || status.Equals("cancelled", StringComparison.OrdinalIgnoreCase)
+        || status.Equals("canceled", StringComparison.OrdinalIgnoreCase);
+
+    private static string? ExtractFailureDetail(JsonElement root)
+    {
+        if (ExtractErrorMessage(root) is { } rootError)
+            return rootError;
+
+        // ReSharper disable once InvertIf -- inverting would duplicate the trailing ExtractIncompleteReason(root) return.
+        if (TryGetResponse(root, out var response))
+        {
+            if (ExtractErrorMessage(response) is { } responseError)
+                return responseError;
+
+            if (ExtractIncompleteReason(response) is { } responseReason)
+                return responseReason;
+        }
+
+        return ExtractIncompleteReason(root);
+    }
+
+    private static string? ExtractIncompleteReason(JsonElement element)
+    {
+        if (element.TryGetProperty("incomplete_details", out var details)
+            && details.ValueKind == JsonValueKind.Object
+            && TryGetString(details, "reason") is { } nestedReason)
+        {
+            return nestedReason;
+        }
+
+        return TryGetString(element, "reason");
+    }
+
+    private static bool TryGetResponse(JsonElement root, out JsonElement response)
+    {
+        if (root.TryGetProperty("response", out response)
+            && response.ValueKind == JsonValueKind.Object)
+        {
+            return true;
+        }
+
+        response = default;
+        return false;
+    }
+
+    private static string? TryGetString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property)
+        && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+
     private static string? ExtractErrorMessage(JsonElement element)
     {
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (element.TryGetProperty("error", out var error))
         {
             if (error.ValueKind == JsonValueKind.Object
@@ -219,6 +321,7 @@ internal sealed class XaiResponsesClient
         if (TryGetNonEmptyString(root, "output_text") is { } outputText)
             return outputText;
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (root.TryGetProperty("output", out var output) && output.ValueKind == JsonValueKind.Array)
         {
             var parts = new List<string>();
@@ -230,6 +333,7 @@ internal sealed class XaiResponsesClient
                     continue;
                 }
 
+                // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- explicit loop kept; the LINQ form switches enumerators and obscures the side effects.
                 foreach (var contentItem in content.EnumerateArray())
                 {
                     var type = TryGetNonEmptyString(contentItem, "type");
@@ -259,7 +363,7 @@ internal sealed class XaiResponsesClient
         foreach (var part in parts.Where(static part => !string.IsNullOrEmpty(part)))
         {
             if (builder.Length > 0
-                && !char.IsWhiteSpace(builder[builder.Length - 1])
+                && !char.IsWhiteSpace(builder[^1])
                 && !char.IsWhiteSpace(part[0])
                 && !char.IsPunctuation(part[0]))
             {

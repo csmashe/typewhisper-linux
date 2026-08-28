@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -8,6 +10,8 @@ public sealed partial class SystemCommandAvailabilityService
 {
     private const int RtldNow = 2;
     private const int RtldGlobal = 0x100;
+    private static readonly TimeSpan s_ydotoolSocketConnectTimeout =
+        TimeSpan.FromMilliseconds(250);
 
     private static readonly string[] s_cudaLibraryPathCandidates =
     [
@@ -32,15 +36,28 @@ public sealed partial class SystemCommandAvailabilityService
         "/usr/local/cuda-12.1/lib64",
         "/usr/local/cuda-12.1/targets/x86_64-linux/lib",
         "/usr/local/cuda-12.0/lib64",
-        "/usr/local/cuda-12.0/targets/x86_64-linux/lib"
+        "/usr/local/cuda-12.0/targets/x86_64-linux/lib",
+    ];
+    private static readonly string[] s_requiredCuda12RuntimeLibraries =
+    [
+        "libcudart.so.12",
+        "libcublas.so.12",
     ];
 
     private static readonly Lock s_cudaPreloadLock = new();
-    private static readonly List<IntPtr> s_cudaPreloadHandles = [];
+    private static readonly Dictionary<string, IntPtr> s_cudaPreloadHandles = new(
+        StringComparer.Ordinal
+    );
 
-    private LinuxCapabilitySnapshot _snapshot = BuildSnapshot();
+    private readonly IProcessRunner _processRunner;
+    private LinuxCapabilitySnapshot _snapshot;
 
-    // ReSharper disable once UnusedMember.Global  public capability-flag property mirroring LinuxCapabilitySnapshot; not currently called in-tree (callers read the snapshot record directly)
+    public SystemCommandAvailabilityService(IProcessRunner? processRunner = null)
+    {
+        _processRunner = processRunner ?? new ProcessRunner();
+        _snapshot = BuildSnapshot();
+    }
+
     public bool IsWaylandSession
     {
         get
@@ -86,7 +103,11 @@ public sealed partial class SystemCommandAvailabilityService
         get
         {
             var s = _snapshot;
-            return s is { ClipboardToolName: "xclip", HasClipboardTool: true };
+            return s is
+            {
+                ClipboardToolName: LinuxCapabilitySnapshot.XclipToolName,
+                HasClipboardTool: true,
+            };
         }
     }
 
@@ -96,7 +117,11 @@ public sealed partial class SystemCommandAvailabilityService
         get
         {
             var s = _snapshot;
-            return s is { ClipboardToolName: "wl-clipboard", HasClipboardTool: true };
+            return s is
+            {
+                ClipboardToolName: LinuxCapabilitySnapshot.WlClipboardToolName,
+                HasClipboardTool: true,
+            };
         }
     }
 
@@ -221,7 +246,8 @@ public sealed partial class SystemCommandAvailabilityService
 
     public static bool TryPreloadCuda12RuntimeLibraries(out string message)
     {
-        if (IsLibraryAvailable("libcudart.so.12") && IsLibraryAvailable("libcublas.so.12"))
+        var processRunner = new ProcessRunner();
+        if (AreCuda12LibrariesVisible(processRunner))
         {
             message = "CUDA 12 runtime libraries are already visible.";
             return true;
@@ -238,30 +264,64 @@ public sealed partial class SystemCommandAvailabilityService
         // so native whisper/sherpa libs find them even without LD_LIBRARY_PATH.
         lock (s_cudaPreloadLock)
         {
-            if (s_cudaPreloadHandles.Count > 0)
+            return TryPreloadCuda12RuntimeLibrariesFromDirectory(
+                directory,
+                s_cudaPreloadHandles,
+                LoadCuda12RuntimeLibrary,
+                out message
+            );
+        }
+    }
+
+    // Callers sharing loadedHandles must synchronize access around this operation.
+    internal static bool TryPreloadCuda12RuntimeLibrariesFromDirectory(
+        string directory,
+        IDictionary<string, IntPtr> loadedHandles,
+        Func<string, (IntPtr Handle, string? Error)> loadLibrary,
+        out string message
+    )
+    {
+        if (
+            s_requiredCuda12RuntimeLibraries.All(library =>
+                loadedHandles.TryGetValue(library, out var handle) && handle != IntPtr.Zero
+            )
+        )
+        {
+            message = $"CUDA 12 runtime libraries were preloaded from {directory}.";
+            return true;
+        }
+
+        foreach (var library in s_requiredCuda12RuntimeLibraries)
+        {
+            if (
+                loadedHandles.TryGetValue(library, out var loadedHandle)
+                && loadedHandle != IntPtr.Zero
+            )
             {
-                message = $"CUDA 12 runtime libraries were preloaded from {directory}.";
-                return true;
+                continue;
             }
 
-            foreach (var library in new[] { "libcudart.so.12", "libcublas.so.12" })
+            var (handle, error) = loadLibrary(Path.Join(directory, library));
+            if (handle == IntPtr.Zero)
             {
-                var path = Path.Join(directory, library);
-                var handle = dlopen(path, RtldNow | RtldGlobal);
-                if (handle == IntPtr.Zero)
-                {
-                    var error = Marshal.PtrToStringAnsi(dlerror());
-                    message =
-                        $"Could not load {library} from {directory}: {error ?? "unknown error"}";
-                    return false;
-                }
-
-                s_cudaPreloadHandles.Add(handle);
+                message =
+                    $"Could not load {library} from {directory}: {error ?? "unknown error"}";
+                return false;
             }
+
+            loadedHandles[library] = handle;
         }
 
         message = $"CUDA 12 runtime libraries were loaded from {directory}.";
         return true;
+    }
+
+    private static (IntPtr Handle, string? Error) LoadCuda12RuntimeLibrary(string path)
+    {
+        var handle = dlopen(path, RtldNow | RtldGlobal);
+        return handle == IntPtr.Zero
+            ? (handle, Marshal.PtrToStringAnsi(dlerror()))
+            : (handle, null);
     }
 
     public async Task<CudaBenchmarkResult> RunCudaBenchmarkAsync(
@@ -292,44 +352,29 @@ public sealed partial class SystemCommandAvailabilityService
         }
 
         var stopwatch = Stopwatch.StartNew();
+        Process? process = null;
         try
         {
-            using var process = Process.Start(
-                new ProcessStartInfo(
+            var result = await _processRunner.RunOneShotAsync(
+                new ProcessCommand(
                     "nvidia-smi",
-                    "--query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits"
-                )
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
+                    [
+                        "--query-gpu=name,memory.total,driver_version",
+                        "--format=csv,noheader,nounits",
+                    ]
+                ),
+                new ProcessOneShotOptions(Timeout: TimeSpan.FromSeconds(3)),
+                cancellationToken
             );
-
-            if (process is null)
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- chain continues
+            // into ExitCode checks below; a switch would only cover part of it.
+            if (result.Status == ProcessRunStatus.StartFailed)
             {
                 return new CudaBenchmarkResult(false, "Could not start nvidia-smi.", null);
             }
 
-            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-            var waitTask = process.WaitForExitAsync(cancellationToken);
-            var timeoutTask = Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
-            var completed = await Task.WhenAny(waitTask, timeoutTask);
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (!ReferenceEquals(completed, waitTask) && !process.HasExited)
+            if (result.Status == ProcessRunStatus.TimedOut)
             {
-                try
-                {
-                    process.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
                 return new CudaBenchmarkResult(
                     false,
                     "nvidia-smi did not respond within 3 seconds.",
@@ -337,12 +382,10 @@ public sealed partial class SystemCommandAvailabilityService
                 );
             }
 
-            await waitTask;
-
             stopwatch.Stop();
-            var output = (await outputTask).Trim();
-            var error = (await errorTask).Trim();
-            if (process.ExitCode != 0)
+            var output = result.StandardOutputText.Trim();
+            var error = result.StandardErrorText.Trim();
+            if (result.ExitCode != 0)
             {
                 return new CudaBenchmarkResult(
                     false,
@@ -375,38 +418,36 @@ public sealed partial class SystemCommandAvailabilityService
                 stopwatch.Elapsed
             );
         }
+        finally
+        {
+            if (process is not null)
+            {
+                // Disposing a Process does not stop the child, so every early exit —
+                // cancellation, the 3 s timeout, an I/O failure — would orphan nvidia-smi.
+                TryKillProcessTree(process);
+                process.Dispose();
+            }
+        }
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(true);
+            }
+        }
+        catch
+        {
+            /* best effort */
+        }
     }
 
     public static bool IsCommandAvailable(string commandName)
     {
-        var pathValue = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrWhiteSpace(pathValue))
-        {
-            return false;
-        }
-
-        foreach (
-            var directory in pathValue.Split(
-                Path.PathSeparator,
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
-            )
-        )
-        {
-            try
-            {
-                var candidate = Path.Join(directory, commandName);
-                if (File.Exists(candidate))
-                {
-                    return true;
-                }
-            }
-            catch
-            {
-                // Ignore invalid PATH entries.
-            }
-        }
-
-        return false;
+        return ExecutablePathResolver.Find(commandName) is not null;
     }
 
     /// <summary>
@@ -428,10 +469,14 @@ public sealed partial class SystemCommandAvailabilityService
 
     /// <summary>
     ///     Finds the ydotool socket path using the standard priority list.
-    ///     Returns null if no candidate exists. Permissions are not stat-checked —
-    ///     we only need to know whether a candidate is reachable.
+    ///     Returns null if no candidate accepts a bounded datagram connection.
     /// </summary>
     internal static string? ResolveYdotoolSocketPath()
+    {
+        return ResolveYdotoolSocketPath(new ProcessRunner());
+    }
+
+    private static string? ResolveYdotoolSocketPath(IProcessRunner processRunner)
     {
         var candidates = new List<string?> { Environment.GetEnvironmentVariable("YDOTOOL_SOCKET") };
 
@@ -443,12 +488,17 @@ public sealed partial class SystemCommandAvailabilityService
 
         candidates.Add("/tmp/.ydotool_socket");
 
-        var uid = TryReadUserId();
+        var uid = TryReadUserId(processRunner);
         if (uid is not null)
         {
             candidates.Add($"/run/user/{uid}/.ydotool_socket");
         }
 
+        return ResolveYdotoolSocketPath(candidates);
+    }
+
+    internal static string? ResolveYdotoolSocketPath(IEnumerable<string?> candidates)
+    {
         // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- the explicit whitespace guard keeps socket-path resolution linear; the partial LINQ form only hoists this one guard while the try/catch + early-return stay in the body
         foreach (var candidate in candidates)
         {
@@ -459,14 +509,24 @@ public sealed partial class SystemCommandAvailabilityService
 
             try
             {
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
+                using var socket = new Socket(
+                    AddressFamily.Unix,
+                    SocketType.Dgram,
+                    ProtocolType.Unspecified
+                );
+                using var timeout = new CancellationTokenSource(
+                    s_ydotoolSocketConnectTimeout
+                );
+                socket
+                    .ConnectAsync(new UnixDomainSocketEndPoint(candidate), timeout.Token)
+                    .AsTask()
+                    .GetAwaiter()
+                    .GetResult();
+                return candidate;
             }
             catch
             {
-                // Inaccessible socket path — skip it.
+                // Missing, stale, inaccessible, or non-datagram endpoint — skip it.
             }
         }
 
@@ -480,9 +540,10 @@ public sealed partial class SystemCommandAvailabilityService
     /// </summary>
     public event EventHandler<LinuxCapabilitySnapshot>? SnapshotChanged;
 
-    private static LinuxCapabilitySnapshot BuildSnapshot()
+    private LinuxCapabilitySnapshot BuildSnapshot()
     {
-        var isWayland = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 };
+        var isWaylandSession = WaylandSessionDetector.IsWaylandSession();
+        var hasWaylandDisplay = WaylandSessionDetector.HasWaylandDisplay();
         var isX11 = Environment.GetEnvironmentVariable("DISPLAY") is { Length: > 0 };
         var hasXclip = IsCommandAvailable("xclip");
         var hasWlClipboard = IsCommandAvailable("wl-copy") && IsCommandAvailable("wl-paste");
@@ -492,18 +553,18 @@ public sealed partial class SystemCommandAvailabilityService
         var hasPlayerCtl = IsCommandAvailable("playerctl");
         // Plays bundled WAVs via any PCM player rather than libcanberra/XDG events —
         // works regardless of the desktop sound theme or "System Sounds" toggle.
-        var hasAudioPlayer = IsCommandAvailable("pw-play")
-                             || IsCommandAvailable("paplay")
-                             || IsCommandAvailable("aplay");
+        var hasAudioPlayer = PcmPlayerResolver.Resolve() is not null;
         var hasYdotool = IsCommandAvailable("ydotool");
-        var ydotoolSocket = ResolveYdotoolSocketPath();
+        var ydotoolSocket = ResolveYdotoolSocketPath(_processRunner);
 
         return new LinuxCapabilitySnapshot(
-            isWayland ? "Wayland"
+            isWaylandSession ? "Wayland"
             : isX11 ? "X11"
             : "Unknown",
-            isWayland ? hasWlClipboard : hasXclip,
-            isWayland ? "wl-clipboard" : "xclip",
+            hasWaylandDisplay ? hasWlClipboard : hasXclip,
+            hasWaylandDisplay
+                ? LinuxCapabilitySnapshot.WlClipboardToolName
+                : LinuxCapabilitySnapshot.XclipToolName,
             IsCommandAvailable("xdotool"),
             IsCommandAvailable("wtype"),
             IsCommandAvailable("ffmpeg"),
@@ -513,9 +574,8 @@ public sealed partial class SystemCommandAvailabilityService
             hasPlayerCtl,
             hasAudioPlayer,
             IsCommandAvailable("nvidia-smi") || File.Exists("/dev/nvidiactl"),
-            (
-                IsLibraryAvailable("libcudart.so.12") && IsLibraryAvailable("libcublas.so.12")
-            ) || FindCuda12RuntimeDirectory() is not null,
+            AreCuda12LibrariesVisible(_processRunner)
+            || FindCuda12RuntimeDirectory() is not null,
             DesktopDetector.DetectId(),
             hasYdotool,
             ydotoolSocket is not null,
@@ -523,43 +583,23 @@ public sealed partial class SystemCommandAvailabilityService
         );
     }
 
-    private static string? TryReadUserId()
+    private static string? TryReadUserId(IProcessRunner processRunner)
     {
         try
         {
-            using var p = Process.Start(
-                new ProcessStartInfo("id", "-u")
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
+            var result = processRunner.RunProbe(
+                new ProcessCommand("id", ["-u"]),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromMilliseconds(500),
+                    StandardError: ProcessCaptureMode.Discard
+                )
             );
-            if (p is null)
+            if (!result.Succeeded)
             {
                 return null;
             }
 
-            // Drain stdout asynchronously so a wedged child can't block past the
-            // timeout. ReadToEnd() blocks until stdout closes, which would defeat
-            // the WaitForExit(500) bound if `id` ever hung.
-            var outputTask = p.StandardOutput.ReadToEndAsync();
-            if (!p.WaitForExit(500))
-            {
-                try
-                {
-                    p.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
-                return null;
-            }
-
-            var output = outputTask.GetAwaiter().GetResult().Trim();
+            var output = result.StandardOutputText.Trim();
             return string.IsNullOrWhiteSpace(output) ? null : output;
         }
         catch
@@ -583,9 +623,18 @@ public sealed partial class SystemCommandAvailabilityService
         return IsCommandAvailable("spd-say") ? "spd-say" : null;
     }
 
-    private static bool IsLibraryAvailable(string libraryName)
+    // One `ldconfig -p` for the pair: probing each library separately spawned the process
+    // twice on every snapshot build, and startup pays for that.
+    private static bool AreCuda12LibrariesVisible(IProcessRunner processRunner)
     {
-        if (FindInLdCache(libraryName))
+        var ldCache = ReadLdCache(processRunner);
+        return IsLibraryAvailable("libcudart.so.12", ldCache)
+               && IsLibraryAvailable("libcublas.so.12", ldCache);
+    }
+
+    private static bool IsLibraryAvailable(string libraryName, string ldCache)
+    {
+        if (ldCache.Contains(libraryName, StringComparison.Ordinal))
         {
             return true;
         }
@@ -646,51 +695,23 @@ public sealed partial class SystemCommandAvailabilityService
         return false;
     }
 
-    private static bool FindInLdCache(string libraryName)
+    /// <summary>The <c>ldconfig -p</c> listing, or empty when it can't be read.</summary>
+    private static string ReadLdCache(IProcessRunner processRunner)
     {
         try
         {
-            using var process = Process.Start(
-                new ProcessStartInfo("ldconfig", "-p")
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
+            var result = processRunner.RunProbe(
+                new ProcessCommand("ldconfig", ["-p"]),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardError: ProcessCaptureMode.Discard
+                )
             );
-
-            if (process is null)
-            {
-                return false;
-            }
-
-            // Drain stderr concurrently: 4 kB kernel buffer can block ldconfig
-            // if we read only stdout.
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
-
-            if (!process.WaitForExit(1000))
-            {
-                try
-                {
-                    process.Kill(true);
-                }
-                catch
-                {
-                    // Ignore failures while cleaning up a timed-out probe.
-                }
-
-                return false;
-            }
-
-            var output = outputTask.GetAwaiter().GetResult();
-            errorTask.GetAwaiter().GetResult();
-            return output.Contains(libraryName, StringComparison.Ordinal);
+            return result.Succeeded ? result.StandardOutputText : "";
         }
         catch
         {
-            return false;
+            return "";
         }
     }
 
@@ -728,12 +749,11 @@ public sealed record LinuxCapabilitySnapshot(
     string? YdotoolSocketPath = null
 )
 {
-    public bool HasAutomaticPasteTool =>
-        SessionType == "Wayland"
-            ? HasWtype || HasXdotool || (HasYdotool && HasYdotoolSocket)
-            : HasXdotool;
+    // The only two values ClipboardToolName ever takes; identity checks reference
+    // these so producer and consumers cannot drift on a raw string.
+    public const string WlClipboardToolName = "wl-clipboard";
+    public const string XclipToolName = "xclip";
 
-    public bool CanAutoPaste => HasClipboardTool && HasAutomaticPasteTool;
     public bool CanUseCuda => HasCudaGpu && HasCudaRuntimeLibraries;
 
     /// <summary>

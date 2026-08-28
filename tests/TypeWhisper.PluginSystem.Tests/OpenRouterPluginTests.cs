@@ -33,7 +33,7 @@ public class OpenRouterPluginTests
 
         Assert.Equal("com.typewhisper.openrouter", manifest.GetProperty("id").GetString());
         Assert.Equal("OpenRouter", manifest.GetProperty("name").GetString());
-        Assert.Equal("llm", manifest.GetProperty("category").GetString());
+        Assert.Equal(["transcription", "llm"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
         Assert.Equal(
             "TypeWhisper.Plugin.OpenRouter.dll",
             manifest.GetProperty("assemblyName").GetString());
@@ -70,7 +70,7 @@ public class OpenRouterPluginTests
         host.SetSetting("fetchedTranscriptionModels", new List<OpenRouterFetchedModel>
         {
             new("z/stt", "Zulu STT", "0.000002", "0"),
-            new("a/stt", "Alpha STT", "0", "0")
+            new("a/stt", "Alpha STT", "0", "0"),
         });
         host.SetSetting("selectedTranscriptionModel", "missing/stt");
 
@@ -159,7 +159,7 @@ public class OpenRouterPluginTests
         host.SetSetting("fetchedModels", new List<OpenRouterFetchedModel>
         {
             new("z/model", "Z Model", "0.000002", "0.000003"),
-            new("a/model", "A Model", "0", "0")
+            new("a/model", "A Model", "0", "0"),
         });
         host.SetSetting("selectedLlmModel", "missing/model");
 
@@ -429,7 +429,7 @@ public class OpenRouterPluginTests
     }
 
     [Fact]
-    public async Task TranscribeAsync_OmitsAutoLanguageAndRejectsTranslation()
+    public async Task TranscribeAsync_OmitsUnspecifiedLanguageAndRejectsTranslation()
     {
         var handler = new CapturingHandler((request, body) =>
         {
@@ -445,7 +445,7 @@ public class OpenRouterPluginTests
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
-        await sut.TranscribeAsync([1], "auto", translate: false, prompt: null, CancellationToken.None);
+        await sut.TranscribeAsync([1], null, translate: false, prompt: null, CancellationToken.None);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             sut.TranscribeAsync([1], "en", translate: true, prompt: null, CancellationToken.None));
         Assert.Contains("does not support translation", ex.Message);
@@ -533,6 +533,7 @@ public class OpenRouterPluginTests
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -542,7 +543,7 @@ public class OpenRouterPluginTests
                 request.RequestUri?.ToString());
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -574,8 +575,8 @@ public class OpenRouterPluginTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n",
-                    Encoding.UTF8, "text/event-stream")
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n\n",
+                    Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -637,7 +638,7 @@ public class OpenRouterPluginTests
                 "selectedLlmModel",
                 "llmTemperatureMode",
                 "llmTemperatureValue",
-                "streamResponses"
+                "streamResponses",
             ],
             keys);
     }
@@ -755,7 +756,7 @@ public class OpenRouterPluginTests
                           ]
                         }
                         """),
-                _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
             };
         });
 
@@ -809,7 +810,7 @@ public class OpenRouterPluginTests
     private static HttpResponseMessage JsonResponse(string json) =>
         new(HttpStatusCode.OK)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
 
     private sealed class CapturingHandler(
@@ -830,7 +831,7 @@ public class OpenRouterPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

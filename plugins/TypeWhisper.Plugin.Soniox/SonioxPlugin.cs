@@ -1,4 +1,7 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -7,7 +10,11 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Soniox;
 
-public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class SonioxPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     internal const string DefaultModelId = "default";
 
@@ -20,23 +27,24 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     private const double MaxSubtitleSegmentDurationSeconds = 6.0;
     private const double SubtitleSegmentPauseSplitSeconds = 0.75;
 
-    private static readonly TimeSpan DefaultPollDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan s_defaultPollDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan s_defaultCleanupBudget = TimeSpan.FromSeconds(5);
 
-    private static readonly IReadOnlyList<PluginModelInfo> Models =
+    private static readonly IReadOnlyList<PluginModelInfo> s_models =
     [
         new(DefaultModelId, "Soniox Async")
         {
-            IsRecommended = true
+            IsRecommended = true,
         },
     ];
 
     private readonly HttpClient _httpClient;
     private readonly TimeSpan _pollDelay;
     private readonly int _maxPollAttempts;
+    private readonly TimeSpan _cleanupBudget;
     private readonly SemaphoreSlim _apiKeyWriteLock = new(1, 1);
 
     private IPluginHostServices? _host;
-    private string? _apiKey;
     private string _selectedModelId = DefaultModelId;
 
     public SonioxPlugin()
@@ -47,26 +55,32 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     internal SonioxPlugin(
         HttpClient httpClient,
         TimeSpan? pollDelay = null,
-        int maxPollAttempts = DefaultMaxPollAttempts)
+        int maxPollAttempts = DefaultMaxPollAttempts,
+        TimeSpan? cleanupBudget = null)
     {
         if (maxPollAttempts <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxPollAttempts), "Poll attempts must be positive.");
 
+        var resolvedCleanupBudget = cleanupBudget ?? s_defaultCleanupBudget;
+        if (resolvedCleanupBudget <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(cleanupBudget), "Cleanup budget must be positive.");
+
         _httpClient = httpClient;
-        _pollDelay = pollDelay ?? DefaultPollDelay;
+        _pollDelay = pollDelay ?? s_defaultPollDelay;
         _maxPollAttempts = maxPollAttempts;
+        _cleanupBudget = resolvedCleanupBudget;
     }
 
     // ITypeWhisperPlugin
 
     public string PluginId => "com.typewhisper.soniox";
     public string PluginName => "Soniox";
-    public string PluginVersion => "1.0.3";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
+        ApiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
         _selectedModelId = DefaultModelId;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
@@ -81,22 +95,25 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
 
     public string ProviderId => "soniox";
     public string ProviderDisplayName => "Soniox";
-    public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
+    public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
 
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels => Models;
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_models;
 
+    // ReSharper disable once ReturnTypeCanBeNotNullable -- matches the interface contract, which declares this member nullable.
     public string? SelectedModelId => _selectedModelId;
 
     public bool SupportsTranslation => false;
 
     public bool SupportsStreaming => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
-        return await SonioxStreamingSession.ConnectAsync(_apiKey!, language, ct);
+        return await SonioxStreamingSession.ConnectAsync(ApiKey!, language, ct);
     }
 
     public void SelectModel(string modelId)
@@ -119,7 +136,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
 
         // Snapshot the key once so a concurrent settings change can't swap it
         // out partway through the multi-request async flow below.
-        var apiKey = _apiKey;
+        var apiKey = ApiKey;
         if (string.IsNullOrEmpty(apiKey))
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
@@ -155,7 +172,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         Task.FromResult(
             key switch
             {
-                "api-key" => _apiKey,
+                "api-key" => ApiKey,
                 _ => null,
             });
 
@@ -171,10 +188,10 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrEmpty(_apiKey))
+        if (string.IsNullOrEmpty(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyRequired"));
 
-        var ok = await ValidateApiKeyAsync(_apiKey, ct);
+        var ok = await ValidateApiKeyAsync(ApiKey, ct);
         return ok
             ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
             : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
@@ -182,7 +199,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
 
     // Settings support
 
-    internal string? ApiKey => _apiKey;
+    internal string? ApiKey { get; private set; }
 
     private IPluginLocalization? _injectedLocalization;
 
@@ -203,7 +220,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         try
         {
             var wasConfigured = IsConfigured;
-            var changed = !string.Equals(_apiKey, normalized, StringComparison.Ordinal);
+            var changed = !string.Equals(ApiKey, normalized, StringComparison.Ordinal);
 
             if (!changed)
                 return;
@@ -220,7 +237,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
 
             // Update in-memory state after the persistence call succeeds so a
             // failing secret store leaves the live key untouched.
-            _apiKey = normalized;
+            ApiKey = normalized;
 
             if (wasConfigured == IsConfigured)
                 hostToNotify = null;
@@ -360,38 +377,79 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
 
     private async Task CleanupAsync(string? transcriptionId, string? fileId, string apiKey)
     {
-        if (transcriptionId is not null)
-            await DeleteBestEffortAsync($"{BaseUrl}/v1/transcriptions/{transcriptionId}", "transcription", apiKey);
+        using var cleanupCts = new CancellationTokenSource(_cleanupBudget);
+        var cleanupToken = cleanupCts.Token;
 
-        if (fileId is not null)
-            await DeleteBestEffortAsync($"{BaseUrl}/v1/files/{fileId}", "file", apiKey);
+        if (transcriptionId is not null)
+        {
+            var transcriptionDeleted = await DeleteBestEffortAsync(
+                $"{BaseUrl}/v1/transcriptions/{transcriptionId}",
+                "transcription",
+                apiKey,
+                cleanupToken);
+            if (transcriptionDeleted)
+                return;
+        }
+
+        if (fileId is not null && !cleanupToken.IsCancellationRequested)
+        {
+            await DeleteBestEffortAsync(
+                $"{BaseUrl}/v1/files/{fileId}",
+                "file",
+                apiKey,
+                cleanupToken);
+        }
     }
 
-    private async Task DeleteBestEffortAsync(string uri, string resourceName, string apiKey)
+    private async Task<bool> DeleteBestEffortAsync(
+        string uri,
+        string resourceName,
+        string apiKey,
+        CancellationToken cleanupToken)
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         using var request = new HttpRequestMessage(HttpMethod.Delete, uri);
         AddAuthorization(request, apiKey);
 
         try
         {
-            using var response = await _httpClient.SendAsync(request, cts.Token);
-            if (!response.IsSuccessStatusCode)
-            {
-                var json = await response.Content.ReadAsStringAsync(cts.Token);
-                _host?.Log(
-                    PluginLogLevel.Warning,
-                    $"Soniox cleanup could not delete {resourceName}: {(int)response.StatusCode} {ExtractApiError(json)}");
-            }
+            using var response = await _httpClient.SendAsync(request, cleanupToken);
+            if (response.IsSuccessStatusCode)
+                return true;
+
+            var json = await response.Content.ReadAsStringAsync(cleanupToken);
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Soniox cleanup could not delete {resourceName}: {(int)response.StatusCode} {ExtractApiError(json)}");
         }
         catch (HttpRequestException ex)
         {
-            _host?.Log(PluginLogLevel.Warning, $"Soniox cleanup could not delete {resourceName}: {ex.Message}");
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Soniox cleanup could not delete {resourceName} because the HTTP request failed: {ex.Message}");
         }
-        catch (TaskCanceledException ex)
+        catch (TimeoutException ex)
         {
-            _host?.Log(PluginLogLevel.Warning, $"Soniox cleanup could not delete {resourceName}: {ex.Message}");
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Soniox cleanup timed out while deleting {resourceName}: {ex.Message}");
         }
+        catch (OperationCanceledException ex)
+        {
+            var reason = cleanupToken.IsCancellationRequested
+                ? "the cleanup budget expired"
+                : $"the request was canceled: {ex.Message}";
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Soniox cleanup could not delete {resourceName} because {reason}.");
+        }
+        catch (Exception ex)
+        {
+            _host?.Log(
+                PluginLogLevel.Warning,
+                $"Soniox cleanup could not delete {resourceName} because an unexpected error occurred: {ex.Message}");
+        }
+
+        return false;
     }
 
     internal static PluginTranscriptionResult ParseTranscript(
@@ -410,6 +468,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         string? detectedLanguage = null;
         var transcriptCursor = 0;
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (root.TryGetProperty("tokens", out var tokens)
             && tokens.ValueKind == JsonValueKind.Array)
         {
@@ -445,7 +504,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
 
         return new PluginTranscriptionResult(text, detectedLanguage ?? fallbackLanguage, duration, NoSpeechProbability: null)
         {
-            Segments = BuildSubtitleSegments(segmentTokens)
+            Segments = BuildSubtitleSegments(segmentTokens),
         };
     }
 
@@ -509,7 +568,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         if (token.End - currentStart > MaxSubtitleSegmentDurationSeconds)
             return true;
 
-        var combinedNormalizedLength = NormalizeSubtitleText(currentText.ToString() + token.Text).Length;
+        var combinedNormalizedLength = NormalizeSubtitleText(currentText + token.Text).Length;
         return combinedNormalizedLength > MaxSubtitleSegmentCharacters;
     }
 
@@ -533,9 +592,11 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         if (trimmedToken.Length == 0)
             return "";
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (transcriptText.Length > 0 && transcriptCursor <= transcriptText.Length)
         {
             var match = transcriptText.IndexOf(trimmedToken, transcriptCursor, StringComparison.Ordinal);
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (match >= 0)
             {
                 var end = match + trimmedToken.Length;
@@ -635,7 +696,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         {
             JsonValueKind.String => error.GetString(),
             JsonValueKind.Object => GetString(error, "message") ?? GetString(error, "detail"),
-            _ => null
+            _ => null,
         };
     }
 
@@ -645,10 +706,7 @@ public sealed class SonioxPlugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     private static string? NormalizeLanguage(string? language)
     {
         var trimmed = language?.Trim();
-        return string.IsNullOrWhiteSpace(trimmed)
-            || trimmed.Equals("auto", StringComparison.OrdinalIgnoreCase)
-                ? null
-                : trimmed;
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
 
     private static string? GetString(JsonElement element, string propertyName) =>

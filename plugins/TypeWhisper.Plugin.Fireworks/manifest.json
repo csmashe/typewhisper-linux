@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "author": "TypeWhisper",
   "description": "Fireworks AI fast LLM inference",
+  "networkAccess": "network",
+  "categories": ["llm"],
   "assemblyName": "TypeWhisper.Plugin.Fireworks.dll",
   "pluginClass": "TypeWhisper.Plugin.Fireworks.FireworksPlugin"
 }

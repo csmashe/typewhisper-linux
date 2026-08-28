@@ -16,7 +16,7 @@
   "Settings.ProfilesDescription": "Endpoints compatibles con OpenAI adicionales. Cada perfil aparece como su propio motor de transcripción y proveedor de LLM que puedes seleccionar en el dictado y en los prompts. El endpoint predeterminado de arriba no se ve afectado.",
   "Settings.ProfileName": "Nombre",
   "Settings.ProfileNamePlaceholder": "Local Ollama",
-  "Settings.ProfileApiKeyDescription": "Déjalo en blanco para mantener la clave actual.",
+  "Settings.ProfileApiKeyDescription": "La clave guardada se mantiene mientras no edites este campo. Si vacías el campo, se elimina la clave guardada.",
   "Settings.ProfileTranscriptionModelDescription": "Predeterminado opcional; se puede elegir cualquier modelo obtenido por flujo de trabajo.",
   "Settings.ProfileLlmModelDescription": "Predeterminado opcional; los prompts pueden usar cualquier modelo obtenido.",
   "Settings.AddProfile": "Añadir perfil",

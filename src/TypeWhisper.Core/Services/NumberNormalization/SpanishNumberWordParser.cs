@@ -13,26 +13,26 @@ internal static class SpanishNumberWordParser
     private static readonly Dictionary<string, int> s_unitValues = new(StringComparer.Ordinal)
     {
         ["cero"] = 0, ["uno"] = 1, ["un"] = 1, ["una"] = 1, ["dos"] = 2, ["tres"] = 3,
-        ["cuatro"] = 4, ["cinco"] = 5, ["seis"] = 6, ["siete"] = 7, ["ocho"] = 8, ["nueve"] = 9
+        ["cuatro"] = 4, ["cinco"] = 5, ["seis"] = 6, ["siete"] = 7, ["ocho"] = 8, ["nueve"] = 9,
     };
 
     private static readonly Dictionary<string, int> s_teenValues = new(StringComparer.Ordinal)
     {
         ["diez"] = 10, ["once"] = 11, ["doce"] = 12, ["trece"] = 13, ["catorce"] = 14,
-        ["quince"] = 15, ["dieciseis"] = 16, ["diecisiete"] = 17, ["dieciocho"] = 18, ["diecinueve"] = 19
+        ["quince"] = 15, ["dieciseis"] = 16, ["diecisiete"] = 17, ["dieciocho"] = 18, ["diecinueve"] = 19,
     };
 
     private static readonly Dictionary<string, int> s_twentyValues = new(StringComparer.Ordinal)
     {
         ["veinte"] = 20, ["veintiuno"] = 21, ["veintiun"] = 21, ["veintiuna"] = 21,
         ["veintidos"] = 22, ["veintitres"] = 23, ["veinticuatro"] = 24, ["veinticinco"] = 25,
-        ["veintiseis"] = 26, ["veintisiete"] = 27, ["veintiocho"] = 28, ["veintinueve"] = 29
+        ["veintiseis"] = 26, ["veintisiete"] = 27, ["veintiocho"] = 28, ["veintinueve"] = 29,
     };
 
     private static readonly Dictionary<string, int> s_tensValues = new(StringComparer.Ordinal)
     {
         ["treinta"] = 30, ["cuarenta"] = 40, ["cincuenta"] = 50,
-        ["sesenta"] = 60, ["setenta"] = 70, ["ochenta"] = 80, ["noventa"] = 90
+        ["sesenta"] = 60, ["setenta"] = 70, ["ochenta"] = 80, ["noventa"] = 90,
     };
 
     private static readonly Dictionary<string, int> s_hundredValues = new(StringComparer.Ordinal)
@@ -41,7 +41,7 @@ internal static class SpanishNumberWordParser
         ["trescientos"] = 300, ["trescientas"] = 300, ["cuatrocientos"] = 400, ["cuatrocientas"] = 400,
         ["quinientos"] = 500, ["quinientas"] = 500, ["seiscientos"] = 600, ["seiscientas"] = 600,
         ["setecientos"] = 700, ["setecientas"] = 700, ["ochocientos"] = 800, ["ochocientas"] = 800,
-        ["novecientos"] = 900, ["novecientas"] = 900
+        ["novecientos"] = 900, ["novecientas"] = 900,
     };
 
     public static NumberWordNormalizer.ParsedWords? Parse(IReadOnlyList<string> words)
@@ -61,7 +61,12 @@ internal static class SpanishNumberWordParser
                 return null;
         }
 
-        var integer = ParseInteger(normalizedWords, index, isNegative);
+        // isNegative only decides the sign: "menos" also means "except/less", so it is not a
+        // number context that licenses the articles "un"/"una". Telling the two senses apart
+        // needs the token LEFT of "menos", which Parse(words) does not receive. Accepted cost:
+        // "menos un grado" stays spoken, which beats rewriting "todos menos un estudiante"
+        // into "todos -1 estudiante". "menos uno"/"menos un millón" are unaffected.
+        var integer = ParseInteger(normalizedWords, index);
         if (integer is null)
             return null;
 
@@ -84,10 +89,7 @@ internal static class SpanishNumberWordParser
         return new NumberWordNormalizer.ParsedWords(replacement, index);
     }
 
-    private static (int Value, int NextIndex)? ParseInteger(
-        IReadOnlyList<string> words,
-        int startIndex,
-        bool allowLeadingArticleOne)
+    private static (int Value, int NextIndex)? ParseInteger(IReadOnlyList<string> words, int startIndex)
     {
         if (startIndex >= words.Count)
             return null;
@@ -104,9 +106,10 @@ internal static class SpanishNumberWordParser
 
             if (word is "millon" or "millones")
             {
-                // A plural scale word ("millones") is a count noun without a leading number
-                // ("millones de personas"); only treat it as a number when a count precedes it.
-                if (word == "millones" && current == 0 && total == 0)
+                // Without a leading count these are nouns, not numbers ("millones de
+                // personas", "medio millón"). "un millón" still converts: AllowsArticleOne
+                // consumes the article as 1 before this branch is reached.
+                if (word is "millon" or "millones" && current == 0 && total == 0)
                     break;
 
                 total += Math.Max(current, 1) * 1_000_000;
@@ -136,7 +139,7 @@ internal static class SpanishNumberWordParser
                 continue;
             }
 
-            var allowArticleOne = AllowsArticleOne(index, words, startIndex, allowLeadingArticleOne, current, total);
+            var allowArticleOne = AllowsArticleOne(index, words, current, total);
             var segment = ParseUnderHundred(words, index, allowArticleOne);
             if (segment is null)
                 break;
@@ -198,22 +201,14 @@ internal static class SpanishNumberWordParser
         IReadOnlyList<string> words,
         int startIndex)
     {
-        var index = startIndex;
-
-        if (index < words.Count && words[index] == "y")
-        {
-            var afterY = index + 1;
-            if (afterY < words.Count &&
-                UnitValue(words[afterY], true) is { } unit &&
-                unit > 0)
-            {
-                return (baseValue + unit, afterY + 1);
-            }
-
+        if (startIndex >= words.Count || words[startIndex] != "y")
             return (baseValue, startIndex);
-        }
 
-        return (baseValue, startIndex);
+        var afterY = startIndex + 1;
+        return afterY < words.Count &&
+               UnitValue(words[afterY], true) is { } unit and > 0
+            ? (baseValue + unit, afterY + 1)
+            : (baseValue, startIndex);
     }
 
     private static (string Digits, int NextIndex) ParseDecimalDigits(IReadOnlyList<string> words, int startIndex)
@@ -249,14 +244,9 @@ internal static class SpanishNumberWordParser
     private static bool AllowsArticleOne(
         int index,
         IReadOnlyList<string> words,
-        int startIndex,
-        bool allowLeadingArticleOne,
         int current,
         int total)
     {
-        if (index == startIndex && allowLeadingArticleOne)
-            return true;
-
         if (current >= 100 || total > 0)
             return true;
 

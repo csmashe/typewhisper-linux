@@ -1,3 +1,9 @@
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
+using System.Buffers;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -5,21 +11,25 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.ElevenLabs;
 
-public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class ElevenLabsPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     internal const string DefaultModelId = "scribe_v2";
     private const string BaseUrl = "https://api.elevenlabs.io";
     private const string ApiKeySecretName = "api-key";
     private const string SelectedModelSettingName = "selectedModel";
 
-    private static readonly char[] InvalidKeytermCharacters = ['<', '>', '{', '}', '[', ']', '\\'];
+    private static readonly SearchValues<char> s_invalidKeytermCharacters = SearchValues.Create("<>{}[]\\");
 
-    private static readonly IReadOnlyList<ElevenLabsModelEntry> ModelEntries =
+    private static readonly IReadOnlyList<ElevenLabsModelEntry> s_modelEntries =
     [
         new(DefaultModelId, "Scribe v2", "scribe_v2", "scribe_v2_realtime"),
     ];
 
-    private static readonly IReadOnlyList<string> Languages =
+    private static readonly IReadOnlyList<string> s_languages =
     [
         "af",
         "am",
@@ -126,8 +136,6 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
-    private string? _apiKey;
-    private string? _selectedModelId;
 
     public ElevenLabsPlugin()
         : this(CreateHttpClient()) { }
@@ -139,13 +147,13 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     public string PluginId => "com.typewhisper.elevenlabs";
     public string PluginName => "ElevenLabs";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync(ApiKeySecretName);
-        _selectedModelId = NormalizeModelId(host.GetSetting<string>(SelectedModelSettingName));
+        ApiKey = await host.LoadSecretAsync(ApiKeySecretName);
+        SelectedModelId = NormalizeModelId(host.GetSetting<string>(SelectedModelSettingName));
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -157,23 +165,25 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     public string ProviderId => "elevenlabs";
     public string ProviderDisplayName => "ElevenLabs";
-    public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
+    public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-        ModelEntries
+        s_modelEntries
             .Select(m => new PluginModelInfo(m.Id, m.DisplayName) { IsRecommended = true })
             .ToList();
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
-    public IReadOnlyList<string> SupportedLanguages => Languages;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
+    public IReadOnlyList<string> SupportedLanguages => s_languages;
 
     public void SelectModel(string modelId)
     {
         var entry = ResolveModelEntry(modelId);
-        _selectedModelId = entry.Id;
+        SelectedModelId = entry.Id;
         _host?.SetSetting(SelectedModelSettingName, entry.Id);
     }
 
@@ -185,14 +195,14 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
         CancellationToken ct
     )
     {
-        if (!IsConfigured || _selectedModelId is null)
+        if (!IsConfigured || SelectedModelId is null)
             throw new InvalidOperationException(
                 "Plugin not configured. API key and model required."
             );
 
-        var entry = ResolveModelEntry(_selectedModelId);
+        var entry = ResolveModelEntry(SelectedModelId);
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/speech-to-text");
-        request.Headers.TryAddWithoutValidation("xi-api-key", _apiKey);
+        request.Headers.TryAddWithoutValidation("xi-api-key", ApiKey);
 
         using var form = new MultipartFormDataContent();
         var audioContent = new ByteArrayContent(wavAudio);
@@ -221,21 +231,22 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
-        if (!IsConfigured || _selectedModelId is null)
+        if (!IsConfigured || SelectedModelId is null)
             throw new InvalidOperationException(
                 "Plugin not configured. API key and model required."
             );
 
-        var entry = ResolveModelEntry(_selectedModelId);
+        var entry = ResolveModelEntry(SelectedModelId);
         return await ElevenLabsStreamingSession.ConnectAsync(
-            _apiKey!,
+            ApiKey!,
             entry.RealtimeModelId,
             NormalizeLanguage(language),
             ct
         );
     }
 
-    internal string? ApiKey => _apiKey;
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -250,9 +261,9 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
     {
         var normalized = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
         var wasConfigured = IsConfigured;
-        var changed = !string.Equals(_apiKey, normalized, StringComparison.Ordinal);
+        var changed = !string.Equals(ApiKey, normalized, StringComparison.Ordinal);
 
-        _apiKey = normalized;
+        ApiKey = normalized;
         if (_host is not null)
         {
             if (normalized is null)
@@ -298,6 +309,7 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
         var duration = 0.0;
         var segments = new List<PluginTranscriptionSegment>();
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (
             root.TryGetProperty("words", out var wordsEl)
             && wordsEl.ValueKind == JsonValueKind.Array
@@ -364,7 +376,7 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
             if (
                 term.Length == 0
                 || term.Length >= 50
-                || term.IndexOfAny(InvalidKeytermCharacters) >= 0
+                || term.AsSpan().IndexOfAny(s_invalidKeytermCharacters) >= 0
                 || term.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length > 5
                 || !seen.Add(term)
             )
@@ -393,7 +405,7 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
                 "selectedModel",
                 Loc.L("Settings.TranscriptionModel"),
                 Description: Loc.L("Settings.ModelDescription"),
-                Options: ModelEntries
+                Options: s_modelEntries
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList()
             ),
@@ -403,8 +415,8 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
         Task.FromResult(
             key switch
             {
-                "api-key" => _apiKey,
-                "selectedModel" => _selectedModelId,
+                "api-key" => ApiKey,
+                "selectedModel" => SelectedModelId,
                 _ => null,
             }
         );
@@ -429,10 +441,10 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        var valid = await ValidateApiKeyAsync(ApiKey, ct);
         return valid
             ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
             : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
@@ -445,15 +457,14 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     private static string? NormalizeLanguage(string? language) =>
         string.IsNullOrWhiteSpace(language)
-        || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
             ? null
             : language;
 
     private static string NormalizeModelId(string? modelId) =>
-        ModelEntries.Any(m => m.Id == modelId) ? modelId! : DefaultModelId;
+        s_modelEntries.Any(m => m.Id == modelId) ? modelId! : DefaultModelId;
 
     private static ElevenLabsModelEntry ResolveModelEntry(string modelId) =>
-        ModelEntries.FirstOrDefault(m => m.Id == modelId)
+        s_modelEntries.FirstOrDefault(m => m.Id == modelId)
         ?? throw new ArgumentException($"Unknown model: {modelId}");
 
     private static bool TryGetDouble(JsonElement element, string propertyName, out double value)

@@ -3,6 +3,8 @@ using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Microsoft.Extensions.DependencyInjection;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 
@@ -30,25 +32,38 @@ public partial class FileTranscriptionSection : UserControl
             return;
         }
 
-        var topLevel = TopLevel.GetTopLevel(this);
-        if (topLevel?.StorageProvider is null)
-        {
-            return;
-        }
+        await UiOperations.RunAsync(
+            "select transcription files",
+            Loc.Instance["Dialog.SelectFiles"],
+            UiFailureKind.StorageProvider | UiFailureKind.FileSystem,
+            async () =>
+            {
+                var topLevel = TopLevel.GetTopLevel(this);
+                if (topLevel?.StorageProvider is null)
+                {
+                    return;
+                }
 
-        var files = await topLevel.StorageProvider.OpenFilePickerAsync(
-            new FilePickerOpenOptions { Title = Loc.Instance["Dialog.SelectFiles"], AllowMultiple = true }
+                var files = await topLevel.StorageProvider.OpenFilePickerAsync(
+                    new FilePickerOpenOptions
+                    {
+                        Title = Loc.Instance["Dialog.SelectFiles"],
+                        AllowMultiple = true,
+                    }
+                );
+
+                var paths = files
+                    .Select(file => file.TryGetLocalPath())
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Cast<string>()
+                    .ToArray();
+                if (paths.Length > 0)
+                {
+                    viewModel.AddFilesCommand.Execute(paths);
+                }
+            },
+            presenter: message => PresentStatusAsync(viewModel, message)
         );
-
-        var paths = files
-            .Select(file => file.TryGetLocalPath())
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Cast<string>()
-            .ToArray();
-        if (paths.Length > 0)
-        {
-            viewModel.AddFilesCommand.Execute(paths);
-        }
     }
 
     // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
@@ -59,26 +74,53 @@ public partial class FileTranscriptionSection : UserControl
             return;
         }
 
-        var topLevel = TopLevel.GetTopLevel(this);
-        if (topLevel?.Clipboard is not null && !string.IsNullOrWhiteSpace(viewModel.ResultText))
-        {
-            await topLevel.Clipboard.SetTextAsync(viewModel.ResultText);
-        }
+        await UiOperations.RunAsync(
+            "copy transcription",
+            Loc.Instance["Common.Copy"],
+            UiFailureKind.Clipboard,
+            async () =>
+            {
+                var topLevel = TopLevel.GetTopLevel(this);
+                if (
+                    topLevel?.Clipboard is not null
+                    && !string.IsNullOrWhiteSpace(viewModel.ResultText)
+                )
+                {
+                    await topLevel.Clipboard.SetTextAsync(viewModel.ResultText);
+                }
+            },
+            presenter: message => PresentStatusAsync(viewModel, message)
+        );
     }
 
     // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnCopyItem(object? sender, RoutedEventArgs e)
     {
-        if ((sender as Control)?.DataContext is not FileTranscriptionQueueItemViewModel item)
+        if (
+            DataContext is not FileTranscriptionSectionViewModel viewModel
+            || (sender as Control)?.DataContext is not FileTranscriptionQueueItemViewModel item
+        )
         {
             return;
         }
 
-        var topLevel = TopLevel.GetTopLevel(this);
-        if (topLevel?.Clipboard is not null && !string.IsNullOrWhiteSpace(item.ResultText))
-        {
-            await topLevel.Clipboard.SetTextAsync(item.ResultText);
-        }
+        await UiOperations.RunAsync(
+            "copy transcription item",
+            Loc.Instance["Common.Copy"],
+            UiFailureKind.Clipboard,
+            async () =>
+            {
+                var topLevel = TopLevel.GetTopLevel(this);
+                if (
+                    topLevel?.Clipboard is not null
+                    && !string.IsNullOrWhiteSpace(item.ResultText)
+                )
+                {
+                    await topLevel.Clipboard.SetTextAsync(item.ResultText);
+                }
+            },
+            presenter: message => PresentStatusAsync(viewModel, message)
+        );
     }
 
     // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
@@ -89,13 +131,13 @@ public partial class FileTranscriptionSection : UserControl
             return;
         }
 
-        var topLevel = TopLevel.GetTopLevel(this);
-        if (topLevel?.StorageProvider is null || string.IsNullOrWhiteSpace(viewModel.ResultText))
-        {
-            return;
-        }
-
-        await ExportTextAsync(viewModel, viewModel.SelectedItem);
+        await UiOperations.RunAsync(
+            "export transcription text",
+            Loc.Instance["Common.Export"],
+            UiFailureKind.StorageProvider | UiFailureKind.FileSystem,
+            () => ExportTextAsync(viewModel, viewModel.SelectedItem),
+            presenter: message => PresentStatusAsync(viewModel, message)
+        );
     }
 
     // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
@@ -109,7 +151,13 @@ public partial class FileTranscriptionSection : UserControl
             return;
         }
 
-        await ExportTextAsync(viewModel, item);
+        await UiOperations.RunAsync(
+            "export transcription item text",
+            Loc.Instance["Common.Export"],
+            UiFailureKind.StorageProvider | UiFailureKind.FileSystem,
+            () => ExportTextAsync(viewModel, item),
+            presenter: message => PresentStatusAsync(viewModel, message)
+        );
     }
 
     private async Task ExportTextAsync(
@@ -137,7 +185,7 @@ public partial class FileTranscriptionSection : UserControl
                 Title = Loc.Instance["Dialog.ExportText"],
                 SuggestedFileName = $"{baseName}.txt",
                 DefaultExtension = "txt",
-                FileTypeChoices = [new FilePickerFileType("Text") { Patterns = ["*.txt"] }]
+                FileTypeChoices = [new FilePickerFileType("Text") { Patterns = ["*.txt"] }],
             }
         );
 
@@ -151,13 +199,35 @@ public partial class FileTranscriptionSection : UserControl
     // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnExportItemSrt(object? sender, RoutedEventArgs e)
     {
-        await ExportSubtitleAsync(sender, "srt", "SRT");
+        if (DataContext is not FileTranscriptionSectionViewModel viewModel)
+        {
+            return;
+        }
+
+        await UiOperations.RunAsync(
+            "export transcription SRT subtitles",
+            Loc.Instance["Common.Export"],
+            UiFailureKind.StorageProvider | UiFailureKind.FileSystem,
+            () => ExportSubtitleAsync(sender, "srt", "SRT"),
+            presenter: message => PresentStatusAsync(viewModel, message)
+        );
     }
 
     // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
     private async void OnExportItemVtt(object? sender, RoutedEventArgs e)
     {
-        await ExportSubtitleAsync(sender, "vtt", "WebVTT");
+        if (DataContext is not FileTranscriptionSectionViewModel viewModel)
+        {
+            return;
+        }
+
+        await UiOperations.RunAsync(
+            "export transcription WebVTT subtitles",
+            Loc.Instance["Common.Export"],
+            UiFailureKind.StorageProvider | UiFailureKind.FileSystem,
+            () => ExportSubtitleAsync(sender, "vtt", "WebVTT"),
+            presenter: message => PresentStatusAsync(viewModel, message)
+        );
     }
 
     private async Task ExportSubtitleAsync(object? sender, string extension, string label)
@@ -189,7 +259,7 @@ public partial class FileTranscriptionSection : UserControl
                 Title = $"Export {label}",
                 SuggestedFileName = $"{baseName}.{extension}",
                 DefaultExtension = extension,
-                FileTypeChoices = [new FilePickerFileType(label) { Patterns = [$"*.{extension}"] }]
+                FileTypeChoices = [new FilePickerFileType(label) { Patterns = [$"*.{extension}"] }],
             }
         );
 
@@ -208,11 +278,21 @@ public partial class FileTranscriptionSection : UserControl
             return;
         }
 
-        var path = await PickFolderAsync("Select watch folder");
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            viewModel.SetWatchFolderPath(path);
-        }
+        await UiOperations.RunAsync(
+            "select watch folder",
+            Loc.Instance["FileTranscription.WatchFolder"],
+            // SetWatchFolderPath synchronously persists via SettingsService.Save
+            // (File.WriteAllText/Move), so a disk-full/read-only write throws here too.
+            UiFailureKind.StorageProvider | UiFailureKind.FileSystem,
+            async () =>
+            {
+                var path = await PickFolderAsync("Select watch folder");
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    viewModel.SetWatchFolderPath(path);
+                }
+            }
+        );
     }
 
     // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; the void return is required by the RoutedEventHandler delegate signature
@@ -226,11 +306,21 @@ public partial class FileTranscriptionSection : UserControl
             return;
         }
 
-        var path = await PickFolderAsync("Select output folder");
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            viewModel.SetWatchFolderOutputPath(path);
-        }
+        await UiOperations.RunAsync(
+            "select watch-folder output folder",
+            Loc.Instance["FileTranscription.OutputFolderOptional"],
+            // SetWatchFolderOutputPath synchronously persists via SettingsService.Save
+            // (File.WriteAllText/Move), so a disk-full/read-only write throws here too.
+            UiFailureKind.StorageProvider | UiFailureKind.FileSystem,
+            async () =>
+            {
+                var path = await PickFolderAsync("Select output folder");
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    viewModel.SetWatchFolderOutputPath(path);
+                }
+            }
+        );
     }
 
     private async Task<string?> PickFolderAsync(string title)
@@ -302,5 +392,17 @@ public partial class FileTranscriptionSection : UserControl
         {
             viewModel.IsDragOver = isDragOver;
         }
+    }
+
+    private static UiOperationGuard UiOperations =>
+        Program.Services.GetRequiredService<UiOperationGuard>();
+
+    private static Task PresentStatusAsync(
+        FileTranscriptionSectionViewModel viewModel,
+        string message
+    )
+    {
+        viewModel.StatusText = message;
+        return Task.CompletedTask;
     }
 }

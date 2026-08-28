@@ -39,6 +39,7 @@ public sealed class LearnedCorrectionsToastController : IDisposable
     public LearnedCorrectionsToastController(
         TargetAppCorrectionLearningService learning,
         IDictionaryService dictionary,
+        IErrorLogService errorLog,
         LearnedCorrectionToastWindow window
     )
     {
@@ -50,7 +51,10 @@ public sealed class LearnedCorrectionsToastController : IDisposable
 
         // The presenter's one-shot auto-hide callback re-enters the presenter, so back it with a
         // DispatcherTimer to keep every access on the UI thread (like the overlay VM did).
-        _presenter = new LearnedCorrectionsFeedbackPresenter(dictionary, ScheduleUiDelay);
+        _presenter = new LearnedCorrectionsFeedbackPresenter(
+            dictionary,
+            errorLog,
+            ScheduleUiDelay);
     }
 
     public void Initialize()

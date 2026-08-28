@@ -6,13 +6,39 @@ namespace TypeWhisper.Core.Tests.Services;
 /// <summary>Covers <see cref="SnippetService" />: trigger expansion, placeholders, tags, profile scoping, and JSON import/export.</summary>
 public sealed class SnippetServiceTests : IDisposable
 {
+    private static readonly TimeSpan s_frozenOffset = TimeSpan.FromHours(2);
+
+    // Just past local midnight, so the UTC instant is still 2039-12-31 and the local-field
+    // placeholders ({date}, {day}, {year}) differ from their UTC equivalents. A same-date
+    // instant could not tell the two apart.
+    private static readonly DateTimeOffset s_frozenLocalNow = new(
+        2040,
+        1,
+        1,
+        0,
+        30,
+        0,
+        s_frozenOffset
+    );
+    private static readonly TimeZoneInfo s_frozenTimeZone = TimeZoneInfo.CreateCustomTimeZone(
+        "SnippetServiceTests/UTC+02",
+        s_frozenOffset,
+        "SnippetServiceTests/UTC+02",
+        "SnippetServiceTests/UTC+02"
+    );
+
     private readonly string _filePath;
+    private readonly FixedTimeProvider _timeProvider;
     private readonly SnippetService _sut;
 
     public SnippetServiceTests()
     {
         _filePath = Path.GetTempFileName();
-        _sut = new SnippetService(_filePath);
+        _timeProvider = new FixedTimeProvider(
+            s_frozenLocalNow.ToUniversalTime(),
+            s_frozenTimeZone
+        );
+        _sut = new SnippetService(_filePath, _timeProvider);
     }
 
     public void Dispose()
@@ -32,7 +58,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "1",
                 Trigger = "mfg",
                 Replacement = "Mit freundlichen Grüßen",
-                Tags = "E-Mail,Gruß"
+                Tags = "E-Mail,Gruß",
             }
         );
 
@@ -49,7 +75,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "link",
-                Replacement = "Siehe: {clipboard}"
+                Replacement = "Siehe: {clipboard}",
             }
         );
 
@@ -65,7 +91,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "link",
-                Replacement = "Siehe: {clipboard}"
+                Replacement = "Siehe: {clipboard}",
             }
         );
 
@@ -81,12 +107,12 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "heute",
-                Replacement = "{date:dd.MM.yyyy}"
+                Replacement = "{date:dd.MM.yyyy}",
             }
         );
 
         var result = _sut.ApplySnippets("heute");
-        Assert.Equal(DateTime.Now.ToString("dd.MM.yyyy"), result);
+        Assert.Equal(s_frozenLocalNow.ToString("dd.MM.yyyy"), result);
     }
 
     [Fact]
@@ -97,12 +123,12 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "uhr",
-                Replacement = "{time:HH:mm:ss}"
+                Replacement = "{time:HH:mm:ss}",
             }
         );
 
         var result = _sut.ApplySnippets("uhr");
-        var expected = DateTime.Now.ToString("HH:mm:ss");
+        var expected = s_frozenLocalNow.ToString("HH:mm:ss");
         Assert.Equal(expected, result);
     }
 
@@ -114,7 +140,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "datum",
-                Replacement = "{date}"
+                Replacement = "{date}",
             }
         );
         _sut.AddSnippet(
@@ -122,7 +148,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "2",
                 Trigger = "zeit",
-                Replacement = "{time}"
+                Replacement = "{time}",
             }
         );
         _sut.AddSnippet(
@@ -130,7 +156,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "3",
                 Trigger = "tag",
-                Replacement = "{day}"
+                Replacement = "{day}",
             }
         );
         _sut.AddSnippet(
@@ -138,28 +164,117 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "4",
                 Trigger = "jahr",
-                Replacement = "{year}"
+                Replacement = "{year}",
             }
         );
 
-        var now = DateTime.Now;
-        Assert.Equal(now.ToString("yyyy-MM-dd"), _sut.ApplySnippets("datum"));
-        Assert.Equal(now.ToString("HH:mm"), _sut.ApplySnippets("zeit"));
-        Assert.Equal(now.ToString("dddd"), _sut.ApplySnippets("tag"));
-        Assert.Equal(now.Year.ToString(), _sut.ApplySnippets("jahr"));
+        Assert.Equal(
+            s_frozenLocalNow.ToString("yyyy-MM-dd"),
+            _sut.ApplySnippets("datum")
+        );
+        Assert.Equal(s_frozenLocalNow.ToString("HH:mm"), _sut.ApplySnippets("zeit"));
+        Assert.Equal(s_frozenLocalNow.ToString("dddd"), _sut.ApplySnippets("tag"));
+        Assert.Equal(s_frozenLocalNow.Year.ToString(), _sut.ApplySnippets("jahr"));
     }
 
     [Fact]
     public void PreviewReplacement_ExpandsPlaceholdersWithoutSnippetTrigger()
     {
-        var now = DateTime.Now;
-
         var result = _sut.PreviewReplacement(
             "Today is {date:yyyy-MM-dd}; clipboard={clipboard}",
             () => "copied"
         );
 
-        Assert.Equal($"Today is {now:yyyy-MM-dd}; clipboard=copied", result);
+        Assert.Equal(
+            $"Today is {s_frozenLocalNow:yyyy-MM-dd}; clipboard=copied",
+            result
+        );
+    }
+
+    [Fact]
+    public void ApplySnippets_MultipleDateTimePlaceholders_UseSingleFrozenInstant()
+    {
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "boundary",
+                Replacement =
+                    "{date:yyyy-MM-dd}|{time:HH:mm:ss}|{datetime:yyyy-MM-dd HH:mm:ss}|{day}|{year}",
+            }
+        );
+
+        var result = _sut.ApplySnippets("boundary");
+
+        Assert.Equal(
+            $"{s_frozenLocalNow:yyyy-MM-dd}|{s_frozenLocalNow:HH:mm:ss}|"
+                + $"{s_frozenLocalNow:yyyy-MM-dd HH:mm:ss}|{s_frozenLocalNow:dddd}|"
+                + s_frozenLocalNow.Year,
+            result
+        );
+        // Two reads, not five: one shared instant for every placeholder in the expansion,
+        // plus the LastUsedAt stamp. Per-placeholder reads would show up as six.
+        Assert.Equal(2, _timeProvider.UtcNowReadCount);
+    }
+
+    [Fact]
+    public void ApplySnippets_OffsetBearingFormats_EmitLocalUtcOffset()
+    {
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "offset",
+                Replacement = "{datetime:O}|{datetime:yyyy-MM-dd HH:mm:sszzz}",
+            }
+        );
+
+        var result = _sut.ApplySnippets("offset");
+
+        Assert.Equal(
+            $"{s_frozenLocalNow:O}|{s_frozenLocalNow:yyyy-MM-dd HH:mm:sszzz}",
+            result
+        );
+    }
+
+    [Fact]
+    public void ApplySnippets_UniversalFullDateTimeFormat_FormatsAsUtc()
+    {
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "universal",
+                Replacement = "{datetime:U}",
+            }
+        );
+
+        var result = _sut.ApplySnippets("universal");
+
+        Assert.Equal(s_frozenLocalNow.UtcDateTime.ToString("U"), result);
+    }
+
+    [Theory]
+    // The Z/GMT suffix is the format's, not a conversion: these are the local fields
+    // (2040-01-01 00:30), whereas the UTC instant is 2039-12-31 22:30.
+    [InlineData("u", "2040-01-01 00:30:00Z")]
+    [InlineData("R", "Sun, 01 Jan 2040 00:30:00 GMT")]
+    [InlineData("r", "Sun, 01 Jan 2040 00:30:00 GMT")]
+    public void ApplySnippets_WallClockStandardFormats_KeepLocalFields(
+        string format,
+        string expected
+    )
+    {
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "legacy",
+                Replacement = $"{{datetime:{format}}}",
+            }
+        );
+
+        Assert.Equal(expected, _sut.ApplySnippets("legacy"));
     }
 
     [Fact]
@@ -171,7 +286,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "1",
                 Trigger = "a",
                 Replacement = "A",
-                Tags = "Code,E-Mail"
+                Tags = "Code,E-Mail",
             }
         );
         _sut.AddSnippet(
@@ -180,7 +295,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "2",
                 Trigger = "b",
                 Replacement = "B",
-                Tags = "E-Mail,Datum"
+                Tags = "E-Mail,Datum",
             }
         );
         _sut.AddSnippet(
@@ -189,7 +304,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "3",
                 Trigger = "c",
                 Replacement = "C",
-                Tags = ""
+                Tags = "",
             }
         );
 
@@ -209,7 +324,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "1",
                 Trigger = "mfg",
                 Replacement = "Grüße",
-                Tags = "E-Mail"
+                Tags = "E-Mail",
             }
         );
         _sut.AddSnippet(
@@ -217,7 +332,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "2",
                 Trigger = "sig",
-                Replacement = "Signatur\nZeile 2"
+                Replacement = "Signatur\nZeile 2",
             }
         );
 
@@ -236,7 +351,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "existing",
-                Replacement = "Existing"
+                Replacement = "Existing",
             }
         );
 
@@ -260,7 +375,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "mfg",
-                Replacement = "Grüße"
+                Replacement = "Grüße",
             }
         );
 
@@ -284,7 +399,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "sig",
-                Replacement = "Mit freundlichen Grüßen\nMarco Mustermann\nTypeWhisper GmbH"
+                Replacement = "Mit freundlichen Grüßen\nMarco Mustermann\nTypeWhisper GmbH",
             }
         );
 
@@ -305,7 +420,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "mfg",
-                Replacement = "Mit freundlichen Grüßen"
+                Replacement = "Mit freundlichen Grüßen",
             }
         );
 
@@ -322,7 +437,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "1",
                 Trigger = "sig",
                 Replacement = "Signature",
-                TriggerMode = SnippetTriggerMode.ExactPhrase
+                TriggerMode = SnippetTriggerMode.ExactPhrase,
             }
         );
 
@@ -339,7 +454,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "1",
                 Trigger = "sig",
                 Replacement = "Profile signature",
-                ProfileIds = ["profile-1"]
+                ProfileIds = ["profile-1"],
             }
         );
 
@@ -356,7 +471,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "sig",
-                Replacement = "Global signature"
+                Replacement = "Global signature",
             }
         );
 
@@ -371,7 +486,7 @@ public sealed class SnippetServiceTests : IDisposable
             {
                 Id = "1",
                 Trigger = "sig",
-                Replacement = "Signature"
+                Replacement = "Signature",
             }
         );
 
@@ -414,7 +529,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "1",
                 Trigger = "mfg",
                 Replacement = "Grüße",
-                Tags = "Alt"
+                Tags = "Alt",
             }
         );
         _sut.UpdateSnippet(
@@ -423,7 +538,7 @@ public sealed class SnippetServiceTests : IDisposable
                 Id = "1",
                 Trigger = "mfg",
                 Replacement = "Grüße",
-                Tags = "Neu"
+                Tags = "Neu",
             }
         );
 
@@ -449,7 +564,7 @@ public sealed class SnippetServiceTests : IDisposable
                 {
                     Id = "new",
                     Trigger = "new",
-                    Replacement = "Do not persist"
+                    Replacement = "Do not persist",
                 }
             )
         );
@@ -483,7 +598,7 @@ public sealed class SnippetServiceTests : IDisposable
     }
 
     [Fact]
-    public void ApplySnippets_WhenUsageSaveFails_DoesNotThrowAndUpdatesCache()
+    public void ApplySnippets_WhenUsageSaveFails_DoesNotThrowAndRollsBackCache()
     {
         const string originalJson =
             "[{\"Id\":\"old\",\"Trigger\":\"old\",\"Replacement\":\"Expanded\",\"IsEnabled\":true}]";
@@ -496,9 +611,30 @@ public sealed class SnippetServiceTests : IDisposable
 
         Assert.Null(exception);
         var updated = Assert.Single(sut.Snippets);
-        Assert.Equal(1, updated.UsageCount);
-        Assert.NotNull(updated.LastUsedAt);
+        Assert.Equal(0, updated.UsageCount);
+        Assert.Null(updated.LastUsedAt);
         Assert.Equal(before, File.ReadAllBytes(failurePath.FilePath));
         Assert.Empty(failurePath.TemporaryFiles);
+    }
+
+    private sealed class FixedTimeProvider : TimeProvider
+    {
+        private readonly DateTimeOffset _utcNow;
+
+        public FixedTimeProvider(DateTimeOffset utcNow, TimeZoneInfo localTimeZone)
+        {
+            _utcNow = utcNow;
+            LocalTimeZone = localTimeZone;
+        }
+
+        public int UtcNowReadCount { get; private set; }
+
+        public override TimeZoneInfo LocalTimeZone { get; }
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            UtcNowReadCount++;
+            return _utcNow;
+        }
     }
 }

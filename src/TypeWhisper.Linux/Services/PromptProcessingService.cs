@@ -159,10 +159,7 @@ public sealed class PromptProcessingService
         finally
         {
             // responseBuilder is non-null whenever provenance is (same capture gate)
-            if (provenance is not null)
-            {
-                provenance.ResponseReceived = responseBuilder!.ToString();
-            }
+            provenance?.ResponseReceived = responseBuilder!.ToString();
         }
     }
 
@@ -204,7 +201,7 @@ public sealed class PromptProcessingService
     private LlmCallProvenance? RecordProvenance(
         LlmCallCapture? capture,
         string stage,
-        ILlmProviderPlugin provider,
+        ILlmProviderRole provider,
         string modelId,
         string systemPrompt,
         string userPrompt,
@@ -217,8 +214,10 @@ public sealed class PromptProcessingService
         }
 
         var providerId = provider.GetLlmSelectionId();
-        var plugin = _pluginManager.GetPlugin(providerId);
-        var ranLocally = plugin is not null && PluginLocalityClassifier.IsLocal(plugin.Manifest);
+        // Look the plugin up by its owning plugin ID: a profile-backed role's
+        // selection ID is the profile's, which matches no manifest ID.
+        var plugin = _pluginManager.GetPlugin(provider.PluginId);
+        var ranLocally = plugin?.Metadata.RanLocally ?? false;
 
         var provenance = new LlmCallProvenance
         {
@@ -229,7 +228,7 @@ public sealed class PromptProcessingService
             ProviderId = providerId,
             ModelId = modelId,
             RanLocally = ranLocally,
-            InjectedMemoryContext = injectedMemoryContext
+            InjectedMemoryContext = injectedMemoryContext,
         };
         capture.Add(provenance);
         return provenance;
@@ -251,12 +250,12 @@ public sealed class PromptProcessingService
                 """;
     }
 
-    private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(PromptAction action)
+    private (ILlmProviderRole? Provider, string ModelId) ResolveProvider(PromptAction action)
     {
         return ResolveProvider(action.ProviderOverride);
     }
 
-    private (ILlmProviderPlugin? Provider, string ModelId) ResolveProvider(string? providerOverride)
+    private (ILlmProviderRole? Provider, string ModelId) ResolveProvider(string? providerOverride)
     {
         if (!string.IsNullOrWhiteSpace(providerOverride))
         {
@@ -293,7 +292,7 @@ public sealed class PromptProcessingService
         return (null, string.Empty);
     }
 
-    private (ILlmProviderPlugin? Provider, string ModelId) ResolvePluginModelId(
+    private (ILlmProviderRole? Provider, string ModelId) ResolvePluginModelId(
         string pluginModelId
     )
     {

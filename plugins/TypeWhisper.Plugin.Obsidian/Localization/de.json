@@ -4,6 +4,8 @@
   "Settings.VaultPathDetectedDescription": "{0} Obsidian-Vault(s) erkannt. Geben Sie bei Bedarf einen Pfad manuell ein.",
   "Settings.Subfolder": "Unterordner",
   "Settings.SubfolderDescription": "Ordner innerhalb des Vaults, in dem Notizen gespeichert werden.",
+  "Settings.SubfolderOutsideVault": "Der Unterordner muss innerhalb des ausgewählten Vaults liegen.",
+  "Settings.NoteOutsideVault": "Die Tagesnotiz muss innerhalb des ausgewählten Vaults liegen.",
   "Settings.SaveMode": "Speichermodus",
   "Settings.SaveModeDescription": "Wählen Sie, ob an eine Tagesnotiz angehängt oder pro Transkription eine Notiz erstellt wird.",
   "Settings.SaveModeOneNote": "Eine Notiz pro Transkription",

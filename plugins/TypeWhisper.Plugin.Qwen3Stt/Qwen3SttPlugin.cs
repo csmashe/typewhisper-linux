@@ -1,25 +1,41 @@
-using System.Net.Http;
-using System.Net.Http.Headers;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedType.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Qwen3Stt;
 
-public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class Qwen3SttPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string DefaultBaseUrl = "http://localhost:8000";
     private const string DefaultModel = "Qwen/Qwen3-ASR";
 
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(60) };
+    private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
     private string? _apiKey;
     private string? _baseUrl;
-    private string? _selectedModelId;
+
+    public Qwen3SttPlugin()
+        : this(new HttpClient { Timeout = TimeSpan.FromSeconds(60) })
+    {
+    }
+
+    internal Qwen3SttPlugin(HttpClient httpClient)
+    {
+        _httpClient = httpClient;
+    }
 
     public string PluginId => "com.typewhisper.qwen3-stt";
     public string PluginName => "Qwen3 STT";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -28,7 +44,7 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
         _baseUrl = host.GetSetting<string>("baseUrl");
         if (string.IsNullOrWhiteSpace(_baseUrl))
             _baseUrl = DefaultBaseUrl;
-        _selectedModelId = host.GetSetting<string>("selectedModel") ?? DefaultModel;
+        SelectedModelId = host.GetSetting<string>("selectedModel") ?? DefaultModel;
         host.Log(PluginLogLevel.Info, $"Activated (baseUrl={_baseUrl}, configured={IsConfigured})");
     }
 
@@ -43,16 +59,19 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
     public bool IsConfigured => !string.IsNullOrEmpty(_baseUrl);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-    [new PluginModelInfo("Qwen/Qwen3-ASR", "Qwen3 ASR")];
+    [new("Qwen/Qwen3-ASR", "Qwen3 ASR")];
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
+
     public bool SupportsTranslation => false;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public void SelectModel(string modelId)
     {
         if (modelId != DefaultModel)
             throw new ArgumentException($"Unknown model: {modelId}");
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
@@ -74,7 +93,7 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
 
         var baseUrl = _baseUrl ?? DefaultBaseUrl;
         var apiKey = _apiKey ?? "";
-        var model = _selectedModelId ?? DefaultModel;
+        var model = SelectedModelId ?? DefaultModel;
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
@@ -159,7 +178,7 @@ public sealed partial class Qwen3SttPlugin : ITranscriptionEnginePlugin, IPlugin
             {
                 "baseUrl" => _baseUrl,
                 "api-key" => _apiKey,
-                "selectedModel" => _selectedModelId,
+                "selectedModel" => SelectedModelId,
                 _ => null,
             }
         );

@@ -23,7 +23,7 @@ public sealed class DiffKindBrushConverter : IValueConverter
         {
             DiffKind.Added => s_added,
             DiffKind.Removed => s_removed,
-            _ => s_unchanged
+            _ => s_unchanged,
         };
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
@@ -69,7 +69,7 @@ public sealed class LocalityBadgeBrushConverter : IValueConverter
         {
             "Background" => local ? s_localBackground : s_networkBackground,
             "Border" => local ? s_localBorder : s_networkBorder,
-            _ => local ? s_localForeground : s_networkForeground
+            _ => local ? s_localForeground : s_networkForeground,
         };
     }
 

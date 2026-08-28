@@ -2,7 +2,6 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:shellvm="using:TypeWhisper.Linux.ViewModels"
-             xmlns:models="using:TypeWhisper.Core.Models"
              xmlns:local="using:TypeWhisper.Linux"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.DashboardSection"
@@ -430,7 +429,7 @@
                     <ItemsControl ItemsSource="{Binding RecentActivity}"
                                   IsVisible="{Binding HasRecentActivity}">
                         <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="models:TranscriptionRecord">
+                            <DataTemplate x:DataType="vm:DashboardRecentActivityRow">
                                 <Border Padding="8,10"
                                         BorderThickness="0,0,0,1"
                                         BorderBrush="#283644">
@@ -440,7 +439,7 @@
                                                    TextWrapping="Wrap" />
                                         <StackPanel Orientation="Horizontal"
                                                     Spacing="10">
-                                            <TextBlock Text="{Binding Timestamp, StringFormat='{}{0:HH:mm}'}"
+                                            <TextBlock Text="{Binding LocalTimestamp, StringFormat='{}{0:HH:mm}'}"
                                                        FontSize="11"
                                                        Foreground="#9BB0C4" />
                                             <TextBlock Text="{Binding AppName}"

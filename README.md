@@ -33,7 +33,7 @@ Press a key, talk, and have clean, punctuated text land in whatever app you're i
 - **Personalization** — searchable history, a dictionary with term packs, snippets, and app/URL-matched profiles. History also has an opt-in **Inspect** panel that shows exactly what was sent to the LLM for each entry — the raw→final diff, the exact prompt, injected memory context, and the reply, with local-vs-cloud labelling. See [Profiles](https://github.com/csmashe/typewhisper-linux/wiki/Profiles) and [History](https://github.com/csmashe/typewhisper-linux/wiki/History).
 - **Learns from your corrections** in the Wispr-Flow style — when you type over a dictated word in the target app to fix it, TypeWhisper silently learns the correction (via AT-SPI) and auto-applies it to future dictations. A brief toast shows what was learned and offers **Undo**. Off by default (it reads the focused field); enable it under [Dictation](https://github.com/csmashe/typewhisper-linux/wiki/Dictation) settings, and review or remove learned entries in the [Dictionary](https://github.com/csmashe/typewhisper-linux/wiki/Dictionary).
 - **A localized interface** — English, German, Spanish, or Russian, switched live (or Auto, to follow your system locale). See [General Settings](https://github.com/csmashe/typewhisper-linux/wiki/General-Settings).
-- **Automation** — a local [HTTP API](https://github.com/csmashe/typewhisper-linux/wiki/HTTP-API) and a `typewhisper` [CLI](https://github.com/csmashe/typewhisper-linux/wiki/CLI) client (currently built from source; release packages don't yet bundle the CLI binary).
+- **Automation** — a local [HTTP API](https://github.com/csmashe/typewhisper-linux/wiki/HTTP-API) and an installable `typewhisper` [CLI](https://github.com/csmashe/typewhisper-linux/wiki/CLI).
 - **Desktop integration** — tray icon, XDG autostart, single-instance handoff, and a user-level installer. See [Desktop Integration](https://github.com/csmashe/typewhisper-linux/wiki/Desktop-Integration).
 
 Everything here is Linux-specific work adapted from the upstream macOS/Windows project: Wayland/X11 global hotkeys, compositor-native window and URL detection, session audio handling, and Linux packaging. The deep how-and-why for each lives in the wiki — start with [Wayland Notes](https://github.com/csmashe/typewhisper-linux/wiki/Wayland-Notes) if you're on Wayland.
@@ -57,11 +57,24 @@ I keep the rest deliberately minimal for latency and predictability — audio du
 
 Tagged releases on [GitHub Releases](https://github.com/csmashe/typewhisper-linux/releases) ship four `linux-x64` formats — **AppImage**, Debian/Ubuntu **`.deb`**, Fedora/RHEL **`.rpm`**, and a no-root **tarball** — each bundling the self-contained .NET runtime and the Linux plugins. See **[Installation](https://github.com/csmashe/typewhisper-linux/wiki/Installation)** for which format to pick and the per-format commands, and **[Requirements](https://github.com/csmashe/typewhisper-linux/wiki/Requirements)** for the optional desktop helpers (`pactl`, `playerctl`, `wtype` / `ydotool` / `xdotool`, `pw-play` / `paplay` / `aplay`, …).
 
+### Tarball and AppImage system libraries
+
+The `.deb` and `.rpm` install required system libraries through the package manager; tarball and AppImage users must install the equivalent libraries from the [Requirements](https://github.com/csmashe/typewhisper-linux/wiki/Requirements) page first.
+
 Whichever format you install, the first-run [Setup Wizard](https://github.com/csmashe/typewhisper-linux/wiki/Setup-Wizard) checks what's needed and gets you set up with everything required — the typing/paste backend, the global-dictation hotkey, active-window detection, and more — so you don't have to wire it up by hand.
 
 ### Build from source
 
-Requires the **.NET 10 SDK**.
+Requires the **.NET 10 SDK** and `python3`. `global.json` pins a 10.0.100 floor so CI is reproducible, and rolls forward from there — your distribution's package is enough:
+
+```bash
+sudo dnf install dotnet-sdk-10.0      # Fedora / RHEL
+sudo apt install dotnet-sdk-10.0      # Debian / Ubuntu
+```
+
+The floor is deliberately on the `10.0.1xx` feature band. Fedora, RHEL and Debian ship *source-built* .NET, which only ever tracks that band, so pinning one of Microsoft's `10.0.2xx`/`10.0.3xx` bands would lock every distro contributor out — `rollForward` only rolls forward, never back. Microsoft's own builds are newer bands and satisfy the pin too, if you prefer one.
+
+The build bundles the Linux plugins, reading the authoritative list in `plugins/catalog.json` via `scripts/plugin-catalog-deploy-map.py`. Skip that step with `-p:DeployBundledLinuxPlugins=false`.
 
 ```bash
 git clone https://github.com/csmashe/typewhisper-linux.git

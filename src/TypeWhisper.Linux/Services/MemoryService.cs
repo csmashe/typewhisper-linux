@@ -115,7 +115,7 @@ public sealed class MemoryService
     // is disabled).
     private LlmCallProvenance? RecordProvenance(
         LlmCallCapture? capture,
-        ILlmProviderPlugin provider,
+        ILlmProviderRole provider,
         string modelId,
         string userPrompt
     )
@@ -126,8 +126,10 @@ public sealed class MemoryService
         }
 
         var providerId = provider.GetLlmSelectionId();
-        var plugin = _pluginManager.GetPlugin(providerId);
-        var ranLocally = plugin is not null && PluginLocalityClassifier.IsLocal(plugin.Manifest);
+        // Look the plugin up by its owning plugin ID: a profile-backed role's
+        // selection ID is the profile's, which matches no manifest ID.
+        var plugin = _pluginManager.GetPlugin(provider.PluginId);
+        var ranLocally = plugin?.Metadata.RanLocally ?? false;
 
         var provenance = new LlmCallProvenance
         {
@@ -138,7 +140,7 @@ public sealed class MemoryService
             ProviderId = providerId,
             ModelId = modelId,
             RanLocally = ranLocally,
-            InjectedMemoryContext = null
+            InjectedMemoryContext = null,
         };
         capture.Add(provenance);
         return provenance;

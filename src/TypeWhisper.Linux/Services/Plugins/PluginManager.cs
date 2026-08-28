@@ -4,6 +4,7 @@ using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services.Plugins;
 
@@ -14,13 +15,7 @@ namespace TypeWhisper.Linux.Services.Plugins;
 /// </summary>
 public sealed class PluginManager : IDisposable
 {
-    // Fresh-install defaults: offline transcription engines only, so dictation works
-    // out of the box without a key. Cloud providers default off until opted in.
-    private static readonly HashSet<string> s_defaultEnabledPluginIds = new(StringComparer.Ordinal)
-    {
-        "com.typewhisper.whisper-cpp", // offline transcription (recommended default)
-        "com.typewhisper.sherpa-onnx" // offline transcription
-    };
+    private static readonly TimeSpan s_defaultPluginShutdownTimeout = TimeSpan.FromSeconds(5);
 
     private readonly HashSet<string> _activatedPlugins = [];
     private readonly ConcurrentDictionary<string, Task<bool>> _activationTasks = new();
@@ -33,16 +28,19 @@ public sealed class PluginManager : IDisposable
     private readonly IProfileService _profiles;
     private readonly string[] _searchDirectories;
     private readonly ISettingsService _settings;
+    private readonly TimeSpan _pluginShutdownTimeout;
     private readonly IErrorLogService? _errorLog;
+    private readonly string _secretProtectionKeyFilePath;
+    private readonly IProcessRunner _processRunner;
     private List<IActionPlugin> _actionPlugins = [];
 
     // Debounce guard for on-demand model re-polls (triggered when a dropdown opens).
     private bool _isRefreshingModels;
     private DateTime _lastModelRefresh = DateTime.MinValue;
 
-    private List<ILlmProviderPlugin> _llmProviders = [];
+    private List<ILlmProviderRole> _llmProviders = [];
     private List<IPostProcessorPlugin> _postProcessors = [];
-    private List<ITranscriptionEnginePlugin> _transcriptionEngines = [];
+    private List<ITranscriptionEngineRole> _transcriptionEngines = [];
     private List<ITtsProviderPlugin> _ttsProviders = [];
 
     public PluginManager(
@@ -51,7 +49,8 @@ public sealed class PluginManager : IDisposable
         IActiveWindowService activeWindow,
         IProfileService profiles,
         ISettingsService settings,
-        IErrorLogService? errorLog = null
+        IErrorLogService? errorLog = null,
+        IProcessRunner? processRunner = null
     )
         : this(
             loader,
@@ -60,7 +59,8 @@ public sealed class PluginManager : IDisposable
             profiles,
             settings,
             [TypeWhisperEnvironment.PluginsPath],
-            errorLog
+            errorLog,
+            processRunner: processRunner
         )
     {
     }
@@ -72,7 +72,10 @@ public sealed class PluginManager : IDisposable
         IProfileService profiles,
         ISettingsService settings,
         IEnumerable<string> searchDirectories,
-        IErrorLogService? errorLog = null
+        IErrorLogService? errorLog = null,
+        TimeSpan? pluginShutdownTimeout = null,
+        string? secretProtectionKeyFilePath = null,
+        IProcessRunner? processRunner = null
     )
     {
         _loader = loader;
@@ -82,6 +85,26 @@ public sealed class PluginManager : IDisposable
         _settings = settings;
         _searchDirectories = searchDirectories.ToArray();
         _errorLog = errorLog;
+        _processRunner = processRunner ?? new ProcessRunner();
+        _secretProtectionKeyFilePath = secretProtectionKeyFilePath
+            ?? Path.Join(
+                Directory.GetParent(
+                    Path.TrimEndingDirectorySeparator(
+                        Path.GetFullPath(_loader.PluginDataRoot)
+                    )
+                )?.FullName
+                    ?? TypeWhisperEnvironment.BasePath,
+                "secret-protection.key"
+            );
+        _pluginShutdownTimeout =
+            pluginShutdownTimeout ?? s_defaultPluginShutdownTimeout;
+        if (_pluginShutdownTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(pluginShutdownTimeout),
+                "The plugin shutdown timeout must be greater than zero."
+            );
+        }
     }
 
     public IReadOnlyList<LoadedPlugin> AllPlugins
@@ -95,7 +118,7 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    public IReadOnlyList<ILlmProviderPlugin> LlmProviders
+    public IReadOnlyList<ILlmProviderRole> LlmProviders
     {
         get
         {
@@ -106,7 +129,7 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    public IReadOnlyList<ITranscriptionEnginePlugin> TranscriptionEngines
+    public IReadOnlyList<ITranscriptionEngineRole> TranscriptionEngines
     {
         get
         {
@@ -164,23 +187,25 @@ public sealed class PluginManager : IDisposable
             activated = [.. _activatedPlugins];
         }
 
+        // One budget for the whole pass: a per-plugin timeout multiplies by the plugin count.
+        var shutdownBudget = Stopwatch.StartNew();
+
         foreach (var plugin in plugins)
         {
-            try
-            {
-                if (activated.Contains(plugin.Manifest.Id))
-                {
-                    plugin.Instance.DeactivateAsync().GetAwaiter().GetResult();
-                }
+            // Dispose is synchronous and can't be canceled. A hostile plugin can strand this
+            // worker past the deadline; bounded shutdown accepts that leaked thread.
+            var shutdownTask = Task.Factory.StartNew(
+                () => ShutdownPlugin(plugin, activated.Contains(plugin.Manifest.Id)),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default
+            );
 
-                plugin.Instance.Dispose();
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine(
-                    $"[PluginManager] Error disposing plugin {plugin.Manifest.Id}: {ex.Message}"
-                );
-            }
+            AwaitPluginShutdown(
+                shutdownTask,
+                plugin.Manifest.Id,
+                _pluginShutdownTimeout - shutdownBudget.Elapsed
+            );
 
             try
             {
@@ -205,6 +230,181 @@ public sealed class PluginManager : IDisposable
             _actionPlugins.Clear();
             _ttsProviders.Clear();
         }
+    }
+
+    private void AwaitPluginShutdown(Task shutdownTask, string pluginId, TimeSpan remaining)
+    {
+        if (remaining <= TimeSpan.Zero)
+        {
+            Trace.WriteLine(
+                "[PluginManager] Shutdown budget of "
+                    + $"{_pluginShutdownTimeout.TotalSeconds:0.###} seconds is spent; "
+                    + $"not waiting for plugin {pluginId}"
+            );
+
+            // The stranded worker still owns ShutdownPlugin's cleanup, so retire the
+            // scope here too — otherwise the plugin's children outlive the host.
+            RetirePluginProcesses(pluginId);
+            ObserveLateShutdown(shutdownTask, pluginId);
+            return;
+        }
+
+        var completedTask = Task.WhenAny(shutdownTask, Task.Delay(remaining))
+            .GetAwaiter()
+            .GetResult();
+
+        if (completedTask != shutdownTask)
+        {
+            Trace.WriteLine(
+                $"[PluginManager] Timed out shutting down plugin {pluginId} "
+                    + $"after {remaining.TotalSeconds:0.###} seconds"
+            );
+
+            // The stranded worker still owns ShutdownPlugin's cleanup, so retire the
+            // scope here too — otherwise the plugin's children outlive the host.
+            RetirePluginProcesses(pluginId);
+            ObserveLateShutdown(shutdownTask, pluginId);
+            return;
+        }
+
+        try
+        {
+            shutdownTask.GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[PluginManager] Error shutting down plugin {pluginId}: {ex.Message}"
+            );
+        }
+    }
+
+    private void ShutdownPlugin(LoadedPlugin plugin, bool deactivate)
+    {
+        try
+        {
+            if (deactivate)
+            {
+                try
+                {
+                    var deactivationTask = plugin.Instance.DeactivateAsync();
+                    var completedTask = Task.WhenAny(
+                            deactivationTask,
+                            Task.Delay(_pluginShutdownTimeout)
+                        )
+                        .GetAwaiter()
+                        .GetResult();
+
+                    if (completedTask == deactivationTask)
+                    {
+                        deactivationTask.GetAwaiter().GetResult();
+                    }
+                    else
+                    {
+                        Trace.WriteLine(
+                            $"[PluginManager] Timed out deactivating plugin {plugin.Manifest.Id} "
+                                + $"after {_pluginShutdownTimeout.TotalSeconds:0.###} seconds"
+                        );
+
+                        // Ordering guarantee: deactivate and dispose never run concurrently for the
+                        // same plugin. Disposing now would race the still-running deactivation, so
+                        // Dispose is deferred to a continuation that fires once it completes —
+                        // forfeited entirely if it never does, acceptable since the host is exiting.
+                        ObserveLateDeactivationThenDispose(deactivationTask, plugin);
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Error deactivating plugin {plugin.Manifest.Id}: {ex.Message}"
+                    );
+                }
+            }
+        }
+        finally
+        {
+            RetirePluginProcesses(plugin.Manifest.Id);
+        }
+
+        try
+        {
+            plugin.Instance.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[PluginManager] Error disposing plugin {plugin.Manifest.Id}: {ex.Message}"
+            );
+        }
+    }
+
+    private static void ObserveLateDeactivationThenDispose(Task deactivationTask, LoadedPlugin plugin)
+    {
+        var pluginId = plugin.Manifest.Id;
+        _ = deactivationTask.ContinueWith(
+            completedTask =>
+            {
+                if (completedTask.IsFaulted)
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Deactivation for plugin {pluginId} faulted after timeout: "
+                            + completedTask.Exception!.GetBaseException().Message
+                    );
+                }
+                else if (completedTask.IsCanceled)
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Deactivation for plugin {pluginId} was canceled after timeout"
+                    );
+                }
+                else
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Deactivation for plugin {pluginId} completed after timeout"
+                    );
+                }
+
+                try
+                {
+                    plugin.Instance.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Error disposing plugin {pluginId}: {ex.Message}"
+                    );
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
+    }
+
+    private static void ObserveLateShutdown(Task shutdownTask, string pluginId)
+    {
+        _ = shutdownTask.ContinueWith(
+            completedTask =>
+            {
+                if (completedTask.IsFaulted)
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Shutdown for plugin {pluginId} faulted after timeout: "
+                            + completedTask.Exception!.GetBaseException().Message
+                    );
+                }
+                else
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Shutdown for plugin {pluginId} completed after timeout"
+                    );
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
     }
 
     public IReadOnlyList<T> GetPlugins<T>()
@@ -245,12 +445,11 @@ public sealed class PluginManager : IDisposable
 
         foreach (var plugin in discovered)
         {
-            // Honor saved choice; otherwise enable local/offline engines by default so a
-            // fresh install has working transcription without an API key. IsLocal in the
-            // manifest is unreliable across plugins, so we anchor on an explicit allowlist.
+            // Honor saved choice; otherwise default-enable plugins whose metadata
+            // marks them local-only.
             var isEnabled = enabledState.TryGetValue(plugin.Manifest.Id, out var state)
                 ? state
-                : s_defaultEnabledPluginIds.Contains(plugin.Manifest.Id) || plugin.Manifest.IsLocal;
+                : IsEnabledByDefault(plugin);
 
             if (isEnabled)
             {
@@ -260,6 +459,11 @@ public sealed class PluginManager : IDisposable
 
         RebuildCapabilityIndices();
         await MigrateApiKeysAsync();
+    }
+
+    internal static bool IsEnabledByDefault(LoadedPlugin plugin)
+    {
+        return plugin.Metadata.NetworkAccess == PluginNetworkAccess.Local;
     }
 
     public async Task EnablePluginAsync(string pluginId)
@@ -372,6 +576,15 @@ public sealed class PluginManager : IDisposable
             await DeactivatePluginAsync(plugin);
         }
 
+        // Unload is authoritative even when a plugin's deactivation failed: release
+        // host-owned process/session state before dropping the collectible context.
+        RetirePluginProcesses(pluginId);
+        lock (_lock)
+        {
+            _hostServices.Remove(pluginId);
+            _activatedPlugins.Remove(pluginId);
+        }
+
         // Always unload even if Dispose throws — otherwise the collectible ALC stays rooted
         // and native deps aren't freed.
         try
@@ -402,13 +615,13 @@ public sealed class PluginManager : IDisposable
         RebuildCapabilityIndices();
     }
 
-    public async Task LoadPluginFromDirectoryAsync(string pluginDirectory, bool activate)
+    public async Task<bool> LoadPluginFromDirectoryAsync(string pluginDirectory, bool activate)
     {
         var plugin = _loader.LoadPlugin(pluginDirectory);
         if (plugin is null)
         {
             Trace.WriteLine($"[PluginManager] Failed to load plugin from {pluginDirectory}");
-            return;
+            return false;
         }
 
         // Unload any existing plugin with the same Id to avoid leaking host services or load context.
@@ -430,11 +643,17 @@ public sealed class PluginManager : IDisposable
 
         if (activate)
         {
-            await ActivatePluginAsync(plugin);
+            if (!await ActivatePluginAsync(plugin))
+            {
+                await UnloadPluginAsync(plugin.Manifest.Id);
+                return false;
+            }
+
             PersistEnabledState(plugin.Manifest.Id, true);
         }
 
         RebuildCapabilityIndices();
+        return true;
     }
 
     public ITtsProviderPlugin? GetTtsProvider(string providerId)
@@ -517,12 +736,21 @@ public sealed class PluginManager : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Raised when the active plugins or their capabilities change. This event may be raised
+    ///     on any thread; UI subscribers are responsible for marshalling to the UI thread.
+    /// </summary>
     public event EventHandler? PluginStateChanged;
 
     private async Task<bool> ActivatePluginAsync(LoadedPlugin plugin)
     {
+        PluginProcessSupervisorScope? processScope = null;
         try
         {
+            processScope = new PluginProcessSupervisorScope(
+                plugin.Manifest.Id,
+                _processRunner
+            );
             var hostServices = new PluginHostServices(
                 plugin.Manifest.Id,
                 plugin.PluginDirectory,
@@ -530,15 +758,14 @@ public sealed class PluginManager : IDisposable
                 EventBus,
                 _profiles,
                 _settings,
-                () =>
-                {
-                    RebuildCapabilityIndices();
-                    PluginStateChanged?.Invoke(this, EventArgs.Empty);
-                },
+                RebuildCapabilityIndices,
                 _errorLog,
                 ResolveErrorCategory(plugin),
                 plugin.Manifest.Name,
-                _loader.PluginDataRoot
+                _loader.PluginDataRoot,
+                _secretProtectionKeyFilePath,
+                processScope,
+                new PcmPlaybackService(processScope)
             );
 
             await plugin.Instance.ActivateAsync(hostServices);
@@ -554,6 +781,9 @@ public sealed class PluginManager : IDisposable
         }
         catch (Exception ex)
         {
+            // The local scope, not hostServices.ProcessScope: this also covers a
+            // PluginHostServices constructor that threw before it was assigned.
+            processScope?.Retire();
             Trace.WriteLine(
                 $"[PluginManager] Failed to activate plugin {plugin.Manifest.Id}: {ex.Message}"
             );
@@ -565,27 +795,38 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    // Pick the error-log category for a plugin's host.Log(Error) calls. The manifest
-    // Category is the plugin's self-declared primary role, but most bundled plugins omit
-    // it — so fall back to the runtime capability interfaces (transcription engines log
-    // under Transcription, LLM providers under Prompt) before the generic Plugin bucket.
+    // Same normalized categories as the UI (Transcription, then Llm, take priority).
+    // Legacy manifests that normalized to Unknown fall back to the instance's
+    // capability interfaces instead of the generic bucket.
     private static string ResolveErrorCategory(LoadedPlugin plugin)
     {
-        return plugin.Manifest.Category?.Trim().ToLowerInvariant() switch
+        if (plugin.Metadata.Categories.Contains(PluginCategory.Transcription))
         {
-            "transcription" => ErrorCategory.Transcription,
-            "llm" or "prompt" => ErrorCategory.Prompt,
-            _ => plugin.Instance switch
-            {
-                ITranscriptionEnginePlugin => ErrorCategory.Transcription,
-                ILlmProviderPlugin => ErrorCategory.Prompt,
-                _ => ErrorCategory.Plugin
-            }
+            return ErrorCategory.Transcription;
+        }
+
+        if (plugin.Metadata.Categories.Contains(PluginCategory.Llm))
+        {
+            return ErrorCategory.Prompt;
+        }
+
+        return plugin.Instance switch
+        {
+            ITranscriptionEnginePlugin => ErrorCategory.Transcription,
+            ILlmProviderPlugin => ErrorCategory.Prompt,
+            _ => ErrorCategory.Plugin,
         };
     }
 
     private async Task<bool> DeactivatePluginAsync(LoadedPlugin plugin)
     {
+        PluginHostServices? hostServices;
+        lock (_lock)
+        {
+            _hostServices.TryGetValue(plugin.Manifest.Id, out hostServices);
+        }
+
+        var deactivated = false;
         try
         {
             await plugin.Instance.DeactivateAsync();
@@ -596,6 +837,7 @@ public sealed class PluginManager : IDisposable
                 _activatedPlugins.Remove(plugin.Manifest.Id);
             }
 
+            deactivated = true;
             Trace.WriteLine($"[PluginManager] Deactivated plugin: {plugin.Manifest.Id}");
             return true;
         }
@@ -606,6 +848,33 @@ public sealed class PluginManager : IDisposable
             );
             return false;
         }
+        finally
+        {
+            // Success drops the host-services entry, so unload can no longer reach this scope:
+            // retire it here. A failed deactivation leaves the plugin registered and usable,
+            // so its work is merely stopped.
+            if (deactivated)
+            {
+                hostServices?.ProcessScope?.Retire();
+            }
+            else
+            {
+                hostServices?.ProcessScope?.TerminateAll();
+            }
+        }
+    }
+
+    // Unload and host shutdown are terminal for the scope, so it is retired rather than
+    // merely stopped: nothing the plugin starts from here on may survive it.
+    private void RetirePluginProcesses(string pluginId)
+    {
+        PluginHostServices? hostServices;
+        lock (_lock)
+        {
+            _hostServices.TryGetValue(pluginId, out hostServices);
+        }
+
+        hostServices?.ProcessScope?.Retire();
     }
 
     private void RebuildCapabilityIndices()
@@ -621,28 +890,33 @@ public sealed class PluginManager : IDisposable
             // (e.g. OpenAI-compatible profiles), then de-dup by selection ID so a
             // role and the plugin's own default never collide. GroupBy().First()
             // keeps the first occurrence — the plugin's primary role is enumerated
-            // before its additional roles.
-            _llmProviders = activePlugins
-                .OfType<ILlmProviderPlugin>()
-                .Concat(
+            // before its additional roles. Resolve and validate every effective ID
+            // before grouping so one malformed external role cannot poison the rebuild.
+            _llmProviders = ValidLlmProviders(
                     activePlugins
-                        // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
-                        .OfType<IAdditionalLlmProvidersProvider>()
-                        .SelectMany(SafeAdditionalLlmProviders)
+                        .OfType<ILlmProviderPlugin>()
+                        .Concat(
+                            activePlugins
+                                // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
+                                .OfType<IAdditionalLlmProvidersProvider>()
+                                .SelectMany(SafeAdditionalLlmProviders)
+                        )
                 )
-                .GroupBy(p => p.GetLlmSelectionId(), StringComparer.Ordinal)
-                .Select(group => group.First())
+                .GroupBy(entry => entry.SelectionId, StringComparer.Ordinal)
+                .Select(group => group.First().Provider)
                 .ToList();
-            _transcriptionEngines = activePlugins
-                .OfType<ITranscriptionEnginePlugin>()
-                .Concat(
+            _transcriptionEngines = ValidTranscriptionEngines(
                     activePlugins
-                        // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
-                        .OfType<IAdditionalTranscriptionEnginesProvider>()
-                        .SelectMany(SafeAdditionalTranscriptionEngines)
+                        .OfType<ITranscriptionEnginePlugin>()
+                        .Concat(
+                            activePlugins
+                                // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
+                                .OfType<IAdditionalTranscriptionEnginesProvider>()
+                                .SelectMany(SafeAdditionalTranscriptionEngines)
+                        )
                 )
-                .GroupBy(p => p.GetTranscriptionSelectionId(), StringComparer.Ordinal)
-                .Select(group => group.First())
+                .GroupBy(entry => entry.SelectionId, StringComparer.Ordinal)
+                .Select(group => group.First().Provider)
                 .ToList();
             _postProcessors = activePlugins
                 .OfType<IPostProcessorPlugin>()
@@ -656,11 +930,78 @@ public sealed class PluginManager : IDisposable
         PluginStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    private IEnumerable<(ILlmProviderRole Provider, string SelectionId)> ValidLlmProviders(
+        IEnumerable<ILlmProviderRole> providers
+    )
+    {
+        foreach (var provider in providers)
+        {
+            string selectionId;
+            try
+            {
+                selectionId = provider.GetLlmSelectionId();
+            }
+            catch (Exception ex)
+            {
+                LogInvalidSelectionId(
+                    "LLM provider",
+                    provider,
+                    ex,
+                    ErrorCategory.Prompt
+                );
+                continue;
+            }
+
+            yield return (provider, selectionId);
+        }
+    }
+
+    private IEnumerable<(
+        ITranscriptionEngineRole Provider,
+        string SelectionId
+    )> ValidTranscriptionEngines(IEnumerable<ITranscriptionEngineRole> providers)
+    {
+        foreach (var provider in providers)
+        {
+            string selectionId;
+            try
+            {
+                selectionId = provider.GetTranscriptionSelectionId();
+            }
+            catch (Exception ex)
+            {
+                LogInvalidSelectionId(
+                    "transcription engine",
+                    provider,
+                    ex,
+                    ErrorCategory.Transcription
+                );
+                continue;
+            }
+
+            yield return (provider, selectionId);
+        }
+    }
+
+    private void LogInvalidSelectionId(
+        string providerRole,
+        object provider,
+        Exception exception,
+        string errorCategory
+    )
+    {
+        var message =
+            $"Skipping {providerRole} '{provider.GetType().Name}' because its effective "
+            + $"selection ID is invalid: {exception.Message}";
+        Trace.WriteLine($"[PluginManager] {message}");
+        _errorLog?.AddEntry(message, errorCategory);
+    }
+
     // A misbehaving third-party plugin must not be able to abort the whole
     // capability rebuild: materialize each provider's additional roles inside a
     // try/catch so a throwing getter (or one that throws mid-enumeration) just
     // contributes nothing and is logged. Grouping/dedup downstream is unchanged.
-    private static IEnumerable<ILlmProviderPlugin> SafeAdditionalLlmProviders(
+    private static IEnumerable<ILlmProviderRole> SafeAdditionalLlmProviders(
         IAdditionalLlmProvidersProvider provider
     )
     {
@@ -682,7 +1023,7 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    private static IEnumerable<ITranscriptionEnginePlugin> SafeAdditionalTranscriptionEngines(
+    private static IEnumerable<ITranscriptionEngineRole> SafeAdditionalTranscriptionEngines(
         IAdditionalTranscriptionEnginesProvider provider
     )
     {
@@ -708,10 +1049,15 @@ public sealed class PluginManager : IDisposable
     {
         try
         {
-            var current = _settings.Current;
-            var updatedState = new Dictionary<string, bool>(current.PluginEnabledState) { [pluginId] = enabled };
-
-            _settings.Save(current with { PluginEnabledState = updatedState });
+            _settings.Update(current =>
+                current with
+                {
+                    PluginEnabledState = new Dictionary<string, bool>(current.PluginEnabledState)
+                    {
+                        [pluginId] = enabled,
+                    },
+                }
+            );
         }
         catch (Exception ex)
         {
@@ -752,12 +1098,15 @@ public sealed class PluginManager : IDisposable
 
         if (migratedGroq || migratedOpenAi)
         {
-            var current = _settings.Current;
-            _settings.Save(
+            _settings.Update(current =>
                 current with
                 {
-                    GroqApiKey = migratedGroq ? "" : current.GroqApiKey,
-                    OpenAiApiKey = migratedOpenAi ? "" : current.OpenAiApiKey
+                    GroqApiKey = migratedGroq && current.GroqApiKey == settings.GroqApiKey
+                        ? ""
+                        : current.GroqApiKey,
+                    OpenAiApiKey = migratedOpenAi && current.OpenAiApiKey == settings.OpenAiApiKey
+                        ? ""
+                        : current.OpenAiApiKey,
                 }
             );
         }
@@ -782,13 +1131,22 @@ public sealed class PluginManager : IDisposable
 
         try
         {
-            var decrypted = ApiKeyProtection.Decrypt(encryptedValue);
-            if (string.IsNullOrEmpty(decrypted))
+            var decrypted = ApiKeyProtection.Decrypt(
+                encryptedValue,
+                _secretProtectionKeyFilePath
+            );
+            if (
+                decrypted.Format is not (
+                    SecretProtectionFormat.Current
+                    or SecretProtectionFormat.LegacyGcm
+                )
+                || string.IsNullOrEmpty(decrypted.PlainText)
+            )
             {
                 return false;
             }
 
-            await hostServices.StoreSecretAsync(secretKey, decrypted);
+            await hostServices.StoreSecretAsync(secretKey, decrypted.PlainText);
             Trace.WriteLine($"[PluginManager] Migrated API key to plugin: {pluginId}");
             return true;
         }
