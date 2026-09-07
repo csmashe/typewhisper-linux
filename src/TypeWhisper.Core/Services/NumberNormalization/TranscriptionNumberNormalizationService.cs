@@ -4,6 +4,10 @@ namespace TypeWhisper.Core.Services.NumberNormalization;
 
 public static class TranscriptionNumberNormalizationService
 {
+    // English only when nothing reports a language (Parakeet never does): trying every parser
+    // lets German "null"/"elf" or Spanish "once"/"dos" rewrite plain English.
+    private static readonly string[] s_unknownLanguageFallback = ["en"];
+
     // ReSharper disable once MemberCanBePrivate.Global -- public API of the service, so callers can
     // check the toggle without running a normalization pass.
     public static bool IsEnabled(bool globalEnabled = true, bool? normalizeNumbersOverride = null) =>
@@ -78,7 +82,7 @@ public static class TranscriptionNumberNormalizationService
         return NormalizeSegments(segments, languages, globalEnabled, normalizeNumbersOverride);
     }
 
-    private static List<string> NormalizationLanguages(
+    private static IReadOnlyList<string> NormalizationLanguages(
         TranscriptionTask transcriptionTask,
         string? detectedLanguage,
         string? configuredLanguage,
@@ -87,9 +91,14 @@ public static class TranscriptionNumberNormalizationService
         if (transcriptionTask == TranscriptionTask.Translate)
             return ["en"];
 
-        return PrioritizedLanguages(
+        var languages = PrioritizedLanguages(
             detectedLanguage,
-            [.. new[] { configuredLanguage }.Where(static language => language is not null).Select(static language => language!), .. configuredLanguageCandidates]);
+            [.. new[] { configuredLanguage }.Where(static language => language is not null).Select(static language => language!), .. configuredLanguageCandidates],
+            out var hasLanguageInformation);
+
+        return languages.Count > 0 || hasLanguageInformation
+            ? languages
+            : s_unknownLanguageFallback;
     }
 
     private static string NormalizeText(
@@ -123,8 +132,12 @@ public static class TranscriptionNumberNormalizationService
             })
             .ToList();
 
-    private static List<string> PrioritizedLanguages(string? primary, IReadOnlyList<string> candidates)
+    private static List<string> PrioritizedLanguages(
+        string? primary,
+        IReadOnlyList<string> candidates,
+        out bool hasLanguageInformation)
     {
+        hasLanguageInformation = false;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var result = new List<string>();
 
@@ -133,7 +146,12 @@ public static class TranscriptionNumberNormalizationService
         foreach (var rawLanguage in new[] { primary }.Where(static language => language is not null).Select(static language => language!).Concat(candidates))
         {
             var normalized = NumberWordNormalizer.NormalizeLanguageCode(rawLanguage);
-            if (normalized is null || !seen.Add(normalized))
+            if (normalized is null)
+                continue;
+
+            hasLanguageInformation = true;
+            if (!NumberWordNormalizer.IsSupportedLanguage(normalized) ||
+                !seen.Add(normalized))
                 continue;
 
             result.Add(normalized);

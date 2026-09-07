@@ -42,7 +42,11 @@ public class PostProcessingPipelineTests
     {
         var result = await _sut.ProcessAsync(
             input,
-            new PipelineOptions { NormalizeSpokenLineBreaks = true }
+            new PipelineOptions
+            {
+                TranscriptionNumberNormalizationEnabled = false,
+                NormalizeSpokenLineBreaks = true,
+            }
         );
         Assert.Equal(expected, result.Text);
     }
@@ -497,6 +501,32 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
+    public async Task ProcessAsync_NumberNormalization_NoLanguageInformation_FallsBackToEnglish()
+    {
+        var options = new PipelineOptions
+        {
+            TranscriptionNumberNormalizationEnabled = true,
+        };
+
+        var result = await _sut.ProcessAsync("Set the value to twenty three", options);
+
+        Assert.Equal("Set the value to 23", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NumberNormalization_NoLanguageInformation_PreservesEnglishWordsThatAreForeignNumbers()
+    {
+        var options = new PipelineOptions
+        {
+            TranscriptionNumberNormalizationEnabled = true,
+        };
+
+        var result = await _sut.ProcessAsync("the value is null", options);
+
+        Assert.Equal("the value is null", result.Text);
+    }
+
+    [Fact]
     public async Task ProcessAsync_NumberNormalization_UsesEnglishForTranslateTask()
     {
         var options = new PipelineOptions
@@ -870,6 +900,7 @@ public class PostProcessingPipelineTests
     {
         var options = new PipelineOptions
         {
+            TranscriptionNumberNormalizationEnabled = false,
             AppFormatter = AppFormatterService.Format,
             TargetProcessName = "OUTLOOK",
         };
