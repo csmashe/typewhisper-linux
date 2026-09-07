@@ -192,6 +192,107 @@ public class GroqPluginTests
     }
 
     [Fact]
+    public async Task ProcessAsync_HidesReasoningForQwenModels()
+    {
+        var handler = new CapturingHandler((_, body) =>
+            {
+                using var doc = JsonDocument.Parse(
+                    body ?? throw new InvalidOperationException("Missing request body.")
+                );
+                Assert.Equal("qwen/qwen3-32b", doc.RootElement.GetProperty("model").GetString());
+                Assert.Equal("hidden", doc.RootElement.GetProperty("reasoning_format").GetString());
+
+                return JsonResponse("""{"choices":[{"message":{"content":"final answer"}}]}""");
+            }
+        );
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
+
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new GroqPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ProcessAsync("system", "user", "qwen/qwen3-32b", CancellationToken.None);
+
+        Assert.Equal("final answer", result);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_DoesNotSendReasoningFormatForOtherModels()
+    {
+        var handler = new CapturingHandler((request, body) =>
+            {
+                using var doc = JsonDocument.Parse(
+                    body ?? throw new InvalidOperationException("Missing request body.")
+                );
+                Assert.Equal("llama-3.3-70b-versatile", doc.RootElement.GetProperty("model").GetString());
+                Assert.False(doc.RootElement.TryGetProperty("reasoning_format", out _));
+
+                return JsonResponse("""{"choices":[{"message":{"content":"final answer"}}]}""");
+            }
+        );
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
+
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new GroqPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ProcessAsync(
+            "system", "user", "llama-3.3-70b-versatile", CancellationToken.None
+        );
+
+        Assert.Equal("final answer", result);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_HidesReasoningForQwenModels()
+    {
+        var sse = string.Join(
+            "\n",
+            """data: {"choices":[{"delta":{"content":"Hel"}}]}""",
+            "",
+            """data: {"choices":[{"delta":{"content":"lo"}}]}""",
+            "",
+            "data: [DONE]",
+            "",
+            ""
+        );
+        var handler = new CapturingHandler((_, body) =>
+            {
+                using var doc = JsonDocument.Parse(
+                    body ?? throw new InvalidOperationException("Missing request body.")
+                );
+                Assert.Equal("qwen/qwen3-32b", doc.RootElement.GetProperty("model").GetString());
+                Assert.Equal("hidden", doc.RootElement.GetProperty("reasoning_format").GetString());
+                Assert.True(doc.RootElement.GetProperty("stream").GetBoolean());
+
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+                };
+            }
+        );
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
+
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new GroqPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        await foreach (
+            var chunk in sut.ProcessStreamingAsync("system", "user", "qwen/qwen3-32b", CancellationToken.None)
+        )
+            chunks.Add(chunk);
+
+        Assert.Equal(["Hel", "lo"], chunks);
+    }
+
+    [Fact]
     public async Task ProcessAsync_UsesFallbackLlmModelWhenSelectionMissing()
     {
         var handler = new CapturingHandler((_, body) =>

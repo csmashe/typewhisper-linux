@@ -172,6 +172,7 @@ public sealed class GroqPlugin
             modelId,
             systemPrompt,
             userText,
+            BuildRequestOptions(modelId),
             ct
         );
     }
@@ -200,11 +201,23 @@ public sealed class GroqPlugin
             modelId,
             systemPrompt,
             userText,
+            BuildRequestOptions(modelId),
             ct
         );
 
         await foreach (var delta in source)
             yield return delta;
+    }
+
+    private static OpenAiChatRequestOptions BuildRequestOptions(string modelId)
+    {
+        // Groq returns Qwen reasoning inline unless the reasoning format is hidden.
+        return modelId.StartsWith("qwen", StringComparison.OrdinalIgnoreCase)
+            ? new OpenAiChatRequestOptions
+            {
+                AdditionalBodyFields = new Dictionary<string, object?> { ["reasoning_format"] = "hidden" },
+            }
+            : new OpenAiChatRequestOptions();
     }
 
     internal string? ApiKey { get; private set; }
