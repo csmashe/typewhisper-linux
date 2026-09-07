@@ -1,25 +1,48 @@
-using System.IO;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable NotAccessedPositionalProperty.Global
+// ReSharper disable UnusedMember.Global
+// ReSharper disable UnusedType.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.Plugins.Shared.Net;
 
 namespace TypeWhisper.Plugin.Obsidian;
 
-public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
-    private IPluginHostServices? _host;
+    private const int MaxIndividualNotePathAttempts = 10_000;
+    private const int UnixFileExistsError = 17;
+    private const int WindowsFileExistsError = 80;
+    private const int WindowsAlreadyExistsError = 183;
+
+    private readonly Func<List<ObsidianVaultInfo>> _detectVaults;
     private List<ObsidianVaultInfo> _detectedVaults = [];
+
+    public ObsidianPlugin() : this(DetectVaults) { }
+
+    internal ObsidianPlugin(Func<List<ObsidianVaultInfo>> detectVaults)
+    {
+        ArgumentNullException.ThrowIfNull(detectVaults);
+        _detectVaults = detectVaults;
+    }
 
     public string PluginId => "com.typewhisper.obsidian";
     public string PluginName => "Obsidian";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public string ActionId => "save-to-obsidian";
     public string ActionName => "Save to Obsidian";
+    // ReSharper disable once ReturnTypeCanBeNotNullable -- matches the interface contract, which declares this member nullable.
     public string? ActionIcon => "\ud83d\udcdd";
 
-    internal IPluginHostServices? Host => _host;
+    internal IPluginHostServices? Host { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -28,12 +51,12 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
     // Prefer the host's localization once activated; fall back to the catalog
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
-    internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
+    internal IPluginLocalization? Loc => Host?.Localization ?? _injectedLocalization;
 
     public Task ActivateAsync(IPluginHostServices host)
     {
-        _host = host;
-        _detectedVaults = DetectVaults();
+        Host = host;
+        _detectedVaults = _detectVaults();
         return Task.CompletedTask;
     }
 
@@ -45,10 +68,10 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         CancellationToken ct
     )
     {
-        if (_host is null)
+        if (Host is null)
             return new ActionResult(false, Loc.L("Settings.PluginNotActivatedShort"));
 
-        var vaultPath = _host.GetSetting<string>("vault-path");
+        var vaultPath = Host.GetSetting<string>("vault-path");
         if (string.IsNullOrWhiteSpace(vaultPath))
             return new ActionResult(
                 false,
@@ -58,51 +81,194 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         if (!Directory.Exists(vaultPath))
             return new ActionResult(false, Loc.L("Settings.VaultPathNotFound", vaultPath));
 
-        var subfolder = _host.GetSetting<string>("subfolder") ?? "TypeWhisper";
-        var dailyNoteMode = _host.GetSetting<bool>("daily-note-mode");
-        var filenameTemplate = _host.GetSetting<string>("filename-template");
+        var subfolder = Host.GetSetting<string>("subfolder") ?? "TypeWhisper";
+        var dailyNoteMode = Host.GetSetting<bool>("daily-note-mode");
+        var filenameTemplate = Host.GetSetting<string>("filename-template");
         if (string.IsNullOrWhiteSpace(filenameTemplate))
             filenameTemplate = "{{date}} {{time}} Transcription";
 
+        if (!TryGetContainedTargetDirectory(vaultPath, subfolder, out var vaultRoot, out var targetDir))
+            return new ActionResult(false, Loc.L("Settings.SubfolderOutsideVault"));
+
+        // In-vault link targets are allowed, outside ones refused. Checked before
+        // CreateDirectory, or an escaping link's directories would exist by the time we refuse.
+        //
+        // Path-based, so a window ahead of the write rather than atomic with it. Deliberate: the
+        // vault is the user's own directory, so anyone who could swap in an escaping link already
+        // has write access to what this protects. Closing the window needs handle-based
+        // O_NOFOLLOW traversal, which .NET does not expose.
+        if (!IsResolvedTargetContained(vaultRoot, targetDir))
+            return new ActionResult(false, Loc.L("Settings.SubfolderOutsideVault"));
+
         var now = DateTime.Now;
-        var targetDir = Path.Join(vaultPath, subfolder);
         Directory.CreateDirectory(targetDir);
 
         string filePath;
         string filename;
-        string content;
 
         if (dailyNoteMode)
         {
             filename = $"{now:yyyy-MM-dd}.md";
             filePath = Path.Join(targetDir, filename);
 
-            var entry = BuildDailyNoteEntry(input, context, now);
+            // The daily note itself may be a link that appending would follow, so it
+            // needs the same in-vault-target check as the directory above.
+            if (!IsResolvedTargetContained(vaultRoot, filePath))
+                return new ActionResult(false, Loc.L("Settings.NoteOutsideVault"));
 
-            if (File.Exists(filePath))
-            {
-                await File.AppendAllTextAsync(filePath, entry, Encoding.UTF8, ct);
-            }
-            else
-            {
-                var header = $"# {now:yyyy-MM-dd}\n\n";
-                await File.WriteAllTextAsync(filePath, header + entry, Encoding.UTF8, ct);
-            }
+            var entry = BuildDailyNoteEntry(input, context, now);
+            var header = $"# {now:yyyy-MM-dd}\n\n";
+            var lockPath = GetDailyNoteLockPath(Host.PluginDataDirectory, filePath);
+            await WriteDailyNoteAsync(filePath, lockPath, header, entry, ct);
         }
         else
         {
+            // No link check needed: FileMode.CreateNew below refuses an existing link
+            // rather than following it.
             filename = BuildFilename(filenameTemplate, context, now) + ".md";
             filePath = Path.Join(targetDir, filename);
-            filePath = EnsureUniqueFilePath(filePath);
-            filename = Path.GetFileName(filePath);
 
-            content = BuildNoteContent(input, context, now);
-            await File.WriteAllTextAsync(filePath, content, Encoding.UTF8, ct);
+            var content = BuildNoteContent(input, context, now);
+            filePath = await WriteIndividualNoteAsync(filePath, content, ct);
+            filename = Path.GetFileName(filePath);
         }
 
-        _host.Log(PluginLogLevel.Info, $"Saved transcription to {filePath}");
+        Host.Log(PluginLogLevel.Info, $"Saved transcription to {filePath}");
         return new ActionResult(true, Loc.L("Settings.SavedTo", filename));
     }
+
+    private static bool TryGetContainedTargetDirectory(
+        string vaultPath,
+        string subfolder,
+        out string vaultRoot,
+        out string targetDir
+    )
+    {
+        vaultRoot = string.Empty;
+        targetDir = string.Empty;
+
+        if (Path.IsPathRooted(subfolder))
+            return false;
+
+        try
+        {
+            vaultRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(vaultPath));
+            targetDir = Path.TrimEndingDirectorySeparator(
+                Path.GetFullPath(Path.Join(vaultRoot, subfolder))
+            );
+            return IsSameOrDescendantPath(vaultRoot, targetDir);
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException
+                or IOException
+                or NotSupportedException
+                or UnauthorizedAccessException
+        )
+        {
+            return false;
+        }
+    }
+
+    private static bool IsResolvedTargetContained(string vaultRoot, string target)
+    {
+        try
+        {
+            var resolvedVaultRoot = ResolveLinkedPath(vaultRoot);
+            var resolvedTarget = ResolveLinkedPath(target);
+            return IsSameOrDescendantPath(resolvedVaultRoot, resolvedTarget);
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException
+                or IOException
+                or NotSupportedException
+                or UnauthorizedAccessException
+        )
+        {
+            return false;
+        }
+    }
+
+    // ResolveLinkTarget reports links of either kind, so this segment-by-segment walk
+    // also resolves a leaf note file.
+    private static string ResolveLinkedPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var remainingSegments = new Queue<string>();
+        var resolvedPath = ResetToPathRoot(fullPath, remainingSegments);
+        var followedLinks = 0;
+
+        while (remainingSegments.TryDequeue(out var segment))
+        {
+            var nextPath = Path.Join(resolvedPath, segment);
+            // ResolveLinkTarget throws on a path that doesn't exist yet, so segments we're
+            // about to create are skipped as literal. Path.Exists (unlike Directory.Exists)
+            // is still true for a dangling link, so an escaping one is still rejected.
+            if (!Path.Exists(nextPath))
+            {
+                resolvedPath = nextPath;
+                continue;
+            }
+
+            var resolvedLink = Directory.ResolveLinkTarget(nextPath, returnFinalTarget: true);
+            if (resolvedLink is null)
+            {
+                resolvedPath = nextPath;
+                continue;
+            }
+
+            followedLinks++;
+            if (followedLinks > 64)
+                throw new IOException($"Too many symbolic links while resolving path: {path}");
+
+            var trailingSegments = remainingSegments.ToArray();
+            remainingSegments.Clear();
+            resolvedPath = ResetToPathRoot(
+                Path.GetFullPath(resolvedLink.FullName),
+                remainingSegments
+            );
+            foreach (var trailingSegment in trailingSegments)
+                remainingSegments.Enqueue(trailingSegment);
+        }
+
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(resolvedPath));
+    }
+
+    private static string ResetToPathRoot(string path, Queue<string> segments)
+    {
+        var root = Path.GetPathRoot(path)
+            ?? throw new IOException($"Path has no root: {path}");
+        foreach (var segment in path[root.Length..].Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries
+        ))
+        {
+            segments.Enqueue(segment);
+        }
+
+        return root;
+    }
+
+    private static bool IsSameOrDescendantPath(string root, string candidate)
+    {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (string.Equals(root, candidate, comparison))
+            return true;
+
+        if (!candidate.StartsWith(root, comparison))
+            return false;
+
+        if (Path.EndsInDirectorySeparator(root))
+            return true;
+
+        return candidate.Length > root.Length
+            && IsDirectorySeparator(candidate[root.Length]);
+    }
+
+    private static bool IsDirectorySeparator(char value) =>
+        value == Path.DirectorySeparatorChar || value == Path.AltDirectorySeparatorChar;
 
     private static string BuildNoteContent(string input, ActionContext context, DateTime now)
     {
@@ -164,6 +330,7 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
 
         foreach (var c in filename)
         {
+            // ReSharper disable once ConvertIfStatementToConditionalTernaryExpression -- subjective style; kept as an explicit if.
             if (Array.IndexOf(invalid, c) >= 0)
                 sanitized.Append('_');
             else
@@ -176,26 +343,205 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         return string.IsNullOrWhiteSpace(result) ? "Transcription" : result;
     }
 
-    private static string EnsureUniqueFilePath(string filePath)
-    {
-        if (!File.Exists(filePath))
-            return filePath;
+    private static Task<string> WriteIndividualNoteAsync(
+        string filePath,
+        string content,
+        CancellationToken ct
+    ) =>
+        WriteIndividualNoteAsync(filePath, content, WriteUtf8TextAsync, ct);
 
+    internal static async Task<string> WriteIndividualNoteAsync(
+        string filePath,
+        string content,
+        Func<FileStream, string, CancellationToken, Task> writeAsync,
+        CancellationToken ct
+    )
+    {
         var dir = Path.GetDirectoryName(filePath)!;
         var nameWithoutExt = Path.GetFileNameWithoutExtension(filePath);
         var ext = Path.GetExtension(filePath);
-        var counter = 2;
 
-        string candidate;
-        do
+        for (var attempt = 0; attempt < MaxIndividualNotePathAttempts; attempt++)
         {
-            candidate = Path.Join(dir, $"{nameWithoutExt} {counter}{ext}");
-            counter++;
-        } while (File.Exists(candidate));
+            var candidate = attempt == 0
+                ? filePath
+                : Path.Join(dir, $"{nameWithoutExt} {attempt + 1}{ext}");
+            FileStream claimedStream;
 
-        return candidate;
+            try
+            {
+                claimedStream = new FileStream(
+                    candidate,
+                    FileMode.CreateNew,
+                    FileAccess.Write,
+                    FileShare.None,
+                    bufferSize: 4096,
+                    FileOptions.Asynchronous
+                );
+            }
+            catch (IOException ex) when (IsCreateNewCollision(ex))
+            {
+                continue;
+            }
+
+            try
+            {
+                await using (claimedStream)
+                {
+                    await writeAsync(claimedStream, content, ct);
+                    await claimedStream.FlushAsync(ct);
+                }
+
+                return candidate;
+            }
+            catch
+            {
+                TryDeleteOwnedFile(candidate);
+                throw;
+            }
+        }
+
+        throw new IOException(
+            $"Could not create a unique Obsidian note after {MaxIndividualNotePathAttempts} attempts."
+        );
     }
 
+    internal static string GetDailyNoteLockPath(string pluginDataDirectory, string notePath)
+    {
+        var normalizedNotePath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(notePath));
+        if (OperatingSystem.IsWindows())
+            normalizedNotePath = normalizedNotePath.ToUpperInvariant();
+
+        var hash = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(normalizedNotePath))
+        );
+        return Path.Join(pluginDataDirectory, "locks", $"{hash}.lock");
+    }
+
+    private static async Task WriteDailyNoteAsync(
+        string filePath,
+        string lockPath,
+        string header,
+        string entry,
+        CancellationToken ct
+    )
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+
+        await using (await InterProcessFileLock.AcquireAsync(lockPath, ct))
+        {
+            if (File.Exists(filePath))
+            {
+                // The sentinel already serializes TypeWhisper writers, so allow
+                // read sharing: an editor/sync client holding the note open for
+                // reading must not turn this append into a sharing violation.
+                var originalLength = new FileInfo(filePath).Length;
+                try
+                {
+                    await using var appendStream = new FileStream(
+                        filePath,
+                        FileMode.Append,
+                        FileAccess.Write,
+                        FileShare.Read,
+                        bufferSize: 4096,
+                        FileOptions.Asynchronous
+                    );
+                    await WriteUtf8TextAsync(appendStream, entry, ct);
+                    await appendStream.FlushAsync(ct);
+                }
+                catch
+                {
+                    // Roll the note back to its pre-append length so a failed or
+                    // cancelled write leaves no partial entry behind.
+                    TryTruncateFile(filePath, originalLength);
+                    throw;
+                }
+
+                return;
+            }
+
+            FileStream claimedStream = new(
+                filePath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 4096,
+                FileOptions.Asynchronous
+            );
+
+            try
+            {
+                await using (claimedStream)
+                {
+                    await WriteUtf8TextAsync(claimedStream, header + entry, ct);
+                    await claimedStream.FlushAsync(ct);
+                }
+            }
+            catch
+            {
+                TryDeleteOwnedFile(filePath);
+                throw;
+            }
+        }
+    }
+
+    private static async Task WriteUtf8TextAsync(
+        FileStream stream,
+        string content,
+        CancellationToken ct
+    )
+    {
+        await using var writer = new StreamWriter(
+            stream,
+            Encoding.UTF8,
+            bufferSize: 1024,
+            leaveOpen: true
+        );
+        await writer.WriteAsync(content.AsMemory(), ct);
+        await writer.FlushAsync(ct);
+    }
+
+    private static bool IsCreateNewCollision(IOException exception)
+    {
+        var errorCode = exception.HResult & 0xFFFF;
+        return errorCode is
+            UnixFileExistsError
+            or WindowsFileExistsError
+            or WindowsAlreadyExistsError;
+    }
+
+    private static void TryDeleteOwnedFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Preserve the original cancellation/write failure if best-effort cleanup fails.
+        }
+    }
+
+    private static void TryTruncateFile(string path, long length)
+    {
+        try
+        {
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Write,
+                FileShare.None
+            );
+            if (stream.Length > length)
+                stream.SetLength(length);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Preserve the original cancellation/write failure if best-effort cleanup fails.
+        }
+    }
+
+    // ReSharper disable once UseVerbatimString -- the mixed backslash/quote escapes read no better as a verbatim string.
     private static string EscapeYaml(string value) =>
         value.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
@@ -223,13 +569,21 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
 
             foreach (var vault in vaultsElement.EnumerateObject())
             {
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (vault.Value.TryGetProperty("path", out var pathElement))
                 {
                     var path = pathElement.GetString();
+                    // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                     if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
                     {
-                        var name = Path.GetFileName(path);
-                        vaults.Add(new ObsidianVaultInfo(name ?? vault.Name, path));
+                        // Path.GetFileName yields "" for a trailing-separator path; trim
+                        // separators first, then fall back to the vault key so the picker
+                        // never shows a blank display name.
+                        var name = Path.GetFileName(
+                            path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                        if (string.IsNullOrEmpty(name))
+                            name = vault.Name;
+                        vaults.Add(new ObsidianVaultInfo(name, path));
                     }
                 }
             }
@@ -251,6 +605,7 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
         }
 
         var configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (string.IsNullOrWhiteSpace(configHome))
         {
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -298,16 +653,16 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default)
     {
-        if (_host is null)
+        if (Host is null)
             return Task.FromResult<string?>(null);
 
         return Task.FromResult(
             key switch
             {
-                "vault-path" => _host.GetSetting<string>("vault-path"),
-                "subfolder" => _host.GetSetting<string>("subfolder") ?? "TypeWhisper",
-                "daily-note-mode" => _host.GetSetting<bool>("daily-note-mode") ? "true" : "false",
-                "filename-template" => _host.GetSetting<string>("filename-template")
+                "vault-path" => Host.GetSetting<string>("vault-path"),
+                "subfolder" => Host.GetSetting<string>("subfolder") ?? "TypeWhisper",
+                "daily-note-mode" => Host.GetSetting<bool>("daily-note-mode") ? "true" : "false",
+                "filename-template" => Host.GetSetting<string>("filename-template")
                     ?? "{{date}} {{time}} Transcription",
                 _ => null,
             }
@@ -316,28 +671,28 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
 
     public Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
     {
-        if (_host is null)
+        if (Host is null)
             return Task.CompletedTask;
 
         switch (key)
         {
             case "vault-path":
-                _host.SetSetting("vault-path", value?.Trim() ?? string.Empty);
+                Host.SetSetting("vault-path", value?.Trim() ?? string.Empty);
                 break;
             case "subfolder":
-                _host.SetSetting(
+                Host.SetSetting(
                     "subfolder",
                     string.IsNullOrWhiteSpace(value) ? "TypeWhisper" : value.Trim()
                 );
                 break;
             case "daily-note-mode":
-                _host.SetSetting(
+                Host.SetSetting(
                     "daily-note-mode",
                     string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
                 );
                 break;
             case "filename-template":
-                _host.SetSetting(
+                Host.SetSetting(
                     "filename-template",
                     string.IsNullOrWhiteSpace(value)
                         ? "{{date}} {{time}} Transcription"
@@ -351,12 +706,12 @@ public sealed partial class ObsidianPlugin : IActionPlugin, IPluginSettingsProvi
 
     public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (_host is null)
+        if (Host is null)
             return Task.FromResult<PluginSettingsValidationResult?>(
                 new PluginSettingsValidationResult(false, Loc.L("Settings.PluginNotActivated"))
             );
 
-        var vaultPath = _host.GetSetting<string>("vault-path");
+        var vaultPath = Host.GetSetting<string>("vault-path");
         if (string.IsNullOrWhiteSpace(vaultPath))
             return Task.FromResult<PluginSettingsValidationResult?>(
                 new PluginSettingsValidationResult(false, Loc.L("Settings.EnterVaultPath"))

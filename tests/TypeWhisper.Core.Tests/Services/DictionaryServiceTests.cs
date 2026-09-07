@@ -36,7 +36,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -52,7 +52,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -69,7 +69,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "A"
+                Original = "A",
             }
         );
         _sut.AddEntry(
@@ -77,7 +77,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "2",
                 EntryType = DictionaryEntryType.Term,
-                Original = "B"
+                Original = "B",
             }
         );
         _sut.AddEntry(
@@ -85,7 +85,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "3",
                 EntryType = DictionaryEntryType.Term,
-                Original = "C"
+                Original = "C",
             }
         );
 
@@ -115,7 +115,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "existing",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -175,7 +175,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "manual",
                 EntryType = DictionaryEntryType.Term,
-                Original = "TypeScript"
+                Original = "TypeScript",
             }
         );
 
@@ -194,12 +194,71 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "1",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "kubernets",
-                Replacement = "Kubernetes"
+                Replacement = "Kubernetes",
             }
         );
 
         var result = _sut.ApplyCorrections("I deployed to kubernets");
         Assert.Equal("I deployed to Kubernetes", result);
+    }
+
+    [Fact]
+    public void PreviewCorrections_ReplacesText()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "kubernets",
+                Replacement = "Kubernetes",
+            }
+        );
+
+        var result = _sut.PreviewCorrections("I deployed to kubernets");
+        Assert.Equal("I deployed to Kubernetes", result);
+    }
+
+    [Fact]
+    public void PreviewCorrections_DoesNotUpdateUsageMetadata()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "kubernets",
+                Replacement = "Kubernetes",
+            }
+        );
+
+        _sut.PreviewCorrections("kubernets");
+        _sut.PreviewCorrections("kubernets");
+        _sut.PreviewCorrections("kubernets");
+
+        var entry = _sut.Entries[0];
+        Assert.Equal(0, entry.UsageCount);
+        Assert.Equal(0, entry.TimesApplied);
+        Assert.Null(entry.LastUsedAt);
+    }
+
+    [Fact]
+    public void PreviewCorrections_DoesNotPersistAcrossInstances()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "kubernets",
+                Replacement = "Kubernetes",
+            }
+        );
+
+        _sut.PreviewCorrections("kubernets");
+
+        var reloadedService = new DictionaryService(_filePath);
+        Assert.Equal(0, reloadedService.Entries[0].UsageCount);
     }
 
     [Fact]
@@ -211,7 +270,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "1",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "kubernets",
-                Replacement = "Kubernetes"
+                Replacement = "Kubernetes",
             }
         );
 
@@ -232,7 +291,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "1",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "test",
-                Replacement = "exam"
+                Replacement = "exam",
             }
         );
 
@@ -252,7 +311,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "low",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "type whisper",
-                Replacement = "Type Whisper"
+                Replacement = "Type Whisper",
             }
         );
         _sut.AddEntry(
@@ -262,7 +321,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 EntryType = DictionaryEntryType.Correction,
                 Original = "type whisper",
                 Replacement = "TypeWhisper",
-                Priority = 10
+                Priority = 10,
             }
         );
 
@@ -279,7 +338,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
         _sut.AddEntry(
@@ -287,7 +346,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "2",
                 EntryType = DictionaryEntryType.Term,
-                Original = "Vue"
+                Original = "Vue",
             }
         );
 
@@ -303,7 +362,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -320,7 +379,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
         _sut.AddEntry(
@@ -329,7 +388,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "2",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "teh",
-                Replacement = "the"
+                Replacement = "the",
             }
         );
 
@@ -347,7 +406,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
         _sut.AddEntry(
@@ -356,7 +415,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "2",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "teh",
-                Replacement = "the"
+                Replacement = "the",
             }
         );
 
@@ -414,7 +473,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 EntryType = DictionaryEntryType.Correction,
                 Original = "kubernets",
                 Replacement = "Kubernetes",
-                Source = source
+                Source = source,
             }
         );
 
@@ -430,7 +489,7 @@ public sealed class DictionaryServiceTests : IDisposable
     {
         var learned = _sut.LearnCorrections([
             new CorrectionSuggestion("teh", "the"),
-            new CorrectionSuggestion("recieve", "receive")
+            new CorrectionSuggestion("recieve", "receive"),
         ]);
 
         Assert.Equal(2, learned.Count);
@@ -468,7 +527,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 EntryType = DictionaryEntryType.Correction,
                 Original = "teh",
                 Replacement = "the",
-                Source = source
+                Source = source,
             }
         );
 
@@ -531,7 +590,7 @@ public sealed class DictionaryServiceTests : IDisposable
     {
         var learned = _sut.LearnCorrections([
             new CorrectionSuggestion("teh", "the"),
-            new CorrectionSuggestion("TEH", "thee")
+            new CorrectionSuggestion("TEH", "thee"),
         ]);
 
         Assert.Single(learned);
@@ -545,7 +604,7 @@ public sealed class DictionaryServiceTests : IDisposable
     {
         var learned = _sut.LearnCorrections([
             new CorrectionSuggestion("teh", "the"),
-            new CorrectionSuggestion("recieve", "receive")
+            new CorrectionSuggestion("recieve", "receive"),
         ]);
         _sut.AddEntry(
             new DictionaryEntry
@@ -554,7 +613,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 EntryType = DictionaryEntryType.Correction,
                 Original = "seperate",
                 Replacement = "separate",
-                Source = DictionaryEntrySource.Manual
+                Source = DictionaryEntrySource.Manual,
             }
         );
 
@@ -609,7 +668,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 CaseSensitive = true,
                 IsStarred = true,
                 Priority = 7,
-                Source = DictionaryEntrySource.CorrectionSuggestion
+                Source = DictionaryEntrySource.CorrectionSuggestion,
             }
         );
 
@@ -657,6 +716,92 @@ public sealed class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
+    public void ImportFromCsv_UpdatesExistingCorrectionByOriginalIgnoringCase()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "existing-id",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "wispr",
+                Replacement = "Wispr",
+                Priority = 5,
+                Source = DictionaryEntrySource.Manual,
+            }
+        );
+
+        var imported = _sut.ImportFromCsv(
+            """
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source
+            Correction,WISPR,Wispr Flow,true,true,true,9,Import
+            """
+        );
+
+        Assert.Equal(1, imported);
+        var correction = Assert.Single(
+            _sut.Entries,
+            entry => entry.EntryType == DictionaryEntryType.Correction
+        );
+        Assert.Equal("existing-id", correction.Id);
+        Assert.Equal("Wispr Flow", correction.Replacement);
+        Assert.Equal(9, correction.Priority);
+    }
+
+    [Fact]
+    public void ImportFromCsv_ExactDuplicateCorrectionIsNoOp()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "existing-id",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "wispr",
+                Replacement = "Wispr",
+                CaseSensitive = true,
+                IsEnabled = false,
+                IsStarred = true,
+                UsageCount = 12,
+                Priority = 5,
+                Source = DictionaryEntrySource.Manual,
+            }
+        );
+
+        var imported = _sut.ImportFromCsv(
+            """
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source
+            Correction,WISPR,Wispr,true,false,true,5,Manual
+            """
+        );
+
+        Assert.Equal(0, imported);
+        var correction = Assert.Single(
+            _sut.Entries,
+            entry => entry.EntryType == DictionaryEntryType.Correction
+        );
+        Assert.Equal("existing-id", correction.Id);
+        Assert.Equal(12, correction.UsageCount);
+    }
+
+    [Fact]
+    public void ImportFromCsv_LastCorrectionRowWinsForDuplicateOriginals()
+    {
+        var imported = _sut.ImportFromCsv(
+            """
+            EntryType,Original,Replacement
+            Correction,wispr,First
+            Correction,WISPR,Second
+            """
+        );
+
+        Assert.Equal(2, imported);
+        var correction = Assert.Single(
+            _sut.Entries,
+            entry => entry.EntryType == DictionaryEntryType.Correction
+        );
+        Assert.Equal("Second", correction.Replacement);
+    }
+
+    [Fact]
     public void ImportFromCsv_SkipsDuplicatesAndInvalidCorrections()
     {
         _sut.AddEntry(
@@ -664,7 +809,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "existing",
                 EntryType = DictionaryEntryType.Term,
-                Original = "TypeWhisper"
+                Original = "TypeWhisper",
             }
         );
 
@@ -679,6 +824,11 @@ public sealed class DictionaryServiceTests : IDisposable
 
         Assert.Equal(1, imported);
         Assert.Equal(2, _sut.Entries.Count);
+        var term = Assert.Single(
+            _sut.Entries,
+            entry => entry.EntryType == DictionaryEntryType.Term
+        );
+        Assert.Equal("existing", term.Id);
         Assert.Contains(
             _sut.Entries,
             entry =>
@@ -694,7 +844,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -715,7 +865,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
         _sut.DeleteEntry("1");

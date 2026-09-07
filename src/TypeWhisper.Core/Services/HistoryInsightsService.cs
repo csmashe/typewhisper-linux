@@ -38,6 +38,9 @@ public sealed class HistoryInsightsService : IHistoryInsightsService
         var typedCount = records.Count(record =>
             record.InsertionStatus is TextInsertionStatus.Typed
         );
+        var actionHandledCount = records.Count(record =>
+            record.InsertionStatus is TextInsertionStatus.ActionHandled
+        );
         var copiedToClipboardCount = records.Count(record =>
             record.InsertionStatus is TextInsertionStatus.CopiedToClipboard
         );
@@ -45,10 +48,11 @@ public sealed class HistoryInsightsService : IHistoryInsightsService
             record.InsertionStatus
                 is TextInsertionStatus.Failed
                 or TextInsertionStatus.ActionFailed
+                or TextInsertionStatus.ActionUnavailable
                 or TextInsertionStatus.MissingClipboardTool
                 or TextInsertionStatus.MissingPasteTool
         );
-        var successfulInsertionCount = pastedCount + typedCount;
+        var successfulInsertionCount = pastedCount + typedCount + actionHandledCount;
         var insertionAttemptCount =
             successfulInsertionCount + copiedToClipboardCount + failedInsertionCount;
 
@@ -75,7 +79,7 @@ public sealed class HistoryInsightsService : IHistoryInsightsService
             ),
             PromptActionAppliedCount = records.Count(record => record.PromptActionApplied),
             TranslationAppliedCount = records.Count(record => record.TranslationApplied),
-            TopApps = topApps
+            TopApps = topApps,
         };
     }
 }

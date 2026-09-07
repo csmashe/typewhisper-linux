@@ -33,7 +33,7 @@ public sealed record IndustryPreset(string Id, string Name, string Description, 
             "Legal",
             "Contract, compliance, and litigation terms.",
             "legal"
-        )
+        ),
     ];
 
     public static string[] MergeIntoEnabledPackIds(string[] enabledPackIds, string presetId)

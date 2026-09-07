@@ -25,7 +25,7 @@ public sealed class Loc : INotifyPropertyChanged
 
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
     };
 
     private readonly Dictionary<string, Dictionary<string, string>> _strings = [];
@@ -193,7 +193,7 @@ public sealed class Loc : INotifyPropertyChanged
             ["ru"] = "Русский",
             ["ja"] = "日本語",
             ["zh"] = "中文",
-            ["ko"] = "한국어"
+            ["ko"] = "한국어",
         };
 
         var options = new List<UiLanguageOption> { new(null, "Auto (System)") };

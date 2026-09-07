@@ -9,7 +9,7 @@ namespace TypeWhisper.Plugins.Shared.Net;
 ///     A cross-process advisory lock built on an exclusively-opened sentinel file.
 ///     <para>
 ///         The on-demand GPU artifacts stage into <em>stable</em> paths in a SHARED
-///         cache so a dropped download can resume (see <see cref="ResilientDownloader" />).
+///         cache so a dropped download can resume (see <c>ResilientDownloader</c>).
 ///         A stable path means two writers can pick the same file, and the per-engine
 ///         <c>SemaphoreSlim</c> gates only serialize within one provisioner instance —
 ///         not the two file-linked copies of the CUDA provisioner in different plugin
@@ -20,7 +20,7 @@ namespace TypeWhisper.Plugins.Shared.Net;
 ///     </para>
 ///     <para>
 ///         Compiled into each plugin assembly via file-linking, so the type is
-///         <c>internal</c> (like <see cref="ResilientDownloader" />).
+///         <c>internal</c> (like <c>ResilientDownloader</c>).
 ///     </para>
 /// </summary>
 internal static class InterProcessFileLock

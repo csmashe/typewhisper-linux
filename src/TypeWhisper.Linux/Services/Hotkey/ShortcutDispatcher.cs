@@ -23,26 +23,26 @@ internal sealed class ShortcutDispatcher
 
     // Profile dictation dedup, keyed by physical KeyCode at press time. Also records the
     // recording mode and timestamp so the release path can compute hold duration for
-    // PushToTalk/Hybrid using the press-time mode (mirrors _dictationKeyDownTime).
-    private readonly Dictionary<KeyCode, (string ProfileId, RecordingMode Mode, DateTime DownAt)>
+    // PushToTalk/Hybrid using the press-time mode (mirrors _mainDictationHeld).
+    private readonly Dictionary<KeyCode, (string ProfileId, RecordingMode Mode, long DownTimestamp)>
         _profileDictationKeyDown = new();
 
-    private readonly Dictionary<KeyCode, string> _profileTextKeyDown = new();
-
-    // Per-action key-down dedup, keyed by the physical KeyCode at press time.
-    // Using the press-time key means release-time cleanup works even if the user
-    // edits or removes the binding mid-hold — otherwise the stranded entry would
-    // silently suppress all future presses of that action.
-    private readonly Dictionary<KeyCode, string> _promptActionKeyDown = new();
+    // Keyed by the complete workflow identity, not the physical key alone: two workflows can share
+    // one key under different modifiers (Ctrl+Shift+P vs Ctrl+Alt+P), and a KeyCode key would let
+    // the first claim swallow the second. The value is the trigger-released flag.
+    private readonly Dictionary<SelectionWorkflowId, bool> _pendingSelectionWorkflows = new();
+    private readonly TimeProvider _timeProvider;
     private bool _cancelKeyDown;
     private bool _copyLastKeyDown;
-    private bool _dictationKeyDown;
-    private DateTime _dictationKeyDownTime;
-    private bool _promptKeyDown;
+    private (KeyCode Key, RecordingMode Mode, long DownTimestamp)? _mainDictationHeld;
     private bool _recentKeyDown;
 
     private GlobalShortcutSet? _shortcuts;
-    private bool _transformSelectionKeyDown;
+
+    internal ShortcutDispatcher(TimeProvider? timeProvider = null)
+    {
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public void UpdateShortcuts(GlobalShortcutSet shortcuts)
     {
@@ -52,6 +52,19 @@ internal sealed class ShortcutDispatcher
     public void ClearShortcuts()
     {
         Volatile.Write(ref _shortcuts, null);
+
+        // Drop every press-time guard queued before the unregister. Handle ignores releases while
+        // the set is null, so surviving state would carry into the next registration and suppress
+        // the rebound keys — or dispatch a pending workflow's pre-unregister payload.
+        lock (_lock)
+        {
+            _pendingSelectionWorkflows.Clear();
+            _profileDictationKeyDown.Clear();
+            _cancelKeyDown = false;
+            _copyLastKeyDown = false;
+            _mainDictationHeld = null;
+            _recentKeyDown = false;
+        }
     }
 
     /// <summary>
@@ -66,15 +79,11 @@ internal sealed class ShortcutDispatcher
         lock (_lock)
         {
             _profileDictationKeyDown.Clear();
-            _profileTextKeyDown.Clear();
-            _promptActionKeyDown.Clear();
+            _pendingSelectionWorkflows.Clear();
             _cancelKeyDown = false;
             _copyLastKeyDown = false;
-            _dictationKeyDown = false;
-            _dictationKeyDownTime = default;
-            _promptKeyDown = false;
+            _mainDictationHeld = null;
             _recentKeyDown = false;
-            _transformSelectionKeyDown = false;
         }
 
         // Main and profile dictation share one recording session, so a single discard covers both.
@@ -99,7 +108,7 @@ internal sealed class ShortcutDispatcher
         }
         else
         {
-            HandleRelease(key, set);
+            HandleRelease(key, mods, set);
         }
     }
 
@@ -178,15 +187,11 @@ internal sealed class ShortcutDispatcher
                     return;
                 }
 
-                lock (_lock)
-                {
-                    if (!_promptActionKeyDown.TryAdd(key, promptActionId))
-                    {
-                        return;
-                    }
-                }
-
-                RaisePromptAction(promptActionId);
+                TryClaimSelectionWorkflow(
+                    key,
+                    SelectionWorkflowKind.PromptAction,
+                    promptActionId
+                );
                 return;
             case ShortcutMatchKind.Profile:
                 if (profileId is null)
@@ -196,18 +201,10 @@ internal sealed class ShortcutDispatcher
 
                 if (profileBehavior == ProfileHotkeyBehavior.ProcessSelectedText)
                 {
-                    lock (_lock)
-                    {
-                        if (!_profileTextKeyDown.TryAdd(key, profileId))
-                        {
-                            return;
-                        }
-                    }
-
-                    RaiseProfile(
-                        ProfileTextProcessingRequested,
-                        profileId,
-                        nameof(ProfileTextProcessingRequested)
+                    TryClaimSelectionWorkflow(
+                        key,
+                        SelectionWorkflowKind.ProfileTextProcessing,
+                        profileId
                     );
                     return;
                 }
@@ -224,7 +221,11 @@ internal sealed class ShortcutDispatcher
 
                     // Capture mode at press time so a mid-hold mode change can't
                     // affect the release path.
-                    _profileDictationKeyDown[key] = (profileId, set.Mode, DateTime.UtcNow);
+                    _profileDictationKeyDown[key] = (
+                        profileId,
+                        set.Mode,
+                        _timeProvider.GetTimestamp()
+                    );
                 }
 
                 // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined RecordingMode values are handled; the default (out-of-range) branch is intentionally omitted.
@@ -274,40 +275,22 @@ internal sealed class ShortcutDispatcher
                 return;
 
             case ShortcutMatchKind.TransformSelection:
-                if (!TryClaimKeyDown(ref _transformSelectionKeyDown))
-                {
-                    return;
-                }
-
-                Raise(TransformSelectionRequested, nameof(TransformSelectionRequested));
+                TryClaimSelectionWorkflow(key, SelectionWorkflowKind.TransformSelection);
                 return;
 
             case ShortcutMatchKind.PromptPalette:
-                if (!TryClaimKeyDown(ref _promptKeyDown))
-                {
-                    return;
-                }
-
-                Raise(PromptPaletteRequested, nameof(PromptPaletteRequested));
+                TryClaimSelectionWorkflow(key, SelectionWorkflowKind.PromptPalette);
                 return;
 
             case ShortcutMatchKind.Dictation:
-                bool claimed;
                 lock (_lock)
                 {
-                    if (_dictationKeyDown)
+                    if (_mainDictationHeld is not null)
                     {
                         return;
                     }
 
-                    _dictationKeyDown = true;
-                    _dictationKeyDownTime = DateTime.UtcNow;
-                    claimed = true;
-                }
-
-                if (!claimed)
-                {
-                    return;
+                    _mainDictationHeld = (key, set.Mode, _timeProvider.GetTimestamp());
                 }
 
                 // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined RecordingMode values are handled; the default (out-of-range) branch is intentionally omitted.
@@ -329,16 +312,51 @@ internal sealed class ShortcutDispatcher
         }
     }
 
-    private void HandleRelease(KeyCode key, GlobalShortcutSet set)
+    private void HandleRelease(KeyCode key, ModifierMask mods, GlobalShortcutSet set)
     {
-        // Clear repeat-guards on key release (modifier-only releases are ignored).
+        List<SelectionWorkflowId>? readySelectionWorkflows = null;
+
         lock (_lock)
         {
-            if (set.PromptPaletteKey is not null && key == set.PromptPaletteKey.Value)
+            List<SelectionWorkflowId>? justReleased = null;
+            // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- explicit loop keeps the Dictionary enumerator (no boxing) and reads clearly under _lock; the LINQ form would switch enumerators for no gain.
+            foreach (var (workflow, triggerReleased) in _pendingSelectionWorkflows)
             {
-                _promptKeyDown = false;
+                if (!triggerReleased && workflow.TriggerKey == key)
+                {
+                    (justReleased ??= []).Add(workflow);
+                }
             }
 
+            if (justReleased is not null)
+            {
+                foreach (var workflow in justReleased)
+                {
+                    _pendingSelectionWorkflows[workflow] = true;
+                }
+            }
+
+            if (ShortcutMatcher.ModifiersMatch(mods, ModifierMask.None))
+            {
+                // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- see above; the explicit loop keeps the non-boxing enumerator.
+                foreach (var (workflow, triggerReleased) in _pendingSelectionWorkflows)
+                {
+                    if (triggerReleased)
+                    {
+                        (readySelectionWorkflows ??= []).Add(workflow);
+                    }
+                }
+
+                if (readySelectionWorkflows is not null)
+                {
+                    foreach (var workflow in readySelectionWorkflows)
+                    {
+                        _pendingSelectionWorkflows.Remove(workflow);
+                    }
+                }
+            }
+
+            // Clear non-selection repeat-guards on their terminal-key release.
             if (set.RecentTranscriptionsKey is not null && key == set.RecentTranscriptionsKey.Value)
             {
                 _recentKeyDown = false;
@@ -352,24 +370,22 @@ internal sealed class ShortcutDispatcher
                 _copyLastKeyDown = false;
             }
 
-            if (set.TransformSelectionKey is not null && key == set.TransformSelectionKey.Value)
-            {
-                _transformSelectionKeyDown = false;
-            }
-
             if (key == set.CancelKey)
             {
                 _cancelKeyDown = false;
             }
+        }
 
-            // Clear press-time entries regardless of the current shortcut set —
-            // an edit/remove mid-hold must not strand the entry and suppress future presses.
-            _promptActionKeyDown.Remove(key);
-            _profileTextKeyDown.Remove(key);
+        if (readySelectionWorkflows is not null)
+        {
+            foreach (var workflow in readySelectionWorkflows)
+            {
+                DispatchSelectionWorkflow(workflow);
+            }
         }
 
         // Profile dictation release mirrors main dictation key semantics.
-        (string ProfileId, RecordingMode Mode, DateTime DownAt) profileHeld;
+        (string ProfileId, RecordingMode Mode, long DownTimestamp) profileHeld;
         bool hadProfileDictation;
         lock (_lock)
         {
@@ -378,7 +394,9 @@ internal sealed class ShortcutDispatcher
 
         if (hadProfileDictation)
         {
-            var profileHeldMs = (DateTime.UtcNow - profileHeld.DownAt).TotalMilliseconds;
+            var profileHeldMs = _timeProvider
+                .GetElapsedTime(profileHeld.DownTimestamp)
+                .TotalMilliseconds;
             // Use press-time mode; a mid-hold mode switch must not fire a Stop the press never set up.
             // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined RecordingMode values are handled; the default (out-of-range) branch is intentionally omitted.
             switch (profileHeld.Mode)
@@ -405,26 +423,22 @@ internal sealed class ShortcutDispatcher
             }
         }
 
-        if (key != set.DictationKey)
-        {
-            return;
-        }
-
-        DateTime keyDownAt;
+        (KeyCode Key, RecordingMode Mode, long DownTimestamp) held;
         lock (_lock)
         {
-            if (!_dictationKeyDown)
+            var current = _mainDictationHeld;
+            if (!current.HasValue || current.Value.Key != key)
             {
                 return;
             }
 
-            _dictationKeyDown = false;
-            keyDownAt = _dictationKeyDownTime;
+            held = current.Value;
+            _mainDictationHeld = null;
         }
 
-        var heldMs = (DateTime.UtcNow - keyDownAt).TotalMilliseconds;
+        var heldMs = _timeProvider.GetElapsedTime(held.DownTimestamp).TotalMilliseconds;
         // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined RecordingMode values are handled; the default (out-of-range) branch is intentionally omitted.
-        switch (set.Mode)
+        switch (held.Mode)
         {
             case RecordingMode.PushToTalk:
                 Raise(DictationStopRequested, nameof(DictationStopRequested));
@@ -453,6 +467,58 @@ internal sealed class ShortcutDispatcher
 
             flag = true;
             return true;
+        }
+    }
+
+    // ReSharper disable once UnusedMethodReturnValue.Local -- the bool completes the Try* contract (mirrors TryClaimKeyDown); callers deliberately rely only on the idempotent claim side effect that de-dupes key auto-repeat.
+    private bool TryClaimSelectionWorkflow(
+        KeyCode key,
+        SelectionWorkflowKind kind,
+        string? payload = null
+    )
+    {
+        lock (_lock)
+        {
+            // One physical press claims one workflow: dropping a modifier mid-hold makes the
+            // auto-repeat presses match a different binding on the same key, and the release would
+            // dispatch both. A genuine second press is allowed — the first entry is released by then.
+            // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- explicit loop keeps the Dictionary enumerator (no boxing) and reads clearly under _lock.
+            foreach (var (workflow, triggerReleased) in _pendingSelectionWorkflows)
+            {
+                if (!triggerReleased && workflow.TriggerKey == key)
+                {
+                    return false;
+                }
+            }
+
+            return _pendingSelectionWorkflows.TryAdd(
+                new SelectionWorkflowId(key, kind, payload),
+                false
+            );
+        }
+    }
+
+    private void DispatchSelectionWorkflow(SelectionWorkflowId workflow)
+    {
+        // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- all defined SelectionWorkflowKind values are handled; the default (out-of-range) branch is intentionally omitted.
+        switch (workflow.Kind)
+        {
+            case SelectionWorkflowKind.PromptPalette:
+                Raise(PromptPaletteRequested, nameof(PromptPaletteRequested));
+                break;
+            case SelectionWorkflowKind.PromptAction:
+                RaisePromptAction(workflow.Payload!);
+                break;
+            case SelectionWorkflowKind.ProfileTextProcessing:
+                RaiseProfile(
+                    ProfileTextProcessingRequested,
+                    workflow.Payload!,
+                    nameof(ProfileTextProcessingRequested)
+                );
+                break;
+            case SelectionWorkflowKind.TransformSelection:
+                Raise(TransformSelectionRequested, nameof(TransformSelectionRequested));
+                break;
         }
     }
 
@@ -509,4 +575,18 @@ internal sealed class ShortcutDispatcher
             );
         }
     }
+
+    private enum SelectionWorkflowKind
+    {
+        PromptPalette,
+        PromptAction,
+        ProfileTextProcessing,
+        TransformSelection,
+    }
+
+    private readonly record struct SelectionWorkflowId(
+        KeyCode TriggerKey,
+        SelectionWorkflowKind Kind,
+        string? Payload
+    );
 }

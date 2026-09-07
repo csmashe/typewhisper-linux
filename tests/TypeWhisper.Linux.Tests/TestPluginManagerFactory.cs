@@ -12,7 +12,7 @@ namespace TypeWhisper.Linux.Tests;
 internal static class TestPluginManagerFactory
 {
     public static PluginManager Create(
-        IReadOnlyList<ILlmProviderPlugin>? llmProviders = null,
+        IReadOnlyList<ILlmProviderRole>? llmProviders = null,
         IReadOnlyList<IActionPlugin>? actionPlugins = null,
         IReadOnlyList<ITtsProviderPlugin>? ttsProviders = null,
         IReadOnlyList<LoadedPlugin>? loadedPlugins = null
@@ -58,33 +58,41 @@ internal static class TestPluginManagerFactory
     public static Mock<ISettingsService> CreateSettings(AppSettings current)
     {
         var settings = new Mock<ISettingsService>();
-        settings.SetupGet(service => service.Current).Returns(current);
+        settings.SetupGet(service => service.Current).Returns(() => current);
         settings
-            .Setup(service => service.Save(It.IsAny<AppSettings>()))
-            .Callback<AppSettings>(saved =>
-                settings.SetupGet(service => service.Current).Returns(saved)
-            );
+            .Setup(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Returns((Func<AppSettings, AppSettings> mutate) =>
+            {
+                current = mutate(current);
+                return current;
+            });
         return settings;
     }
 
     public static LoadedPlugin CreateLoadedPlugin(
         string pluginDir,
         string pluginId,
-        ITypeWhisperPlugin plugin
+        ITypeWhisperPlugin plugin,
+        PluginNetworkAccess networkAccess = PluginNetworkAccess.Network,
+        IReadOnlyList<PluginCategory>? categories = null
     )
     {
+        var manifest = new PluginManifest
+        {
+            Id = pluginId,
+            Name = plugin.PluginName,
+            Version = plugin.PluginVersion,
+            AssemblyName = "fake.dll",
+            PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name,
+            NetworkAccess = networkAccess,
+            Categories = (categories ?? [PluginCategory.Utility]).ToArray(),
+        };
         return new LoadedPlugin(
-            new PluginManifest
-            {
-                Id = pluginId,
-                Name = plugin.PluginName,
-                Version = plugin.PluginVersion,
-                AssemblyName = "fake.dll",
-                PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name
-            },
+            manifest,
             plugin,
             new PluginAssemblyLoadContext(pluginDir),
-            pluginDir
+            pluginDir,
+            PluginLoader.ResolveMetadata(manifest)
         );
     }
 

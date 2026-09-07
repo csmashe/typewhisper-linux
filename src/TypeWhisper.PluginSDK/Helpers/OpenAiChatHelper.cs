@@ -21,6 +21,9 @@ namespace TypeWhisper.PluginSDK.Helpers;
 // ReSharper disable once UnusedType.Global
 public static class OpenAiChatHelper
 {
+    private static readonly ISseEventPolicy<string> s_streamPolicy =
+        new ChatCompletionSsePolicy();
+
     /// <summary>
     ///     Convenience overload that sends a chat completion using the default token cap
     ///     (2048 via <c>max_tokens</c>), no reasoning-effort hint, and temperature 0.1.
@@ -158,8 +161,7 @@ public static class OpenAiChatHelper
         // ResponseHeadersRead: start reading the body as it streams rather than buffering.
         // The batch path uses SendWithErrorHandlingAsync (which buffers), so here we send and
         // check the status line ourselves.
-        using var response = await httpClient.SendAsync(
-            request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await SendStreamingRequestAsync(httpClient, request, ct);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -168,67 +170,41 @@ public static class OpenAiChatHelper
             {
                 401 => "Invalid API key",
                 429 => "Rate limit reached, please wait",
-                _ => $"API error {(int)response.StatusCode}: {OpenAiApiHelper.ExtractErrorMessage(errorBody)}"
+                _ => $"API error {(int)response.StatusCode}: {OpenAiApiHelper.ExtractErrorMessage(errorBody)}",
             };
             throw new InvalidOperationException(message);
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
-        var receivedTerminalSignal = false;
 
-        while (await reader.ReadLineAsync(ct) is { } rawLine)
+        await foreach (var delta in SseEventDecoder.ReadValidatedAsync(reader, s_streamPolicy, ct))
+            yield return delta;
+    }
+
+    private static async Task<HttpResponseMessage> SendStreamingRequestAsync(
+        HttpClient httpClient,
+        HttpRequestMessage request,
+        CancellationToken ct
+    )
+    {
+        try
         {
-            var line = rawLine.Trim();
-            if (!line.StartsWith("data:", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            // SSE spec makes the space after "data:" optional; strip at most one
-            // so "data:{...}" frames aren't silently skipped.
-            var payload = line[5..];
-            if (payload.StartsWith(' '))
-            {
-                payload = payload[1..];
-            }
-
-            if (payload == "[DONE]")
-            {
-                yield break;
-            }
-
-            // Providers can fail mid-stream via a top-level `error` frame after a 200.
-            // Throw so LlmStreamPump faults and the caller falls back to batch,
-            // rather than committing partial deltas as a successful result.
-            if (ParseChatCompletionStreamError(payload) is { } error)
-            {
-                throw new InvalidOperationException(error);
-            }
-
-            var delta = ParseChatCompletionStreamDelta(payload, out var hasFinishReason);
-            // Some compatible providers close cleanly after a non-null finish_reason
-            // instead of sending [DONE]. Do not stop here: usage or [DONE] may follow.
-            receivedTerminalSignal |= hasFinishReason;
-
-            if (delta is { Length: > 0 })
-            {
-                yield return delta;
-            }
-        }
-
-        if (!receivedTerminalSignal)
-        {
-            throw new InvalidOperationException(
-                "Incomplete chat completion stream: connection closed without a terminal "
-                + "frame ([DONE] or a non-null finish_reason)."
+            return await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                ct
             );
+        }
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException("API request timed out.", ex);
         }
     }
 
     /// <summary>
     ///     Extracts <c>choices[0].delta.content</c> from a single SSE chunk payload,
-    ///     or <c>null</c> for contentless/unparseable frames (heartbeats, role-only, finish).
+    ///     or <c>null</c> for valid contentless frames (role-only, finish).
     ///     Reflection-free via <see cref="JsonDocument" />.
     /// </summary>
     // ReSharper disable once UnusedMember.Global
@@ -240,8 +216,7 @@ public static class OpenAiChatHelper
 
     /// <summary>
     ///     Extracts a content delta and reports whether <c>choices[0].finish_reason</c>
-    ///     carries a valid terminal value. Invalid/contentless frames remain non-fatal
-    ///     and return <c>null</c>.
+    ///     carries a valid terminal value. Valid contentless frames return <c>null</c>.
     /// </summary>
     private static string? ParseChatCompletionStreamDelta(
         string dataPayload,
@@ -249,44 +224,54 @@ public static class OpenAiChatHelper
     )
     {
         hasFinishReason = false;
-        JsonDocument doc;
-        try
+        using var doc = JsonDocument.Parse(dataPayload);
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("choices", out var choices)
+            || choices.ValueKind != JsonValueKind.Array
+            || choices.GetArrayLength() == 0)
         {
-            doc = JsonDocument.Parse(dataPayload);
+            throw CreateInvalidResponseException(
+                dataPayload,
+                root,
+                "'choices' must be a non-empty array"
+            );
         }
-        catch (JsonException)
+
+        var firstChoice = choices[0];
+        if (firstChoice.ValueKind != JsonValueKind.Object
+            || !firstChoice.TryGetProperty("delta", out var delta)
+            || delta.ValueKind != JsonValueKind.Object)
+        {
+            throw CreateInvalidResponseException(
+                dataPayload,
+                root,
+                "'choices[0].delta' must be an object"
+            );
+        }
+
+        // finish_reason is only ever null (still streaming) or a non-empty string
+        // ("stop", "length", ...); anything else must not mask a truncated stream.
+        hasFinishReason = firstChoice.TryGetProperty("finish_reason", out var finishReason)
+                          && finishReason.ValueKind == JsonValueKind.String
+                          && !string.IsNullOrEmpty(finishReason.GetString());
+
+        if (!delta.TryGetProperty("content", out var content)
+            || content.ValueKind == JsonValueKind.Null)
         {
             return null;
         }
 
-        using (doc)
+        if (content.ValueKind != JsonValueKind.String)
         {
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object
-                || !root.TryGetProperty("choices", out var choices)
-                || choices.ValueKind != JsonValueKind.Array
-                || choices.GetArrayLength() == 0
-                || choices[0].ValueKind != JsonValueKind.Object)
-            {
-                return null;
-            }
-
-            var firstChoice = choices[0];
-            // finish_reason is only ever null (still streaming) or a non-empty string
-            // ("stop", "length", ...); anything else must not mask a truncated stream.
-            hasFinishReason = firstChoice.TryGetProperty("finish_reason", out var finishReason)
-                              && finishReason.ValueKind == JsonValueKind.String
-                              && !string.IsNullOrEmpty(finishReason.GetString());
-
-            if (firstChoice.TryGetProperty("delta", out var delta)
-                && delta.TryGetProperty("content", out var content)
-                && content.ValueKind == JsonValueKind.String)
-            {
-                return content.GetString();
-            }
+            throw CreateInvalidResponseException(
+                dataPayload,
+                root,
+                "'choices[0].delta.content' must be a string"
+            );
         }
 
-        return null;
+        return content.GetString();
     }
 
     /// <summary>
@@ -335,6 +320,36 @@ public static class OpenAiChatHelper
         }
     }
 
+    private sealed class ChatCompletionSsePolicy : ISseEventPolicy<string>
+    {
+        public string StreamName => "chat completion stream";
+        public string ExpectedTerminal => "[DONE] or a non-empty finish_reason";
+
+        public SsePolicyDecision<string> Evaluate(SseEvent sseEvent)
+        {
+            if (sseEvent.Data == "[DONE]")
+            {
+                return new SsePolicyDecision<string>(
+                    AcceptTerminal: true,
+                    EndStream: true);
+            }
+
+            if (ParseChatCompletionStreamError(sseEvent.Data) is { } error)
+            {
+                return new SsePolicyDecision<string>(
+                    Error: new InvalidOperationException(error));
+            }
+
+            var delta = ParseChatCompletionStreamDelta(
+                sseEvent.Data,
+                out var hasFinishReason);
+            return new SsePolicyDecision<string>(
+                HasDelta: delta is { Length: > 0 },
+                Delta: delta,
+                AcceptTerminal: hasFinishReason);
+        }
+    }
+
     /// <summary>Returns <c>choices[0].message.content</c> from a chat completion JSON response.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedParameter.Global
@@ -348,22 +363,72 @@ public static class OpenAiChatHelper
             || choices.ValueKind != JsonValueKind.Array
             || choices.GetArrayLength() == 0)
         {
-            return "";
+            throw CreateInvalidResponseException(
+                json,
+                root,
+                "'choices' must be a non-empty array"
+            );
         }
 
         var firstChoice = choices[0];
-        if (
-            firstChoice.ValueKind != JsonValueKind.Object
+        if (firstChoice.ValueKind != JsonValueKind.Object
             || !firstChoice.TryGetProperty("message", out var message)
-            || message.ValueKind != JsonValueKind.Object
-            || !message.TryGetProperty("content", out var content)
-            || content.ValueKind != JsonValueKind.String
-        )
+            || message.ValueKind != JsonValueKind.Object)
         {
-            return "";
+            throw CreateInvalidResponseException(
+                json,
+                root,
+                "'choices[0].message' must be an object"
+            );
+        }
+
+        if (!message.TryGetProperty("content", out var content)
+            || content.ValueKind != JsonValueKind.String)
+        {
+            throw CreateInvalidResponseException(
+                json,
+                root,
+                "'choices[0].message.content' must be a string"
+            );
         }
 
         return content.GetString()?.Trim() ?? "";
+    }
+
+    private static InvalidOperationException CreateInvalidResponseException(
+        string json,
+        JsonElement root,
+        string requiredField
+    )
+    {
+        var providerError = TryGetProviderErrorMessage(root);
+        var providerErrorDetail = providerError is null
+            ? ""
+            : $" Provider error: {providerError}";
+        return new InvalidOperationException(
+            $"Invalid chat completion response: required field {requiredField}."
+            + $"{providerErrorDetail} Body: {GetBodySnippet(json)}"
+        );
+    }
+
+    private static string? TryGetProviderErrorMessage(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Object
+            && root.TryGetProperty("error", out var error)
+            && error.ValueKind == JsonValueKind.Object
+            && error.TryGetProperty("message", out var message)
+            && message.ValueKind == JsonValueKind.String)
+        {
+            return message.GetString();
+        }
+
+        return null;
+    }
+
+    private static string GetBodySnippet(string json)
+    {
+        const int maxLength = 200;
+        return json.Length > maxLength ? $"{json[..maxLength]}..." : json;
     }
 
     private static Dictionary<string, object?> BuildRequestBody(
@@ -382,8 +447,8 @@ public static class OpenAiChatHelper
             ["model"] = model,
             ["messages"] = new object[]
             {
-                new { role = "system", content = systemPrompt }, new { role = "user", content = userText }
-            }
+                new { role = "system", content = systemPrompt }, new { role = "user", content = userText },
+            },
         };
 
         if (temperature is not null)

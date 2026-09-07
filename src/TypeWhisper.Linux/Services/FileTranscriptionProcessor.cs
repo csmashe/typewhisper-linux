@@ -74,8 +74,11 @@ public sealed class FileTranscriptionProcessor(
         );
 
         var currentSettings = settings.Current;
-        var configuredLanguage = options?.Language ?? currentSettings.Language;
-        var language = configuredLanguage == "auto" ? null : configuredLanguage;
+        var languageSelection = LanguageSelectionResolver.Resolve(
+            options?.Language,
+            currentSettings.Language
+        );
+        var configuredLanguage = languageSelection.LanguageTag;
         var task =
             options?.Task
             ?? (
@@ -90,18 +93,30 @@ public sealed class FileTranscriptionProcessor(
         // the post-processing pipeline would block a concurrent dictation or
         // watch-folder transcription from loading a different model.
         PluginTranscriptionResult pluginResult;
+        bool engineSupportsTranslation;
         await using (
-            var lease = await modelManager.AcquireTranscriptionAsync(modelId, cancellationToken)
+            var lease = await modelManager.AcquireTranscriptionAsync(
+                modelId,
+                cancellationToken: cancellationToken
+            )
         )
         {
+            engineSupportsTranslation = lease.Plugin.SupportsTranslation;
             pluginResult = await lease.Plugin.TranscribeAsync(
                 wav,
-                language,
+                languageSelection,
                 task == TranscriptionTask.Translate,
                 null,
                 cancellationToken
             );
         }
+
+        // An engine that ignores the translate task returns source-language text; reporting
+        // Translate downstream would make number normalization treat it as English.
+        var effectiveTask =
+            task == TranscriptionTask.Translate && engineSupportsTranslation
+                ? TranscriptionTask.Translate
+                : TranscriptionTask.Transcribe;
 
         var result = new TranscriptionResult
         {
@@ -116,7 +131,7 @@ public sealed class FileTranscriptionProcessor(
                     segment.Start,
                     segment.End
                 ))
-                .ToArray()
+                .ToArray(),
         };
 
         var pipelineResult = await pipeline.ProcessAsync(
@@ -127,16 +142,14 @@ public sealed class FileTranscriptionProcessor(
                     ? vocabularyBoosting.Apply
                     : null,
                 DictionaryCorrector = dictionary.ApplyCorrections,
-                TranscriptionTask = task,
+                TranscriptionTask = effectiveTask,
                 DetectedLanguage = result.DetectedLanguage,
-                ConfiguredLanguage = language,
+                ConfiguredLanguage = configuredLanguage,
                 TranscriptionNumberNormalizationEnabled =
-                    currentSettings.TranscriptionNumberNormalizationEnabled
+                    currentSettings.TranscriptionNumberNormalizationEnabled,
             },
             cancellationToken
         );
-
-        modelManager.ScheduleAutoUnload();
 
         return new FileTranscriptionProcessResult(result, pipelineResult.Text);
     }
@@ -210,7 +223,7 @@ public sealed class FileTranscriptionProcessor(
                 $"Ambiguous transcription model '{options.ModelId}': provided by multiple engines. "
                     + "Specify the engine explicitly or use the full plugin-qualified model id."
             ),
-            _ => ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), options.ModelId)
+            _ => ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), options.ModelId),
         };
     }
 }

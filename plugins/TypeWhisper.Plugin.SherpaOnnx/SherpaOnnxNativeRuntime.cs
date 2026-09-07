@@ -1,4 +1,3 @@
-using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using SherpaOnnx;
@@ -42,16 +41,17 @@ internal static class SherpaOnnxNativeRuntime
     // (→ CPU fallback) instead of a crash.
     // internal (not private) so a regression test can assert the CUDA provider is
     // never reintroduced here (see the §6 invariant in the comment above).
+    // ReSharper disable once InconsistentNaming -- internal static field is part of the test-observable API; PascalCase intended.
     internal static readonly string[] PreloadOrder =
     [
         "libonnxruntime_providers_shared.so",
         "libonnxruntime.so",
-        "libsherpa-onnx-cxx-api.so"
+        "libsherpa-onnx-cxx-api.so",
     ];
 
-    private static readonly object Sync = new();
-    private static bool _resolverRegistered;
-    private static string? _cudaRuntimeDirectory;
+    private static readonly Lock s_sync = new();
+    private static bool s_resolverRegistered;
+    private static string? s_cudaRuntimeDirectory;
 
     /// <summary>
     ///     Registers the import resolver once. Safe (and cheap) to call even on the
@@ -61,16 +61,16 @@ internal static class SherpaOnnxNativeRuntime
     /// </summary>
     public static void RegisterResolver()
     {
-        lock (Sync)
+        lock (s_sync)
         {
-            if (_resolverRegistered)
+            if (s_resolverRegistered)
                 return;
 
             NativeLibrary.SetDllImportResolver(
                 typeof(OfflineRecognizer).Assembly,
                 ResolveNativeLibrary
             );
-            _resolverRegistered = true;
+            s_resolverRegistered = true;
         }
     }
 
@@ -84,15 +84,15 @@ internal static class SherpaOnnxNativeRuntime
         if (string.IsNullOrWhiteSpace(runtimeDirectory))
             throw new ArgumentException("Runtime directory is required.", nameof(runtimeDirectory));
 
-        lock (Sync)
+        lock (s_sync)
         {
-            if (!_resolverRegistered)
+            if (!s_resolverRegistered)
             {
                 NativeLibrary.SetDllImportResolver(
                     typeof(OfflineRecognizer).Assembly,
                     ResolveNativeLibrary
                 );
-                _resolverRegistered = true;
+                s_resolverRegistered = true;
             }
 
             foreach (var soname in PreloadOrder)
@@ -102,6 +102,7 @@ internal static class SherpaOnnxNativeRuntime
                     continue;
 
                 var handle = dlopen(path, RtldNow | RtldGlobal);
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (handle == IntPtr.Zero)
                 {
                     var error = Marshal.PtrToStringAnsi(dlerror());
@@ -115,7 +116,7 @@ internal static class SherpaOnnxNativeRuntime
             // Point the resolver at the GPU dir only after every dependency loaded.
             // If a preload above threw, the resolver stays on the CPU runtime so an
             // Auto fallback gets a genuine CPU load rather than the half-wired GPU one.
-            _cudaRuntimeDirectory = runtimeDirectory;
+            s_cudaRuntimeDirectory = runtimeDirectory;
         }
     }
 
@@ -125,7 +126,7 @@ internal static class SherpaOnnxNativeRuntime
         DllImportSearchPath? searchPath
     )
     {
-        var runtimeDirectory = _cudaRuntimeDirectory;
+        var runtimeDirectory = s_cudaRuntimeDirectory;
         if (string.IsNullOrWhiteSpace(runtimeDirectory))
             return IntPtr.Zero; // CPU path: let the default loader find the nuget runtime.
 
@@ -147,9 +148,13 @@ internal static class SherpaOnnxNativeRuntime
         return name;
     }
 
+    // Kept as DllImport (Linux-only libc interop): CharSet.Ansi marshals as UTF-8 here, and
+    // LibraryImport would need AllowUnsafeBlocks for the string marshalling for no real gain.
+#pragma warning disable SYSLIB1054, CA2101
     [DllImport("libdl.so.2", CharSet = CharSet.Ansi)]
     private static extern IntPtr dlopen(string fileName, int flags);
 
     [DllImport("libdl.so.2")]
     private static extern IntPtr dlerror();
+#pragma warning restore SYSLIB1054, CA2101
 }

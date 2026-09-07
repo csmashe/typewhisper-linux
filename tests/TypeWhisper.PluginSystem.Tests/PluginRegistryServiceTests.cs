@@ -49,14 +49,20 @@ public sealed class PluginRegistryServiceTests : IDisposable
                 Description = "A test plugin",
                 Size = 1024L,
                 DownloadUrl = "https://example.com/plugin.zip",
-                RequiresApiKey = false
-            }
+                Platform = "linux",
+                Rid = "linux-x64",
+                SdkAbi = "net10.0",
+                RequiresApiKey = false,
+            },
         };
 
         var json = JsonSerializer.Serialize(plugins);
         var httpClient = CreateMockHttpClient(json);
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         var result = await service.FetchRegistryAsync();
 
@@ -75,13 +81,16 @@ public sealed class PluginRegistryServiceTests : IDisposable
             {
                 Id = "p1",
                 Name = "P",
-                Version = "1.0",
+                Version = "1.0.0",
                 Author = "A",
                 Description = "D",
                 Size = 100L,
                 DownloadUrl = "u",
-                RequiresApiKey = false
-            }
+                Platform = "linux",
+                Rid = "linux-x64",
+                SdkAbi = "net10.0",
+                RequiresApiKey = false,
+            },
         };
         var json = JsonSerializer.Serialize(plugins);
 
@@ -99,13 +108,16 @@ public sealed class PluginRegistryServiceTests : IDisposable
                 callCount++;
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent(json)
+                    Content = new StringContent(json),
                 };
             });
 
         var httpClient = new HttpClient(handler.Object);
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         await service.FetchRegistryAsync();
         await service.FetchRegistryAsync();
@@ -122,32 +134,41 @@ public sealed class PluginRegistryServiceTests : IDisposable
             {
                 Id = "com.typewhisper.groq",
                 Name = "OK",
-                Version = "1.0",
+                Version = "1.0.0",
                 MinHostVersion = "0.1.0",
                 Author = "A",
                 Description = "D",
                 Size = 100L,
                 DownloadUrl = "u",
-                RequiresApiKey = false
+                Platform = "linux",
+                Rid = "linux-x64",
+                SdkAbi = "net10.0",
+                RequiresApiKey = false,
             },
             new
             {
                 Id = "com.typewhisper.openai",
                 Name = "Nope",
-                Version = "1.0",
+                Version = "1.0.0",
                 MinHostVersion = "999.0.0",
                 Author = "A",
                 Description = "D",
                 Size = 100L,
                 DownloadUrl = "u",
-                RequiresApiKey = false
-            }
+                Platform = "linux",
+                Rid = "linux-x64",
+                SdkAbi = "net10.0",
+                RequiresApiKey = false,
+            },
         };
 
         var json = JsonSerializer.Serialize(plugins);
         var httpClient = CreateMockHttpClient(json);
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         var result = await service.FetchRegistryAsync();
 
@@ -156,11 +177,131 @@ public sealed class PluginRegistryServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task FetchRegistryAsync_HonorsPrereleaseMinimumHostVersions()
+    {
+        var plugins = new[]
+        {
+            new
+            {
+                Id = "com.typewhisper.groq",
+                Name = "Compatible",
+                Version = "1.0.0",
+                MinHostVersion = "0.13.0-rc.2",
+                Author = "A",
+                Description = "D",
+                Size = 100L,
+                DownloadUrl = "u",
+                Platform = "linux",
+                Rid = "linux-x64",
+                SdkAbi = "net10.0",
+                RequiresApiKey = false,
+            },
+            new
+            {
+                Id = "com.typewhisper.openai",
+                Name = "Newer prerelease",
+                Version = "1.0.0",
+                MinHostVersion = "0.13.0-rc.3",
+                Author = "A",
+                Description = "D",
+                Size = 100L,
+                DownloadUrl = "u",
+                Platform = "linux",
+                Rid = "linux-x64",
+                SdkAbi = "net10.0",
+                RequiresApiKey = false,
+            },
+            new
+            {
+                Id = "com.typewhisper.openrouter",
+                Name = "Final release",
+                Version = "1.0.0",
+                MinHostVersion = "0.13.0",
+                Author = "A",
+                Description = "D",
+                Size = 100L,
+                DownloadUrl = "u",
+                Platform = "linux",
+                Rid = "linux-x64",
+                SdkAbi = "net10.0",
+                RequiresApiKey = false,
+            },
+        };
+
+        var httpClient = CreateMockHttpClient(JsonSerializer.Serialize(plugins));
+        var manager = CreateManager();
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            HostVersion = "0.13.0-rc.2",
+            RuntimeRid = "linux-x64",
+        };
+
+        var result = await service.FetchRegistryAsync();
+
+        var compatible = Assert.Single(result);
+        Assert.Equal("com.typewhisper.groq", compatible.Id);
+    }
+
+    [Fact]
+    public async Task FetchRegistryAsync_RejectsMalformedMinimumHostVersion()
+    {
+        var plugins = new[]
+        {
+            new
+            {
+                Id = "com.typewhisper.groq",
+                Name = "Malformed",
+                Version = "1.0.0",
+                MinHostVersion = (string?)"not-semver",
+                Author = "A",
+                Description = "D",
+                Size = 100L,
+                DownloadUrl = "u",
+                Platform = "linux",
+                Rid = "linux-x64",
+                SdkAbi = "net10.0",
+                RequiresApiKey = false,
+            },
+            new
+            {
+                Id = "com.typewhisper.openai",
+                Name = "No minimum",
+                Version = "1.0.0",
+                MinHostVersion = (string?)null,
+                Author = "A",
+                Description = "D",
+                Size = 100L,
+                DownloadUrl = "u",
+                Platform = "linux",
+                Rid = "linux-x64",
+                SdkAbi = "net10.0",
+                RequiresApiKey = false,
+            },
+        };
+
+        var httpClient = CreateMockHttpClient(JsonSerializer.Serialize(plugins));
+        var manager = CreateManager();
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            HostVersion = "0.13.0",
+            RuntimeRid = "linux-x64",
+        };
+
+        var result = await service.FetchRegistryAsync();
+
+        var compatible = Assert.Single(result);
+        Assert.Equal("com.typewhisper.openai", compatible.Id);
+    }
+
+    [Fact]
     public async Task FetchRegistryAsync_HttpError_ReturnsEmptyList()
     {
         var httpClient = CreateMockHttpClient("", HttpStatusCode.InternalServerError);
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         var result = await service.FetchRegistryAsync();
 
@@ -171,7 +312,10 @@ public sealed class PluginRegistryServiceTests : IDisposable
     public void GetInstallState_NotInstalled_WhenPluginNotLoaded()
     {
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         var registryPlugin = new RegistryPlugin
         {
@@ -181,7 +325,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
             Author = "A",
             Description = "D",
             Size = 100,
-            DownloadUrl = "u"
+            DownloadUrl = "u",
         };
 
         Assert.Equal(PluginInstallState.NotInstalled, service.GetInstallState(registryPlugin));
@@ -190,17 +334,26 @@ public sealed class PluginRegistryServiceTests : IDisposable
     [Fact]
     public async Task FirstRunAutoInstallAsync_SetsFlag()
     {
+        var current = new AppSettings { PluginFirstRunCompleted = false };
         AppSettings? savedSettings = null;
         _settings
-            .Setup(s => s.Save(It.IsAny<AppSettings>()))
-            .Callback<AppSettings>(s => savedSettings = s);
+            .Setup(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Returns((Func<AppSettings, AppSettings> mutate) =>
+            {
+                current = mutate(current);
+                savedSettings = current;
+                return current;
+            });
         _settings
             .Setup(s => s.Current)
-            .Returns(new AppSettings { PluginFirstRunCompleted = false });
+            .Returns(() => current);
 
         var httpClient = CreateMockHttpClient("[]");
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         await service.FirstRunAutoInstallAsync();
 
@@ -215,11 +368,14 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var httpClient = CreateMockHttpClient("[]");
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient);
+        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        {
+            RuntimeRid = "linux-x64",
+        };
 
         await service.FirstRunAutoInstallAsync();
 
-        _settings.Verify(s => s.Save(It.IsAny<AppSettings>()), Times.Never);
+        _settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
     private PluginManager CreateManager()

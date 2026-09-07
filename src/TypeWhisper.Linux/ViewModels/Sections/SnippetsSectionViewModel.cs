@@ -16,11 +16,15 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
 {
     private readonly IDictionaryService _dictionary;
     private readonly Action _entriesChangedHandler;
+    private readonly IErrorLogService? _errorLog;
     private readonly ISnippetService _snippets;
     private readonly Action _snippetsChangedHandler;
 
     [ObservableProperty]
     private bool _caseSensitive;
+
+    [ObservableProperty]
+    private string _errorText = "";
 
     [ObservableProperty]
     private string? _editingSnippetId;
@@ -46,10 +50,15 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _showEditor;
 
-    public SnippetsSectionViewModel(ISnippetService snippets, IDictionaryService dictionary)
+    public SnippetsSectionViewModel(
+        ISnippetService snippets,
+        IDictionaryService dictionary,
+        IErrorLogService? errorLog = null
+    )
     {
         _snippets = snippets;
         _dictionary = dictionary;
+        _errorLog = errorLog;
         _snippetsChangedHandler = () => Dispatcher.UIThread.Post(Refresh);
         _entriesChangedHandler = () => Dispatcher.UIThread.Post(NotifyConflictWarningChanged);
         _snippets.SnippetsChanged += _snippetsChangedHandler;
@@ -66,6 +75,8 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         Loc.Instance.GetString("Snippets.SummaryText", SnippetCount, EnabledSnippetCount);
     public bool ShowEmptyState => FilteredSnippets.Count == 0;
     public bool ShowSnippetList => FilteredSnippets.Count > 0;
+
+    public bool HasError => !string.IsNullOrEmpty(ErrorText);
 
     public bool HasSelectedTagFilter =>
         !string.Equals(SelectedTagFilter, Loc.Instance["Snippets.AllTags"], StringComparison.Ordinal);
@@ -85,7 +96,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     public IReadOnlyList<SnippetTriggerModeOption> TriggerModeOptions { get; } =
     [
         new(SnippetTriggerMode.Anywhere, Loc.Instance["Snippets.TriggerModeAnywhere"]),
-        new(SnippetTriggerMode.ExactPhrase, Loc.Instance["Snippets.TriggerModeExactPhrase"])
+        new(SnippetTriggerMode.ExactPhrase, Loc.Instance["Snippets.TriggerModeExactPhrase"]),
     ];
 
     public void Dispose()
@@ -136,6 +147,11 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(EditorSaveText));
     }
 
+    partial void OnErrorTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasError));
+    }
+
     partial void OnEditingSnippetIdChanged(string? value)
     {
         OnPropertyChanged(nameof(IsEditingExisting));
@@ -173,7 +189,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
             IsEnabled = existing?.IsEnabled ?? true,
             UsageCount = existing?.UsageCount ?? 0,
             LastUsedAt = existing?.LastUsedAt,
-            CreatedAt = existing?.CreatedAt ?? DateTime.UtcNow
+            CreatedAt = existing?.CreatedAt ?? DateTime.UtcNow,
         };
 
         if (existing is null)
@@ -290,11 +306,14 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         try
         {
             mutation();
+            ErrorText = "";
             return true;
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"[SnippetsSectionViewModel] Failed to {operation}: {ex}");
+            _errorLog?.AddEntry($"Could not {operation}: {ex.Message}");
+            ErrorText = Loc.Instance.GetString("Snippets.SaveFailed", ex.Message);
             Refresh();
             return false;
         }
@@ -327,7 +346,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
             ),
             {
                     EntryType: DictionaryEntryType.Correction,
-                    Replacement: { Length: > 0 } replacement
+                    Replacement: { Length: > 0 } replacement,
                 } => Loc.Instance.GetString(
                 "Snippets.ConflictCorrectionReplacement",
                 conflict.Original,
@@ -337,7 +356,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
                 "Snippets.ConflictCorrection",
                 conflict.Original
             ),
-            _ => ""
+            _ => "",
         };
     }
 

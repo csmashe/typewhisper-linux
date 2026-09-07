@@ -16,7 +16,7 @@
   "Settings.ProfilesDescription": "Zusätzliche OpenAI-kompatible Endpunkte. Jedes Profil erscheint als eigene Transkriptions-Engine und eigener LLM-Anbieter, die Sie beim Diktieren und in Prompts auswählen können. Der Standard-Endpunkt oben bleibt davon unberührt.",
   "Settings.ProfileName": "Name",
   "Settings.ProfileNamePlaceholder": "Local Ollama",
-  "Settings.ProfileApiKeyDescription": "Leer lassen, um den aktuellen Schlüssel beizubehalten.",
+  "Settings.ProfileApiKeyDescription": "Ein gespeicherter Schlüssel bleibt erhalten, solange Sie dieses Feld nicht bearbeiten. Wenn Sie das Feld leeren, wird der gespeicherte Schlüssel entfernt.",
   "Settings.ProfileTranscriptionModelDescription": "Optionaler Standard; jedes abgerufene Modell kann pro Workflow gewählt werden.",
   "Settings.ProfileLlmModelDescription": "Optionaler Standard; Prompts können jedes abgerufene Modell verwenden.",
   "Settings.AddProfile": "Profil hinzufügen",

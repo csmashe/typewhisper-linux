@@ -1,0 +1,265 @@
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "id": "com.typewhisper.assemblyai",
+      "projectPath": "plugins/TypeWhisper.Plugin.AssemblyAi/TypeWhisper.Plugin.AssemblyAi.csproj",
+      "releaseSlug": "assemblyai",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.cerebras",
+      "projectPath": "plugins/TypeWhisper.Plugin.Cerebras/TypeWhisper.Plugin.Cerebras.csproj",
+      "releaseSlug": "cerebras",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.claude",
+      "projectPath": "plugins/TypeWhisper.Plugin.Claude/TypeWhisper.Plugin.Claude.csproj",
+      "releaseSlug": "claude",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.cloudflare-asr",
+      "projectPath": "plugins/TypeWhisper.Plugin.CloudflareAsr/TypeWhisper.Plugin.CloudflareAsr.csproj",
+      "releaseSlug": "cloudflare-asr",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.cohere",
+      "projectPath": "plugins/TypeWhisper.Plugin.Cohere/TypeWhisper.Plugin.Cohere.csproj",
+      "releaseSlug": "cohere",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.deepgram",
+      "projectPath": "plugins/TypeWhisper.Plugin.Deepgram/TypeWhisper.Plugin.Deepgram.csproj",
+      "releaseSlug": "deepgram",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.elevenlabs",
+      "projectPath": "plugins/TypeWhisper.Plugin.ElevenLabs/TypeWhisper.Plugin.ElevenLabs.csproj",
+      "releaseSlug": "elevenlabs",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.file-memory",
+      "projectPath": "plugins/TypeWhisper.Plugin.FileMemory/TypeWhisper.Plugin.FileMemory.csproj",
+      "releaseSlug": "file-memory",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.fireworks",
+      "projectPath": "plugins/TypeWhisper.Plugin.Fireworks/TypeWhisper.Plugin.Fireworks.csproj",
+      "releaseSlug": "fireworks",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.gemini",
+      "projectPath": "plugins/TypeWhisper.Plugin.Gemini/TypeWhisper.Plugin.Gemini.csproj",
+      "releaseSlug": "gemini",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.gemma-local",
+      "projectPath": "plugins/TypeWhisper.Plugin.GemmaLocal/TypeWhisper.Plugin.GemmaLocal.csproj",
+      "releaseSlug": "gemma-local",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "nativeRuntimes": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.gladia",
+      "projectPath": "plugins/TypeWhisper.Plugin.Gladia/TypeWhisper.Plugin.Gladia.csproj",
+      "releaseSlug": "gladia",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.google-cloud-stt",
+      "projectPath": "plugins/TypeWhisper.Plugin.GoogleCloudStt/TypeWhisper.Plugin.GoogleCloudStt.csproj",
+      "releaseSlug": "google-cloud-stt",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.groq",
+      "projectPath": "plugins/TypeWhisper.Plugin.Groq/TypeWhisper.Plugin.Groq.csproj",
+      "releaseSlug": "groq",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.linear",
+      "projectPath": "plugins/TypeWhisper.Plugin.Linear/TypeWhisper.Plugin.Linear.csproj",
+      "releaseSlug": "linear",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.obsidian",
+      "projectPath": "plugins/TypeWhisper.Plugin.Obsidian/TypeWhisper.Plugin.Obsidian.csproj",
+      "releaseSlug": "obsidian",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.openai",
+      "projectPath": "plugins/TypeWhisper.Plugin.OpenAi/TypeWhisper.Plugin.OpenAi.csproj",
+      "releaseSlug": "openai",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.openai-compatible",
+      "projectPath": "plugins/TypeWhisper.Plugin.OpenAiCompatible/TypeWhisper.Plugin.OpenAiCompatible.csproj",
+      "releaseSlug": "openai-compatible",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.openai-vector-memory",
+      "projectPath": "plugins/TypeWhisper.Plugin.OpenAiVectorMemory/TypeWhisper.Plugin.OpenAiVectorMemory.csproj",
+      "releaseSlug": "openai-vector-memory",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.openrouter",
+      "projectPath": "plugins/TypeWhisper.Plugin.OpenRouter/TypeWhisper.Plugin.OpenRouter.csproj",
+      "releaseSlug": "openrouter",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.qwen3-stt",
+      "projectPath": "plugins/TypeWhisper.Plugin.Qwen3Stt/TypeWhisper.Plugin.Qwen3Stt.csproj",
+      "releaseSlug": "qwen3-stt",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.reson8",
+      "projectPath": "plugins/TypeWhisper.Plugin.Reson8/TypeWhisper.Plugin.Reson8.csproj",
+      "releaseSlug": "reson8",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.script",
+      "projectPath": "plugins/TypeWhisper.Plugin.Script/TypeWhisper.Plugin.Script.csproj",
+      "releaseSlug": "script",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.sherpa-onnx",
+      "projectPath": "plugins/TypeWhisper.Plugin.SherpaOnnx/TypeWhisper.Plugin.SherpaOnnx.csproj",
+      "releaseSlug": "sherpa-onnx",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "nativeRuntimes": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.smallest-ai",
+      "projectPath": "plugins/TypeWhisper.Plugin.SmallestAi/TypeWhisper.Plugin.SmallestAi.csproj",
+      "releaseSlug": "smallest-ai",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.soniox",
+      "projectPath": "plugins/TypeWhisper.Plugin.Soniox/TypeWhisper.Plugin.Soniox.csproj",
+      "releaseSlug": "soniox",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.speechmatics",
+      "projectPath": "plugins/TypeWhisper.Plugin.Speechmatics/TypeWhisper.Plugin.Speechmatics.csproj",
+      "releaseSlug": "speechmatics",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.supertonic-tts",
+      "projectPath": "plugins/TypeWhisper.Plugin.SupertonicTts/TypeWhisper.Plugin.SupertonicTts.csproj",
+      "releaseSlug": "supertonic-tts",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "nativeRuntimes": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.voxtral",
+      "projectPath": "plugins/TypeWhisper.Plugin.Voxtral/TypeWhisper.Plugin.Voxtral.csproj",
+      "releaseSlug": "voxtral",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.webhook",
+      "projectPath": "plugins/TypeWhisper.Plugin.Webhook/TypeWhisper.Plugin.Webhook.csproj",
+      "releaseSlug": "webhook",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.whisper-cpp",
+      "projectPath": "plugins/TypeWhisper.Plugin.WhisperCpp/TypeWhisper.Plugin.WhisperCpp.csproj",
+      "releaseSlug": "whisper-cpp",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "nativeRuntimes": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.xai",
+      "projectPath": "plugins/TypeWhisper.Plugin.Xai/TypeWhisper.Plugin.Xai.csproj",
+      "releaseSlug": "xai",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    }
+  ]
+}

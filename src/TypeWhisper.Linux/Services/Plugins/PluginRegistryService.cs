@@ -1,63 +1,68 @@
 using System.Diagnostics;
 using System.IO.Compression;
-using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text.Json;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Linux.Services.ManagedArtifacts;
+using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services.Plugins;
 
 /// <summary>
-///     Fetches the plugin registry from GitHub, manages installation, uninstallation,
-///     and update checking for Linux-compatible marketplace plugins.
+///     Fetches the Linux plugin registry, exposes compatible releases, and installs
+///     validated archives through a recoverable directory transaction.
 /// </summary>
 public sealed class PluginRegistryService
 {
-    // Registry JSON is hosted under the Windows repo but shared; filtered to Linux-compatible IDs below.
-    private const string RegistryUrl = "https://typewhisper.github.io/typewhisper-win/plugins.json";
+    private const string RegistryUrl =
+        "https://csmashe.github.io/typewhisper-linux/plugins.json";
+    private const string HostPlatform = "linux";
+    private const string HostSdkAbi = "net10.0";
+    private const long MaxArchiveBytes = 512L * 1024 * 1024;
+    private const long MaxExtractedBytes = 2L * 1024 * 1024 * 1024;
+    private const int MaxArchiveEntries = 4096;
+
+    // The registry is a JSON index of a few dozen plugins — kilobytes in practice, so both
+    // ceilings are deliberately generous. Two of them, not one: 8 MB of "{}" still deserializes
+    // into millions of objects, which is what would exhaust memory in the first-run bootstrap.
+    private const long MaxRegistryBytes = 8L * 1024 * 1024;
+    private const int MaxRegistryEntries = 1024;
+
+    private const string TransactionDirectoryName = ".typewhisper-plugin-transactions";
     private static readonly TimeSpan s_cacheDuration = TimeSpan.FromMinutes(5);
+
+    // First-run auto-install runs inside the awaited bootstrap, so a blackholed registry
+    // endpoint must not hold onboarding for HttpClient's ~100s default timeout.
+    private static readonly TimeSpan s_registryFetchTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan s_updateCheckInterval = TimeSpan.FromHours(24);
-
-    private static readonly JsonSerializerOptions s_jsonOptions = new() { PropertyNameCaseInsensitive = true };
-
-    // Restrict to the set already proven by the old bundled-plugin path.
-    private static readonly HashSet<string> s_supportedPluginIds = new(
-        StringComparer.OrdinalIgnoreCase
-    )
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        "com.typewhisper.sherpa-onnx",
-        "com.typewhisper.whisper-cpp",
-        "com.typewhisper.file-memory",
-        "com.typewhisper.openai",
-        "com.typewhisper.openrouter",
-        "com.typewhisper.gemini",
-        "com.typewhisper.cerebras",
-        "com.typewhisper.claude",
-        "com.typewhisper.cohere",
-        "com.typewhisper.fireworks",
-        "com.typewhisper.groq",
-        "com.typewhisper.assemblyai",
-        "com.typewhisper.deepgram",
-        "com.typewhisper.cloudflare-asr",
-        "com.typewhisper.gladia",
-        "com.typewhisper.speechmatics",
-        "com.typewhisper.soniox",
-        "com.typewhisper.reson8",
-        "com.typewhisper.google-cloud-stt",
-        "com.typewhisper.voxtral",
-        "com.typewhisper.qwen3-stt",
-        "com.typewhisper.obsidian",
-        "com.typewhisper.linear",
-        "com.typewhisper.openai-compatible"
+        PropertyNameCaseInsensitive = true,
     };
 
+    // Registry-only options: options-level converters take precedence over the SDK enums'
+    // type-level JsonStringEnumConverter, so an unknown name a future registry publishes
+    // degrades one field instead of blanking the whole plugin browser. Staged-manifest
+    // validation stays on the strict s_jsonOptions. PluginNetworkAccess has no Unknown
+    // member; Network is the documented fail-closed choice (see PluginLocalityClassifier).
+    private static readonly JsonSerializerOptions s_registryJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters =
+        {
+            new TolerantJsonStringEnumConverter<PluginCategory>(PluginCategory.Unknown),
+            new TolerantJsonStringEnumConverter<PluginNetworkAccess>(
+                PluginNetworkAccess.Network
+            ),
+        },
+    };
+
+    private readonly ManagedDirectoryTransaction _directoryTransaction;
     private readonly HttpClient _httpClient;
-
-    // kept injected as a DI/test seam; not consumed in-tree
-    // ReSharper disable once NotAccessedField.Local
-    private readonly PluginLoader _pluginLoader;
-
     private readonly PluginManager _pluginManager;
+    private readonly string _pluginsRoot;
     private readonly ISettingsService _settings;
 
     private List<RegistryPlugin>? _cachedRegistry;
@@ -70,45 +75,169 @@ public sealed class PluginRegistryService
         ISettingsService settings,
         HttpClient? httpClient = null
     )
+        : this(
+            pluginManager,
+            pluginLoader,
+            settings,
+            httpClient ?? new HttpClient(),
+            TypeWhisperEnvironment.PluginsPath
+        ) { }
+
+    internal PluginRegistryService(
+        PluginManager pluginManager,
+        PluginLoader pluginLoader,
+        ISettingsService settings,
+        HttpClient httpClient,
+        string pluginsRoot
+    )
     {
+        ArgumentNullException.ThrowIfNull(pluginManager);
+        ArgumentNullException.ThrowIfNull(pluginLoader);
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(httpClient);
+        ArgumentException.ThrowIfNullOrWhiteSpace(pluginsRoot);
+
         _pluginManager = pluginManager;
-        _pluginLoader = pluginLoader;
         _settings = settings;
-        _httpClient = httpClient ?? new HttpClient();
+        _httpClient = httpClient;
+        _pluginsRoot = Path.GetFullPath(pluginsRoot);
+        _directoryTransaction = new ManagedDirectoryTransaction(
+            Path.Join(_pluginsRoot, TransactionDirectoryName),
+            // ReSharper disable once RedundantArgumentDefaultValue -- an interrupted install must
+            // roll back to the previously working plugin; state that here rather than leaving it
+            // to whatever the transaction's default happens to be.
+            ManagedDirectoryRecoveryMode.RestoreBackup
+        );
     }
+
+    // Internal deterministic seams for compatibility tests.
+    internal string HostVersion { get; init; } = AppVersion.Display;
+    internal string RuntimeRid { get; init; } = ResolveRuntimeRid();
 
     public async Task<IReadOnlyList<RegistryPlugin>> FetchRegistryAsync(
         CancellationToken ct = default
     )
     {
+        var (plugins, _) = await FetchRegistryWithOutcomeAsync(ct).ConfigureAwait(false);
+        return plugins;
+    }
+
+    /// <summary>
+    ///     Fetches the registry and reports whether <em>this</em> call succeeded. Returned rather
+    ///     than stored: first-run auto-install and the periodic update check can overlap, and a
+    ///     shared field would let one caller read the other's result.
+    /// </summary>
+    private async Task<(IReadOnlyList<RegistryPlugin> Plugins, bool Succeeded)>
+        FetchRegistryWithOutcomeAsync(CancellationToken ct)
+    {
         if (_cachedRegistry is not null && DateTime.UtcNow - _cacheTimestamp < s_cacheDuration)
         {
-            return _cachedRegistry;
+            ct.ThrowIfCancellationRequested();
+            return (_cachedRegistry, true);
         }
 
         try
         {
-            var json = await _httpClient.GetStringAsync(RegistryUrl, ct);
-            var allPlugins =
-                JsonSerializer.Deserialize<List<RegistryPlugin>>(json, s_jsonOptions) ?? [];
+            using var fetchCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            fetchCts.CancelAfter(s_registryFetchTimeout);
+            using var response = await _httpClient
+                .GetAsync(
+                    RegistryUrl,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    fetchCts.Token
+                )
+                .ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var allPlugins = await ReadBoundedRegistryAsync(response, fetchCts.Token)
+                .ConfigureAwait(false);
 
-            var hostVersion = GetHostVersion();
-            _cachedRegistry = allPlugins
-                .Where(p => s_supportedPluginIds.Contains(p.Id))
-                .Where(p => IsCompatible(p.MinHostVersion, hostVersion))
-                .ToList();
+            _cachedRegistry = allPlugins.Where(IsCompatible).ToList();
             _cacheTimestamp = DateTime.UtcNow;
 
             Trace.WriteLine(
                 $"[PluginRegistry] Fetched {_cachedRegistry.Count} compatible Linux plugin(s) from registry"
             );
-            return _cachedRegistry;
+            return (_cachedRegistry, true);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Only the caller's own token aborts. The 15s fetch deadline surfaces as an
+            // OperationCanceledException too, and that one is an ordinary fetch failure.
+            throw;
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"[PluginRegistry] Failed to fetch registry: {ex.Message}");
-            return _cachedRegistry ?? [];
+            return (_cachedRegistry ?? [], false);
         }
+    }
+
+    /// <summary>
+    ///     Reads the registry body under a hard ceiling instead of buffering whatever the endpoint
+    ///     sends: a declared Content-Length is rejected up front, a chunked one cut off mid-stream.
+    /// </summary>
+    private static async Task<List<RegistryPlugin>> ReadBoundedRegistryAsync(
+        HttpResponseMessage response,
+        CancellationToken ct
+    )
+    {
+        if (response.Content.Headers.ContentLength > MaxRegistryBytes)
+        {
+            throw new InvalidDataException(
+                $"Plugin registry exceeds the {MaxRegistryBytes}-byte limit."
+            );
+        }
+
+        await using var stream = await response
+            .Content.ReadAsStreamAsync(ct)
+            .ConfigureAwait(false);
+        using var bounded = new MemoryStream();
+        var buffer = new byte[64 * 1024];
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer, ct).ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+
+            if (bounded.Length + read > MaxRegistryBytes)
+            {
+                throw new InvalidDataException(
+                    $"Plugin registry exceeds the {MaxRegistryBytes}-byte limit."
+                );
+            }
+
+            bounded.Write(buffer, 0, read);
+        }
+
+        bounded.Position = 0;
+        var plugins = new List<RegistryPlugin>();
+        // Streamed rather than deserialized whole: the cap has to stop allocating at the limit,
+        // not discover afterwards that it already materialized millions of entries.
+        var entries = 0;
+        await foreach (
+            var plugin in JsonSerializer
+                .DeserializeAsyncEnumerable<RegistryPlugin>(bounded, s_registryJsonOptions, ct)
+                .ConfigureAwait(false)
+        )
+        {
+            // Counts every element, not just the kept ones: JSON nulls would otherwise slip past
+            // the cap, and dropping them silently would let a malformed registry mark first-run
+            // complete.
+            if (++entries > MaxRegistryEntries)
+            {
+                throw new InvalidDataException(
+                    $"Plugin registry declares more than {MaxRegistryEntries} entries."
+                );
+            }
+
+            plugins.Add(
+                plugin ?? throw new InvalidDataException("Plugin registry contains a null entry.")
+            );
+        }
+
+        return plugins;
     }
 
     public PluginInstallState GetInstallState(RegistryPlugin registryPlugin)
@@ -119,119 +248,536 @@ public sealed class PluginRegistryService
             return PluginInstallState.NotInstalled;
         }
 
-        if (
-            Version.TryParse(registryPlugin.Version, out var remoteVer)
-            && Version.TryParse(local.Manifest.Version, out var localVer)
-            && remoteVer > localVer
-        )
-        {
-            return PluginInstallState.UpdateAvailable;
-        }
-
-        return PluginInstallState.Installed;
+        return AppVersion.TryCompareStrict(
+                registryPlugin.Version,
+                local.Manifest.Version,
+                out var comparison
+            )
+            && comparison > 0
+            ? PluginInstallState.UpdateAvailable
+            : PluginInstallState.Installed;
     }
 
-    private async Task InstallPluginAsync(
+    /// <summary>
+    ///     Restores any pre-activation swap left behind by a terminated process. This must run
+    ///     before PluginManager discovers live plugin directories during startup.
+    /// </summary>
+    public async Task RecoverInterruptedInstallsAsync(CancellationToken ct = default)
+    {
+        await _directoryTransaction.RecoverAllAsync(ct).ConfigureAwait(false);
+        await _directoryTransaction.PurgeAbandonedArtifactsAsync(ct).ConfigureAwait(false);
+    }
+
+    // Only reached for ids the host does not already bundle: BundledPluginDeployer runs
+    // first every launch and re-syncs any bundled tree it does not recognise, so wiring
+    // this to an update button needs a bundled-vs-registry ownership rule first.
+    internal async Task InstallPluginAsync(
         RegistryPlugin registryPlugin,
         IProgress<double>? progress = null,
         CancellationToken ct = default
     )
     {
-        var pluginDir = Path.Join(TypeWhisperEnvironment.PluginsPath, registryPlugin.Id);
+        EnsureRegistryEntryInstallable(registryPlugin);
+        Directory.CreateDirectory(_pluginsRoot);
 
-        if (_pluginManager.GetPlugin(registryPlugin.Id) is not null)
-        {
-            await _pluginManager.UnloadPluginAsync(registryPlugin.Id);
-        }
-
-        if (Directory.Exists(pluginDir))
-        {
-            Directory.Delete(pluginDir, true);
-        }
-
-        Directory.CreateDirectory(pluginDir);
-
-        var tempZip = Path.GetTempFileName();
+        var pluginDir = Path.Join(_pluginsRoot, registryPlugin.Id);
+        var stage = _directoryTransaction.CreateStageDirectory(registryPlugin.Id);
+        var downloadPath = Path.Join(
+            Path.GetDirectoryName(stage)!,
+            $"download-{Guid.NewGuid():N}.tmp"
+        );
+        ManagedDirectoryTransaction.ManagedDirectoryCommit? commit = null;
+        var oldWasLoaded = _pluginManager.GetPlugin(registryPlugin.Id) is not null;
+        var activationSucceeded = false;
         try
         {
-            // Scope the download streams so the temp file is closed before we
-            // extract from it; the surrounding finally deletes tempZip on every
-            // exit path (download, extract, or load failure included).
-            using (var response = await _httpClient.GetAsync(
-                       registryPlugin.DownloadUrl,
-                       HttpCompletionOption.ResponseHeadersRead,
-                       ct))
-            {
-                response.EnsureSuccessStatusCode();
-
-                var totalBytes = response.Content.Headers.ContentLength ?? registryPlugin.Size;
-                await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-                await using var fileStream = File.Create(tempZip);
-
-                var buffer = new byte[8192];
-                long bytesRead = 0;
-                int read;
-                while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
+            // Everything below the download runs on the caller's context: unload/activate
+            // persist enabled state, and SettingsChanged reaches settings view models that
+            // mutate bound collections without dispatching. Task.Run keeps the download and
+            // extraction off that context, since the caller is usually the UI thread.
+            await Task.Run(
+                async () =>
                 {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
-                    bytesRead += read;
-                    progress?.Report(totalBytes > 0 ? (double)bytesRead / totalBytes : 0);
-                }
+                    await DownloadArchiveAsync(registryPlugin, downloadPath, progress, ct)
+                        .ConfigureAwait(false);
+                    ExtractAndValidateArchive(downloadPath, stage, registryPlugin, ct);
+                },
+                ct
+            );
+
+            commit = await _directoryTransaction.CommitAsync(
+                registryPlugin.Id,
+                stage,
+                pluginDir,
+                async cancellationToken =>
+                {
+                    if (_pluginManager.GetPlugin(registryPlugin.Id) is not null)
+                    {
+                        await _pluginManager.UnloadPluginAsync(registryPlugin.Id);
+                    }
+
+                    cancellationToken.ThrowIfCancellationRequested();
+                },
+                ct
+            );
+
+            if (!await _pluginManager.LoadPluginFromDirectoryAsync(pluginDir, activate: true))
+            {
+                throw new InvalidDataException(
+                    $"Plugin '{registryPlugin.Id}' could not be loaded and activated."
+                );
             }
 
-            // ReSharper disable once MethodHasAsyncOverloadWithCancellation -- synchronous extraction is intentional; the async overload would change cancellation semantics (partial extract on cancel) for a small local plugin zip
-            ZipFile.ExtractToDirectory(tempZip, pluginDir, true);
-
-            await _pluginManager.LoadPluginFromDirectoryAsync(pluginDir, true);
-
+            activationSucceeded = true;
+            await commit.CompleteAsync();
             Trace.WriteLine(
                 $"[PluginRegistry] Installed plugin: {registryPlugin.Id} v{registryPlugin.Version}"
             );
         }
-        catch (Exception ex)
+        catch (Exception installException)
         {
             Trace.WriteLine(
-                $"[PluginRegistry] Failed to install {registryPlugin.Id}: {ex.Message}"
+                $"[PluginRegistry] Failed to install {registryPlugin.Id}: {installException.Message}"
             );
 
-            if (!Directory.Exists(pluginDir))
+            var recoveryFailures = new List<Exception>();
+            if (commit is not null && !activationSucceeded)
             {
-                throw;
+                try
+                {
+                    var rejected = await commit.RollbackAsync();
+                    if (rejected is not null)
+                    {
+                        // Discard immediately: FirstRunAutoInstallAsync retries a failing
+                        // plugin on every launch, so a retained tree per attempt is unbounded.
+                        DeleteDirectoryBestEffort(rejected);
+                    }
+                }
+                catch (Exception rollbackException)
+                {
+                    recoveryFailures.Add(rollbackException);
+                }
             }
 
-            try
+            if (
+                oldWasLoaded
+                && _pluginManager.GetPlugin(registryPlugin.Id) is null
+                && Directory.Exists(pluginDir)
+            )
             {
-                Directory.Delete(pluginDir, true);
+                try
+                {
+                    if (
+                        !await _pluginManager.LoadPluginFromDirectoryAsync(
+                            pluginDir,
+                            activate: true
+                        )
+                    )
+                    {
+                        throw new InvalidDataException(
+                            $"The previous plugin '{registryPlugin.Id}' could not be reloaded after rollback."
+                        );
+                    }
+                }
+                catch (Exception reloadException)
+                {
+                    recoveryFailures.Add(reloadException);
+                }
             }
-            catch
+
+            if (recoveryFailures.Count > 0)
             {
-                // Best-effort cleanup of the partial install directory; the original failure is rethrown below.
+                throw new AggregateException(
+                    "Plugin installation failed and recovery was not fully successful.",
+                    [installException, .. recoveryFailures]
+                );
             }
 
             throw;
         }
         finally
         {
-            if (File.Exists(tempZip))
+            if (commit is not null)
             {
-                try
-                {
-                    File.Delete(tempZip);
-                }
-                catch
-                {
-                    // Best-effort temp cleanup; nothing else depends on it.
-                }
+                await commit.DisposeAsync();
             }
+
+            DeleteFileBestEffort(downloadPath);
+            DeleteDirectoryBestEffort(stage);
         }
     }
 
-    // ReSharper disable once UnusedMember.Global  public API surface (plugin uninstall entry point); not currently called in-tree
+    private async Task DownloadArchiveAsync(
+        RegistryPlugin registryPlugin,
+        string destinationPath,
+        IProgress<double>? progress,
+        CancellationToken ct
+    )
+    {
+        if (
+            !Uri.TryCreate(registryPlugin.DownloadUrl, UriKind.Absolute, out var downloadUri)
+            || !string.Equals(downloadUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            throw new InvalidDataException("Plugin downloads must use an absolute HTTPS URL.");
+        }
+
+        using var response = await _httpClient
+            .GetAsync(downloadUri, HttpCompletionOption.ResponseHeadersRead, ct)
+            .ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+
+        if (
+            response.Content.Headers.ContentLength is { } contentLength
+            && contentLength != registryPlugin.Size
+        )
+        {
+            throw new InvalidDataException(
+                $"Plugin archive Content-Length {contentLength} does not match declared size {registryPlugin.Size}."
+            );
+        }
+
+        var expectedHash = Convert.FromHexString(registryPlugin.Sha256);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        await using var contentStream = await response.Content
+            .ReadAsStreamAsync(ct)
+            .ConfigureAwait(false);
+        await using var fileStream = new FileStream(
+            destinationPath,
+            new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                Options = FileOptions.Asynchronous | FileOptions.SequentialScan,
+            }
+        );
+
+        var buffer = new byte[64 * 1024];
+        long downloaded = 0;
+        while (true)
+        {
+            var read = await contentStream.ReadAsync(buffer, ct).ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+
+            downloaded += read;
+            if (downloaded > registryPlugin.Size)
+            {
+                throw new InvalidDataException(
+                    "Plugin archive exceeds its declared download size."
+                );
+            }
+
+            hash.AppendData(buffer, 0, read);
+            await fileStream.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+            progress?.Report((double)downloaded / registryPlugin.Size);
+        }
+
+        await fileStream.FlushAsync(ct).ConfigureAwait(false);
+        if (downloaded != registryPlugin.Size)
+        {
+            throw new InvalidDataException(
+                $"Plugin archive size {downloaded} does not match declared size {registryPlugin.Size}."
+            );
+        }
+
+        var actualHash = hash.GetHashAndReset();
+        if (!CryptographicOperations.FixedTimeEquals(actualHash, expectedHash))
+        {
+            throw new InvalidDataException("Plugin archive SHA-256 does not match the registry.");
+        }
+    }
+
+    private void ExtractAndValidateArchive(
+        string archivePath,
+        string stage,
+        RegistryPlugin registryPlugin,
+        CancellationToken ct
+    )
+    {
+        using var archive = ZipFile.OpenRead(archivePath);
+        if (archive.Entries.Count is 0 or > MaxArchiveEntries)
+        {
+            throw new InvalidDataException(
+                $"Plugin archive entry count must be between 1 and {MaxArchiveEntries}."
+            );
+        }
+
+        var entries = ValidateArchiveEntries(archive, registryPlugin);
+        var stagePrefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(stage))
+            + Path.DirectorySeparatorChar;
+        var buffer = new byte[64 * 1024];
+        foreach (var entryInfo in entries)
+        {
+            ct.ThrowIfCancellationRequested();
+            var destination = Path.GetFullPath(
+                Path.Join(stage, entryInfo.Path.Replace('/', Path.DirectorySeparatorChar))
+            );
+            if (!destination.StartsWith(stagePrefix, PathComparison))
+            {
+                throw new InvalidDataException(
+                    $"Plugin archive entry escapes staging: {entryInfo.Entry.FullName}"
+                );
+            }
+
+            if (entryInfo.IsDirectory)
+            {
+                Directory.CreateDirectory(destination);
+                continue;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            using var input = entryInfo.Entry.Open();
+            using var output = new FileStream(
+                destination,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None
+            );
+            long written = 0;
+            while (true)
+            {
+                // One entry can be most of the 2 GB budget, so the per-entry check above
+                // is not enough on its own.
+                ct.ThrowIfCancellationRequested();
+                var read = input.Read(buffer, 0, buffer.Length);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                written += read;
+                if (written > entryInfo.Entry.Length)
+                {
+                    throw new InvalidDataException(
+                        $"Plugin archive entry expanded beyond its declared size: {entryInfo.Path}"
+                    );
+                }
+
+                output.Write(buffer, 0, read);
+            }
+
+            if (written != entryInfo.Entry.Length)
+            {
+                throw new InvalidDataException(
+                    $"Plugin archive entry size changed during extraction: {entryInfo.Path}"
+                );
+            }
+        }
+
+        ValidateStagedManifest(stage, registryPlugin);
+    }
+
+    private static List<ValidatedArchiveEntry> ValidateArchiveEntries(
+        ZipArchive archive,
+        RegistryPlugin registryPlugin
+    )
+    {
+        var entries = new List<ValidatedArchiveEntry>(archive.Entries.Count);
+        var paths = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        long extractedBytes = 0;
+
+        foreach (var entry in archive.Entries)
+        {
+            if (IsSymbolicLink(entry))
+            {
+                throw new InvalidDataException(
+                    $"Plugin archive contains a symbolic link: {entry.FullName}"
+                );
+            }
+
+            var isDirectory = entry.FullName.EndsWith('/') || entry.FullName.EndsWith('\\');
+            var normalized = NormalizeArchivePath(entry.FullName, isDirectory);
+            if (!paths.TryAdd(normalized, isDirectory))
+            {
+                throw new InvalidDataException(
+                    $"Plugin archive contains duplicate or case-colliding entries: {entry.FullName}"
+                );
+            }
+
+            // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- the
+            // LINQ form would enumerate the dictionary through a different enumerator, and the
+            // loop body throws with the offending entry rather than producing a value.
+            foreach (var existing in paths)
+            {
+                if (
+                    (!existing.Value
+                        && normalized.StartsWith(existing.Key + "/", StringComparison.OrdinalIgnoreCase))
+                    || (!isDirectory
+                        && existing.Key.StartsWith(normalized + "/", StringComparison.OrdinalIgnoreCase))
+                )
+                {
+                    throw new InvalidDataException(
+                        $"Plugin archive contains a file/directory layout collision: {entry.FullName}"
+                    );
+                }
+            }
+
+            if (
+                !isDirectory
+                && string.Equals(
+                    Path.GetFileName(normalized),
+                    "TypeWhisper.PluginSDK.dll",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            {
+                throw new InvalidDataException(
+                    "Plugin archives must not bundle TypeWhisper.PluginSDK.dll."
+                );
+            }
+
+            ValidateNativeRuntimePath(normalized, registryPlugin.Rid);
+            if (!isDirectory)
+            {
+                checked
+                {
+                    extractedBytes += entry.Length;
+                }
+
+                if (extractedBytes > MaxExtractedBytes)
+                {
+                    throw new InvalidDataException(
+                        $"Plugin archive exceeds the {MaxExtractedBytes}-byte extraction limit."
+                    );
+                }
+            }
+
+            entries.Add(new ValidatedArchiveEntry(entry, normalized, isDirectory));
+        }
+
+        if (!paths.TryGetValue(PluginManifest.FileName, out var manifestIsDirectory) || manifestIsDirectory)
+        {
+            throw new InvalidDataException(
+                "Plugin archive must contain exactly one root manifest.json."
+            );
+        }
+
+        return entries;
+    }
+
+    private void ValidateStagedManifest(string stage, RegistryPlugin registryPlugin)
+    {
+        var manifestPath = Path.Join(stage, PluginManifest.FileName);
+        PluginManifest manifest;
+        try
+        {
+            manifest = JsonSerializer.Deserialize<PluginManifest>(
+                    File.ReadAllText(manifestPath),
+                    s_jsonOptions
+                )
+                ?? throw new InvalidDataException("Plugin manifest.json is empty.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException("Plugin manifest.json is invalid.", ex);
+        }
+
+        if (!string.Equals(manifest.Id, registryPlugin.Id, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Plugin manifest id '{manifest.Id}' does not match registry id '{registryPlugin.Id}'."
+            );
+        }
+
+        if (
+            !string.Equals(manifest.Version, registryPlugin.Version, StringComparison.Ordinal)
+            || !AppVersion.IsValidStrict(manifest.Version)
+        )
+        {
+            throw new InvalidDataException(
+                $"Plugin manifest version '{manifest.Version}' does not match registry version '{registryPlugin.Version}'."
+            );
+        }
+
+        if (
+            !string.Equals(
+                NormalizeOptionalVersion(manifest.MinHostVersion),
+                NormalizeOptionalVersion(registryPlugin.MinHostVersion),
+                StringComparison.Ordinal
+            )
+        )
+        {
+            throw new InvalidDataException(
+                "Plugin manifest minimum host version does not match the registry."
+            );
+        }
+
+        if (
+            !AppVersion.IsHostCompatible(
+                manifest.MinHostVersion,
+                HostVersion,
+                out var incompatibilityReason
+            )
+        )
+        {
+            throw new InvalidDataException(
+                $"Plugin '{manifest.Id}' is incompatible with this host: {incompatibilityReason}"
+            );
+        }
+
+        if (
+            string.IsNullOrWhiteSpace(manifest.AssemblyName)
+            || Path.IsPathRooted(manifest.AssemblyName)
+            || manifest.AssemblyName.IndexOfAny(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]
+            ) >= 0
+            || !string.Equals(
+                Path.GetExtension(manifest.AssemblyName),
+                ".dll",
+                StringComparison.OrdinalIgnoreCase
+            )
+            || !File.Exists(Path.Join(stage, manifest.AssemblyName))
+        )
+        {
+            throw new InvalidDataException(
+                $"Plugin archive does not contain the declared root assembly '{manifest.AssemblyName}'."
+            );
+        }
+    }
+
+    private void EnsureRegistryEntryInstallable(RegistryPlugin registryPlugin)
+    {
+        ArgumentNullException.ThrowIfNull(registryPlugin);
+        if (!IsSafePluginId(registryPlugin.Id))
+        {
+            throw new InvalidDataException("Registry plugin id is not a safe directory name.");
+        }
+
+        if (!IsCompatible(registryPlugin))
+        {
+            throw new InvalidDataException(
+                $"Registry plugin '{registryPlugin.Id}' is not compatible with {HostPlatform}/{RuntimeRid}/{HostSdkAbi}."
+            );
+        }
+
+        if (registryPlugin.Size is <= 0 or > MaxArchiveBytes)
+        {
+            throw new InvalidDataException(
+                $"Plugin archive size must be between 1 and {MaxArchiveBytes} bytes."
+            );
+        }
+
+        if (!IsValidSha256(registryPlugin.Sha256))
+        {
+            throw new InvalidDataException("Registry plugin SHA-256 is invalid.");
+        }
+    }
+
+    // ReSharper disable once UnusedMember.Global -- public plugin uninstall entry point.
     public async Task UninstallPluginAsync(string pluginId)
     {
-        await _pluginManager.UnloadPluginAsync(pluginId);
+        if (!IsSafePluginId(pluginId))
+        {
+            throw new ArgumentException("Plugin id is not a safe directory name.", nameof(pluginId));
+        }
 
-        var pluginDir = Path.Join(TypeWhisperEnvironment.PluginsPath, pluginId);
+        await _pluginManager.UnloadPluginAsync(pluginId).ConfigureAwait(false);
+
+        var pluginDir = Path.Join(_pluginsRoot, pluginId);
         if (Directory.Exists(pluginDir))
         {
             try
@@ -248,11 +794,7 @@ public sealed class PluginRegistryService
         }
     }
 
-    /// <summary>
-    ///     Checks for plugin updates, throttled to one network probe per 24 h to avoid hammering
-    ///     the registry endpoint on repeated launches.
-    /// </summary>
-    // ReSharper disable once UnusedMember.Global  public API surface (throttled plugin update check); not currently called in-tree
+    // ReSharper disable once UnusedMember.Global -- public throttled update-check entry point.
     public async Task CheckForUpdatesAsync(CancellationToken ct = default)
     {
         if (DateTime.UtcNow - _lastUpdateCheck < s_updateCheckInterval)
@@ -261,8 +803,7 @@ public sealed class PluginRegistryService
         }
 
         _lastUpdateCheck = DateTime.UtcNow;
-
-        var registry = await FetchRegistryAsync(ct);
+        var registry = await FetchRegistryAsync(ct).ConfigureAwait(false);
         var updatesAvailable = registry
             .Where(p => GetInstallState(p) == PluginInstallState.UpdateAvailable)
             .ToList();
@@ -275,10 +816,6 @@ public sealed class PluginRegistryService
         }
     }
 
-    /// <summary>
-    ///     First-launch bootstrap: installs all compatible registry plugins so the app is usable
-    ///     out of the box. Guarded by PluginFirstRunCompleted so it won't re-run after user uninstalls.
-    /// </summary>
     public async Task FirstRunAutoInstallAsync(CancellationToken ct = default)
     {
         if (_settings.Current.PluginFirstRunCompleted)
@@ -290,58 +827,228 @@ public sealed class PluginRegistryService
             "[PluginRegistry] First run detected, auto-installing Linux-compatible registry plugins..."
         );
 
-        // Only mark first-run bootstrap complete once everything actually
-        // installed. A failed fetch (e.g. offline) or a failed plugin install
-        // must leave the flag clear so the next launch retries.
-        var anyFailed = false;
-        try
-        {
-            var registry = await FetchRegistryAsync(ct);
-            foreach (var plugin in registry)
-            {
-                if (GetInstallState(plugin) != PluginInstallState.NotInstalled)
-                {
-                    continue;
-                }
+        // Deliberately no ConfigureAwait(false) in this method: the bootstrap runner calls it
+        // on the UI thread and _settings.Save raises SettingsChanged synchronously into
+        // settings view models that mutate bound collections without dispatching.
+        var (registry, fetchSucceeded) = await FetchRegistryWithOutcomeAsync(ct);
+        var anyFailed = !fetchSucceeded;
 
-                try
-                {
-                    await InstallPluginAsync(plugin, ct: ct);
-                }
-                catch (Exception ex)
-                {
-                    anyFailed = true;
-                    Trace.WriteLine(
-                        $"[PluginRegistry] Auto-install failed for {plugin.Id}: {ex.Message}"
-                    );
-                }
-            }
-        }
-        catch (Exception ex)
+        foreach (var plugin in registry)
         {
-            anyFailed = true;
-            Trace.WriteLine($"[PluginRegistry] First run auto-install failed: {ex.Message}");
+            if (GetInstallState(plugin) != PluginInstallState.NotInstalled)
+            {
+                continue;
+            }
+
+            try
+            {
+                await InstallPluginAsync(plugin, ct: ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Shutdown, not a failed install: don't log one failure per remaining plugin.
+                throw;
+            }
+            catch (Exception ex)
+            {
+                anyFailed = true;
+                Trace.WriteLine(
+                    $"[PluginRegistry] Auto-install failed for {plugin.Id}: {ex.Message}"
+                );
+            }
         }
 
         if (!anyFailed)
         {
-            _settings.Save(_settings.Current with { PluginFirstRunCompleted = true });
+            _settings.Update(current => current with { PluginFirstRunCompleted = true });
         }
     }
 
-    private static Version GetHostVersion()
+    private bool IsCompatible(RegistryPlugin plugin)
     {
-        var asm = Assembly.GetEntryAssembly();
-        return asm?.GetName().Version ?? new Version(1, 0);
-    }
-
-    private static bool IsCompatible(string? minHostVersion, Version hostVersion)
-    {
-        if (string.IsNullOrEmpty(minHostVersion))
+        string reason;
+        if (!IsSafePluginId(plugin.Id))
+        {
+            reason = "plugin id is not a safe directory name";
+        }
+        else if (!string.Equals(plugin.Platform, HostPlatform, StringComparison.OrdinalIgnoreCase))
+        {
+            reason = $"platform '{plugin.Platform}' is not '{HostPlatform}'";
+        }
+        else if (!string.Equals(plugin.Rid, RuntimeRid, StringComparison.OrdinalIgnoreCase))
+        {
+            reason = $"RID '{plugin.Rid}' is not '{RuntimeRid}'";
+        }
+        else if (!string.Equals(plugin.SdkAbi, HostSdkAbi, StringComparison.Ordinal))
+        {
+            reason = $"SDK ABI '{plugin.SdkAbi}' is not '{HostSdkAbi}'";
+        }
+        else if (!AppVersion.IsValidStrict(plugin.Version))
+        {
+            reason = $"version '{plugin.Version}' is not valid SemVer";
+        }
+        else if (
+            !AppVersion.IsHostCompatible(
+                plugin.MinHostVersion,
+                HostVersion,
+                out var incompatibilityReason
+            )
+        )
+        {
+            reason = incompatibilityReason;
+        }
+        else
         {
             return true;
         }
 
-        return !Version.TryParse(minHostVersion, out var minVer) || hostVersion >= minVer;
+        Trace.WriteLine(
+            $"[PluginRegistry] Excluding incompatible plugin '{plugin.Id}': {reason}"
+        );
+        return false;
     }
+
+    private static string NormalizeArchivePath(string rawPath, bool isDirectory)
+    {
+        if (string.IsNullOrEmpty(rawPath) || rawPath.Contains('\0'))
+        {
+            throw new InvalidDataException("Plugin archive contains an empty or invalid path.");
+        }
+
+        var normalized = rawPath.Replace('\\', '/');
+        if (
+            normalized.StartsWith('/')
+            || normalized.StartsWith("//", StringComparison.Ordinal)
+            || (normalized.Length >= 2 && char.IsAsciiLetter(normalized[0]) && normalized[1] == ':')
+        )
+        {
+            throw new InvalidDataException(
+                $"Plugin archive contains an absolute path: {rawPath}"
+            );
+        }
+
+        if (isDirectory)
+        {
+            normalized = normalized.TrimEnd('/');
+        }
+
+        var segments = normalized.Split('/');
+        if (
+            segments.Length == 0
+            || segments.Any(segment => segment.Length == 0 || segment is "." or "..")
+        )
+        {
+            throw new InvalidDataException(
+                $"Plugin archive contains a traversal or malformed path: {rawPath}"
+            );
+        }
+
+        return string.Join('/', segments);
+    }
+
+    private static void ValidateNativeRuntimePath(string normalizedPath, string declaredRid)
+    {
+        var segments = normalizedPath.Split('/');
+        if (
+            segments.Length >= 2
+            && string.Equals(segments[0], "runtimes", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(segments[1], declaredRid, StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            throw new InvalidDataException(
+                $"Plugin archive contains undeclared native runtime '{segments[1]}'."
+            );
+        }
+    }
+
+    private static bool IsSymbolicLink(ZipArchiveEntry entry)
+    {
+        const int unixFileTypeMask = 0xF000;
+        const int unixSymbolicLink = 0xA000;
+        var unixMode = (entry.ExternalAttributes >> 16) & 0xFFFF;
+        return (unixMode & unixFileTypeMask) == unixSymbolicLink
+            || (entry.ExternalAttributes & (int)FileAttributes.ReparsePoint) != 0;
+    }
+
+    private static bool IsSafePluginId(string id)
+    {
+        return !string.IsNullOrWhiteSpace(id)
+            && id is not ("." or "..")
+            && !Path.IsPathRooted(id)
+            && id.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) < 0;
+    }
+
+    private static bool IsValidSha256(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length != SHA256.HashSizeInBytes * 2)
+        {
+            return false;
+        }
+
+        try
+        {
+            return Convert.FromHexString(value).Length == SHA256.HashSizeInBytes;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    private static string? NormalizeOptionalVersion(string? version)
+    {
+        return string.IsNullOrWhiteSpace(version) ? null : version;
+    }
+
+    private static string ResolveRuntimeRid()
+    {
+        return RuntimeInformation.ProcessArchitecture switch
+        {
+            Architecture.X64 => "linux-x64",
+            Architecture.Arm64 => "linux-arm64",
+            Architecture.Arm => "linux-arm",
+            Architecture.X86 => "linux-x86",
+            var architecture => $"linux-{architecture.ToString().ToLowerInvariant()}",
+        };
+    }
+
+    private static void DeleteFileBestEffort(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[PluginRegistry] Failed to clean download '{path}': {ex.Message}");
+        }
+    }
+
+    private static void DeleteDirectoryBestEffort(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[PluginRegistry] Failed to clean directory '{path}': {ex.Message}");
+        }
+    }
+
+    private static StringComparison PathComparison => OperatingSystem.IsWindows()
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
+
+    private sealed record ValidatedArchiveEntry(
+        ZipArchiveEntry Entry,
+        string Path,
+        bool IsDirectory
+    );
 }

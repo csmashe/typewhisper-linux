@@ -17,9 +17,10 @@ internal struct InputEvent
     public int Value;
 
     public static readonly int SizeBytes = Marshal.SizeOf<InputEvent>();
-    // ReSharper disable once UnusedMember.Global  evdev kernel constant (linux/input-event-codes.h EV_SYN); kept for completeness of the input_event vocabulary
     public const ushort EvSyn = 0;
     public const ushort EvKey = 1;
+    public const ushort SynReport = 0;
+    public const ushort SynDropped = 3;
     // ReSharper disable once UnusedMember.Global  evdev input_event value (0 = key release); kept for completeness of the input_event vocabulary
     public const int Released = 0;
     public const int Pressed = 1;

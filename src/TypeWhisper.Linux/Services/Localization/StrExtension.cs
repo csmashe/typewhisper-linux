@@ -1,7 +1,7 @@
-using System.Globalization;
 using Avalonia.Data;
 using Avalonia.Data.Converters;
 using Avalonia.Markup.Xaml;
+using System.Globalization;
 
 namespace TypeWhisper.Linux.Services.Localization;
 
@@ -33,7 +33,7 @@ public sealed class StrExtension : MarkupExtension
             Source = Loc.Instance,
             Mode = BindingMode.OneWay,
             Converter = LocKeyConverter.Instance,
-            ConverterParameter = Key
+            ConverterParameter = Key,
         };
     }
 }

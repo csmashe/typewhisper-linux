@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "author": "TypeWhisper",
   "description": "Voxtral (Mistral) audio transcription and translation",
+  "networkAccess": "network",
+  "categories": ["transcription"],
   "assemblyName": "TypeWhisper.Plugin.Voxtral.dll",
   "pluginClass": "TypeWhisper.Plugin.Voxtral.VoxtralPlugin"
 }

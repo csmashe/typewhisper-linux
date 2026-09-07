@@ -45,7 +45,7 @@ public static class SpokenCommandKeyphrase
         {
             <= 3 => 0,
             <= 6 => 1,
-            _ => 2
+            _ => 2,
         };
 
         var tokens = Tokenize(rawText);

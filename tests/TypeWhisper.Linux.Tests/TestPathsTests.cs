@@ -21,4 +21,13 @@ public sealed class TestPathsTests
             TestPaths.EnsureIsolated(Path.Join(TypeWhisperEnvironment.BasePath, "Audio"))
         );
     }
+
+    [Fact]
+    public void EnsureIsolated_AcceptsPathOutsideProductionRoot()
+    {
+        // The guard is worthless if it also rejects the temp paths every test actually uses.
+        var path = Path.Join(Path.GetTempPath(), $"TypeWhisper.Isolation-{Guid.NewGuid():N}");
+
+        Assert.Equal(Path.GetFullPath(path), TestPaths.EnsureIsolated(path));
+    }
 }

@@ -80,7 +80,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         return translated;
     }
 
-    private ILlmProviderPlugin? GetConfiguredTranslationProvider()
+    private ILlmProviderRole? GetConfiguredTranslationProvider()
     {
         return _pluginManager.LlmProviders.FirstOrDefault(provider => provider.IsAvailable);
     }
@@ -90,7 +90,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
     // attach the response (null when capture is disabled).
     private LlmCallProvenance? RecordProvenance(
         LlmCallCapture? capture,
-        ILlmProviderPlugin provider,
+        ILlmProviderRole provider,
         string modelId,
         string userPrompt
     )
@@ -101,8 +101,10 @@ public sealed class TranslationService : ITranslationService, IDisposable
         }
 
         var providerId = provider.GetLlmSelectionId();
-        var plugin = _pluginManager.GetPlugin(providerId);
-        var ranLocally = plugin is not null && PluginLocalityClassifier.IsLocal(plugin.Manifest);
+        // Look the plugin up by its owning plugin ID: a profile-backed role's
+        // selection ID is the profile's, which matches no manifest ID.
+        var plugin = _pluginManager.GetPlugin(provider.PluginId);
+        var ranLocally = plugin?.Metadata.RanLocally ?? false;
 
         var provenance = new LlmCallProvenance
         {
@@ -113,7 +115,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
             ProviderId = providerId,
             ModelId = modelId,
             RanLocally = ranLocally,
-            InjectedMemoryContext = null
+            InjectedMemoryContext = null,
         };
         capture.Add(provenance);
         return provenance;
@@ -263,7 +265,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         {
             GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
             InterOpNumThreads = 1,
-            IntraOpNumThreads = Environment.ProcessorCount
+            IntraOpNumThreads = Environment.ProcessorCount,
         };
 
         var encoder = new InferenceSession(
@@ -299,7 +301,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
 
         using var encoderResults = model.Encoder.Run([
             NamedOnnxValue.CreateFromTensor("input_ids", inputIdsTensor),
-            NamedOnnxValue.CreateFromTensor("attention_mask", attentionMask)
+            NamedOnnxValue.CreateFromTensor("attention_mask", attentionMask),
         ]);
 
         var encoderHidden =
@@ -321,7 +323,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
             {
                 NamedOnnxValue.CreateFromTensor("input_ids", decoderInputIds),
                 NamedOnnxValue.CreateFromTensor("encoder_attention_mask", attentionMask),
-                NamedOnnxValue.CreateFromTensor("encoder_hidden_states", encoderHidden)
+                NamedOnnxValue.CreateFromTensor("encoder_hidden_states", encoderHidden),
             };
 
             using var decoderResults = model.Decoder.Run(decoderInputs);
@@ -383,7 +385,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
                 var rid = RuntimeInformation.ProcessArchitecture switch
                 {
                     Architecture.Arm64 => "linux-arm64",
-                    _ => "linux-x64"
+                    _ => "linux-x64",
                 };
 
                 var candidate = Path.Join(

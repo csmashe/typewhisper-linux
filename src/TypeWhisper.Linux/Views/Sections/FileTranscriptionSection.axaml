@@ -396,7 +396,15 @@
                                                        FontSize="12"
                                                        Foreground="#FF8A8A"
                                                        TextWrapping="Wrap"
-                                                       IsVisible="{Binding !Success}" />
+                                                       IsVisible="{Binding ShowsFailure}" />
+                                            <!-- A succeeded run can still carry a warning (e.g. the
+                                                 source file could not be deleted); Success alone
+                                                 would hide it. -->
+                                            <TextBlock Text="{Binding ErrorMessage}"
+                                                       FontSize="12"
+                                                       Foreground="#F4C97D"
+                                                       TextWrapping="Wrap"
+                                                       IsVisible="{Binding ShowsWarning}" />
                                         </StackPanel>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>

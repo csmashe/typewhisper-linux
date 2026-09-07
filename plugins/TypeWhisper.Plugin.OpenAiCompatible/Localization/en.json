@@ -16,7 +16,7 @@
   "Settings.ProfilesDescription": "Extra OpenAI-compatible endpoints. Each profile appears as its own transcription engine and LLM provider you can select in dictation and prompts. The default endpoint above is unaffected.",
   "Settings.ProfileName": "Name",
   "Settings.ProfileNamePlaceholder": "Local Ollama",
-  "Settings.ProfileApiKeyDescription": "Leave blank to keep the current key.",
+  "Settings.ProfileApiKeyDescription": "A stored key is kept unless you edit this field. Clearing the field removes the stored key.",
   "Settings.ProfileTranscriptionModelDescription": "Optional default; any fetched model can be chosen per workflow.",
   "Settings.ProfileLlmModelDescription": "Optional default; prompts can use any fetched model.",
   "Settings.AddProfile": "Add profile",

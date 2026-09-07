@@ -1,3 +1,5 @@
+// ReSharper disable ArrangeObjectCreationWhenTypeNotEvident -- target-typed `new(...)` inside collection
+// expressions and record construction is the prevailing style across this codebase.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -26,6 +28,8 @@ public class App : Application
     ///     better than any other default on Linux, so we migrate past it.
     /// </summary>
     private const string UpstreamDefaultHotkey = "Ctrl+Shift+F9";
+    private static readonly TimeSpan s_shutdownQuiesceBudget = TimeSpan.FromSeconds(5);
+    private static int s_skipProviderDisposal;
 
     /// <summary>
     ///     Tray-menu Exit flips this; Close-button handler checks it to decide
@@ -39,6 +43,9 @@ public class App : Application
     ///     desktop.Shutdown(). Access is UI-thread-only.
     /// </summary>
     private static bool ClosePermitted { get; set; }
+
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global -- diagnostic seam, kept for degraded-startup inspection.
+    internal BootstrapReport? LastBootstrapReport { get; private set; }
 
     public override void Initialize()
     {
@@ -66,6 +73,69 @@ public class App : Application
             Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(settings.Current.UiLanguage);
             BootTrace.Stage("Loc.Initialize");
 
+            var secretMigration = services.GetRequiredService<SecretProtectionMigrationService>();
+            var secretMigrationResult = secretMigration.MigrateAllAtStartup();
+            if (secretMigrationResult.RootSettingsChanged)
+            {
+                settings.Load();
+            }
+
+            string? secretMigrationWarning = null;
+            if (secretMigrationResult.HasUnresolvedSecrets)
+            {
+                secretMigrationWarning = Loc.Instance.GetString(
+                    "Security.SecretMigrationWarning",
+                    secretMigrationResult.UnresolvedSecretCount
+                );
+                var startupErrorLog = services.GetRequiredService<IErrorLogService>();
+                if (
+                    startupErrorLog.Entries.All(
+                        entry => entry.Message != secretMigrationWarning
+                    )
+                )
+                {
+                    startupErrorLog.AddEntry(secretMigrationWarning);
+                }
+            }
+
+            BootTrace.Stage("secret protection migration");
+
+            var uiOperations = services.GetRequiredService<UiOperationGuard>();
+            Dispatcher.UIThread.UnhandledException += (sender, args) =>
+            {
+                args.Handled = true;
+                _ = uiOperations.ReportDispatcherFailureAsync(args.Exception, "TypeWhisper");
+            };
+
+            // Reconcile configured state and infer native ownership from the persisted spec before
+            // DictationOrchestrator starts HotkeyService. A matching deferred KDE entry is treated
+            // as desktop-owned even before KGlobalAccel loads it.
+            var hotkey = services.GetRequiredService<HotkeyService>();
+            ReconcileHotkeyOnStartup(hotkey, settings);
+            var shortcuts = services.GetRequiredService<ShortcutsSectionViewModel>();
+            using (var nativeBindingProbeCts = new CancellationTokenSource(TimeSpan.FromSeconds(2)))
+            {
+                try
+                {
+                    shortcuts
+                        .RefreshNativeDictationBindingStateAsync(nativeBindingProbeCts.Token)
+                        .GetAwaiter()
+                        .GetResult();
+                }
+                catch (OperationCanceledException ex)
+                {
+                    hotkey.SetNativeDictationBindingActive(false);
+                    Trace.WriteLine($"[App] Native dictation binding probe timed out: {ex.Message}");
+                }
+                catch (Exception ex)
+                {
+                    hotkey.SetNativeDictationBindingActive(false);
+                    Trace.WriteLine($"[App] Native dictation binding probe failed: {ex}");
+                }
+            }
+
+            BootTrace.Stage("native dictation binding reconciled");
+
             // Tray must be initialized before MainWindow so IsTrayAvailable is set when
             // GeneralSection's close-to-tray binding latches (the probe raises no PropertyChanged).
             var tray = services.GetRequiredService<TrayIconService>();
@@ -75,6 +145,25 @@ public class App : Application
             var main = services.GetRequiredService<MainWindow>();
             desktop.MainWindow = main;
             BootTrace.Stage("MainWindow constructed");
+            if (secretMigrationWarning is not null)
+            {
+                var warningShown = false;
+                main.Opened += async (_, _) =>
+                {
+                    if (warningShown)
+                    {
+                        return;
+                    }
+
+                    warningShown = true;
+                    var dialog = new MessageDialogWindow();
+                    await dialog.ShowMessageAsync(
+                        Loc.Instance["Security.SecretMigrationWarningTitle"],
+                        secretMigrationWarning
+                    );
+                };
+            }
+
             main.Opened += (_, _) => BootTrace.Stage("MainWindow.Opened fired");
             // We're up and on screen — end the desktop's "launching" busy
             // cursor. Avalonia never completes the startup-notification
@@ -140,9 +229,28 @@ public class App : Application
             var sessionResults = services.GetRequiredService<DictationSessionResultStore>();
             dictation.SessionCompleted += sessionResults.Record;
 
+            // Construction resolves the socket path. Failing here means we cannot tell
+            // whether another instance already owns it, and ownership uncertainty fails
+            // closed (ControlSocketServer.Start does the same) — a second instance would
+            // share settings, hotkeys, and runtime state with the first.
+            ControlSocketServer controlSocket;
+            try
+            {
+                controlSocket = services.GetRequiredService<ControlSocketServer>();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[App] Control socket path unavailable: {ex}");
+                StartupCancellation.NotifyUnverifiedInstance();
+                ShuttingDown = true;
+                // Nonzero, matching Program's preflight probe failure: this is a
+                // canceled startup, not the "already running" success path below.
+                _ = ShutdownAndExitAsync(services, desktop, 1);
+                return;
+            }
+
             // The bind doubles as the single-instance guard; AddressAlreadyInUse means
             // a live peer got here first — shut this instance down cleanly.
-            var controlSocket = services.GetRequiredService<ControlSocketServer>();
             try
             {
                 controlSocket.Start();
@@ -191,14 +299,10 @@ public class App : Application
             services.GetRequiredService<RecordingNotificationService>().Initialize();
             BootTrace.Stage("recordingNotification.Initialize");
 
-            // ReconcileHotkeyOnStartup migrates any upstream default and writes the service's
-            // current binding back to settings so subsequent SettingsChanged events don't
-            // silently rebind to a key the user never chose.
-            var hotkey = services.GetRequiredService<HotkeyService>();
-            ReconcileHotkeyOnStartup(hotkey, settings);
+            var errorLog = services.GetRequiredService<IErrorLogService>();
             var promptActions = services.GetRequiredService<IPromptActionService>();
             // Seed the disabled auto-cleanup prompt + profile on a first install,
-            // before the hotkey snapshots below read them (both are disabled, so
+            // before dynamic reconciliation reads them (both are disabled, so
             // their Ctrl+Alt+E binding stays inert until the user enables them).
             try
             {
@@ -207,28 +311,74 @@ public class App : Application
             catch (Exception ex)
             {
                 Trace.WriteLine($"[App] Failed to seed first-run prompt actions: {ex}");
-                services.GetRequiredService<IErrorLogService>().AddEntry(
+                errorLog.AddEntry(
                     $"Could not seed first-run prompt actions: {ex.Message}",
                     ErrorCategory.Prompt
                 );
             }
 
-            hotkey.SetPromptActionHotkeys(
-                HotkeyService.ParsePromptActionHotkeys(promptActions.Actions)
-            );
-            promptActions.ActionsChanged += () =>
-                hotkey.SetPromptActionHotkeys(
-                    HotkeyService.ParsePromptActionHotkeys(promptActions.Actions)
-                );
             var profileService = services.GetRequiredService<IProfileService>();
-            profileService.SeedFirstRunDefaultsIfMissing();
-            hotkey.SetProfileHotkeys(
-                HotkeyService.ParseProfileHotkeys(profileService.Profiles)
-            );
-            profileService.ProfilesChanged += () =>
-                hotkey.SetProfileHotkeys(
-                    HotkeyService.ParseProfileHotkeys(profileService.Profiles)
-                );
+            // Best-effort seed: a failure here must not abort startup.
+            try
+            {
+                profileService.SeedFirstRunDefaultsIfMissing();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[App] Failed to seed first-run profiles: {ex}");
+                errorLog.AddEntry($"Could not seed first-run profiles: {ex.Message}");
+            }
+
+            // ActionsChanged fires on the UI thread while ProfilesChanged can fire off the
+            // HTTP worker thread (e.g. /v1/profiles/toggle), so the two subscriptions can enter
+            // this reconcile concurrently. Both services are read AND applied under reconcileLock
+            // so a callback that snapshots first and is then preempted can't overwrite a newer
+            // reconciliation with its stale lists.
+            // Lock order is reconcileLock -> service gate, one direction only: neither service
+            // raises its change event while holding its own gate.
+            var reconcileLock = new object();
+            var reconcileRevision = 0L;
+            IReadOnlySet<DynamicHotkeyRejection> activeRejections =
+                new HashSet<DynamicHotkeyRejection>();
+
+            void ReconcileDynamicHotkeys()
+            {
+                var revision = Interlocked.Increment(ref reconcileRevision);
+                IReadOnlyList<DynamicHotkeyRejection> newlyActiveRejections;
+                lock (reconcileLock)
+                {
+                    // A reconcile that started later snapshotted at least as fresh a state,
+                    // so applying this one behind it would reinstate what it superseded.
+                    if (revision != Interlocked.Read(ref reconcileRevision))
+                    {
+                        return;
+                    }
+
+                    var rejections = hotkey.SetDynamicHotkeysDetailed(
+                        HotkeyService.ParsePromptActionHotkeyCandidates(
+                            promptActions.Actions
+                        ),
+                        HotkeyService.ParseProfileHotkeyCandidates(
+                            profileService.Profiles
+                        )
+                    );
+                    var transition = TransitionDynamicHotkeyRejections(
+                        activeRejections,
+                        rejections
+                    );
+                    newlyActiveRejections = transition.NewlyActive;
+                    activeRejections = transition.Active;
+                }
+
+                foreach (var rejection in newlyActiveRejections)
+                {
+                    errorLog.AddEntry(FormatDynamicHotkeyRejection(rejection));
+                }
+            }
+
+            ReconcileDynamicHotkeys();
+            promptActions.ActionsChanged += ReconcileDynamicHotkeys;
+            profileService.ProfilesChanged += ReconcileDynamicHotkeys;
             var lastApplied = hotkey.CurrentHotkeyString;
             var lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
             var lastRecentTranscriptionsApplied = hotkey.CurrentRecentTranscriptionsHotkeyString;
@@ -237,6 +387,11 @@ public class App : Application
             settings.SettingsChanged += s =>
             {
                 hotkey.Mode = s.Mode;
+                var toggleHotkeyChanged = false;
+                var promptPaletteHotkeyChanged = false;
+                var recentTranscriptionsHotkeyChanged = false;
+                var copyLastTranscriptionHotkeyChanged = false;
+                var transformSelectionHotkeyChanged = false;
                 if (
                     !string.IsNullOrWhiteSpace(s.ToggleHotkey)
                     && s.ToggleHotkey != lastApplied
@@ -244,6 +399,7 @@ public class App : Application
                 )
                 {
                     lastApplied = hotkey.CurrentHotkeyString;
+                    toggleHotkeyChanged = true;
                 }
 
                 if (
@@ -252,6 +408,7 @@ public class App : Application
                 )
                 {
                     lastPromptPaletteApplied = hotkey.CurrentPromptPaletteHotkeyString;
+                    promptPaletteHotkeyChanged = true;
                 }
 
                 if (
@@ -263,6 +420,7 @@ public class App : Application
                 {
                     lastRecentTranscriptionsApplied =
                         hotkey.CurrentRecentTranscriptionsHotkeyString;
+                    recentTranscriptionsHotkeyChanged = true;
                 }
 
                 if (
@@ -274,6 +432,7 @@ public class App : Application
                 {
                     lastCopyLastTranscriptionApplied =
                         hotkey.CurrentCopyLastTranscriptionHotkeyString;
+                    copyLastTranscriptionHotkeyChanged = true;
                 }
 
                 if (
@@ -282,6 +441,20 @@ public class App : Application
                 )
                 {
                     lastTransformSelectionApplied = hotkey.CurrentTransformSelectionHotkeyString;
+                    transformSelectionHotkeyChanged = true;
+                }
+
+                if (
+                    ShouldReconcileDynamicHotkeys(
+                        toggleHotkeyChanged,
+                        promptPaletteHotkeyChanged,
+                        recentTranscriptionsHotkeyChanged,
+                        copyLastTranscriptionHotkeyChanged,
+                        transformSelectionHotkeyChanged
+                    )
+                )
+                {
+                    ReconcileDynamicHotkeys();
                 }
             };
 
@@ -320,11 +493,12 @@ public class App : Application
 
             var recentTranscriptions = services.GetRequiredService<RecentTranscriptionsService>();
             recentTranscriptions.FeedbackRequested += (message, isError) =>
-            {
-                Debug.WriteLine(
-                    $"[RecentTranscriptions] {(isError ? "Error" : "Info")}: {message}"
+                RouteRecentTranscriptionFeedback(
+                    dictation.TryPublishTransientFeedback,
+                    errorLog,
+                    message,
+                    isError
                 );
-            };
             hotkey.RecentTranscriptionsRequested += (_, _) => recentTranscriptions.TogglePalette();
             hotkey.CopyLastTranscriptionRequested += (_, _) =>
                 _ = recentTranscriptions.CopyLastTranscriptionToClipboardAsync();
@@ -361,6 +535,93 @@ public class App : Application
         BootTrace.Stage("base.OnFrameworkInitializationCompleted returned");
     }
 
+    internal sealed record DynamicHotkeyRejectionTransition(
+        IReadOnlyList<DynamicHotkeyRejection> NewlyActive,
+        IReadOnlySet<DynamicHotkeyRejection> Active
+    );
+
+    internal static DynamicHotkeyRejectionTransition TransitionDynamicHotkeyRejections(
+        IReadOnlySet<DynamicHotkeyRejection> previous,
+        IEnumerable<DynamicHotkeyRejection> current
+    )
+    {
+        var active = new HashSet<DynamicHotkeyRejection>();
+        var newlyActive = new List<DynamicHotkeyRejection>();
+        foreach (var rejection in current)
+        {
+            if (!active.Add(rejection))
+            {
+                continue;
+            }
+
+            if (!previous.Contains(rejection))
+            {
+                newlyActive.Add(rejection);
+            }
+        }
+
+        return new(newlyActive, active);
+    }
+
+    internal static bool ShouldReconcileDynamicHotkeys(
+        bool toggleHotkeyChanged,
+        bool promptPaletteHotkeyChanged,
+        bool recentTranscriptionsHotkeyChanged,
+        bool copyLastTranscriptionHotkeyChanged,
+        bool transformSelectionHotkeyChanged
+    )
+    {
+        return toggleHotkeyChanged
+            || promptPaletteHotkeyChanged
+            || recentTranscriptionsHotkeyChanged
+            || copyLastTranscriptionHotkeyChanged
+            || transformSelectionHotkeyChanged;
+    }
+
+    private static string FormatDynamicHotkeyRejection(
+        DynamicHotkeyRejection rejection
+    )
+    {
+        var key = (rejection.Kind, rejection.Reason) switch
+        {
+            (
+                DynamicHotkeyBindingKind.PromptAction,
+                DynamicHotkeyRejectionReason.BlankId
+            ) => "Shortcuts.PromptActionHotkeyInactiveBlankId",
+            (
+                DynamicHotkeyBindingKind.PromptAction,
+                DynamicHotkeyRejectionReason.Conflict
+            ) => "Shortcuts.PromptActionHotkeyInactiveConflict",
+            (
+                DynamicHotkeyBindingKind.Profile,
+                DynamicHotkeyRejectionReason.BlankId
+            ) => "Shortcuts.ProfileHotkeyInactiveBlankId",
+            (
+                DynamicHotkeyBindingKind.Profile,
+                DynamicHotkeyRejectionReason.Conflict
+            ) => "Shortcuts.ProfileHotkeyInactiveConflict",
+            _ => null,
+        };
+
+        if (key is null)
+        {
+            // A kind/reason this formatter does not know yet must still produce a log
+            // entry — throwing here would abort the whole hotkey-apply pass over a
+            // diagnostic string. No localization key covers the combination, so the
+            // fallback stays English.
+            return $"Hotkey binding rejected ({rejection.Kind}/{rejection.Reason}): "
+                   + $"'{rejection.DisplayName}' {rejection.NormalizedChord}";
+        }
+
+        return rejection.Reason == DynamicHotkeyRejectionReason.BlankId
+            ? Loc.Instance.GetString(key, rejection.NormalizedChord)
+            : Loc.Instance.GetString(
+                key,
+                rejection.DisplayName,
+                rejection.NormalizedChord
+            );
+    }
+
     private static void ReconcileHotkeyOnStartup(HotkeyService hotkey, ISettingsService settings)
     {
         var s = settings.Current;
@@ -379,13 +640,13 @@ public class App : Application
 
         if (shouldMigrate)
         {
-            settings.Save(s with { ToggleHotkey = linuxDefault });
+            settings.Update(current => current with { ToggleHotkey = linuxDefault });
         }
         else if (!hotkey.TrySetHotkeyFromString(persisted))
         {
             // User-set but unparseable — keep the service default and fix
             // settings so UI/state agree.
-            settings.Save(s with { ToggleHotkey = linuxDefault });
+            settings.Update(current => current with { ToggleHotkey = linuxDefault });
         }
     }
 
@@ -453,7 +714,8 @@ public class App : Application
 
     private static async Task ShutdownAndExitAsync(
         IServiceProvider services,
-        IClassicDesktopStyleApplicationLifetime desktop)
+        IClassicDesktopStyleApplicationLifetime desktop,
+        int exitCode = 0)
     {
         try
         {
@@ -468,7 +730,7 @@ public class App : Application
             ClosePermitted = true;
             // Must call Shutdown explicitly: DictationOverlayWindow is always-shown
             // (backlog #16 Opacity workaround) so OnLastWindowClose never fires.
-            desktop.Shutdown();
+            desktop.Shutdown(exitCode);
         }
     }
 
@@ -477,7 +739,7 @@ public class App : Application
     ///     Runs before desktop.Shutdown() so the Host isn't left racing
     ///     libuiohook / PortAudio on exit.
     /// </summary>
-    private static async Task TearDownAsync(IServiceProvider services)
+    internal static async Task TearDownAsync(IServiceProvider services)
     {
         try
         {
@@ -500,6 +762,73 @@ public class App : Application
 
         try
         {
+            var tray = services.GetService<TrayIconService>();
+            tray?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Tray dispose failed: {ex.Message}");
+        }
+
+        var recorder = services.GetService<RecorderSectionViewModel>();
+        var recorderDrained = true;
+        try
+        {
+            if (recorder is not null)
+            {
+                recorderDrained = await recorder
+                    .QuiesceAsync(s_shutdownQuiesceBudget)
+                    .WaitAsync(s_shutdownQuiesceBudget + TimeSpan.FromSeconds(1))
+                    .ConfigureAwait(false);
+                if (!recorderDrained)
+                {
+                    Debug.WriteLine(
+                        "[App] Recorder quiesce did not settle within the shutdown budget."
+                    );
+                }
+            }
+        }
+        catch (TimeoutException ex)
+        {
+            recorderDrained = false;
+            Debug.WriteLine($"[App] Recorder quiesce timed out: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            recorderDrained = false;
+            Debug.WriteLine($"[App] Recorder quiesce failed: {ex.Message}");
+        }
+
+        var httpApi = services.GetService<HttpApiService>();
+        var httpApiDrained = true;
+        try
+        {
+            if (httpApi is not null)
+            {
+                httpApiDrained = await httpApi
+                    .QuiesceAsync(s_shutdownQuiesceBudget)
+                    .WaitAsync(s_shutdownQuiesceBudget + TimeSpan.FromSeconds(1))
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (TimeoutException ex)
+        {
+            httpApiDrained = false;
+            Debug.WriteLine($"[App] HTTP API quiesce timed out: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            httpApiDrained = false;
+            Debug.WriteLine($"[App] HTTP API quiesce failed: {ex.Message}");
+        }
+
+        // After the HTTP quiesce: an admitted PUT /v1/profiles/toggle handler calls
+        // into HotkeyService, so disposing it (or the control socket) before the
+        // drain completes would let a live request touch a disposed service. Still
+        // unconditional — even on a failed drain the libuiohook threads must not
+        // race process exit, and a handler that outlived its budget is already lost.
+        try
+        {
             var hotkey = services.GetService<HotkeyService>();
             hotkey?.Dispose();
         }
@@ -520,42 +849,9 @@ public class App : Application
 
         try
         {
-            var tray = services.GetService<TrayIconService>();
-            tray?.Dispose();
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[App] Tray dispose failed: {ex.Message}");
-        }
-
-        try
-        {
-            var models = services.GetService<ModelManagerService>();
-            if (models is not null)
-            {
-                await models.UnloadModelAsync().ConfigureAwait(false);
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[App] Model unload failed: {ex.Message}");
-        }
-
-        try
-        {
-            var audio = services.GetService<AudioRecordingService>();
-            audio?.Dispose();
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[App] Audio dispose failed: {ex.Message}");
-        }
-
-        try
-        {
-            // Kill the pactl subscribe child process if it's still running. Audio
-            // dispose already Stop()s it; this is a belt-and-braces cleanup of the
-            // singleton in case follow-default was never active on the audio service.
+            // Reap the pactl subscribe child even when an HTTP handler outlives the drain budget.
+            // Audio disposal also stops it when follow-default is active; disposing the singleton
+            // here covers every configuration and prevents the child from being orphaned to init.
             var deviceWatcher = services.GetService<IDefaultDeviceChangeWatcher>();
             deviceWatcher?.Dispose();
         }
@@ -574,10 +870,57 @@ public class App : Application
             Debug.WriteLine($"[App] Playback dispose failed: {ex.Message}");
         }
 
+        var shutdownDecision = ApplyHttpApiDrainResult(httpApiDrained, recorderDrained);
+        if (!shutdownDecision.DisposeDependencies)
+        {
+            // Fail fast into process exit after a recorder or HTTP drain failure and after
+            // reaping the default-device watcher and playback. Deliberately skip dictation,
+            // audio, and model cleanup; Program observes SkipProviderDisposal and skips the
+            // provider too, so those DI-owned dependencies are not disposed underneath the
+            // recorder workflow or admitted HTTP handler that outlived its drain budget.
+            Debug.WriteLine(
+                "[App] Recorder or HTTP API drain failed; skipping dependent and provider disposal before process exit."
+            );
+            return;
+        }
+
+        var dictation = services.GetService<DictationOrchestrator>();
         try
         {
-            var api = services.GetService<HttpApiService>();
-            api?.Dispose();
+            if (dictation is not null
+                && !await dictation.CloseToggleGateAsync().ConfigureAwait(false))
+            {
+                Debug.WriteLine(
+                    "[App] Dictation toggle gate did not go idle within the close budget."
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Dictation toggle-gate close failed: {ex.Message}");
+        }
+
+        DisposeDictationBeforeAudio(
+            dictation,
+            services.GetService<AudioRecordingService>()
+        );
+
+        try
+        {
+            var models = services.GetService<ModelManagerService>();
+            if (models is not null)
+            {
+                await models.UnloadModelAsync().ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Model unload failed: {ex.Message}");
+        }
+
+        try
+        {
+            httpApi?.Dispose();
         }
         catch (Exception ex)
         {
@@ -595,50 +938,243 @@ public class App : Application
         }
     }
 
-    private static async Task BootstrapAsync(IServiceProvider services)
+    internal static bool SkipProviderDisposal =>
+        Volatile.Read(ref s_skipProviderDisposal) != 0;
+
+    internal static ShutdownDisposalDecision ApplyHttpApiDrainResult(
+        bool httpApiDrained,
+        bool recorderDrained
+    )
+    {
+        var drainsSettled = httpApiDrained && recorderDrained;
+        var decision = new ShutdownDisposalDecision(
+            DisposeDependencies: drainsSettled,
+            SkipProviderDisposal: !drainsSettled
+        );
+        Volatile.Write(
+            ref s_skipProviderDisposal,
+            decision.SkipProviderDisposal ? 1 : 0
+        );
+        return decision;
+    }
+
+    internal static void ResetShutdownDisposalDecisionForTests()
+    {
+        Volatile.Write(ref s_skipProviderDisposal, 0);
+    }
+
+    internal readonly record struct ShutdownDisposalDecision(
+        bool DisposeDependencies,
+        // ReSharper disable once MemberHidesStaticFromOuterClass -- deliberately mirrors the
+        // App.SkipProviderDisposal flag this decision component feeds.
+        bool SkipProviderDisposal
+    );
+
+    internal static void DisposeDictationBeforeAudio(
+        IDisposable? dictation,
+        IDisposable? audio
+    )
+    {
+        try
+        {
+            dictation?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Dictation dispose failed: {ex.Message}");
+        }
+
+        try
+        {
+            audio?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Audio dispose failed: {ex.Message}");
+        }
+    }
+
+    internal static bool RouteRecentTranscriptionFeedback(
+        Func<string, bool, bool> publishFeedback,
+        IErrorLogService errorLog,
+        string message,
+        bool isError
+    )
+    {
+        Debug.WriteLine(
+            $"[RecentTranscriptions] {(isError ? "Error" : "Info")}: {message}"
+        );
+        var published = publishFeedback(message, isError);
+        if (isError)
+        {
+            errorLog.AddEntry(
+                "Recent transcription insertion failed. Install wl-clipboard on Wayland or xclip on X11 for clipboard access. For automatic paste, set up ydotool on GNOME/KDE Wayland, install wtype or ydotool on other Wayland compositors, or install xdotool on X11.",
+                ErrorCategory.Insertion
+            );
+        }
+
+        return published;
+    }
+
+    private static Task<BootstrapReport> BootstrapAsync(IServiceProvider services)
     {
         BootTrace.Stage("BootstrapAsync begin");
-        var settings = services.GetRequiredService<ISettingsService>();
+        var stages = CreateBootstrapStages(services);
+        var errorLog = services.GetService<IErrorLogService>();
+        return new BootstrapRunner(stages, errorLog).RunAsync();
+    }
 
-        var history = services.GetRequiredService<IHistoryService>();
-        await history.EnsureLoadedAsync();
-        BootTrace.Stage("history.EnsureLoadedAsync");
-
-        services.GetRequiredService<SessionAudioFileService>().DeleteSessionCaptures();
-
-        var audio = services.GetRequiredService<AudioRecordingService>();
-        ApplyConfiguredMicrophone(audio, settings);
-        BootTrace.Stage("audio configured");
-
-        _ = services.GetRequiredService<BundledPluginDeployer>();
-        BundledPluginDeployer.DeployIfMissing();
-        BootTrace.Stage("BundledPluginDeployer.DeployIfMissing");
-
-        var pluginManager = services.GetRequiredService<PluginManager>();
-        await pluginManager.InitializeAsync();
-        BootTrace.Stage("PluginManager.InitializeAsync");
-
-        // PluginRegistryService targets the upstream Windows registry (Windows-built artifacts);
-        // the Linux fork ships its own plugins via BundledPluginDeployer, so the registry is not used.
-
-        var historyRetention = services.GetRequiredService<HistoryRetentionCoordinator>();
-        historyRetention.Initialize();
-
-        var modelManager = services.GetRequiredService<ModelManagerService>();
-        modelManager.MigrateSettings();
-
-        var selectedModel = settings.Current.SelectedModelId;
-        if (!string.IsNullOrEmpty(selectedModel) && modelManager.IsDownloaded(selectedModel))
-        {
-            try
-            {
-                await modelManager.LoadModelAsync(selectedModel);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[App] Auto-load model failed: {ex.Message}");
-            }
-        }
+    internal static IReadOnlyList<BootstrapStage> CreateBootstrapStages(
+        IServiceProvider services
+    )
+    {
+        return
+        [
+            new(
+                BootstrapStageNames.HistoryLoad,
+                [],
+                async () =>
+                {
+                    var history = services.GetRequiredService<IHistoryService>();
+                    await history.EnsureLoadedAsync();
+                    BootTrace.Stage("history.EnsureLoadedAsync");
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.SessionCleanup,
+                [],
+                () =>
+                {
+                    services
+                        .GetRequiredService<SessionAudioFileService>()
+                        .DeleteSessionCaptures();
+                    return Task.CompletedTask;
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.AudioConfiguration,
+                [],
+                () =>
+                {
+                    var settings = services.GetRequiredService<ISettingsService>();
+                    var audio = services.GetRequiredService<AudioRecordingService>();
+                    ApplyConfiguredMicrophone(audio, settings);
+                    BootTrace.Stage("audio configured");
+                    return Task.CompletedTask;
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.PluginRegistryRecovery,
+                [],
+                async () =>
+                {
+                    await services
+                        .GetRequiredService<PluginRegistryService>()
+                        .RecoverInterruptedInstallsAsync();
+                    BootTrace.Stage("PluginRegistryService.RecoverInterruptedInstallsAsync");
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.BundledPluginDeployment,
+                [BootstrapStageNames.PluginRegistryRecovery],
+                () =>
+                {
+                    _ = services.GetRequiredService<BundledPluginDeployer>();
+                    BundledPluginDeployer.DeployIfMissing();
+                    BootTrace.Stage("BundledPluginDeployer.DeployIfMissing");
+                    return Task.CompletedTask;
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.PluginInitialization,
+                [BootstrapStageNames.BundledPluginDeployment],
+                async () =>
+                {
+                    var pluginManager = services.GetRequiredService<PluginManager>();
+                    await pluginManager.InitializeAsync();
+                    BootTrace.Stage("PluginManager.InitializeAsync");
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.PluginRegistryBootstrap,
+                [BootstrapStageNames.PluginInitialization],
+                async () =>
+                {
+                    await services
+                        .GetRequiredService<PluginRegistryService>()
+                        .FirstRunAutoInstallAsync();
+                    BootTrace.Stage("PluginRegistryService.FirstRunAutoInstallAsync");
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.RetentionInitialization,
+                [],
+                () =>
+                {
+                    var historyRetention =
+                        services.GetRequiredService<HistoryRetentionCoordinator>();
+                    historyRetention.Initialize();
+                    return Task.CompletedTask;
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.ModelMigration,
+                [],
+                () =>
+                {
+                    var modelManager = services.GetRequiredService<ModelManagerService>();
+                    modelManager.MigrateSettings();
+                    return Task.CompletedTask;
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.ModelAutoLoad,
+                [BootstrapStageNames.ModelMigration],
+                async () =>
+                {
+                    var settings = services.GetRequiredService<ISettingsService>();
+                    var modelManager = services.GetRequiredService<ModelManagerService>();
+                    var selectedModel = settings.Current.SelectedModelId;
+                    if (
+                        !string.IsNullOrEmpty(selectedModel)
+                        && modelManager.IsDownloaded(selectedModel)
+                    )
+                    {
+                        try
+                        {
+                            await modelManager.LoadModelAsync(selectedModel);
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"[App] Auto-load model failed: {ex.Message}");
+                            throw;
+                        }
+                    }
+                },
+                Required: false
+            ),
+            new(
+                BootstrapStageNames.WatchFolderAutoStart,
+                [BootstrapStageNames.PluginInitialization],
+                () =>
+                {
+                    services
+                        .GetRequiredService<FileTranscriptionSectionViewModel>()
+                        .TryAutoStartWatchFolder();
+                    return Task.CompletedTask;
+                },
+                Required: false
+            ),
+        ];
     }
 
     /// <summary>
@@ -661,19 +1197,245 @@ public class App : Application
         }
     }
 
-    private static async Task BootstrapDeferredAsync(IServiceProvider services)
+    // Trace.WriteLine can throw (e.g. a broken-stdout ConsoleTraceListener); this runs
+    // inside the never-faulting deferred bootstrap path (see BootstrapDeferredAsync), so
+    // failures here are swallowed rather than propagated.
+    private static void SafeTrace(string message)
     {
         try
         {
-            await BootstrapAsync(services);
+            Trace.WriteLine(message);
         }
-        catch (Exception ex)
+        catch
         {
-            Debug.WriteLine($"[App] Deferred bootstrap failed: {ex}");
+            // Nowhere left to report to; dropping the diagnostic beats faulting the task.
         }
     }
 
-    private static void ApplyConfiguredMicrophone(
+    // Invariant: the returned task never faults. It is awaited inside an async-void UI
+    // handler (main.Opened), where a faulted task would escape into Avalonia's dispatcher
+    // and crash; when onboarding is complete nothing awaits it, so a fault would surface as
+    // an unobserved TaskScheduler exception. Every failure is captured into the report.
+    private async Task<BootstrapReport> BootstrapDeferredAsync(IServiceProvider services)
+    {
+        try
+        {
+            var report = await BootstrapAsync(services);
+            LastBootstrapReport = report;
+            return report;
+        }
+        catch (RequiredBootstrapStageException ex)
+        {
+            LastBootstrapReport = ex.Report;
+            SafeTrace(ex.Message);
+            return ex.Report;
+        }
+        catch (Exception ex)
+        {
+            SafeTrace($"[App] Deferred bootstrap failed: {ex}");
+            var report = new BootstrapReport(
+                [
+                    new BootstrapStageOutcome(
+                        "Bootstrap",
+                        Required: false,
+                        BootstrapStageStatus.Failed,
+                        ex
+                    ),
+                ]
+            );
+            LastBootstrapReport = report;
+            return report;
+        }
+    }
+
+    internal static class BootstrapStageNames
+    {
+        public const string HistoryLoad = "History load";
+        public const string SessionCleanup = "Session cleanup";
+        public const string AudioConfiguration = "Audio configuration";
+        public const string BundledPluginDeployment = "Bundled-plugin deployment";
+        public const string PluginRegistryRecovery = "Plugin-registry recovery";
+        public const string PluginInitialization = "Plugin initialization";
+        public const string PluginRegistryBootstrap = "Plugin-registry bootstrap";
+        public const string RetentionInitialization = "Retention initialization";
+        public const string ModelMigration = "Model migration";
+        public const string ModelAutoLoad = "Model auto-load";
+        public const string WatchFolderAutoStart = "Watch-folder auto-start";
+    }
+
+    internal sealed record BootstrapStage(
+        string Name,
+        IReadOnlyList<string> Dependencies,
+        Func<Task> Action,
+        bool Required
+    );
+
+    internal enum BootstrapStageStatus
+    {
+        Succeeded,
+        Failed,
+        Skipped,
+    }
+
+    internal sealed record BootstrapStageOutcome(
+        string Name,
+        bool Required,
+        BootstrapStageStatus Status,
+        Exception? Exception = null,
+        string? SkippedDueTo = null
+    );
+
+    internal sealed class BootstrapReport
+    {
+        public BootstrapReport(IReadOnlyList<BootstrapStageOutcome> outcomes)
+        {
+            Outcomes = outcomes;
+        }
+
+        public IReadOnlyList<BootstrapStageOutcome> Outcomes { get; }
+
+        public bool IsDegraded =>
+            Outcomes.Any(outcome => outcome.Status != BootstrapStageStatus.Succeeded);
+
+        public IReadOnlyList<BootstrapStageOutcome> RequiredFailures =>
+            Outcomes
+                .Where(outcome =>
+                    outcome.Required && outcome.Status != BootstrapStageStatus.Succeeded
+                )
+                .ToArray();
+    }
+
+    internal sealed class RequiredBootstrapStageException : Exception
+    {
+        public RequiredBootstrapStageException(BootstrapReport report)
+            : base(
+                $"Required bootstrap stage(s) failed: {string.Join(
+                    ", ",
+                    report.RequiredFailures.Select(outcome => outcome.Name)
+                )}"
+            )
+        {
+            Report = report;
+        }
+
+        public BootstrapReport Report { get; }
+    }
+
+    internal sealed class BootstrapRunner
+    {
+        private readonly IErrorLogService? _errorLog;
+        private readonly IReadOnlyList<BootstrapStage> _stages;
+
+        public BootstrapRunner(
+            IReadOnlyList<BootstrapStage> stages,
+            IErrorLogService? errorLog = null
+        )
+        {
+            _stages = stages;
+            _errorLog = errorLog;
+        }
+
+        public async Task<BootstrapReport> RunAsync()
+        {
+            var outcomes = new List<BootstrapStageOutcome>(_stages.Count);
+            var outcomesByName = new Dictionary<string, BootstrapStageOutcome>(
+                StringComparer.Ordinal
+            );
+
+            foreach (var stage in _stages)
+            {
+                string? skippedDueTo = null;
+                foreach (var dependency in stage.Dependencies)
+                {
+                    // ReSharper disable once InvertIf -- the positive form states the skip condition
+                    // directly; inverting it into a `continue` guard reads worse here.
+                    if (
+                        !outcomesByName.TryGetValue(dependency, out var dependencyOutcome)
+                        || dependencyOutcome.Status != BootstrapStageStatus.Succeeded
+                    )
+                    {
+                        skippedDueTo = dependency;
+                        break;
+                    }
+                }
+
+                BootstrapStageOutcome outcome;
+                if (skippedDueTo is not null)
+                {
+                    outcome = new(
+                        stage.Name,
+                        stage.Required,
+                        BootstrapStageStatus.Skipped,
+                        SkippedDueTo: skippedDueTo
+                    );
+                    SafeTrace(
+                        $"[App] Bootstrap stage '{stage.Name}' skipped because dependency "
+                            + $"'{skippedDueTo}' did not succeed."
+                    );
+                }
+                else
+                {
+                    try
+                    {
+                        await stage.Action();
+                        outcome = new(
+                            stage.Name,
+                            stage.Required,
+                            BootstrapStageStatus.Succeeded
+                        );
+                    }
+                    catch (Exception ex)
+                    {
+                        outcome = new(
+                            stage.Name,
+                            stage.Required,
+                            BootstrapStageStatus.Failed,
+                            Exception: ex
+                        );
+                        SafeTrace($"[App] Bootstrap stage '{stage.Name}' failed: {ex}");
+                        TryWriteErrorLog(stage.Name, ex);
+                    }
+                }
+
+                outcomes.Add(outcome);
+                outcomesByName.Add(stage.Name, outcome);
+            }
+
+            var report = new BootstrapReport(outcomes);
+            // ReSharper disable once ConvertIfStatementToReturnStatement -- the suggested
+            // `return cond ? throw ... : report;` obscures the failure path.
+            if (report.RequiredFailures.Count > 0)
+            {
+                throw new RequiredBootstrapStageException(report);
+            }
+
+            return report;
+        }
+
+        private void TryWriteErrorLog(string stageName, Exception exception)
+        {
+            if (_errorLog is null)
+            {
+                return;
+            }
+
+            try
+            {
+                _errorLog.AddEntry(
+                    $"Bootstrap stage '{stageName}' failed: {exception.Message}"
+                );
+            }
+            catch (Exception errorLogException)
+            {
+                SafeTrace(
+                    "[App] Could not write bootstrap failure to the error log: "
+                        + errorLogException
+                );
+            }
+        }
+    }
+
+    internal static void ApplyConfiguredMicrophone(
         AudioRecordingService audio,
         ISettingsService settings
     )
@@ -701,6 +1463,7 @@ public class App : Application
             var resolved = audio.ResolveConfiguredDevice(configuredIndex, configuredId);
             if (resolved is null)
             {
+                audio.SelectedDeviceIndex = null;
                 return;
             }
 
@@ -709,13 +1472,37 @@ public class App : Application
 
             if (resolved.Index != configuredIndex || resolved.PersistentId != configuredId)
             {
-                settings.Save(
-                    settings.Current with
+                var raced = false;
+                settings.Update(current =>
+                {
+                    if (
+                        current.SelectedMicrophoneDevice != configuredIndex
+                        || current.SelectedMicrophoneDeviceId != configuredId
+                    )
+                    {
+                        // A newer selection landed after this restore captured its
+                        // inputs; persisting the stale resolution would overwrite
+                        // the user's choice.
+                        raced = true;
+                        return current;
+                    }
+
+                    // Update may retry the delegate; only the final run decides.
+                    raced = false;
+                    return current with
                     {
                         SelectedMicrophoneDevice = resolved.Index,
-                        SelectedMicrophoneDeviceId = resolved.PersistentId
-                    }
-                );
+                        SelectedMicrophoneDeviceId = resolved.PersistentId,
+                    };
+                });
+
+                if (raced)
+                {
+                    // Re-run against the newer selection so the audio service does
+                    // not keep the stale device applied above. Recurs only while
+                    // yet-newer selections keep landing, so it is self-limiting.
+                    ApplyConfiguredMicrophone(audio, settings);
+                }
             }
         }
         catch (Exception ex)

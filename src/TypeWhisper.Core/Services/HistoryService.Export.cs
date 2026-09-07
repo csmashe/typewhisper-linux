@@ -129,7 +129,7 @@ public sealed partial class HistoryService
             profile = r.ProfileName,
             insertion_status = r.InsertionStatus.ToString(),
             insertion_failure_reason = r.InsertionFailureReason,
-            words = r.WordCount
+            words = r.WordCount,
         });
 
         return JsonSerializer.Serialize(data, s_jsonOptions);

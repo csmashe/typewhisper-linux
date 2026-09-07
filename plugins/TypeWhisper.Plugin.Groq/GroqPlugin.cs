@@ -1,4 +1,9 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable NotAccessedPositionalProperty.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -7,8 +12,9 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Groq;
 
-public sealed partial class GroqPlugin
+public sealed class GroqPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         ILlmProviderPlugin,
         IPluginSettingsProvider,
         IPluginLocalizationAware
@@ -16,14 +22,11 @@ public sealed partial class GroqPlugin
     private const string BaseUrl = "https://api.groq.com/openai";
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
-    private string? _apiKey;
-    private string? _selectedModelId;
     private string? _selectedApiModelName;
-    private string? _selectedLlmModelId;
     private List<FetchedLlmModel> _fetchedLlmModels = [];
     private bool _streamResponses = true;
 
-    private static readonly IReadOnlyList<TranscriptionModelEntry> TranscriptionModelEntries =
+    private static readonly IReadOnlyList<TranscriptionModelEntry> s_transcriptionModelEntries =
     [
         new("whisper-large-v3", "Whisper Large V3", "whisper-large-v3", SupportsTranslation: true),
         new(
@@ -34,7 +37,7 @@ public sealed partial class GroqPlugin
         ),
     ];
 
-    private static readonly IReadOnlyList<PluginModelInfo> FallbackLlmModels =
+    private static readonly IReadOnlyList<PluginModelInfo> s_fallbackLlmModels =
     [
         new("llama-3.3-70b-versatile", "Llama 3.3 70B"),
         new("llama-3.1-8b-instant", "Llama 3.1 8B"),
@@ -53,24 +56,24 @@ public sealed partial class GroqPlugin
 
     public string PluginId => "com.typewhisper.groq";
     public string PluginName => "Groq";
-    public string PluginVersion => "1.0.3";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
-        _selectedModelId =
-            host.GetSetting<string>("selectedModel") ?? TranscriptionModelEntries[0].Id;
-        _selectedLlmModelId = host.GetSetting<string>("selectedLlmModel");
+        ApiKey = await host.LoadSecretAsync("api-key");
+        SelectedModelId =
+            host.GetSetting<string>("selectedModel") ?? s_transcriptionModelEntries[0].Id;
+        SelectedLlmModelId = host.GetSetting<string>("selectedLlmModel");
         _fetchedLlmModels = NormalizeFetchedLlmModels(
             host.GetSetting<List<FetchedLlmModel>>("fetchedLlmModels") ?? []
         );
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
 
         var selectedTranscription =
-            TranscriptionModelEntries.FirstOrDefault(m => m.Id == _selectedModelId)
-            ?? TranscriptionModelEntries[0];
-        _selectedModelId = selectedTranscription.Id;
+            s_transcriptionModelEntries.FirstOrDefault(m => m.Id == SelectedModelId)
+            ?? s_transcriptionModelEntries[0];
+        SelectedModelId = selectedTranscription.Id;
         _selectedApiModelName = selectedTranscription.ApiModelName;
 
         NormalizeSelectedLlmModel();
@@ -85,30 +88,33 @@ public sealed partial class GroqPlugin
 
     public string ProviderId => "groq";
     public string ProviderDisplayName => "Groq";
-    public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
+    public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-        TranscriptionModelEntries.Select(m => new PluginModelInfo(m.Id, m.DisplayName)).ToList();
+        s_transcriptionModelEntries.Select(m => new PluginModelInfo(m.Id, m.DisplayName)).ToList();
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation
     {
         get
         {
-            if (!IsConfigured || _selectedModelId is null)
+            if (!IsConfigured || SelectedModelId is null)
                 return false;
-            var entry = TranscriptionModelEntries.FirstOrDefault(m => m.Id == _selectedModelId);
+            var entry = s_transcriptionModelEntries.FirstOrDefault(m => m.Id == SelectedModelId);
             return entry?.SupportsTranslation ?? false;
         }
     }
 
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
+
     public void SelectModel(string modelId)
     {
         var entry =
-            TranscriptionModelEntries.FirstOrDefault(m => m.Id == modelId)
+            s_transcriptionModelEntries.FirstOrDefault(m => m.Id == modelId)
             ?? throw new ArgumentException($"Unknown model: {modelId}");
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _selectedApiModelName = entry.ApiModelName;
         _host?.SetSetting("selectedModel", modelId);
     }
@@ -129,7 +135,7 @@ public sealed partial class GroqPlugin
         return await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
             BaseUrl,
-            _apiKey!,
+            ApiKey!,
             _selectedApiModelName,
             wavAudio,
             language,
@@ -146,7 +152,7 @@ public sealed partial class GroqPlugin
     public IReadOnlyList<PluginModelInfo> SupportedModels =>
         _fetchedLlmModels.Count > 0
             ? _fetchedLlmModels.Select(m => new PluginModelInfo(m.Id, m.Id)).ToList()
-            : FallbackLlmModels;
+            : s_fallbackLlmModels;
 
     public async Task<string> ProcessAsync(
         string systemPrompt,
@@ -162,7 +168,7 @@ public sealed partial class GroqPlugin
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient,
             BaseUrl,
-            _apiKey!,
+            ApiKey!,
             modelId,
             systemPrompt,
             userText,
@@ -190,18 +196,19 @@ public sealed partial class GroqPlugin
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
             BaseUrl,
-            _apiKey!,
+            ApiKey!,
             modelId,
             systemPrompt,
             userText,
             ct
         );
 
-        await foreach (var delta in source.WithCancellation(ct))
+        await foreach (var delta in source)
             yield return delta;
     }
 
-    internal string? ApiKey => _apiKey;
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -211,16 +218,17 @@ public sealed partial class GroqPlugin
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
-    internal string? SelectedLlmModelId => _selectedLlmModelId;
+    internal string? SelectedLlmModelId { get; private set; }
+
     internal IReadOnlyList<FetchedLlmModel> FetchedLlmModels => _fetchedLlmModels;
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
         var normalizedApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
         var wasConfigured = IsConfigured;
-        var changed = !string.Equals(_apiKey, normalizedApiKey, StringComparison.Ordinal);
+        var changed = !string.Equals(ApiKey, normalizedApiKey, StringComparison.Ordinal);
 
-        _apiKey = normalizedApiKey;
+        ApiKey = normalizedApiKey;
         if (_host is not null)
         {
             if (normalizedApiKey is null)
@@ -231,9 +239,9 @@ public sealed partial class GroqPlugin
             if (changed)
             {
                 _fetchedLlmModels = [];
-                _selectedLlmModelId = null;
+                SelectedLlmModelId = null;
                 _host.SetSetting("fetchedLlmModels", _fetchedLlmModels);
-                _host.SetSetting<string?>("selectedLlmModel", _selectedLlmModelId);
+                _host.SetSetting("selectedLlmModel", SelectedLlmModelId);
                 NormalizeSelectedLlmModel();
 
                 if (wasConfigured != IsConfigured)
@@ -244,7 +252,7 @@ public sealed partial class GroqPlugin
 
     internal void SelectLlmModel(string modelId)
     {
-        _selectedLlmModelId = modelId;
+        SelectedLlmModelId = modelId;
         _host?.SetSetting("selectedLlmModel", modelId);
     }
 
@@ -260,8 +268,8 @@ public sealed partial class GroqPlugin
     internal async Task<List<FetchedLlmModel>?> FetchLlmModelsAsync(CancellationToken ct = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
-        if (!string.IsNullOrEmpty(_apiKey))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        if (!string.IsNullOrEmpty(ApiKey))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
 
         try
         {
@@ -338,7 +346,7 @@ public sealed partial class GroqPlugin
     internal string ResolveLlmModelId(string? requestedModel) =>
         !string.IsNullOrWhiteSpace(requestedModel)
             ? requestedModel
-            : _selectedLlmModelId ?? SupportedModels[0].Id;
+            : SelectedLlmModelId ?? SupportedModels[0].Id;
 
     private void NormalizeSelectedLlmModel()
     {
@@ -346,12 +354,12 @@ public sealed partial class GroqPlugin
             SupportedModels.Select(m => m.Id),
             StringComparer.OrdinalIgnoreCase
         );
-        if (_selectedLlmModelId is not null && availableIds.Contains(_selectedLlmModelId))
+        if (SelectedLlmModelId is not null && availableIds.Contains(SelectedLlmModelId))
             return;
 
-        _selectedLlmModelId = (SupportedModels.Count > 0 ? SupportedModels[0] : null)?.Id;
-        if (_selectedLlmModelId is not null)
-            _host?.SetSetting("selectedLlmModel", _selectedLlmModelId);
+        SelectedLlmModelId = (SupportedModels.Count > 0 ? SupportedModels[0] : null)?.Id;
+        if (SelectedLlmModelId is not null)
+            _host?.SetSetting("selectedLlmModel", SelectedLlmModelId);
     }
 
     private static List<FetchedLlmModel> NormalizeFetchedLlmModels(
@@ -383,7 +391,7 @@ public sealed partial class GroqPlugin
                 Key: "selectedModel",
                 Label: Loc.L("Settings.TranscriptionModel"),
                 Description: Loc.L("Settings.TranscriptionModelDescription"),
-                Options: TranscriptionModelEntries
+                Options: s_transcriptionModelEntries
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList()
             ),
@@ -409,9 +417,9 @@ public sealed partial class GroqPlugin
         Task.FromResult(
             key switch
             {
-                "api-key" => _apiKey,
-                "selectedModel" => _selectedModelId,
-                "selectedLlmModel" => _selectedLlmModelId,
+                "api-key" => ApiKey,
+                "selectedModel" => SelectedModelId,
+                "selectedLlmModel" => SelectedLlmModelId,
                 LlmStreamingSettings.StreamResponsesSettingKey
                     => _streamResponses ? "true" : "false",
                 _ => null,
@@ -454,14 +462,15 @@ public sealed partial class GroqPlugin
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        var valid = await ValidateApiKeyAsync(ApiKey, ct);
         if (!valid)
             return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
 
         var models = await FetchLlmModelsAsync(ct);
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (models is not null)
         {
             SetFetchedLlmModels(models);

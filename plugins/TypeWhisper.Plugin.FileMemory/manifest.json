@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "author": "TypeWhisper",
   "description": "File-based memory storage for extracted facts",
+  "networkAccess": "local",
+  "categories": ["memory"],
   "assemblyName": "TypeWhisper.Plugin.FileMemory.dll",
   "pluginClass": "TypeWhisper.Plugin.FileMemory.FileMemoryPlugin"
 }

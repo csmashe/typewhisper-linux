@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.ActiveWindow;
@@ -9,6 +10,7 @@ using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
 using TypeWhisper.Linux.Services.Insertion;
 using TypeWhisper.Linux.Services.Ipc;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Services.Setup;
 using TypeWhisper.Linux.ViewModels;
@@ -31,7 +33,40 @@ internal static class ServiceRegistrations
         services.AddSingleton<ISettingsService>(
             new SettingsService(TypeWhisperEnvironment.SettingsFilePath)
         );
-        services.AddSingleton<IErrorLogService>(new ErrorLogService(dataPath));
+        var errorLog = new ErrorLogService(dataPath);
+        // EnsureDirectories can only reach the boot log, which a desktop-entry launch never shows.
+        // Repeat it here so the About screen and exported diagnostics carry it too.
+        if (!TypeWhisperEnvironment.AudioDirectoryIsOwnerOnly)
+        {
+            var warning =
+                $"Recordings folder '{TypeWhisperEnvironment.AudioPath}' could not be made "
+                + "owner-only; recordings saved there may be readable by other users of this "
+                + "machine.";
+
+            // A standing property of the mount, not an event, and the log is a bounded ring
+            // persisted across launches — appending every startup would evict real failures.
+            if (errorLog.Entries.All(e => e.Message != warning))
+            {
+                errorLog.AddEntry(warning, ErrorCategory.Recording);
+            }
+        }
+
+        services.AddSingleton<IErrorLogService>(errorLog);
+        services.AddSingleton(sp =>
+            new UiOperationGuard(
+                sp.GetRequiredService<IErrorLogService>(),
+                async message =>
+                {
+                    var dialog = new MessageDialogWindow();
+                    await dialog.ShowMessageAsync(
+                        Loc.Instance["Common.OperationFailedTitle"],
+                        message
+                    );
+                },
+                (operation, reason) =>
+                    Loc.Instance.GetString("Common.OperationFailed", operation, reason)
+            )
+        );
         services.AddSingleton<IHistoryService>(
             new HistoryService(
                 Path.Join(dataPath, "history.json"),
@@ -46,8 +81,11 @@ internal static class ServiceRegistrations
         services.AddSingleton<ISnippetService>(
             new SnippetService(Path.Join(dataPath, "snippets.json"))
         );
-        services.AddSingleton<IProfileService>(
-            new ProfileService(Path.Join(dataPath, "profiles.json"))
+        services.AddSingleton<IProfileService>(sp =>
+            new ProfileService(
+                Path.Join(dataPath, "profiles.json"),
+                sp.GetRequiredService<IErrorLogService>()
+            )
         );
         services.AddSingleton<IPromptActionService>(sp =>
             new PromptActionService(
@@ -103,6 +141,8 @@ internal static class ServiceRegistrations
         services.AddSingleton<IMediaPauseService, MediaPauseService>();
         services.AddSingleton<SystemCommandAvailabilityService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
+        services.AddSingleton<UrlLauncher>();
+        services.AddSingleton<ActionPluginExecutionHost>();
         // Reactive OS-default capture-device watcher (pactl subscribe); AudioRecordingService
         // starts/stops it as follow-default mode toggles and disposes it on teardown.
         services.AddSingleton<IDefaultDeviceChangeWatcher, PactlDefaultDeviceWatcher>();
@@ -135,14 +175,21 @@ internal static class ServiceRegistrations
         services.AddSingleton<IDeShortcutWriter, HyprlandShortcutWriter>();
         services.AddSingleton<IDeShortcutWriter, SwayShortcutWriter>();
 
-        services.AddSingleton(sp => new TextInsertionService(
-            sp.GetRequiredService<IErrorLogService>(),
-            sp.GetRequiredService<SystemCommandAvailabilityService>(),
-            sp.GetRequiredService<IPasteConfirmationSource>()
-        ));
+        services.AddSingleton(sp =>
+        {
+            var audioRecording = sp.GetRequiredService<AudioRecordingService>();
+            return new TextInsertionService(
+                sp.GetRequiredService<IErrorLogService>(),
+                sp.GetRequiredService<SystemCommandAvailabilityService>(),
+                sp.GetRequiredService<IPasteConfirmationSource>(),
+                sp.GetRequiredService<IProcessRunner>(),
+                isAnotherSessionRecording: () => audioRecording.IsRecording
+            );
+        });
         services.AddSingleton<YdotoolSetupHelper>();
         services.AddSingleton<InputAccessSetupHelper>();
         services.AddSingleton<BrowserAccessibilitySetupHelper>();
+        services.AddSingleton<CudaLibraryPathSetupService>();
         services.AddSingleton<GnomeWindowCallsSetupHelper>();
 
         // Onboarding checklist tasks. Each self-gates via AppliesToThisMachine();
@@ -155,6 +202,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<ISetupTask, KwinActiveWindowSetupTask>();
         services.AddSingleton<ISetupTask, FfmpegSetupTask>();
         services.AddSingleton<TrayIconService>();
+        services.AddSingleton<OverlayCoordinator>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
         services.AddSingleton<LlmCleanupService>();
@@ -166,7 +214,13 @@ internal static class ServiceRegistrations
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();
         services.AddSingleton<UpdateCheckService>();
-        services.AddSingleton<SettingsBackupService>();
+        services.AddSingleton<SecretProtectionMigrationService>();
+        services.AddSingleton(sp =>
+            new SettingsBackupService(
+                TypeWhisperEnvironment.BasePath,
+                secretMigration: sp.GetRequiredService<SecretProtectionMigrationService>()
+            )
+        );
         services.AddSingleton<ApiDiscoveryFile>();
         services.AddSingleton<DictationSessionResultStore>();
         services.AddSingleton<HttpApiService>();

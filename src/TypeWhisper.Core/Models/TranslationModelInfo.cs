@@ -52,7 +52,7 @@ public sealed record TranslationModelInfo
         new("ar", "العربية"),
         new("hi", "हिन्दी"),
         new("vi", "Tiếng Việt"),
-        new("id", "Bahasa Indonesia")
+        new("id", "Bahasa Indonesia"),
     ];
 
     // The OPUS-MT models that actually exist (confirmed Xenova ONNX exports). The
@@ -102,7 +102,7 @@ public sealed record TranslationModelInfo
         Pair("en", "hu"),
         Pair("en", "id"),
         // Direct non-English pairs
-        Pair("de", "es")
+        Pair("de", "es"),
     ];
 
     // Distinct target languages across every model pair — the targets we can
@@ -196,8 +196,8 @@ public sealed record TranslationModelInfo
                     $"{Hf}/opus-mt-{repo}/resolve/main/onnx/decoder_model_quantized.onnx"
                 ),
                 new TranslationFileInfo("tokenizer.json", $"{Hf}/opus-mt-{repo}/resolve/main/tokenizer.json"),
-                new TranslationFileInfo("config.json", $"{Hf}/opus-mt-{repo}/resolve/main/config.json")
-            ]
+                new TranslationFileInfo("config.json", $"{Hf}/opus-mt-{repo}/resolve/main/config.json"),
+            ],
         };
     }
 }

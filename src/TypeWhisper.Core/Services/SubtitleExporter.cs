@@ -46,12 +46,12 @@ public static class SubtitleExporter
     private static string FormatSrtTime(double seconds)
     {
         var ts = TimeSpan.FromSeconds(seconds);
-        return $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2},{ts.Milliseconds:D3}";
+        return $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2},{ts.Milliseconds:D3}";
     }
 
     private static string FormatVttTime(double seconds)
     {
         var ts = TimeSpan.FromSeconds(seconds);
-        return $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}.{ts.Milliseconds:D3}";
+        return $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}.{ts.Milliseconds:D3}";
     }
 }

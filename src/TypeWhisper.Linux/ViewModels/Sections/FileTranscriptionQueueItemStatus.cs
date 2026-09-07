@@ -8,5 +8,5 @@ public enum FileTranscriptionQueueItemStatus
     Completed,
     Cancelled,
     Error,
-    Unsupported
+    Unsupported,
 }

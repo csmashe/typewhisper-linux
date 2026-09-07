@@ -13,6 +13,22 @@ using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+internal static class PresentationDateTime
+{
+    internal static DateTime ToLocal(DateTime timestamp, TimeZoneInfo timeZone)
+    {
+        if (timestamp.Kind == DateTimeKind.Local)
+        {
+            return timestamp;
+        }
+
+        var utcTimestamp = timestamp.Kind == DateTimeKind.Utc
+            ? timestamp
+            : DateTime.SpecifyKind(timestamp, DateTimeKind.Utc);
+        return TimeZoneInfo.ConvertTimeFromUtc(utcTimestamp, timeZone);
+    }
+}
+
 public partial class HistorySectionViewModel : ObservableObject
 {
     // Thousands of entries: rows are materialized in pages and appended on scroll.
@@ -23,6 +39,8 @@ public partial class HistorySectionViewModel : ObservableObject
     private readonly IHistoryService _history;
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly ISettingsService _settings;
+    private readonly TimeZoneInfo _timeZone;
+    private readonly Func<DateTime> _utcNow;
 
     [ObservableProperty]
     private bool _isLoading;
@@ -49,12 +67,33 @@ public partial class HistorySectionViewModel : ObservableObject
         SessionAudioFileService sessionAudioFiles,
         AudioPlaybackService audioPlayback
     )
+        : this(
+            history,
+            dictionary,
+            settings,
+            sessionAudioFiles,
+            audioPlayback,
+            TimeZoneInfo.Local,
+            () => DateTime.UtcNow
+        ) { }
+
+    internal HistorySectionViewModel(
+        IHistoryService history,
+        IDictionaryService dictionary,
+        ISettingsService settings,
+        SessionAudioFileService sessionAudioFiles,
+        AudioPlaybackService audioPlayback,
+        TimeZoneInfo timeZone,
+        Func<DateTime> utcNow
+    )
     {
         _history = history;
         _dictionary = dictionary;
         _settings = settings;
         _sessionAudioFiles = sessionAudioFiles;
         _audioPlayback = audioPlayback;
+        _timeZone = timeZone;
+        _utcNow = utcNow;
 
         _history.RecordsChanged += () =>
         {
@@ -93,7 +132,7 @@ public partial class HistorySectionViewModel : ObservableObject
             ".csv" => _history.ExportToCsv(visibleRecords),
             ".md" => _history.ExportToMarkdown(visibleRecords),
             ".json" => _history.ExportToJson(visibleRecords),
-            _ => _history.ExportToText(visibleRecords)
+            _ => _history.ExportToText(visibleRecords),
         };
     }
 
@@ -193,7 +232,7 @@ public partial class HistorySectionViewModel : ObservableObject
                 Id = Guid.NewGuid().ToString(),
                 EntryType = DictionaryEntryType.Term,
                 Original = term,
-                Source = DictionaryEntrySource.Manual
+                Source = DictionaryEntrySource.Manual,
             }
         );
     }
@@ -252,6 +291,11 @@ public partial class HistorySectionViewModel : ObservableObject
                    record.AudioFileName,
                    StringComparison.OrdinalIgnoreCase
                );
+    }
+
+    internal DateTime ToLocalPresentationTime(DateTime timestamp)
+    {
+        return PresentationDateTime.ToLocal(timestamp, _timeZone);
     }
 
     private async Task LoadAsync()
@@ -368,10 +412,12 @@ public partial class HistorySectionViewModel : ObservableObject
     private void AppendNextPage()
     {
         var end = Math.Min(_shownCount + PageSize, _filtered.Count);
+        var today = ToLocalPresentationTime(_utcNow()).Date;
         for (var i = _shownCount; i < end; i++)
         {
             var record = _filtered[i];
-            var groupName = ComputeDateGroup(record.Timestamp);
+            var row = new HistoryRecordRow(record, this);
+            var groupName = ComputeDateGroup(row.LocalTimestamp, today);
 
             // Records are newest-first; each record either extends the last group or starts a new one.
             var group =
@@ -382,7 +428,7 @@ public partial class HistorySectionViewModel : ObservableObject
                 Groups.Add(group);
             }
 
-            group.Entries.Add(new HistoryRecordRow(record, this));
+            group.Entries.Add(row);
         }
 
         _shownCount = end;
@@ -411,9 +457,8 @@ public partial class HistorySectionViewModel : ObservableObject
         SelectedAppFilter = AvailableApps.Contains(current) ? current : allApps;
     }
 
-    private static string ComputeDateGroup(DateTime timestamp)
+    private static string ComputeDateGroup(DateTime timestamp, DateTime today)
     {
-        var today = DateTime.Today;
         var date = timestamp.Date;
 
         if (date == today)
@@ -473,12 +518,14 @@ public partial class HistoryRecordRow : ObservableObject
     {
         _record = record;
         _owner = owner;
+        LocalTimestamp = owner.ToLocalPresentationTime(record.Timestamp);
         SetCorrectionSuggestions(record.PendingCorrectionSuggestions);
     }
 
     public ObservableCollection<CorrectionSuggestionRow> CorrectionSuggestions { get; } = [];
 
-    public string TimeLabel => Record.Timestamp.ToString("HH:mm");
+    public DateTime LocalTimestamp { get; private set; }
+    public string TimeLabel => LocalTimestamp.ToString("HH:mm");
     public string DurationLabel => $"{Record.DurationSeconds:F1}s";
     public bool HasProfileName => !string.IsNullOrWhiteSpace(Record.ProfileName);
     public bool HasAppProcessName => !string.IsNullOrWhiteSpace(Record.AppProcessName);
@@ -528,8 +575,11 @@ public partial class HistoryRecordRow : ObservableObject
 
     partial void OnRecordChanged(TranscriptionRecord value)
     {
+        LocalTimestamp = _owner.ToLocalPresentationTime(value.Timestamp);
         _rawVsFinalDiffCache = null;
         _inspectorCallsCache = null;
+        OnPropertyChanged(nameof(LocalTimestamp));
+        OnPropertyChanged(nameof(TimeLabel));
         OnPropertyChanged(nameof(RawVsFinalDiff));
         OnPropertyChanged(nameof(InspectorCalls));
     }
@@ -718,7 +768,7 @@ public sealed class LlmCallDisplay
             "Cleanup" => Loc.Instance["History.Inspect.StageCleanup"],
             "Translation" => Loc.Instance["History.Inspect.StageTranslation"],
             "Memory" => Loc.Instance["History.Inspect.StageMemory"],
-            _ => Loc.Instance["History.Inspect.StagePromptAction"]
+            _ => Loc.Instance["History.Inspect.StagePromptAction"],
         };
 
     public string ProviderModelLabel => $"{_call.ProviderName} · {_call.ModelId}";

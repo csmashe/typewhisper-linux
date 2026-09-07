@@ -21,6 +21,9 @@
         <!-- Shared on-demand CUDA provisioner, compiled into the plugin assembly. -->
         <Compile Include="..\Shared\Cuda\CudaRuntimeProvisioner.cs"
                  Link="Shared\Cuda\CudaRuntimeProvisioner.cs" />
+        <!-- Shared crash-durable file writer used by the provisioner's legacy-migration tombstone. -->
+        <Compile Include="..\Shared\Io\DurableFileWrite.cs"
+                 Link="Shared\Io\DurableFileWrite.cs" />
         <!-- Shared resumable/idle-watchdog downloader, compiled into the plugin assembly. -->
         <Compile Include="..\Shared\Net\ResilientDownloader.cs"
                  Link="Shared\Net\ResilientDownloader.cs" />

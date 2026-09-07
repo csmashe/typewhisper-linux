@@ -2,39 +2,43 @@ using System.Diagnostics;
 
 namespace TypeWhisper.Linux.Services;
 
-/// <summary>
-///     Opens a URL in the user's default browser. Uses UseShellExecute, which
-///     on Linux .NET routes through the desktop's URL handler (xdg-open).
-/// </summary>
-public static class UrlLauncher
+/// <summary>Validated HTTP(S) handoff through the host process supervisor.</summary>
+public sealed class UrlLauncher(IProcessRunner processRunner)
 {
-    // ReSharper disable once UnusedMethodReturnValue.Global -- returns whether the launch succeeded for callers that want it; current callers ignore it.
-    public static bool Open(string? url)
+    // ReSharper disable once UnusedMethodReturnValue.Global -- current callers ignore the success flag.
+    public bool Open(string? url)
     {
-        if (string.IsNullOrWhiteSpace(url))
+        // Only well-formed http(s) URLs reach the desktop handler — never a raw string that
+        // could be coerced into a local path or a command.
+        var normalizedUrl = NormalizeHttpUrl(url);
+        if (normalizedUrl is null)
         {
             return false;
         }
 
-        // Only hand off well-formed http(s) URLs to the shell handler — never a
-        // raw string that could be coerced into a local path or command.
+        var uri = new Uri(normalizedUrl, UriKind.Absolute);
+        var result = processRunner.LaunchUri(uri);
+        if (!result.Started)
+        {
+            Trace.WriteLine(
+                $"[UrlLauncher] Failed to open {uri.AbsoluteUri}: {result.StartError}"
+            );
+        }
+
+        return result.Started;
+    }
+
+    /// <summary>Returns a canonical absolute HTTP(S) URL, or null when the value is unsafe.</summary>
+    internal static string? NormalizeHttpUrl(string? url)
+    {
         if (
             !Uri.TryCreate(url, UriKind.Absolute, out var uri)
             || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
         )
         {
-            return false;
+            return null;
         }
 
-        try
-        {
-            Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[UrlLauncher] Failed to open {uri.AbsoluteUri}: {ex.Message}");
-            return false;
-        }
+        return uri.AbsoluteUri;
     }
 }

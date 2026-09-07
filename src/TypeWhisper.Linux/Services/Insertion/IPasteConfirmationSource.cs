@@ -25,12 +25,13 @@ public interface IPasteConfirmationSource
     bool? HasFocusedElement { get; }
 
     /// <summary>
-    ///     Starts watching for an insertion signal; call BEFORE sending the paste
-    ///     keystroke. Returns <c>null</c> when the source is not running (feature off) —
-    ///     indeterminate, the caller falls back to its fixed floor delay exactly as if no
-    ///     confirmer were wired.
+    ///     Starts watching for a text mutation that verifies <paramref name="expectedText" />
+    ///     was delivered; call BEFORE sending the paste keystroke. Returns <c>null</c> when
+    ///     the source is not running (feature off) — indeterminate, the caller falls back
+    ///     to its fixed floor delay exactly as if no confirmer were wired.
     /// </summary>
-    IPasteWatch? BeginWatch();
+    /// <param name="expectedText">The exact clipboard text the target is expected to insert.</param>
+    IPasteWatch? BeginWatch(string expectedText);
 }
 
 /// <summary>

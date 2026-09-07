@@ -133,6 +133,25 @@ public class NumberWordNormalizerTests
     }
 
     [Fact]
+    public void Normalize_SpanishMenosArticleOne_IsNotReadAsNegativeOne()
+    {
+        // "menos" is also the preposition "except/less", so it is not a number context that
+        // licenses the articles "un"/"una"; only the bare numeral "uno" converts after it.
+        Assert.Equal("todos menos un estudiante", NumberWordNormalizer.Normalize("todos menos un estudiante", "es"));
+        Assert.Equal("todos menos una persona", NumberWordNormalizer.Normalize("todos menos una persona", "es"));
+        Assert.Equal("-1000000", NumberWordNormalizer.Normalize("menos un millón", "es"));
+    }
+
+    [Fact]
+    public void Normalize_BareScaleNoun_IsNotTreatedAsNumber()
+    {
+        // Singular "millón"/"Million" without a leading count is a noun, not a number.
+        Assert.Equal("medio millón de filas", NumberWordNormalizer.Normalize("medio millón de filas", "es"));
+        Assert.Equal("eine halbe Million Zeilen", NumberWordNormalizer.Normalize("eine halbe Million Zeilen", "de"));
+        Assert.Equal("1000000 Zeilen", NumberWordNormalizer.Normalize("eine Million Zeilen", "de"));
+    }
+
+    [Fact]
     public void Normalize_UnsupportedLanguage_IsNoOp()
     {
         var result = NumberWordNormalizer.Normalize("twenty three", "it");

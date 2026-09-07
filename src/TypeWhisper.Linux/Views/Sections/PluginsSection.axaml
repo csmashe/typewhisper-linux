@@ -47,11 +47,19 @@
 
                 <TextBox Text="{Binding Value}"
                          PlaceholderText="{Binding Placeholder}"
+                         PasswordChar="{Binding MultilinePasswordChar}"
+                         RevealPassword="{Binding RevealSecretMultiline, Mode=TwoWay}"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"
                          MinHeight="80"
                          HorizontalAlignment="Stretch"
                          IsVisible="{Binding IsMultilineKind}" />
+
+                <ToggleButton IsChecked="{Binding RevealSecretMultiline}"
+                              Content="{loc:Str Plugins.RevealSecretMultiline}"
+                              FontSize="12"
+                              HorizontalAlignment="Left"
+                              IsVisible="{Binding IsSecretMultiline}" />
 
                 <CheckBox IsChecked="{Binding BoolValue}"
                           Content="{Binding Label}"
@@ -205,14 +213,6 @@
 
                                                                 <StackPanel Orientation="Horizontal"
                                                                             Spacing="6">
-                                                                    <Border Classes="badge"
-                                                                            Background="#1A3453"
-                                                                            BorderBrush="#2E5B89"
-                                                                            BorderThickness="1">
-                                                                        <TextBlock Text="{Binding CategoryLabel}"
-                                                                                FontSize="11"
-                                                                                Foreground="#D6E7FF" />
-                                                                    </Border>
                                                                     <Border Classes="badge"
                                                                             Background="{Binding LocationBadgeBackground}"
                                                                             BorderBrush="{Binding LocationBadgeBorder}"

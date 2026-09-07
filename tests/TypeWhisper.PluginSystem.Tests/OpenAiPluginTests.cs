@@ -1,6 +1,8 @@
 using System.Net;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.OpenAi;
 using TypeWhisper.PluginSDK;
@@ -33,7 +35,7 @@ public class OpenAiPluginTests
 
         Assert.Equal("com.typewhisper.openai", manifest.GetProperty("id").GetString());
         Assert.Equal("OpenAI / ChatGPT", manifest.GetProperty("name").GetString());
-        Assert.Equal("transcription", manifest.GetProperty("category").GetString());
+        Assert.Equal(["transcription", "llm", "tts"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
         Assert.Equal(
             "TypeWhisper.Plugin.OpenAi.dll",
             manifest.GetProperty("assemblyName").GetString()
@@ -121,7 +123,7 @@ public class OpenAiPluginTests
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
         host.SetSetting("reasoningEffort", "xhigh");
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         await sut.ProcessAsync("system", "user", "gpt-5.5", CancellationToken.None);
@@ -148,7 +150,7 @@ public class OpenAiPluginTests
         host.Secrets["oauth-refresh-token"] = "refresh-token";
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
         host.SetSetting("reasoningEffort", "xhigh");
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         await sut.ProcessAsync("system", "user", "gpt-5.5", CancellationToken.None);
@@ -170,7 +172,7 @@ public class OpenAiPluginTests
 
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         await sut.ProcessAsync("system", "user", "o4-mini", CancellationToken.None);
@@ -248,7 +250,7 @@ public class OpenAiPluginTests
 
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-live" } };
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var result = await sut.ProcessAsync("Fix grammar", "hello world", "gpt-5.5", CancellationToken.None);
@@ -293,7 +295,7 @@ public class OpenAiPluginTests
 
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-live" } };
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var models = await sut.RefreshAvailableLlmModelsAsync(CancellationToken.None);
@@ -351,7 +353,7 @@ public class OpenAiPluginTests
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
         host.SetSetting("selectedLLMModel", "gpt-5.5");
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         await sut.RefreshAvailableLlmModelsAsync(CancellationToken.None);
@@ -431,7 +433,7 @@ public class OpenAiPluginTests
         host.Secrets["oauth-refresh-token"] = "refresh-token";
 
         using var httpClient = new HttpClient(handler);
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var result = await sut.ProcessAsync("Fix grammar", "hello world", "gpt-5.5", CancellationToken.None);
@@ -450,18 +452,21 @@ public class OpenAiPluginTests
     }
 
     [Fact]
-    public void ChatGptResponseParser_ExtractsServerSentEventText()
+    public async Task ChatGptResponseParser_ExtractsServerSentEventText()
     {
-        const string stream = """
-                              event: response.output_text.delta
-                              data: {"type":"response.output_text.delta","delta":"Hello"}
-                              event: response.output_text.delta
-                              data: {"type":"response.output_text.delta","delta":" world"}
-                              data: [DONE]
+        var stream = string.Join(
+            "\n",
+            "event: response.output_text.delta",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\"}",
+            "",
+            "event: response.output_text.delta",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}",
+            "",
+            "data: [DONE]",
+            "",
+            "");
 
-                              """;
-
-        Assert.Equal("Hello world", OpenAiChatGptClient.ParseResponseText(stream));
+        Assert.Equal("Hello world", await OpenAiChatGptClient.ParseResponseTextAsync(stream));
     }
 
     [Fact]
@@ -492,7 +497,7 @@ public class OpenAiPluginTests
         host.Secrets["oauth-refresh-token"] = "original-refresh-token";
 
         using var httpClient = new HttpClient(handler);
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         await sut.ProcessAsync("system", "user", "gpt-5.5", CancellationToken.None);
@@ -500,6 +505,263 @@ public class OpenAiPluginTests
         Assert.NotNull(capturedTokenRequest);
         Assert.Equal("original-refresh-token", host.Secrets["oauth-refresh-token"]);
         Assert.Equal("new-access-token", host.Secrets["oauth-access-token"]);
+    }
+
+    [Fact]
+    public async Task ConcurrentChatGptRequests_RefreshOnceAndUseOneCoherentCredentialSnapshot()
+    {
+        const long expiresAtUnixSeconds = 4_102_444_800;
+        var firstAccessToken = CreateJwt("""
+            {
+              "exp": 4102444800
+            }
+            """);
+        var firstIdToken = CreateJwt("""
+            {
+              "chatgpt_account_id": "acct_single_refresh",
+              "chatgpt_plan_type": "pro"
+            }
+            """);
+        var secondAccessToken = CreateJwt("""
+            {
+              "exp": 4102444800,
+              "jti": "duplicate"
+            }
+            """);
+        var secondIdToken = CreateJwt("""
+            {
+              "chatgpt_account_id": "acct_duplicate_refresh",
+              "chatgpt_plan_type": "free"
+            }
+            """);
+        var firstRefreshResponse = JsonSerializer.Serialize(new
+        {
+            access_token = firstAccessToken,
+            refresh_token = "rotated-refresh-token",
+            id_token = firstIdToken,
+            expires_in = 3600,
+        });
+        var duplicateRefreshResponse = JsonSerializer.Serialize(new
+        {
+            access_token = secondAccessToken,
+            refresh_token = "duplicate-rotated-refresh-token",
+            id_token = secondIdToken,
+            expires_in = 3600,
+        });
+        var firstRefreshStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstRefresh = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var downstreamAccessTokens = new List<string?>();
+        var tokenPostCount = 0;
+        var handler = new CapturingHandler(async (request, _) =>
+        {
+            if (request.RequestUri?.AbsoluteUri == "https://auth.openai.com/oauth/token")
+            {
+                // ReSharper disable once AccessToModifiedClosure -- intentional shared counter across handler invocations; Interlocked.Increment coordinates the concurrent-refresh dedup this test asserts.
+                var refreshNumber = Interlocked.Increment(ref tokenPostCount);
+                // ReSharper disable once InvertIf -- the positive form states the first-refresh case this test coordinates.
+                if (refreshNumber == 1)
+                {
+                    firstRefreshStarted.TrySetResult(true);
+                    await releaseFirstRefresh.Task;
+                    return JsonResponse(firstRefreshResponse);
+                }
+
+                return JsonResponse(duplicateRefreshResponse);
+            }
+
+            lock (downstreamAccessTokens)
+            {
+                downstreamAccessTokens.Add(request.Headers.Authorization?.Parameter);
+            }
+
+            return JsonResponse("""{"output_text":"OK"}""");
+        });
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddMinutes(-5));
+        host.Secrets["oauth-access-token"] = "expired-access-token";
+        host.Secrets["oauth-refresh-token"] = "original-refresh-token";
+
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var firstRequest = sut.ProcessAsync(
+            "system",
+            "first",
+            "gpt-5.5",
+            timeoutCts.Token);
+        await firstRefreshStarted.Task.WaitAsync(timeoutCts.Token);
+        var secondRequest = sut.ProcessAsync(
+            "system",
+            "second",
+            "gpt-5.5",
+            timeoutCts.Token);
+
+        releaseFirstRefresh.TrySetResult(true);
+        await Task.WhenAll(firstRequest, secondRequest).WaitAsync(timeoutCts.Token);
+
+        Assert.Equal(1, Volatile.Read(ref tokenPostCount));
+        lock (downstreamAccessTokens)
+        {
+            Assert.Equal(2, downstreamAccessTokens.Count);
+            Assert.All(
+                downstreamAccessTokens,
+                accessToken => Assert.Equal(firstAccessToken, accessToken));
+        }
+        Assert.Equal(firstAccessToken, host.Secrets["oauth-access-token"]);
+        Assert.Equal("rotated-refresh-token", host.Secrets["oauth-refresh-token"]);
+        Assert.Equal(firstIdToken, host.Secrets["oauth-id-token"]);
+        Assert.Equal("acct_single_refresh", host.GetSetting<string>("oauthAccountID"));
+        Assert.Equal("pro", host.GetSetting<string>("oauthPlanType"));
+        Assert.Equal(
+            DateTimeOffset.FromUnixTimeSeconds(expiresAtUnixSeconds),
+            host.GetSetting<DateTimeOffset?>("oauthExpiresAt"));
+    }
+
+    [Fact]
+    public async Task ChatGptRefresh_FailureReleasesCredentialGateForWaitingRequest()
+    {
+        var firstRefreshStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstRefresh = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var tokenPostCount = 0;
+        var handler = new CapturingHandler(async (request, _) =>
+        {
+            if (request.RequestUri?.AbsoluteUri != "https://auth.openai.com/oauth/token")
+                return JsonResponse("""{"output_text":"OK"}""");
+
+            // ReSharper disable once AccessToModifiedClosure -- intentional shared counter across handler invocations; Interlocked.Increment coordinates the concurrent-refresh dedup this test asserts.
+            var refreshNumber = Interlocked.Increment(ref tokenPostCount);
+            // ReSharper disable once InvertIf -- the positive form states the first-refresh case this test coordinates.
+            if (refreshNumber == 1)
+            {
+                firstRefreshStarted.TrySetResult(true);
+                await releaseFirstRefresh.Task;
+                return new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent(
+                        """{"error":"rejected refresh token"}""",
+                        Encoding.UTF8,
+                        "application/json"),
+                };
+            }
+
+            return JsonResponse(
+                """{"access_token":"recovered-access-token","refresh_token":"recovered-refresh-token","expires_in":3600}""");
+        });
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddMinutes(-5));
+        host.Secrets["oauth-access-token"] = "expired-access-token";
+        host.Secrets["oauth-refresh-token"] = "original-refresh-token";
+
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var failingRequest = sut.ProcessAsync(
+            "system",
+            "first",
+            "gpt-5.5",
+            timeoutCts.Token);
+        await firstRefreshStarted.Task.WaitAsync(timeoutCts.Token);
+        var waitingRequest = sut.ProcessAsync(
+            "system",
+            "second",
+            "gpt-5.5",
+            timeoutCts.Token);
+
+        try
+        {
+            for (var i = 0; i < 10; i++)
+                await Task.Yield();
+            Assert.Equal(1, Volatile.Read(ref tokenPostCount));
+
+            releaseFirstRefresh.TrySetResult(true);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => failingRequest);
+            Assert.Equal("OK", await waitingRequest.WaitAsync(timeoutCts.Token));
+            Assert.Equal(2, Volatile.Read(ref tokenPostCount));
+            Assert.Equal("recovered-access-token", host.Secrets["oauth-access-token"]);
+            Assert.Equal("recovered-refresh-token", host.Secrets["oauth-refresh-token"]);
+        }
+        finally
+        {
+            releaseFirstRefresh.TrySetResult(true);
+        }
+    }
+
+    [Fact]
+    public async Task ChatGptRefresh_CancellationReleasesCredentialGateForWaitingRequest()
+    {
+        var firstRefreshStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var tokenPostCount = 0;
+        var handler = new CapturingHandler(async (request, _, cancellationToken) =>
+        {
+            if (request.RequestUri?.AbsoluteUri != "https://auth.openai.com/oauth/token")
+                return JsonResponse("""{"output_text":"OK"}""");
+
+            // ReSharper disable once AccessToModifiedClosure -- intentional shared counter across handler invocations; Interlocked.Increment coordinates the concurrent-refresh dedup this test asserts.
+            var refreshNumber = Interlocked.Increment(ref tokenPostCount);
+            // ReSharper disable once InvertIf -- the positive form states the first-refresh case this test coordinates.
+            if (refreshNumber == 1)
+            {
+                firstRefreshStarted.TrySetResult(true);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+
+            return JsonResponse(
+                """{"access_token":"recovered-access-token","refresh_token":"recovered-refresh-token","expires_in":3600}""");
+        });
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddMinutes(-5));
+        host.Secrets["oauth-access-token"] = "expired-access-token";
+        host.Secrets["oauth-refresh-token"] = "original-refresh-token";
+
+        using var firstRequestCts = new CancellationTokenSource();
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var canceledRequest = sut.ProcessAsync(
+            "system",
+            "first",
+            "gpt-5.5",
+            firstRequestCts.Token);
+        await firstRefreshStarted.Task.WaitAsync(timeoutCts.Token);
+        var waitingRequest = sut.ProcessAsync(
+            "system",
+            "second",
+            "gpt-5.5",
+            timeoutCts.Token);
+
+        try
+        {
+            for (var i = 0; i < 10; i++)
+                await Task.Yield();
+            Assert.Equal(1, Volatile.Read(ref tokenPostCount));
+
+            // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel must trip the token before the assertion; CancelAsync would defer it.
+            firstRequestCts.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceledRequest);
+            Assert.Equal("OK", await waitingRequest.WaitAsync(timeoutCts.Token));
+            Assert.Equal(2, Volatile.Read(ref tokenPostCount));
+            Assert.Equal("recovered-access-token", host.Secrets["oauth-access-token"]);
+            Assert.Equal("recovered-refresh-token", host.Secrets["oauth-refresh-token"]);
+        }
+        finally
+        {
+            // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in this teardown path; CancelAsync() only defers callbacks, with no benefit here.
+            firstRequestCts.Cancel();
+        }
     }
 
     [Fact]
@@ -558,7 +820,7 @@ public class OpenAiPluginTests
                 "streamResponses",
                 "selectedVoice",
                 "ttsInstructions",
-                "forgetChatGptLogin"
+                "forgetChatGptLogin",
             ],
             keys);
     }
@@ -606,7 +868,7 @@ public class OpenAiPluginTests
 
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-live" } };
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var result = await sut.ValidateAsync();
@@ -661,9 +923,8 @@ public class OpenAiPluginTests
     }
 
     [Fact]
-    public async Task SpeakAsync_PostsAudioSpeechRequestAndUsesPlaybackFactory()
+    public async Task SpeakAsync_PostsAudioSpeechRequestAndUsesHostPcmPlayback()
     {
-        byte[]? playbackBytes = null;
         var handler = new CapturingHandler((request, body) =>
         {
             Assert.Equal(HttpMethod.Post, request.Method);
@@ -680,27 +941,29 @@ public class OpenAiPluginTests
 
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent([0, 1, 2, 3])
+                Content = new ByteArrayContent([0, 1, 2, 3]),
             });
         });
 
         using var httpClient = new HttpClient(handler);
-        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-live" } };
-        var sut = new OpenAiPlugin(
-            httpClient,
-            pcm =>
-            {
-                playbackBytes = pcm;
-                return new FakeTtsPlaybackSession();
-            },
-            ttsPlaybackAvailableProbe: () => true);
+        var playback = new RecordingPcmPlaybackService();
+        var host = new TestPluginHostServices
+        {
+            PcmPlayback = playback,
+            Secrets = { ["api-key"] = "sk-live" },
+        };
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
         sut.SelectVoice("nova");
 
         var session = await sut.SpeakAsync(new TtsSpeakRequest("Read this", "en"), CancellationToken.None);
 
         Assert.NotNull(session);
-        Assert.Equal([0, 1, 2, 3], playbackBytes);
+        var playbackRequest = Assert.Single(playback.Requests);
+        Assert.Equal([0, 1, 2, 3], playbackRequest.Payload.ToArray());
+        Assert.Equal(24_000, playbackRequest.SampleRate);
+        Assert.Equal(1, playbackRequest.Channels);
+        Assert.Equal(PcmSampleFormat.Signed16LittleEndian, playbackRequest.Format);
     }
 
     [Fact]
@@ -712,13 +975,13 @@ public class OpenAiPluginTests
             requestCount++;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent([0, 1, 2, 3])
+                Content = new ByteArrayContent([0, 1, 2, 3]),
             });
         });
 
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-live" } };
-        var sut = new OpenAiPlugin(httpClient, ttsPlaybackAvailableProbe: () => false);
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var session = await sut.SpeakAsync(new TtsSpeakRequest("Read this", "en"), CancellationToken.None);
@@ -746,7 +1009,7 @@ public class OpenAiPluginTests
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
         host.SetSetting("llmTemperatureMode", "custom");
         host.SetSetting("llmTemperatureValue", 0.7);
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         await sut.ProcessAsync("system", "user", "gpt-4o", CancellationToken.None);
@@ -776,7 +1039,7 @@ public class OpenAiPluginTests
         using var httpClient = new HttpClient(handler);
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
         host.SetSetting("reasoningEffort", "high");
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         await sut.ProcessAsync("system", "user", "o4-mini", CancellationToken.None);
@@ -851,7 +1114,7 @@ public class OpenAiPluginTests
         host.Secrets["oauth-access-token"] = "access-token";
         host.Secrets["oauth-refresh-token"] = "refresh-token";
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var models = await sut.RefreshAvailableLlmModelsAsync(CancellationToken.None);
@@ -863,9 +1126,9 @@ public class OpenAiPluginTests
 
     // C5 Phase 7 — realtime streaming session
     // ----------------------------------------
-    // Four tests ported verbatim from upstream `8683551` exercise the
-    // session's pure functions; the remaining two cover the fork-specific
-    // model + auth-mode gating in OpenAiPlugin itself.
+    // Pure-function tests exercise the protocol payloads and collector.
+    // Transport-backed tests below cover finalize ordering without network
+    // access, plus the fork-specific model + auth-mode gating.
 
     [Fact]
     public void RealtimeUri_UsesGAEndpointWithoutBetaHeader()
@@ -1048,7 +1311,7 @@ public class OpenAiPluginTests
             0x80, 0x3e, 0, 0,  // sample rate 16000
             0, 0x7d, 0, 0,     // byte rate
             2, 0,      // block align
-            16, 0 // bits per sample
+            16, 0, // bits per sample
         };
         var listData = "INFO"u8.ToArray();  // 4 bytes ("INFO")
         var oddListPayload = new byte[] { 1, 2, 3 };  // odd size triggers pad
@@ -1164,6 +1427,161 @@ public class OpenAiPluginTests
     }
 
     [Fact]
+    public async Task RealtimeFinalize_AppendAfterEarlierCompletedItem_CommitsAndWaitsForTailItem()
+    {
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var socket = new FakeRealtimeWebSocket();
+        await using var session =
+            await OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+
+        await session.SendAudioAsync(new byte[] { 1, 0, 2, 0 }, timeoutCts.Token);
+
+        // Synchronize through a later transcript delta: receive ordering
+        // guarantees committed-A was applied before this callback fires.
+        var firstDelta = WaitForTranscriptAsync(
+            session,
+            new StreamingTranscriptEvent("a", false),
+            timeoutCts.Token);
+        socket.QueueTextMessage(
+            """{"type":"input_audio_buffer.committed","item_id":"item_a"}""");
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.delta","item_id":"item_a","delta":"a"}""");
+        await firstDelta;
+
+        await session.SendAudioAsync(new byte[] { 3, 0, 4, 0 }, timeoutCts.Token);
+
+        var firstCompleted = WaitForTranscriptAsync(
+            session,
+            new StreamingTranscriptEvent("utterance A", true),
+            timeoutCts.Token);
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_a","transcript":"utterance A"}""");
+        await firstCompleted;
+
+        var finalizeTask = session.FinalizeAsync(timeoutCts.Token);
+        await socket.WaitForSentMessageTypeAsync(
+            "input_audio_buffer.commit",
+            timeoutCts.Token);
+
+        Assert.False(finalizeTask.IsCompleted);
+        Assert.Equal(1, socket.CountSentMessages("input_audio_buffer.commit"));
+
+        // The explicit commit must bind finalize to item B. A committed
+        // acknowledgement alone is not enough; its transcription result
+        // is the terminal event finalize is waiting for.
+        var secondDelta = WaitForTranscriptAsync(
+            session,
+            new StreamingTranscriptEvent("b", false),
+            timeoutCts.Token);
+        socket.QueueTextMessage(
+            """{"type":"input_audio_buffer.committed","item_id":"item_b"}""");
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.delta","item_id":"item_b","delta":"b"}""");
+        await secondDelta;
+
+        Assert.False(finalizeTask.IsCompleted);
+
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_b","transcript":"utterance B"}""");
+        await finalizeTask;
+    }
+
+    [Fact]
+    public async Task RealtimeFinalize_AllAudioAlreadyServerCommitted_SendsNoCommitAndWaitsForTranscription()
+    {
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var socket = new FakeRealtimeWebSocket();
+        await using var session =
+            await OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+
+        await session.SendAudioAsync(new byte[] { 1, 0, 2, 0 }, timeoutCts.Token);
+
+        var delta = WaitForTranscriptAsync(
+            session,
+            new StreamingTranscriptEvent("ready", false),
+            timeoutCts.Token);
+        socket.QueueTextMessage(
+            """{"type":"input_audio_buffer.committed","item_id":"item_a"}""");
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.delta","item_id":"item_a","delta":"ready"}""");
+        await delta;
+
+        var finalizeTask = session.FinalizeAsync(timeoutCts.Token);
+
+        Assert.Equal(0, socket.CountSentMessages("input_audio_buffer.commit"));
+        Assert.False(finalizeTask.IsCompleted);
+
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_a","transcript":"ready"}""");
+        await finalizeTask;
+
+        Assert.Equal(0, socket.CountSentMessages("input_audio_buffer.commit"));
+    }
+
+    [Fact]
+    public async Task RealtimeFinalize_ManualCommitMode_SendsOneCommitAndWaitsForTranscription()
+    {
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var socket = new FakeRealtimeWebSocket();
+        await using var session =
+            await OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+
+        // No server-VAD commit arrives in manual mode. Finalize retains the
+        // existing batch behavior of sending exactly one explicit commit.
+        await session.SendAudioAsync(new byte[] { 1, 0, 2, 0 }, timeoutCts.Token);
+
+        var finalizeTask = session.FinalizeAsync(timeoutCts.Token);
+        await socket.WaitForSentMessageTypeAsync(
+            "input_audio_buffer.commit",
+            timeoutCts.Token);
+
+        Assert.Equal(1, socket.CountSentMessages("input_audio_buffer.commit"));
+        Assert.False(finalizeTask.IsCompleted);
+
+        var delta = WaitForTranscriptAsync(
+            session,
+            new StreamingTranscriptEvent("batch", false),
+            timeoutCts.Token);
+        socket.QueueTextMessage(
+            """{"type":"input_audio_buffer.committed","item_id":"item_batch"}""");
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.delta","item_id":"item_batch","delta":"batch"}""");
+        await delta;
+
+        Assert.False(finalizeTask.IsCompleted);
+
+        socket.QueueTextMessage(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_batch","transcript":"batch"}""");
+        await finalizeTask;
+
+        Assert.Equal(1, socket.CountSentMessages("input_audio_buffer.commit"));
+    }
+
+    [Fact]
+    public async Task RealtimeFinalize_CancellationWhileWaitingForCommitAcknowledgement_Throws()
+    {
+        using var testTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var finalizeCts = new CancellationTokenSource();
+        var socket = new FakeRealtimeWebSocket();
+        await using var session =
+            await OpenAiRealtimeStreamingSession.CreateConnectedSessionForTests(socket);
+
+        await session.SendAudioAsync(new byte[] { 1, 0, 2, 0 }, testTimeoutCts.Token);
+
+        var finalizeTask = session.FinalizeAsync(finalizeCts.Token);
+        await socket.WaitForSentMessageTypeAsync(
+            "input_audio_buffer.commit",
+            testTimeoutCts.Token);
+        Assert.False(finalizeTask.IsCompleted);
+
+        // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel must trip the token before the assertion; CancelAsync would defer it.
+        finalizeCts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () => await finalizeTask);
+    }
+
+    [Fact]
     public async Task SupportsStreaming_RequiresRealtimeModelAndApiKeyMode()
     {
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
@@ -1207,6 +1625,33 @@ public class OpenAiPluginTests
         Assert.Contains("API key", authEx.Message);
     }
 
+    private static async Task WaitForTranscriptAsync(
+        OpenAiRealtimeStreamingSession session,
+        StreamingTranscriptEvent expected,
+        CancellationToken ct)
+    {
+        var received = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        session.TranscriptReceived += OnTranscript;
+        try
+        {
+            await received.Task.WaitAsync(ct);
+        }
+        finally
+        {
+            session.TranscriptReceived -= OnTranscript;
+        }
+
+        return;
+
+        void OnTranscript(StreamingTranscriptEvent transcriptEvent)
+        {
+            if (transcriptEvent == expected)
+                received.TrySetResult(true);
+        }
+    }
+
     private static JsonElement LoadManifest()
     {
         var basePath = Path.GetFullPath(AppContext.BaseDirectory);
@@ -1241,6 +1686,7 @@ public class OpenAiPluginTests
             "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -1248,13 +1694,13 @@ public class OpenAiPluginTests
             capturedBody = body;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             });
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
         using var httpClient = new HttpClient(handler);
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var chunks = new List<string>();
@@ -1276,7 +1722,7 @@ public class OpenAiPluginTests
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
         host.SetSetting("streamResponses", false);
         using var httpClient = new HttpClient(handler);
-        var sut = new OpenAiPlugin(httpClient, _ => new FakeTtsPlaybackSession());
+        var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var chunks = new List<string>();
@@ -1290,12 +1736,28 @@ public class OpenAiPluginTests
     private static HttpResponseMessage JsonResponse(string json) =>
         new(HttpStatusCode.OK)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
 
-    private sealed class CapturingHandler(
-        Func<HttpRequestMessage, string?, Task<HttpResponseMessage>> responder) : HttpMessageHandler
+    private static string CreateJwt(string payload)
     {
+        var encodedPayload = Convert.ToBase64String(Encoding.UTF8.GetBytes(payload))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+        return $"e30.{encodedPayload}.signature";
+    }
+
+    private sealed class CapturingHandler(
+        Func<HttpRequestMessage, string?, CancellationToken, Task<HttpResponseMessage>> responder)
+        : HttpMessageHandler
+    {
+        public CapturingHandler(
+            Func<HttpRequestMessage, string?, Task<HttpResponseMessage>> responder)
+            : this((request, body, _) => responder(request, body))
+        {
+        }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -1303,7 +1765,131 @@ public class OpenAiPluginTests
             var body = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            return await responder(request, body);
+            return await responder(request, body, cancellationToken);
+        }
+    }
+
+    private sealed class FakeRealtimeWebSocket : WebSocket
+    {
+        private readonly Channel<byte[]> _incoming = Channel.CreateUnbounded<byte[]>();
+        private readonly List<string> _sentMessages = [];
+        private readonly SemaphoreSlim _sentSignal = new(0);
+        private readonly Lock _sentLock = new();
+        private int _state = (int)WebSocketState.Open;
+        private WebSocketCloseStatus? _closeStatus;
+        private string? _closeStatusDescription;
+
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- WebSocket declares these get-only, so an override cannot add a private setter.
+        public override WebSocketCloseStatus? CloseStatus => _closeStatus;
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- WebSocket declares these get-only, so an override cannot add a private setter.
+        public override string? CloseStatusDescription => _closeStatusDescription;
+        public override WebSocketState State => (WebSocketState)Volatile.Read(ref _state);
+        public override string? SubProtocol => null;
+
+        public void QueueTextMessage(string json)
+        {
+            if (!_incoming.Writer.TryWrite(Encoding.UTF8.GetBytes(json)))
+                throw new InvalidOperationException("The fake WebSocket receive queue is closed.");
+        }
+
+        public int CountSentMessages(string messageType)
+        {
+            lock (_sentLock)
+            {
+                return _sentMessages.Count(message => GetMessageType(message) == messageType);
+            }
+        }
+
+        public async Task WaitForSentMessageTypeAsync(
+            string messageType,
+            CancellationToken ct)
+        {
+            while (true)
+            {
+                lock (_sentLock)
+                {
+                    if (_sentMessages.Any(message => GetMessageType(message) == messageType))
+                        return;
+                }
+
+                await _sentSignal.WaitAsync(ct);
+            }
+        }
+
+        public override void Abort()
+        {
+            Interlocked.Exchange(ref _state, (int)WebSocketState.Aborted);
+            _incoming.Writer.TryComplete();
+        }
+
+        public override Task CloseAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _closeStatus = closeStatus;
+            _closeStatusDescription = statusDescription;
+            Interlocked.Exchange(ref _state, (int)WebSocketState.Closed);
+            _incoming.Writer.TryComplete();
+            return Task.CompletedTask;
+        }
+
+        public override Task CloseOutputAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken) =>
+            CloseAsync(closeStatus, statusDescription, cancellationToken);
+
+        public override void Dispose()
+        {
+            Interlocked.Exchange(ref _state, (int)WebSocketState.Closed);
+            _incoming.Writer.TryComplete();
+            _sentSignal.Dispose();
+        }
+
+        public override async Task<WebSocketReceiveResult> ReceiveAsync(
+            ArraySegment<byte> buffer,
+            CancellationToken cancellationToken)
+        {
+            var message = await _incoming.Reader.ReadAsync(cancellationToken);
+            if (message.Length > buffer.Count)
+                throw new InvalidOperationException("The fake WebSocket receive buffer is too small.");
+
+            message.CopyTo(buffer.Array!.AsSpan(buffer.Offset, buffer.Count));
+            return new WebSocketReceiveResult(
+                message.Length,
+                WebSocketMessageType.Text,
+                endOfMessage: true);
+        }
+
+        public override Task SendAsync(
+            ArraySegment<byte> buffer,
+            WebSocketMessageType messageType,
+            bool endOfMessage,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (messageType != WebSocketMessageType.Text || !endOfMessage)
+                throw new InvalidOperationException("The fake WebSocket only accepts complete text messages.");
+
+            var message = Encoding.UTF8.GetString(
+                buffer.Array!,
+                buffer.Offset,
+                buffer.Count);
+            lock (_sentLock)
+            {
+                _sentMessages.Add(message);
+            }
+
+            _sentSignal.Release();
+            return Task.CompletedTask;
+        }
+
+        private static string? GetMessageType(string json)
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.GetProperty("type").GetString();
         }
     }
 
@@ -1311,7 +1897,7 @@ public class OpenAiPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];
@@ -1342,6 +1928,8 @@ public class OpenAiPluginTests
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
+        public IPluginPcmPlaybackService PcmPlayback { get; init; } =
+            UnavailablePluginPcmPlaybackService.Instance;
         public string? ActiveAppProcessName => null;
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();
@@ -1381,16 +1969,4 @@ public class OpenAiPluginTests
         public void Dispose() { }
     }
 
-    private sealed class FakeTtsPlaybackSession : ITtsPlaybackSession
-    {
-        public bool IsActive => false;
-
-        public event EventHandler? Completed
-        {
-            add { value?.Invoke(this, EventArgs.Empty); }
-            remove { }
-        }
-
-        public void Stop() { }
-    }
 }

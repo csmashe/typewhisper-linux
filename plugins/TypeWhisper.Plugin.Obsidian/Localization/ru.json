@@ -4,6 +4,8 @@
   "Settings.VaultPathDetectedDescription": "Обнаружено хранилищ Obsidian: {0}. При необходимости введите путь вручную.",
   "Settings.Subfolder": "Подпапка",
   "Settings.SubfolderDescription": "Папка внутри хранилища, в которой сохраняются заметки.",
+  "Settings.SubfolderOutsideVault": "Подпапка должна находиться внутри выбранного хранилища.",
+  "Settings.NoteOutsideVault": "Ежедневная заметка должна находиться внутри выбранного хранилища.",
   "Settings.SaveMode": "Режим сохранения",
   "Settings.SaveModeDescription": "Выберите, добавлять ли запись в ежедневную заметку или создавать отдельную заметку для каждой транскрипции.",
   "Settings.SaveModeOneNote": "Отдельная заметка для каждой транскрипции",

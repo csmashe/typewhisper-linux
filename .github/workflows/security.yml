@@ -23,7 +23,7 @@ concurrency:
 jobs:
   dependency-review:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: write
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/dependency-review-action@v4
 
   codeql:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v7
@@ -55,11 +55,13 @@ jobs:
 
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
           cache: true
           cache-dependency-path: |
             **/*.csproj
             Directory.Build.props
+            tests/Directory.Packages.props
+            **/packages.lock.json
 
       - name: Restore solution and CLI
         shell: pwsh
@@ -107,7 +109,7 @@ jobs:
       - uses: github/codeql-action/analyze@v3
 
   dotnet-package-audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v7
@@ -120,11 +122,13 @@ jobs:
 
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
           cache: true
           cache-dependency-path: |
             **/*.csproj
             Directory.Build.props
+            tests/Directory.Packages.props
+            **/packages.lock.json
 
       - name: Create artifact directory
         shell: pwsh

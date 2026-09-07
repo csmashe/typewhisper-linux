@@ -19,7 +19,7 @@ public sealed class DictationOrchestratorPromptActionResolutionTests
         {
             Id = "auto",
             Name = "Auto",
-            SystemPrompt = "x"
+            SystemPrompt = "x",
         };
 
         var resolved = DictationOrchestrator.ResolveAutoPromptAction("auto", [action]);
@@ -35,7 +35,7 @@ public sealed class DictationOrchestratorPromptActionResolutionTests
             Id = "manual",
             Name = "Manual",
             SystemPrompt = "x",
-            IsManualOnly = true
+            IsManualOnly = true,
         };
 
         var resolved = DictationOrchestrator.ResolveAutoPromptAction("manual", [action]);
@@ -58,7 +58,7 @@ public sealed class DictationOrchestratorPromptActionResolutionTests
         {
             Id = "other",
             Name = "Other",
-            SystemPrompt = "x"
+            SystemPrompt = "x",
         };
 
         var resolved = DictationOrchestrator.ResolveAutoPromptAction("missing", [action]);

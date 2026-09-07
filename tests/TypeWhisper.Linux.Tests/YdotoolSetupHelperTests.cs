@@ -239,7 +239,7 @@ public sealed class YdotoolSetupHelperTests
     }
 
     [Fact]
-    public async Task InstallUdevRuleAsync_rewrites_marker_owned_files()
+    public async Task InstallUdevRuleAsync_refuses_customized_marker_owned_files()
     {
         using var env = new TempEnvironment();
         // Use the real production header ("# Installed by TypeWhisper — ..."),
@@ -252,16 +252,19 @@ public sealed class YdotoolSetupHelperTests
 
         var result = await helper.InstallUdevRuleAsync(CancellationToken.None);
 
-        Assert.True(result.Success);
-        Assert.Equal(0, runner.LastPrivilegedResult?.ExitCode);
-        var modulesContent = File.ReadAllText(env.ModulesLoadPath);
-        Assert.StartsWith("# Installed by TypeWhisper", modulesContent);
-        Assert.Contains("\nuinput\n", modulesContent);
-        Assert.DoesNotContain("old modules content", modulesContent);
-        var ruleContent = File.ReadAllText(env.UdevRulePath);
-        Assert.StartsWith("# Installed by TypeWhisper", ruleContent);
-        Assert.Contains("KERNEL==\"uinput\"", ruleContent);
-        Assert.DoesNotContain("old rule content", ruleContent);
+        Assert.False(result.Success);
+        Assert.Equal(
+            YdotoolSetupHelper.ModulesLoadConflictExitCode,
+            runner.LastPrivilegedResult?.ExitCode
+        );
+        Assert.Equal(
+            "# Installed by TypeWhisper — old header\nold modules content\n",
+            File.ReadAllText(env.ModulesLoadPath)
+        );
+        Assert.Equal(
+            "# Installed by TypeWhisper — old header\nold rule content\n",
+            File.ReadAllText(env.UdevRulePath)
+        );
     }
 
     [Fact]
@@ -435,6 +438,48 @@ public sealed class YdotoolSetupHelperTests
         Assert.True(File.Exists(YdotoolSetupHelper.UserUnitFilePath()));
     }
 
+    // Neither root path is branded — both are generic admin config the ydotool package
+    // ships too, so the printed instructions must be ownership-gated like the privileged script.
+    [Fact]
+    public async Task RemoveAsync_without_pkexec_does_not_tell_the_user_to_delete_foreign_root_files()
+    {
+        using var env = new TempEnvironment();
+        env.WriteModulesLoad("# Managed by the distribution\nloop\n");
+        env.WriteUdevRule("# distro ydotool rule\nKERNEL==\"uinput\", MODE=\"0660\"\n");
+        var helper = new YdotoolSetupHelper(
+            new SystemCommandAvailabilityService(),
+            new FakeProcessRunner()
+        );
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.DoesNotContain("rm -f", result.Detail);
+        Assert.Contains(env.ModulesLoadPath, result.Detail);
+        Assert.Contains(env.UdevRulePath, result.Detail);
+        Assert.Contains("ownership marker", result.Detail);
+    }
+
+    [Fact]
+    public async Task RemoveAsync_without_pkexec_offers_deletion_for_our_own_root_files()
+    {
+        using var env = new TempEnvironment();
+        env.WriteModulesLoad("# Installed by TypeWhisper — load uinput\nuinput\n");
+        env.WriteUdevRule(
+            "# Installed by TypeWhisper — uinput access\nKERNEL==\"uinput\", TAG+=\"uaccess\"\n"
+        );
+        var helper = new YdotoolSetupHelper(
+            new SystemCommandAvailabilityService(),
+            new FakeProcessRunner()
+        );
+
+        var result = await helper.RemoveAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains($"sudo rm -f {env.ModulesLoadPath}", result.Detail);
+        Assert.Contains($"sudo rm -f {env.UdevRulePath}", result.Detail);
+    }
+
     [Fact]
     public async Task RemoveAsync_disables_and_deletes_a_TypeWhisper_owned_user_unit()
     {
@@ -514,6 +559,10 @@ public sealed class YdotoolSetupHelperTests
         // Uses the internal test-only override (not an env var) so the override
         // never reaches the privileged pkexec scripts in production.
         private readonly string? _originalSysConf = YdotoolSetupHelper.SysConfDirOverride;
+        private readonly string? _originalManagedState =
+            YdotoolSetupHelper.ManagedArtifactStateRootOverride;
+        private readonly string? _originalRootManagedState =
+            YdotoolSetupHelper.RootManagedArtifactStateRootOverride;
 
         private readonly string _sysConfDir = Path.Join(
             Path.GetTempPath(),
@@ -538,6 +587,14 @@ public sealed class YdotoolSetupHelperTests
             Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", _configHome);
             Environment.SetEnvironmentVariable("PATH", _pathDir);
             YdotoolSetupHelper.SysConfDirOverride = _sysConfDir;
+            YdotoolSetupHelper.ManagedArtifactStateRootOverride = Path.Join(
+                _configHome,
+                "managed-state"
+            );
+            YdotoolSetupHelper.RootManagedArtifactStateRootOverride = Path.Join(
+                _sysConfDir,
+                "managed-root-state"
+            );
         }
 
         public void Dispose()
@@ -545,6 +602,8 @@ public sealed class YdotoolSetupHelperTests
             Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", _originalXdg);
             Environment.SetEnvironmentVariable("PATH", _originalPath);
             YdotoolSetupHelper.SysConfDirOverride = _originalSysConf;
+            YdotoolSetupHelper.ManagedArtifactStateRootOverride = _originalManagedState;
+            YdotoolSetupHelper.RootManagedArtifactStateRootOverride = _originalRootManagedState;
             try
             {
                 Directory.Delete(_configHome, true);
@@ -590,6 +649,7 @@ public sealed class YdotoolSetupHelperTests
             PutFakeBinaryOnPath("pkexec");
             PutExecutableSuccessBinaryOnPath("udevadm");
             PutExecutableSuccessBinaryOnPath("modprobe");
+            PutExecutableSuccessBinaryOnPath("chown");
             return new PrivilegedScriptRunner(
                 $"{_pathDir}{Path.PathSeparator}/usr/bin{Path.PathSeparator}/bin"
             );
@@ -626,6 +686,7 @@ public sealed class YdotoolSetupHelperTests
             IReadOnlyDictionary<string, string>? environment = null,
             string? standardInput = null,
             TimeSpan? timeout = null,
+            bool detachAfterExit = false,
             CancellationToken ct = default
         )
         {
@@ -640,7 +701,7 @@ public sealed class YdotoolSetupHelperTests
                 new Dictionary<string, string> { ["PATH"] = commandPath },
                 standardInput,
                 timeout,
-                ct
+                ct: ct
             );
             LastPrivilegedResult = result;
             return result;

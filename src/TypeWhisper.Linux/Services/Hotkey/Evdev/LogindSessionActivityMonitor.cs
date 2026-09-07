@@ -195,7 +195,7 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
                 dbus.ErrorName is "org.freedesktop.DBus.Error.ServiceUnknown"
                     or "org.freedesktop.DBus.Error.NameHasNoOwner"
                     or "org.freedesktop.DBus.Error.FileNotFound",
-            _ => false
+            _ => false,
         };
     }
 
@@ -332,7 +332,7 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
                 Interface = PropertiesInterface,
                 Path = sessionPath,
                 Member = "PropertiesChanged",
-                Arg0 = SessionInterface
+                Arg0 = SessionInterface,
             },
             s_readPropertiesChanged,
             HandlePropertiesChanged,
@@ -355,7 +355,7 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
                 Sender = LoginService,
                 Interface = SessionInterface,
                 Path = sessionPath,
-                Member = member
+                Member = member,
             },
             locked ? s_readLockSignal : s_readUnlockSignal,
             locked ? HandleLockSignal : HandleUnlockSignal,

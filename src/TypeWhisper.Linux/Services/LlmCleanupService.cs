@@ -72,9 +72,13 @@ public sealed class LlmCleanupService
             );
             return string.IsNullOrWhiteSpace(cleaned) ? lightText : cleaned.Trim();
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(ct);
         }
         catch (Exception ex)
         {

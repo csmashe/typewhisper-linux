@@ -1,9 +1,18 @@
+// Linked into each test project rather than owned by one, so solution-wide analysis reports
+// the linked-in copies as unused. Every member here is called from the suites that link it.
+// ReSharper disable UnusedType.Global
+// ReSharper disable UnusedMember.Global
+
 using TypeWhisper.Core;
 
 namespace TypeWhisper.Tests;
 
+// File-linked into four test projects; TypeWhisper.Integration.Tests links it without referencing it yet,
+// so solution-wide analysis reports that copy of the class and its members as unused.
+// ReSharper disable once UnusedType.Global
 internal static class TestPaths
 {
+    // ReSharper disable once UnusedMember.Global -- see the note on the class; used from the other linked projects.
     public static string CreateTempDirectory(string name)
     {
         var path = NewTempPath(name);
@@ -59,6 +68,7 @@ internal static class TestPaths
         return fullPath;
     }
 
+    // ReSharper disable once UnusedMember.Global -- see the note on the class; used from the other linked projects.
     public static void DeleteDirectory(string path)
     {
         var isolatedPath = EnsureIsolated(path);

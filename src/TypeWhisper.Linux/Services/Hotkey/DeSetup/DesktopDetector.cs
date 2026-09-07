@@ -98,7 +98,7 @@ public static class DesktopDetector
             "kde" => "KDE Plasma",
             "hyprland" => "Hyprland",
             "sway" => "Sway",
-            _ => RawXdgFallback()
+            _ => RawXdgFallback(),
         };
     }
 
@@ -176,7 +176,7 @@ public static class DesktopDetector
             "Pantheon" => "Pantheon",
             "Budgie" => "Budgie",
             "Deepin" => "Deepin",
-            _ => tokens[^1]
+            _ => tokens[^1],
         };
     }
 }

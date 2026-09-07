@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "author": "TypeWhisper",
   "description": "Speechmatics speech-to-text transcription engine",
+  "networkAccess": "network",
+  "categories": ["transcription"],
   "assemblyName": "TypeWhisper.Plugin.Speechmatics.dll",
   "pluginClass": "TypeWhisper.Plugin.Speechmatics.SpeechmaticsPlugin"
 }

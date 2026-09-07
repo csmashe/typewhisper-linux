@@ -6,58 +6,102 @@ using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services;
 
+internal interface IRecordingNotificationStateSource
+{
+    event EventHandler<OverlayPresentationChangedEventArgs>? PresentationChanged;
+}
+
 /// <summary>
-///     Recording indicator for tiling WMs (Hyprland/Sway/…) via a persistent
-///     <c>org.freedesktop.Notifications</c> desktop notification (expire_timeout 0),
-///     closed by id when recording stops. No-op on full DEs (GNOME/KDE/Cinnamon)
-///     which use the overlay — see <see cref="DesktopDetector.UsesNotificationRecordingIndicator" />.
+///     Complete dictation state and feedback surface for notification-indicator
+///     WMs (Hyprland/Sway/River/Niri) via <c>org.freedesktop.Notifications</c>.
+///     No-op on full DEs (GNOME/KDE/Cinnamon), which use the overlay — see
+///     <see cref="DesktopDetector.UsesNotificationRecordingIndicator" />.
 /// </summary>
 public sealed partial class RecordingNotificationService : IDisposable
 {
     private static readonly TimeSpan s_callTimeout = TimeSpan.FromSeconds(3);
 
-    private readonly DictationOrchestrator _dictation;
     private readonly bool _enabled;
     private readonly Lock _gate = new();
     private readonly IProcessRunner _runner;
     private readonly ISettingsService _settings;
+    private readonly IRecordingNotificationStateSource _stateSource;
     private uint _activeId;
-
-    // Monotonic counter bumped on every Start/Stop edge. ShowAsync/CloseAsync are
-    // fire-and-forget and await a multi-second gdbus call, so a rapid Start→Stop
-    // can finish out of order. Each handler re-checks the generation after its await
-    // and bails (closing its own just-created id) if superseded — last edge wins.
-    private uint _generation;
-
-    private bool _wasRecording;
+    private NotificationPresentation? _desiredPresentation;
+    private bool _disposed;
+    private uint _desiredVersion;
+    private TaskCompletionSource? _idleCompletion;
+    private bool _initialized;
+    private long _lastPresentationRevision;
+    private bool _workerRunning;
 
     public RecordingNotificationService(
-        DictationOrchestrator dictation,
+        OverlayCoordinator overlayCoordinator,
         ISettingsService settings,
         IProcessRunner runner
     )
+        : this(
+            new CoordinatorPresentationSource(overlayCoordinator),
+            settings,
+            runner,
+            DesktopDetector.UsesNotificationRecordingIndicator()
+        )
     {
-        _dictation = dictation;
+    }
+
+    internal RecordingNotificationService(
+        IRecordingNotificationStateSource stateSource,
+        ISettingsService settings,
+        IProcessRunner runner,
+        bool enabled
+    )
+    {
+        _stateSource = stateSource;
         _settings = settings;
         _runner = runner;
-        _enabled = DesktopDetector.UsesNotificationRecordingIndicator();
+        _enabled = enabled;
+    }
+
+    internal RecordingNotificationService(
+        OverlayCoordinator overlayCoordinator,
+        ISettingsService settings,
+        IProcessRunner runner,
+        bool enabled
+    )
+        : this(new CoordinatorPresentationSource(overlayCoordinator), settings, runner, enabled)
+    {
     }
 
     public void Dispose()
     {
-        if (_enabled)
-        {
-            _dictation.OverlayStateChanged -= OnOverlayStateChanged;
-        }
-
-        // Teardown — supersede any in-flight show and dismiss whatever is up.
-        uint generation;
+        bool startWorker;
         lock (_gate)
         {
-            generation = ++_generation;
+            if (!_enabled || _disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            if (_initialized)
+            {
+                _stateSource.PresentationChanged -= OnPresentationChanged;
+                _initialized = false;
+            }
+
+            if (_desiredPresentation is not null || _activeId != 0)
+            {
+                _desiredPresentation = null;
+                _desiredVersion++;
+            }
+
+            startWorker = StartWorkerIfNeededLocked();
         }
 
-        _ = CloseAsync(generation);
+        if (startWorker)
+        {
+            _ = DispatchLoopAsync();
+        }
     }
 
     /// <summary>
@@ -70,53 +114,199 @@ public sealed partial class RecordingNotificationService : IDisposable
         {
             RecordingMode.Toggle => Loc.Instance["Notify.BodyToggle"],
             RecordingMode.PushToTalk => Loc.Instance["Notify.BodyPushToTalk"],
-            _ => Loc.Instance["Notify.BodyHybrid"]
+            _ => Loc.Instance["Notify.BodyHybrid"],
         };
     }
 
     public void Initialize()
     {
-        if (!_enabled)
+        lock (_gate)
         {
+            if (!_enabled || _initialized || _disposed)
+            {
+                return;
+            }
+
+            _stateSource.PresentationChanged += OnPresentationChanged;
+            _initialized = true;
+        }
+    }
+
+    internal Task WaitForIdleAsync()
+    {
+        lock (_gate)
+        {
+            return _workerRunning ? _idleCompletion!.Task : Task.CompletedTask;
+        }
+    }
+
+    private void OnPresentationChanged(
+        object? sender,
+        OverlayPresentationChangedEventArgs presented
+    )
+    {
+        NotificationPresentation? presentation;
+        try
+        {
+            presentation = ProjectPresentation(presented.State, presented.Requester);
+        }
+        catch
+        {
+            // Notifications are advisory and must never disrupt dictation state dispatch.
             return;
         }
 
-        _dictation.OverlayStateChanged += OnOverlayStateChanged;
-    }
-
-    private string ResolveBody()
-    {
-        return BodyFor(_settings.Current.Mode);
-    }
-
-    private void OnOverlayStateChanged(object? sender, DictationOverlayState state)
-    {
-        // Edge-trigger: OverlayStateChanged fires many times per recording (partial text, levels).
-        if (state.IsRecording == _wasRecording)
-        {
-            return;
-        }
-
-        _wasRecording = state.IsRecording;
-        uint generation;
+        bool startWorker;
         lock (_gate)
         {
-            generation = ++_generation;
+            if (_disposed || presented.Revision <= _lastPresentationRevision)
+            {
+                return;
+            }
+
+            _lastPresentationRevision = presented.Revision;
+            if (Equals(_desiredPresentation, presentation))
+            {
+                return;
+            }
+
+            _desiredPresentation = presentation;
+            _desiredVersion++;
+            startWorker = StartWorkerIfNeededLocked();
         }
 
-        _ = state.IsRecording ? ShowAsync(generation) : CloseAsync(generation);
+        if (startWorker)
+        {
+            _ = DispatchLoopAsync();
+        }
     }
 
-    private async Task ShowAsync(uint generation)
+    private NotificationPresentation? ProjectPresentation(
+        DictationOverlayState state,
+        OverlayRequester? requester
+    )
     {
-        // Use previous id as replaces_id so a lingered notification is replaced
-        // in-place rather than stacking a second popup.
-        uint replaceId;
-        lock (_gate)
+        // The recording title/body describe DICTATION's capture protocol (push-to-talk
+        // says "release to insert"). Transform is toggle-only, so its recording states
+        // fall through to the status branch, whose text carries the correct protocol.
+        if (state.IsRecording && requester == OverlayRequester.Dictation)
         {
-            replaceId = _activeId;
+            return new NotificationPresentation(
+                Loc.Instance["Appearance.NotificationRecordingTitle"],
+                BodyFor(_settings.Current.Mode),
+                0,
+                null
+            );
         }
 
+        if (state.ShowFeedback && !string.IsNullOrWhiteSpace(state.FeedbackText))
+        {
+            var globalExpiry = AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+                _settings.Current.PreviewBubbleAutoHideMilliseconds
+            );
+            var expiry = globalExpiry == 0
+                ? 0
+                : AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+                    state.FeedbackDurationMilliseconds ?? globalExpiry
+                );
+            return expiry <= 0
+                ? null
+                : new NotificationPresentation(
+                    state.FeedbackText,
+                    state.ActionResultUrl ?? string.Empty,
+                    expiry,
+                    state.NotificationIconName
+                );
+        }
+
+        if (state.IsOverlayVisible && !string.IsNullOrWhiteSpace(state.StatusText))
+        {
+            return new NotificationPresentation(state.StatusText, string.Empty, 0, null);
+        }
+
+        return null;
+    }
+
+    private bool StartWorkerIfNeededLocked()
+    {
+        if (_workerRunning)
+        {
+            return false;
+        }
+
+        if (_desiredPresentation is null && _activeId == 0)
+        {
+            return false;
+        }
+
+        _workerRunning = true;
+        _idleCompletion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        return true;
+    }
+
+    private async Task DispatchLoopAsync()
+    {
+        while (true)
+        {
+            NotificationPresentation? presentation;
+            uint replaceId;
+            uint version;
+            lock (_gate)
+            {
+                presentation = _desiredPresentation;
+                replaceId = _activeId;
+                version = _desiredVersion;
+            }
+
+            uint? shownId = null;
+            if (presentation is null)
+            {
+                if (replaceId != 0)
+                {
+                    await CloseByIdAsync(replaceId).ConfigureAwait(false);
+                }
+            }
+            else
+            {
+                shownId = await ShowAsync(presentation, replaceId).ConfigureAwait(false);
+            }
+
+            TaskCompletionSource? completed = null;
+            lock (_gate)
+            {
+                if (presentation is null)
+                {
+                    _activeId = 0;
+                }
+                else if (shownId is { } id)
+                {
+                    _activeId = id;
+                }
+
+                if (version == _desiredVersion)
+                {
+                    _workerRunning = false;
+                    completed = _idleCompletion;
+                    _idleCompletion = null;
+                }
+            }
+
+            // ReSharper disable once InvertIf -- last statement in the loop; inverting into a `continue` would obscure the signal-and-stop intent.
+            if (completed is not null)
+            {
+                completed.TrySetResult();
+                return;
+            }
+        }
+    }
+
+    private async Task<uint?> ShowAsync(
+        NotificationPresentation presentation,
+        uint replaceId
+    )
+    {
         try
         {
             var result = await _runner
@@ -125,10 +315,13 @@ public sealed partial class RecordingNotificationService : IDisposable
                     [
                         "call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path",
                         "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.Notify",
-                        "TypeWhisper", replaceId.ToString(), ResolveIconPath(),
-                        Loc.Instance["Appearance.NotificationRecordingTitle"], ResolveBody(), "[]", // actions
+                        // Stops GOption parsing: the icon and summary carry plugin-supplied text, and a
+                        // leading "-" would otherwise be read as an option and abort the whole call.
+                        "--",
+                        "TypeWhisper", replaceId.ToString(), presentation.IconName ?? ResolveIconPath(),
+                        presentation.Summary, presentation.Body, "[]", // actions
                         "{}", // hints
-                        "0" // expire_timeout 0 → stay up until we close it
+                        presentation.ExpireTimeout.ToString(),
                     ],
                     timeout: s_callTimeout
                 )
@@ -136,59 +329,22 @@ public sealed partial class RecordingNotificationService : IDisposable
 
             if (!result.Succeeded)
             {
-                return;
+                return null;
             }
 
             // gdbus prints "(uint32 N,)" — anchor on "uint32 " to avoid matching the "32" in the type name.
             var match = NotificationIdRegex().Match(result.StandardOutput);
-            if (!match.Success || !uint.TryParse(match.Groups[1].Value, out var id))
-            {
-                return;
-            }
-
-            bool superseded;
-            lock (_gate)
-            {
-                // A newer edge fired while Notify was in flight — dismiss this id.
-                superseded = generation != _generation;
-                if (!superseded)
-                {
-                    _activeId = id;
-                }
-            }
-
-            if (superseded)
-            {
-                await CloseByIdAsync(id).ConfigureAwait(false);
-            }
+            return match.Success
+                   && uint.TryParse(match.Groups[1].Value, out var id)
+                   && id != 0
+                ? id
+                : null;
         }
         catch
         {
             // Notifications are purely advisory — never let one disrupt dictation.
+            return null;
         }
-    }
-
-    private async Task CloseAsync(uint generation)
-    {
-        uint id;
-        lock (_gate)
-        {
-            // A newer Start superseded this Stop — closing would dismiss the new recording's notification.
-            if (generation != _generation)
-            {
-                return;
-            }
-
-            id = _activeId;
-            _activeId = 0;
-        }
-
-        if (id == 0)
-        {
-            return;
-        }
-
-        await CloseByIdAsync(id).ConfigureAwait(false);
     }
 
     private async Task CloseByIdAsync(uint id)
@@ -201,7 +357,7 @@ public sealed partial class RecordingNotificationService : IDisposable
                     [
                         "call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path",
                         "/org/freedesktop/Notifications", "--method",
-                        "org.freedesktop.Notifications.CloseNotification", id.ToString()
+                        "org.freedesktop.Notifications.CloseNotification", id.ToString(),
                     ],
                     timeout: s_callTimeout
                 )
@@ -236,4 +392,21 @@ public sealed partial class RecordingNotificationService : IDisposable
 
     [GeneratedRegex(@"uint32 (\d+)")]
     private static partial Regex NotificationIdRegex();
+
+    private sealed class CoordinatorPresentationSource(OverlayCoordinator overlayCoordinator)
+        : IRecordingNotificationStateSource
+    {
+        public event EventHandler<OverlayPresentationChangedEventArgs>? PresentationChanged
+        {
+            add => overlayCoordinator.PresentationChanged += value;
+            remove => overlayCoordinator.PresentationChanged -= value;
+        }
+    }
+
+    private sealed record NotificationPresentation(
+        string Summary,
+        string Body,
+        int ExpireTimeout,
+        string? IconName
+    );
 }

@@ -19,11 +19,30 @@ public sealed class CleanupServiceTests
     }
 
     [Theory]
-    [InlineData("um hello world", "Hello world")]
+    [InlineData("um hello world", "Um hello world")]
     [InlineData("uh, hello world", "Hello world")]
     [InlineData("hello, you know, world", "Hello, world")]
-    [InlineData("er hello ah world", "Hello world")]
+    [InlineData("er hello ah world", "Er hello world")]
+    [InlineData("err hello world", "Hello world")]
+    [InlineData("erm hello world", "Hello world")]
+    [InlineData("umm hello world", "Hello world")]
     public void Clean_Light_RemovesStandaloneFillers(string input, string expected)
+    {
+        var result = _sut.Clean(input, CleanupLevel.Light);
+
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("er ist hier", "Er ist hier")]
+    [InlineData("um momento", "Um momento")]
+    [InlineData("er zijn drie boeken", "Er zijn drie boeken")]
+    [InlineData("er bil", "Er bil")]
+    [InlineData("jeg er glad", "Jeg er glad")]
+    public void Clean_Light_PreservesGermanAndPortugueseWordsThatCollideWithOldFillerPatterns(
+        string input,
+        string expected
+    )
     {
         var result = _sut.Clean(input, CleanupLevel.Light);
 
@@ -151,8 +170,8 @@ public sealed class CleanupServiceTests
     [Fact]
     public void Clean_MediumAndHigh_DegradeToLightForNow()
     {
-        Assert.Equal("Hello", _sut.Clean("um hello", CleanupLevel.Medium));
-        Assert.Equal("Hello", _sut.Clean("um hello", CleanupLevel.High));
+        Assert.Equal("Hello", _sut.Clean("uh hello", CleanupLevel.Medium));
+        Assert.Equal("Hello", _sut.Clean("uh hello", CleanupLevel.High));
     }
 
     [Fact]

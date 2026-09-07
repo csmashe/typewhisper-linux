@@ -1,7 +1,7 @@
-using System.Diagnostics;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using System.Diagnostics;
 using TypeWhisper.Linux.ViewModels;
 
 namespace TypeWhisper.Linux.Views;

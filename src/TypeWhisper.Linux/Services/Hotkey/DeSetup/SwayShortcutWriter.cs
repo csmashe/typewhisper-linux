@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
@@ -10,6 +9,44 @@ namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 /// </summary>
 public sealed class SwayShortcutWriter : IDeShortcutWriter
 {
+    private const int MaxWriteAttempts = 3;
+
+    private const string RemovalRequiresReloadWarning =
+        "Sway may still have the live binding. Run `swaymsg reload` (or restart Sway) to remove it.";
+
+    private static readonly TimeSpan s_reloadTimeout = TimeSpan.FromSeconds(10);
+
+    private readonly Func<
+        AtomicFileSnapshot,
+        string,
+        CancellationToken,
+        Task<bool>
+    > _conditionalWriteAsync;
+
+    private readonly IProcessRunner _processRunner;
+
+    public SwayShortcutWriter()
+        : this(new ProcessRunner()) { }
+
+    // ReSharper disable once MemberCanBePrivate.Global -- public DI seam: callers inject an IProcessRunner; the parameterless overload chains here with a real ProcessRunner.
+    public SwayShortcutWriter(IProcessRunner processRunner)
+        : this(processRunner, AtomicFileWriter.WriteIfUnchangedAsync) { }
+
+    internal SwayShortcutWriter(
+        Func<AtomicFileSnapshot, string, CancellationToken, Task<bool>> conditionalWriteAsync
+    )
+        : this(new ProcessRunner(), conditionalWriteAsync) { }
+
+    internal SwayShortcutWriter(
+        IProcessRunner processRunner,
+        Func<AtomicFileSnapshot, string, CancellationToken, Task<bool>> conditionalWriteAsync
+    )
+    {
+        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
+        _conditionalWriteAsync = conditionalWriteAsync
+                                 ?? throw new ArgumentNullException(nameof(conditionalWriteAsync));
+    }
+
     public string DesktopId => "sway";
     public string DisplayName => "Sway";
     public bool SupportsPushToTalk => true;
@@ -36,29 +73,20 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
 
     public async Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct)
     {
-        var path = ResolveConfigPath();
-        if (!File.Exists(path))
-        {
-            return false;
-        }
+        var inner = await ReadManagedBlockLinesAsync(ct).ConfigureAwait(false);
+        // Must match exactly — a stale trigger or manual edit reads as not-installed.
+        var expected = BuildManagedLines(spec).Select(l => l.TrimEnd()).ToList();
+        return inner is not null && inner.SequenceEqual(expected);
+    }
 
-        try
-        {
-            var existing = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
-            var inner = SentinelBlock.ExtractBlockLines(existing);
-            if (inner is null)
-            {
-                return false;
-            }
-
-            // Must match exactly — a stale trigger or manual edit reads as not-installed.
-            var expected = BuildManagedLines(spec).Select(l => l.TrimEnd()).ToList();
-            return inner.SequenceEqual(expected);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            return false;
-        }
+    // The sway config holds one managed sentinel block carrying no shortcut id, so this answers
+    // for the only shortcut this writer installs.
+    public async Task<bool> IsManagedShortcutPresentAsync(
+        string shortcutId,
+        CancellationToken ct
+    )
+    {
+        return await ReadManagedBlockLinesAsync(ct).ConfigureAwait(false) is not null;
     }
 
     public async Task<DeShortcutWriteResult> WriteAsync(DeShortcutSpec spec, CancellationToken ct)
@@ -78,30 +106,53 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             );
         }
 
-        var existing = File.Exists(path)
-            ? await File.ReadAllTextAsync(path, ct).ConfigureAwait(false)
-            : string.Empty;
-        var scan = SentinelBlock.Scan(existing);
-        if (scan.Mismatched)
+        var managed = BuildManagedLines(spec).ToList();
+        var committed = false;
+        for (var attempt = 0; attempt < MaxWriteAttempts; attempt++)
         {
-            return new DeShortcutWriteResult(
-                false,
-                $"Your sway config has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually and try again.",
-                []
-            );
+            try
+            {
+                var snapshot = await AtomicFileWriter.CaptureAsync(path, ct)
+                    .ConfigureAwait(false);
+                var scan = SentinelBlock.Scan(snapshot.Contents);
+                if (scan.Mismatched)
+                {
+                    return new DeShortcutWriteResult(
+                        false,
+                        $"Your sway config has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually and try again.",
+                        []
+                    );
+                }
+
+                var updated = SentinelBlock.ReplaceOrAppend(snapshot.Contents, managed);
+                // ReSharper disable once InvertIf -- the conditional-write commit/break is the deliberate success path of the capture-and-retry loop; leave it as-is rather than inverting into a continue.
+                if (
+                    await _conditionalWriteAsync(snapshot, updated, ct).ConfigureAwait(false)
+                )
+                {
+                    committed = true;
+                    break;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return new DeShortcutWriteResult(
+                    false,
+                    $"Could not write {path}: {ex.Message}",
+                    []
+                );
+            }
         }
 
-        var managed = BuildManagedLines(spec).ToList();
-        var updated = SentinelBlock.ReplaceOrAppend(existing, managed);
-        try
-        {
-            await AtomicFileWriter.WriteAsync(path, updated, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
+        if (!committed)
         {
             return new DeShortcutWriteResult(
                 false,
-                $"Could not write {path}: {ex.Message}",
+                "Sway config kept changing while TypeWhisper was updating it. Please retry.",
                 []
             );
         }
@@ -117,58 +168,79 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
     public async Task<DeShortcutWriteResult> RemoveAsync(string shortcutId, CancellationToken ct)
     {
         var path = ResolveConfigPath();
-        if (!File.Exists(path))
+        for (var attempt = 0; attempt < MaxWriteAttempts; attempt++)
         {
-            return new DeShortcutWriteResult(
-                true,
-                "No sway config to update.",
-                []
-            );
+            try
+            {
+                var snapshot = await AtomicFileWriter.CaptureAsync(path, ct)
+                    .ConfigureAwait(false);
+                if (!snapshot.Existed)
+                {
+                    return new DeShortcutWriteResult(
+                        true,
+                        "No sway config to update.",
+                        [],
+                        RemovalRequiresReloadWarning
+                    );
+                }
+
+                var scan = SentinelBlock.Scan(snapshot.Contents);
+                if (scan.Mismatched)
+                {
+                    return new DeShortcutWriteResult(
+                        false,
+                        $"Your sway config has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually and try again.",
+                        []
+                    );
+                }
+
+                if (scan.OpenLine is null)
+                {
+                    return new DeShortcutWriteResult(
+                        true,
+                        "No Sway integration to remove.",
+                        [],
+                        RemovalRequiresReloadWarning
+                    );
+                }
+
+                var updated = SentinelBlock.Remove(snapshot.Contents);
+                if (
+                    !await _conditionalWriteAsync(snapshot, updated, ct).ConfigureAwait(false)
+                )
+                {
+                    continue;
+                }
+
+                var reloaded = await ReloadAsync(ct).ConfigureAwait(false);
+                var warning = reloaded
+                    ? null
+                    : RemovalRequiresReloadWarning;
+                return new DeShortcutWriteResult(
+                    true,
+                    "Sway managed block removed.",
+                    [path],
+                    warning
+                );
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return new DeShortcutWriteResult(
+                    false,
+                    $"Could not write {path}: {ex.Message}",
+                    []
+                );
+            }
         }
 
-        var existing = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
-        var scan = SentinelBlock.Scan(existing);
-        if (scan.Mismatched)
-        {
-            return new DeShortcutWriteResult(
-                false,
-                $"Your sway config has an unbalanced TypeWhisper managed block. {scan.Reason} Fix it manually and try again.",
-                []
-            );
-        }
-
-        if (scan.OpenLine is null)
-        {
-            return new DeShortcutWriteResult(
-                true,
-                "No Sway integration to remove.",
-                []
-            );
-        }
-
-        var updated = SentinelBlock.Remove(existing);
-        try
-        {
-            await AtomicFileWriter.WriteAsync(path, updated, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            return new DeShortcutWriteResult(
-                false,
-                $"Could not write {path}: {ex.Message}",
-                []
-            );
-        }
-
-        var reloaded = await ReloadAsync(ct).ConfigureAwait(false);
-        var warning = reloaded
-            ? null
-            : "Block removed, but `swaymsg reload` failed. Reload Sway manually to drop the live bindings.";
         return new DeShortcutWriteResult(
-            true,
-            "Sway managed block removed.",
-            [path],
-            warning
+            false,
+            "Sway config kept changing while TypeWhisper was removing its managed block. Please retry.",
+            []
         );
     }
 
@@ -200,9 +272,9 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             {
                 "ctrl" or "control" => "Ctrl",
                 "shift" => "Shift",
-                "alt" or "meta" => "Alt",
-                "super" or "win" or "windows" or "cmd" => "Mod4",
-                _ => parts[i]
+                "alt" => "Alt",
+                "super" or "win" or "windows" or "cmd" or "meta" => "Mod4",
+                _ => parts[i],
             };
             if (sb.Length > 0)
             {
@@ -276,6 +348,36 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
         return true;
     }
 
+    private static async Task<IReadOnlyList<string>?> ReadManagedBlockLinesAsync(
+        CancellationToken ct
+    )
+    {
+        var path = ResolveConfigPath();
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            var existing = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
+            var scan = SentinelBlock.Scan(existing);
+            if (scan.Mismatched || scan.OpenLine is null)
+            {
+                return null;
+            }
+
+            return SentinelBlock.ExtractBlockLines(existing);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // Raced with a delete between the Exists probe and the read — not installed.
+            return null;
+        }
+        // Permission and transient I/O failures propagate: callers treat an
+        // indeterminate probe as "unknown" rather than erasing a known state.
+    }
+
     private static string ResolveConfigPath()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -284,60 +386,23 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
         return Path.Join(configHome, "sway", "config");
     }
 
-    private static async Task<bool> ReloadAsync(CancellationToken ct)
+    private async Task<bool> ReloadAsync(CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         if (!DesktopDetector.BinaryExists("swaymsg"))
         {
             return false;
         }
 
-        var (ok, _, _) = await RunAsync("swaymsg", ["reload"], ct).ConfigureAwait(false);
-        return ok;
-    }
-
-    private static async Task<(bool ok, string stdout, string stderr)> RunAsync(
-        string fileName,
-        IReadOnlyList<string> args,
-        CancellationToken ct
-    )
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = fileName,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        foreach (var a in args)
-        {
-            psi.ArgumentList.Add(a);
-        }
-
-        try
-        {
-            using var proc = Process.Start(psi);
-            if (proc is null)
-            {
-                return (false, string.Empty, $"Could not start {fileName}");
-            }
-
-            var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
-            var stderrTask = proc.StandardError.ReadToEndAsync(ct);
-            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
-            var stdout = await stdoutTask.ConfigureAwait(false);
-            var stderr = await stderrTask.ConfigureAwait(false);
-            return (proc.ExitCode == 0, stdout, stderr);
-        }
-        catch (OperationCanceledException)
-        {
-            // Cancellation must propagate to callers; only genuine Sway/process
-            // errors are flattened into the failure tuple below.
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return (false, string.Empty, ex.Message);
-        }
+        var result = await _processRunner.RunAsync(
+                "swaymsg",
+                ["reload"],
+                timeout: s_reloadTimeout,
+                ct: ct
+            )
+            .ConfigureAwait(false);
+        // Some runners report cancellation as a result rather than throwing; enforce it either way.
+        ct.ThrowIfCancellationRequested();
+        return result.Succeeded;
     }
 }

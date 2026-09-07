@@ -32,7 +32,7 @@ public sealed class DictionaryServiceCorrectionsTests : IDisposable
             EntryType = DictionaryEntryType.Correction,
             Original = "teh",
             Replacement = "the",
-            IsEnabled = true
+            IsEnabled = true,
         });
         _sut.AddEntry(new DictionaryEntry
         {
@@ -40,13 +40,13 @@ public sealed class DictionaryServiceCorrectionsTests : IDisposable
             EntryType = DictionaryEntryType.Correction,
             Original = "recieve",
             Replacement = "receive",
-            IsEnabled = false
+            IsEnabled = false,
         });
         _sut.AddEntry(new DictionaryEntry
         {
             Id = "3",
             EntryType = DictionaryEntryType.Term,
-            Original = "React"
+            Original = "React",
         });
 
         var corrections = _sut.GetCorrections();
@@ -79,6 +79,20 @@ public sealed class DictionaryServiceCorrectionsTests : IDisposable
     }
 
     [Fact]
+    public void UpsertCorrection_IdenticalReupsert_DoesNotRaiseEntriesChanged()
+    {
+        _sut.UpsertCorrection("teh", "the", caseSensitive: false);
+        var changes = 0;
+        _sut.EntriesChanged += () => changes++;
+
+        _sut.UpsertCorrection("teh", "the", caseSensitive: false);
+        Assert.Equal(0, changes);
+
+        _sut.UpsertCorrection("teh", "THE", caseSensitive: false);
+        Assert.Equal(1, changes);
+    }
+
+    [Fact]
     public void DeleteCorrection_Match()
     {
         _sut.UpsertCorrection("teh", "the", false);
@@ -107,7 +121,7 @@ public sealed class DictionaryServiceCorrectionsTests : IDisposable
         {
             Id = "1",
             EntryType = DictionaryEntryType.Term,
-            Original = "FooCorp"
+            Original = "FooCorp",
         });
 
         var deleted = _sut.DeleteTerm("foocorp");
@@ -123,7 +137,7 @@ public sealed class DictionaryServiceCorrectionsTests : IDisposable
         {
             Id = "1",
             EntryType = DictionaryEntryType.Term,
-            Original = "FooCorp"
+            Original = "FooCorp",
         });
 
         var deleted = _sut.DeleteTerm("BarCorp");
@@ -140,7 +154,7 @@ public sealed class DictionaryServiceCorrectionsTests : IDisposable
         {
             Id = "1",
             EntryType = DictionaryEntryType.Term,
-            Original = "teh"
+            Original = "teh",
         });
 
         var deleted = _sut.DeleteTerm("teh");

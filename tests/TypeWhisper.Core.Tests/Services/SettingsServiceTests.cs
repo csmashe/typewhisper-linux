@@ -10,11 +10,54 @@ public sealed class SettingsServiceTests : IDisposable
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
     private readonly string _filePath;
     private readonly string _tempDir;
+
+    /// <summary>
+    ///     Runs <paramref name="body" /> on <paramref name="participantCount" /> dedicated threads that
+    ///     all start together. Dedicated rather than pooled: a <see cref="Barrier" /> needs every
+    ///     participant running at once, and the thread pool grows past <c>ProcessorCount</c> only slowly.
+    /// </summary>
+    private static void RunConcurrently(int participantCount, Action<int> body)
+    {
+        using var barrier = new Barrier(participantCount);
+        var failures = new List<Exception>();
+        var threads = new Thread[participantCount];
+        for (var i = 0; i < participantCount; i++)
+        {
+            var idx = i;
+            threads[i] = new Thread(() =>
+            {
+                try
+                {
+                    // ReSharper disable once AccessToDisposedClosure -- disposed only after every thread is joined below.
+                    barrier.SignalAndWait();
+                    body(idx);
+                }
+                catch (Exception ex)
+                {
+                    lock (failures)
+                    {
+                        failures.Add(ex);
+                    }
+                }
+            }) { IsBackground = true };
+            threads[i].Start();
+        }
+
+        foreach (var thread in threads)
+        {
+            thread.Join();
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new AggregateException(failures);
+        }
+    }
 
     public SettingsServiceTests()
     {
@@ -64,8 +107,8 @@ public sealed class SettingsServiceTests : IDisposable
             AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>
             {
                 ["kitty"] = TextInsertionStrategy.DirectTyping,
-                ["firefox"] = TextInsertionStrategy.ClipboardPaste
-            }
+                ["firefox"] = TextInsertionStrategy.ClipboardPaste,
+            },
         };
 
         sut.Save(settings);
@@ -176,6 +219,242 @@ public sealed class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void Save_WhileASubscriberIsStillDelivering_SerializesPublicationInCommitOrder()
+    {
+        var sut = new SettingsService(_filePath);
+        var firstDelivering = new ManualResetEventSlim();
+        var releaseFirst = new ManualResetEventSlim();
+        var received = new List<string?>();
+        var blockFirstDelivery = true;
+
+        sut.SettingsChanged += s =>
+        {
+            lock (received)
+            {
+                received.Add(s.Language);
+            }
+
+            if (!blockFirstDelivery)
+            {
+                return;
+            }
+
+            blockFirstDelivery = false;
+            firstDelivering.Set();
+            releaseFirst.Wait(TimeSpan.FromSeconds(5));
+        };
+
+        var writerA = new Thread(() => sut.Save(AppSettings.Default with { Language = "a" }))
+        {
+            IsBackground = true,
+        };
+        writerA.Start();
+        Assert.True(firstDelivering.Wait(TimeSpan.FromSeconds(5)));
+
+        var writerB = new Thread(() => sut.Save(AppSettings.Default with { Language = "b" }))
+        {
+            IsBackground = true,
+        };
+        writerB.Start();
+
+        // B hands its snapshot to the active drainer rather than blocking behind a slow
+        // subscriber. What it must NOT do is announce "b" while A is still delivering "a" — a
+        // subscriber would see the newer value first. Publishing inline fails right here.
+        Assert.True(writerB.Join(TimeSpan.FromSeconds(5)));
+        lock (received)
+        {
+            Assert.Equal(["a"], received);
+        }
+
+        releaseFirst.Set();
+        Assert.True(writerA.Join(TimeSpan.FromSeconds(5)));
+
+        // A's drainer picks up B's queued snapshot before it returns.
+        lock (received)
+        {
+            Assert.Equal(["a", "b"], received);
+        }
+
+        Assert.Equal("b", sut.Current.Language);
+    }
+
+    [Fact]
+    public void Save_ConcurrentCalls_DeliverEveryCommitExactlyOnce()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default);
+
+        const int writers = 16;
+        const int savesPerWriter = 20;
+        var received = 0;
+        // ReSharper disable once AccessToModifiedClosure -- the handler increments the captured counter from many threads (Interlocked); it is read only after every writer has joined.
+        sut.SettingsChanged += _ => Interlocked.Increment(ref received);
+
+        RunConcurrently(
+            writers,
+            idx =>
+            {
+                for (var i = 0; i < savesPerWriter; i++)
+                {
+                    sut.Save(AppSettings.Default with { CommandKeyphrase = $"phrase-{idx}-{i}" });
+                }
+            }
+        );
+
+        // Once every writer has returned no drainer can still be active, so the queue must have
+        // been fully delivered. Asserts that invariant rather than reproducing the narrow resign
+        // race, which needs an interleaving too tight to force without a production seam.
+        Assert.Equal(writers * savesPerWriter, Volatile.Read(ref received));
+    }
+
+    [Fact]
+    public void Save_FromInsideASubscriber_DeliversNestedCommitAfterTheCurrentOne()
+    {
+        var sut = new SettingsService(_filePath);
+        var received = new List<string?>();
+        var reentered = false;
+
+        sut.SettingsChanged += s =>
+        {
+            lock (received)
+            {
+                received.Add(s.Language);
+            }
+
+            if (reentered || s.Language != "a")
+            {
+                return;
+            }
+
+            // Re-entrant save from inside a handler: it must queue, not recurse and deliver "b"
+            // to the remaining subscribers before "a" has finished going out.
+            reentered = true;
+            sut.Save(AppSettings.Default with { Language = "b" });
+
+            lock (received)
+            {
+                Assert.Equal(["a"], received);
+            }
+        };
+
+        sut.Save(AppSettings.Default with { Language = "a" });
+
+        lock (received)
+        {
+            Assert.Equal(["a", "b"], received);
+        }
+    }
+
+    [Fact]
+    public void Save_ConcurrentCalls_DoNotThrow()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default); // ensure the primary file exists before racing
+
+        var exception = Record.Exception(() =>
+            RunConcurrently(
+                24,
+                idx => sut.Save(AppSettings.Default with { CommandKeyphrase = $"phrase-{idx}" })
+            )
+        );
+
+        Assert.Null(exception);
+
+        // Reload must see a fully-formed, non-torn snapshot (a corrupted temp/primary file would
+        // silently fall back to AppSettings.Default inside SettingsService.Load()).
+        var reloaded = new SettingsService(_filePath);
+        Assert.StartsWith("phrase-", reloaded.Current.CommandKeyphrase);
+    }
+
+    [Fact]
+    public void Update_ConcurrentDisjointMutations_AllSurvive()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default);
+
+        const int taskCount = 20;
+        RunConcurrently(
+            taskCount,
+            idx => sut.Update(current => current with
+            {
+                AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>(
+                    current.AppInsertionStrategies,
+                    StringComparer.OrdinalIgnoreCase)
+                {
+                    [$"app{idx}"] = TextInsertionStrategy.DirectTyping,
+                },
+            })
+        );
+
+        var reloaded = new SettingsService(_filePath);
+        for (var i = 0; i < taskCount; i++)
+        {
+            Assert.True(
+                reloaded.Current.AppInsertionStrategies.ContainsKey($"app{i}"),
+                $"app{i} was lost — Update did not read the latest Current under the write lock.");
+        }
+    }
+
+    [Fact]
+    public async Task Update_GatedTwoWriters_SerializesDelegatesAndPersistsBothChanges()
+    {
+        var sut = new SettingsService(_filePath);
+        var timeout = TimeSpan.FromSeconds(5);
+        var writerAEntered = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseWriterA = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var writerBAttempting = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var writerBEntered = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var writerARuns = 0;
+        string? writerBSawLanguage = null;
+
+        var writerA = Task.Run(() =>
+            sut.Update(current =>
+            {
+                // ReSharper disable once AccessToModifiedClosure -- the counter is deliberately shared with the outer scope (Interlocked-written here, Volatile-read after both writers complete).
+                Interlocked.Increment(ref writerARuns);
+                writerAEntered.TrySetResult(true);
+                releaseWriterA.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+                return current with { Language = "writer-a" };
+            })
+        );
+
+        await writerAEntered.Task.WaitAsync(timeout);
+        var writerB = Task.Run(() =>
+        {
+            writerBAttempting.TrySetResult(true);
+            return sut.Update(current =>
+            {
+                writerBEntered.TrySetResult(true);
+                writerBSawLanguage = current.Language;
+                return current with { HasCompletedOnboarding = true };
+            });
+        });
+
+        await writerBAttempting.Task.WaitAsync(timeout);
+        var writerBInterleaved = writerBEntered.Task.IsCompleted;
+        releaseWriterA.TrySetResult(true);
+        await Task.WhenAll(writerA, writerB).WaitAsync(timeout);
+
+        Assert.False(writerBInterleaved);
+        Assert.Equal(1, Volatile.Read(ref writerARuns));
+        Assert.Equal("writer-a", writerBSawLanguage);
+        Assert.Equal("writer-a", sut.Current.Language);
+        Assert.True(sut.Current.HasCompletedOnboarding);
+
+        var reloaded = new SettingsService(_filePath);
+        Assert.Equal("writer-a", reloaded.Current.Language);
+        Assert.True(reloaded.Current.HasCompletedOnboarding);
+    }
+
+    [Fact]
     public void Load_LegacyHistoryRetentionDays_MigratesToMinutes()
     {
         File.WriteAllText(
@@ -220,7 +499,7 @@ public sealed class SettingsServiceTests : IDisposable
             AppSettings.Default with
             {
                 HistoryRetentionMode = HistoryRetentionMode.Duration,
-                HistoryRetentionMinutes = 60
+                HistoryRetentionMinutes = 60,
             }
         );
 
@@ -237,7 +516,7 @@ public sealed class SettingsServiceTests : IDisposable
         sut.Save(
             AppSettings.Default with
             {
-                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses
+                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses,
             }
         );
 

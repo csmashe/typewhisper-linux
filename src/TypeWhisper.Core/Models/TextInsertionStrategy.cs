@@ -6,5 +6,5 @@ public enum TextInsertionStrategy
     Auto,
     ClipboardPaste,
     DirectTyping,
-    CopyOnly
+    CopyOnly,
 }

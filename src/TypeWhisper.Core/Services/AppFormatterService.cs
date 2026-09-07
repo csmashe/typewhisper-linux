@@ -30,7 +30,7 @@ public static class AppFormatterService
         ["cmd"] = "code",
         ["powershell"] = "code",
         ["pwsh"] = "code",
-        ["cursor"] = "code"
+        ["cursor"] = "code",
     };
 
     /// <summary>
@@ -48,7 +48,7 @@ public static class AppFormatterService
         return format switch
         {
             "markdown" => FormatAsMarkdown(text),
-            _ => text // code + plaintext = passthrough
+            _ => text, // code + plaintext = passthrough
         };
     }
 

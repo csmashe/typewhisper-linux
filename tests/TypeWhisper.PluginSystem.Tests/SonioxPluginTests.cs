@@ -33,9 +33,8 @@ public class SonioxPluginTests
 
         Assert.Equal("com.typewhisper.soniox", manifest.GetProperty("id").GetString());
         Assert.Equal("Soniox", manifest.GetProperty("name").GetString());
-        Assert.Equal("transcription", manifest.GetProperty("category").GetString());
         Assert.Equal(["transcription"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
-        Assert.False(manifest.GetProperty("isLocal").GetBoolean());
+        Assert.Equal("network", manifest.GetProperty("networkAccess").GetString());
         Assert.True(manifest.GetProperty("requiresApiKey").GetBoolean());
     }
 
@@ -153,10 +152,9 @@ public class SonioxPluginTests
     }
 
     [Theory]
-    [InlineData("auto")]
     [InlineData("")]
     [InlineData(null)]
-    public void BuildConfigMessage_OmitsLanguageHints_ForAutoOrEmpty(string? language)
+    public void BuildConfigMessage_OmitsLanguageHints_WhenUnspecified(string? language)
     {
         var json = SonioxSession.BuildConfigMessage("k", SonioxSession.RealtimeModel, language);
 
@@ -315,7 +313,7 @@ public class SonioxPluginTests
     {
         var host = new TestPluginHostServices
         {
-            StoreSecretException = new InvalidOperationException("store failed")
+            StoreSecretException = new InvalidOperationException("store failed"),
         };
         var sut = new SonioxPlugin();
         await sut.ActivateAsync(host);
@@ -362,7 +360,7 @@ public class SonioxPluginTests
     }
 
     [Fact]
-    public async Task TranscribeAsync_UsesAsyncTranscriptionFlowAndCleansUp()
+    public async Task TranscribeAsync_UsesAsyncTranscriptionFlowAndDeletesOnlyTranscription()
     {
         var seen = new List<string>();
         var handler = new CapturingHandler((request, body) =>
@@ -413,7 +411,7 @@ public class SonioxPluginTests
                     """);
             }
 
-            return request.Method == HttpMethod.Delete ? JsonResponse("{}") 
+            return request.Method == HttpMethod.Delete ? NoContentResponse()
                 : throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
         });
 
@@ -430,7 +428,7 @@ public class SonioxPluginTests
         // Tokens are now grouped into subtitle-sized segments rather than one cue per token.
         Assert.Equal(["Hallo Welt"], result.Segments.Select(s => s.Text).ToArray());
         Assert.Contains("DELETE https://api.soniox.com/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721", seen);
-        Assert.Contains("DELETE https://api.soniox.com/v1/files/84c32fc6-4fb5-4e7a-b656-b5ec70493753", seen);
+        Assert.DoesNotContain("DELETE https://api.soniox.com/v1/files/84c32fc6-4fb5-4e7a-b656-b5ec70493753", seen);
     }
 
     [Fact]
@@ -461,7 +459,7 @@ public class SonioxPluginTests
             if (request.Method == HttpMethod.Get && request.RequestUri?.AbsolutePath == "/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721/transcript")
                 return JsonResponse("""{ "text": "Hello", "tokens": [] }""");
 
-            return request.Method == HttpMethod.Delete ? JsonResponse("{}")
+            return request.Method == HttpMethod.Delete ? NoContentResponse()
                 : throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
         });
 
@@ -479,7 +477,7 @@ public class SonioxPluginTests
     }
 
     [Fact]
-    public async Task TranscribeAsync_OmitsLanguageHintsForAuto()
+    public async Task TranscribeAsync_OmitsLanguageHintsWhenUnspecified()
     {
         var handler = new SonioxFlowHandler(createBody =>
         {
@@ -492,18 +490,21 @@ public class SonioxPluginTests
         var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
         await sut.ActivateAsync(host);
 
-        var result = await sut.TranscribeAsync([1, 2, 3], "auto", translate: false, prompt: null, CancellationToken.None);
+        var result = await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
 
         Assert.Equal("Hello", result.Text);
     }
 
     [Fact]
-    public async Task TranscribeAsync_OmitsLanguageHintsForWhitespacePaddedAuto()
+    public async Task TranscribeAsync_CarriesExplicitCanonicalLanguageHint()
     {
         var handler = new SonioxFlowHandler(createBody =>
         {
             using var doc = JsonDocument.Parse(createBody);
-            Assert.False(doc.RootElement.TryGetProperty("language_hints", out _));
+            Assert.Equal(
+                "de-DE",
+                doc.RootElement.GetProperty("language_hints")[0].GetString()
+            );
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
@@ -511,10 +512,10 @@ public class SonioxPluginTests
         var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
         await sut.ActivateAsync(host);
 
-        var result = await sut.TranscribeAsync([1, 2, 3], " auto ", translate: false, prompt: null, CancellationToken.None);
+        var result = await sut.TranscribeAsync([1, 2, 3], "de-DE", translate: false, prompt: null, CancellationToken.None);
 
         Assert.Equal("Hello", result.Text);
-        Assert.Null(result.DetectedLanguage);
+        Assert.Equal("de-DE", result.DetectedLanguage);
     }
 
     [Fact]
@@ -531,7 +532,7 @@ public class SonioxPluginTests
     }
 
     [Fact]
-    public async Task TranscribeAsync_StatusErrorIncludesSonioxDetailsAndCleansUp()
+    public async Task TranscribeAsync_StatusErrorIncludesDetailsAndFallsBackToFileDeleteAfterConflict()
     {
         var seen = new List<string>();
         var handler = new CapturingHandler((request, body) =>
@@ -556,8 +557,18 @@ public class SonioxPluginTests
                     """);
             }
 
-            return request.Method == HttpMethod.Delete ? JsonResponse("{}") 
-                : throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}; body={Encoding.UTF8.GetString(body ?? [])}");
+            if (request.Method == HttpMethod.Delete
+                && request.RequestUri?.AbsolutePath == "/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721")
+            {
+                return JsonResponse(
+                    """{ "error_type": "conflict", "message": "Transcription is still processing" }""",
+                    HttpStatusCode.Conflict);
+            }
+
+            return request.Method == HttpMethod.Delete
+                && request.RequestUri?.AbsolutePath == "/v1/files/84c32fc6-4fb5-4e7a-b656-b5ec70493753"
+                    ? NoContentResponse()
+                    : throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}; body={Encoding.UTF8.GetString(body ?? [])}");
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
@@ -573,6 +584,10 @@ public class SonioxPluginTests
         Assert.Contains("req-1", ex.Message);
         Assert.Contains("DELETE https://api.soniox.com/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721", seen);
         Assert.Contains("DELETE https://api.soniox.com/v1/files/84c32fc6-4fb5-4e7a-b656-b5ec70493753", seen);
+        Assert.Contains(
+            host.Logs,
+            log => log.Level == PluginLogLevel.Warning
+                && log.Message.Contains("409", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -612,7 +627,9 @@ public class SonioxPluginTests
             if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v1/transcriptions")
                 return JsonResponse("""{ "id": "73d4357d-cad2-4338-a60d-ec6f2044f721", "status": "queued" }""", HttpStatusCode.Created);
 
-            return JsonResponse(request.Method == HttpMethod.Get ? """{ "status": "processing" }""" : "{}");
+            return request.Method == HttpMethod.Delete
+                ? NoContentResponse()
+                : JsonResponse("""{ "status": "processing" }""");
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
@@ -624,6 +641,204 @@ public class SonioxPluginTests
             sut.TranscribeAsync([1, 2, 3], "en", translate: false, prompt: null, CancellationToken.None));
 
         Assert.Contains("did not complete", ex.Message);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_CleanupIsBoundedBySingleInjectedBudget()
+    {
+        var deleteStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var deleteCanceled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var deletedPaths = new List<string>();
+        var handler = new AsyncCapturingHandler(async (request, _, cancellationToken) =>
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v1/files")
+                return JsonResponse("""{ "id": "file-1" }""", HttpStatusCode.Created);
+
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v1/transcriptions")
+                return JsonResponse("""{ "id": "transcription-1", "status": "queued" }""", HttpStatusCode.Created);
+
+            if (request.Method == HttpMethod.Get
+                && request.RequestUri?.AbsolutePath == "/v1/transcriptions/transcription-1")
+            {
+                return JsonResponse("""{ "status": "error", "error_message": "Primary failure" }""");
+            }
+
+            if (request.Method == HttpMethod.Delete)
+            {
+                deletedPaths.Add(request.RequestUri!.AbsolutePath);
+                deleteStarted.TrySetResult(true);
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                }
+                finally
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        deleteCanceled.TrySetResult(true);
+                }
+
+                return NoContentResponse();
+            }
+
+            throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(
+            httpClient,
+            pollDelay: TimeSpan.Zero,
+            maxPollAttempts: 2,
+            cleanupBudget: TimeSpan.FromMilliseconds(100));
+        await sut.ActivateAsync(host);
+
+        var transcriptionTask = sut.TranscribeAsync(
+            [1, 2, 3],
+            "en",
+            translate: false,
+            prompt: null,
+            CancellationToken.None);
+
+        await deleteStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => transcriptionTask.WaitAsync(TimeSpan.FromSeconds(5)));
+        await deleteCanceled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Contains("Primary failure", ex.Message);
+        Assert.Equal(["/v1/transcriptions/transcription-1"], deletedPaths);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_CancellationAfterResourceCreationSurfacesWithinCleanupBudget()
+    {
+        var pollStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleanupStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleanupCanceled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleanupTokenWasCanceledAtStart = false;
+        var handler = new AsyncCapturingHandler(async (request, _, cancellationToken) =>
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v1/files")
+                return JsonResponse("""{ "id": "file-1" }""", HttpStatusCode.Created);
+
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v1/transcriptions")
+                return JsonResponse("""{ "id": "transcription-1", "status": "queued" }""", HttpStatusCode.Created);
+
+            if (request.Method == HttpMethod.Get
+                && request.RequestUri?.AbsolutePath == "/v1/transcriptions/transcription-1")
+            {
+                pollStarted.TrySetResult(true);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return JsonResponse("""{ "status": "completed" }""");
+            }
+
+            if (request.Method == HttpMethod.Delete
+                && request.RequestUri?.AbsolutePath == "/v1/transcriptions/transcription-1")
+            {
+                cleanupTokenWasCanceledAtStart = cancellationToken.IsCancellationRequested;
+                cleanupStarted.TrySetResult(true);
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                }
+                finally
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        cleanupCanceled.TrySetResult(true);
+                }
+
+                return NoContentResponse();
+            }
+
+            throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(
+            httpClient,
+            pollDelay: TimeSpan.Zero,
+            maxPollAttempts: 2,
+            cleanupBudget: TimeSpan.FromMilliseconds(100));
+        await sut.ActivateAsync(host);
+        using var callerCts = new CancellationTokenSource();
+
+        var transcriptionTask = sut.TranscribeAsync(
+            [1, 2, 3],
+            "en",
+            translate: false,
+            prompt: null,
+            callerCts.Token);
+
+        // ReSharper disable once MethodSupportsCancellation -- wall-clock hang guard; the only in-scope token is callerCts.Token (the token under test), not something to forward here.
+        await pollStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel must trip the token before the assertion; CancelAsync would defer it.
+        callerCts.Cancel();
+        // ReSharper disable once MethodSupportsCancellation -- wall-clock hang guard; forwarding callerCts.Token (already cancelled above) would throw immediately instead of awaiting cleanup start.
+        await cleanupStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            // ReSharper disable once MethodSupportsCancellation -- wall-clock hang guard; forwarding callerCts.Token (already cancelled) would pre-empt the transcription task's own cancellation under test.
+            () => transcriptionTask.WaitAsync(TimeSpan.FromSeconds(5)));
+        // ReSharper disable once MethodSupportsCancellation -- wall-clock hang guard; forwarding callerCts.Token (already cancelled) would throw immediately instead of awaiting cleanup cancellation.
+        await cleanupCanceled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.False(cleanupTokenWasCanceledAtStart);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_DeletesUploadedFileWhenTranscriptionCreationFails()
+    {
+        var deletedPaths = new List<string>();
+        var handler = new CapturingHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v1/files")
+                return JsonResponse("""{ "id": "file-1" }""", HttpStatusCode.Created);
+
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v1/transcriptions")
+            {
+                return JsonResponse(
+                    """{ "error_type": "invalid_request", "message": "Creation failed" }""",
+                    HttpStatusCode.BadRequest);
+            }
+
+            if (request.Method == HttpMethod.Delete)
+            {
+                deletedPaths.Add(request.RequestUri!.AbsolutePath);
+                return NoContentResponse();
+            }
+
+            throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            sut.TranscribeAsync([1, 2, 3], "en", translate: false, prompt: null, CancellationToken.None));
+
+        Assert.Contains("Creation failed", ex.Message);
+        Assert.Equal(["/v1/files/file-1"], deletedPaths);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_SuccessfulTranscriptionDeleteDoesNotDeleteFile()
+    {
+        var handler = new SonioxFlowHandler(_ => { });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.TranscribeAsync(
+            [1, 2, 3],
+            "en",
+            translate: false,
+            prompt: null,
+            CancellationToken.None);
+
+        Assert.Equal("Hello", result.Text);
+        Assert.Equal(["/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721"], handler.DeletedPaths);
     }
 
     private static SonioxSession.SonioxMessage Final(string text) =>
@@ -643,11 +858,16 @@ public class SonioxPluginTests
     private static HttpResponseMessage JsonResponse(string json, HttpStatusCode statusCode = HttpStatusCode.OK) =>
         new(statusCode)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
+
+    private static HttpResponseMessage NoContentResponse() =>
+        new(HttpStatusCode.NoContent);
 
     private sealed class SonioxFlowHandler(Action<string> inspectCreateBody) : HttpMessageHandler
     {
+        public List<string> DeletedPaths { get; } = [];
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -668,8 +888,13 @@ public class SonioxPluginTests
             if (request.Method == HttpMethod.Get && request.RequestUri?.AbsolutePath == "/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721/transcript")
                 return JsonResponse("""{ "text": "Hello", "tokens": [] }""");
 
-            return request.Method == HttpMethod.Delete ? JsonResponse("{}") 
-                : throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
+            if (request.Method == HttpMethod.Delete)
+            {
+                DeletedPaths.Add(request.RequestUri!.AbsolutePath);
+                return NoContentResponse();
+            }
+
+            throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
         }
     }
 
@@ -705,11 +930,12 @@ public class SonioxPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];
         public Dictionary<string, string?> Secrets { get; } = [];
+        public List<(PluginLogLevel Level, string Message)> Logs { get; } = [];
         public int NotifyCapabilitiesChangedCount { get; private set; }
         public Exception? StoreSecretException { get; init; }
         public Exception? DeleteSecretException { get; set; }
@@ -748,7 +974,7 @@ public class SonioxPluginTests
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();
         public IReadOnlyList<string> AvailableProfileNames => [];
-        public void Log(PluginLogLevel level, string message) { }
+        public void Log(PluginLogLevel level, string message) => Logs.Add((level, message));
         public void NotifyCapabilitiesChanged() => NotifyCapabilitiesChangedCount++;
         public IPluginLocalization Localization { get; } = new TestPluginLocalization();
     }

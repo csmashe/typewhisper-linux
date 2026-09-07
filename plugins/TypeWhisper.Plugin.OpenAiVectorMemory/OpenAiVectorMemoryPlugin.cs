@@ -1,5 +1,9 @@
-using System.IO;
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedType.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
+using System.Collections.Immutable;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -13,18 +17,31 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     private const string EmbeddingModel = "text-embedding-3-small";
     private const string EmbeddingUrl = "https://api.openai.com/v1/embeddings";
 
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
-    private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
     private string? _apiKey;
-    private string? _filePath;
-    private List<VectorMemoryEntry>? _entries;
+    private IPluginStateStore<ImmutableArray<VectorMemoryEntry>>? _store;
+
+    // Store commits are atomic, but an operation spans a read, an embedding request, and a
+    // commit; without this gate, a concurrent clear/delete could be overwritten by a lagging commit.
+    private readonly SemaphoreSlim _operationGate = new(1, 1);
+
+    // ReSharper disable once UnusedMember.Global -- the host instantiates the plugin through this public parameterless constructor via reflection, which the analyzer cannot see.
+    public OpenAiVectorMemoryPlugin()
+        : this(new HttpClientHandler())
+    {
+    }
+
+    internal OpenAiVectorMemoryPlugin(HttpMessageHandler handler)
+    {
+        _httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
+    }
 
     public string PluginId => "com.typewhisper.openai-vector-memory";
     public string PluginName => "OpenAI Vector Memory";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     private IPluginLocalization? _injectedLocalization;
 
@@ -39,7 +56,15 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _filePath = Path.Join(host.PluginDataDirectory, "vector-memories.json");
+        _store = host.OpenStateStore<ImmutableArray<VectorMemoryEntry>>(
+            "vector-memories.json",
+            static () => [],
+            new PluginStateStoreOptions
+            {
+                JsonOptions = s_jsonOptions,
+                CorruptFilePolicy = PluginStateCorruptFilePolicy.Throw,
+            }
+        );
         // Normalize on load: legacy stored keys may carry trailing whitespace
         // from before SetSettingValueAsync started trimming.
         var stored = await host.LoadSecretAsync("api-key");
@@ -51,7 +76,7 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     public Task DeactivateAsync()
     {
         _host = null;
-        _entries = null;
+        _store = null;
         return Task.CompletedTask;
     }
 
@@ -81,15 +106,18 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         // Normalize once and reuse so whitespace-padded keys aren't stored or
         // treated as "configured" in memory, persistence, or validation.
         var trimmed = value?.Trim();
-        _apiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
+        var nextApiKey = string.IsNullOrEmpty(trimmed) ? null : trimmed;
 
         if (_host is not null)
         {
+            ct.ThrowIfCancellationRequested();
             if (string.IsNullOrEmpty(trimmed))
                 await _host.DeleteSecretAsync("api-key");
             else
                 await _host.StoreSecretAsync("api-key", trimmed);
         }
+
+        _apiKey = nextApiKey;
     }
 
     public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default) =>
@@ -103,25 +131,48 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     {
         EnsureConfigured();
 
-        await _lock.WaitAsync(ct);
+        var store = GetStore();
+        await _operationGate.WaitAsync(ct);
         try
         {
-            var entries = await LoadEntriesAsync(ct);
-
-            if (entries.Any(e => e.Content == content))
+            var existing = await store.ReadAsync(ct);
+            if (existing.Any(e => e.Content == content))
             {
                 _host?.Log(PluginLogLevel.Debug, "Duplicate memory skipped");
                 return;
             }
 
             var embedding = await GetEmbeddingAsync(content, ct);
-            entries.Add(new VectorMemoryEntry(content, embedding, DateTime.UtcNow));
-            await SaveEntriesAsync(ct);
-            _host?.Log(PluginLogLevel.Debug, $"Stored vector memory (total={entries.Count})");
+            var added = false;
+            var committed = await store.UpdateAsync(
+                current =>
+                {
+                    if (current.Any(e => e.Content == content))
+                    {
+                        return current;
+                    }
+
+                    added = true;
+                    return current.Add(
+                        new VectorMemoryEntry(content, embedding, DateTime.UtcNow)
+                    );
+                },
+                ct
+            );
+            if (!added)
+            {
+                _host?.Log(PluginLogLevel.Debug, "Duplicate memory skipped");
+                return;
+            }
+
+            _host?.Log(
+                PluginLogLevel.Debug,
+                $"Stored vector memory (total={committed.Length})"
+            );
         }
         finally
         {
-            _lock.Release();
+            _operationGate.Release();
         }
     }
 
@@ -133,11 +184,14 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     {
         EnsureConfigured();
 
-        await _lock.WaitAsync(ct);
+        var store = GetStore();
+        // Gated like the mutations: a search reads then embeds, and matching against a
+        // pre-clear snapshot would surface memory the user has already deleted.
+        await _operationGate.WaitAsync(ct);
         try
         {
-            var entries = await LoadEntriesAsync(ct);
-            if (entries.Count == 0)
+            var entries = await store.ReadAsync(ct);
+            if (entries.IsEmpty)
                 return [];
 
             var queryEmbedding = await GetEmbeddingAsync(query, ct);
@@ -151,94 +205,67 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         }
         finally
         {
-            _lock.Release();
+            _operationGate.Release();
         }
     }
 
     public async Task<IReadOnlyList<string>> GetAllAsync(CancellationToken ct)
     {
-        await _lock.WaitAsync(ct);
-        try
-        {
-            var entries = await LoadEntriesAsync(ct);
-            return entries.Select(e => e.Content).ToList();
-        }
-        finally
-        {
-            _lock.Release();
-        }
+        var entries = await GetStore().ReadAsync(ct);
+        return entries.Select(e => e.Content).ToList();
     }
 
     public async Task DeleteAsync(string content, CancellationToken ct)
     {
-        await _lock.WaitAsync(ct);
+        var store = GetStore();
+        await _operationGate.WaitAsync(ct);
         try
         {
-            var entries = await LoadEntriesAsync(ct);
-            // Snapshot before mutating so a SaveEntriesAsync failure doesn't
-            // leave the in-memory cache out of sync with the on-disk file —
-            // a later StoreAsync would otherwise persist the deleted state.
-            var snapshot = new List<VectorMemoryEntry>(entries);
-            var removed = entries.RemoveAll(e => e.Content == content);
-
-            if (removed > 0)
-            {
-                try
+            await store.UpdateAsync(
+                current =>
                 {
-                    await SaveEntriesAsync(ct);
-                }
-                catch
-                {
-                    _entries = snapshot;
-                    throw;
-                }
-            }
+                    var next = current.Where(e => e.Content != content).ToImmutableArray();
+                    return next.Length == current.Length ? current : next;
+                },
+                ct
+            );
         }
         finally
         {
-            _lock.Release();
+            _operationGate.Release();
         }
     }
 
     public async Task ClearAllAsync(CancellationToken ct)
     {
-        await _lock.WaitAsync(ct);
+        var cleared = false;
+        var store = GetStore();
+        await _operationGate.WaitAsync(ct);
         try
         {
-            var entries = await LoadEntriesAsync(ct);
-            var snapshot = new List<VectorMemoryEntry>(entries);
-            entries.Clear();
-
-            try
-            {
-                await SaveEntriesAsync(ct);
-            }
-            catch
-            {
-                _entries = snapshot;
-                throw;
-            }
-
-            _host?.Log(PluginLogLevel.Info, "All vector memories cleared");
+            await store.UpdateAsync(
+                current =>
+                {
+                    cleared = !current.IsEmpty;
+                    return cleared ? [] : current;
+                },
+                ct
+            );
         }
         finally
         {
-            _lock.Release();
+            _operationGate.Release();
+        }
+
+        if (cleared)
+        {
+            _host?.Log(PluginLogLevel.Info, "All vector memories cleared");
         }
     }
 
     public async Task<int> CountAsync(CancellationToken ct)
     {
-        await _lock.WaitAsync(ct);
-        try
-        {
-            var entries = await LoadEntriesAsync(ct);
-            return entries.Count;
-        }
-        finally
-        {
-            _lock.Release();
-        }
+        return (await GetStore().ReadAsync(ct)).Length;
     }
 
     private async Task<float[]> GetEmbeddingAsync(string text, CancellationToken ct)
@@ -299,72 +326,6 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
         return denominator == 0 ? 0 : dot / denominator;
     }
 
-    private async Task<List<VectorMemoryEntry>> LoadEntriesAsync(CancellationToken ct)
-    {
-        if (_entries is not null)
-            return _entries;
-
-        if (_filePath is null)
-            throw new InvalidOperationException("Plugin not activated");
-
-        if (File.Exists(_filePath))
-        {
-            try
-            {
-                var json = await File.ReadAllTextAsync(_filePath, ct);
-                _entries =
-                    JsonSerializer.Deserialize<List<VectorMemoryEntry>>(json, JsonOptions) ?? [];
-            }
-            catch (Exception ex)
-            {
-                // Surface the failure instead of swallowing it: callers like
-                // StoreAsync/DeleteAsync would otherwise write back an empty
-                // list and clobber a corrupt-but-recoverable file.
-                _host?.Log(PluginLogLevel.Warning, $"Failed to load vector memories: {ex.Message}");
-                throw;
-            }
-        }
-        else
-        {
-            _entries = [];
-        }
-
-        return _entries;
-    }
-
-    private async Task SaveEntriesAsync(CancellationToken ct)
-    {
-        if (_filePath is null || _entries is null)
-            return;
-
-        var dir = Path.GetDirectoryName(_filePath);
-        if (dir is not null && !Directory.Exists(dir))
-            Directory.CreateDirectory(dir);
-
-        var json = JsonSerializer.Serialize(_entries, JsonOptions);
-
-        // Write to a sibling temp file and atomically replace, so a crash
-        // mid-write can't leave the vector store truncated.
-        var tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            await File.WriteAllTextAsync(tempPath, json, ct);
-            if (File.Exists(_filePath))
-                File.Replace(tempPath, _filePath, destinationBackupFileName: null);
-            else
-                File.Move(tempPath, _filePath);
-        }
-        catch
-        {
-            if (File.Exists(tempPath))
-            {
-                try { File.Delete(tempPath); }
-                catch { /* best effort */ }
-            }
-            throw;
-        }
-    }
-
     private void EnsureConfigured()
     {
         // Match ValidateAsync's IsNullOrWhiteSpace check so a whitespace-only secret
@@ -378,8 +339,16 @@ public sealed class OpenAiVectorMemoryPlugin : IMemoryStoragePlugin, IPluginSett
     public void Dispose()
     {
         _httpClient.Dispose();
-        _lock.Dispose();
+        _operationGate.Dispose();
     }
 
-    private sealed record VectorMemoryEntry(string Content, float[] Embedding, DateTime CreatedAt);
+    private IPluginStateStore<ImmutableArray<VectorMemoryEntry>> GetStore() =>
+        _store ?? throw new InvalidOperationException("Plugin not activated");
+
+    // ReSharper disable once NotAccessedPositionalProperty.Local -- CreatedAt is persisted metadata in the serialized entry shape, not dead code.
+    private sealed record VectorMemoryEntry(
+        string Content,
+        float[] Embedding,
+        DateTime CreatedAt
+    );
 }

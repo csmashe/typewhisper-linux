@@ -1,5 +1,6 @@
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -17,11 +18,17 @@ public partial class DictationOverlayViewModel : ObservableObject
     // ~10 Hz cadence of LevelChanged.
     private const int WaveformSampleCount = 5;
 
-    private readonly AudioRecordingService _audio;
+    private readonly DispatcherTimer _clockTimer;
     private readonly DispatcherTimer _feedbackTimer;
+    private readonly Func<string?, bool> _openUrl;
+    private readonly OverlayCoordinator? _overlayCoordinator;
+    private readonly Action<Action> _postToUiThread;
     private readonly DispatcherTimer _recordingTimer;
     private readonly ISettingsService _settings;
     private readonly float[] _waveformLevels = new float[WaveformSampleCount];
+
+    private bool _applyingCoordinatorPresentation;
+    private long _lastCoordinatorRevision;
 
     [ObservableProperty]
     private string? _activeAppName;
@@ -36,7 +43,13 @@ public partial class DictationOverlayViewModel : ObservableObject
     private bool _feedbackIsError;
 
     [ObservableProperty]
+    private int? _feedbackDurationMilliseconds;
+
+    [ObservableProperty]
     private string? _feedbackText;
+
+    [ObservableProperty]
+    private string? _actionResultUrl;
 
     [ObservableProperty]
     private bool _isOverlayVisible;
@@ -62,18 +75,64 @@ public partial class DictationOverlayViewModel : ObservableObject
     private string _statusText = Loc.Instance["Overlay.Ready"];
 
     public DictationOverlayViewModel(
-        DictationOrchestrator dictation,
-        TransformSelectionService transformSelection,
         AudioRecordingService audio,
         ISettingsService settings,
-        IDetectionFailureTracker failureTracker
+        IDetectionFailureTracker failureTracker,
+        UrlLauncher urlLauncher,
+        OverlayCoordinator overlayCoordinator
+    )
+        : this(
+            settings,
+            static action => Dispatcher.UIThread.Post(action),
+            openUrl: urlLauncher.Open,
+            overlayCoordinator: overlayCoordinator,
+            failureTracker: failureTracker
+        )
+    {
+        SubscribeToAudioLevels(audio);
+    }
+
+    // Test seam: production posts non-audio service events to Avalonia's UI thread; tests can
+    // run that path synchronously and optionally exercise the shared direct audio subscription.
+    internal DictationOverlayViewModel(
+        ISettingsService settings,
+        Action<Action> postToUiThread,
+        AudioRecordingService? audio = null,
+        Func<string?, bool>? openUrl = null,
+        OverlayCoordinator? overlayCoordinator = null,
+        IDetectionFailureTracker? failureTracker = null
     )
     {
-        _audio = audio;
         _settings = settings;
+        _postToUiThread = postToUiThread;
+        _openUrl = openUrl ?? (_ => false);
+        _overlayCoordinator = overlayCoordinator;
+        if (audio is not null)
+        {
+            SubscribeToAudioLevels(audio);
+        }
+
+        if (failureTracker is not null)
+        {
+            failureTracker.OnFailure += (_, e) =>
+            {
+                if (!e.ShouldShowPersistentBanner)
+                {
+                    // The detailed English reason is already in the error log; the toast is
+                    // UI-facing and must be localized.
+                    ShowSystemErrorFeedback(Loc.Instance["Overlay.WindowDetectionFailed"]);
+                }
+            };
+        }
 
         _recordingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
-        _recordingTimer.Tick += (_, _) => RefreshRecordingSeconds();
+        _recordingTimer.Tick += (_, _) => RecordingTimerTick();
+
+        // LeftText/RightText render DateTime.Now with minute resolution. Polling once per second
+        // keeps a minute rollover's visible delay below one second without re-arming for wall-clock
+        // alignment; this timer is stopped whenever no clock slot is actually visible.
+        _clockTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _clockTimer.Tick += (_, _) => ClockTimerTick();
 
         // Interval is set per arm so live setting changes take effect on the
         // next event. RestartFeedbackTimer re-arms even when ShowFeedback is
@@ -84,40 +143,35 @@ public partial class DictationOverlayViewModel : ObservableObject
             _feedbackTimer.Stop();
             ShowFeedback = false;
             FeedbackText = null;
+            ActionResultUrl = null;
+            FeedbackDurationMilliseconds = null;
             OnPropertyChanged(nameof(HasVisibleContent));
         };
 
-        dictation.OverlayStateChanged += (_, state) =>
-            Dispatcher.UIThread.Post(() => ApplyState(state));
-
-        transformSelection.OverlayStateChanged += (_, state) =>
-            Dispatcher.UIThread.Post(() => ApplyState(state));
-
-        // Raw RMS is typically well below 0.1 for speech, so amplify ×8 to drive a
-        // visible meter — same scaling the recorder and wizard VMs apply.
-        _audio.LevelChanged += (_, level) =>
-            Dispatcher.UIThread.Post(() => AudioLevel = Math.Clamp(level * 8, 0f, 1f));
-
-        _settings.SettingsChanged += _ => Dispatcher.UIThread.Post(RefreshOverlaySlots);
-
-        failureTracker.OnFailure += (_, e) =>
+        if (overlayCoordinator is not null)
         {
-            if (e.ShouldShowPersistentBanner)
-            {
-                return;
-            }
+            overlayCoordinator.PresentationChanged += OnCoordinatorPresentationChanged;
+        }
 
-            Dispatcher.UIThread.Post(() =>
+        _settings.SettingsChanged += _ => _postToUiThread(RefreshOverlaySlots);
+    }
+
+    private void SubscribeToAudioLevels(AudioRecordingService audio)
+    {
+        audio.LevelChanged += (_, level) =>
+        {
+            if (IsRecording)
             {
-                FeedbackText = e.Reason;
-                FeedbackIsError = true;
-                ShowFeedback = true;
-                RestartFeedbackTimer();
-            });
+                // Raw RMS is typically well below 0.1 for speech, so amplify ×8 to drive a
+                // visible meter — same scaling the recorder and wizard VMs apply.
+                AudioLevel = Math.Clamp(level * 8, 0f, 1f);
+            }
         };
     }
 
     public bool HasVisibleContent => IsOverlayVisible || ShowFeedback;
+
+    public bool HasActionResultUrl => !string.IsNullOrWhiteSpace(ActionResultUrl);
 
     public string RecordingTimerText
     {
@@ -177,6 +231,7 @@ public partial class DictationOverlayViewModel : ObservableObject
     partial void OnIsOverlayVisibleChanged(bool value)
     {
         OnPropertyChanged(nameof(HasVisibleContent));
+        UpdateClockTimer();
     }
 
     partial void OnShowFeedbackChanged(bool value)
@@ -184,7 +239,7 @@ public partial class DictationOverlayViewModel : ObservableObject
         OnPropertyChanged(nameof(HasVisibleContent));
 
         _feedbackTimer.Stop();
-        if (value)
+        if (value && !_applyingCoordinatorPresentation)
         {
             ArmFeedbackAutoHideTimer();
         }
@@ -198,14 +253,21 @@ public partial class DictationOverlayViewModel : ObservableObject
 
     private void ArmFeedbackAutoHideTimer()
     {
-        var milliseconds = AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+        var globalMilliseconds = AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
             _settings.Current.PreviewBubbleAutoHideMilliseconds);
+        var milliseconds = globalMilliseconds == 0
+            ? 0
+            : AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
+                FeedbackDurationMilliseconds ?? globalMilliseconds
+            );
 
         if (milliseconds <= 0)
         {
             _feedbackTimer.Stop();
             ShowFeedback = false;
             FeedbackText = null;
+            ActionResultUrl = null;
+            FeedbackDurationMilliseconds = null;
             OnPropertyChanged(nameof(HasVisibleContent));
             return;
         }
@@ -234,8 +296,6 @@ public partial class DictationOverlayViewModel : ObservableObject
         OnPropertyChanged(nameof(WaveformBar2Height));
         OnPropertyChanged(nameof(WaveformBar3Height));
         OnPropertyChanged(nameof(WaveformBar4Height));
-        OnPropertyChanged(nameof(LeftText));
-        OnPropertyChanged(nameof(RightText));
     }
 
     partial void OnFeedbackIsErrorChanged(bool value)
@@ -243,11 +303,110 @@ public partial class DictationOverlayViewModel : ObservableObject
         OnPropertyChanged(nameof(FeedbackForeground));
     }
 
-    private void ApplyState(DictationOverlayState state)
+    partial void OnActionResultUrlChanged(string? value)
     {
+        OnPropertyChanged(nameof(HasActionResultUrl));
+    }
+
+    [RelayCommand]
+    private void OpenActionResult()
+    {
+        var url = ActionResultUrl;
+        if (string.IsNullOrWhiteSpace(url) || _openUrl(url))
+        {
+            return;
+        }
+
+        // Swap the presented feedback in place so the coordinator stays the sole render
+        // path and re-arms its expiry for the replacement; rewriting VM properties here
+        // would leave the original expiry armed and cut the replacement short. When the
+        // feedback already expired, surface the failure as a fresh system toast instead.
+        var message = Loc.Instance["ActionResult.OpenFailed"];
+        if (_overlayCoordinator is null
+            || !_overlayCoordinator.ReplacePresentedFeedback(state => state with
+            {
+                ActionResultUrl = null,
+                FeedbackDurationMilliseconds = null,
+                FeedbackText = message,
+                FeedbackIsError = true,
+                ShowFeedback = true,
+            }))
+        {
+            ShowSystemErrorFeedback(message);
+        }
+    }
+
+    // Sole-render-path invariant: with a coordinator wired, every repaint must flow through
+    // its arbitration — a direct property write here would be invisible to the coordinator,
+    // which suppresses repaints while its own presented state is unchanged and so could
+    // never paint over it again.
+    private void ShowSystemErrorFeedback(string message)
+    {
+        if (_overlayCoordinator is { } coordinator)
+        {
+            var token = coordinator.Acquire(OverlayRequester.System);
+            coordinator.Show(
+                token,
+                new DictationOverlayState
+                {
+                    ShowFeedback = true,
+                    FeedbackIsError = true,
+                    FeedbackText = message,
+                }
+            );
+            return;
+        }
+
+        _postToUiThread(() =>
+        {
+            ActionResultUrl = null;
+            FeedbackDurationMilliseconds = null;
+            FeedbackText = message;
+            FeedbackIsError = true;
+            ShowFeedback = true;
+            RestartFeedbackTimer();
+        });
+    }
+
+    internal void ApplyState(DictationOverlayState state)
+    {
+        ApplyStateCore(state, restartFeedbackTimer: true);
+    }
+
+    private void OnCoordinatorPresentationChanged(
+        object? sender,
+        OverlayPresentationChangedEventArgs presentation
+    )
+    {
+        if (presentation.Revision <= _lastCoordinatorRevision)
+        {
+            return;
+        }
+
+        _lastCoordinatorRevision = presentation.Revision;
+        _feedbackTimer.Stop();
+        _applyingCoordinatorPresentation = true;
+        try
+        {
+            ApplyStateCore(presentation.State, restartFeedbackTimer: false);
+        }
+        finally
+        {
+            _applyingCoordinatorPresentation = false;
+        }
+    }
+
+    private void ApplyStateCore(
+        DictationOverlayState state,
+        bool restartFeedbackTimer
+    )
+    {
+        var wasShowingFeedback = ShowFeedback;
         IsOverlayVisible = state.IsOverlayVisible;
         FeedbackIsError = state.FeedbackIsError;
+        FeedbackDurationMilliseconds = state.FeedbackDurationMilliseconds;
         FeedbackText = state.FeedbackText;
+        ActionResultUrl = state.ActionResultUrl;
         StatusText = state.StatusText;
         PartialText = state.PartialText;
         LlmResponseText = state.LlmResponseText;
@@ -256,6 +415,10 @@ public partial class DictationOverlayViewModel : ObservableObject
         _sessionStartedAtUtc = state.SessionStartedAtUtc;
         IsRecording = state.IsRecording;
         ShowFeedback = state.ShowFeedback;
+        if (restartFeedbackTimer && wasShowingFeedback && state.ShowFeedback)
+        {
+            RestartFeedbackTimer();
+        }
 
         if (IsRecording && _sessionStartedAtUtc is not null)
         {
@@ -289,6 +452,23 @@ public partial class DictationOverlayViewModel : ObservableObject
         RecordingSeconds = Math.Max(0, (DateTime.UtcNow - startedAt).TotalSeconds);
     }
 
+    internal void RecordingTimerTick()
+    {
+        RefreshRecordingSeconds();
+        NotifyTextSlots(OverlayWidget.Timer);
+    }
+
+    internal void ClockTimerTick()
+    {
+        NotifyTextSlots(OverlayWidget.Clock);
+    }
+
+    internal bool IsClockTimerRunning => _clockTimer.IsEnabled;
+
+    internal bool IsFeedbackTimerRunning => _feedbackTimer.IsEnabled;
+
+    internal TimeSpan FeedbackTimerInterval => _feedbackTimer.Interval;
+
     private void RefreshOverlaySlots()
     {
         OnPropertyChanged(nameof(ShowLeftIndicator));
@@ -299,6 +479,36 @@ public partial class DictationOverlayViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowRightWaveform));
         OnPropertyChanged(nameof(ShowRightText));
         OnPropertyChanged(nameof(RightText));
+        UpdateClockTimer();
+    }
+
+    private void NotifyTextSlots(OverlayWidget widget)
+    {
+        if (_settings.Current.OverlayLeftWidget == widget)
+        {
+            OnPropertyChanged(nameof(LeftText));
+        }
+
+        if (_settings.Current.OverlayRightWidget == widget)
+        {
+            OnPropertyChanged(nameof(RightText));
+        }
+    }
+
+    private void UpdateClockTimer()
+    {
+        var shouldRun = IsOverlayVisible
+                        && (_settings.Current.OverlayLeftWidget == OverlayWidget.Clock
+                            || _settings.Current.OverlayRightWidget == OverlayWidget.Clock);
+
+        if (shouldRun)
+        {
+            _clockTimer.Start();
+        }
+        else
+        {
+            _clockTimer.Stop();
+        }
     }
 
     private static bool IsTextWidget(OverlayWidget widget)
@@ -323,11 +533,11 @@ public partial class DictationOverlayViewModel : ObservableObject
                 RecordingMode.Toggle => Loc.Instance["Common.ModeToggle"],
                 RecordingMode.PushToTalk => Loc.Instance["Common.ModePushToTalk"],
                 RecordingMode.Hybrid => Loc.Instance["Common.ModeHybrid"],
-                _ => ""
+                _ => "",
             },
             OverlayWidget.AppName => ActiveAppName ?? "",
             // Indicator, Waveform and None render no text; handled by the default arm.
-            _ => ""
+            _ => "",
         };
     }
 }

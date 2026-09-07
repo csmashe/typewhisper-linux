@@ -16,7 +16,7 @@
   "Settings.ProfilesDescription": "Дополнительные OpenAI-совместимые конечные точки. Каждый профиль отображается как отдельный движок транскрипции и провайдер LLM, которые можно выбрать при диктовке и в промптах. Конечная точка по умолчанию выше не затрагивается.",
   "Settings.ProfileName": "Название",
   "Settings.ProfileNamePlaceholder": "Local Ollama",
-  "Settings.ProfileApiKeyDescription": "Оставьте пустым, чтобы сохранить текущий ключ.",
+  "Settings.ProfileApiKeyDescription": "Сохранённый ключ остаётся, пока вы не измените это поле. Если очистить поле, сохранённый ключ будет удалён.",
   "Settings.ProfileTranscriptionModelDescription": "Необязательное значение по умолчанию; для каждого рабочего процесса можно выбрать любую загруженную модель.",
   "Settings.ProfileLlmModelDescription": "Необязательное значение по умолчанию; промпты могут использовать любую загруженную модель.",
   "Settings.AddProfile": "Добавить профиль",

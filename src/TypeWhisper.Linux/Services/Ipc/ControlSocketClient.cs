@@ -15,9 +15,10 @@ internal static class ControlSocketClient
     private const int TimeoutMillis = 2000;
 
     /// <summary>
-    ///     Side-effect-free liveness probe: returns true if a server is bound to
-    ///     <paramref name="path" />. Used by argument-bearing launches (e.g. <c>--minimized</c>)
-    ///     that must not trigger a toggle merely to check for a running instance.
+    ///     Liveness probe: returns true if a server is bound to <paramref name="path" />.
+    ///     Never toggles recording state, so argument-bearing launches (e.g. <c>--minimized</c>)
+    ///     can use it to check for a running instance. It may, however, unlink a socket path
+    ///     confirmed stale under the ownership lock.
     /// </summary>
     public static bool IsLivePeer(string path)
     {
@@ -40,14 +41,9 @@ internal static class ControlSocketClient
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
         {
-            try
-            {
-                File.Delete(path);
-            }
-            catch
-            {
-                /* best-effort */
-            }
+            // ECONNREFUSED alone isn't proof of staleness — the peer may have bound but not
+            // yet started listening. Re-probe under the ownership lock before unlinking.
+            ControlSocketOwnership.TryCleanupStaleSocket(path);
 
             return false;
         }
@@ -137,15 +133,8 @@ internal static class ControlSocketClient
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
         {
-            // Stale socket — remove so the new instance can bind without EADDRINUSE.
-            try
-            {
-                File.Delete(path);
-            }
-            catch
-            {
-                /* best-effort */
-            }
+            // ECONNREFUSED alone isn't proof of staleness; re-probe under the ownership lock before unlinking.
+            ControlSocketOwnership.TryCleanupStaleSocket(path);
 
             return false;
         }
@@ -249,15 +238,8 @@ internal static class ControlSocketClient
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
         {
-            // Stale socket — clean up so a follow-up GUI launch can bind cleanly.
-            try
-            {
-                File.Delete(path);
-            }
-            catch
-            {
-                /* best-effort */
-            }
+            // ECONNREFUSED alone isn't proof of staleness; re-probe under the ownership lock before unlinking.
+            ControlSocketOwnership.TryCleanupStaleSocket(path);
 
             return false;
         }

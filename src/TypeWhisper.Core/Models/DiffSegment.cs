@@ -10,7 +10,7 @@ public enum DiffKind
     Added,
 
     /// <summary>Present in the raw text but not the final text.</summary>
-    Removed
+    Removed,
 }
 
 /// <summary>

@@ -98,6 +98,138 @@ public sealed class LocalModelStorageServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_SaveFails_LeavesSourceIntact()
+    {
+        var source = Path.Join(_tempRoot, "source-save-failure");
+        var target = Path.Join(_tempRoot, "target-save-failure");
+        var modelDir = Path.Join(source, LocalModelStoragePaths.PluginDataFolderName, "com.typewhisper.whisper-cpp", "Models");
+        Directory.CreateDirectory(modelDir);
+        var sourceModel = Path.Join(modelDir, "ggml-base.bin");
+        await File.WriteAllTextAsync(sourceModel, "weights");
+
+        // Source is already the active custom path so the general (non-default) branch runs.
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source })
+        {
+            ThrowOnSave = new IOException("save failed"),
+        };
+        var service = new LocalModelStorageService(settings);
+
+        await Assert.ThrowsAsync<IOException>(() => service.MoveDownloadsAndUsePathAsync(target));
+
+        // Save failed before the best-effort cleanup, so source and persisted path are untouched.
+        Assert.True(File.Exists(sourceModel));
+        Assert.Equal(source, settings.Current.LocalModelStoragePath);
+    }
+
+    [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_DifferentFileAtTarget_FailsWithoutDeletingSource()
+    {
+        var source = Path.Join(_tempRoot, "source-conflict");
+        var target = Path.Join(_tempRoot, "target-conflict");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(target);
+        var sourceModel = Path.Join(source, "ggml-base.bin");
+        var conflictingTarget = Path.Join(target, "ggml-base.bin");
+        await File.WriteAllTextAsync(sourceModel, "complete weights");
+        await File.WriteAllTextAsync(conflictingTarget, "truncated");
+
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source });
+        var service = new LocalModelStorageService(settings);
+
+        await Assert.ThrowsAsync<IOException>(() => service.MoveDownloadsAndUsePathAsync(target));
+
+        Assert.Equal("complete weights", await File.ReadAllTextAsync(sourceModel));
+        Assert.Equal("truncated", await File.ReadAllTextAsync(conflictingTarget));
+        Assert.Equal(source, settings.Current.LocalModelStoragePath);
+    }
+
+    [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_PreexistingSameSizeTarget_KeepsSourceRatherThanTrustingIt()
+    {
+        var source = Path.Join(_tempRoot, "source-resume");
+        var target = Path.Join(_tempRoot, "target-resume");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(target);
+        var sourceModel = Path.Join(source, "ggml-base.bin");
+        await File.WriteAllTextAsync(sourceModel, "weights");
+        await File.WriteAllTextAsync(Path.Join(target, "ggml-base.bin"), "weights");
+
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source });
+        var service = new LocalModelStorageService(settings);
+
+        await service.MoveDownloadsAndUsePathAsync(target);
+
+        // Equal size is not proof of equal bytes, and this run did not write the target, so the
+        // source is retained. Wasting disk beats deleting the only good copy.
+        Assert.True(File.Exists(sourceModel));
+        Assert.Equal(Path.GetFullPath(target), settings.Current.LocalModelStoragePath);
+    }
+
+    [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_SameSizeDifferentContentAtTarget_NeverDeletesSource()
+    {
+        var source = Path.Join(_tempRoot, "source-collision");
+        var target = Path.Join(_tempRoot, "target-collision");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(target);
+        var sourceModel = Path.Join(source, "ggml-base.bin");
+        var targetModel = Path.Join(target, "ggml-base.bin");
+
+        // Byte-for-byte different, identical length — the case a length-only identity check
+        // would wave through before deleting the source.
+        await File.WriteAllTextAsync(sourceModel, "AAAAAAA");
+        await File.WriteAllTextAsync(targetModel, "BBBBBBB");
+
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source });
+        var service = new LocalModelStorageService(settings);
+
+        await service.MoveDownloadsAndUsePathAsync(target);
+
+        Assert.Equal("AAAAAAA", await File.ReadAllTextAsync(sourceModel));
+        Assert.Equal("BBBBBBB", await File.ReadAllTextAsync(targetModel));
+    }
+
+    [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_FailurePartwayThroughCopy_LeavesSourceIntact()
+    {
+        var source = Path.Join(_tempRoot, "source-copy-failure");
+        var target = Path.Join(_tempRoot, "target-copy-failure");
+        var sourceModel = Path.Join(source, "first-model.bin");
+        var sourcePluginAsset = Path.Join(
+            source,
+            LocalModelStoragePaths.PluginDataFolderName,
+            "com.typewhisper.whisper-cpp",
+            "Models",
+            "second-model.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourcePluginAsset)!);
+        await File.WriteAllTextAsync(sourceModel, "first");
+        await File.WriteAllTextAsync(sourcePluginAsset, "second");
+
+        // Pre-create a directory exactly where the second model's file must land: the same-directory
+        // staging copy succeeds, but the final File.Move onto an existing directory throws, leaving a
+        // partial staging file behind unless the copy helper cleans it up.
+        var blockingTarget = Path.Join(
+            target,
+            LocalModelStoragePaths.PluginDataFolderName,
+            "com.typewhisper.whisper-cpp",
+            "Models",
+            "second-model.bin");
+        Directory.CreateDirectory(blockingTarget);
+
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source });
+        var service = new LocalModelStorageService(settings);
+
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            service.MoveDownloadsAndUsePathAsync(target));
+
+        Assert.True(File.Exists(Path.Join(target, "first-model.bin")));
+        Assert.True(File.Exists(sourceModel));
+        Assert.True(File.Exists(sourcePluginAsset));
+        Assert.Equal(source, settings.Current.LocalModelStoragePath);
+        Assert.Empty(Directory.EnumerateFiles(target, "*.tw-migrate-*.tmp", SearchOption.AllDirectories));
+    }
+
+    [Fact]
     public async Task MoveDownloadsAndUsePathAsync_DefaultLayout_MigratesSiblingPluginAssetsAndSavesPath()
     {
         var defaultRoot = Path.Join(_tempRoot, "default");
@@ -300,16 +432,37 @@ public sealed class LocalModelStorageServiceTests : IDisposable
 
     private sealed class FakeSettingsService : ISettingsService
     {
+        // ISettingsService.Update must read and persist under the same gate as Save.
+        private readonly Lock _gate = new();
+
         public FakeSettingsService(AppSettings initial) => Current = initial;
 
         public AppSettings Current { get; private set; }
+
+        public Exception? ThrowOnSave;
 
         public AppSettings Load() => Current;
 
         public void Save(AppSettings settings)
         {
-            Current = settings;
-            SettingsChanged?.Invoke(settings);
+            lock (_gate)
+            {
+                if (ThrowOnSave is not null)
+                    throw ThrowOnSave;
+
+                Current = settings;
+                SettingsChanged?.Invoke(settings);
+            }
+        }
+
+        public AppSettings Update(Func<AppSettings, AppSettings> mutate)
+        {
+            lock (_gate)
+            {
+                var updated = mutate(Current);
+                Save(updated);
+                return updated;
+            }
         }
 
         public event Action<AppSettings>? SettingsChanged;

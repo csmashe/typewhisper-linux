@@ -53,7 +53,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
             {
                 Id = "prompt",
                 Name = "Rewrite",
-                SystemPrompt = "Rewrite this"
+                SystemPrompt = "Rewrite this",
             },
             "hello",
             ct: CancellationToken.None
@@ -82,7 +82,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
             [defaultProvider, overrideProvider],
             [
                 CreateLoadedPlugin(defaultProvider.PluginId, defaultProvider),
-                CreateLoadedPlugin(overrideProvider.PluginId, overrideProvider)
+                CreateLoadedPlugin(overrideProvider.PluginId, overrideProvider),
             ]
         );
         var settings = CreateSettings(
@@ -101,7 +101,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
                 Id = "prompt",
                 Name = "Rewrite",
                 SystemPrompt = "Rewrite this",
-                ProviderOverride = "plugin:com.test.override:model-b"
+                ProviderOverride = "plugin:com.test.override:model-b",
             },
             "hello",
             ct: CancellationToken.None
@@ -134,7 +134,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
             {
                 Id = "prompt",
                 Name = "Rewrite",
-                SystemPrompt = "Rewrite this"
+                SystemPrompt = "Rewrite this",
             },
             "hello",
             ct: CancellationToken.None
@@ -245,12 +245,18 @@ public sealed class PromptProcessingServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ProcessAsync_WithLocalPlugin_MarksRanLocallyFromManifest()
+    public async Task ProcessAsync_WithLocalDescriptor_MarksRanLocally()
     {
         var provider = new FakeLlmProviderPlugin("com.test.local", "Local Provider", "model-l");
         using var pluginManager = CreatePluginManager(
             [provider],
-            [CreateLoadedPlugin(provider.PluginId, provider, isLocal: true)]
+            [
+                CreateLoadedPlugin(
+                    provider.PluginId,
+                    provider,
+                    PluginNetworkAccess.Local
+                ),
+            ]
         );
         var settings = CreateSettings(
             new AppSettings { DefaultLlmProvider = "plugin:com.test.local:model-l" }
@@ -272,6 +278,51 @@ public sealed class PromptProcessingServiceTests : IDisposable
 
         var call = Assert.Single(capture.Calls);
         Assert.True(call.RanLocally);
+    }
+
+    [Theory]
+    [InlineData(PluginNetworkAccess.Network)]
+    [InlineData(PluginNetworkAccess.Mixed)]
+    [InlineData(PluginNetworkAccess.UserControlled)]
+    public async Task ProcessAsync_WithNonLocalDescriptor_DoesNotMarkRanLocally(
+        PluginNetworkAccess networkAccess
+    )
+    {
+        var provider = new FakeLlmProviderPlugin(
+            "com.test.non-local",
+            "Non-local Provider",
+            "model-n"
+        );
+        using var pluginManager = CreatePluginManager(
+            [provider],
+            [CreateLoadedPlugin(provider.PluginId, provider, networkAccess)]
+        );
+        var settings = CreateSettings(
+            new AppSettings
+            {
+                DefaultLlmProvider = "plugin:com.test.non-local:model-n",
+            }
+        );
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        var capture = new LlmCallCapture();
+        await sut.ProcessAsync(
+            new PromptAction
+            {
+                Id = "prompt",
+                Name = "Rewrite",
+                SystemPrompt = "Rewrite this",
+            },
+            "hello",
+            capture,
+            CancellationToken.None
+        );
+
+        Assert.False(Assert.Single(capture.Calls).RanLocally);
     }
 
     [Fact]
@@ -420,7 +471,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
     }
 
     private PluginManager CreatePluginManager(
-        IReadOnlyList<ILlmProviderPlugin> llmProviders,
+        IReadOnlyList<ILlmProviderRole> llmProviders,
         IReadOnlyList<LoadedPlugin> loadedPlugins
     )
     {
@@ -448,25 +499,28 @@ public sealed class PromptProcessingServiceTests : IDisposable
     private LoadedPlugin CreateLoadedPlugin(
         string pluginId,
         ITypeWhisperPlugin plugin,
-        bool isLocal = false
+        PluginNetworkAccess networkAccess = PluginNetworkAccess.Network
     )
     {
         var pluginDir = Path.Join(_tempDir, pluginId);
         Directory.CreateDirectory(pluginDir);
 
+        var manifest = new PluginManifest
+        {
+            Id = pluginId,
+            Name = plugin.PluginName,
+            Version = plugin.PluginVersion,
+            AssemblyName = "fake.dll",
+            PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name,
+            NetworkAccess = networkAccess,
+            Categories = [PluginCategory.Llm],
+        };
         return new LoadedPlugin(
-            new PluginManifest
-            {
-                Id = pluginId,
-                Name = plugin.PluginName,
-                Version = plugin.PluginVersion,
-                AssemblyName = "fake.dll",
-                PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name,
-                IsLocal = isLocal
-            },
+            manifest,
             plugin,
             new PluginAssemblyLoadContext(pluginDir),
-            pluginDir
+            pluginDir,
+            PluginLoader.ResolveMetadata(manifest)
         );
     }
 

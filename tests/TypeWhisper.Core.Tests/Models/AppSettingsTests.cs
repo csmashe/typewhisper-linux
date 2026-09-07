@@ -1,3 +1,4 @@
+using System.Text.Json;
 using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Tests.Models;
@@ -5,6 +6,41 @@ namespace TypeWhisper.Core.Tests.Models;
 /// <summary>Covers <see cref="AppSettings" /> defaults and its normalize/clamp helpers (auto-hide, acceleration, overlay position).</summary>
 public class AppSettingsTests
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
+    [Fact]
+    public void LegacyHotkeyProperties_AreIgnoredOnLoadAndOmittedOnSave()
+    {
+        const string legacyJson =
+            """
+            {
+              "pushToTalkHotkey": "Ctrl+Shift+F8",
+              "toggleOnlyHotkey": "Ctrl+Shift+F9",
+              "holdOnlyHotkey": "Ctrl+Shift+F10",
+              "language": "de",
+              "autoPaste": false
+            }
+            """;
+
+        var settings = JsonSerializer.Deserialize<AppSettings>(legacyJson, s_jsonOptions);
+
+        Assert.NotNull(settings);
+        Assert.Equal("de", settings.Language);
+        Assert.False(settings.AutoPaste);
+
+        var reserializedJson = JsonSerializer.Serialize(settings, s_jsonOptions);
+        using var reserialized = JsonDocument.Parse(reserializedJson);
+        var root = reserialized.RootElement;
+
+        Assert.False(root.TryGetProperty("pushToTalkHotkey", out _));
+        Assert.False(root.TryGetProperty("toggleOnlyHotkey", out _));
+        Assert.False(root.TryGetProperty("holdOnlyHotkey", out _));
+    }
+
     [Fact]
     public void DefaultPreviewBubbleAutoHideMilliseconds_IsFifteenHundred()
     {

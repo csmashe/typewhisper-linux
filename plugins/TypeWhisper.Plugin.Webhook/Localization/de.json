@@ -18,6 +18,7 @@
   "Settings.MethodInvalid": "Methode muss POST oder PUT sein.",
   "Settings.HeaderMissingSeparator": "Header-Zeile '{0}' fehlt ein ':'-Trennzeichen.",
   "Settings.HeaderEmptyName": "Header-Zeile '{0}' hat einen leeren Namen.",
+  "Settings.HeaderPlaceholderWithoutStoredValue": "für Header '{0}' gibt es keinen gespeicherten Wert zum Beibehalten; geben Sie den tatsächlichen Wert ein.",
   "Settings.FailedToSaveSettings": "Einstellungen konnten nicht gespeichert werden: {0}",
   "Settings.Saved": "Gespeichert.",
   "Manifest.Name": "Webhook",

@@ -1,7 +1,9 @@
-using System.Diagnostics;
-using System.IO;
+// ReSharper disable ClassNeverInstantiated.Global
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net;
-using System.Net.Http;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -13,7 +15,7 @@ namespace TypeWhisper.Plugin.OpenAi;
 internal enum OpenAiAuthMode
 {
     ApiKey,
-    ChatGpt
+    ChatGpt,
 }
 
 internal static class OpenAiAuthModeExtensions
@@ -50,6 +52,9 @@ internal static class OpenAiOAuthClient
 
     private const string AuthorizeOriginator = "opencode";
 
+    private static readonly JsonSerializerOptions s_jsonReadOptions =
+        new() { PropertyNameCaseInsensitive = true };
+
     public static OpenAiPkceCodes GeneratePkceCodes()
     {
         var verifier = RandomOAuthString(64);
@@ -85,17 +90,15 @@ internal static class OpenAiOAuthClient
         OpenAiPkceCodes pkce,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Issuer}/oauth/token")
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Issuer}/oauth/token");
+        request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
         {
-            Content = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["grant_type"] = "authorization_code",
-                ["code"] = code,
-                ["redirect_uri"] = RedirectUri,
-                ["client_id"] = ClientId,
-                ["code_verifier"] = pkce.Verifier,
-            })
-        };
+            ["grant_type"] = "authorization_code",
+            ["code"] = code,
+            ["redirect_uri"] = RedirectUri,
+            ["client_id"] = ClientId,
+            ["code_verifier"] = pkce.Verifier,
+        });
 
         return await SendTokenRequestAsync(httpClient, request, ct);
     }
@@ -105,15 +108,13 @@ internal static class OpenAiOAuthClient
         string refreshToken,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Issuer}/oauth/token")
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Issuer}/oauth/token");
+        request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
         {
-            Content = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["grant_type"] = "refresh_token",
-                ["refresh_token"] = refreshToken,
-                ["client_id"] = ClientId,
-            })
-        };
+            ["grant_type"] = "refresh_token",
+            ["refresh_token"] = refreshToken,
+            ["client_id"] = ClientId,
+        });
 
         return await SendTokenRequestAsync(httpClient, request, ct);
     }
@@ -147,9 +148,7 @@ internal static class OpenAiOAuthClient
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException($"OpenAI token request failed with status {(int)response.StatusCode}: {json}");
 
-        return JsonSerializer.Deserialize<OpenAiOAuthTokenResponse>(
-            json,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+        return JsonSerializer.Deserialize<OpenAiOAuthTokenResponse>(json, s_jsonReadOptions)
             ?? throw new InvalidOperationException("OpenAI token response could not be parsed.");
     }
 
@@ -347,9 +346,11 @@ internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
     private void StopListeners()
     {
         try { _v4Listener?.Stop(); }
-        catch { }
+        catch { /* Listener may already be stopped or disposed. */ }
+
         try { _v6Listener?.Stop(); }
-        catch { }
+        catch { /* Listener may already be stopped or disposed. */ }
+
         _v4Listener = null;
         _v6Listener = null;
     }
@@ -409,14 +410,14 @@ internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
         """;
 
     private static string ErrorHtml(string message) =>
-        $$"""
+        $"""
         <!doctype html>
         <html>
           <head><meta charset="utf-8"><title>TypeWhisper Login</title></head>
           <body style="font-family:Segoe UI,sans-serif;background:#111827;color:#f9fafb;display:grid;min-height:100vh;place-items:center;margin:0">
             <main style="max-width:520px;padding:28px;border-radius:12px;background:#1f2937">
               <h1 style="margin-top:0;color:#fca5a5">Login failed</h1>
-              <p>{{message}}</p>
+              <p>{message}</p>
             </main>
           </body>
         </html>

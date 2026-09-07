@@ -104,6 +104,68 @@ public sealed class HistorySectionViewModelTests : IDisposable
         Assert.Equal("Kubernetes", entry.Replacement);
     }
 
+    [Fact]
+    public void Refresh_UtcPlus13_GroupsLateUtcRecordUnderLocalTodayAndFormatsLocalTime()
+    {
+        var timeZone = TimeZoneInfo.CreateCustomTimeZone(
+            "History tests UTC+13",
+            TimeSpan.FromHours(13),
+            "History tests UTC+13",
+            "History tests UTC+13"
+        );
+        var utcNow = new DateTime(2030, 1, 2, 23, 45, 0, DateTimeKind.Utc);
+        var history = CreateHistoryService();
+        var record = CreateRecord(
+            "crosses midnight",
+            timestamp: new DateTime(2030, 1, 2, 23, 30, 0, DateTimeKind.Utc)
+        );
+        history.AddRecord(record);
+
+        var sut = CreateViewModel(
+            history,
+            CreateDictionaryService(),
+            timeZone: timeZone,
+            utcNow: () => utcNow
+        );
+
+        var group = Assert.Single(sut.Groups);
+        Assert.Equal(Loc.Instance["History.GroupToday"], group.Name);
+        var row = Assert.Single(group.Entries);
+        Assert.Equal(new DateTime(2030, 1, 3, 12, 30, 0), row.LocalTimestamp);
+        Assert.Equal("12:30", row.TimeLabel);
+    }
+
+    [Fact]
+    public void Refresh_UtcMinus11_TreatsUnspecifiedTimestampAsUtcAndGroupsLocalYesterday()
+    {
+        var timeZone = TimeZoneInfo.CreateCustomTimeZone(
+            "History tests UTC-11",
+            TimeSpan.FromHours(-11),
+            "History tests UTC-11",
+            "History tests UTC-11"
+        );
+        var utcNow = new DateTime(2030, 1, 3, 12, 0, 0, DateTimeKind.Utc);
+        var history = CreateHistoryService();
+        var record = CreateRecord(
+            "legacy timestamp",
+            timestamp: new DateTime(2030, 1, 3, 10, 30, 0, DateTimeKind.Unspecified)
+        );
+        history.AddRecord(record);
+
+        var sut = CreateViewModel(
+            history,
+            CreateDictionaryService(),
+            timeZone: timeZone,
+            utcNow: () => utcNow
+        );
+
+        var group = Assert.Single(sut.Groups);
+        Assert.Equal(Loc.Instance["History.GroupYesterday"], group.Name);
+        var row = Assert.Single(group.Entries);
+        Assert.Equal(new DateTime(2030, 1, 2, 23, 30, 0), row.LocalTimestamp);
+        Assert.Equal("23:30", row.TimeLabel);
+    }
+
     private HistoryService CreateHistoryService()
     {
         return new HistoryService(Path.Join(_tempDir, "history.json"), Path.Join(_tempDir, "audio"));
@@ -126,7 +188,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
             AppSettings.Default with
             {
                 AutoAddDictionaryCorrections = autoAddCorrections,
-                CaptureLlmProvenance = captureProvenance
+                CaptureLlmProvenance = captureProvenance,
             }
         );
         return settings;
@@ -135,7 +197,9 @@ public sealed class HistorySectionViewModelTests : IDisposable
     private HistorySectionViewModel CreateViewModel(
         HistoryService history,
         DictionaryService dictionary,
-        SettingsService? settings = null
+        SettingsService? settings = null,
+        TimeZoneInfo? timeZone = null,
+        Func<DateTime>? utcNow = null
     ) =>
         new(
             history,
@@ -147,25 +211,28 @@ public sealed class HistorySectionViewModelTests : IDisposable
             // tests that never trigger audio playback don't fail on device init.
 #pragma warning disable SYSLIB0050
             (AudioPlaybackService)
-            FormatterServices.GetUninitializedObject(typeof(AudioPlaybackService))
+            FormatterServices.GetUninitializedObject(typeof(AudioPlaybackService)),
+            timeZone ?? TimeZoneInfo.Local,
+            utcNow ?? (() => DateTime.UtcNow)
         );
 #pragma warning restore SYSLIB0050
 
     private static TranscriptionRecord CreateRecord(
         string finalText,
         string? raw = null,
-        IReadOnlyList<LlmCallProvenance>? llmCalls = null
+        IReadOnlyList<LlmCallProvenance>? llmCalls = null,
+        DateTime? timestamp = null
     )
     {
         return new TranscriptionRecord
         {
             Id = Guid.NewGuid().ToString("N"),
-            Timestamp = DateTime.UtcNow,
+            Timestamp = timestamp ?? DateTime.UtcNow,
             RawText = raw ?? finalText,
             FinalText = finalText,
             DurationSeconds = 2.4,
             AppProcessName = "test",
-            LlmCalls = llmCalls ?? []
+            LlmCalls = llmCalls ?? [],
         };
     }
 
@@ -186,7 +253,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
             ProviderId = "com.test.provider",
             ModelId = modelId,
             RanLocally = ranLocally,
-            InjectedMemoryContext = injectedContext
+            InjectedMemoryContext = injectedContext,
         };
     }
 
@@ -203,7 +270,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
                 CreateCall(
                     "Cleanup",
                     injectedContext: "remembered fact"
-                )
+                ),
             ]
         );
         history.AddRecord(record);

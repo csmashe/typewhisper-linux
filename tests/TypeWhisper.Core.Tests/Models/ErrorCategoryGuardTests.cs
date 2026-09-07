@@ -37,7 +37,7 @@ public partial class ErrorCategoryGuardTests
             ErrorCategory.Prompt,
             ErrorCategory.Plugin,
             ErrorCategory.Insertion,
-            ErrorCategory.Detection
+            ErrorCategory.Detection,
         ];
 
         Assert.Equal(all.Length, all.Distinct().Count());

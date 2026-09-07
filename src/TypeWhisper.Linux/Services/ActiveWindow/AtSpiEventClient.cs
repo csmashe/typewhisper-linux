@@ -219,6 +219,12 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     private readonly Lock _focusLock = new();
     private readonly SemaphoreSlim _startGate = new(1, 1);
 
+    // Guards the {_disposed, _started, IsRunning} triple and TearDownConnection's snapshot-and-null
+    // of the connection/subscription fields. TryStartAsync writes them outside it: starts serialize
+    // on _startGate, and a post-disposal publish is swept by EnsureStartedAsync's _disposed
+    // re-check. Dispose can't use _startGate — it is synchronous and would stall mid-connect.
+    private readonly Lock _lifecycleLock = new();
+
     // Guards _textChangedRefCount and _textChangedRegistered. A dedicated lock (not _focusLock) so
     // an acquire/release from a commit or paste path never contends with the focus-event fast path
     // on the dispatch thread.
@@ -260,6 +266,11 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     private AtSpiElementRef? _currentFocused;
 
+    // Advances for every valid focused gain/loss and fences a cold-start scan against focus
+    // changes observed after that scan began. Guarded by _focusLock and deliberately never reset:
+    // connection-lifecycle invalidation remains the bootstrap CTS's responsibility.
+    private long _focusEventGeneration;
+
     // In-flight cold-start focus scan, so concurrent bootstrap callers share one walk
     // instead of each traversing the bus. Behind _focusLock; cleared when the scan settles.
     private Task<AtSpiElementRef?>? _focusBootstrap;
@@ -288,26 +299,60 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
+        lock (_lifecycleLock)
         {
-            return;
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            // Consumers that must not start the listeners themselves gate on IsRunning; leaving it
+            // true after disposal would send them at a torn-down connection.
+            _started = false;
+            IsRunning = false;
         }
 
-        _disposed = true;
+        TearDownConnection();
+
+        // _startGate is deliberately NOT disposed: fire-and-forget reconciles and arms can still be
+        // mid-wait at shutdown, and a disposed semaphore would fault their WaitAsync or their
+        // finally's Release. SemaphoreSlim needs disposal only when its AvailableWaitHandle is used
+        // — same rationale as TargetAppCorrectionLearningService's listen gate.
+    }
+
+    // The single teardown point, so the startup-failure, stop, disposal and
+    // disposed-while-connecting paths can't drift apart. Detaches under the lock and disposes
+    // outside it, so racing callers can't double-dispose or run bus teardown while holding it.
+    private void TearDownConnection()
+    {
+        IDisposable? stateSubscription;
+        IDisposable? textSubscription;
+        IDisposable? registryOwnerSubscription;
+        DBusConnection? connection;
+        lock (_lifecycleLock)
+        {
+            stateSubscription = _stateSubscription;
+            textSubscription = _textSubscription;
+            registryOwnerSubscription = _registryOwnerSubscription;
+            connection = _connection;
+            _stateSubscription = null;
+            _textSubscription = null;
+            _registryOwnerSubscription = null;
+            _connection = null;
+        }
 
         try
         {
-            _stateSubscription?.Dispose();
-            _textSubscription?.Dispose();
-            _registryOwnerSubscription?.Dispose();
-            _connection?.Dispose();
+            stateSubscription?.Dispose();
+            textSubscription?.Dispose();
+            registryOwnerSubscription?.Dispose();
+            connection?.Dispose();
         }
         catch
         {
             // best effort — teardown of a dying bus connection must not throw.
         }
-
-        _startGate.Dispose();
     }
 
     public event Action<AtSpiElementRef>? FocusChanged;
@@ -336,6 +381,12 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     public async Task<bool> EnsureStartedAsync()
     {
+        // Fast path only — the authoritative check happens under the gate below.
+        if (_disposed)
+        {
+            return false;
+        }
+
         if (_started)
         {
             return IsRunning;
@@ -344,18 +395,39 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         await _startGate.WaitAsync().ConfigureAwait(false);
         try
         {
+            // Dispose can land during the wait; connecting after its teardown would build a
+            // connection nothing ever closes.
+            if (_disposed)
+            {
+                return false;
+            }
+
             if (_started)
             {
                 return IsRunning;
             }
 
             var started = await TryStartAsync().ConfigureAwait(false);
-            IsRunning = started;
-            // Only cache success. On failure TryStartAsync has already torn down any partial
-            // connection, so leaving _started false lets a later call retry (e.g. the a11y bus
-            // became available, or a transient connect error cleared).
-            _started = started;
-            return started;
+
+            // TryStartAsync awaits, so Dispose may have swept past this brand-new connection while
+            // it was being built. Test and publish together, or this overwrites its cleared state.
+            lock (_lifecycleLock)
+            {
+                if (!_disposed)
+                {
+                    IsRunning = started;
+                    // Only cache success. On failure TryStartAsync has already torn down any
+                    // partial connection, so leaving _started false lets a later call retry
+                    // (e.g. the a11y bus became available, or a transient connect error cleared).
+                    _started = started;
+                    return started;
+                }
+            }
+
+            // Disposed while connecting: drop what we just built. Idempotent, so it's safe even
+            // when Dispose's own teardown already claimed it.
+            TearDownConnection();
+            return false;
         }
         finally
         {
@@ -532,25 +604,17 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     public async Task StopAsync()
     {
+        // Dispose already tore the connection down; a late reconcile or observer-error reset has
+        // nothing left to stop.
+        if (_disposed)
+        {
+            return;
+        }
+
         await _startGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            try
-            {
-                _stateSubscription?.Dispose();
-                _textSubscription?.Dispose();
-                _registryOwnerSubscription?.Dispose();
-                _connection?.Dispose();
-            }
-            catch
-            {
-                // best effort — teardown of a dying bus connection must not throw.
-            }
-
-            _stateSubscription = null;
-            _textSubscription = null;
-            _registryOwnerSubscription = null;
-            _connection = null;
+            TearDownConnection();
             // Reset so the next EnsureStartedAsync reconnects fresh rather than returning
             // the stale cached availability.
             _started = false;
@@ -829,8 +893,9 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             }
 
             var cts = new CancellationTokenSource(s_bootstrapDeadline);
+            var bootstrapGeneration = _focusEventGeneration;
             _focusBootstrapCts = cts;
-            return _focusBootstrap = BootstrapFocusAsync(conn, cts);
+            return _focusBootstrap = BootstrapFocusAsync(conn, cts, bootstrapGeneration);
         }
     }
 
@@ -857,14 +922,19 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     // leading Yield forces asynchronous completion so a synchronously-failing scan can't run
     // its finally BEFORE the caller's slot assignment lands — that would cache a settled task
     // forever and disable every future bootstrap on this connection.
-    private async Task<AtSpiElementRef?> BootstrapFocusAsync(DBusConnection conn, CancellationTokenSource cts)
+    private async Task<AtSpiElementRef?> BootstrapFocusAsync(
+        DBusConnection conn,
+        CancellationTokenSource cts,
+        long bootstrapGeneration
+    )
     {
         await Task.Yield();
         try
         {
             // A real focus event that landed while the walk ran is authoritative — prefer it
             // over the walk's own (possibly empty) result rather than reporting no focus.
-            return await ScanForFocusedElementAsync(conn, cts.Token).ConfigureAwait(false)
+            return await ScanForFocusedElementAsync(conn, bootstrapGeneration, cts.Token)
+                .ConfigureAwait(false)
                 ?? CurrentFocusedElement;
         }
         catch (OperationCanceledException)
@@ -913,6 +983,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     // on; the bounded walk works everywhere.
     private async Task<AtSpiElementRef?> ScanForFocusedElementAsync(
         DBusConnection conn,
+        long bootstrapGeneration,
         CancellationToken ct
     )
     {
@@ -942,7 +1013,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                 // SeedFocus re-checks cancellation while holding _focusLock — the same lock
                 // StopAsync cancels under — so a reset racing this walk can't have its cleared
                 // focus repopulated with an element from the torn-down connection.
-                return SeedFocus(focused, ct);
+                return SeedFocus(focused, bootstrapGeneration, ct);
             }
         }
 
@@ -1064,13 +1135,28 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     // itself); every match lands in the recent history so consumers' candidate fallback can
     // probe the one with readable text. FocusChanged is deliberately NOT raised: this
     // reconstructs state a missed past event should have left behind — focus didn't move now.
-    private AtSpiElementRef SeedFocus(List<AtSpiElementRef> found, CancellationToken ct)
+    private AtSpiElementRef? SeedFocus(
+        List<AtSpiElementRef> found,
+        long bootstrapGeneration,
+        CancellationToken ct
+    )
     {
         lock (_focusLock)
         {
             // Atomic with StopAsync's cancel+clear (both under _focusLock): if a reset already
             // won the lock, bail instead of seeding an element from the dead connection.
             ct.ThrowIfCancellationRequested();
+
+            // Any valid focus event after this scan began makes its observation stale, including
+            // a loss that had no current element to clear. Return only the live event-sourced
+            // state and leave both focus fields untouched so the next cold arm can retry safely.
+            if (bootstrapGeneration != _focusEventGeneration)
+            {
+                Trace.WriteLine(
+                    "[AtSpiEventClient] bootstrap scan rejected: focus changed while scanning (stale generation)."
+                );
+                return _currentFocused;
+            }
 
             if (_currentFocused is { } raced)
             {
@@ -1091,6 +1177,22 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             _currentFocused = found[^1];
             return found[^1];
         }
+    }
+
+    internal long CaptureFocusGenerationForTest()
+    {
+        lock (_focusLock)
+        {
+            return _focusEventGeneration;
+        }
+    }
+
+    internal AtSpiElementRef? SeedFocusForTest(
+        List<AtSpiElementRef> found,
+        long capturedGeneration
+    )
+    {
+        return SeedFocus(found, capturedGeneration, CancellationToken.None);
     }
 
     private static async Task<uint> GetStateWord0Async(
@@ -1245,7 +1347,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                     // body arg, so Arg0="focused" lets the bus daemon filter to focus changes
                     // for us instead of waking us for every state change session-wide. The
                     // in-handler detail/detail1 checks below stay as defense in depth.
-                    Arg0 = FocusedStateName
+                    Arg0 = FocusedStateName,
                 },
                 s_readSignal,
                 HandleStateChanged,
@@ -1258,7 +1360,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                 {
                     Type = MessageType.Signal,
                     Interface = EventObjectInterface,
-                    Member = "TextChanged"
+                    Member = "TextChanged",
                 },
                 s_readSignal,
                 HandleTextChanged,
@@ -1278,7 +1380,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                     Sender = "org.freedesktop.DBus",
                     Interface = "org.freedesktop.DBus",
                     Member = "NameOwnerChanged",
-                    Arg0 = RegistryBusName
+                    Arg0 = RegistryBusName,
                 },
                 s_readNameOwnerChanged,
                 HandleRegistryOwnerChanged,
@@ -1322,27 +1424,12 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             // A connection may have been made before AddMatchAsync/RegisterEventAsync threw.
             // Tear down any partial state so we don't leak a live connection/match, and so the
             // next EnsureStartedAsync retries from a clean slate.
-            try
-            {
-                _stateSubscription?.Dispose();
-                _textSubscription?.Dispose();
-                _registryOwnerSubscription?.Dispose();
-                _connection?.Dispose();
-            }
-            catch
-            {
-                // best effort — teardown of a half-open connection must not throw.
-            }
-
-            _stateSubscription = null;
-            _textSubscription = null;
-            _registryOwnerSubscription = null;
-            _connection = null;
+            TearDownConnection();
             return false;
         }
     }
 
-    private void HandleStateChanged(Exception? exception, AtSpiSignal signal, object? readerState, object? handlerState)
+    internal void HandleStateChanged(Exception? exception, AtSpiSignal signal, object? readerState, object? handlerState)
     {
         // Only successful reads carry a signal. On error/disconnect the observer is invoked
         // with a non-null exception and a default value; schedule a reconnect rather than
@@ -1353,10 +1440,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             return;
         }
 
-        if (
-            !string.Equals(signal.Detail, FocusedStateName, StringComparison.Ordinal)
-            || signal.Detail1 != StateGained
-        )
+        if (!string.Equals(signal.Detail, FocusedStateName, StringComparison.Ordinal))
         {
             return;
         }
@@ -1367,8 +1451,25 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             return;
         }
 
+        if (signal.Detail1 != StateGained)
+        {
+            // Focus loss can arrive after a newer gain, so only clear the element that actually
+            // lost focus; a stale loss must not clobber the newer focus anchor.
+            lock (_focusLock)
+            {
+                _focusEventGeneration++;
+                if (_currentFocused == element)
+                {
+                    _currentFocused = null;
+                }
+            }
+
+            return;
+        }
+
         lock (_focusLock)
         {
+            _focusEventGeneration++;
             _currentFocused = element;
             _recentFocused.Remove(element);
             _recentFocused.Insert(0, element);
@@ -1676,7 +1777,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         "org.freedesktop.DBus.Error.UnknownMethod",
         "org.freedesktop.DBus.Error.ServiceUnknown", // app's a11y bridge went away
         "org.freedesktop.DBus.Error.NoReply", // app busy / not responding
-        "org.freedesktop.DBus.Error.Disconnected"
+        "org.freedesktop.DBus.Error.Disconnected",
     ];
 
     // at-spi2-core 2.52 (Ubuntu/Mint) answers a property Get for an interface the element does not
@@ -1733,7 +1834,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         _errorLog.AddEntry(message, ErrorCategory.Detection);
     }
 
-    private readonly record struct AtSpiSignal(string Sender, string Path, string Detail, int Detail1);
+    internal readonly record struct AtSpiSignal(string Sender, string Path, string Detail, int Detail1);
 
     // Handle returned by AcquireTextChangedEvents. Idempotent: only the first Dispose releases the
     // underlying lease, so a caller (or a double-dispose from finalization patterns) can't drive

@@ -5,8 +5,8 @@ namespace TypeWhisper.Core.Services.NumberNormalization;
 
 public static class NumberWordNormalizer
 {
-    // fr/zh/ja parsers from upstream are intentionally not ported on Linux (locales are en/de/es/ru),
-    // so those language codes are omitted from the supported set.
+    // Only languages with a parser in this folder. fr/zh/ja were deliberately not ported from
+    // upstream; "ru" is a UI locale but has no parser, so Russian number words are left alone.
     private static readonly HashSet<string> s_supportedLanguageCodes = ["en", "de", "es"];
 
     public static string Normalize(string text, string? language)
@@ -61,6 +61,9 @@ public static class NumberWordNormalizer
     {
         var normalized = word.Normalize(NormalizationForm.FormD);
         var builder = new StringBuilder(normalized.Length);
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator --
+        // the LINQ form swaps string's struct enumerator for the boxed one, allocating on a
+        // method that runs for every word of every transcript.
         foreach (var c in normalized)
         {
             if (CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
@@ -82,7 +85,7 @@ public static class NumberWordNormalizer
             "en" => EnglishNumberWordParser.Parse(wordTexts),
             "de" => GermanNumberWordParser.Parse(wordTexts),
             "es" => SpanishNumberWordParser.Parse(wordTexts),
-            _ => null
+            _ => null,
         };
 
         if (parsed is null || parsed.ConsumedWords <= 0 || parsed.ConsumedWords > words.Count)
@@ -176,7 +179,7 @@ public static class NumberWordNormalizer
     private enum TokenKind
     {
         Word,
-        Other
+        Other,
     }
 
     private sealed record Token(string Text, TokenKind Kind)
