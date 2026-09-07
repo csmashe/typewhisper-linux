@@ -150,20 +150,26 @@ public static class OpenAiTranscriptionHelper
                 : "";
             var start = seg.TryGetProperty("start", out var startEl) ? startEl.GetDouble() : 0;
             var end = seg.TryGetProperty("end", out var endEl) ? endEl.GetDouble() : 0;
-            segments.Add(new PluginTranscriptionSegment(segmentText, start, end));
-
-            if (!seg.TryGetProperty("no_speech_prob", out var nspEl))
+            var prob = seg.TryGetProperty("no_speech_prob", out var nspEl)
+                && nspEl.ValueKind == JsonValueKind.Number
+                ? (float?)nspEl.GetDouble()
+                : null;
+            segments.Add(new PluginTranscriptionSegment(segmentText, start, end)
             {
-                continue;
+                NoSpeechProbability = prob,
+            });
+            if (prob is { } probability)
+            {
+                minNoSpeechProb = minNoSpeechProb is null
+                    ? probability
+                    : Math.Min(minNoSpeechProb.Value, probability);
             }
-
-            var prob = (float)nspEl.GetDouble();
-            minNoSpeechProb = minNoSpeechProb is null
-                ? prob
-                : Math.Min(minNoSpeechProb.Value, prob);
         }
 
-        return new PluginTranscriptionResult(text.Trim(), language, duration, minNoSpeechProb) { Segments = segments };
+        return new PluginTranscriptionResult(text.Trim(), language, duration, minNoSpeechProb)
+        {
+            Segments = segments,
+        };
     }
 
     private static InvalidOperationException CreateInvalidResponseException(

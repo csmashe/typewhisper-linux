@@ -17,6 +17,8 @@ public static class WhisperHallucinationFilter
     // phrase is treated as a real (if terse) dictation rather than a silence artifact.
     private const float MinNoSpeechProbability = 0.3f;
 
+    private const float TerminalSegmentMinNoSpeechProbability = 0.8f;
+
     // Normalized (lowercased, punctuation-stripped, single-spaced) stock outputs.
     private static readonly HashSet<string> s_phrases = new(StringComparer.Ordinal)
     {
@@ -66,6 +68,42 @@ public static class WhisperHallucinationFilter
         }
 
         return s_phrases.Contains(Normalize(transcript));
+    }
+
+    /// <summary>
+    ///     Strips a trailing silence segment that contains only a stock phrase when its no-speech
+    ///     probability exceeds the threshold and real text precedes it in the transcript.
+    /// </summary>
+    public static bool TryStripTerminalSegment(
+        string text,
+        string? terminalSegmentText,
+        float? terminalSegmentNoSpeechProbability,
+        out string strippedText
+    )
+    {
+        strippedText = text;
+        if (terminalSegmentNoSpeechProbability is not > TerminalSegmentMinNoSpeechProbability
+            || string.IsNullOrWhiteSpace(terminalSegmentText)
+            || !s_phrases.Contains(Normalize(terminalSegmentText)))
+        {
+            return false;
+        }
+
+        var trimmedText = text.Trim();
+        var segmentText = terminalSegmentText.Trim();
+        if (!trimmedText.EndsWith(segmentText, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var remainder = trimmedText[..^segmentText.Length].TrimEnd();
+        if (remainder.Length == 0)
+        {
+            return false;
+        }
+
+        strippedText = remainder;
+        return true;
     }
 
     private static string Normalize(string value)

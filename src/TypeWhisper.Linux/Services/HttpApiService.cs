@@ -1691,6 +1691,11 @@ public sealed partial class HttpApiService : IDisposable
             engineSupportsTranslation = plugin.SupportsTranslation;
         }
 
+        if (!settings.TranscribeShortQuietClipsAggressively)
+        {
+            result = TerminalHallucinationTrimmer.Trim(result);
+        }
+
         // An engine that ignores the translate task returns source-language text; reporting
         // Translate downstream would make number normalization treat it as English.
         var effectiveTask =

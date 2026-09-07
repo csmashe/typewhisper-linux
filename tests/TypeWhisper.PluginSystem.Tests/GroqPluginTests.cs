@@ -356,6 +356,38 @@ public class GroqPluginTests
         Assert.Equal("bulk", chunks[0]);
     }
 
+    [Fact]
+    public async Task TranscribeAsync_ReportsPerSegmentNoSpeechProbability()
+    {
+        var handler = new CapturingHandler((_, body) =>
+        {
+            Assert.Contains("verbose_json", body);
+            return JsonResponse("""
+                {
+                    "text": "Please send the updated draft. Thank you.",
+                    "language": "en",
+                    "duration": 8.0,
+                    "segments": [
+                        { "text": " Please send the updated draft.", "start": 0.0, "end": 5.0, "no_speech_prob": 0.02 },
+                        { "text": " Thank you.", "start": 5.0, "end": 8.0, "no_speech_prob": 0.95 }
+                    ]
+                }
+                """);
+        });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new GroqPlugin(httpClient);
+        await sut.ActivateAsync(host);
+        sut.SelectModel("whisper-large-v3");
+
+        var result = await sut.TranscribeAsync([4, 5, 6], "en", false, null, CancellationToken.None);
+
+        Assert.Equal("Please send the updated draft. Thank you.", result.Text);
+        Assert.Equal(2, result.Segments.Count);
+        Assert.Equal(0.95f, result.Segments[1].NoSpeechProbability);
+        Assert.Equal(0.02f, result.NoSpeechProbability);
+    }
+
     private static HttpResponseMessage JsonResponse(string json)
     {
         return new HttpResponseMessage(HttpStatusCode.OK)
