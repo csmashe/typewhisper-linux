@@ -28,6 +28,9 @@ public sealed class OpenAiCompatiblePlugin
     // role wrapper below. The default endpoint keeps using the original flat settings
     // keys (baseUrl/api-key/selectedModel/...) so existing single-endpoint setups are
     // unchanged.
+    private const string ThinkingModeSettingKey = "thinkingMode";
+    private ThinkingMode _thinkingMode;
+
     private const string AdditionalProfilesSettingKey = "additionalProfiles";
     private const string ProfilesCollectionKey = "profiles";
     private const string ProfileIdPrefix = "openai-compatible-";
@@ -69,6 +72,7 @@ public sealed class OpenAiCompatiblePlugin
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
+        _thinkingMode = ParseThinkingMode(host.GetSetting<string>(ThinkingModeSettingKey));
         ApiKey = await host.LoadSecretAsync("api-key");
         BaseUrl = host.GetSetting<string>("baseUrl");
         SelectedModelId = host.GetSetting<string>("selectedModel");
@@ -199,6 +203,7 @@ public sealed class OpenAiCompatiblePlugin
             modelId,
             systemPrompt,
             userText,
+            BuildRequestOptions(BaseUrl!, _thinkingMode),
             ct
         );
     }
@@ -230,6 +235,7 @@ public sealed class OpenAiCompatiblePlugin
             modelId,
             systemPrompt,
             userText,
+            BuildRequestOptions(BaseUrl!, _thinkingMode),
             ct
         );
 
@@ -424,12 +430,14 @@ public sealed class OpenAiCompatiblePlugin
                 Description: Loc.L("Settings.StreamResponsesDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
+            BuildThinkingModeDefinition(),
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(
             key switch
             {
+                ThinkingModeSettingKey => FormatThinkingMode(_thinkingMode),
                 "baseUrl" => BaseUrl,
                 "api-key" => ApiKey,
                 "selectedModel" => SelectedModelId,
@@ -448,6 +456,10 @@ public sealed class OpenAiCompatiblePlugin
     {
         switch (key)
         {
+            case ThinkingModeSettingKey:
+                _thinkingMode = ParseThinkingMode(value);
+                _host?.SetSetting(ThinkingModeSettingKey, FormatThinkingMode(_thinkingMode));
+                break;
             case "baseUrl":
                 SetBaseUrl(value ?? string.Empty);
                 break;
@@ -471,6 +483,56 @@ public sealed class OpenAiCompatiblePlugin
                 SetStreamResponses(ParseBool(value));
                 break;
         }
+    }
+
+    internal enum ThinkingMode { ProviderDefault, Off, On }
+
+    internal static ThinkingMode ParseThinkingMode(string? value) => value switch
+    {
+        "off" => ThinkingMode.Off,
+        "on" => ThinkingMode.On,
+        _ => ThinkingMode.ProviderDefault,
+    };
+
+    internal static string FormatThinkingMode(ThinkingMode mode) => mode switch
+    {
+        ThinkingMode.Off => "off",
+        ThinkingMode.On => "on",
+        _ => "default",
+    };
+
+    private PluginSettingDefinition BuildThinkingModeDefinition() => new(
+        Key: ThinkingModeSettingKey,
+        Label: Loc.L("Settings.ThinkingMode"),
+        Description: Loc.L("Settings.ThinkingModeDescription"),
+        Kind: PluginSettingKind.Dropdown,
+        Options:
+        [
+            new PluginSettingOption("default", Loc.L("Settings.ThinkingModeDefault")),
+            new PluginSettingOption("off", Loc.L("Settings.ThinkingModeOff")),
+            new PluginSettingOption("on", Loc.L("Settings.ThinkingModeOn")),
+        ]);
+
+    private static OpenAiChatRequestOptions BuildRequestOptions(string baseUrl, ThinkingMode mode)
+    {
+        if (mode == ThinkingMode.ProviderDefault)
+            return new OpenAiChatRequestOptions();
+
+        if (Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)
+            && string.Equals(uri.Host, "api.deepinfra.com", StringComparison.OrdinalIgnoreCase))
+            return new OpenAiChatRequestOptions { ReasoningEffort = mode == ThinkingMode.On ? "high" : "none" };
+
+        // No single control is universal: cloud endpoints read `thinking`, while vLLM and
+        // llama.cpp read `chat_template_kwargs.enable_thinking`. Local servers ignore the other.
+        var enabled = mode == ThinkingMode.On;
+        return new OpenAiChatRequestOptions
+        {
+            AdditionalBodyFields = new Dictionary<string, object?>
+            {
+                ["thinking"] = new { type = enabled ? "enabled" : "disabled" },
+                ["chat_template_kwargs"] = new { enable_thinking = enabled },
+            },
+        };
     }
 
     private bool IsKnownModel(string? modelId) =>
@@ -692,6 +754,7 @@ public sealed class OpenAiCompatiblePlugin
                         "selectedLlmModel", Loc.L("Settings.LlmModel"),
                         Description: Loc.L("Settings.ProfileLlmModelDescription"),
                         Kind: PluginSettingKind.Text),
+                    BuildThinkingModeDefinition(),
                     new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text),
                 ],
                 ItemLabelFieldKey: "name",
@@ -717,6 +780,7 @@ public sealed class OpenAiCompatiblePlugin
                     ["api-key"] = null,
                     ["selectedModel"] = p.SelectedModelId,
                     ["selectedLlmModel"] = p.SelectedLlmModelId,
+                    [ThinkingModeSettingKey] = FormatThinkingMode(ParseThinkingMode(p.ThinkingMode)),
                     ["__id"] = p.Id,
                 }
             ))
@@ -801,6 +865,7 @@ public sealed class OpenAiCompatiblePlugin
                 BaseUrl = baseUrl,
                 SelectedModelId = selectedModelId,
                 SelectedLlmModelId = selectedLlmModelId,
+                ThinkingMode = FormatThinkingMode(ParseThinkingMode(Get(item, ThinkingModeSettingKey))),
                 FetchedModels = preserveCatalog ? prev!.FetchedModels : [],
             });
         }
@@ -1027,6 +1092,7 @@ public sealed class OpenAiCompatiblePlugin
             modelId,
             systemPrompt,
             userText,
+            BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode)),
             ct
         );
     }
@@ -1064,6 +1130,7 @@ public sealed class OpenAiCompatiblePlugin
             modelId,
             systemPrompt,
             userText,
+            BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode)),
             ct
         );
 
@@ -1341,6 +1408,7 @@ public sealed class OpenAiCompatiblePlugin
                 right.SelectedLlmModelId,
                 StringComparison.Ordinal
             )
+            && ParseThinkingMode(left.ThinkingMode) == ParseThinkingMode(right.ThinkingMode)
             && left.FetchedModels.SequenceEqual(right.FetchedModels);
     }
 
@@ -1472,6 +1540,9 @@ public sealed class OpenAiCompatibleProfile
 
     /// <summary>Optional default LLM model ID.</summary>
     public string? SelectedLlmModelId { get; set; }
+
+    /// <summary>Thinking mode for this profile ("default", "off", "on"); null means provider default.</summary>
+    public string? ThinkingMode { get; init; }
 
     /// <summary>Models fetched from the provider. API keys are never stored here.</summary>
     public List<FetchedModel> FetchedModels { get; set; } = [];

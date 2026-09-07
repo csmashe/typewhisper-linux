@@ -10,7 +10,9 @@
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Unicode;
 
 namespace TypeWhisper.PluginSDK.Helpers;
 
@@ -21,6 +23,14 @@ namespace TypeWhisper.PluginSDK.Helpers;
 // ReSharper disable once UnusedType.Global
 public static class OpenAiChatHelper
 {
+    private const string ReasoningOnlyResponseMessage =
+        "Chat completion returned only reasoning content and no final answer.";
+
+    private static readonly JsonSerializerOptions s_requestJsonOptions = new()
+    {
+        Encoder = JavaScriptEncoder.Create(UnicodeRanges.All),
+    };
+
     private static readonly ISseEventPolicy<string> s_streamPolicy =
         new ChatCompletionSsePolicy();
 
@@ -53,13 +63,8 @@ public static class OpenAiChatHelper
             model,
             systemPrompt,
             userText,
-            ct,
-            // maxOutputTokens (2048) is passed explicitly to bind this call to the
-            // 11-parameter overload; without it the 7-arg call would resolve back to
-            // this same overload and recurse. The remaining optionals
-            // (maxOutputTokenParameter, reasoningEffort, temperature) are left at their
-            // defaults, which already match what this convenience overload documents.
-            2048
+            new OpenAiChatRequestOptions(),
+            ct
         );
     }
 
@@ -108,9 +113,32 @@ public static class OpenAiChatHelper
         double? temperature = 0.1
     )
     {
+        var options = new OpenAiChatRequestOptions
+        {
+            MaxOutputTokens = maxOutputTokens,
+            MaxOutputTokenParameter = maxOutputTokenParameter,
+            ReasoningEffort = reasoningEffort,
+            Temperature = temperature,
+        };
+        return await SendChatCompletionAsync(
+            httpClient, baseUrl, apiKey, model, systemPrompt, userText, options, ct);
+    }
+
+    /// <summary>Sends a chat completion shaped by <paramref name="options" />.</summary>
+    /// <returns>The assistant's response content text, with reasoning blocks removed.</returns>
+    public static async Task<string> SendChatCompletionAsync(
+        HttpClient httpClient,
+        string baseUrl,
+        string apiKey,
+        string model,
+        string systemPrompt,
+        string userText,
+        OpenAiChatRequestOptions options,
+        CancellationToken ct
+    )
+    {
         var requestBody = JsonSerializer.Serialize(
-            BuildRequestBody(model, systemPrompt, userText, maxOutputTokens,
-                maxOutputTokenParameter, reasoningEffort, temperature, false));
+            BuildRequestBody(model, systemPrompt, userText, options, false), s_requestJsonOptions);
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -146,9 +174,33 @@ public static class OpenAiChatHelper
         double? temperature = 0.1
     )
     {
+        var options = new OpenAiChatRequestOptions
+        {
+            MaxOutputTokens = maxOutputTokens,
+            MaxOutputTokenParameter = maxOutputTokenParameter,
+            ReasoningEffort = reasoningEffort,
+            Temperature = temperature,
+        };
+        await foreach (var delta in SendChatCompletionStreamingAsync(
+            httpClient, baseUrl, apiKey, model, systemPrompt, userText, options, ct))
+            yield return delta;
+    }
+
+    /// <summary>Streaming sibling of the options-based overload; reasoning blocks are filtered out of the deltas.</summary>
+    public static async IAsyncEnumerable<string> SendChatCompletionStreamingAsync(
+        HttpClient httpClient,
+        string baseUrl,
+        string apiKey,
+        string model,
+        string systemPrompt,
+        string userText,
+        OpenAiChatRequestOptions options,
+        [EnumeratorCancellation]
+        CancellationToken ct
+    )
+    {
         var requestBody = JsonSerializer.Serialize(
-            BuildRequestBody(model, systemPrompt, userText, maxOutputTokens,
-                maxOutputTokenParameter, reasoningEffort, temperature, true));
+            BuildRequestBody(model, systemPrompt, userText, options, true), s_requestJsonOptions);
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -178,8 +230,26 @@ public static class OpenAiChatHelper
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
+        var filter = new ThinkingBlockStreamFilter();
+        var producedVisibleText = false;
         await foreach (var delta in SseEventDecoder.ReadValidatedAsync(reader, s_streamPolicy, ct))
-            yield return delta;
+        {
+            foreach (var visible in filter.Push(delta))
+            {
+                producedVisibleText = true;
+                yield return visible;
+            }
+        }
+
+        var remaining = filter.Flush();
+        if (remaining.Length > 0)
+        {
+            producedVisibleText = true;
+            yield return remaining;
+        }
+
+        if (!producedVisibleText && filter.SawThinkBlock)
+            throw new InvalidOperationException(ReasoningOnlyResponseMessage);
     }
 
     private static async Task<HttpResponseMessage> SendStreamingRequestAsync(
@@ -392,7 +462,11 @@ public static class OpenAiChatHelper
             );
         }
 
-        return content.GetString()?.Trim() ?? "";
+        var rawContent = content.GetString() ?? "";
+        var stripped = ThinkingBlockFilter.Strip(rawContent);
+        if (rawContent.Length > 0 && string.IsNullOrWhiteSpace(stripped))
+            throw new InvalidOperationException(ReasoningOnlyResponseMessage);
+        return stripped.Trim();
     }
 
     private static InvalidOperationException CreateInvalidResponseException(
@@ -435,10 +509,7 @@ public static class OpenAiChatHelper
         string model,
         string systemPrompt,
         string userText,
-        int? maxOutputTokens,
-        string maxOutputTokenParameter,
-        string? reasoningEffort,
-        double? temperature,
+        OpenAiChatRequestOptions options,
         bool stream
     )
     {
@@ -451,24 +522,35 @@ public static class OpenAiChatHelper
             },
         };
 
-        if (temperature is not null)
+        if (options.Temperature is not null)
         {
-            body["temperature"] = temperature.Value;
+            body["temperature"] = options.Temperature.Value;
         }
 
-        if (maxOutputTokens is not null)
+        if (options.MaxOutputTokens is not null)
         {
-            body[maxOutputTokenParameter] = maxOutputTokens.Value;
+            body[options.MaxOutputTokenParameter] = options.MaxOutputTokens.Value;
         }
 
-        if (!string.IsNullOrWhiteSpace(reasoningEffort))
+        if (!string.IsNullOrWhiteSpace(options.ReasoningEffort))
         {
-            body["reasoning_effort"] = reasoningEffort;
+            body["reasoning_effort"] = options.ReasoningEffort;
         }
 
         if (stream)
         {
             body["stream"] = true;
+        }
+
+        if (options.AdditionalBodyFields is not { } fields)
+            return body;
+
+        foreach (var (key, value) in fields)
+        {
+            // Protect routing and stream semantics from provider-specific additions.
+            if (key is "model" or "messages" or "stream")
+                throw new ArgumentException($"Additional body field '{key}' is reserved.", nameof(options));
+            body[key] = value;
         }
 
         return body;

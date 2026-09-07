@@ -11,6 +11,176 @@ namespace TypeWhisper.PluginSystem.Tests;
 public sealed class OpenAiCompatiblePluginTests
 {
     [Fact]
+    public async Task ProcessAsync_ThinkingModeDefault_SendsNoThinkingControl()
+    {
+        var body = await CaptureThinkingRequestAsync("default");
+        Assert.False(body.TryGetProperty("thinking", out _));
+        Assert.False(body.TryGetProperty("chat_template_kwargs", out _));
+        Assert.False(body.TryGetProperty("reasoning_effort", out _));
+        Assert.False(body.TryGetProperty("reasoning", out _));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ThinkingModeOff_SendsThinkingDisabled()
+    {
+        var body = await CaptureThinkingRequestAsync("off");
+        Assert.Equal("disabled", body.GetProperty("thinking").GetProperty("type").GetString());
+        Assert.False(body.GetProperty("chat_template_kwargs").GetProperty("enable_thinking").GetBoolean());
+        Assert.False(body.TryGetProperty("reasoning_effort", out _));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ThinkingModeOn_SendsThinkingEnabled()
+    {
+        var body = await CaptureThinkingRequestAsync("on");
+        Assert.Equal("enabled", body.GetProperty("thinking").GetProperty("type").GetString());
+        Assert.True(body.GetProperty("chat_template_kwargs").GetProperty("enable_thinking").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("off", "none")]
+    [InlineData("on", "high")]
+    public async Task ProcessAsync_DeepInfra_UsesReasoningEffort(string mode, string expected)
+    {
+        var body = await CaptureThinkingRequestAsync(mode, "https://API.DEEPINFRA.COM/custom-path");
+        Assert.Equal(expected, body.GetProperty("reasoning_effort").GetString());
+        Assert.False(body.TryGetProperty("thinking", out _));
+        Assert.False(body.TryGetProperty("chat_template_kwargs", out _));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_DeepInfraLookalikeHost_UsesGenericThinkingControl()
+    {
+        var body = await CaptureThinkingRequestAsync("off", "https://api.deepinfra.com.example.org");
+        Assert.Equal("disabled", body.GetProperty("thinking").GetProperty("type").GetString());
+        Assert.False(body.TryGetProperty("reasoning_effort", out _));
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ThinkingModeOff_SendsThinkingDisabled()
+    {
+        var body = await CaptureThinkingRequestAsync("off", streaming: true);
+        Assert.True(body.GetProperty("stream").GetBoolean());
+        Assert.Equal("disabled", body.GetProperty("thinking").GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task ThinkingMode_RoundTripsThroughSettingsProvider()
+    {
+        var host = new TestPluginHostServices();
+        using var client = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        await sut.SetSettingValueAsync("thinkingMode", "on");
+        Assert.Equal("on", await sut.GetSettingValueAsync("thinkingMode"));
+        Assert.Equal("on", host.GetSetting<string>("thinkingMode"));
+        Assert.Contains("thinkingMode", host.SettingWrites);
+        await sut.SetSettingValueAsync("thinkingMode", "unknown");
+        Assert.Equal("default", await sut.GetSettingValueAsync("thinkingMode"));
+        Assert.Equal("default", host.GetSetting<string>("thinkingMode"));
+        var definition = Assert.Single(sut.GetSettingDefinitions(), d => d.Key == "thinkingMode");
+        Assert.Equal(PluginSettingKind.Dropdown, definition.Kind);
+        Assert.Equal(["default", "off", "on"], definition.Options!.Select(o => o.Value));
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WithoutThinkingModeSetting_DefaultsToProviderDefault()
+    {
+        using var client = ModelsClient();
+        var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices());
+        Assert.Equal("default", await sut.GetSettingValueAsync("thinkingMode"));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ThrowsWhenResponseContainsOnlyReasoningContent()
+    {
+        using var client = new HttpClient(new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"choices":[{"message":{"reasoning_content":"plan"}}]}"""),
+        }));
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "https://example.test");
+        var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.ProcessAsync("system", "user", "model", CancellationToken.None));
+        Assert.Contains("content", exception.Message);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AdditionalProfile_ThinkingMode_PersistsAndAppliesToRequests(bool streaming)
+    {
+        string? capturedBody = null;
+        using var client = new HttpClient(new CapturingHandler((_, body) =>
+        {
+            capturedBody = body;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(streaming ? "data: [DONE]\n\n"
+                    : """{"choices":[{"message":{"content":"ok"}}]}"""),
+            };
+        }));
+        var host = new TestPluginHostServices();
+        var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        var item = new PluginCollectionItem(new Dictionary<string, string?>
+        {
+            ["name"] = "Thinking endpoint", ["baseUrl"] = "https://example.test",
+            ["selectedLlmModel"] = "model", ["thinkingMode"] = "off",
+        });
+        var definition = Assert.Single(sut.GetCollectionDefinitions()).ItemFields
+            .Single(d => d.Key == "thinkingMode");
+        Assert.Equal(PluginSettingKind.Dropdown, definition.Kind);
+        await sut.SetItemsAsync("profiles", [item]);
+        var reloaded = new OpenAiCompatiblePlugin(client);
+        await reloaded.ActivateAsync(host);
+        var saved = Assert.Single(await reloaded.GetItemsAsync("profiles"));
+        Assert.Equal("off", saved.Values["thinkingMode"]);
+        var role = Assert.Single(reloaded.AdditionalLlmProviders);
+        if (streaming)
+        {
+            await foreach (var chunk in role.ProcessStreamingAsync("system", "user", "model", CancellationToken.None))
+                Assert.Fail($"Unexpected delta: {chunk}");
+        }
+        else
+            Assert.Equal("ok", await role.ProcessAsync("system", "user", "model", CancellationToken.None));
+        using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.Equal("disabled", doc.RootElement.GetProperty("thinking").GetProperty("type").GetString());
+    }
+
+    private static async Task<JsonElement> CaptureThinkingRequestAsync(
+        string mode, string baseUrl = "https://example.test", bool streaming = false)
+    {
+        string? capturedBody = null;
+        using var client = new HttpClient(new CapturingHandler((_, body) =>
+        {
+            capturedBody = body;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(streaming ? "data: [DONE]\n\n"
+                    : """{"choices":[{"message":{"content":"ok"}}]}"""),
+            };
+        }));
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", baseUrl);
+        host.SetSetting("thinkingMode", mode);
+        var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        if (streaming)
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "model", CancellationToken.None))
+                Assert.Fail($"Unexpected delta: {chunk}");
+        }
+        else
+            await sut.ProcessAsync("system", "user", "model", CancellationToken.None);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        return doc.RootElement.Clone();
+    }
+
+    [Fact]
     public async Task ProcessStreamingAsync_StreamsDeltas_AgainstOpenAiCompatibleServer()
     {
         HttpRequestMessage? capturedRequest = null;

@@ -9,6 +9,189 @@ namespace TypeWhisper.PluginSystem.Tests;
 public sealed class OpenAiChatHelperTests
 {
     [Fact]
+    public async Task SendChatCompletionAsync_WritesNonAsciiContentLiterally()
+    {
+        var body = await CaptureRequestAsync(new OpenAiChatRequestOptions(), "今天天气很好,我们去蹓狗吧!");
+        Assert.Contains("今天天气很好,我们去蹓狗吧!", body);
+        Assert.DoesNotContain(@"\u4eca", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SendChatCompletionAsync_AdditionalBodyFields_AreSerialized()
+    {
+        var body = await CaptureRequestAsync(new OpenAiChatRequestOptions
+        {
+            AdditionalBodyFields = new Dictionary<string, object?> { ["thinking"] = new { type = "disabled" } },
+        });
+        using var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        Assert.Equal("disabled", root.GetProperty("thinking").GetProperty("type").GetString());
+        Assert.Equal("model", root.GetProperty("model").GetString());
+        Assert.Equal(2, root.GetProperty("messages").GetArrayLength());
+        Assert.Equal(2048, root.GetProperty("max_tokens").GetInt32());
+        Assert.Equal(0.1, root.GetProperty("temperature").GetDouble());
+    }
+
+    [Theory]
+    [InlineData("model")]
+    [InlineData("messages")]
+    [InlineData("stream")]
+    public async Task SendChatCompletionAsync_AdditionalBodyFields_CannotOverrideReservedKeys(string key)
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() => CaptureRequestAsync(new OpenAiChatRequestOptions
+        {
+            AdditionalBodyFields = new Dictionary<string, object?> { [key] = "override" },
+        }));
+    }
+
+    [Fact]
+    public async Task SendChatCompletionAsync_StripsThinkBlockFromContent()
+    {
+        Assert.Equal("Final answer.", await SendChatResponseAsync(
+            """{"choices":[{"message":{"content":"<think>\nplan\n</think>\n\nFinal answer."}}]}"""));
+    }
+
+    [Fact]
+    public async Task SendChatCompletionAsync_ThrowsWhenContentIsOnlyThinkBlock()
+    {
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => SendChatResponseAsync(
+            """{"choices":[{"message":{"content":"<think>plan</think>\n "}}]}"""));
+        Assert.Equal("Chat completion returned only reasoning content and no final answer.", exception.Message);
+    }
+
+    [Fact]
+    public async Task SendChatCompletionAsync_IgnoresReasoningContentField()
+    {
+        Assert.Equal("processed", await SendChatResponseAsync(
+            """{"choices":[{"message":{"reasoning_content":"plan","content":"  processed  "}}]}"""));
+    }
+
+    [Fact]
+    public async Task SendChatCompletionStreamingAsync_DropsThinkBlockSplitAcrossDeltas()
+    {
+        string[] deltas = ["<thi", "nk>reason", "ing</th", "ink>", "Hel", "lo"];
+        var sse = string.Concat(deltas.Select(content => "data: " + JsonSerializer.Serialize(
+            new { choices = new[] { new { delta = new { content } } } }) + "\n\n")) + "data: [DONE]\n\n";
+        var chunks = new List<string>();
+        await StreamChatResponseAsync(sse, chunks);
+        Assert.Equal("Hello", string.Concat(chunks));
+        Assert.All(chunks, chunk => Assert.DoesNotContain("<think>", chunk, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ThinkingBlockStreamFilter_FlushReturnsHeldPartialPrefixThatWasNotATag()
+    {
+        var filter = new ThinkingBlockStreamFilter();
+        Assert.Equal("a <t", string.Concat(filter.Push("a <t")) + filter.Flush());
+    }
+
+    [Fact]
+    public void ThinkingBlockFilter_Strip_ReturnsSameInstanceWithoutTags()
+    {
+        var text = new string("  unchanged  ".ToCharArray());
+        Assert.Same(text, ThinkingBlockFilter.Strip(text));
+    }
+
+    [Fact]
+    public void ThinkingBlockFilter_Strip_RemovesUnterminatedBlock()
+    {
+        Assert.Equal("Answer", ThinkingBlockFilter.Strip("Answer <think>dangling"));
+    }
+
+    [Theory]
+    [InlineData("<THINK>first\nthought</ThInK>\n\nHello<think>second</think>!", "Hello!")]
+    [InlineData("  <think>hidden</think>  Answer  ", "Answer  ")]
+    public void ThinkingBlockFilter_Strip_RemovesAllBlocks(string text, string expected)
+    {
+        Assert.Equal(expected, ThinkingBlockFilter.Strip(text));
+    }
+
+    [Theory]
+    [InlineData("<THINK>first\nthought</ThInK>\n\nHello<think>second</think>!", "Hello!")]
+    [InlineData("Hello <tiger>!", "Hello <tiger>!")]
+    [InlineData("<think>hidden", "")]
+    [InlineData("a </th", "a </th")]
+    public void ThinkingBlockStreamFilter_HandlesEverySplit(string text, string expected)
+    {
+        for (var split = 0; split <= text.Length; split++)
+        {
+            var filter = new ThinkingBlockStreamFilter();
+            var actual = string.Concat(filter.Push(text[..split]))
+                + string.Concat(filter.Push(text[split..])) + filter.Flush();
+            Assert.Equal(expected, actual);
+        }
+        var characterFilter = new ThinkingBlockStreamFilter();
+        Assert.Equal(expected, string.Concat(text.SelectMany(c => characterFilter.Push(c.ToString())))
+            + characterFilter.Flush());
+    }
+
+    [Fact]
+    public async Task SendChatCompletionStreamingAsync_WritesNonAsciiContentLiterally()
+    {
+        var handler = new RequestCaptureHandler("data: [DONE]\n\n");
+        using var client = new HttpClient(handler);
+        await foreach (var unused in OpenAiChatHelper.SendChatCompletionStreamingAsync(
+            client, "https://example.test", "key", "model", "system", "今天天气很好,我们去蹓狗吧!",
+            new OpenAiChatRequestOptions(), CancellationToken.None))
+        {
+            Assert.Fail($"Unexpected delta: {unused}");
+        }
+        Assert.Contains("今天天气很好,我们去蹓狗吧!", handler.Body);
+        Assert.DoesNotContain(@"\u4eca", handler.Body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SendChatCompletionStreamingAsync_ThrowsWhenStreamIsOnlyThinkBlock()
+    {
+        var sse = string.Join("\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"\\n\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"<think>plan</think>\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"\\n\"}}]}",
+            "",
+            "data: [DONE]",
+            "",
+            "");
+        var handler = new RequestCaptureHandler(sse);
+        using var client = new HttpClient(handler);
+        var chunks = new List<string>();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var chunk in OpenAiChatHelper.SendChatCompletionStreamingAsync(
+                client, "https://example.test", "key", "model", "system", "user",
+                new OpenAiChatRequestOptions(), CancellationToken.None))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Empty(chunks);
+        Assert.Contains("reasoning", error.Message);
+    }
+
+    private static async Task<string> CaptureRequestAsync(OpenAiChatRequestOptions options, string user = "user")
+    {
+        var handler = new RequestCaptureHandler("""{"choices":[{"message":{"content":"ok"}}]}""");
+        using var client = new HttpClient(handler);
+        await OpenAiChatHelper.SendChatCompletionAsync(
+            client, "https://example.test", "key", "model", "system", user, options, CancellationToken.None);
+        return handler.Body!;
+    }
+
+    private sealed class RequestCaptureHandler(string response) : HttpMessageHandler
+    {
+        public string? Body { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Body = await request.Content!.ReadAsStringAsync(ct);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(response) };
+        }
+    }
+
+    [Fact]
     public void SendChatCompletionAsync_PreservesLegacySevenParameterOverload()
     {
         var parameterTypes = new[]

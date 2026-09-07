@@ -498,51 +498,23 @@ public sealed class OpenRouterPlugin
 
     // Network paths
 
-    private async Task<string> SendChatCompletionAsync(
+    private Task<string> SendChatCompletionAsync(
         string model,
         string systemPrompt,
         string userText,
-        CancellationToken ct)
-    {
-        var body = new Dictionary<string, object?>
-        {
-            ["model"] = model,
-            ["messages"] = new object[]
+        CancellationToken ct) =>
+        OpenAiChatHelper.SendChatCompletionAsync(
+            _httpClient,
+            BaseUrl,
+            ApiKey!,
+            model,
+            systemPrompt,
+            userText,
+            new OpenAiChatRequestOptions
             {
-                new { role = "system", content = systemPrompt },
-                new { role = "user", content = userText },
+                Temperature = TemperatureMode == TemperatureModeCustom ? TemperatureValue : null,
             },
-            ["max_tokens"] = 2048,
-        };
-
-        if (TemperatureMode == TemperatureModeCustom)
-            body["temperature"] = TemperatureValue;
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/chat/completions");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
-        request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
-
-        var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, request, ct);
-        var json = await response.Content.ReadAsStringAsync(ct);
-        return ParseChatCompletionResponse(json);
-    }
-
-    private static string ParseChatCompletionResponse(string json)
-    {
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-
-        if (root.TryGetProperty("choices", out var choices)
-            && choices.ValueKind == JsonValueKind.Array
-            && choices.GetArrayLength() > 0
-            && choices[0].TryGetProperty("message", out var message)
-            && message.TryGetProperty("content", out var content))
-        {
-            return content.GetString()?.Trim() ?? "";
-        }
-
-        return "";
-    }
+            ct);
 
     private async Task<PluginTranscriptionResult> SendAudioTranscriptionAsync(
         string model,
