@@ -21,6 +21,44 @@ namespace TypeWhisper.PluginSystem.Tests;
 public sealed class ClaudePluginTests
 {
     [Fact]
+    public async Task ProcessAsync_ScalesMaxTokensAndRejectsMaxTokensStopReason()
+    {
+        var input = string.Concat(Enumerable.Repeat("dictated input ", 1000));
+        using var client = new HttpClient(new CapturingHandler((_, body) =>
+        {
+            using var doc = JsonDocument.Parse(body!);
+            Assert.Equal(LlmOutputTokenBudget.Calculate("system", input), doc.RootElement.GetProperty("max_tokens").GetInt32());
+            Assert.True(doc.RootElement.GetProperty("max_tokens").GetInt32() > 2048);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
+                """{"stop_reason":"max_tokens","content":[{"type":"text","text":"partial"}]}""") };
+        }));
+        var sut = new ClaudePlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "key" } });
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => sut.ProcessAsync("system", input, "claude", CancellationToken.None));
+        Assert.Equal(PluginRequestFailureKind.OutputTruncated, ex.FailureKind);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_MaxTokensStopReason_ThrowsTruncation()
+    {
+        const string sse = "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n"
+            + "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\n"
+            + "data: {\"type\":\"message_stop\"}\n\n";
+        using var client = new HttpClient(new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(sse, Encoding.UTF8, "text/event-stream") }));
+        var sut = new ClaudePlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "key" } });
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "claude", CancellationToken.None))
+                chunks.Add(chunk);
+        });
+        Assert.Equal(PluginRequestFailureKind.OutputTruncated, ex.FailureKind);
+        Assert.Equal(["partial"], chunks);
+    }
+
+    [Fact]
     public async Task ProcessStreamingAsync_StreamsContentBlockDeltasInOrder()
     {
         string? capturedBody = null;

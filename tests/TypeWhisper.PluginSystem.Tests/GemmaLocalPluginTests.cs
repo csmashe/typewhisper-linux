@@ -218,6 +218,21 @@ public sealed class GemmaLocalPluginTests
         );
     }
 
+    [Theory]
+    [InlineData(2048, 2048, true)]
+    [InlineData(2049, 2048, true)]
+    [InlineData(2047, 2048, false)]
+    [InlineData(1, 1, true)]
+    [InlineData(0, 0, false)]
+    public void IsTokenBudgetExhausted_TrueOnlyWhenGenerationReachesTheCap(
+        int generatedPieces,
+        int maxTokens,
+        bool expected
+    )
+    {
+        Assert.Equal(expected, GemmaLocalPlugin.IsTokenBudgetExhausted(generatedPieces, maxTokens));
+    }
+
     private static GemmaLocalPlugin CreatePluginWithRoutingProbe(
         RoutingObservation observation
     ) =>

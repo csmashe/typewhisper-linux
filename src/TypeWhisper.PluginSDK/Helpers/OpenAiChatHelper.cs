@@ -31,11 +31,8 @@ public static class OpenAiChatHelper
         Encoder = JavaScriptEncoder.Create(UnicodeRanges.All),
     };
 
-    private static readonly ISseEventPolicy<string> s_streamPolicy =
-        new ChatCompletionSsePolicy();
-
     /// <summary>
-    ///     Convenience overload that sends a chat completion using the default token cap
+    ///     Convenience overload that sends a chat completion using the default minimum token cap
     ///     (2048 via <c>max_tokens</c>), no reasoning-effort hint, and temperature 0.1.
     /// </summary>
     /// <returns>The assistant's response content text.</returns>
@@ -79,7 +76,7 @@ public static class OpenAiChatHelper
     /// <param name="userText">User message text.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <param name="maxOutputTokens">
-    ///     Optional cap on response tokens. Pass <c>null</c> to omit the field
+    ///     Optional minimum cap on response tokens. Pass <c>null</c> to omit the field
     ///     entirely (some endpoints reject zero/empty values).
     /// </param>
     /// <param name="maxOutputTokenParameter">
@@ -149,7 +146,7 @@ public static class OpenAiChatHelper
 
         var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(httpClient, request, ct);
         var json = await response.Content.ReadAsStringAsync(ct);
-        return ParseChatCompletionResponse(json);
+        return ParseChatCompletionResponse(json, options.ProviderName ?? "The provider");
     }
 
     /// <summary>
@@ -232,7 +229,7 @@ public static class OpenAiChatHelper
 
         var filter = new ThinkingBlockStreamFilter();
         var producedVisibleText = false;
-        await foreach (var delta in SseEventDecoder.ReadValidatedAsync(reader, s_streamPolicy, ct))
+        await foreach (var delta in SseEventDecoder.ReadValidatedAsync(reader, new ChatCompletionSsePolicy(options.ProviderName ?? "The provider"), ct))
         {
             foreach (var visible in filter.Push(delta))
             {
@@ -290,10 +287,10 @@ public static class OpenAiChatHelper
     /// </summary>
     private static string? ParseChatCompletionStreamDelta(
         string dataPayload,
-        out bool hasFinishReason
+        out string? terminalReason
     )
     {
-        hasFinishReason = false;
+        terminalReason = null;
         using var doc = JsonDocument.Parse(dataPayload);
         var root = doc.RootElement;
         if (root.ValueKind != JsonValueKind.Object
@@ -322,9 +319,9 @@ public static class OpenAiChatHelper
 
         // finish_reason is only ever null (still streaming) or a non-empty string
         // ("stop", "length", ...); anything else must not mask a truncated stream.
-        hasFinishReason = firstChoice.TryGetProperty("finish_reason", out var finishReason)
+        terminalReason = firstChoice.TryGetProperty("finish_reason", out var finishReason)
                           && finishReason.ValueKind == JsonValueKind.String
-                          && !string.IsNullOrEmpty(finishReason.GetString());
+                          ? finishReason.GetString() : null;
 
         if (!delta.TryGetProperty("content", out var content)
             || content.ValueKind == JsonValueKind.Null)
@@ -390,7 +387,7 @@ public static class OpenAiChatHelper
         }
     }
 
-    private sealed class ChatCompletionSsePolicy : ISseEventPolicy<string>
+    private sealed class ChatCompletionSsePolicy(string providerName) : ISseEventPolicy<string>
     {
         public string StreamName => "chat completion stream";
         public string ExpectedTerminal => "[DONE] or a non-empty finish_reason";
@@ -412,18 +409,22 @@ public static class OpenAiChatHelper
 
             var delta = ParseChatCompletionStreamDelta(
                 sseEvent.Data,
-                out var hasFinishReason);
+                out var finishReason);
+            if (LlmResponseTruncationGuard.IsTokenLimitReason(finishReason))
+                return new SsePolicyDecision<string>(Error: new PluginRequestException(
+                    $"{providerName} stopped the response at its output token limit.",
+                    PluginRequestFailureKind.OutputTruncated, isTransient: false));
             return new SsePolicyDecision<string>(
                 HasDelta: delta is { Length: > 0 },
                 Delta: delta,
-                AcceptTerminal: hasFinishReason);
+                AcceptTerminal: !string.IsNullOrEmpty(finishReason));
         }
     }
 
     /// <summary>Returns <c>choices[0].message.content</c> from a chat completion JSON response.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedParameter.Global
-    private static string ParseChatCompletionResponse(string json)
+    private static string ParseChatCompletionResponse(string json, string providerName)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -439,6 +440,8 @@ public static class OpenAiChatHelper
                 "'choices' must be a non-empty array"
             );
         }
+
+        LlmResponseTruncationGuard.ThrowIfOpenAiChatCompletionTruncated(root, providerName);
 
         var firstChoice = choices[0];
         if (firstChoice.ValueKind != JsonValueKind.Object
@@ -529,7 +532,14 @@ public static class OpenAiChatHelper
 
         if (options.MaxOutputTokens is not null)
         {
-            body[options.MaxOutputTokenParameter] = options.MaxOutputTokens.Value;
+            // Preserve the configured floor while allowing long prompts enough output.
+            // Reasoning consumes the same output cap, so reserve extra capacity for it.
+            var budget = !options.ScaleOutputTokens
+                ? options.MaxOutputTokens.Value
+                : !string.IsNullOrWhiteSpace(options.ReasoningEffort)
+                    ? LlmOutputTokenBudget.CalculateWithReasoningReserve(systemPrompt, userText)
+                    : LlmOutputTokenBudget.Calculate(systemPrompt, userText);
+            body[options.MaxOutputTokenParameter] = Math.Max(options.MaxOutputTokens.Value, budget);
         }
 
         if (!string.IsNullOrWhiteSpace(options.ReasoningEffort))

@@ -1,3 +1,4 @@
+using TypeWhisper.PluginSDK;
 using TypeWhisper.Plugin.OpenAi;
 using TypeWhisper.PluginSDK.Helpers;
 
@@ -5,6 +6,19 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public sealed class OpenAiChatGptClientTests
 {
+    [Theory]
+    [InlineData("response.incomplete")]
+    [InlineData("response.completed")]
+    public async Task ChatGptResponseParser_RejectsIncompleteEventAfterPartialText(string eventType)
+    {
+        var sse = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"
+            + $$$$"""data: {"type":"{{{{eventType}}}}","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}"""
+            + "\n\ndata: [DONE]\n\n";
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => OpenAiChatGptClient.ParseResponseTextAsync(sse));
+        Assert.Equal(PluginRequestFailureKind.OutputTruncated, ex.FailureKind);
+        Assert.False(ex.IsTransient);
+    }
+
     [Fact]
     public async Task ParseResponseText_SseDeltaThenEof_Throws()
     {
@@ -58,10 +72,13 @@ public sealed class OpenAiChatGptClientTests
             "",
             "");
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var ex = await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
             OpenAiChatGptClient.ParseResponseTextAsync(stream));
 
-        Assert.Contains(eventType, ex.Message);
+        if (eventType == "response.incomplete")
+            Assert.Equal(PluginRequestFailureKind.OutputIncomplete, Assert.IsType<PluginRequestException>(ex).FailureKind);
+        else
+            Assert.Contains(eventType, ex.Message);
         if (status is not null)
             Assert.Contains(status, ex.Message);
         Assert.DoesNotContain("partial-secret", ex.Message);
@@ -98,10 +115,10 @@ public sealed class OpenAiChatGptClientTests
 
                               """;
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var ex = await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
             OpenAiChatGptClient.ParseResponseTextAsync(stream));
 
-        Assert.Contains("response.completed", ex.Message);
+        Assert.Equal(PluginRequestFailureKind.OutputIncomplete, Assert.IsType<PluginRequestException>(ex).FailureKind);
         Assert.Contains("incomplete", ex.Message);
         Assert.DoesNotContain("partial-secret", ex.Message);
         Assert.DoesNotContain("response-secret", ex.Message);

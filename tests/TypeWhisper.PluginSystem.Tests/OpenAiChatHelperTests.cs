@@ -1,3 +1,4 @@
+using TypeWhisper.PluginSDK;
 using System.Net;
 using System.Reflection;
 using System.Text;
@@ -8,6 +9,82 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public sealed class OpenAiChatHelperTests
 {
+    [Fact]
+    public async Task SendChatCompletionAsync_ScalesOutputBudgetForLongInput()
+    {
+        var input = string.Concat(Enumerable.Repeat("dictated input ", 1000));
+        using var doc = JsonDocument.Parse(await CaptureRequestAsync(new OpenAiChatRequestOptions(), input));
+        Assert.True(doc.RootElement.GetProperty("max_tokens").GetInt32() > 2048);
+    }
+
+    [Fact]
+    public async Task SendChatCompletionAsync_KeepsFloorForShortInput()
+    {
+        using var doc = JsonDocument.Parse(await CaptureRequestAsync(new OpenAiChatRequestOptions()));
+        Assert.Equal(2048, doc.RootElement.GetProperty("max_tokens").GetInt32());
+    }
+
+    [Fact]
+    public async Task SendChatCompletionAsync_UsesReasoningReserveWhenReasoningEffortSet()
+    {
+        using var doc = JsonDocument.Parse(await CaptureRequestAsync(new OpenAiChatRequestOptions { ReasoningEffort = "high" }));
+        Assert.Equal(LlmOutputTokenBudget.CalculateWithReasoningReserve("system", "user"),
+            doc.RootElement.GetProperty("max_tokens").GetInt32());
+    }
+
+    [Theory]
+    [InlineData("length")]
+    [InlineData("MAX_TOKENS")]
+    [InlineData("max_output_tokens")]
+    [InlineData("model_context_window_exceeded")]
+    public async Task SendChatCompletionAsync_RejectsTokenLimitedPartialResponse(string reason)
+    {
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => SendChatResponseAsync(
+            $$"""{"choices":[{"message":{"content":"partial"},"finish_reason":"{{reason}}"}]}"""));
+        Assert.Equal(PluginRequestFailureKind.OutputTruncated, ex.FailureKind);
+        Assert.False(ex.IsTransient);
+        Assert.Contains("token", ex.Message);
+    }
+
+    [Fact]
+    public async Task SendChatCompletionStreamingAsync_RejectsTokenLimitedStream()
+    {
+        var chunks = new List<string>();
+        const string sse = "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
+            + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n";
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => StreamChatResponseAsync(sse, chunks));
+        Assert.Equal(PluginRequestFailureKind.OutputTruncated, ex.FailureKind);
+        Assert.False(ex.IsTransient);
+        Assert.Equal(["partial"], chunks);
+    }
+
+    [Theory]
+    [InlineData(100, 2048)]
+    [InlineData(8000, 4096)]
+    [InlineData(100000, 4096)]
+    public void OutputTokenBudget_ScalesAndRemainsBounded(int characters, int expected) =>
+        Assert.Equal(expected, LlmOutputTokenBudget.Calculate("", new string('x', characters)));
+
+    [Fact]
+    public void OutputTokenBudget_AddsReasoningCapacityWithoutReducingVisibleBudget()
+    {
+        var input = new string('x', 100000);
+        Assert.Equal(LlmOutputTokenBudget.Calculate("", input) + LlmOutputTokenBudget.ReasoningReserveTokens,
+            LlmOutputTokenBudget.CalculateWithReasoningReserve("", input));
+    }
+
+    [Fact]
+    public void OutputTokenBudget_CapsLocalGenerationToRemainingContext() =>
+        Assert.Equal(596, LlmOutputTokenBudget.FitToContext(2048, 3500, 4096, "Gemma"));
+
+    [Fact]
+    public void OutputTokenBudget_RejectsPromptWithoutOutputCapacity()
+    {
+        var ex = Assert.Throws<PluginRequestException>(() => LlmOutputTokenBudget.FitToContext(2048, 4096, 4096, "Gemma"));
+        Assert.Equal(PluginRequestFailureKind.RequestTooLarge, ex.FailureKind);
+        Assert.False(ex.IsTransient);
+    }
+
     [Fact]
     public async Task SendChatCompletionAsync_WritesNonAsciiContentLiterally()
     {
@@ -169,6 +246,15 @@ public sealed class OpenAiChatHelperTests
 
         Assert.Empty(chunks);
         Assert.Contains("reasoning", error.Message);
+    }
+
+    [Fact]
+    public async Task SendChatCompletionAsync_ScaleOutputTokensFalse_SendsFloorUnchanged()
+    {
+        var longInput = string.Concat(Enumerable.Repeat("dictated input ", 1_000));
+        var body = await CaptureRequestAsync(new OpenAiChatRequestOptions { ScaleOutputTokens = false }, longInput);
+        using var doc = JsonDocument.Parse(body);
+        Assert.Equal(2048, doc.RootElement.GetProperty("max_tokens").GetInt32());
     }
 
     private static async Task<string> CaptureRequestAsync(OpenAiChatRequestOptions options, string user = "user")

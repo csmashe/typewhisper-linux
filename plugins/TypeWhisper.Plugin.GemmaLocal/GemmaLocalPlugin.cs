@@ -10,6 +10,7 @@ using LLama;
 using LLama.Common;
 using LLama.Sampling;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.GemmaLocal;
@@ -319,21 +320,27 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                 );
 
             var prompt = FormatGemmaPrompt(systemPrompt, userText);
+            var promptTokenCount = _context.Tokenize(prompt, addBos: true, special: true).Length;
 
             var executor = new StatelessExecutor(_weights, _context.Params);
             var inferenceParams = new InferenceParams
             {
-                MaxTokens = 2048,
+                MaxTokens = LlmOutputTokenBudget.FitToContext(
+                    LlmOutputTokenBudget.Calculate(systemPrompt, userText),
+                    promptTokenCount, checked((int)_context.ContextSize), ProviderName),
                 AntiPrompts = ["<end_of_turn>", "<eos>"],
                 SamplingPipeline = new DefaultSamplingPipeline { Temperature = 0.3f },
             };
 
             var result = new System.Text.StringBuilder();
+            var generatedPieces = 0;
             await foreach (var token in executor.InferAsync(prompt, inferenceParams, ct))
             {
+                generatedPieces++;
                 result.Append(token);
             }
 
+            ThrowIfTokenBudgetExhausted(generatedPieces, inferenceParams.MaxTokens);
             return result.ToString().Trim();
         }
         finally
@@ -366,11 +373,14 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                 );
 
             var prompt = FormatGemmaPrompt(systemPrompt, userText);
+            var promptTokenCount = _context.Tokenize(prompt, addBos: true, special: true).Length;
 
             var executor = new StatelessExecutor(_weights, _context.Params);
             var inferenceParams = new InferenceParams
             {
-                MaxTokens = 2048,
+                MaxTokens = LlmOutputTokenBudget.FitToContext(
+                    LlmOutputTokenBudget.Calculate(systemPrompt, userText),
+                    promptTokenCount, checked((int)_context.ContextSize), ProviderName),
                 AntiPrompts = ["<end_of_turn>", "<eos>"],
                 SamplingPipeline = new DefaultSamplingPipeline { Temperature = 0.3f },
             };
@@ -379,14 +389,34 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             // through so the overlay renders the local model's output live. (The
             // batch sibling trims the accumulated result; the streamed text is not
             // trimmed — Gemma's model-turn output is normally clean.)
+            var generatedPieces = 0;
             await foreach (var token in executor.InferAsync(prompt, inferenceParams, ct))
             {
+                generatedPieces++;
                 yield return token;
             }
+
+            ThrowIfTokenBudgetExhausted(generatedPieces, inferenceParams.MaxTokens);
         }
         finally
         {
             _inferenceLock.Release();
+        }
+    }
+
+    // The executor yields one piece per generated token and ends identically on an
+    // anti-prompt or on the cap, so hitting the cap is the only truncation signal.
+    internal static bool IsTokenBudgetExhausted(int generatedPieces, int maxTokens) =>
+        maxTokens > 0 && generatedPieces >= maxTokens;
+
+    private static void ThrowIfTokenBudgetExhausted(int generatedPieces, int maxTokens)
+    {
+        if (IsTokenBudgetExhausted(generatedPieces, maxTokens))
+        {
+            throw new PluginRequestException(
+                "Gemma 4 (Local) stopped the response at its output token limit.",
+                PluginRequestFailureKind.OutputTruncated,
+                isTransient: false);
         }
     }
 

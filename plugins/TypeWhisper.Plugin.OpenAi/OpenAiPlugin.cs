@@ -334,11 +334,15 @@ public sealed class OpenAiPlugin
             modelId,
             systemPrompt,
             userText,
-            ct,
-            maxOutputTokens: 2048,
-            maxOutputTokenParameter: OutputTokenParameter(modelId),
-            reasoningEffort: SupportsReasoningEffort(modelId) ? ReasoningEffort : null,
-            temperature: ResolvedTemperature(modelId)
+            new OpenAiChatRequestOptions
+            {
+                ProviderName = "OpenAI",
+                MaxOutputTokens = 2048,
+                MaxOutputTokenParameter = OutputTokenParameter(modelId),
+                ReasoningEffort = SupportsReasoningEffort(modelId) ? ReasoningEffort : null,
+                Temperature = ResolvedTemperature(modelId),
+            },
+            ct
         );
     }
 
@@ -375,11 +379,15 @@ public sealed class OpenAiPlugin
             modelId,
             systemPrompt,
             userText,
-            ct,
-            maxOutputTokens: 2048,
-            maxOutputTokenParameter: OutputTokenParameter(modelId),
-            reasoningEffort: SupportsReasoningEffort(modelId) ? ReasoningEffort : null,
-            temperature: ResolvedTemperature(modelId)
+            new OpenAiChatRequestOptions
+            {
+                ProviderName = "OpenAI",
+                MaxOutputTokens = 2048,
+                MaxOutputTokenParameter = OutputTokenParameter(modelId),
+                ReasoningEffort = SupportsReasoningEffort(modelId) ? ReasoningEffort : null,
+                Temperature = ResolvedTemperature(modelId),
+            },
+            ct
         );
 
         await foreach (var delta in source)

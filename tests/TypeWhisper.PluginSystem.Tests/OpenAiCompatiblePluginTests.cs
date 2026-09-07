@@ -11,6 +11,14 @@ namespace TypeWhisper.PluginSystem.Tests;
 public sealed class OpenAiCompatiblePluginTests
 {
     [Fact]
+    public async Task ProcessAsync_LongInput_KeepsFixedOutputCap()
+    {
+        var longInput = string.Concat(Enumerable.Repeat("dictated input ", 1_000));
+        var body = await CaptureThinkingRequestAsync("default", userText: longInput);
+        Assert.Equal(2048, body.GetProperty("max_tokens").GetInt32());
+    }
+
+    [Fact]
     public async Task ProcessAsync_ThinkingModeDefault_SendsNoThinkingControl()
     {
         var body = await CaptureThinkingRequestAsync("default");
@@ -152,7 +160,7 @@ public sealed class OpenAiCompatiblePluginTests
     }
 
     private static async Task<JsonElement> CaptureThinkingRequestAsync(
-        string mode, string baseUrl = "https://example.test", bool streaming = false)
+        string mode, string baseUrl = "https://example.test", bool streaming = false, string userText = "user")
     {
         string? capturedBody = null;
         using var client = new HttpClient(new CapturingHandler((_, body) =>
@@ -171,11 +179,11 @@ public sealed class OpenAiCompatiblePluginTests
         await sut.ActivateAsync(host);
         if (streaming)
         {
-            await foreach (var chunk in sut.ProcessStreamingAsync("system", "user", "model", CancellationToken.None))
+            await foreach (var chunk in sut.ProcessStreamingAsync("system", userText, "model", CancellationToken.None))
                 Assert.Fail($"Unexpected delta: {chunk}");
         }
         else
-            await sut.ProcessAsync("system", "user", "model", CancellationToken.None);
+            await sut.ProcessAsync("system", userText, "model", CancellationToken.None);
         using var doc = JsonDocument.Parse(capturedBody!);
         return doc.RootElement.Clone();
     }

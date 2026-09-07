@@ -196,7 +196,7 @@ public sealed class OpenRouterPlugin
             : model;
 
         // OpenRouter's batch body emits the same chat.completion shape as the
-        // shared helper: always max_tokens 2048, and temperature only in custom
+        // shared helper: a scaled max_tokens budget, and temperature only in custom
         // mode (provider default otherwise). It sets no extra headers, so the
         // shared streaming helper is a lossless route.
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
@@ -206,9 +206,12 @@ public sealed class OpenRouterPlugin
             modelId,
             systemPrompt,
             userText,
-            ct,
-            maxOutputTokens: 2048,
-            temperature: TemperatureMode == TemperatureModeCustom ? TemperatureValue : null);
+            new OpenAiChatRequestOptions
+            {
+                ProviderName = "OpenRouter",
+                Temperature = TemperatureMode == TemperatureModeCustom ? TemperatureValue : null,
+            },
+            ct);
 
         await foreach (var delta in source)
             yield return delta;
@@ -512,6 +515,7 @@ public sealed class OpenRouterPlugin
             userText,
             new OpenAiChatRequestOptions
             {
+                ProviderName = "OpenRouter",
                 Temperature = TemperatureMode == TemperatureModeCustom ? TemperatureValue : null,
             },
             ct);

@@ -515,17 +515,25 @@ public sealed class OpenAiCompatiblePlugin
 
     private static OpenAiChatRequestOptions BuildRequestOptions(string baseUrl, ThinkingMode mode)
     {
+        // The endpoint's context window is unknown (often a small self-hosted model), so keep
+        // the fixed output cap; a cut-off answer now surfaces as a truncation error instead.
+        var baseOptions = new OpenAiChatRequestOptions
+        {
+            ProviderName = "OpenAI Compatible",
+            ScaleOutputTokens = false,
+        };
+
         if (mode == ThinkingMode.ProviderDefault)
-            return new OpenAiChatRequestOptions();
+            return baseOptions;
 
         if (Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)
             && string.Equals(uri.Host, "api.deepinfra.com", StringComparison.OrdinalIgnoreCase))
-            return new OpenAiChatRequestOptions { ReasoningEffort = mode == ThinkingMode.On ? "high" : "none" };
+            return baseOptions with { ReasoningEffort = mode == ThinkingMode.On ? "high" : "none" };
 
         // No single control is universal: cloud endpoints read `thinking`, while vLLM and
         // llama.cpp read `chat_template_kwargs.enable_thinking`. Local servers ignore the other.
         var enabled = mode == ThinkingMode.On;
-        return new OpenAiChatRequestOptions
+        return baseOptions with
         {
             AdditionalBodyFields = new Dictionary<string, object?>
             {

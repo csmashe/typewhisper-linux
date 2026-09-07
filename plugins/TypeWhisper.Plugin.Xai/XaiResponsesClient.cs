@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 
 namespace TypeWhisper.Plugin.Xai;
@@ -137,6 +138,21 @@ internal sealed class XaiResponsesClient
     ///     Used by the streaming reader to surface a post-200 stream failure as a
     ///     thrown exception. Reflection-free (A18) via <see cref="JsonDocument" />.
     /// </summary>
+    private static PluginRequestException? ParseStreamTruncation(string dataPayload)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(dataPayload);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                ? LlmResponseTruncationGuard.TryCreateResponsesApiIncompleteException(doc.RootElement, "xAI")
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     internal static string? ParseStreamError(string dataPayload)
     {
         JsonDocument doc;
@@ -220,6 +236,9 @@ internal sealed class XaiResponsesClient
             // The Responses stream returns 200 before generation finishes, so a
             // mid-stream failure arrives as a typed lifecycle frame rather than
             // an HTTP error. Error validation must precede completion acceptance.
+            if (ParseStreamTruncation(sseEvent.Data) is { } truncation)
+                return new SsePolicyDecision<string>(Error: truncation);
+
             if (ParseStreamError(sseEvent.Data) is { } error)
             {
                 return new SsePolicyDecision<string>(
@@ -317,6 +336,7 @@ internal sealed class XaiResponsesClient
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
+        LlmResponseTruncationGuard.ThrowIfResponsesApiIncomplete(root, "xAI");
 
         if (TryGetNonEmptyString(root, "output_text") is { } outputText)
             return outputText;

@@ -215,9 +215,10 @@ public sealed class GroqPlugin
         return modelId.StartsWith("qwen", StringComparison.OrdinalIgnoreCase)
             ? new OpenAiChatRequestOptions
             {
+                ProviderName = "Groq",
                 AdditionalBodyFields = new Dictionary<string, object?> { ["reasoning_format"] = "hidden" },
             }
-            : new OpenAiChatRequestOptions();
+            : new OpenAiChatRequestOptions { ProviderName = "Groq" };
     }
 
     internal string? ApiKey { get; private set; }
