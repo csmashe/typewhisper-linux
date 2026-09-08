@@ -173,7 +173,7 @@ public sealed class BundledPluginDeployerTests
 
             var sourceDll = Path.Join(sourcePlugin, "current.dll");
             var sourceMtime = File.GetLastWriteTimeUtc(sourceDll);
-            var replacement = "current-v2";
+            const string replacement = "current-v2";
             Assert.Equal(File.ReadAllBytes(sourceDll).Length, replacement.Length);
             File.WriteAllText(sourceDll, replacement);
             File.SetLastWriteTimeUtc(sourceDll, sourceMtime);

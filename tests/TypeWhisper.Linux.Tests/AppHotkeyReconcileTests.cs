@@ -91,7 +91,7 @@ public sealed class AppHotkeyReconcileTests
         string chord
     )
     {
-        return new(
+        return new DynamicHotkeyRejection(
             kind,
             DynamicHotkeyRejectionReason.Conflict,
             id,

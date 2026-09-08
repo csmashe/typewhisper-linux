@@ -1,3 +1,5 @@
+// CA1861: the inline arrays are one-off registry fixtures, not repeatedly-called constants.
+#pragma warning disable CA1861
 using Moq;
 using Moq.Protected;
 using System.Net;

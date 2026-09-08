@@ -125,7 +125,7 @@ public partial class RecorderSectionViewModel : ObservableObject
                 return Task.CompletedTask;
             }
 
-            publishedWorkflow = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            publishedWorkflow = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             workflow = publishedWorkflow.Task;
             stopRecording = IsRecording;
             _publishedWorkflow = workflow;

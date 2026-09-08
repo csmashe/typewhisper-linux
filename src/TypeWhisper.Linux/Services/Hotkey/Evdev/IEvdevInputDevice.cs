@@ -166,6 +166,7 @@ internal sealed partial class EvdevInputDevice(string path) : IEvdevInputDevice
                     bytesRead = read(deviceHandle, bufferPointer, (nuint)buffer.Length);
                 }
 
+                // ReSharper disable once ConvertIfStatementToSwitchStatement -- the chain continues with a different kind of check; a partial switch would split it.
                 if (bytesRead > 0)
                 {
                     if (terminalPollEvent)
@@ -227,6 +228,7 @@ internal sealed partial class EvdevInputDevice(string path) : IEvdevInputDevice
             while (true)
             {
                 var bytesWritten = write(wakeHandle, in signal, sizeof(ulong));
+                // ReSharper disable once ConvertIfStatementToSwitchStatement -- the chain continues with a different kind of check; a partial switch would split it.
                 if (bytesWritten == sizeof(ulong))
                 {
                     return;
@@ -240,6 +242,7 @@ internal sealed partial class EvdevInputDevice(string path) : IEvdevInputDevice
                 }
 
                 var error = Marshal.GetLastPInvokeError();
+                // ReSharper disable once ConvertIfStatementToSwitchStatement -- the chain continues with a different kind of check; a partial switch would split it.
                 if (error == ErrorInterrupted)
                 {
                     continue;

@@ -839,6 +839,7 @@ public sealed class SpeechFeedbackService : IDisposable
             _isPlaybackPending = false;
         }
 
+        // ReSharper disable once InvertIf -- inverting would duplicate the trailing return.
         if (playbackRequest is not null)
         {
             // Reached from Dispose: a blocking plugin Stop() or cancellation

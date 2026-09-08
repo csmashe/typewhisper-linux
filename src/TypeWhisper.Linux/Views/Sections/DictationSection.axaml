@@ -274,6 +274,7 @@
                             <TextBlock Text="{loc:Str Dictation.SpokenLanguage}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
+                                      Grid.Row="0"
                                       ItemsSource="{Binding LanguageChoices}"
                                       SelectedItem="{Binding SelectedLanguageOption}"
                                       HorizontalAlignment="Stretch">
@@ -284,6 +285,7 @@
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
                             <TextBlock Grid.Row="1"
+                                       Grid.Column="0"
                                        Grid.ColumnSpan="2"
                                        Text="{Binding LanguageSelectionWarning}"
                                        IsVisible="{Binding LanguageSelectionRequired}"

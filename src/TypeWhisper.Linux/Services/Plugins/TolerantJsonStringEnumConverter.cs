@@ -22,6 +22,7 @@ internal sealed class TolerantJsonStringEnumConverter<TEnum>(TEnum fallback) : J
         JsonSerializerOptions options
     )
     {
+        // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- the default arm intentionally covers the remaining token types.
         switch (reader.TokenType)
         {
             case JsonTokenType.String:

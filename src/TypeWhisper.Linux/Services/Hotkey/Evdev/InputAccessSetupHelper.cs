@@ -608,6 +608,7 @@ public sealed partial class InputAccessSetupHelper
             commands.Add(ToManualSudoCommand(BuildPrivilegedRemoveScript(false)));
         }
 
+        // ReSharper disable once InvertIf -- inverting would duplicate the trailing return.
         if (removeManagedGroupGrant)
         {
             try
@@ -647,15 +648,15 @@ public sealed partial class InputAccessSetupHelper
         var identity = GetCurrentIdentity();
         var common = BuildInputGroupGrantCommonShell(identity);
         return common
-               + $$"""
+               + $"""
             if input_group_member; then
-              echo '{{InputGroupPreexistingToken}}'
+              echo '{InputGroupPreexistingToken}'
             else
               ensure_input_group_grant_directory
               write_input_group_grant_record "$input_group_pending_content"
               if usermod -aG input -- "$input_group_user"; then
                 write_input_group_grant_record "$input_group_owned_content"
-                echo '{{InputGroupAddedToken}}'
+                echo '{InputGroupAddedToken}'
               else
                 status=$?
                 if ! input_group_member; then
@@ -673,11 +674,11 @@ public sealed partial class InputAccessSetupHelper
         var identity = GetCurrentIdentity();
         var common = BuildInputGroupGrantCommonShell(identity);
         return common
-               + $$"""
+               + $"""
             classify_input_group_grant_record
             if [ "$input_group_record_state" != managed ]; then
-              echo '{{InputGroupGrantUnsafeToken}}' >&2
-              exit {{InputGroupGrantUnsafeExitCode}}
+              echo '{InputGroupGrantUnsafeToken}' >&2
+              exit {InputGroupGrantUnsafeExitCode}
             fi
             if input_group_member; then
               if command -v gpasswd >/dev/null 2>&1; then
@@ -698,11 +699,11 @@ public sealed partial class InputAccessSetupHelper
             fi
             classify_input_group_grant_record
             if [ "$input_group_record_state" != managed ]; then
-              echo '{{InputGroupGrantUnsafeToken}}' >&2
-              exit {{InputGroupGrantUnsafeExitCode}}
+              echo '{InputGroupGrantUnsafeToken}' >&2
+              exit {InputGroupGrantUnsafeExitCode}
             fi
             rm -f "$input_group_record"
-            echo '{{InputGroupRevokedToken}}'
+            echo '{InputGroupRevokedToken}'
             """
                + "\n";
     }
@@ -712,7 +713,7 @@ public sealed partial class InputAccessSetupHelper
         var recordPath = InputGroupGrantRecordPath(identity);
         var pending = InputGroupGrantRecordContent("pending-add", identity);
         var owned = InputGroupGrantRecordContent("owned", identity);
-        Func<string, string> quote = PrivilegedManagedFileTransaction.QuoteAsShCArgument;
+        var quote = PrivilegedManagedFileTransaction.QuoteAsShCArgument;
         return $$"""
             input_group_grant_dir={{quote(InputGroupGrantStateDirectory)}}
             input_group_record={{quote(recordPath)}}
@@ -845,7 +846,7 @@ public sealed partial class InputAccessSetupHelper
     {
         var identity = CurrentIdentityOverride?.Invoke() ?? (LibcGetEUid(), Environment.UserName);
         if (string.IsNullOrWhiteSpace(identity.UserName)
-            || identity.UserName.StartsWith("-", StringComparison.Ordinal)
+            || identity.UserName.StartsWith('-')
             || identity.UserName.IndexOfAny(['\0', '\r', '\n']) >= 0)
         {
             throw new InvalidOperationException(

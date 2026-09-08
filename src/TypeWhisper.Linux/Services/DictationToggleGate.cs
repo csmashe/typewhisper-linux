@@ -184,6 +184,7 @@ internal sealed class DictationToggleGate : IDisposable
                 return false;
             }
 
+            // ReSharper disable once InvertIf -- the closed case is the significant branch; kept as the guard.
             if (_closed)
             {
                 _gate.Release();
@@ -255,12 +256,7 @@ internal sealed class DictationToggleGate : IDisposable
     {
         // Keep the closed check and semaphore acquisition in this same critical section. Otherwise
         // CloseAsync could close an apparently idle gate while a pre-checked caller acquires it.
-        if (_closed || !_gate.Wait(0))
-        {
-            return false;
-        }
-
-        return true;
+        return !_closed && _gate.Wait(0);
     }
 
     private void ReleaseLocked()

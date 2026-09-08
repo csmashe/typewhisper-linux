@@ -233,6 +233,6 @@ public class HttpApiRequestDispatcherTests
     private static Task AssertAdmitted(HttpApiDispatchResult result)
     {
         Assert.Equal(HttpApiDispatchStatus.Admitted, result.Status);
-        return Assert.IsAssignableFrom<Task>(result.HandlerTask);
+        return Assert.IsType<Task>(result.HandlerTask, exactMatch: false);
     }
 }

@@ -266,6 +266,7 @@ internal static partial class ApiKeyProtection
         var fd = NativeFile.OpenExisting(path, out var openError);
         if (fd < 0)
         {
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
             if (openError == NativeFile.ErrorNoEntry)
             {
                 return null;
@@ -345,6 +346,7 @@ internal static partial class ApiKeyProtection
             }
 
             Span<byte> extraByte = stackalloc byte[1];
+            // ReSharper disable once InvertIf -- the size-check throw is the point of this block; inverting would bury it below the return.
             if (
                 bytesRead != KeySize
                 || RandomAccess.Read(handle, extraByte, KeySize) != 0
@@ -586,6 +588,7 @@ internal static partial class ApiKeyProtection
                 }
 
                 error = Marshal.GetLastPInvokeError();
+                // ReSharper disable once InvertIf -- the retry loop keeps its terminal branch explicit; inverting into a continue reads worse.
                 if (error != ErrorInterrupted)
                 {
                     stat = default;

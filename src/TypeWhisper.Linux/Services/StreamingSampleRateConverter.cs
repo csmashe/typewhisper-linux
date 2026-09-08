@@ -149,6 +149,7 @@ internal sealed class StreamingSampleRateConverter
         if (_coefficients.Length > 0)
         {
             var leftSample = EvaluateFirAtIndex(leftIndex);
+            // ReSharper disable once InvertIf -- inverting would duplicate the trailing return.
             if (rightIndex != leftIndex && fraction != 0f)
             {
                 var rightSample = EvaluateFirAtIndex(rightIndex);
@@ -185,12 +186,9 @@ internal sealed class StreamingSampleRateConverter
             return _firstSample;
         }
 
-        if (index >= _totalInputSampleCount)
-        {
-            return _lastSample;
-        }
-
-        return _history[checked((int)(index - _historyStartIndex))];
+        return index >= _totalInputSampleCount
+            ? _lastSample
+            : _history[checked((int)(index - _historyStartIndex))];
     }
 
     private void TrimUnusedHistory()

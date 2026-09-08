@@ -213,8 +213,7 @@ public sealed class TransformSelectionService
             return;
         }
 
-        var capture = await CaptureSelectionForTransformAsync(_textInsertion, _activeWindow);
-        var selectedText = capture.SelectedText;
+        var (selectedText, targetSnapshot) = await CaptureSelectionForTransformAsync(_textInsertion, _activeWindow);
         if (string.IsNullOrWhiteSpace(selectedText))
         {
             await ShowWarningAsync("Select text before using Transform Selection.");
@@ -241,7 +240,7 @@ public sealed class TransformSelectionService
 
         _session = new TransformSelectionSession(
             selectedText,
-            capture.TargetSnapshot,
+            targetSnapshot,
             captureSession
         );
         PublishOverlay(state =>
@@ -254,7 +253,7 @@ public sealed class TransformSelectionService
                 IsRecording = true,
                 StatusText = Localization.Loc.Instance["Overlay.TransformPrompt"],
                 PartialText = selectedText,
-                ActiveAppName = ResolveActiveAppName(capture.TargetSnapshot),
+                ActiveAppName = ResolveActiveAppName(targetSnapshot),
                 SessionStartedAtUtc = DateTime.UtcNow,
             }
         );

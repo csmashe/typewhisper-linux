@@ -590,7 +590,7 @@ public sealed class InputAccessSetupHelperTests
     {
         using var env = new SysConfEnvironment();
         SysConfEnvironment.WriteRule(InputAccessSetupHelper.UdevRuleContent);
-        env.WriteGroupProvenance("owned");
+        SysConfEnvironment.WriteGroupProvenance("owned");
         var usermodLog = Path.Join(env.Dir, "usermod.log");
         var gpasswdLog = Path.Join(env.Dir, "gpasswd.log");
         var runner = env.CreateGroupScriptRunner(
@@ -614,7 +614,7 @@ public sealed class InputAccessSetupHelperTests
     public async Task RemoveAsync_without_gpasswd_falls_back_to_usermod_rG()
     {
         using var env = new SysConfEnvironment();
-        env.WriteGroupProvenance("owned");
+        SysConfEnvironment.WriteGroupProvenance("owned");
         var usermodLog = Path.Join(env.Dir, "usermod.log");
         var runner = env.CreateGroupScriptRunner(
             alreadyMember: true,
@@ -651,7 +651,7 @@ public sealed class InputAccessSetupHelperTests
     public async Task RemoveAsync_with_rule_absent_but_provenance_present_still_revokes_group()
     {
         using var env = new SysConfEnvironment();
-        env.WriteGroupProvenance("owned");
+        SysConfEnvironment.WriteGroupProvenance("owned");
         var usermodLog = Path.Join(env.Dir, "usermod.log");
         var gpasswdLog = Path.Join(env.Dir, "gpasswd.log");
         var runner = env.CreateGroupScriptRunner(
@@ -674,7 +674,7 @@ public sealed class InputAccessSetupHelperTests
     public async Task RemoveAsync_group_removal_failure_preserves_provenance()
     {
         using var env = new SysConfEnvironment();
-        env.WriteGroupProvenance("owned");
+        SysConfEnvironment.WriteGroupProvenance("owned");
         var usermodLog = Path.Join(env.Dir, "usermod.log");
         var gpasswdLog = Path.Join(env.Dir, "gpasswd.log");
         var runner = env.CreateGroupScriptRunner(
@@ -697,7 +697,7 @@ public sealed class InputAccessSetupHelperTests
     public async Task RemoveAsync_recovers_pending_add_provenance()
     {
         using var env = new SysConfEnvironment();
-        env.WriteGroupProvenance("pending-add");
+        SysConfEnvironment.WriteGroupProvenance("pending-add");
         var usermodLog = Path.Join(env.Dir, "usermod.log");
         var gpasswdLog = Path.Join(env.Dir, "gpasswd.log");
         var runner = env.CreateGroupScriptRunner(
@@ -720,7 +720,7 @@ public sealed class InputAccessSetupHelperTests
     public async Task RemoveAsync_clears_pending_add_when_membership_was_not_applied()
     {
         using var env = new SysConfEnvironment();
-        env.WriteGroupProvenance("pending-add");
+        SysConfEnvironment.WriteGroupProvenance("pending-add");
         var usermodLog = Path.Join(env.Dir, "usermod.log");
         var runner = env.CreateGroupScriptRunner(alreadyMember: false, usermodLog);
         var helper = new InputAccessSetupHelper(runner);
@@ -737,7 +737,7 @@ public sealed class InputAccessSetupHelperTests
     public async Task RemoveAsync_without_pkexec_offers_only_a_provenance_guarded_group_revoke()
     {
         using var env = new SysConfEnvironment();
-        env.WriteGroupProvenance("owned");
+        SysConfEnvironment.WriteGroupProvenance("owned");
         var helper = new InputAccessSetupHelper(new FakeProcessRunner());
 
         var result = await helper.RemoveAsync(CancellationToken.None);
@@ -756,7 +756,7 @@ public sealed class InputAccessSetupHelperTests
     {
         using var env = new SysConfEnvironment();
         SysConfEnvironment.WriteRule(InputAccessSetupHelper.UdevRuleContent);
-        env.WriteGroupProvenance("owned");
+        SysConfEnvironment.WriteGroupProvenance("owned");
         var helper = new InputAccessSetupHelper(new FakeProcessRunner());
 
         var result = await helper.RemoveAsync(CancellationToken.None);
@@ -780,7 +780,7 @@ public sealed class InputAccessSetupHelperTests
     public async Task RemoveAsync_group_only_manual_fallback_survives_identity_failure()
     {
         using var env = new SysConfEnvironment();
-        env.WriteGroupProvenance("owned");
+        SysConfEnvironment.WriteGroupProvenance("owned");
         var identityCalls = 0;
         InputAccessSetupHelper.CurrentIdentityOverride = () =>
             ++identityCalls == 1 ? (4242u, "typewhisper-test") : (4242u, "bad\nname");
@@ -796,7 +796,7 @@ public sealed class InputAccessSetupHelperTests
     public async Task RemoveAsync_refuses_group_revoke_when_provenance_was_swapped_before_the_privileged_run()
     {
         using var env = new SysConfEnvironment();
-        env.WriteGroupProvenance("owned");
+        SysConfEnvironment.WriteGroupProvenance("owned");
         var usermodLog = Path.Join(env.Dir, "usermod.log");
         const string foreignRecord = "state=owned\nuid=4242\nusername=someone-else";
         var runner = new SwapProvenanceBeforePrivilegedRunner(
@@ -823,9 +823,9 @@ public sealed class InputAccessSetupHelperTests
     public async Task RemoveAsync_with_edited_owned_rule_and_provenance_still_revokes_group()
     {
         using var env = new SysConfEnvironment();
-        var editedRule = InputAccessSetupHelper.UdevRuleContent + "# administrator edit\n";
+        const string editedRule = InputAccessSetupHelper.UdevRuleContent + "# administrator edit\n";
         SysConfEnvironment.WriteRule(editedRule);
-        env.WriteGroupProvenance("owned");
+        SysConfEnvironment.WriteGroupProvenance("owned");
         var usermodLog = Path.Join(env.Dir, "usermod.log");
         var gpasswdLog = Path.Join(env.Dir, "gpasswd.log");
         var runner = env.CreateGroupScriptRunner(
@@ -853,9 +853,9 @@ public sealed class InputAccessSetupHelperTests
     public async Task RemoveAsync_with_edited_owned_rule_reports_independent_group_failure()
     {
         using var env = new SysConfEnvironment();
-        var editedRule = InputAccessSetupHelper.UdevRuleContent + "# administrator edit\n";
+        const string editedRule = InputAccessSetupHelper.UdevRuleContent + "# administrator edit\n";
         SysConfEnvironment.WriteRule(editedRule);
-        env.WriteGroupProvenance("owned");
+        SysConfEnvironment.WriteGroupProvenance("owned");
         var usermodLog = Path.Join(env.Dir, "usermod.log");
         var gpasswdLog = Path.Join(env.Dir, "gpasswd.log");
         var runner = env.CreateGroupScriptRunner(
@@ -1128,7 +1128,7 @@ public sealed class InputAccessSetupHelperTests
             ];
         }
 
-        public void WriteGroupProvenance(string state)
+        public static void WriteGroupProvenance(string state)
         {
             Directory.CreateDirectory(InputAccessSetupHelper.InputGroupGrantStateDirectory);
             File.WriteAllText(

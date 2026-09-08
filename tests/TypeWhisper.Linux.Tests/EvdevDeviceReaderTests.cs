@@ -280,7 +280,7 @@ public sealed class EvdevDeviceReaderTests
         var actualFailure = await failure.Task.WaitAsync(s_testGuard);
 
         // PTYs report master closure as POLLHUP with EOF or, on some kernels, EIO.
-        Assert.IsAssignableFrom<IOException>(actualFailure);
+        Assert.IsType<IOException>(actualFailure, exactMatch: false);
         Assert.NotEqual(pty.SlavePath, LinuxPty.GetFileDescriptorTarget(readerFd));
         Assert.Empty(events.Snapshot());
     }
@@ -314,7 +314,7 @@ public sealed class EvdevDeviceReaderTests
 
         var actualFailure = await failure.Task.WaitAsync(s_testGuard);
 
-        Assert.IsAssignableFrom<IOException>(actualFailure);
+        Assert.IsType<IOException>(actualFailure, exactMatch: false);
         Assert.Empty(events.Snapshot());
     }
 
@@ -1112,7 +1112,9 @@ public sealed class EvdevDeviceReaderTests
             }
         }
 
-        // This test fixture deliberately uses DllImport so its project does not require AllowUnsafeBlocks.
+        // This test fixture deliberately uses DllImport so its project does not require AllowUnsafeBlocks;
+        // the ASCII PTY paths need no explicit string marshalling.
+#pragma warning disable SYSLIB1054, CA2101
         [DllImport("libc", SetLastError = true)]
         private static extern int posix_openpt(int flags);
 
@@ -1146,5 +1148,6 @@ public sealed class EvdevDeviceReaderTests
 
         [DllImport("libc", SetLastError = true)]
         private static extern nint write(SafeFileHandle fd, byte[] buffer, nuint count);
+#pragma warning restore SYSLIB1054, CA2101
     }
 }

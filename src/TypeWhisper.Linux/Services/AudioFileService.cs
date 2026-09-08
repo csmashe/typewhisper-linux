@@ -87,6 +87,7 @@ public sealed class AudioFileService
             cancellationToken
         ).ConfigureAwait(false);
 
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- the chain continues with a different kind of check; a partial switch would split it.
         if (result.Status == ProcessRunStatus.StartFailed)
         {
             throw new InvalidOperationException(
@@ -156,6 +157,7 @@ public sealed class AudioFileService
             cancellationToken
         ).ConfigureAwait(false);
 
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- the chain continues with a different kind of check; a partial switch would split it.
         if (result.Status == ProcessRunStatus.StartFailed)
         {
             throw new InvalidOperationException(

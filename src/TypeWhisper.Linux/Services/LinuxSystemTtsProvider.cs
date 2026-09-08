@@ -19,7 +19,6 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
 
     private readonly Func<string?> _speechFeedbackCommand;
     private readonly IProcessRunner _processRunner;
-    private string? _selectedVoiceId;
 
     public LinuxSystemTtsProvider(
         ISettingsService settings,
@@ -45,7 +44,7 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
         Func<string?> speechFeedbackCommand
     )
     {
-        _selectedVoiceId = settings.Current.SpokenFeedbackVoiceId;
+        SelectedVoiceId = settings.Current.SpokenFeedbackVoiceId;
         _processRunner = processRunner;
         _speechFeedbackCommand = speechFeedbackCommand;
     }
@@ -56,7 +55,7 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
     public string ProviderId => BuiltInProviderId;
     public string ProviderDisplayName => "Linux system voice";
     public bool IsConfigured => _speechFeedbackCommand() is not null;
-    public string? SelectedVoiceId => _selectedVoiceId;
+    public string? SelectedVoiceId { get; private set; }
     public string SettingsSummary => SelectedVoiceId ?? "System default voice";
 
     public IReadOnlyList<PluginVoiceInfo> AvailableVoices => [];
@@ -73,7 +72,7 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
 
     public void SelectVoice(string? voiceId)
     {
-        _selectedVoiceId = string.IsNullOrWhiteSpace(voiceId) ? null : voiceId;
+        SelectedVoiceId = string.IsNullOrWhiteSpace(voiceId) ? null : voiceId;
     }
 
     public Task<ITtsPlaybackSession> SpeakAsync(TtsSpeakRequest request, CancellationToken ct)

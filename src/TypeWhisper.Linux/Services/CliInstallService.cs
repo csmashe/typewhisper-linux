@@ -354,6 +354,7 @@ public sealed class CliInstallService
         // For local development, prepare the CLI with:
         // dotnet publish src/TypeWhisper.Cli/TypeWhisper.Cli.csproj -c Debug -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false
         var candidates = new List<string> { Path.Join(baseDirectory, "Cli", CliFileName) };
+        // ReSharper disable once InvertIf -- inverting would duplicate the trailing return.
         if (sourceDirectory is not null)
         {
             candidates.Add(

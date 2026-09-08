@@ -53,7 +53,6 @@ internal sealed class SecretProtectionMigrationService
     private readonly string _keyFilePath;
     private readonly Action? _quarantinePersistedObserver;
     private readonly AtomicJsonStore<QuarantineDocument> _quarantineStore;
-    private readonly string _quarantinePath;
     private readonly string _startupId;
 
     public SecretProtectionMigrationService()
@@ -77,9 +76,9 @@ internal sealed class SecretProtectionMigrationService
         );
         _startupId = startupId ?? s_processStartupId;
         _quarantinePersistedObserver = quarantinePersistedObserver;
-        _quarantinePath = Path.Join(_basePath, QuarantineFileName);
+        QuarantinePath = Path.Join(_basePath, QuarantineFileName);
         _quarantineStore = new AtomicJsonStore<QuarantineDocument>(
-            _quarantinePath,
+            QuarantinePath,
             static () => new QuarantineDocument(),
             new AtomicJsonStoreOptions<QuarantineDocument>
             {
@@ -93,7 +92,7 @@ internal sealed class SecretProtectionMigrationService
 
     // The backup export guards this file's inode the same way as the key: its
     // ciphertext is protected only by a derivation from guessable inputs.
-    internal string QuarantinePath => _quarantinePath;
+    internal string QuarantinePath { get; }
 
     public SecretProtectionMigrationResult MigrateAll()
     {
@@ -359,7 +358,7 @@ internal sealed class SecretProtectionMigrationService
                 {
                     Trace.WriteLine(
                         $"[SecretProtectionMigration] Could not quarantine '{path}' property "
-                            + $"'{propertyName}' at '{_quarantinePath}': {ex.Message}"
+                            + $"'{propertyName}' at '{QuarantinePath}': {ex.Message}"
                     );
                     migrationError ??=
                         $"Could not quarantine protected settings in '{path}': {ex.Message}";
@@ -381,12 +380,9 @@ internal sealed class SecretProtectionMigrationService
 
         try
         {
-            if (!ApplyReplacements(path, replacements))
-            {
-                return new FileMigrationOutcome(sourceChanged, replacements.Count, null);
-            }
-
-            return new FileMigrationOutcome(true, 0, null);
+            return ApplyReplacements(path, replacements)
+                ? new FileMigrationOutcome(true, 0, null)
+                : new FileMigrationOutcome(sourceChanged, replacements.Count, null);
         }
         catch (Exception ex) when (
             ex is IOException or JsonException or UnauthorizedAccessException
@@ -415,7 +411,7 @@ internal sealed class SecretProtectionMigrationService
                 propertyName,
                 StringComparer.Ordinal
             )
-            || !File.Exists(_quarantinePath)
+            || !File.Exists(QuarantinePath)
         )
         {
             return;
@@ -453,7 +449,7 @@ internal sealed class SecretProtectionMigrationService
         {
             Trace.WriteLine(
                 $"[SecretProtectionMigration] Could not reset provider failure state at "
-                    + $"'{_quarantinePath}': {ex.Message}"
+                    + $"'{QuarantinePath}': {ex.Message}"
             );
         }
     }
@@ -575,6 +571,7 @@ internal sealed class SecretProtectionMigrationService
         });
         VerifyQuarantineMode();
 
+        // ReSharper disable once InvertIf -- the positive form states the retirement condition; inverting the multi-line predicate reads worse.
         if (
             hasDurableQuarantineCopy
             && committed.RetiredSecrets.Any(secret =>
@@ -603,7 +600,7 @@ internal sealed class SecretProtectionMigrationService
         {
             Trace.WriteLine(
                 $"[SecretProtectionMigration] Retired provider secret quarantine: "
-                    + $"'{_quarantinePath}'"
+                    + $"'{QuarantinePath}'"
             );
             return true;
         }
@@ -701,9 +698,9 @@ internal sealed class SecretProtectionMigrationService
 
     private void PrepareQuarantineMode()
     {
-        if (File.Exists(_quarantinePath) && !OperatingSystem.IsWindows())
+        if (File.Exists(QuarantinePath) && !OperatingSystem.IsWindows())
         {
-            File.SetUnixFileMode(_quarantinePath, QuarantineFileMode);
+            File.SetUnixFileMode(QuarantinePath, QuarantineFileMode);
         }
     }
 
@@ -714,12 +711,12 @@ internal sealed class SecretProtectionMigrationService
             return;
         }
 
-        File.SetUnixFileMode(_quarantinePath, QuarantineFileMode);
-        if (File.GetUnixFileMode(_quarantinePath) != QuarantineFileMode)
+        File.SetUnixFileMode(QuarantinePath, QuarantineFileMode);
+        if (File.GetUnixFileMode(QuarantinePath) != QuarantineFileMode)
         {
             throw new IOException(
                 $"Could not apply Unix mode '{QuarantineFileMode}' to "
-                    + $"'{_quarantinePath}'."
+                    + $"'{QuarantinePath}'."
             );
         }
     }
