@@ -20,6 +20,24 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class XaiPluginTests
 {
     [Fact]
+    public async Task ProcessAsync_OmitsOutputCapAndRejectsIncompleteTokenLimitedOutput()
+    {
+        var input = string.Concat(Enumerable.Repeat("dictated input ", 1000));
+        using var client = new HttpClient(new CapturingHandler((_, body) =>
+        {
+            // Grok's reasoning tokens count against max_output_tokens, so no cap is sent.
+            Assert.DoesNotContain("max_output_tokens", body!);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
+                """{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output_text":"partial"}""") };
+        }));
+        var sut = new XaiPlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "key" } });
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => sut.ProcessAsync("system", input, "", CancellationToken.None));
+        Assert.Equal(PluginRequestFailureKind.OutputTruncated, ex.FailureKind);
+        Assert.False(ex.IsTransient);
+    }
+
+    [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {
         var manifest = LoadManifest();
@@ -346,7 +364,7 @@ public class XaiPluginTests
     [Theory]
     [InlineData(
         """{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}""",
-        "max_output_tokens")]
+        "output token limit")]
     [InlineData(
         """{"type":"response.cancelled","response":{"status":"cancelled","error":{"message":"cancelled upstream"}}}""",
         "cancelled upstream")]
@@ -381,7 +399,7 @@ public class XaiPluginTests
         await sut.ActivateAsync(host);
 
         var chunks = new List<string>();
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        var ex = await Assert.ThrowsAnyAsync<InvalidOperationException>(async () =>
         {
             await foreach (var chunk in sut.ProcessStreamingAsync(
                 "system", "user", "", CancellationToken.None))
@@ -392,6 +410,8 @@ public class XaiPluginTests
 
         Assert.Equal(["partial"], chunks);
         Assert.Contains(expectedDetail, ex.Message);
+        if (expectedDetail == "output token limit")
+            Assert.Equal(PluginRequestFailureKind.OutputTruncated, Assert.IsType<PluginRequestException>(ex).FailureKind);
     }
 
     [Fact]

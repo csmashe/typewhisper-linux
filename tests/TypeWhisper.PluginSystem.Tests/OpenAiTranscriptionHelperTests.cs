@@ -250,6 +250,46 @@ public class OpenAiTranscriptionHelperTests
         Assert.True(result.NoSpeechProbability < 0.1f);
     }
 
+    [Fact]
+    public void ParseTranscriptionResponse_PopulatesPerSegmentNoSpeechProbability()
+    {
+        var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse("""
+            {
+                "text": "Please send the updated draft. Thank you.",
+                "segments": [
+                    { "text": " Please send the updated draft.", "start": 0, "end": 5, "no_speech_prob": 0.02 },
+                    { "text": " Thank you.", "start": 5, "end": 8, "no_speech_prob": 0.95 }
+                ]
+            }
+            """);
+
+        Assert.Equal("Please send the updated draft. Thank you.", result.Text);
+        Assert.Equal(2, result.Segments.Count);
+        Assert.Equal(0.02f, result.Segments[0].NoSpeechProbability);
+        Assert.Equal(0.95f, result.Segments[1].NoSpeechProbability);
+        Assert.Equal(0.02f, result.NoSpeechProbability);
+    }
+
+    [Fact]
+    public void ParseTranscriptionResponse_NonNumericNoSpeechProb_IsNull()
+    {
+        var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse("""
+            { "text": "Thank you.", "segments": [{ "text": " Thank you.", "no_speech_prob": "high" }] }
+            """);
+
+        Assert.Null(Assert.Single(result.Segments).NoSpeechProbability);
+    }
+
+    [Fact]
+    public void ParseTranscriptionResponse_SegmentWithoutNoSpeechProb_IsNull()
+    {
+        var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse("""
+            { "text": "Thank you.", "segments": [{ "text": " Thank you." }] }
+            """);
+
+        Assert.Null(Assert.Single(result.Segments).NoSpeechProbability);
+    }
+
     private static Task<PluginTranscriptionResult> TranscribeAsync(
         HttpClient httpClient,
         string responseFormat

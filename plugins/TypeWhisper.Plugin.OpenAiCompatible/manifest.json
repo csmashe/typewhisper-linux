@@ -1,7 +1,8 @@
 {
   "id": "com.typewhisper.openai-compatible",
   "name": "OpenAI Compatible",
-  "version": "1.0.1",
+  "version": "1.0.3",
+  "minHostVersion": "0.13.2",
   "author": "TypeWhisper",
   "description": "Connect to any OpenAI-compatible server (Ollama, LM Studio, vLLM, etc.)",
   "networkAccess": "userControlled",

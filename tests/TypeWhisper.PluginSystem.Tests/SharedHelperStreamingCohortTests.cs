@@ -18,6 +18,17 @@ namespace TypeWhisper.PluginSystem.Tests;
 public sealed class SharedHelperStreamingCohortTests
 {
     [Fact]
+    public async Task ProcessStreamingAsync_LengthFinishReason_ThrowsTruncation()
+    {
+        var chunks = new List<string>();
+        const string sse = "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
+            + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n";
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => StreamCerebrasSseAsync(sse, chunks));
+        Assert.Equal(PluginRequestFailureKind.OutputTruncated, ex.FailureKind);
+        Assert.Equal(["partial"], chunks);
+    }
+
+    [Fact]
     public async Task Cerebras_ProcessStreamingAsync_StreamsDeltas()
     {
         var (chunks, body, url) = await StreamAsync(h => new CerebrasPlugin(h), "api-key", "llama-test");
@@ -163,7 +174,7 @@ public sealed class SharedHelperStreamingCohortTests
             "",
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
             "",
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}",
             "",
             "data: [DONE]",
             "",

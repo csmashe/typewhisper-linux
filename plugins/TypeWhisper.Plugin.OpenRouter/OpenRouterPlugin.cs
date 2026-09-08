@@ -196,7 +196,7 @@ public sealed class OpenRouterPlugin
             : model;
 
         // OpenRouter's batch body emits the same chat.completion shape as the
-        // shared helper: always max_tokens 2048, and temperature only in custom
+        // shared helper: a scaled max_tokens budget, and temperature only in custom
         // mode (provider default otherwise). It sets no extra headers, so the
         // shared streaming helper is a lossless route.
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
@@ -206,9 +206,12 @@ public sealed class OpenRouterPlugin
             modelId,
             systemPrompt,
             userText,
-            ct,
-            maxOutputTokens: 2048,
-            temperature: TemperatureMode == TemperatureModeCustom ? TemperatureValue : null);
+            new OpenAiChatRequestOptions
+            {
+                ProviderName = "OpenRouter",
+                Temperature = TemperatureMode == TemperatureModeCustom ? TemperatureValue : null,
+            },
+            ct);
 
         await foreach (var delta in source)
             yield return delta;
@@ -498,51 +501,24 @@ public sealed class OpenRouterPlugin
 
     // Network paths
 
-    private async Task<string> SendChatCompletionAsync(
+    private Task<string> SendChatCompletionAsync(
         string model,
         string systemPrompt,
         string userText,
-        CancellationToken ct)
-    {
-        var body = new Dictionary<string, object?>
-        {
-            ["model"] = model,
-            ["messages"] = new object[]
+        CancellationToken ct) =>
+        OpenAiChatHelper.SendChatCompletionAsync(
+            _httpClient,
+            BaseUrl,
+            ApiKey!,
+            model,
+            systemPrompt,
+            userText,
+            new OpenAiChatRequestOptions
             {
-                new { role = "system", content = systemPrompt },
-                new { role = "user", content = userText },
+                ProviderName = "OpenRouter",
+                Temperature = TemperatureMode == TemperatureModeCustom ? TemperatureValue : null,
             },
-            ["max_tokens"] = 2048,
-        };
-
-        if (TemperatureMode == TemperatureModeCustom)
-            body["temperature"] = TemperatureValue;
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/chat/completions");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
-        request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
-
-        var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, request, ct);
-        var json = await response.Content.ReadAsStringAsync(ct);
-        return ParseChatCompletionResponse(json);
-    }
-
-    private static string ParseChatCompletionResponse(string json)
-    {
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-
-        if (root.TryGetProperty("choices", out var choices)
-            && choices.ValueKind == JsonValueKind.Array
-            && choices.GetArrayLength() > 0
-            && choices[0].TryGetProperty("message", out var message)
-            && message.TryGetProperty("content", out var content))
-        {
-            return content.GetString()?.Trim() ?? "";
-        }
-
-        return "";
-    }
+            ct);
 
     private async Task<PluginTranscriptionResult> SendAudioTranscriptionAsync(
         string model,

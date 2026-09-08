@@ -20,14 +20,17 @@ public sealed class SonioxPlugin
 
     private const string BaseUrl = "https://api.soniox.com";
     private const string ApiKeySecretName = "api-key";
-    private const string SonioxAsyncModelId = "stt-async-v4";
+    private const string SonioxAsyncModelId = "stt-async-v5";
     private const int DefaultMaxPollAttempts = 3600;
     private const int MaxSubtitleSegmentCharacters = 84;
     private const int MinSentenceSegmentCharacters = 20;
     private const double MaxSubtitleSegmentDurationSeconds = 6.0;
     private const double SubtitleSegmentPauseSplitSeconds = 0.75;
 
-    private static readonly TimeSpan s_defaultPollDelay = TimeSpan.FromSeconds(1);
+    // Short first delay so brief clips return fast; back off toward a cap so long
+    // recordings do not hammer the API.
+    private static readonly TimeSpan s_defaultInitialPollDelay = TimeSpan.FromMilliseconds(150);
+    private static readonly TimeSpan s_defaultMaxPollDelay = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan s_defaultCleanupBudget = TimeSpan.FromSeconds(5);
 
     private static readonly IReadOnlyList<PluginModelInfo> s_models =
@@ -39,10 +42,12 @@ public sealed class SonioxPlugin
     ];
 
     private readonly HttpClient _httpClient;
-    private readonly TimeSpan _pollDelay;
+    private readonly TimeSpan _initialPollDelay;
+    private readonly TimeSpan _maxPollDelay;
     private readonly int _maxPollAttempts;
     private readonly TimeSpan _cleanupBudget;
     private readonly SemaphoreSlim _apiKeyWriteLock = new(1, 1);
+    private readonly Lock _cleanupChainLock = new();
 
     private IPluginHostServices? _host;
     private string _selectedModelId = DefaultModelId;
@@ -66,7 +71,8 @@ public sealed class SonioxPlugin
             throw new ArgumentOutOfRangeException(nameof(cleanupBudget), "Cleanup budget must be positive.");
 
         _httpClient = httpClient;
-        _pollDelay = pollDelay ?? s_defaultPollDelay;
+        _initialPollDelay = pollDelay ?? s_defaultInitialPollDelay;
+        _maxPollDelay = pollDelay ?? s_defaultMaxPollDelay;
         _maxPollAttempts = maxPollAttempts;
         _cleanupBudget = resolvedCleanupBudget;
     }
@@ -85,10 +91,23 @@ public sealed class SonioxPlugin
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
-    public Task DeactivateAsync()
+    public async Task DeactivateAsync()
     {
+        // Uploaded audio must not outlive the session: finish pending deletions before the host
+        // (and then the HttpClient) go away. CleanupAsync already bounds each deletion. A
+        // transcription finishing mid-drain appends to the chain, so loop until it stops growing.
+        Task pending;
+        do
+        {
+            lock (_cleanupChainLock)
+            {
+                pending = LastCleanupTask;
+            }
+
+            await pending;
+        } while (!IsCleanupChainAt(pending));
+
         _host = null;
-        return Task.CompletedTask;
     }
 
     // ITranscriptionEnginePlugin
@@ -149,11 +168,21 @@ public sealed class SonioxPlugin
             transcriptionId = await CreateTranscriptionAsync(fileId, language, apiKey, ct);
             var completedDetails = await WaitUntilCompletedAsync(transcriptionId, apiKey, ct);
             var transcriptJson = await FetchTranscriptAsync(transcriptionId, apiKey, ct);
-            return ParseTranscript(transcriptJson, completedDetails, NormalizeLanguage(language));
+            var result = ParseTranscript(transcriptJson, completedDetails, NormalizeLanguage(language));
+            // Chain rather than replace so an overlapping transcription's cleanup is never lost
+            // and DeactivateAsync can drain every pending deletion.
+            var cleanup = CleanupInBackgroundAsync(transcriptionId, fileId, apiKey);
+            lock (_cleanupChainLock)
+            {
+                LastCleanupTask = Task.WhenAll(LastCleanupTask, cleanup);
+            }
+
+            return result;
         }
-        finally
+        catch
         {
             await CleanupAsync(transcriptionId, fileId, apiKey);
+            throw;
         }
     }
 
@@ -200,6 +229,9 @@ public sealed class SonioxPlugin
     // Settings support
 
     internal string? ApiKey { get; private set; }
+
+    /// <summary>Tests await this task to observe background cleanup deterministically.</summary>
+    internal Task LastCleanupTask { get; private set; } = Task.CompletedTask;
 
     private IPluginLocalization? _injectedLocalization;
 
@@ -325,6 +357,7 @@ public sealed class SonioxPlugin
 
     private async Task<JsonElement> WaitUntilCompletedAsync(string transcriptionId, string apiKey, CancellationToken ct)
     {
+        var delay = _initialPollDelay;
         for (var attempt = 0; attempt < _maxPollAttempts; attempt++)
         {
             ct.ThrowIfCancellationRequested();
@@ -343,13 +376,19 @@ public sealed class SonioxPlugin
             if (string.Equals(status, "error", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"Soniox transcription failed: {ExtractApiError(root)}");
 
-            if (attempt < _maxPollAttempts - 1 && _pollDelay > TimeSpan.Zero)
-                await Task.Delay(_pollDelay, ct);
+            if (attempt >= _maxPollAttempts - 1 || delay <= TimeSpan.Zero)
+                continue;
+
+            await Task.Delay(delay, ct);
+            delay = NextPollDelay(delay, _maxPollDelay);
         }
 
         throw new TimeoutException(
             $"Soniox transcription {transcriptionId} did not complete within the configured polling window.");
     }
+
+    internal static TimeSpan NextPollDelay(TimeSpan current, TimeSpan max) =>
+        TimeSpan.FromTicks((long)Math.Min(current.Ticks * 1.5, max.Ticks));
 
     private async Task<string> FetchTranscriptAsync(string transcriptionId, string apiKey, CancellationToken ct)
     {
@@ -373,6 +412,28 @@ public sealed class SonioxPlugin
         }
 
         return json;
+    }
+
+    private bool IsCleanupChainAt(Task task)
+    {
+        lock (_cleanupChainLock)
+        {
+            return ReferenceEquals(LastCleanupTask, task);
+        }
+    }
+
+    private async Task CleanupInBackgroundAsync(string? transcriptionId, string? fileId, string apiKey)
+    {
+        await Task.Yield();
+
+        try
+        {
+            await CleanupAsync(transcriptionId, fileId, apiKey);
+        }
+        catch (Exception ex)
+        {
+            _host?.Log(PluginLogLevel.Warning, $"Soniox background cleanup failed: {ex.Message}");
+        }
     }
 
     private async Task CleanupAsync(string? transcriptionId, string? fileId, string apiKey)

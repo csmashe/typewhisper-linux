@@ -47,6 +47,9 @@ internal sealed class OpenAiResponsesClient
         var body = new Dictionary<string, JsonElement>
         {
             ["model"] = OpenAiJson.Element(model),
+            ["max_output_tokens"] = OpenAiJson.Element(!string.IsNullOrWhiteSpace(reasoningEffort)
+                ? LlmOutputTokenBudget.CalculateWithReasoningReserve(systemPrompt, userText)
+                : LlmOutputTokenBudget.Calculate(systemPrompt, userText)),
             ["instructions"] = OpenAiJson.Element(instructions),
             ["input"] = OpenAiJson.Element(new[]
             {
@@ -72,6 +75,7 @@ internal sealed class OpenAiResponsesClient
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
+        LlmResponseTruncationGuard.ThrowIfResponsesApiIncomplete(root, "OpenAI");
 
         if (root.TryGetProperty("output_text", out var outputText)
             && outputText.ValueKind == JsonValueKind.String)

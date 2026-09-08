@@ -9,6 +9,8 @@ public static class NumberWordNormalizer
     // upstream; "ru" is a UI locale but has no parser, so Russian number words are left alone.
     private static readonly HashSet<string> s_supportedLanguageCodes = ["en", "de", "es"];
 
+    internal static bool IsSupportedLanguage(string language) => s_supportedLanguageCodes.Contains(language);
+
     public static string Normalize(string text, string? language)
     {
         var languageCode = NormalizeLanguageCode(language);
@@ -46,7 +48,7 @@ public static class NumberWordNormalizer
     internal static string? NormalizeLanguageCode(string? language)
     {
         var trimmed = language?.Trim();
-        if (string.IsNullOrEmpty(trimmed))
+        if (string.IsNullOrEmpty(trimmed) || string.Equals(trimmed, "auto", StringComparison.OrdinalIgnoreCase))
             return null;
 
         var separatorIndex = trimmed.IndexOfAny(['-', '_']);

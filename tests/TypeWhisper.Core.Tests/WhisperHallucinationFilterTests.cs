@@ -120,4 +120,87 @@ public sealed class WhisperHallucinationFilterTests
                 durationSeconds: 1.0,
                 noSpeechProbability));
     }
+
+    [Fact]
+    public void TryStripTerminalSegment_StripsHighNoSpeechThankYouAfterRealText()
+    {
+        const string text = "Please send the updated draft. Thank you.";
+
+        Assert.True(WhisperHallucinationFilter.TryStripTerminalSegment(
+            text, " Thank you.", 0.95f, out var strippedText));
+        Assert.Equal("Please send the updated draft.", strippedText);
+    }
+
+    [Fact]
+    public void TryStripTerminalSegment_KeepsConfidentTerminalThankYou()
+    {
+        const string text = "Please send the updated draft. Thank you.";
+
+        Assert.False(WhisperHallucinationFilter.TryStripTerminalSegment(
+            text, " Thank you.", 0.05f, out var strippedText));
+        Assert.Equal(text, strippedText);
+    }
+
+    [Fact]
+    public void TryStripTerminalSegment_KeepsWhenProbabilityUnknown()
+    {
+        const string text = "Please send the updated draft. Thank you.";
+
+        Assert.False(WhisperHallucinationFilter.TryStripTerminalSegment(
+            text, " Thank you.", null, out var strippedText));
+        Assert.Equal(text, strippedText);
+    }
+
+    [Fact]
+    public void TryStripTerminalSegment_KeepsNonStockPhrase()
+    {
+        const string text = "Please send the updated draft. Tomorrow morning.";
+
+        Assert.False(WhisperHallucinationFilter.TryStripTerminalSegment(
+            text, " Tomorrow morning.", 0.95f, out var strippedText));
+        Assert.Equal(text, strippedText);
+    }
+
+    [Fact]
+    public void TryStripTerminalSegment_KeepsStandalonePhrase()
+    {
+        const string text = "Thank you.";
+
+        Assert.False(WhisperHallucinationFilter.TryStripTerminalSegment(
+            text, " Thank you.", 0.95f, out var strippedText));
+        Assert.Equal(text, strippedText);
+    }
+
+    [Fact]
+    public void TryStripTerminalSegment_KeepsWhenSegmentIsNotTheSuffix()
+    {
+        const string text = "Please send it. Thanks.";
+
+        Assert.False(WhisperHallucinationFilter.TryStripTerminalSegment(
+            text, " Thank you.", 0.95f, out var strippedText));
+        Assert.Equal(text, strippedText);
+    }
+
+    [Fact]
+    public void TryStripTerminalSegment_AtThresholdIsKept()
+    {
+        const string text = "Please send the updated draft. Thank you.";
+
+        Assert.False(WhisperHallucinationFilter.TryStripTerminalSegment(
+            text, " Thank you.", 0.8f, out var strippedText));
+        Assert.Equal(text, strippedText);
+    }
+
+    [Theory]
+    [InlineData(" Thanks for watching!")]
+    [InlineData(" THANK YOU!!")]
+    [InlineData(" Bye.")]
+    public void TryStripTerminalSegment_MatchesAnyStockPhrase(string terminalText)
+    {
+        const string realText = "Please send the updated draft.";
+
+        Assert.True(WhisperHallucinationFilter.TryStripTerminalSegment(
+            realText + terminalText, terminalText, 0.95f, out var strippedText));
+        Assert.Equal(realText, strippedText);
+    }
 }

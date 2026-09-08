@@ -1,3 +1,4 @@
+using TypeWhisper.PluginSDK.Helpers;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
@@ -19,6 +20,41 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class OpenAiPluginTests
 {
+    [Fact]
+    public void ResponsesParser_RejectsIncompleteTokenLimitedOutput()
+    {
+        var ex = Assert.Throws<PluginRequestException>(() => OpenAiResponsesClient.ParseResponse(
+            """{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output_text":"partial"}"""));
+        Assert.Equal(PluginRequestFailureKind.OutputTruncated, ex.FailureKind);
+        Assert.False(ex.IsTransient);
+    }
+
+    [Fact]
+    public void ResponsesParser_ClassifiesNonTokenIncompleteOutputSeparately()
+    {
+        var ex = Assert.Throws<PluginRequestException>(() => OpenAiResponsesClient.ParseResponse(
+            """{"status":"incomplete","incomplete_details":{"reason":"content_filter"},"output_text":"partial"}"""));
+        Assert.Equal(PluginRequestFailureKind.OutputIncomplete, ex.FailureKind);
+        Assert.False(ex.IsTransient);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("high")]
+    public void ResponsesRequests_IncludeOutputBudget(string? effort)
+    {
+        var expected = effort is null ? LlmOutputTokenBudget.Calculate("system", "user")
+            : LlmOutputTokenBudget.CalculateWithReasoningReserve("system", "user");
+        Assert.Equal(expected, OpenAiResponsesClient.CreateRequestBody("model", "system", "user", effort)["max_output_tokens"].GetInt32());
+    }
+
+    [Fact]
+    public void ChatGptBackendRequests_OmitOutputBudget()
+    {
+        // The ChatGPT login backend rejects max_output_tokens; truncation is caught on the stream instead.
+        Assert.False(OpenAiChatGptClient.CreateRequestBody("model", "system", "user", null).ContainsKey("max_output_tokens"));
+    }
+
     [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {

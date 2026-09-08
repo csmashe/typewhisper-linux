@@ -2012,6 +2012,17 @@ public sealed class DictationOrchestrator : IDisposable
                         null,
                         cancelToken
                     );
+                    // Trim before the preview fallback and gates so they see the remaining text.
+                    // Honor the aggressive short-clip setting like the two gates below.
+                    if (!_settings.Current.TranscribeShortQuietClipsAggressively)
+                    {
+                        var trimmedResult = TerminalHallucinationTrimmer.Trim(result);
+                        if (!ReferenceEquals(result, trimmedResult))
+                        {
+                            Trace.WriteLine("[Dictation] Stripped trailing Whisper hallucination segment.");
+                        }
+                        result = trimmedResult;
+                    }
                 }
             }
             catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)

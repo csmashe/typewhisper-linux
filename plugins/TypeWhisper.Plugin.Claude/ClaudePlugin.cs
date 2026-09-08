@@ -80,7 +80,7 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
         var requestBody = new
         {
             model,
-            max_tokens = 2048,
+            max_tokens = LlmOutputTokenBudget.Calculate(systemPrompt, userText),
             system = systemPrompt,
             messages = new[] { new { role = "user", content = userText } },
         };
@@ -107,6 +107,7 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
         }
 
         using var doc = JsonDocument.Parse(responseBody);
+        LlmResponseTruncationGuard.ThrowIfAnthropicResponseTruncated(doc.RootElement, "Anthropic");
         var content = doc.RootElement.GetProperty("content");
         if (content.GetArrayLength() == 0)
             throw new InvalidOperationException("Anthropic API returned empty content array");
@@ -134,7 +135,7 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
         var requestBody = new
         {
             model,
-            max_tokens = 2048,
+            max_tokens = LlmOutputTokenBudget.Calculate(systemPrompt, userText),
             stream = true,
             system = systemPrompt,
             messages = new[] { new { role = "user", content = userText } },
@@ -173,6 +174,14 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
 
         await foreach (var delta in SseEventDecoder.ReadValidatedAsync(reader, s_streamPolicy, ct))
             yield return delta;
+    }
+
+    private static string? ParseStreamStopReason(string data)
+    {
+        using var doc = JsonDocument.Parse(data);
+        return doc.RootElement.TryGetProperty("delta", out var delta)
+            && delta.TryGetProperty("stop_reason", out var reason)
+            && reason.ValueKind == JsonValueKind.String ? reason.GetString() : null;
     }
 
     private static string? ParseStreamEventType(string dataPayload)
@@ -294,6 +303,12 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
             }
 
             var payloadType = ParseStreamEventType(sseEvent.Data);
+            if (payloadType == "message_delta"
+                && LlmResponseTruncationGuard.IsTokenLimitReason(ParseStreamStopReason(sseEvent.Data)))
+                return new SsePolicyDecision<string>(Error: new PluginRequestException(
+                    "Anthropic stopped the response at its output token limit.",
+                    PluginRequestFailureKind.OutputTruncated, isTransient: false));
+
             var delta = ParseStreamDelta(sseEvent.Data);
             return new SsePolicyDecision<string>(
                 HasDelta: delta is { Length: > 0 },

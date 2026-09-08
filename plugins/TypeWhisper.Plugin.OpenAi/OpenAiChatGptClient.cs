@@ -154,6 +154,14 @@ internal sealed class OpenAiChatGptClient
                 if (GetString(root, "type") is not { } type)
                     return default;
 
+                // A completed event can still carry an incomplete nested response status.
+                if (type is "response.incomplete" or "response.completed"
+                    && LlmResponseTruncationGuard.TryCreateResponsesApiIncompleteException(root, "OpenAI")
+                        is { } incomplete)
+                {
+                    return new SsePolicyDecision<ChatGptTextPart>(Error: incomplete);
+                }
+
                 if (GetSseFailure(root, type) is { } failure)
                 {
                     return new SsePolicyDecision<ChatGptTextPart>(
@@ -238,6 +246,9 @@ internal sealed class OpenAiChatGptClient
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
+
+            if (LlmResponseTruncationGuard.TryCreateResponsesApiIncompleteException(root, "OpenAI") is { } incomplete)
+                throw incomplete;
 
             if (GetString(root, "output_text") is { Length: > 0 } outputText)
             {

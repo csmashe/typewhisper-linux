@@ -111,6 +111,11 @@ public sealed class FileTranscriptionProcessor(
             );
         }
 
+        if (!currentSettings.TranscribeShortQuietClipsAggressively)
+        {
+            pluginResult = TerminalHallucinationTrimmer.Trim(pluginResult);
+        }
+
         // An engine that ignores the translate task returns source-language text; reporting
         // Translate downstream would make number normalization treat it as English.
         var effectiveTask =
@@ -130,7 +135,10 @@ public sealed class FileTranscriptionProcessor(
                     segment.Text,
                     segment.Start,
                     segment.End
-                ))
+                )
+                {
+                    NoSpeechProbability = segment.NoSpeechProbability,
+                })
                 .ToArray(),
         };
 
