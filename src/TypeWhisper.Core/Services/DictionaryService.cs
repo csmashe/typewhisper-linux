@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
@@ -177,7 +178,7 @@ public sealed partial class DictionaryService : IDictionaryService
 
             // MatchEvaluator overload: prevents "$1"/"$&" in user replacements from being
             // interpreted as regex substitution tokens; also counts each match individually.
-            var replacement = entry.Replacement!;
+            var replacement = entry.ExpandEscapes ? ExpandReplacementEscapes(entry.Replacement!) : entry.Replacement!;
             var matchCount = 0;
             var replaced = GetCorrectionRegex(entry.Original, entry.CaseSensitive).Replace(
                 text,
@@ -204,6 +205,54 @@ public sealed partial class DictionaryService : IDictionaryService
         }
 
         return text;
+    }
+
+    // Expansion is apply-time only so stored/exported values stay literal.
+    private static string ExpandReplacementEscapes(string replacement)
+    {
+        if (!replacement.Contains('\\', StringComparison.Ordinal))
+            return replacement;
+
+        var builder = new StringBuilder(replacement.Length);
+        for (var index = 0; index < replacement.Length; index++)
+        {
+            var character = replacement[index];
+            if (character != '\\' || index + 1 >= replacement.Length)
+            {
+                builder.Append(character);
+                continue;
+            }
+
+            var escaped = replacement[index + 1];
+            switch (escaped)
+            {
+                case 's':
+                    builder.Append(' ');
+                    index++;
+                    break;
+                case 'n':
+                    builder.Append('\n');
+                    index++;
+                    break;
+                case 'r':
+                    builder.Append('\r');
+                    index++;
+                    break;
+                case 't':
+                    builder.Append('\t');
+                    index++;
+                    break;
+                case '\\':
+                    builder.Append('\\');
+                    index++;
+                    break;
+                default:
+                    builder.Append('\\');
+                    break;
+            }
+        }
+
+        return builder.ToString();
     }
 
     private Regex GetCorrectionRegex(string original, bool caseSensitive)
@@ -370,7 +419,7 @@ public sealed partial class DictionaryService : IDictionaryService
                 // Re-upserting an unchanged correction is a no-op: the store already skips the
                 // write, and reporting it as a change would still fire EntriesChanged.
                 if (
-                    existing.IsEnabled
+                    existing is { IsEnabled: true, ExpandEscapes: false }
                     && existing.CaseSensitive == caseSensitive
                     && string.Equals(existing.Replacement, replacement, StringComparison.Ordinal)
                 )
@@ -386,7 +435,11 @@ public sealed partial class DictionaryService : IDictionaryService
 
                 newCache[idx] = existing with
                 {
-                    Replacement = replacement, CaseSensitive = caseSensitive, IsEnabled = true,
+                    Replacement = replacement,
+                    CaseSensitive = caseSensitive,
+                    IsEnabled = true,
+                    // Upserted text is literal: never inherit expansion from a UI-created entry.
+                    ExpandEscapes = false,
                 };
             }
             else

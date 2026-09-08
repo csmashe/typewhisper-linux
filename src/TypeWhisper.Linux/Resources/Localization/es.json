@@ -324,6 +324,7 @@
   "Dictionary.OriginalPlaceholder": "Introduce el original...",
   "Dictionary.PacksHeader": "Los paquetes añaden terminología especializada para que el reconocimiento de voz entienda mejor el vocabulario del ámbito.",
   "Dictionary.PriorityPlaceholder": "Prioridad",
+  "Dictionary.ReplacementEscapesHint": "Escapes de reemplazo: \\s espacio, \\n salto de línea, \\r retorno de carro, \\t tabulación, \\\\ barra invertida. La búsqueda es literal.",
   "Dictionary.ReplacementPlaceholder": "Reemplazo (opcional)",
   "Dictionary.SearchPlaceholder": "Buscar entradas...",
   "Dictionary.TabAll": "Todas",

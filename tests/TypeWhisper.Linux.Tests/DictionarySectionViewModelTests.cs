@@ -50,6 +50,33 @@ public sealed class DictionarySectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void AddEntry_Correction_EnablesEscapeExpansion()
+    {
+        var dictionary = CreateDictionaryService();
+        var sut = CreateViewModel(dictionary);
+        sut.NewEntryType = DictionaryEntryType.Correction;
+        sut.NewOriginal = "new paragraph";
+        sut.NewReplacement = @"\n";
+
+        sut.AddEntryCommand.Execute(null);
+
+        Assert.True(Assert.Single(dictionary.Entries).ExpandEscapes);
+    }
+
+    [Fact]
+    public void AddEntry_Term_DoesNotEnableEscapeExpansion()
+    {
+        var dictionary = CreateDictionaryService();
+        var sut = CreateViewModel(dictionary);
+        sut.NewEntryType = DictionaryEntryType.Term;
+        sut.NewOriginal = "TypeWhisper";
+
+        sut.AddEntryCommand.Execute(null);
+
+        Assert.False(Assert.Single(dictionary.Entries).ExpandEscapes);
+    }
+
+    [Fact]
     public void EntryControls_UpdateStarredAndPriority()
     {
         var dictionary = CreateDictionaryService();

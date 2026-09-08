@@ -324,6 +324,7 @@
   "Dictionary.OriginalPlaceholder": "Введите оригинал...",
   "Dictionary.PacksHeader": "Пакеты добавляют специализированную терминологию, чтобы распознавание речи лучше понимало отраслевую лексику.",
   "Dictionary.PriorityPlaceholder": "Приоритет",
+  "Dictionary.ReplacementEscapesHint": "Экранирование замены: \\s пробел, \\n новая строка, \\r возврат каретки, \\t табуляция, \\\\ обратная косая черта. Поиск буквальный.",
   "Dictionary.ReplacementPlaceholder": "Замена (необязательно)",
   "Dictionary.SearchPlaceholder": "Поиск записей...",
   "Dictionary.TabAll": "Все",

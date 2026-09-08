@@ -233,6 +233,7 @@ public partial class DictionarySectionViewModel : ObservableObject
             {
                 Id = Guid.NewGuid().ToString(),
                 EntryType = NewEntryType,
+                ExpandEscapes = NewEntryType == DictionaryEntryType.Correction,
                 Original = NewOriginal.Trim(),
                 Replacement = string.IsNullOrWhiteSpace(NewReplacement)
                     ? null

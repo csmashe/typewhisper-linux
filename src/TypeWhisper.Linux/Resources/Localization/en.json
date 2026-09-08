@@ -324,6 +324,7 @@
   "Dictionary.OriginalPlaceholder": "Enter original...",
   "Dictionary.PacksHeader": "Packs add specialized terminology so speech recognition better understands domain vocabulary.",
   "Dictionary.PriorityPlaceholder": "Priority",
+  "Dictionary.ReplacementEscapesHint": "Replacement escapes: \\s space, \\n line break, \\r carriage return, \\t tab, \\\\ backslash. Matching is literal.",
   "Dictionary.ReplacementPlaceholder": "Replacement (optional)",
   "Dictionary.SearchPlaceholder": "Search entries...",
   "Dictionary.TabAll": "All",

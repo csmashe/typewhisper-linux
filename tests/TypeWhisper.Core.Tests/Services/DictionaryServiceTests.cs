@@ -330,6 +330,213 @@ public sealed class DictionaryServiceTests : IDisposable
         Assert.Equal("TypeWhisper", result);
     }
 
+    [Theory]
+    [InlineData(@"\s", " ")]
+    [InlineData(@"\s-\s", " - ")]
+    [InlineData(@"\s\n", " \n")]
+    [InlineData(@"\s\\n", @" \n")]
+    [InlineData(@"\s\x", @" \x")]
+    [InlineData(" \r\n\t", " \r\n\t")]
+    [InlineData(@"\n", "\n")]
+    [InlineData(@"\n\n", "\n\n")]
+    [InlineData(@"\r\n", "\r\n")]
+    [InlineData(@"\t", "\t")]
+    [InlineData(@"\\", "\\")]
+    [InlineData(@"trailing\", @"trailing\")]
+    public void ApplyCorrections_ExpandsReplacementEscapes(string stored, string expected)
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                ExpandEscapes = true,
+                Original = "new paragraph",
+                Replacement = stored,
+            }
+        );
+
+        var result = _sut.ApplyCorrections("first new paragraph second");
+
+        Assert.Equal("first " + expected + " second", result);
+    }
+
+    [Fact]
+    public void ApplyCorrections_KeepsDollarTokensLiteralAfterExpansion()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                ExpandEscapes = true,
+                Original = "new paragraph",
+                Replacement = @"$1\sX",
+            }
+        );
+
+        Assert.Equal("$1 X", _sut.ApplyCorrections("new paragraph"));
+    }
+
+    [Fact]
+    public void PreviewCorrections_ExpandsReplacementEscapes()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                ExpandEscapes = true,
+                Original = "new paragraph",
+                Replacement = @"\s\n",
+            }
+        );
+
+        Assert.Equal("first  \n second", _sut.PreviewCorrections("first new paragraph second"));
+    }
+
+    [Fact]
+    public void ExportToCsv_KeepsReplacementEscapesLiteral()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                ExpandEscapes = true,
+                Original = "new paragraph",
+                Replacement = @"\n\n",
+            }
+        );
+
+        var csv = _sut.ExportToCsv();
+
+        Assert.Contains(@"Correction,new paragraph,\n\n,", csv);
+        var importFilePath = Path.GetTempFileName();
+        try
+        {
+            var importedService = new DictionaryService(importFilePath);
+            Assert.Equal(1, importedService.ImportFromCsv(csv));
+            var importedEntry = Assert.Single(importedService.Entries);
+            Assert.Equal(@"\n\n", importedEntry.Replacement);
+            Assert.True(importedEntry.ExpandEscapes);
+        }
+        finally
+        {
+            File.Delete(importFilePath);
+        }
+    }
+
+    [Fact]
+    public void ApplyCorrections_WithoutExpandEscapes_KeepsBackslashesLiteral()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "1",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "x",
+            Replacement = @"\sqrt{x}\tau",
+        });
+
+        Assert.Equal(@"\sqrt{x}\tau", _sut.ApplyCorrections("x"));
+    }
+
+    [Fact]
+    public void ImportFromCsv_WithoutExpandEscapesColumn_StaysLiteral()
+    {
+        const string csv = """
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source
+            Correction,x,\sqrt{x}\tau,False,True,False,0,Import
+            """;
+
+        Assert.Equal(1, _sut.ImportFromCsv(csv));
+        Assert.False(Assert.Single(_sut.Entries).ExpandEscapes);
+        Assert.Equal(@"\sqrt{x}\tau", _sut.ApplyCorrections("x"));
+    }
+
+    [Fact]
+    public void ExportToCsv_ImportFromCsv_RoundTripsExpandEscapes()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "1",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "x",
+            Replacement = @"\n",
+            ExpandEscapes = true,
+        });
+
+        var csv = _sut.ExportToCsv();
+        Assert.Contains(@"Correction,x,\n,False,True,False,0,Manual,True", csv);
+        _sut.DeleteEntry("1");
+
+        Assert.Equal(1, _sut.ImportFromCsv(csv));
+        Assert.True(Assert.Single(_sut.Entries).ExpandEscapes);
+        Assert.Equal("\n", _sut.ApplyCorrections("x"));
+        Assert.Equal(1, _sut.ImportFromCsv("Term,vocabulary,,False,True,False,0,Import,True"));
+        Assert.False(_sut.Entries.Single(entry => entry.EntryType == DictionaryEntryType.Term).ExpandEscapes);
+    }
+
+    [Fact]
+    public void UpsertCorrection_StaysLiteral()
+    {
+        _sut.UpsertCorrection("x", @"\n", false);
+
+        Assert.False(Assert.Single(_sut.Entries).ExpandEscapes);
+        Assert.Equal(@"\n", _sut.ApplyCorrections("x"));
+    }
+
+    [Fact]
+    public void UpsertCorrection_OverEscapeEnabledEntry_ResetsToLiteral()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "folder",
+                Replacement = @"\n",
+                ExpandEscapes = true,
+            }
+        );
+
+        _sut.UpsertCorrection("folder", @"C:\temp", false);
+
+        var entry = Assert.Single(_sut.Entries);
+        Assert.False(entry.ExpandEscapes);
+        Assert.Equal(@"C:\temp", _sut.ApplyCorrections("folder"));
+        Assert.False(Assert.Single(new DictionaryService(_filePath).Entries).ExpandEscapes);
+    }
+
+    [Fact]
+    public void UpsertCorrection_SameTextOverEscapeEnabledEntry_ResetsToLiteral()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "folder",
+                Replacement = @"a\tb",
+                ExpandEscapes = true,
+            }
+        );
+
+        _sut.UpsertCorrection("folder", @"a\tb", false);
+
+        Assert.False(Assert.Single(_sut.Entries).ExpandEscapes);
+        Assert.Equal(@"a\tb", _sut.ApplyCorrections("folder"));
+    }
+
+    [Fact]
+    public void LearnCorrection_StaysLiteral()
+    {
+        _sut.LearnCorrection("folder", @"C:\temp");
+
+        Assert.False(Assert.Single(_sut.Entries).ExpandEscapes);
+        Assert.Equal(@"C:\temp", _sut.ApplyCorrections("folder"));
+    }
+
     [Fact]
     public void GetTermsForPrompt_ReturnsCommaSeparated()
     {
@@ -675,11 +882,11 @@ public sealed class DictionaryServiceTests : IDisposable
         var csv = _sut.ExportToCsv();
 
         Assert.Contains(
-            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source",
+            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes",
             csv
         );
         Assert.Contains(
-            "Correction,\"wispr, flow\",\"Wispr \"\"Flow\"\"\",True,True,True,7,CorrectionSuggestion",
+            "Correction,\"wispr, flow\",\"Wispr \"\"Flow\"\"\",True,True,True,7,CorrectionSuggestion,False",
             csv
         );
     }

@@ -11,7 +11,7 @@ public sealed partial class DictionaryService
     {
         var sb = new StringBuilder();
         sb.AppendLine(
-            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source"
+            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes"
         );
 
         var entries = _store.Current
@@ -36,6 +36,8 @@ public sealed partial class DictionaryService
             sb.Append(Csv.Escape(entry.Priority.ToString()));
             sb.Append(',');
             sb.Append(Csv.Escape(entry.Source.ToString()));
+            sb.Append(',');
+            sb.Append(Csv.Escape(entry.ExpandEscapes.ToString()));
             sb.AppendLine();
         }
 
@@ -131,6 +133,7 @@ public sealed partial class DictionaryService
                     IsStarred = ReadBool(row, 5),
                     Priority = ReadInt(row, 6),
                     Source = ReadSource(row, 7),
+                    ExpandEscapes = entryType == DictionaryEntryType.Correction && ReadBool(row, 8),
                 };
 
                 if (entryType == DictionaryEntryType.Correction)
@@ -151,6 +154,7 @@ public sealed partial class DictionaryService
                             IsStarred = entry.IsStarred,
                             Priority = entry.Priority,
                             Source = entry.Source,
+                            ExpandEscapes = entry.ExpandEscapes,
                         };
                         imported++;
                         continue;
@@ -184,7 +188,8 @@ public sealed partial class DictionaryService
                && existing.IsEnabled == incoming.IsEnabled
                && existing.IsStarred == incoming.IsStarred
                && existing.Priority == incoming.Priority
-               && existing.Source == incoming.Source;
+               && existing.Source == incoming.Source
+               && existing.ExpandEscapes == incoming.ExpandEscapes;
     }
 
     private static string DictionaryEntryKey(DictionaryEntry entry)

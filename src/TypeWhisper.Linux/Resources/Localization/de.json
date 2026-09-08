@@ -324,6 +324,7 @@
   "Dictionary.OriginalPlaceholder": "Original eingeben...",
   "Dictionary.PacksHeader": "Pakete fügen spezialisierte Fachbegriffe hinzu, damit die Spracherkennung Fachvokabular besser versteht.",
   "Dictionary.PriorityPlaceholder": "Priorität",
+  "Dictionary.ReplacementEscapesHint": "Ersetzungs-Escapes: \\s Leerzeichen, \\n Zeilenumbruch, \\r Wagenrücklauf, \\t Tabulator, \\\\ Backslash. Die Suche ist wörtlich.",
   "Dictionary.ReplacementPlaceholder": "Ersetzung (optional)",
   "Dictionary.SearchPlaceholder": "Einträge durchsuchen...",
   "Dictionary.TabAll": "Alle",
