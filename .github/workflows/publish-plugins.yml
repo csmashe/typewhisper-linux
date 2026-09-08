@@ -53,7 +53,7 @@ jobs:
           echo "PLUGIN_SDK_ABI=$($entry.sdkAbi)" >> $env:GITHUB_ENV
           echo "Project: $($entry.projectPath)"
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
 
