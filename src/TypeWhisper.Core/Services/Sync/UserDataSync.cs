@@ -62,6 +62,7 @@ public enum UserDataSyncDictionaryEntryType
 /// <param name="CreatedAt">Created at supplied to the member.</param>
 /// <param name="UpdatedAt">Updated at supplied to the member.</param>
 /// <param name="IsRegex">Whether Original is a regular expression.</param>
+/// <param name="ExpandEscapes">Whether Replacement escapes are expanded at apply time.</param>
 public sealed record UserDataSyncDictionaryEntry(
     UserDataSyncDictionaryEntryType EntryType,
     string Original,
@@ -70,7 +71,8 @@ public sealed record UserDataSyncDictionaryEntry(
     bool IsEnabled,
     DateTime CreatedAt,
     DateTime UpdatedAt,
-    bool IsRegex = false);
+    bool IsRegex = false,
+    bool ExpandEscapes = false);
 
 /// <summary>
 /// Represents user data sync snippet data.
