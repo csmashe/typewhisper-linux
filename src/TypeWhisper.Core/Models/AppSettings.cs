@@ -87,6 +87,7 @@ public record AppSettings
     public bool TranscribeShortQuietClipsAggressively { get; init; }
     public bool TranscriptionNumberNormalizationEnabled { get; init; } = true;
     public EnglishOutputVariant EnglishOutputVariant { get; init; } = EnglishOutputVariant.AsTranscribed;
+    public GermanOutputVariant GermanOutputVariant { get; init; } = GermanOutputVariant.AsTranscribed;
     public bool ShortUtterancePunctuationEnabled { get; init; } = true;
 
     // Live transcription (streaming preview while recording)

@@ -145,6 +145,7 @@ public sealed class FileTranscriptionProcessor(
 
         // Segments feed subtitle export and never pass through the pipeline.
         result = EnglishOutputNormalizationService.NormalizeResult(result, currentSettings.EnglishOutputVariant, effectiveTask, configuredLanguage);
+        result = GermanOutputNormalizationService.NormalizeResult(result, currentSettings.GermanOutputVariant, effectiveTask, configuredLanguage);
 
         var pipelineResult = await pipeline.ProcessAsync(
             result.Text,
@@ -160,6 +161,7 @@ public sealed class FileTranscriptionProcessor(
                 TranscriptionNumberNormalizationEnabled =
                     currentSettings.TranscriptionNumberNormalizationEnabled,
                 EnglishOutputVariant = currentSettings.EnglishOutputVariant,
+                GermanOutputVariant = currentSettings.GermanOutputVariant,
                 ShortUtterancePunctuationEnabled = currentSettings.ShortUtterancePunctuationEnabled,
             },
             cancellationToken

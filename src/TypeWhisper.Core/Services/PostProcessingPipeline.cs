@@ -273,7 +273,8 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
             );
         }
 
-        if (options.EnglishOutputVariant != EnglishOutputVariant.AsTranscribed)
+        if (options.EnglishOutputVariant != EnglishOutputVariant.AsTranscribed
+            || options.GermanOutputVariant != GermanOutputVariant.AsTranscribed)
         {
             // Before the dictionary so a user correction can override a spelling rewrite; the text is
             // still in the source language here, so no translation target is passed.
@@ -281,7 +282,7 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
                 (
                     OutputVariantPriority,
                     PostProcessingStepNames.OutputVariant,
-                    (text, _) => Task.FromResult(ApplyOutputVariant(text, options, translationTarget: null))
+                    (text, _) => Task.FromResult(ApplyOutputVariants(text, options, translationTarget: null))
                 )
             );
         }
@@ -335,14 +336,15 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
 
             // Only text the translator actually produced is respelled here; when the source already
             // matched the target the dictionary's earlier corrections must stand.
-            if (options.EnglishOutputVariant != EnglishOutputVariant.AsTranscribed)
+            if (options.EnglishOutputVariant != EnglishOutputVariant.AsTranscribed
+                || options.GermanOutputVariant != GermanOutputVariant.AsTranscribed)
             {
                 steps.Add(
                     (
                         TranslatedOutputVariantPriority,
                         PostProcessingStepNames.TranslatedOutputVariant,
                         (text, _) => Task.FromResult(
-                            translated ? ApplyOutputVariant(text, options, targetLang) : text
+                            translated ? ApplyOutputVariants(text, options, targetLang) : text
                         )
                     )
                 );
@@ -355,11 +357,21 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
         return steps.OrderBy(static step => step.Item1).ToList();
     }
 
-    private static string ApplyOutputVariant(string text, PipelineOptions options, string? translationTarget)
+    private static string ApplyOutputVariants(string text, PipelineOptions options, string? translationTarget)
     {
-        return EnglishOutputNormalizationService.NormalizeText(
+        text = EnglishOutputNormalizationService.NormalizeText(
             text,
             options.EnglishOutputVariant,
+            options.TranscriptionTask,
+            options.DetectedLanguage,
+            options.ConfiguredLanguage,
+            options.ConfiguredLanguageCandidates,
+            translationTarget
+        );
+
+        return GermanOutputNormalizationService.NormalizeText(
+            text,
+            options.GermanOutputVariant,
             options.TranscriptionTask,
             options.DetectedLanguage,
             options.ConfiguredLanguage,

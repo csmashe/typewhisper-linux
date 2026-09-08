@@ -61,6 +61,50 @@ public sealed class DictationSectionViewModelTests
     }
 
     [Fact]
+    public void GermanOutputVariant_LoadsFromSettings()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { GermanOutputVariant = GermanOutputVariant.Switzerland },
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+
+        Assert.Equal(GermanOutputVariant.Switzerland, context.Sut.GermanOutputVariant);
+        Assert.Equal(GermanOutputVariant.Switzerland, context.Sut.SelectedGermanOutputVariantOption?.Value);
+    }
+
+    [Fact]
+    public void GermanOutputVariant_Change_PersistsToSettings()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default,
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+
+        context.Sut.SelectedGermanOutputVariantOption = context.Sut.GermanOutputVariantOptions
+            .Single(option => option.Value == GermanOutputVariant.Switzerland);
+
+        Assert.Equal(GermanOutputVariant.Switzerland, context.Settings.Object.Current.GermanOutputVariant);
+        context.Settings.Verify(
+            service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
+            Times.Once);
+    }
+
+    [Theory]
+    [InlineData("de-CH", null, true)]
+    [InlineData("auto", null, false)]
+    [InlineData("en", "de", true)]
+    [InlineData("en", null, false)]
+    public void IsGermanOutputVariantVisible_FollowsLanguageAndTarget(string language, string? target, bool expected)
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default,
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+
+        context.Sut.Language = language;
+        context.Sut.TranslationTargetLanguage = target;
+
+        Assert.Equal(expected, context.Sut.IsGermanOutputVariantVisible);
+    }
+
+    [Fact]
     public void ShortUtterancePunctuationEnabled_LoadsFromSettings()
     {
         var devices = new FakeAudioDeviceEnumerator(

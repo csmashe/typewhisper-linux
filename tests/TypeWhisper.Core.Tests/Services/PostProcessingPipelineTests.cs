@@ -10,6 +10,50 @@ public class PostProcessingPipelineTests
     private readonly PostProcessingPipeline _sut = new();
 
     [Fact]
+    public async Task ProcessAsync_SwissGermanOutput_RunsBeforeDictionaryCorrections()
+    {
+        var result = await _sut.ProcessAsync("Eine große Straße", new PipelineOptions
+        {
+            GermanOutputVariant = GermanOutputVariant.Switzerland,
+            DetectedLanguage = "de",
+            DictionaryCorrector = text => text.Replace("grosse", "GROSSE"),
+        });
+
+        Assert.Equal("Eine GROSSE Strasse", result.Text);
+        Assert.Contains(result.Steps, step => step is { Name: PostProcessingStepNames.OutputVariant, Changed: true });
+    }
+
+    [Fact]
+    public async Task ProcessAsync_SwissGermanOutput_RunsAfterGermanTranslation()
+    {
+        var options = new PipelineOptions
+        {
+            GermanOutputVariant = GermanOutputVariant.Switzerland,
+            DetectedLanguage = "en",
+            TranslationHandler = (_, _, _, _) => Task.FromResult("Die Straße ist groß."),
+            TranslationTarget = "de",
+        };
+
+        var result = await _sut.ProcessAsync("The road is big.", options);
+
+        Assert.Equal("Die Strasse ist gross.", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_EnglishAndGermanVariants_ShareOneStep()
+    {
+        var result = await _sut.ProcessAsync("Große colour", new PipelineOptions
+        {
+            EnglishOutputVariant = EnglishOutputVariant.UnitedStates,
+            GermanOutputVariant = GermanOutputVariant.Switzerland,
+            DetectedLanguage = "de",
+        });
+
+        Assert.Equal("Grosse colour", result.Text);
+        Assert.Single(result.Steps, step => step.Name == PostProcessingStepNames.OutputVariant);
+    }
+
+    [Fact]
     public async Task ProcessAsync_EnglishOutputVariant_RunsBeforeDictionaryCorrections()
     {
         var result = await _sut.ProcessAsync("the colour labs", new PipelineOptions

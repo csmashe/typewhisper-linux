@@ -44,6 +44,9 @@ public sealed record PipelineOptions
     /// <summary>Regional spelling variant applied to final written English output.</summary>
     public EnglishOutputVariant EnglishOutputVariant { get; init; } = EnglishOutputVariant.AsTranscribed;
 
+    /// <summary>Regional spelling variant applied to final written German output.</summary>
+    public GermanOutputVariant GermanOutputVariant { get; init; } = GermanOutputVariant.AsTranscribed;
+
     /// <summary>Process name of the target app for formatting.</summary>
     public string? TargetProcessName { get; init; }
 

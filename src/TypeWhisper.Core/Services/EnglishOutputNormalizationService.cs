@@ -7,8 +7,6 @@ namespace TypeWhisper.Core.Services;
 public static partial class EnglishOutputNormalizationService
 {
     private const string ResourcePrefix = "TypeWhisper.Core.Resources.EnglishSpelling";
-    private static readonly char[] s_trailingProsePunctuation = [';', ':', ',', '.', '!', '?', ')', ']', '"', '\'', '…'];
-
     private static readonly Lazy<IReadOnlyDictionary<string, string>> s_americanSpellings =
         new(() => LoadSpellings("american.tsv"));
     private static readonly Lazy<IReadOnlyDictionary<string, string>> s_britishSpellings =
@@ -46,16 +44,9 @@ public static partial class EnglishOutputNormalizationService
 
         return spellings is null
             ? text
-            : Token().Replace(text, token => NormalizeToken(token.Value, spellings));
-    }
-
-    // URLs, e-mail addresses, paths and identifiers are literals: rewriting "color" inside them
-    // breaks the destination, so only prose tokens are respelled.
-    private static string NormalizeToken(string token, IReadOnlyDictionary<string, string> spellings)
-    {
-        return LiteralMarker().IsMatch(token.TrimEnd(s_trailingProsePunctuation))
-            ? token
-            : EnglishWord().Replace(token, match => NormalizeWord(match.Value, spellings));
+            : OutputLiteralTokens.RespellProse(
+                text,
+                token => EnglishWord().Replace(token, match => NormalizeWord(match.Value, spellings)));
     }
 
     /// <summary>Respells a transcription's text and segments together.</summary>
@@ -153,10 +144,4 @@ public static partial class EnglishOutputNormalizationService
 
     [GeneratedRegex(@"(?<![\p{L}\p{M}])[\p{L}\p{M}]+(?:['’][\p{L}\p{M}]+)*(?![\p{L}\p{M}])", RegexOptions.CultureInvariant)]
     private static partial Regex EnglishWord();
-
-    [GeneratedRegex(@"\S+", RegexOptions.CultureInvariant)]
-    private static partial Regex Token();
-
-    [GeneratedRegex(@"[/\\@_=:;{}<>`#$\d]|\w\.\w", RegexOptions.CultureInvariant)]
-    private static partial Regex LiteralMarker();
 }

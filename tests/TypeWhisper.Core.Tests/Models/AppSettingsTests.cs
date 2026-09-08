@@ -19,6 +19,12 @@ public class AppSettingsTests
     }
 
     [Fact]
+    public void DefaultGermanOutputVariant_PreservesTranscribedSpelling()
+    {
+        Assert.Equal(GermanOutputVariant.AsTranscribed, AppSettings.Default.GermanOutputVariant);
+    }
+
+    [Fact]
     public void LegacyHotkeyProperties_AreIgnoredOnLoadAndOmittedOnSave()
     {
         const string legacyJson =

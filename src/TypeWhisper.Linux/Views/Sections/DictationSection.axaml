@@ -266,7 +266,7 @@
             <TextBlock Text="{loc:Str Dictation.Language}"
                        Classes="group-title" />
             <Border Classes="settings-panel">
-                <Grid RowDefinitions="Auto,1,Auto,1,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,240"
@@ -336,6 +336,32 @@
                                       HorizontalAlignment="Stretch">
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate x:DataType="vm:EnglishOutputVariantOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="5" Background="#18FFFFFF"
+                            IsVisible="{Binding IsGermanOutputVariantVisible}" />
+                    <Border Grid.Row="6" Classes="row"
+                            IsVisible="{Binding IsGermanOutputVariantVisible}">
+                        <Grid ColumnDefinitions="*,240">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="{loc:Str Dictation.GermanOutputVariant}"
+                                           Classes="row-label" />
+                                <TextBlock Text="{loc:Str Dictation.GermanOutputVariantHint}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding GermanOutputVariantOptions}"
+                                      SelectedItem="{Binding SelectedGermanOutputVariantOption}"
+                                      HorizontalAlignment="Stretch">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:GermanOutputVariantOption">
                                         <TextBlock Text="{Binding DisplayName}" />
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>

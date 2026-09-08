@@ -1715,6 +1715,7 @@ public sealed partial class HttpApiService : IDisposable
                 TranscriptionNumberNormalizationEnabled =
                     settings.TranscriptionNumberNormalizationEnabled,
                 EnglishOutputVariant = settings.EnglishOutputVariant,
+                GermanOutputVariant = settings.GermanOutputVariant,
                 ShortUtterancePunctuationEnabled = settings.ShortUtterancePunctuationEnabled,
             },
             ct
@@ -1735,6 +1736,15 @@ public sealed partial class HttpApiService : IDisposable
                 finalText = EnglishOutputNormalizationService.NormalizeText(
                     finalText,
                     settings.EnglishOutputVariant,
+                    effectiveTask,
+                    result.DetectedLanguage,
+                    configuredLanguage,
+                    opts.LanguageHints,
+                    opts.TargetLanguage
+                );
+                finalText = GermanOutputNormalizationService.NormalizeText(
+                    finalText,
+                    settings.GermanOutputVariant,
                     effectiveTask,
                     result.DetectedLanguage,
                     configuredLanguage,
