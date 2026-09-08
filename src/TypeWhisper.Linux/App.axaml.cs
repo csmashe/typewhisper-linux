@@ -547,6 +547,7 @@ public class App : Application
     {
         var active = new HashSet<DynamicHotkeyRejection>();
         var newlyActive = new List<DynamicHotkeyRejection>();
+        // ReSharper disable once LoopCanBeConvertedToQuery -- one pass feeds both the active set and the newly-active list; a query would need two.
         foreach (var rejection in current)
         {
             if (!active.Add(rejection))
@@ -1470,6 +1471,7 @@ public class App : Application
             audio.FollowSystemDefault = false;
             audio.SelectedDeviceIndex = resolved.Index;
 
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (resolved.Index != configuredIndex || resolved.PersistentId != configuredId)
             {
                 var raced = false;

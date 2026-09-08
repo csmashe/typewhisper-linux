@@ -286,7 +286,7 @@ public sealed class OverlayCoordinator
         return false;
     }
 
-    private void SetStateLocked(Slot slot, DictationOverlayState state, int globalAutoHideMilliseconds)
+    private static void SetStateLocked(Slot slot, DictationOverlayState state, int globalAutoHideMilliseconds)
     {
         CancelExpiryLocked(slot);
         slot.State = state;
@@ -385,6 +385,7 @@ public sealed class OverlayCoordinator
 
         // Once terminal feedback loses arbitration, its moment has passed. Clearing the slot now
         // prevents an old completion from resurfacing after the winning workflow ends.
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- explicit loop kept; the LINQ form switches enumerators and obscures the side effects.
         foreach (var slot in _slots.Values)
         {
             if (slot.Priority == OverlayPriority.TerminalFeedback
@@ -401,10 +402,11 @@ public sealed class OverlayCoordinator
         // SetStateLocked cancels any prior timer — and for a toast that waited
         // suppressed behind a higher-priority slot). Runs before the no-change check
         // below because a same-state republication still needs its timer re-armed.
-        if (winner is not null
-            && winner.Priority is OverlayPriority.TerminalFeedback
-                or OverlayPriority.TransientFeedback
-            && winner.Expiry is null)
+        if (winner is
+            {
+                Priority: OverlayPriority.TerminalFeedback or OverlayPriority.TransientFeedback,
+                Expiry: null,
+            })
         {
             var expiryGeneration = winner.ExpiryGeneration;
             var expiryToken = winner.Token;
@@ -432,6 +434,7 @@ public sealed class OverlayCoordinator
     private Slot? SelectWinnerLocked()
     {
         Slot? winner = null;
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- explicit max-search loop; the LINQ form switches enumerators and reads worse under the lock.
         foreach (var slot in _slots.Values)
         {
             if (slot.Priority == OverlayPriority.None)
@@ -451,7 +454,7 @@ public sealed class OverlayCoordinator
         return winner;
     }
 
-    private void CancelExpiryLocked(Slot slot)
+    private static void CancelExpiryLocked(Slot slot)
     {
         slot.ExpiryGeneration++;
         slot.Expiry?.Dispose();
@@ -459,7 +462,7 @@ public sealed class OverlayCoordinator
     }
 
     // A retired slot's next feedback is a fresh toast, so workflow ownership resets too.
-    private void RetireSlotLocked(Slot slot)
+    private static void RetireSlotLocked(Slot slot)
     {
         CancelExpiryLocked(slot);
         slot.State = DictationOverlayState.Hidden;

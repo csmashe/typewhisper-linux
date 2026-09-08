@@ -21,7 +21,7 @@ internal enum ManagedDesktopIntegrationState
 // MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
 // value parameter is part of the generated signature and cannot be dropped even when ignored here.
 // ReSharper disable UnusedParameterInPartialMethod
-public partial class ShortcutsSectionViewModel : ObservableObject, IDisposable
+public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDisposable
 {
     private const string DictationShortcutId = DictationShortcutSpecFactory.DictationShortcutId;
 

@@ -14,7 +14,7 @@ public sealed class AtomicFileWriteTests
             "TypeWhisper.AtomicFileWriteReplaceSyncOrderTests"
         );
         var path = Path.Join(directory, "state.json");
-        var finalMode =
+        const UnixFileMode finalMode =
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead;
         var calls = new List<string>();
         string? stagedPath = null;
@@ -69,7 +69,7 @@ public sealed class AtomicFileWriteTests
         );
         var path = Path.Join(directory, "state.bin");
         byte[] replacement = [0, 1, 2, 255];
-        var readOnlyMode =
+        const UnixFileMode readOnlyMode =
             UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead;
 
         try

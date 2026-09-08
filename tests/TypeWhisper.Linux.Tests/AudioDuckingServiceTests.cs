@@ -425,6 +425,7 @@ public sealed class AudioDuckingServiceTests
         runner.RespondWith(
             (_, args) =>
             {
+                // ReSharper disable once InvertIf -- inverting would duplicate the trailing return.
                 if (!raced && args.Count > 0 && args[0] == "set-sink-input-volume")
                 {
                     raced = true;

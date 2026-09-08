@@ -255,7 +255,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
                 return;
             }
 
-            if (sampleRate == 16000 || sampleRate <= 0)
+            if (sampleRate is 16000 or <= 0)
             {
                 EnqueueSamplesUnderLock(_sampleRateConverter.Complete());
                 EnqueueSamplesUnderLock(samples);

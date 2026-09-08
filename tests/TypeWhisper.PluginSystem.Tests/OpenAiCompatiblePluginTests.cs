@@ -1482,6 +1482,7 @@ public sealed class OpenAiCompatiblePluginTests
         {
             Assert.Equal(11434, request.RequestUri?.Port);
             // ReSharper disable once AccessToModifiedClosure -- the counter distinguishes the deliberately concurrent original and fresh A requests.
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (Interlocked.Increment(ref aRequestCount) == 1)
             {
                 originalRequestStarted.TrySetResult(true);

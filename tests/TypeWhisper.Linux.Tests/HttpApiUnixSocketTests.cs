@@ -694,8 +694,6 @@ public sealed class HttpApiUnixSocketTests
             TestPaths.CreateTempDirectory("TypeWhisper.HttpApiUnixSocketTests");
         private readonly HotkeyService _hotkeys = TestShortcutBackend.CreateHotkeyService();
         private readonly ModelManagerService _models;
-        private readonly ProfileService _profiles;
-        private readonly PromptActionService _promptActions;
         private readonly DictationSessionResultStore _sessionResults = new();
         private AppSettings _current;
 
@@ -740,8 +738,8 @@ public sealed class HttpApiUnixSocketTests
                 Settings.Object
             );
             var historyService = history ?? new Mock<IHistoryService>();
-            _profiles = new ProfileService(Path.Join(_tempDirectory, "profiles.json"));
-            _promptActions = new PromptActionService(
+            Profiles = new ProfileService(Path.Join(_tempDirectory, "profiles.json"));
+            PromptActions = new PromptActionService(
                 Path.Join(_tempDirectory, "prompt-actions.json")
             );
             ProcessRunner = new FakeProcessRunner
@@ -763,8 +761,8 @@ public sealed class HttpApiUnixSocketTests
                 Settings.Object,
                 audioFiles,
                 historyService.Object,
-                _profiles,
-                _promptActions,
+                Profiles,
+                PromptActions,
                 _hotkeys,
                 null!,
                 null!,
@@ -785,9 +783,9 @@ public sealed class HttpApiUnixSocketTests
 
         internal string DiscoveryPath { get; }
 
-        internal ProfileService Profiles => _profiles;
+        internal ProfileService Profiles { get; }
 
-        internal PromptActionService PromptActions => _promptActions;
+        internal PromptActionService PromptActions { get; }
 
         internal FakeProcessRunner ProcessRunner { get; }
 

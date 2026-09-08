@@ -180,6 +180,7 @@ public sealed class GlobalHotkeySetupTask : ISetupTask
                 );
             }
 
+            // ReSharper disable once InvertIf -- the refused case is the significant branch; kept as the guard.
             if (removal.Refused)
             {
                 var detail = removal.Detail;

@@ -805,7 +805,7 @@ public class CudaRuntimeProvisionerTests
             .ClearCacheAsync(CancellationToken.None)
             .WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal(new[] { "sync-file", "sync-directory" }, events);
+        Assert.Equal(["sync-file", "sync-directory"], events);
         Assert.Equal(tombstonePath, provisioner.LegacyMigrationDisabledPathForTests);
         Assert.True(File.Exists(tombstonePath));
         Assert.False(Directory.Exists(configuredRoot));

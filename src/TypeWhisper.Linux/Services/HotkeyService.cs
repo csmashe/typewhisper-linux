@@ -809,7 +809,7 @@ public sealed class HotkeyService : IDisposable
             }
 
             result.Add(
-                new(
+                new PromptActionHotkeyCandidate(
                     new PromptActionHotkey(action.Id, key.Value, modifiers),
                     action.Name
                 )
@@ -893,20 +893,19 @@ public sealed class HotkeyService : IDisposable
         var acceptedProfiles = new List<ProfileHotkey>(_profileHotkeyCandidates.Length);
         var rejections = new List<DynamicHotkeyRejection>();
 
-        foreach (var candidate in _promptActionHotkeyCandidates)
+        foreach (var (entry, displayName) in _promptActionHotkeyCandidates)
         {
-            var entry = candidate.Hotkey;
             if (string.IsNullOrWhiteSpace(entry.ActionId))
             {
                 Trace.WriteLine(
                     "[HotkeyService] Refusing prompt-action hotkey with empty action id."
                 );
                 rejections.Add(
-                    new(
+                    new DynamicHotkeyRejection(
                         DynamicHotkeyBindingKind.PromptAction,
                         DynamicHotkeyRejectionReason.BlankId,
                         entry.ActionId,
-                        candidate.DisplayName,
+                        displayName,
                         FormatHotkey(entry.Key, entry.Modifiers)
                     )
                 );
@@ -922,7 +921,7 @@ public sealed class HotkeyService : IDisposable
                     DynamicCollisionRejection(
                         DynamicHotkeyBindingKind.PromptAction,
                         entry.ActionId,
-                        candidate.DisplayName,
+                        displayName,
                         entry.Key,
                         entry.Modifiers
                     )
@@ -943,7 +942,7 @@ public sealed class HotkeyService : IDisposable
                     DynamicCollisionRejection(
                         DynamicHotkeyBindingKind.PromptAction,
                         entry.ActionId,
-                        candidate.DisplayName,
+                        displayName,
                         entry.Key,
                         entry.Modifiers
                     )
@@ -954,20 +953,19 @@ public sealed class HotkeyService : IDisposable
             acceptedActions.Add(entry);
         }
 
-        foreach (var candidate in _profileHotkeyCandidates)
+        foreach (var (entry, displayName) in _profileHotkeyCandidates)
         {
-            var entry = candidate.Hotkey;
             if (string.IsNullOrWhiteSpace(entry.ProfileId))
             {
                 Trace.WriteLine(
                     "[HotkeyService] Refusing profile hotkey with empty profile id."
                 );
                 rejections.Add(
-                    new(
+                    new DynamicHotkeyRejection(
                         DynamicHotkeyBindingKind.Profile,
                         DynamicHotkeyRejectionReason.BlankId,
                         entry.ProfileId,
-                        candidate.DisplayName,
+                        displayName,
                         FormatHotkey(entry.Key, entry.Modifiers)
                     )
                 );
@@ -993,7 +991,7 @@ public sealed class HotkeyService : IDisposable
                     DynamicCollisionRejection(
                         DynamicHotkeyBindingKind.Profile,
                         entry.ProfileId,
-                        candidate.DisplayName,
+                        displayName,
                         entry.Key,
                         entry.Modifiers
                     )
@@ -1014,7 +1012,7 @@ public sealed class HotkeyService : IDisposable
                     DynamicCollisionRejection(
                         DynamicHotkeyBindingKind.Profile,
                         entry.ProfileId,
-                        candidate.DisplayName,
+                        displayName,
                         entry.Key,
                         entry.Modifiers
                     )
@@ -1039,7 +1037,7 @@ public sealed class HotkeyService : IDisposable
         ModifierMask modifiers
     )
     {
-        return new(
+        return new DynamicHotkeyRejection(
             bindingKind,
             DynamicHotkeyRejectionReason.Conflict,
             id,
@@ -1114,7 +1112,7 @@ public sealed class HotkeyService : IDisposable
             }
 
             result.Add(
-                new(
+                new ProfileHotkeyCandidate(
                     new ProfileHotkey(
                         profile.Id,
                         key.Value,

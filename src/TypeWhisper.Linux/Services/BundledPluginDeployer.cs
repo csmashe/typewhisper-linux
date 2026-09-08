@@ -119,6 +119,7 @@ public sealed class BundledPluginDeployer
             }
         }
 
+        // ReSharper disable once InvertIf -- inverting would duplicate the trailing return.
         if (forceDeploy && allPluginsSucceeded)
         {
             try

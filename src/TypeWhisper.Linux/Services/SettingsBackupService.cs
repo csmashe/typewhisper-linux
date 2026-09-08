@@ -200,6 +200,7 @@ public sealed partial class SettingsBackupService
                 {
                     var rootPath = Path.Join(_basePath, root);
                     var rootKind = NativeFile.GetEntryKind(rootPath);
+                    // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- the default arm intentionally covers the remaining entry kinds.
                     switch (rootKind)
                     {
                         case BackupEntryKind.Absent:
@@ -827,6 +828,7 @@ public sealed partial class SettingsBackupService
         {
             var relativePath = NormalizeEntryName(Path.GetRelativePath(_basePath, path));
             var kind = NativeFile.GetEntryKind(path);
+            // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- the default arm intentionally covers the remaining entry kinds.
             switch (kind)
             {
                 case BackupEntryKind.Directory:
@@ -886,6 +888,7 @@ public sealed partial class SettingsBackupService
         ref long bytes
     )
     {
+        // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- the default arm intentionally covers the remaining entry kinds.
         switch (NativeFile.GetEntryKind(path))
         {
             case BackupEntryKind.RegularFile:

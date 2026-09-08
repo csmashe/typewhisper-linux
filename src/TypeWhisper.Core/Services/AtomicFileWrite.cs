@@ -530,6 +530,7 @@ public static partial class AtomicFileWrite
 
         try
         {
+            // ReSharper disable once InvertIf -- the failed-sync throw is the point of this block; inverting would bury it below an early return.
             if (Fsync(directoryFileDescriptor) != 0)
             {
                 var error = Marshal.GetLastPInvokeError();

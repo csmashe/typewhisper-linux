@@ -342,11 +342,11 @@ public partial class DictationOverlayViewModel : ObservableObject
     // never paint over it again.
     private void ShowSystemErrorFeedback(string message)
     {
+        // ReSharper disable once InlineTemporaryVariable -- the pattern variable is the null-checked snapshot of a field another thread can clear.
         if (_overlayCoordinator is { } coordinator)
         {
-            var token = coordinator.Acquire(OverlayRequester.System);
             coordinator.Show(
-                token,
+                coordinator.Acquire(OverlayRequester.System),
                 new DictationOverlayState
                 {
                     ShowFeedback = true,

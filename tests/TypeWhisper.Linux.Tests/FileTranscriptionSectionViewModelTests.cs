@@ -586,7 +586,7 @@ public sealed class FileTranscriptionSectionViewModelTests : IDisposable
         );
     }
 
-    private PluginManager CreatePluginManager(params FakeTranscriptionPlugin[] plugins)
+    private static PluginManager CreatePluginManager(params FakeTranscriptionPlugin[] plugins)
     {
         var pluginDirectory = Path.GetDirectoryName(
             typeof(FileTranscriptionSectionViewModelTests).Assembly.Location

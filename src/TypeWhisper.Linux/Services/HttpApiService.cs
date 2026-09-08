@@ -385,11 +385,6 @@ public sealed partial class HttpApiService : IDisposable
 
             if (_quiesceTask is not null)
             {
-                if (!_quiesceTask.IsCompleted)
-                {
-                    return _quiesceTask;
-                }
-
                 if (!_quiesceTask.IsCompletedSuccessfully || _quiesceTask.Result)
                 {
                     return _quiesceTask;
@@ -1076,6 +1071,7 @@ public sealed partial class HttpApiService : IDisposable
             var dispatch = _requestDispatcher.TryRun(() =>
                 HandleRequestAsync(context, requestLifetime.Token)
             );
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- the chain continues with a different kind of check; a partial switch would split it.
             if (dispatch.Status == HttpApiDispatchStatus.CapacityExceeded)
             {
                 await RejectOverCapacityAsync(context, requestLifetime.Token);
