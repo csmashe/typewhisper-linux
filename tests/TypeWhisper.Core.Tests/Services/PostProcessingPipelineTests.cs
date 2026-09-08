@@ -91,6 +91,42 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
+    public async Task ProcessAsync_ShortUtterancePunctuationDisabled_RemovesModelPunctuation()
+    {
+        var result = await _sut.ProcessAsync("Hallo, Marco.", new PipelineOptions
+        {
+            ShortUtterancePunctuationEnabled = false,
+        });
+
+        Assert.Equal("Hallo Marco", result.Text);
+        Assert.Contains(result.Steps, step =>
+            step is { Name: PostProcessingStepNames.ShortUtterancePunctuation, Changed: true });
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ShortUtterancePunctuationEnabled_AddsNoStep()
+    {
+        var result = await _sut.ProcessAsync("Hallo, Marco.", new PipelineOptions());
+
+        Assert.Equal("Hallo, Marco.", result.Text);
+        Assert.DoesNotContain(result.Steps, step =>
+            step.Name == PostProcessingStepNames.ShortUtterancePunctuation);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ShortUtterancePunctuation_RunsBeforeSpokenCommands()
+    {
+        var result = await _sut.ProcessAsync("Thanks.", new PipelineOptions
+        {
+            ShortUtterancePunctuationEnabled = false,
+            NormalizeSpokenLineBreaks = true,
+        });
+
+        Assert.Equal(PostProcessingStepNames.ShortUtterancePunctuation, result.Steps[0].Name);
+        Assert.Equal(PostProcessingStepNames.SpokenCommands, result.Steps[1].Name);
+    }
+
+    [Fact]
     public async Task ProcessAsync_NoOptions_ReturnsRawText()
     {
         var result = await _sut.ProcessAsync("hello world", new PipelineOptions());

@@ -1715,6 +1715,7 @@ public sealed partial class HttpApiService : IDisposable
                 TranscriptionNumberNormalizationEnabled =
                     settings.TranscriptionNumberNormalizationEnabled,
                 EnglishOutputVariant = settings.EnglishOutputVariant,
+                ShortUtterancePunctuationEnabled = settings.ShortUtterancePunctuationEnabled,
             },
             ct
         );

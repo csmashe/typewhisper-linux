@@ -74,6 +74,12 @@ public class AppSettingsTests
     }
 
     [Fact]
+    public void DefaultShortUtterancePunctuationEnabled_IsTrue()
+    {
+        Assert.True(AppSettings.Default.ShortUtterancePunctuationEnabled);
+    }
+
+    [Fact]
     public void DefaultTranscriptionNumberNormalizationEnabled_IsTrue()
     {
         Assert.True(AppSettings.Default.TranscriptionNumberNormalizationEnabled);

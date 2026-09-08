@@ -296,6 +296,8 @@
   "Dictation.RestartToApply": "Перезапустите TypeWhisper, чтобы применить.",
   "Dictation.Settings": "Настройки",
   "Dictation.ShellProfileUpdateFailed": "Не удалось обновить файл запуска оболочки: {0}",
+  "Dictation.ShortUtterancePunctuation": "Сохранять пунктуацию в коротких фразах",
+  "Dictation.ShortUtterancePunctuationHint": "Если параметр отключен, TypeWhisper удаляет добавленные моделью запятые в приветствиях и знаки в конце фраз из одного или двух слов, например в \"Привет Марко\".",
   "Dictation.SilenceTimeoutSeconds": "Таймаут тишины (секунды)",
   "Dictation.SoundFeedback": "Звуковое подтверждение",
   "Dictation.SpokenLanguage": "Язык речи",

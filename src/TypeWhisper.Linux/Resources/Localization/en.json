@@ -296,6 +296,8 @@
   "Dictation.RestartToApply": "Restart TypeWhisper to apply.",
   "Dictation.Settings": "Settings",
   "Dictation.ShellProfileUpdateFailed": "Could not update shell startup file: {0}",
+  "Dictation.ShortUtterancePunctuation": "Keep punctuation in short utterances",
+  "Dictation.ShortUtterancePunctuationHint": "When turned off, TypeWhisper removes model-added greeting commas and sentence-ending punctuation from one- or two-word utterances, such as \"Hello Marco\".",
   "Dictation.SilenceTimeoutSeconds": "Silence timeout (seconds)",
   "Dictation.SoundFeedback": "Sound Feedback",
   "Dictation.SpokenLanguage": "Spoken language",

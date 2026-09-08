@@ -296,6 +296,8 @@
   "Dictation.RestartToApply": "Starten Sie TypeWhisper neu, um die Änderung anzuwenden.",
   "Dictation.Settings": "Einstellungen",
   "Dictation.ShellProfileUpdateFailed": "Shell-Startdatei konnte nicht aktualisiert werden: {0}",
+  "Dictation.ShortUtterancePunctuation": "Satzzeichen bei kurzen Äußerungen beibehalten",
+  "Dictation.ShortUtterancePunctuationHint": "Ist diese Option ausgeschaltet, entfernt TypeWhisper bei Äußerungen mit ein oder zwei Wörtern automatisch gesetzte Grußkommas und Satzendzeichen, zum Beispiel in \"Hallo Marco\".",
   "Dictation.SilenceTimeoutSeconds": "Stille-Zeitlimit (Sekunden)",
   "Dictation.SoundFeedback": "Akustisches Feedback",
   "Dictation.SpokenLanguage": "Gesprochene Sprache",

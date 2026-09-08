@@ -160,6 +160,7 @@ public sealed class FileTranscriptionProcessor(
                 TranscriptionNumberNormalizationEnabled =
                     currentSettings.TranscriptionNumberNormalizationEnabled,
                 EnglishOutputVariant = currentSettings.EnglishOutputVariant,
+                ShortUtterancePunctuationEnabled = currentSettings.ShortUtterancePunctuationEnabled,
             },
             cancellationToken
         );

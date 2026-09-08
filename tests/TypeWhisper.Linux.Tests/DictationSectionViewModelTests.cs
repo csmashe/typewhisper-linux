@@ -61,6 +61,37 @@ public sealed class DictationSectionViewModelTests
     }
 
     [Fact]
+    public void ShortUtterancePunctuationEnabled_LoadsFromSettings()
+    {
+        var devices = new FakeAudioDeviceEnumerator(
+            new FakeDevice(0, "Default Mic", 1, isDefault: true)
+        );
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { ShortUtterancePunctuationEnabled = false },
+            devices
+        );
+
+        Assert.False(context.Sut.ShortUtterancePunctuationEnabled);
+    }
+
+    [Fact]
+    public void ShortUtterancePunctuationEnabled_Change_PersistsToSettings()
+    {
+        var devices = new FakeAudioDeviceEnumerator(
+            new FakeDevice(0, "Default Mic", 1, isDefault: true)
+        );
+        using var context = new ViewModelTestContext(AppSettings.Default, devices);
+
+        context.Sut.ShortUtterancePunctuationEnabled = false;
+
+        context.Settings.Verify(
+            service => service.Update(It.Is<Func<AppSettings, AppSettings>>(
+                mutation => !mutation(AppSettings.Default).ShortUtterancePunctuationEnabled)),
+            Times.Once
+        );
+    }
+
+    [Fact]
     public async Task ReadyEngineChange_RebuildsLanguagePickerAndPreservesInvalidSavedChoice()
     {
         var plugin = new ModelDependentLanguagePlugin();

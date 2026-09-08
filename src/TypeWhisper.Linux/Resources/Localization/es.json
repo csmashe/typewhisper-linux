@@ -296,6 +296,8 @@
   "Dictation.RestartToApply": "Reinicia TypeWhisper para aplicar los cambios.",
   "Dictation.Settings": "Ajustes",
   "Dictation.ShellProfileUpdateFailed": "No se pudo actualizar el archivo de inicio del shell: {0}",
+  "Dictation.ShortUtterancePunctuation": "Conservar la puntuación en frases cortas",
+  "Dictation.ShortUtterancePunctuationHint": "Si está desactivado, TypeWhisper elimina las comas de saludo y los signos finales añadidos por el modelo en frases de una o dos palabras, como \"Hola Marco\".",
   "Dictation.SilenceTimeoutSeconds": "Tiempo de espera de silencio (segundos)",
   "Dictation.SoundFeedback": "Respuesta sonora",
   "Dictation.SpokenLanguage": "Idioma hablado",

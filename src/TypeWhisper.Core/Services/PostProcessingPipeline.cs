@@ -8,6 +8,7 @@ namespace TypeWhisper.Core.Services;
 
 /// <summary>
 ///     Priority-based post-processing pipeline. Steps run in ascending priority order:
+///     ShortUtterancePunctuation=40 (only when disabled),
 ///     SpokenCommands=50, SpokenPunctuation=60, NumberNormalization=100, Formatting=150,
 ///     Cleanup=250, LLM=300, Snippets=500, VocabularyBoosting=550, OutputVariant=575,
 ///     Dictionary=600, Translation=900, TranslatedOutputVariant=950.
@@ -15,6 +16,7 @@ namespace TypeWhisper.Core.Services;
 /// </summary>
 public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
 {
+    private const int ShortUtterancePunctuationPriority = 40;
     private const int SpokenCommandsPriority = 50;
     private const int SpokenPunctuationPriority = 60;
     private const int NumberNormalizationPriority = 100;
@@ -140,6 +142,20 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
         )> BuildSteps(PipelineOptions options)
     {
         var steps = new List<(int, string, Func<string, CancellationToken, Task<string>>)>();
+
+        // Runs before every other step so the strip sees the model's raw one- or two-word output.
+        if (!options.ShortUtterancePunctuationEnabled)
+        {
+            steps.Add(
+                (
+                    ShortUtterancePunctuationPriority,
+                    PostProcessingStepNames.ShortUtterancePunctuation,
+                    (text, _) => Task.FromResult(
+                        ShortUtterancePunctuationService.NormalizeText(text, punctuationEnabled: false)
+                    )
+                )
+            );
+        }
 
         // Spoken line-break commands run first so the LLM sees real breaks, not the words.
         if (options.NormalizeSpokenLineBreaks)
