@@ -921,6 +921,30 @@ public class SonioxPluginTests
     }
 
     [Fact]
+    public async Task DeactivateAsync_DrainsCleanupOfOverlappingTranscriptions()
+    {
+        var releaseDelete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new SonioxFlowHandler(_ => { }, async cancellationToken =>
+        {
+            await releaseDelete.Task.WaitAsync(cancellationToken);
+            return NoContentResponse();
+        });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero);
+        await sut.ActivateAsync(host);
+
+        await sut.TranscribeAsync([1, 2, 3], "en", translate: false, prompt: null, CancellationToken.None);
+        await sut.TranscribeAsync([4, 5, 6], "en", translate: false, prompt: null, CancellationToken.None);
+        var deactivation = sut.DeactivateAsync();
+
+        Assert.False(deactivation.IsCompleted);
+        releaseDelete.SetResult();
+        await deactivation.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(2, handler.DeletedPaths.Count(path => path.StartsWith("/v1/transcriptions/", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task TranscribeAsync_BackgroundCleanupFailureIsLoggedNotThrown()
     {
         var handler = new SonioxFlowHandler(_ => { }, _ => Task.FromResult(JsonResponse(

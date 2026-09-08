@@ -47,6 +47,7 @@ public sealed class SonioxPlugin
     private readonly int _maxPollAttempts;
     private readonly TimeSpan _cleanupBudget;
     private readonly SemaphoreSlim _apiKeyWriteLock = new(1, 1);
+    private readonly Lock _cleanupChainLock = new();
 
     private IPluginHostServices? _host;
     private string _selectedModelId = DefaultModelId;
@@ -159,9 +160,12 @@ public sealed class SonioxPlugin
             var result = ParseTranscript(transcriptJson, completedDetails, NormalizeLanguage(language));
             // Chain rather than replace so an overlapping transcription's cleanup is never lost
             // and DeactivateAsync can drain every pending deletion.
-            LastCleanupTask = Task.WhenAll(
-                LastCleanupTask,
-                CleanupInBackgroundAsync(transcriptionId, fileId, apiKey));
+            var cleanup = CleanupInBackgroundAsync(transcriptionId, fileId, apiKey);
+            lock (_cleanupChainLock)
+            {
+                LastCleanupTask = Task.WhenAll(LastCleanupTask, cleanup);
+            }
+
             return result;
         }
         catch

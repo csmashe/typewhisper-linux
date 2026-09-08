@@ -532,6 +532,10 @@ public static class OpenAiChatHelper
 
         if (options.MaxOutputTokens is not null)
         {
+            if (body.ContainsKey(options.MaxOutputTokenParameter))
+                throw new ArgumentException(
+                    $"Output token parameter '{options.MaxOutputTokenParameter}' is reserved.", nameof(options));
+
             // Preserve the configured floor while allowing long prompts enough output.
             // Reasoning consumes the same output cap, so reserve extra capacity for it.
             var budget = !options.ScaleOutputTokens
@@ -557,10 +561,10 @@ public static class OpenAiChatHelper
 
         foreach (var (key, value) in fields)
         {
-            // Protect routing and stream semantics from provider-specific additions.
-            if (key is "model" or "messages" or "stream")
+            // Provider-specific additions must not override the fields the helper manages
+            // (`stream` is absent from batch bodies but still owned by the helper).
+            if (key is "stream" || !body.TryAdd(key, value))
                 throw new ArgumentException($"Additional body field '{key}' is reserved.", nameof(options));
-            body[key] = value;
         }
 
         return body;

@@ -18,8 +18,9 @@ public sealed record OpenAiChatRequestOptions
     public double? Temperature { get; init; } = 0.1;
 
     /// <summary>
-    ///     Provider-specific fields written after the standard ones. <c>model</c>, <c>messages</c>
-    ///     and <c>stream</c> are reserved and throw <see cref="ArgumentException" />.
+    ///     Provider-specific fields written after the standard ones. A key the helper already
+    ///     writes (<c>model</c>, <c>messages</c>, <c>stream</c>, the output cap, ...) throws
+    ///     <see cref="ArgumentException" />.
     /// </summary>
     public IReadOnlyDictionary<string, object?>? AdditionalBodyFields { get; init; }
 }

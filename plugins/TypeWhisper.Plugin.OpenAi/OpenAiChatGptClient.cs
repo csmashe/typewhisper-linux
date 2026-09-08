@@ -247,6 +247,9 @@ internal sealed class OpenAiChatGptClient
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
+            if (LlmResponseTruncationGuard.TryCreateResponsesApiIncompleteException(root, "OpenAI") is { } incomplete)
+                throw incomplete;
+
             if (GetString(root, "output_text") is { Length: > 0 } outputText)
             {
                 responseText = outputText.Trim();

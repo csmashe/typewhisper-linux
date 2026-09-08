@@ -113,11 +113,22 @@ public sealed class OpenAiChatHelperTests
     [InlineData("model")]
     [InlineData("messages")]
     [InlineData("stream")]
+    [InlineData("max_tokens")]
+    [InlineData("temperature")]
     public async Task SendChatCompletionAsync_AdditionalBodyFields_CannotOverrideReservedKeys(string key)
     {
         await Assert.ThrowsAsync<ArgumentException>(() => CaptureRequestAsync(new OpenAiChatRequestOptions
         {
             AdditionalBodyFields = new Dictionary<string, object?> { [key] = "override" },
+        }));
+    }
+
+    [Fact]
+    public async Task SendChatCompletionAsync_OutputTokenParameter_CannotTargetReservedKey()
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() => CaptureRequestAsync(new OpenAiChatRequestOptions
+        {
+            MaxOutputTokenParameter = "model",
         }));
     }
 

@@ -1758,7 +1758,10 @@ public sealed partial class HttpApiService : IDisposable
                         model = selectedModelId,
                         segments = result.Segments.Select(segment => new
                         {
-                            text = segment.Text, start = segment.Start, end = segment.End,
+                            text = segment.Text,
+                            start = segment.Start,
+                            end = segment.End,
+                            noSpeechProbability = segment.NoSpeechProbability,
                         }),
                     }
                 )

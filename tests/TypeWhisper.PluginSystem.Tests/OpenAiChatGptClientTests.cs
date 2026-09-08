@@ -20,6 +20,16 @@ public sealed class OpenAiChatGptClientTests
     }
 
     [Fact]
+    public async Task ChatGptJsonResponse_RejectsIncompleteResultWithPartialText()
+    {
+        const string json =
+            """{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output_text":"partial"}""";
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => OpenAiChatGptClient.ParseResponseTextAsync(json));
+        Assert.Equal(PluginRequestFailureKind.OutputTruncated, ex.FailureKind);
+        Assert.DoesNotContain("partial", ex.Message);
+    }
+
+    [Fact]
     public async Task ParseResponseText_SseDeltaThenEof_Throws()
     {
         var stream = string.Join(
