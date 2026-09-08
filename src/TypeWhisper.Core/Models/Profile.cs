@@ -16,6 +16,8 @@ public sealed record Profile
     public int Priority { get; init; }
     public IReadOnlyList<string> ProcessNames { get; init; } = [];
     public IReadOnlyList<string> UrlPatterns { get; init; } = [];
+    /// <summary>Only matters when both ProcessNames and UrlPatterns are non-empty.</summary>
+    public ProfileContextMatchMode ContextMatchMode { get; init; } = ProfileContextMatchMode.All;
     public string? InputLanguage { get; init; }
     public string? TranslationTarget { get; init; }
     public string? SelectedTask { get; init; }
