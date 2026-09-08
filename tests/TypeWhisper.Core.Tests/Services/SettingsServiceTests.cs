@@ -98,6 +98,7 @@ public sealed class SettingsServiceTests : IDisposable
             VocabularyBoostingEnabled = true,
             AutoAddDictionaryCorrections = true,
             CleanupLevel = CleanupLevel.Light,
+            EnglishOutputVariant = EnglishOutputVariant.UnitedStates,
             PreviewBubbleAutoHideMilliseconds = 3750,
             OverlayCustomLeft = 123.5,
             OverlayCustomTop = 87.25,
@@ -119,6 +120,7 @@ public sealed class SettingsServiceTests : IDisposable
         Assert.True(sut2.Current.VocabularyBoostingEnabled);
         Assert.True(sut2.Current.AutoAddDictionaryCorrections);
         Assert.Equal(CleanupLevel.Light, sut2.Current.CleanupLevel);
+        Assert.Equal(EnglishOutputVariant.UnitedStates, sut2.Current.EnglishOutputVariant);
         Assert.Equal(3750, sut2.Current.PreviewBubbleAutoHideMilliseconds);
         Assert.Equal(123.5, sut2.Current.OverlayCustomLeft);
         Assert.Equal(87.25, sut2.Current.OverlayCustomTop);

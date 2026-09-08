@@ -2284,6 +2284,7 @@ public sealed class DictationOrchestrator : IDisposable
                     ConfiguredLanguage = configuredLanguage,
                     TranscriptionNumberNormalizationEnabled =
                         _settings.Current.TranscriptionNumberNormalizationEnabled,
+                    EnglishOutputVariant = _settings.Current.EnglishOutputVariant,
                     PluginPostProcessors = pluginProcessors,
                     StatusCallback = status =>
                     {

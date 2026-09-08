@@ -1,5 +1,6 @@
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -142,6 +143,9 @@ public sealed class FileTranscriptionProcessor(
                 .ToArray(),
         };
 
+        // Segments feed subtitle export and never pass through the pipeline.
+        result = EnglishOutputNormalizationService.NormalizeResult(result, currentSettings.EnglishOutputVariant, effectiveTask, configuredLanguage);
+
         var pipelineResult = await pipeline.ProcessAsync(
             result.Text,
             new PipelineOptions
@@ -155,6 +159,7 @@ public sealed class FileTranscriptionProcessor(
                 ConfiguredLanguage = configuredLanguage,
                 TranscriptionNumberNormalizationEnabled =
                     currentSettings.TranscriptionNumberNormalizationEnabled,
+                EnglishOutputVariant = currentSettings.EnglishOutputVariant,
             },
             cancellationToken
         );

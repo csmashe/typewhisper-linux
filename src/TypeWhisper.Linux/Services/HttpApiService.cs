@@ -16,6 +16,7 @@ using System.Text.RegularExpressions;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK;
@@ -1713,6 +1714,7 @@ public sealed partial class HttpApiService : IDisposable
                 ConfiguredLanguageCandidates = opts.LanguageHints,
                 TranscriptionNumberNormalizationEnabled =
                     settings.TranscriptionNumberNormalizationEnabled,
+                EnglishOutputVariant = settings.EnglishOutputVariant,
             },
             ct
         );
@@ -1727,6 +1729,16 @@ public sealed partial class HttpApiService : IDisposable
                     result.DetectedLanguage ?? configuredLanguage ?? "en",
                     opts.TargetLanguage,
                     ct: ct
+                );
+                // The API translates after the pipeline, so respell the translated text here.
+                finalText = EnglishOutputNormalizationService.NormalizeText(
+                    finalText,
+                    settings.EnglishOutputVariant,
+                    effectiveTask,
+                    result.DetectedLanguage,
+                    configuredLanguage,
+                    opts.LanguageHints,
+                    opts.TargetLanguage
                 );
             }
             catch (NotSupportedException ex)

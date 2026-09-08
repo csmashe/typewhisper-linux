@@ -38,6 +38,9 @@ public sealed record PipelineOptions
     /// <summary>Configured language hint candidates used when detected language does not normalize.</summary>
     public IReadOnlyList<string> ConfiguredLanguageCandidates { get; init; } = [];
 
+    /// <summary>Regional spelling variant applied to final written English output.</summary>
+    public EnglishOutputVariant EnglishOutputVariant { get; init; } = EnglishOutputVariant.AsTranscribed;
+
     /// <summary>Process name of the target app for formatting.</summary>
     public string? TargetProcessName { get; init; }
 
@@ -129,6 +132,8 @@ public static class PostProcessingStepNames
     public const string Llm = "LLM";
     public const string Snippets = "Snippets";
     public const string VocabularyBoosting = "VocabularyBoosting";
+    public const string OutputVariant = "OutputVariant";
+    public const string TranslatedOutputVariant = "TranslatedOutputVariant";
     public const string Dictionary = "Dictionary";
     public const string Translation = "Translation";
 

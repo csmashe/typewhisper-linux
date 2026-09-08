@@ -17,6 +17,50 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class DictationSectionViewModelTests
 {
     [Fact]
+    public void EnglishOutputVariant_LoadsFromSettings()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { EnglishOutputVariant = EnglishOutputVariant.UnitedKingdom },
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+
+        Assert.Equal(EnglishOutputVariant.UnitedKingdom, context.Sut.EnglishOutputVariant);
+        Assert.Equal(EnglishOutputVariant.UnitedKingdom, context.Sut.SelectedEnglishOutputVariantOption?.Value);
+    }
+
+    [Fact]
+    public void EnglishOutputVariant_Change_PersistsToSettings()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default,
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+
+        context.Sut.SelectedEnglishOutputVariantOption = context.Sut.EnglishOutputVariantOptions
+            .Single(option => option.Value == EnglishOutputVariant.UnitedStates);
+
+        Assert.Equal(EnglishOutputVariant.UnitedStates, context.Settings.Object.Current.EnglishOutputVariant);
+        context.Settings.Verify(
+            service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
+            Times.Once);
+    }
+
+    [Theory]
+    [InlineData("auto", null, true)]
+    [InlineData("en-GB", null, true)]
+    [InlineData("de", null, false)]
+    [InlineData("de", "en", true)]
+    public void IsEnglishOutputVariantVisible_FollowsLanguageAndTarget(string language, string? target, bool expected)
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default,
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+
+        context.Sut.Language = language;
+        context.Sut.TranslationTargetLanguage = target;
+
+        Assert.Equal(expected, context.Sut.IsEnglishOutputVariantVisible);
+    }
+
+    [Fact]
     public async Task ReadyEngineChange_RebuildsLanguagePickerAndPreservesInvalidSavedChoice()
     {
         var plugin = new ModelDependentLanguagePlugin();

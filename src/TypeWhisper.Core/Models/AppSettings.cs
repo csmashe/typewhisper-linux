@@ -86,6 +86,7 @@ public record AppSettings
     public bool SoundFeedbackEnabled { get; init; } = true;
     public bool TranscribeShortQuietClipsAggressively { get; init; }
     public bool TranscriptionNumberNormalizationEnabled { get; init; } = true;
+    public EnglishOutputVariant EnglishOutputVariant { get; init; } = EnglishOutputVariant.AsTranscribed;
 
     // Live transcription (streaming preview while recording)
     public bool LiveTranscriptionEnabled { get; init; } = true;

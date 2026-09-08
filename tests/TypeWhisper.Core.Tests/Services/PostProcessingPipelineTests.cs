@@ -10,6 +10,87 @@ public class PostProcessingPipelineTests
     private readonly PostProcessingPipeline _sut = new();
 
     [Fact]
+    public async Task ProcessAsync_EnglishOutputVariant_RunsBeforeDictionaryCorrections()
+    {
+        var result = await _sut.ProcessAsync("the colour labs", new PipelineOptions
+        {
+            EnglishOutputVariant = EnglishOutputVariant.UnitedStates,
+            DetectedLanguage = "en",
+            DictionaryCorrector = text => text.Replace("color labs", "Colour Labs"),
+        });
+
+        Assert.Equal("the Colour Labs", result.Text);
+        Assert.Contains(result.Steps, step => step is { Name: PostProcessingStepNames.OutputVariant, Changed: true });
+        Assert.DoesNotContain(result.Steps, step => step.Name == PostProcessingStepNames.TranslatedOutputVariant);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_EnglishOutputVariant_RunsAfterEnglishTranslation()
+    {
+        var options = new PipelineOptions
+        {
+            EnglishOutputVariant = EnglishOutputVariant.UnitedStates,
+            DetectedLanguage = "de",
+            TranslationHandler = (_, _, _, _) => Task.FromResult("The colour was analysed."),
+            TranslationTarget = "en",
+        };
+
+        var result = await _sut.ProcessAsync("Die Farbe wurde analysiert.", options);
+
+        Assert.Equal("The color was analyzed.", result.Text);
+        Assert.Contains(result.Steps, step => step is { Name: PostProcessingStepNames.TranslatedOutputVariant, Changed: true });
+    }
+
+    [Fact]
+    public async Task ProcessAsync_EnglishOutputVariant_SameLanguageTranslationKeepsDictionaryOverride()
+    {
+        var options = new PipelineOptions
+        {
+            EnglishOutputVariant = EnglishOutputVariant.UnitedStates,
+            DetectedLanguage = "en",
+            DictionaryCorrector = text => text.Replace("color labs", "Colour Labs"),
+            TranslationHandler = (_, _, _, _) => Task.FromResult("TRANSLATED"),
+            TranslationTarget = "en",
+        };
+
+        var result = await _sut.ProcessAsync("the colour labs", options);
+
+        Assert.Equal("the Colour Labs", result.Text);
+        Assert.Contains(result.Steps, step => step is { Name: PostProcessingStepNames.TranslatedOutputVariant, Changed: false });
+    }
+
+    [Fact]
+    public async Task ProcessAsync_EnglishOutputVariant_SkipsTranslatedNonEnglish()
+    {
+        var result = await _sut.ProcessAsync("The colour.", new PipelineOptions
+        {
+            EnglishOutputVariant = EnglishOutputVariant.UnitedStates,
+            DetectedLanguage = "en",
+            TranslationTarget = "de",
+            TranslationHandler = (_, _, _, _) => Task.FromResult("Die Farbe heißt Colour."),
+        });
+
+        Assert.Equal("Die Farbe heißt Colour.", result.Text);
+        Assert.Contains(result.Steps, step => step is { Name: PostProcessingStepNames.TranslatedOutputVariant, Changed: false });
+    }
+
+    [Fact]
+    public async Task ProcessAsync_AsTranscribed_AddsNoOutputVariantStep()
+    {
+        var result = await _sut.ProcessAsync("The colour.", new PipelineOptions
+        {
+            EnglishOutputVariant = EnglishOutputVariant.AsTranscribed,
+            DetectedLanguage = "de",
+            TranslationTarget = "en",
+            TranslationHandler = (_, _, _, _) => Task.FromResult("The colour."),
+        });
+
+        Assert.Equal("The colour.", result.Text);
+        Assert.DoesNotContain(result.Steps, step =>
+            step.Name is PostProcessingStepNames.OutputVariant or PostProcessingStepNames.TranslatedOutputVariant);
+    }
+
+    [Fact]
     public async Task ProcessAsync_NoOptions_ReturnsRawText()
     {
         var result = await _sut.ProcessAsync("hello world", new PipelineOptions());

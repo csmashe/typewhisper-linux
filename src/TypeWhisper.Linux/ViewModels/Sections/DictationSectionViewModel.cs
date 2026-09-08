@@ -102,6 +102,9 @@ public partial class DictationSectionViewModel : ObservableObject
     private CleanupLevel _cleanupLevel = CleanupLevel.None;
 
     [ObservableProperty]
+    private EnglishOutputVariant _englishOutputVariant = EnglishOutputVariant.AsTranscribed;
+
+    [ObservableProperty]
     private string _cudaSetupStatus = "";
 
     [ObservableProperty]
@@ -330,6 +333,9 @@ public partial class DictationSectionViewModel : ObservableObject
 
     public ObservableCollection<CleanupLevelOption> CleanupLevelOptions { get; } =
         new(CreateCleanupLevelOptions());
+
+    public ObservableCollection<EnglishOutputVariantOption> EnglishOutputVariantOptions { get; } =
+        new(CreateEnglishOutputVariantOptions());
 
     public ObservableCollection<InsertionStrategyOption> InsertionStrategyOptions { get; } =
         new(CreateInsertionStrategyOptions());
@@ -576,6 +582,21 @@ public partial class DictationSectionViewModel : ObservableObject
         }
     }
 
+    public EnglishOutputVariantOption? SelectedEnglishOutputVariantOption
+    {
+        get => EnglishOutputVariantOptions.FirstOrDefault(option => option.Value == EnglishOutputVariant);
+        set
+        {
+            var selected = value?.Value ?? EnglishOutputVariant.AsTranscribed;
+            if (selected == EnglishOutputVariant)
+            {
+                return;
+            }
+
+            EnglishOutputVariant = selected;
+        }
+    }
+
     public InsertionStrategyOption? SelectedNewInsertionStrategyOption
     {
         get =>
@@ -768,6 +789,7 @@ public partial class DictationSectionViewModel : ObservableObject
         Language = string.IsNullOrWhiteSpace(settings.Language) ? "auto" : settings.Language;
         TranslationTargetLanguage = settings.TranslationTargetLanguage;
         CleanupLevel = settings.CleanupLevel;
+        EnglishOutputVariant = settings.EnglishOutputVariant;
         // Hydrate the saved acceleration WITHOUT running the change guard: at startup no
         // model is loaded yet, so ActiveTranscriptionPlugin is null and CanUseCuda would
         // read false even when the runtime is fully provisioned — the guard would then
@@ -810,6 +832,8 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedLanguageOption));
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
         OnPropertyChanged(nameof(SelectedCleanupLevelOption));
+        OnPropertyChanged(nameof(SelectedEnglishOutputVariantOption));
+        OnPropertyChanged(nameof(IsEnglishOutputVariantVisible));
         OnPropertyChanged(nameof(SelectedNewInsertionStrategyOption));
         OnPropertyChanged(nameof(SelectedAccelerationOption));
         OnPropertyChanged(nameof(AccelerationStatusText));
@@ -824,6 +848,7 @@ public partial class DictationSectionViewModel : ObservableObject
         var acceleration = LocalModelAcceleration;
         var language = Language;
         var cleanupLevel = CleanupLevel;
+        var englishOutputVariant = EnglishOutputVariant;
         var newInsertionStrategy = NewInsertionStrategy;
         var appInsertionStrategies = AppInsertionStrategies
             .Select(row => (Row: row, row.Strategy))
@@ -835,11 +860,13 @@ public partial class DictationSectionViewModel : ObservableObject
             ReplaceCollection(AccelerationOptions, CreateAccelerationOptions());
             RefreshLanguageChoices();
             ReplaceCollection(CleanupLevelOptions, CreateCleanupLevelOptions());
+            ReplaceCollection(EnglishOutputVariantOptions, CreateEnglishOutputVariantOptions());
             ReplaceCollection(InsertionStrategyOptions, CreateInsertionStrategyOptions());
 
             LocalModelAcceleration = acceleration;
             Language = language;
             CleanupLevel = cleanupLevel;
+            EnglishOutputVariant = englishOutputVariant;
             NewInsertionStrategy = newInsertionStrategy;
             foreach (var (row, strategy) in appInsertionStrategies)
             {
@@ -850,6 +877,8 @@ public partial class DictationSectionViewModel : ObservableObject
             OnPropertyChanged(nameof(SelectedLanguageOption));
             OnPropertyChanged(nameof(LanguageSelectionWarning));
             OnPropertyChanged(nameof(SelectedCleanupLevelOption));
+            OnPropertyChanged(nameof(SelectedEnglishOutputVariantOption));
+            OnPropertyChanged(nameof(IsEnglishOutputVariantVisible));
             OnPropertyChanged(nameof(SelectedNewInsertionStrategyOption));
             OnPropertyChanged(nameof(AudioDuckingUnavailableReason));
             OnPropertyChanged(nameof(MediaPauseUnavailableReason));
@@ -944,6 +973,29 @@ public partial class DictationSectionViewModel : ObservableObject
         LanguageSelectionRequired = SelectedLanguageOption is null;
         OnPropertyChanged(nameof(LanguageSelectionWarning));
     }
+
+    private static IReadOnlyList<EnglishOutputVariantOption> CreateEnglishOutputVariantOptions()
+    {
+        return
+        [
+            new(EnglishOutputVariant.AsTranscribed, Loc.Instance["Dictation.EnglishOutputVariantAsTranscribed"]),
+            new(EnglishOutputVariant.UnitedStates, Loc.Instance["Dictation.EnglishOutputVariantUnitedStates"]),
+            new(EnglishOutputVariant.UnitedKingdom, Loc.Instance["Dictation.EnglishOutputVariantUnitedKingdom"]),
+        ];
+    }
+
+    // English spelling only matters when English can be the final language: an English or
+    // auto-detected input, or an English translation target.
+    public bool IsEnglishOutputVariantVisible =>
+        IsEnglishOrAuto(Language) || IsEnglish(TranslationTargetLanguage);
+
+    private static bool IsEnglish(string? code) =>
+        string.Equals(code?.Trim().Split('-', '_')[0], "en", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsEnglishOrAuto(string? code) =>
+        string.IsNullOrWhiteSpace(code)
+        || string.Equals(code.Trim(), "auto", StringComparison.OrdinalIgnoreCase)
+        || IsEnglish(code);
 
     private static IReadOnlyList<CleanupLevelOption> CreateCleanupLevelOptions()
     {
@@ -1557,6 +1609,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnLanguageChanged(string value)
     {
+        OnPropertyChanged(nameof(IsEnglishOutputVariantVisible));
         if (_isLocalizedOptionRefresh)
         {
             return;
@@ -1569,6 +1622,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnTranslationTargetLanguageChanged(string? value)
     {
+        OnPropertyChanged(nameof(IsEnglishOutputVariantVisible));
         _settings.Update(current => current with { TranslationTargetLanguage = value });
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
     }
@@ -1582,6 +1636,17 @@ public partial class DictationSectionViewModel : ObservableObject
 
         _settings.Update(current => current with { CleanupLevel = value });
         OnPropertyChanged(nameof(SelectedCleanupLevelOption));
+    }
+
+    partial void OnEnglishOutputVariantChanged(EnglishOutputVariant value)
+    {
+        if (_isLocalizedOptionRefresh)
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { EnglishOutputVariant = value });
+        OnPropertyChanged(nameof(SelectedEnglishOutputVariantOption));
     }
 
     partial void OnAutoPasteChanged(bool value)
@@ -1929,6 +1994,8 @@ public sealed record AccelerationOption(string Value, string DisplayName);
 public sealed record SpokenLanguageOption(string Code, string DisplayName);
 
 public sealed record CleanupLevelOption(CleanupLevel Value, string DisplayName);
+
+public sealed record EnglishOutputVariantOption(EnglishOutputVariant Value, string DisplayName);
 
 public sealed record InsertionStrategyOption(TextInsertionStrategy Value, string DisplayName);
 
