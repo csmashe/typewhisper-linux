@@ -945,6 +945,48 @@ public class SonioxPluginTests
     }
 
     [Fact]
+    public async Task DeactivateAsync_WaitsForCleanupRegisteredWhileDraining()
+    {
+        var firstDeleteStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstDelete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondDeleteStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSecondDelete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var deleteCalls = 0;
+        var handler = new SonioxFlowHandler(_ => { }, async cancellationToken =>
+        {
+            if (Interlocked.Increment(ref deleteCalls) == 1)
+            {
+                firstDeleteStarted.SetResult();
+                await releaseFirstDelete.Task.WaitAsync(cancellationToken);
+            }
+            else
+            {
+                secondDeleteStarted.SetResult();
+                await releaseSecondDelete.Task.WaitAsync(cancellationToken);
+            }
+
+            return NoContentResponse();
+        });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero);
+        await sut.ActivateAsync(host);
+
+        await sut.TranscribeAsync([1, 2, 3], "en", translate: false, prompt: null, CancellationToken.None);
+        await firstDeleteStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var deactivation = sut.DeactivateAsync();
+        await sut.TranscribeAsync([4, 5, 6], "en", translate: false, prompt: null, CancellationToken.None);
+
+        releaseFirstDelete.SetResult();
+        await secondDeleteStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(deactivation.IsCompleted);
+
+        releaseSecondDelete.SetResult();
+        await deactivation.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(2, handler.DeletedPaths.Count(path => path.StartsWith("/v1/transcriptions/", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task TranscribeAsync_BackgroundCleanupFailureIsLoggedNotThrown()
     {
         var handler = new SonioxFlowHandler(_ => { }, _ => Task.FromResult(JsonResponse(

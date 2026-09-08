@@ -94,8 +94,19 @@ public sealed class SonioxPlugin
     public async Task DeactivateAsync()
     {
         // Uploaded audio must not outlive the session: finish pending deletions before the host
-        // (and then the HttpClient) go away. CleanupAsync already bounds each deletion.
-        await LastCleanupTask;
+        // (and then the HttpClient) go away. CleanupAsync already bounds each deletion. A
+        // transcription finishing mid-drain appends to the chain, so loop until it stops growing.
+        Task pending;
+        do
+        {
+            lock (_cleanupChainLock)
+            {
+                pending = LastCleanupTask;
+            }
+
+            await pending;
+        } while (!IsCleanupChainAt(pending));
+
         _host = null;
     }
 
@@ -401,6 +412,14 @@ public sealed class SonioxPlugin
         }
 
         return json;
+    }
+
+    private bool IsCleanupChainAt(Task task)
+    {
+        lock (_cleanupChainLock)
+        {
+            return ReferenceEquals(LastCleanupTask, task);
+        }
     }
 
     private async Task CleanupInBackgroundAsync(string? transcriptionId, string? fileId, string apiKey)
