@@ -2,6 +2,7 @@
   "id": "com.typewhisper.claude",
   "name": "Claude",
   "version": "1.0.1",
+  "minHostVersion": "0.13.2",
   "author": "TypeWhisper",
   "description": "Anthropic Claude LLM for prompt processing",
   "networkAccess": "network",
