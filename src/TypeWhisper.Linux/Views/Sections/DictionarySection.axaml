@@ -217,6 +217,17 @@
                                                         BorderBrush="#223243"
                                                         BorderThickness="1"
                                                         CornerRadius="999"
+                                                        Padding="8,3"
+                                                        ToolTip.Tip="{loc:Str Dictionary.Regex}"
+                                                        IsVisible="{Binding IsRegex}">
+                                                    <TextBlock Text=".*"
+                                                               FontSize="10.5"
+                                                               Foreground="#D6DEE9" />
+                                                </Border>
+                                                <Border Background="#1B2430"
+                                                        BorderBrush="#223243"
+                                                        BorderThickness="1"
+                                                        CornerRadius="999"
                                                         Padding="8,3">
                                                     <TextBlock Text="{Binding UsageCount, StringFormat='{}{0}x'}"
                                                                FontSize="10.5"
@@ -335,7 +346,7 @@
                     Padding="14,12"
                     IsVisible="{Binding ShowAddBar}">
                 <StackPanel Spacing="6">
-                    <Grid ColumnDefinitions="*,Auto,*,92,Auto,Auto,Auto,Auto"
+                    <Grid ColumnDefinitions="*,Auto,*,92,Auto,Auto,Auto,Auto,Auto"
                           ColumnSpacing="10">
                         <TextBox Grid.Column="0"
                                  Text="{Binding NewOriginal}"
@@ -363,8 +374,15 @@
                         <CheckBox Grid.Column="6"
                                   Content="Aa"
                                   IsChecked="{Binding CaseSensitive}"
+                                  ToolTip.Tip="{loc:Str Dictionary.CaseSensitive}"
                                   VerticalAlignment="Center" />
-                        <Button Grid.Column="7"
+                        <CheckBox Grid.Column="7"
+                                  Content=".*"
+                                  IsChecked="{Binding NewIsRegex}"
+                                  IsVisible="{Binding IsNewTypeCorrection}"
+                                  ToolTip.Tip="{loc:Str Dictionary.Regex}"
+                                  VerticalAlignment="Center" />
+                        <Button Grid.Column="8"
                                 Content="{loc:Str Dictionary.Add}"
                                 Command="{Binding AddEntryCommand}"
                                 Padding="14,7" />
@@ -374,6 +392,11 @@
                                TextWrapping="Wrap"
                                FontSize="12"
                                Foreground="#8A9AAE" />
+                    <TextBlock Text="{Binding RegexValidationError}"
+                               IsVisible="{Binding HasRegexValidationError}"
+                               FontSize="12"
+                               Foreground="#E0A845"
+                               TextWrapping="Wrap" />
                 </StackPanel>
             </Border>
         </StackPanel>

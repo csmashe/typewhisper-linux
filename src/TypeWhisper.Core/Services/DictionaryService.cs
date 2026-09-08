@@ -18,15 +18,17 @@ public sealed partial class DictionaryService : IDictionaryService
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
+    private static readonly TimeSpan s_correctionRegexTimeout = TimeSpan.FromMilliseconds(250);
+
     private const int MaxCachedCorrectionPatterns = 512;
 
     private readonly AtomicJsonStore<ImmutableArray<DictionaryEntry>> _store;
 
-    // A correction's pattern is a pure function of its original text and case sensitivity, so
+    // A correction's pattern is a pure function of its original text, case sensitivity, and regex mode, so
     // this needs no invalidation when entries change — an edited original just maps to a new key.
     // Reusing the instances keeps the dictation path off Regex's static cache, which holds only
     // 15 patterns and thrashes once a user has more corrections than that.
-    private readonly ConcurrentDictionary<(string Original, bool CaseSensitive), Regex>
+    private readonly ConcurrentDictionary<(string Original, bool CaseSensitive, bool IsRegex), Regex>
         _correctionPatterns = new();
 
     public DictionaryService(string filePath)
@@ -171,7 +173,8 @@ public sealed partial class DictionaryService : IDictionaryService
                 ? StringComparison.Ordinal
                 : StringComparison.OrdinalIgnoreCase;
 
-            if (!text.Contains(entry.Original, comparison))
+            // Regex patterns need not appear literally in the input.
+            if (!entry.IsRegex && !text.Contains(entry.Original, comparison))
             {
                 continue;
             }
@@ -180,14 +183,27 @@ public sealed partial class DictionaryService : IDictionaryService
             // interpreted as regex substitution tokens; also counts each match individually.
             var replacement = entry.ExpandEscapes ? ExpandReplacementEscapes(entry.Replacement!) : entry.Replacement!;
             var matchCount = 0;
-            var replaced = GetCorrectionRegex(entry.Original, entry.CaseSensitive).Replace(
-                text,
-                _ =>
-                {
-                    matchCount++;
-                    return replacement;
-                }
-            );
+            string replaced;
+            // A broken or slow rule must not prevent the remaining corrections from running.
+            try
+            {
+                replaced = GetCorrectionRegex(entry.Original, entry.CaseSensitive, entry.IsRegex).Replace(
+                    text,
+                    _ =>
+                    {
+                        matchCount++;
+                        return replacement;
+                    }
+                );
+            }
+            catch (ArgumentException) when (entry.IsRegex)
+            {
+                continue;
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                continue;
+            }
             if (matchCount == 0 || string.Equals(replaced, text, StringComparison.Ordinal))
             {
                 continue;
@@ -255,7 +271,7 @@ public sealed partial class DictionaryService : IDictionaryService
         return builder.ToString();
     }
 
-    private Regex GetCorrectionRegex(string original, bool caseSensitive)
+    private Regex GetCorrectionRegex(string original, bool caseSensitive, bool isRegex)
     {
         // Bounded only against a pathological session that edits thousands of distinct originals;
         // a clear costs nothing but a rebuild on next use.
@@ -265,10 +281,19 @@ public sealed partial class DictionaryService : IDictionaryService
         }
 
         return _correctionPatterns.GetOrAdd(
-            (original, caseSensitive),
+            (original, caseSensitive, isRegex),
             static key =>
             {
-                var (text, isCaseSensitive) = key;
+                var (text, isCaseSensitive, useRegex) = key;
+                if (useRegex)
+                {
+                    return new Regex(
+                        text,
+                        RegexOptions.CultureInvariant | (isCaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase),
+                        s_correctionRegexTimeout
+                    );
+                }
+
                 // \b silently fails for originals like "C#" or ".NET" whose ends are non-word
                 // chars. Anchor each side based on what the original starts/ends with: \b on
                 // word-chars, lookaround on symbol-chars.
@@ -286,7 +311,8 @@ public sealed partial class DictionaryService : IDictionaryService
                     prefix + Regex.Escape(text) + suffix,
                     isCaseSensitive
                         ? RegexOptions.None
-                        : RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
+                        : RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+                    s_correctionRegexTimeout
                 );
             }
         );
@@ -390,7 +416,7 @@ public sealed partial class DictionaryService : IDictionaryService
             .Where(e =>
                 e is { IsEnabled: true, EntryType: DictionaryEntryType.Correction, Replacement: not null }
             )
-            .Select(e => new DictionaryCorrection(e.Original, e.Replacement!, e.CaseSensitive))
+            .Select(e => new DictionaryCorrection(e.Original, e.Replacement!, e.CaseSensitive, e.IsRegex))
             .ToList();
     }
 
@@ -409,8 +435,9 @@ public sealed partial class DictionaryService : IDictionaryService
 
         Commit(newCache =>
         {
+            // Regex rules are a separate identity: literal writers never select, overwrite or delete them.
             var existing = newCache.FirstOrDefault(e =>
-                e.EntryType == DictionaryEntryType.Correction
+                e is { EntryType: DictionaryEntryType.Correction, IsRegex: false }
                 && e.Original.Equals(original, StringComparison.OrdinalIgnoreCase)
             );
 
@@ -472,7 +499,7 @@ public sealed partial class DictionaryService : IDictionaryService
         var removed = Commit(entries =>
         {
             return entries.RemoveAll(e =>
-                    e.EntryType == DictionaryEntryType.Correction
+                    e is { EntryType: DictionaryEntryType.Correction, IsRegex: false }
                     && e.Original.Equals(original, StringComparison.OrdinalIgnoreCase)
                 )
                 > 0;
@@ -486,7 +513,7 @@ public sealed partial class DictionaryService : IDictionaryService
         Commit(newCache =>
         {
             var existing = newCache.FirstOrDefault(e =>
-                e.EntryType == DictionaryEntryType.Correction
+                e is { EntryType: DictionaryEntryType.Correction, IsRegex: false }
                 && e.Original.Equals(original, StringComparison.OrdinalIgnoreCase)
             );
 
@@ -563,7 +590,7 @@ public sealed partial class DictionaryService : IDictionaryService
                 }
 
                 var existing = newCache.FirstOrDefault(e =>
-                    e.EntryType == DictionaryEntryType.Correction
+                    e is { EntryType: DictionaryEntryType.Correction, IsRegex: false }
                     && e.Original.Equals(original, StringComparison.OrdinalIgnoreCase)
                 );
 

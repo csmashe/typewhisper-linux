@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 
@@ -25,6 +26,149 @@ public sealed class DictionaryServiceTests : IDisposable
         if (File.Exists(_filePath))
         {
             File.Delete(_filePath);
+        }
+    }
+
+    [Fact]
+    public void ApplyCorrections_RegexEntry_ReplacesMatches()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "colou?r", Replacement = "color", IsRegex = true,
+        });
+
+        Assert.Equal("the color and the color", _sut.ApplyCorrections("the colour and the color"));
+    }
+
+    [Fact]
+    public void ApplyCorrections_RegexEntry_BypassesLiteralPrefilter()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "colou?r", Replacement = "color", IsRegex = true,
+        });
+
+        Assert.Equal("color", _sut.ApplyCorrections("colour"));
+    }
+
+    [Fact]
+    public void ApplyCorrections_RegexEntry_KeepsGroupTokensLiteral()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = @"(\w+)@example\.com", Replacement = "$1@corp.example", IsRegex = true,
+        });
+
+        Assert.Equal("$1@corp.example", _sut.ApplyCorrections("alice@example.com"));
+    }
+
+    [Fact]
+    public void ApplyCorrections_LiteralEntryWithRegexMetacharacters_StaysLiteral()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "c++", Replacement = "C++", IsRegex = false,
+        });
+
+        Assert.Equal("C++", _sut.ApplyCorrections("c++"));
+    }
+
+    [Theory]
+    [InlineData(false, "color")]
+    [InlineData(true, "Colour")]
+    public void ApplyCorrections_RegexEntry_IsCaseInsensitiveUnlessCaseSensitive(bool caseSensitive, string expected)
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "colou?r", Replacement = "color", IsRegex = true, CaseSensitive = caseSensitive,
+        });
+
+        Assert.Equal(expected, _sut.ApplyCorrections("Colour"));
+    }
+
+    [Fact]
+    public void ApplyCorrections_InvalidRegexEntry_IsSkippedWithoutBreakingOthers()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "[unclosed", Replacement = "x", IsRegex = true,
+        });
+        _sut.UpsertCorrection("teh", "the", false);
+
+        Assert.Equal("the [unclosed", _sut.ApplyCorrections("teh [unclosed"));
+    }
+
+    [Fact]
+    public void ApplyCorrections_PathologicalRegexEntry_TimesOutWithoutBreakingOthers()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "(a+)+$", Replacement = "x", IsRegex = true,
+        });
+        _sut.UpsertCorrection("teh", "the", false);
+        var input = "teh " + new string('a', 40) + "!";
+        var stopwatch = Stopwatch.StartNew();
+
+        var result = _sut.ApplyCorrections(input);
+
+        stopwatch.Stop();
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"Elapsed: {stopwatch.Elapsed}");
+        Assert.StartsWith("the ", result);
+        Assert.Equal("the " + new string('a', 40) + "!", result);
+    }
+
+    [Fact]
+    public void GetCorrections_ExposesIsRegex()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "colou?r", Replacement = "color", IsRegex = true,
+        });
+
+        Assert.True(Assert.Single(_sut.GetCorrections()).IsRegex);
+    }
+
+    [Fact]
+    public void ImportFromCsv_WithoutIsRegexColumn_DefaultsToLiteral()
+    {
+        Assert.Equal(1, _sut.ImportFromCsv("""
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes
+            Correction,colou?r,color,False,True,False,0,Import,False
+            """));
+
+        Assert.False(Assert.Single(_sut.Entries).IsRegex);
+        Assert.Equal("colour", _sut.ApplyCorrections("colour"));
+    }
+
+    [Fact]
+    public void ExportToCsv_ImportFromCsv_RoundTripsIsRegex()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "colou?r", Replacement = "color", IsRegex = true,
+        });
+        var csv = _sut.ExportToCsv();
+        var importedPath = Path.GetTempFileName();
+        try
+        {
+            var imported = new DictionaryService(importedPath);
+            Assert.Equal(1, imported.ImportFromCsv(csv));
+            Assert.True(Assert.Single(imported.Entries).IsRegex);
+            Assert.Equal(1, imported.ImportFromCsv("Term,vocabulary,,False,True,False,0,Import,False,True"));
+            Assert.False(imported.Entries.Single(e => e.EntryType == DictionaryEntryType.Term).IsRegex);
+        }
+        finally
+        {
+            File.Delete(importedPath);
         }
     }
 
@@ -467,7 +611,7 @@ public sealed class DictionaryServiceTests : IDisposable
         });
 
         var csv = _sut.ExportToCsv();
-        Assert.Contains(@"Correction,x,\n,False,True,False,0,Manual,True", csv);
+        Assert.Contains(@"Correction,x,\n,False,True,False,0,Manual,True,False", csv);
         _sut.DeleteEntry("1");
 
         Assert.Equal(1, _sut.ImportFromCsv(csv));
@@ -526,6 +670,117 @@ public sealed class DictionaryServiceTests : IDisposable
 
         Assert.False(Assert.Single(_sut.Entries).ExpandEscapes);
         Assert.Equal(@"a\tb", _sut.ApplyCorrections("folder"));
+    }
+
+    [Fact]
+    public void ImportFromCsv_KeepsDistinctRegexPatterns()
+    {
+        const string csv = """
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes,IsRegex
+            Correction,\s+,SPACE,False,True,False,0,Import,False,True
+            Correction,\S+,WORD,False,True,False,0,Import,False,True
+            """;
+
+        Assert.Equal(2, _sut.ImportFromCsv(csv));
+        Assert.Equal(2, _sut.Entries.Count);
+        Assert.Equal(0, _sut.ImportFromCsv(csv));
+        Assert.Equal(2, _sut.Entries.Count);
+    }
+
+    [Fact]
+    public void ImportFromCsv_KeepsLiteralAndRegexEntriesWithSameOriginalSeparate()
+    {
+        const string csv = """
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes,IsRegex
+            Correction,a.b,LITERAL,False,True,False,0,Import,False,False
+            Correction,a.b,REGEX,False,True,False,0,Import,False,True
+            """;
+
+        Assert.Equal(2, _sut.ImportFromCsv(csv));
+
+        var literal = Assert.Single(_sut.Entries, e => !e.IsRegex);
+        var regex = Assert.Single(_sut.Entries, e => e.IsRegex);
+        Assert.Equal("LITERAL", literal.Replacement);
+        Assert.Equal("REGEX", regex.Replacement);
+        Assert.Equal("REGEX", _sut.ApplyCorrections("axb"));
+    }
+
+    [Fact]
+    public void UpsertCorrection_DoesNotSelectRegexEntryWithSameOriginal()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "a.b",
+                Replacement = "X",
+                IsRegex = true,
+            }
+        );
+
+        var result = _sut.UpsertCorrection("a.b", "Y", false);
+
+        Assert.False(result.IsRegex);
+        Assert.Equal(2, _sut.Entries.Count);
+        var regex = Assert.Single(_sut.Entries, e => e.IsRegex);
+        Assert.Equal("X", regex.Replacement);
+        Assert.Equal("X", _sut.ApplyCorrections("axb"));
+    }
+
+    [Fact]
+    public void DeleteCorrection_DoesNotRemoveRegexEntryWithSameOriginal()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "a.b",
+                Replacement = "X",
+                IsRegex = true,
+            }
+        );
+        _sut.UpsertCorrection("a.b", "Y", false);
+
+        _sut.DeleteCorrection("a.b");
+
+        Assert.True(Assert.Single(_sut.Entries).IsRegex);
+    }
+
+    [Fact]
+    public void LearnCorrection_DoesNotSelectRegexEntryWithSameOriginal()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "a.b",
+                Replacement = "X",
+                IsRegex = true,
+            }
+        );
+
+        _sut.LearnCorrection("a.b", "Z");
+
+        Assert.Equal(2, _sut.Entries.Count);
+        Assert.Equal("X", Assert.Single(_sut.Entries, e => e.IsRegex).Replacement);
+    }
+
+    [Fact]
+    public void ImportFromCsv_KeepsRegexOriginalWhitespace()
+    {
+        const string csv = """
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes,IsRegex
+            Correction,"foo ",bar,False,True,False,0,Import,False,True
+            Correction," lit ",eral,False,True,False,0,Import,False,False
+            """;
+
+        Assert.Equal(2, _sut.ImportFromCsv(csv));
+
+        Assert.Equal("foo ", Assert.Single(_sut.Entries, e => e.IsRegex).Original);
+        Assert.Equal("lit", Assert.Single(_sut.Entries, e => !e.IsRegex).Original);
     }
 
     [Fact]
@@ -882,11 +1137,11 @@ public sealed class DictionaryServiceTests : IDisposable
         var csv = _sut.ExportToCsv();
 
         Assert.Contains(
-            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes",
+            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes,IsRegex",
             csv
         );
         Assert.Contains(
-            "Correction,\"wispr, flow\",\"Wispr \"\"Flow\"\"\",True,True,True,7,CorrectionSuggestion,False",
+            "Correction,\"wispr, flow\",\"Wispr \"\"Flow\"\"\",True,True,True,7,CorrectionSuggestion,False,False",
             csv
         );
     }

@@ -18,6 +18,9 @@ public sealed record DictionaryEntry
     /// </summary>
     public bool ExpandEscapes { get; init; }
 
+    /// <summary>Original is a .NET regular expression instead of a literal phrase</summary>
+    public bool IsRegex { get; init; }
+
     public bool CaseSensitive { get; init; }
     public bool IsEnabled { get; init; } = true;
     public bool IsStarred { get; init; }

@@ -11,7 +11,7 @@ public sealed partial class DictionaryService
     {
         var sb = new StringBuilder();
         sb.AppendLine(
-            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes"
+            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes,IsRegex"
         );
 
         var entries = _store.Current
@@ -38,6 +38,8 @@ public sealed partial class DictionaryService
             sb.Append(Csv.Escape(entry.Source.ToString()));
             sb.Append(',');
             sb.Append(Csv.Escape(entry.ExpandEscapes.ToString()));
+            sb.Append(',');
+            sb.Append(Csv.Escape(entry.IsRegex.ToString()));
             sb.AppendLine();
         }
 
@@ -73,13 +75,15 @@ public sealed partial class DictionaryService
             var correctionIndexes = new Dictionary<string, int>(
                 StringComparer.OrdinalIgnoreCase
             );
+            // Regex rules are distinct by exact pattern, so `\s+` and `\S+` never collapse.
+            var regexCorrectionIndexes = new Dictionary<string, int>(StringComparer.Ordinal);
 
             for (var i = 0; i < newCache.Count; i++)
             {
                 var existing = newCache[i];
                 if (existing.EntryType == DictionaryEntryType.Correction)
                 {
-                    correctionIndexes.TryAdd(existing.Original, i);
+                    (existing.IsRegex ? regexCorrectionIndexes : correctionIndexes).TryAdd(existing.Original, i);
                 }
             }
 
@@ -98,7 +102,9 @@ public sealed partial class DictionaryService
                     continue;
                 }
 
-                var original = row[1].Trim();
+                var isRegex = entryType == DictionaryEntryType.Correction && ReadBool(row, 9);
+                // Leading and trailing whitespace is significant in a pattern.
+                var original = isRegex ? row[1] : row[1].Trim();
                 if (string.IsNullOrWhiteSpace(original))
                 {
                     continue;
@@ -134,11 +140,13 @@ public sealed partial class DictionaryService
                     Priority = ReadInt(row, 6),
                     Source = ReadSource(row, 7),
                     ExpandEscapes = entryType == DictionaryEntryType.Correction && ReadBool(row, 8),
+                    IsRegex = isRegex,
                 };
 
                 if (entryType == DictionaryEntryType.Correction)
                 {
-                    if (correctionIndexes.TryGetValue(original, out var existingIndex))
+                    var indexes = entry.IsRegex ? regexCorrectionIndexes : correctionIndexes;
+                    if (indexes.TryGetValue(original, out var existingIndex))
                     {
                         var existing = newCache[existingIndex];
                         if (HasSameCsvFields(existing, entry))
@@ -155,12 +163,13 @@ public sealed partial class DictionaryService
                             Priority = entry.Priority,
                             Source = entry.Source,
                             ExpandEscapes = entry.ExpandEscapes,
+                            IsRegex = entry.IsRegex,
                         };
                         imported++;
                         continue;
                     }
 
-                    correctionIndexes.Add(original, newCache.Count);
+                    indexes.Add(original, newCache.Count);
                     newCache.Add(entry);
                     imported++;
                     continue;
@@ -189,7 +198,8 @@ public sealed partial class DictionaryService
                && existing.IsStarred == incoming.IsStarred
                && existing.Priority == incoming.Priority
                && existing.Source == incoming.Source
-               && existing.ExpandEscapes == incoming.ExpandEscapes;
+               && existing.ExpandEscapes == incoming.ExpandEscapes
+               && existing.IsRegex == incoming.IsRegex;
     }
 
     private static string DictionaryEntryKey(DictionaryEntry entry)

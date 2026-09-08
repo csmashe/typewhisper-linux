@@ -61,6 +61,7 @@ public enum UserDataSyncDictionaryEntryType
 /// <param name="IsEnabled">Is enabled supplied to the member.</param>
 /// <param name="CreatedAt">Created at supplied to the member.</param>
 /// <param name="UpdatedAt">Updated at supplied to the member.</param>
+/// <param name="IsRegex">Whether Original is a regular expression.</param>
 public sealed record UserDataSyncDictionaryEntry(
     UserDataSyncDictionaryEntryType EntryType,
     string Original,
@@ -68,7 +69,8 @@ public sealed record UserDataSyncDictionaryEntry(
     bool CaseSensitive,
     bool IsEnabled,
     DateTime CreatedAt,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    bool IsRegex = false);
 
 /// <summary>
 /// Represents user data sync snippet data.
