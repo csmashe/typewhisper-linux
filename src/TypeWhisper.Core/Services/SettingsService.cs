@@ -163,6 +163,9 @@ public sealed class SettingsService : ISettingsService
         }
     }
 
+    private static AppSettings ApplySpokenFormattingMigration(AppSettings settings) =>
+        settings with { SpokenFormattingProfiles = SpokenFormatting.SpokenFormattingProfileStore.NormalizeProfiles(settings.SpokenFormattingProfiles) };
+
     private static AppSettings Deserialize(string json)
     {
         var settings =
@@ -170,7 +173,7 @@ public sealed class SettingsService : ISettingsService
             ?? throw new JsonException("Settings JSON deserialized to null.");
         settings = ApplyHistoryRetentionMigration(settings, json);
         settings = ApplyAccelerationMigration(settings, json);
-        return ApplyLanguageHintsMigration(settings);
+        return ApplySpokenFormattingMigration(ApplyLanguageHintsMigration(settings));
     }
 
     // A file that predates hints carries only Language; normalizing mirrors it into the list.

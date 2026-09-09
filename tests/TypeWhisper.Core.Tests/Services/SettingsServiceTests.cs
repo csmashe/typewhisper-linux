@@ -78,6 +78,30 @@ public sealed class SettingsServiceTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    public void Load_NullSpokenFormattingProfiles_IsEmpty(string profiles)
+    {
+        File.WriteAllText(_filePath, "{\"spokenFormattingProfiles\":" + profiles + "}");
+        Assert.Empty(new SettingsService(_filePath).Current.SpokenFormattingProfiles);
+    }
+
+    [Fact]
+    public void Load_NormalizesSpokenFormattingProfiles()
+    {
+        File.WriteAllText(_filePath, """
+            {"spokenFormattingProfiles":[
+                {"engineId":" engine ","modelId":" model ","languageCode":"en-US","strategyOverrideRaw":"AUTOMATIC"},
+                {"engineId":"engine","modelId":"model","languageCode":"en","strategyOverrideRaw":"future","verificationStateRaw":"futureState"}
+            ]}
+            """);
+        var profile = Assert.Single(new SettingsService(_filePath).Current.SpokenFormattingProfiles);
+        Assert.Equal("en", profile.LanguageCode);
+        Assert.Equal("future", profile.StrategyOverrideRaw);
+        Assert.Equal("futureState", profile.VerificationStateRaw);
+    }
+
     [Fact]
     public void Load_LegacyLanguage_MigratesToSingleHint()
     {

@@ -96,6 +96,14 @@ public record AppSettings
     public bool TranscriptionNumberNormalizationEnabled { get; init; } = true;
     public EnglishOutputVariant EnglishOutputVariant { get; init; } = EnglishOutputVariant.AsTranscribed;
     public GermanOutputVariant GermanOutputVariant { get; init; } = GermanOutputVariant.AsTranscribed;
+    public SpokenFormattingStrategy SpokenFormattingStrategy { get; init; } = SpokenFormattingStrategy.Automatic;
+    public IReadOnlyList<DictationSpokenFormattingProfile> SpokenFormattingProfiles
+    {
+        get;
+        // JsonSerializer passes null for a null JSON value; the load migration normalizes the list.
+        // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract
+        init => field = value ?? [];
+    } = [];
     public bool ShortUtterancePunctuationEnabled { get; init; } = true;
 
     // Live transcription (streaming preview while recording)
