@@ -60,6 +60,7 @@ public sealed class DictationOrchestratorCompositionTests
             Assert.Equal(["hello? "], fixture.InsertionPlatform.Typed);
 
             var history = Assert.Single(fixture.History.Records);
+            Assert.Same(history, Assert.Single(fixture.Statistics.Records));
             Assert.Equal("hello question mark", history.RawText);
             Assert.Equal("hello?", history.FinalText);
             Assert.True(File.Exists(Path.Join(TypeWhisperEnvironment.DataPath, "history.json")));

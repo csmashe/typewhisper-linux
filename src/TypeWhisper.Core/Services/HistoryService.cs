@@ -47,6 +47,8 @@ public sealed partial class HistoryService : IHistoryService
 
     public IReadOnlyList<TranscriptionRecord> Records => ReadRecords().ToArray();
 
+    public bool RecordsAvailable { get; private set; } = true;
+
     public event Action? RecordsChanged;
 
     public int TotalRecords => ReadRecords().Length;
@@ -62,10 +64,13 @@ public sealed partial class HistoryService : IHistoryService
     {
         try
         {
-            return _store.Current;
+            var records = _store.Current;
+            RecordsAvailable = true;
+            return records;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
+            RecordsAvailable = false;
             Trace.WriteLine($"[HistoryService] Failed to load history: {ex.Message}");
             return [];
         }

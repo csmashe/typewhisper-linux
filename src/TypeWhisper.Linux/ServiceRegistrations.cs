@@ -67,6 +67,7 @@ internal static class ServiceRegistrations
                     Loc.Instance.GetString("Common.OperationFailed", operation, reason)
             )
         );
+        RegisterUsageStatistics(services, dataPath);
         services.AddSingleton<IHistoryService>(
             new HistoryService(
                 Path.Join(dataPath, "history.json"),
@@ -266,4 +267,22 @@ internal static class ServiceRegistrations
         services.AddTransient<RecentTranscriptionsPaletteWindow>();
         services.AddTransient<WelcomeWizard>();
     }
+
+    internal static void RegisterUsageStatistics(IServiceCollection services, string dataPath)
+    {
+        services.AddSingleton<IUsageStatisticsService>(provider =>
+            CreateUsageStatisticsService(dataPath, provider.GetRequiredService<IHistoryService>()));
+    }
+
+    private static UsageStatisticsService CreateUsageStatisticsService(string dataPath, IHistoryService history)
+    {
+        var statistics = new UsageStatisticsService(Path.Join(dataPath, "usage-statistics.json"));
+        var records = history.Records;
+        if (history.RecordsAvailable)
+        {
+            statistics.BackfillFromHistoryIfNeeded(records);
+        }
+        return statistics;
+    }
+
 }

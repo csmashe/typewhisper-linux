@@ -74,6 +74,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IErrorLogService _errorLog;
     private readonly IDetectionFailureTracker _failureTracker;
     private readonly IHistoryService _history;
+    private readonly IUsageStatisticsService? _usageStatistics;
     private readonly HotkeyService _hotkey;
     private readonly IdeFileReferenceService _ideFileReferences;
     private readonly DictationInFlightSessionTracker _inFlightTracker = new();
@@ -193,7 +194,8 @@ public sealed class DictationOrchestrator : IDisposable
         IErrorLogService errorLog,
         ISessionActivityMonitor sessionActivityMonitor,
         ActionPluginExecutionHost actionPluginExecutionHost,
-        OverlayCoordinator overlayCoordinator
+        OverlayCoordinator overlayCoordinator,
+        IUsageStatisticsService? usageStatistics = null
     )
     {
         _hotkey = hotkey;
@@ -206,6 +208,7 @@ public sealed class DictationOrchestrator : IDisposable
         _mediaPause = mediaPause;
         _models = models;
         _history = history;
+        _usageStatistics = usageStatistics;
         _settings = settings;
         _activeWindow = activeWindow;
         _profiles = profiles;
@@ -3763,7 +3766,7 @@ public sealed class DictationOrchestrator : IDisposable
             var timestamp =
                 context.RecordingStart == default ? DateTime.UtcNow : context.RecordingStart;
 
-            _history.AddRecord(
+            var record =
                 BuildHistoryRecord(
                     context,
                     Guid.NewGuid().ToString(),
@@ -3782,8 +3785,9 @@ public sealed class DictationOrchestrator : IDisposable
                     PromptActionApplied = true,
                     IsSpokenCommand = true,
                     LlmCalls = context.Capture?.Calls ?? [],
-                }
-            );
+                };
+            _history.AddRecord(record);
+            _usageStatistics?.RecordTranscription(record);
         }
         catch (Exception ex)
         {
@@ -3809,7 +3813,7 @@ public sealed class DictationOrchestrator : IDisposable
     {
         try
         {
-            _history.AddRecord(
+            var record =
                 BuildHistoryRecord(
                     context,
                     id,
@@ -3847,8 +3851,9 @@ public sealed class DictationOrchestrator : IDisposable
                         PostProcessingStepNames.Translation
                     ),
                     LlmCalls = context.Capture?.Calls ?? [],
-                }
-            );
+                };
+            _history.AddRecord(record);
+            _usageStatistics?.RecordTranscription(record);
         }
         catch (Exception ex)
         {
