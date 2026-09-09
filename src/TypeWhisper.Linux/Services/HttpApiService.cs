@@ -1726,31 +1726,38 @@ public sealed partial class HttpApiService : IDisposable
         {
             try
             {
+                var sourceLanguage = result.DetectedLanguage ?? configuredLanguage ?? "en";
                 finalText = await _translation.TranslateAsync(
                     finalText,
-                    result.DetectedLanguage ?? configuredLanguage ?? "en",
+                    sourceLanguage,
                     opts.TargetLanguage,
                     ct: ct
                 );
-                // The API translates after the pipeline, so respell the translated text here.
-                finalText = EnglishOutputNormalizationService.NormalizeText(
-                    finalText,
-                    settings.EnglishOutputVariant,
-                    effectiveTask,
-                    result.DetectedLanguage,
-                    configuredLanguage,
-                    opts.LanguageHints,
-                    opts.TargetLanguage
-                );
-                finalText = GermanOutputNormalizationService.NormalizeText(
-                    finalText,
-                    settings.GermanOutputVariant,
-                    effectiveTask,
-                    result.DetectedLanguage,
-                    configuredLanguage,
-                    opts.LanguageHints,
-                    opts.TargetLanguage
-                );
+                // The API translates after the pipeline, so respell the translated text here —
+                // but only when the translator actually ran: it returns the input untouched when
+                // source and target are equal, and that text already carries the dictionary's
+                // corrections, which a second respelling would override.
+                if (sourceLanguage != opts.TargetLanguage)
+                {
+                    finalText = EnglishOutputNormalizationService.NormalizeText(
+                        finalText,
+                        settings.EnglishOutputVariant,
+                        effectiveTask,
+                        result.DetectedLanguage,
+                        configuredLanguage,
+                        opts.LanguageHints,
+                        opts.TargetLanguage
+                    );
+                    finalText = GermanOutputNormalizationService.NormalizeText(
+                        finalText,
+                        settings.GermanOutputVariant,
+                        effectiveTask,
+                        result.DetectedLanguage,
+                        configuredLanguage,
+                        opts.LanguageHints,
+                        opts.TargetLanguage
+                    );
+                }
             }
             catch (NotSupportedException ex)
             {
