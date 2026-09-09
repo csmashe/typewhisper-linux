@@ -18,7 +18,8 @@ public sealed class SonioxPlugin
 {
     internal const string DefaultModelId = "default";
 
-    private const string BaseUrl = "https://api.soniox.com";
+    internal const string DefaultRegionId = "us";
+    private const string RegionSettingKey = "region";
     private const string ApiKeySecretName = "api-key";
     private const string SonioxAsyncModelId = "stt-async-v5";
     private const int DefaultMaxPollAttempts = 3600;
@@ -41,13 +42,25 @@ public sealed class SonioxPlugin
         },
     ];
 
+    // Keys are issued per regional project and both REST and realtime hosts are regional.
+    // https://soniox.com/docs/stt/data-residency
+    internal static IReadOnlyList<SonioxRegion> AvailableRegions { get; } =
+    [
+        new(DefaultRegionId, "Settings.RegionUs", "https://api.soniox.com", "wss://stt-rt.soniox.com/transcribe-websocket"),
+        new("eu", "Settings.RegionEu", "https://api.eu.soniox.com", "wss://stt-rt.eu.soniox.com/transcribe-websocket"),
+        new("jp", "Settings.RegionJp", "https://api.jp.soniox.com", "wss://stt-rt.jp.soniox.com/transcribe-websocket"),
+        new("in", "Settings.RegionIn", "https://api.in.soniox.com", "wss://stt-rt.in.soniox.com/transcribe-websocket"),
+    ];
+
     private readonly HttpClient _httpClient;
     private readonly TimeSpan _initialPollDelay;
     private readonly TimeSpan _maxPollDelay;
     private readonly int _maxPollAttempts;
     private readonly TimeSpan _cleanupBudget;
+    private readonly TimeSpan _regionProbeTimeout;
     private readonly SemaphoreSlim _apiKeyWriteLock = new(1, 1);
     private readonly Lock _cleanupChainLock = new();
+    private readonly Lock _regionLock = new();
 
     private IPluginHostServices? _host;
     private string _selectedModelId = DefaultModelId;
@@ -61,7 +74,8 @@ public sealed class SonioxPlugin
         HttpClient httpClient,
         TimeSpan? pollDelay = null,
         int maxPollAttempts = DefaultMaxPollAttempts,
-        TimeSpan? cleanupBudget = null)
+        TimeSpan? cleanupBudget = null,
+        TimeSpan? regionProbeTimeout = null)
     {
         if (maxPollAttempts <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxPollAttempts), "Poll attempts must be positive.");
@@ -70,6 +84,11 @@ public sealed class SonioxPlugin
         if (resolvedCleanupBudget <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(cleanupBudget), "Cleanup budget must be positive.");
 
+        var resolvedRegionProbeTimeout = regionProbeTimeout ?? TimeSpan.FromSeconds(10);
+        if (resolvedRegionProbeTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(regionProbeTimeout), "Region probe timeout must be positive.");
+
+        _regionProbeTimeout = resolvedRegionProbeTimeout;
         _httpClient = httpClient;
         _initialPollDelay = pollDelay ?? s_defaultInitialPollDelay;
         _maxPollDelay = pollDelay ?? s_defaultMaxPollDelay;
@@ -88,7 +107,8 @@ public sealed class SonioxPlugin
         _host = host;
         ApiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
         _selectedModelId = DefaultModelId;
-        host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
+        RegionId = NormalizeRegionId(host.GetSetting<string>(RegionSettingKey));
+        host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured}, region={RegionId})");
     }
 
     public async Task DeactivateAsync()
@@ -138,7 +158,7 @@ public sealed class SonioxPlugin
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
-        return await SonioxStreamingSession.ConnectAsync(ApiKey!, languageHints, ct);
+        return await ConnectStreaming(ApiKey!, RealtimeUri, languageHints, ct);
     }
 
     public void SelectModel(string modelId)
@@ -185,9 +205,10 @@ public sealed class SonioxPlugin
         byte[] wavAudio, IReadOnlyList<string> languageHints, string? fallbackLanguage, CancellationToken ct)
     {
 
-        // Snapshot the key once so a concurrent settings change can't swap it
-        // out partway through the multi-request async flow below.
+        // Snapshot the key and region once so a concurrent settings change can't swap the key
+        // or the region out partway through the multi-request async flow below.
         var apiKey = ApiKey;
+        var region = Region;
         if (string.IsNullOrEmpty(apiKey))
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
@@ -196,20 +217,20 @@ public sealed class SonioxPlugin
 
         try
         {
-            fileId = await UploadFileAsync(wavAudio, apiKey, ct);
+            fileId = await UploadFileAsync(wavAudio, region.BaseUrl, apiKey, ct);
             var normalizedLanguageHints = languageHints
                 .Select(NormalizeLanguage)
                 .Where(static language => language is not null)
                 .Select(static language => language!)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            transcriptionId = await CreateTranscriptionAsync(fileId, normalizedLanguageHints, apiKey, ct);
-            var completedDetails = await WaitUntilCompletedAsync(transcriptionId, apiKey, ct);
-            var transcriptJson = await FetchTranscriptAsync(transcriptionId, apiKey, ct);
+            transcriptionId = await CreateTranscriptionAsync(fileId, normalizedLanguageHints, region.BaseUrl, apiKey, ct);
+            var completedDetails = await WaitUntilCompletedAsync(transcriptionId, region.BaseUrl, apiKey, ct);
+            var transcriptJson = await FetchTranscriptAsync(transcriptionId, region.BaseUrl, apiKey, ct);
             var result = ParseTranscript(transcriptJson, completedDetails, fallbackLanguage);
             // Chain rather than replace so an overlapping transcription's cleanup is never lost
             // and DeactivateAsync can drain every pending deletion.
-            var cleanup = CleanupInBackgroundAsync(transcriptionId, fileId, apiKey);
+            var cleanup = CleanupInBackgroundAsync(transcriptionId, fileId, region.BaseUrl, apiKey);
             lock (_cleanupChainLock)
             {
                 LastCleanupTask = Task.WhenAll(LastCleanupTask, cleanup);
@@ -219,7 +240,7 @@ public sealed class SonioxPlugin
         }
         catch
         {
-            await CleanupAsync(transcriptionId, fileId, apiKey);
+            await CleanupAsync(transcriptionId, fileId, region.BaseUrl, apiKey);
             throw;
         }
     }
@@ -233,6 +254,12 @@ public sealed class SonioxPlugin
                 Loc.L("Settings.ApiKey"),
                 IsSecret: true,
                 Description: Loc.L("Settings.ApiKeyDescription")),
+            new(
+                RegionSettingKey,
+                Loc.L("Settings.Region"),
+                Description: Loc.L("Settings.RegionDescription"),
+                Options: AvailableRegions.Select(r => new PluginSettingOption(r.Id, Loc.L(r.LabelKey))).ToList(),
+                Kind: PluginSettingKind.Dropdown),
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
@@ -240,6 +267,7 @@ public sealed class SonioxPlugin
             key switch
             {
                 "api-key" => ApiKey,
+                RegionSettingKey => RegionId,
                 _ => null,
             });
 
@@ -250,6 +278,9 @@ public sealed class SonioxPlugin
             case "api-key":
                 await SetApiKeyAsync(value ?? string.Empty);
                 break;
+            case RegionSettingKey:
+                SetRegion(value);
+                break;
         }
     }
 
@@ -258,10 +289,27 @@ public sealed class SonioxPlugin
         if (string.IsNullOrEmpty(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyRequired"));
 
-        var ok = await ValidateApiKeyAsync(ApiKey, ct);
-        return ok
-            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
-            : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
+        var probedKey = ApiKey;
+        var probedRegionId = RegionId;
+        var detected = await DetectRegionAsync(probedKey, ct);
+        if (detected is null)
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
+
+        var detectedLabel = Loc.L(ResolveRegion(detected).LabelKey);
+        lock (_regionLock)
+        {
+            // The probes can take a while; if the key or region was saved again meanwhile, the
+            // result belongs to the old settings and must neither be reported nor persisted.
+            if (!string.Equals(ApiKey, probedKey, StringComparison.Ordinal) || RegionId != probedRegionId)
+                return new PluginSettingsValidationResult(false, Loc.L("Settings.SettingsChangedDuringProbe"));
+
+            if (detected == probedRegionId)
+                return new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValidRegion", detectedLabel));
+
+            SetRegionLocked(detected);
+        }
+
+        return new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValidRegionSwitched", detectedLabel));
     }
 
     // Settings support
@@ -280,6 +328,71 @@ public sealed class SonioxPlugin
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
+
+    internal sealed record SonioxRegion(string Id, string LabelKey, string BaseUrl, string RealtimeUrl);
+
+    internal string RegionId { get; private set; } = DefaultRegionId;
+    internal SonioxRegion Region => ResolveRegion(RegionId);
+    internal Uri RealtimeUri => new(Region.RealtimeUrl);
+
+    private static SonioxRegion ResolveRegion(string? id) =>
+        AvailableRegions.FirstOrDefault(region =>
+            string.Equals(region.Id, id?.Trim(), StringComparison.OrdinalIgnoreCase))
+        ?? AvailableRegions[0];
+
+    private static string NormalizeRegionId(string? id) => ResolveRegion(id).Id;
+
+    internal void SetRegion(string? regionId)
+    {
+        lock (_regionLock)
+        {
+            SetRegionLocked(regionId);
+        }
+    }
+
+    private void SetRegionLocked(string? regionId)
+    {
+        var normalized = NormalizeRegionId(regionId);
+        if (RegionId == normalized)
+            return;
+
+        // Persist first so a failing settings store leaves the live region untouched and the
+        // same value can be saved again.
+        _host?.SetSetting(RegionSettingKey, normalized);
+        RegionId = normalized;
+    }
+
+    /// <summary>Opens the realtime session; tests replace it to observe the endpoint the plugin picks.</summary>
+    internal Func<string, Uri, IReadOnlyList<string>, CancellationToken, Task<IStreamingSession>> ConnectStreaming { get; set; } =
+        static async (apiKey, realtimeUri, languageHints, ct) =>
+            await SonioxStreamingSession.ConnectAsync(apiKey, realtimeUri, languageHints, ct);
+
+    internal async Task<string?> DetectRegionAsync(string apiKey, CancellationToken ct = default)
+    {
+        var normalized = NormalizeApiKey(apiKey);
+        if (normalized is null)
+            return null;
+
+        var selected = Region;
+        // The selected region answers in one request normally; a key only works in its own
+        // region, so the fallback sweep is a correction, not a guess.
+        foreach (var region in AvailableRegions.Where(r => r.Id != selected.Id).Prepend(selected))
+        {
+            using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            probeCts.CancelAfter(_regionProbeTimeout);
+            try
+            {
+                if (await ProbeModelsAsync(region.BaseUrl, normalized, probeCts.Token))
+                    return region.Id;
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // This region's probe timed out; the next one may still answer.
+            }
+        }
+
+        return null;
+    }
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
@@ -326,10 +439,15 @@ public sealed class SonioxPlugin
         if (normalized is null)
             return false;
 
+        return await ProbeModelsAsync(Region.BaseUrl, normalized, ct);
+    }
+
+    private async Task<bool> ProbeModelsAsync(string baseUrl, string apiKey, CancellationToken ct)
+    {
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
-            AddAuthorization(request, normalized);
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/v1/models");
+            AddAuthorization(request, apiKey);
             using var response = await _httpClient.SendAsync(request, ct);
             return response.IsSuccessStatusCode;
         }
@@ -351,14 +469,14 @@ public sealed class SonioxPlugin
         }
     }
 
-    private async Task<string> UploadFileAsync(byte[] wavAudio, string apiKey, CancellationToken ct)
+    private async Task<string> UploadFileAsync(byte[] wavAudio, string baseUrl, string apiKey, CancellationToken ct)
     {
         using var form = new MultipartFormDataContent();
         var fileContent = new ByteArrayContent(wavAudio);
         fileContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
         form.Add(fileContent, "file", "audio.wav");
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/files");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/files");
         AddAuthorization(request, apiKey);
         request.Content = form;
 
@@ -371,6 +489,7 @@ public sealed class SonioxPlugin
     private async Task<string> CreateTranscriptionAsync(
         string fileId,
         List<string> languageHints,
+        string baseUrl,
         string apiKey,
         CancellationToken ct)
     {
@@ -383,7 +502,7 @@ public sealed class SonioxPlugin
         if (languageHints.Count > 0)
             payload["language_hints"] = languageHints;
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/transcriptions");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/transcriptions");
         AddAuthorization(request, apiKey);
         request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 
@@ -393,14 +512,14 @@ public sealed class SonioxPlugin
             ?? throw new InvalidOperationException("Soniox transcription response did not include a transcription id.");
     }
 
-    private async Task<JsonElement> WaitUntilCompletedAsync(string transcriptionId, string apiKey, CancellationToken ct)
+    private async Task<JsonElement> WaitUntilCompletedAsync(string transcriptionId, string baseUrl, string apiKey, CancellationToken ct)
     {
         var delay = _initialPollDelay;
         for (var attempt = 0; attempt < _maxPollAttempts; attempt++)
         {
             ct.ThrowIfCancellationRequested();
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/transcriptions/{transcriptionId}");
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/v1/transcriptions/{transcriptionId}");
             AddAuthorization(request, apiKey);
 
             var json = await SendJsonAsync(request, "Soniox transcription status", ct);
@@ -428,11 +547,11 @@ public sealed class SonioxPlugin
     internal static TimeSpan NextPollDelay(TimeSpan current, TimeSpan max) =>
         TimeSpan.FromTicks((long)Math.Min(current.Ticks * 1.5, max.Ticks));
 
-    private async Task<string> FetchTranscriptAsync(string transcriptionId, string apiKey, CancellationToken ct)
+    private async Task<string> FetchTranscriptAsync(string transcriptionId, string baseUrl, string apiKey, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            $"{BaseUrl}/v1/transcriptions/{transcriptionId}/transcript");
+            $"{baseUrl}/v1/transcriptions/{transcriptionId}/transcript");
         AddAuthorization(request, apiKey);
 
         return await SendJsonAsync(request, "Soniox transcript retrieval", ct);
@@ -460,13 +579,13 @@ public sealed class SonioxPlugin
         }
     }
 
-    private async Task CleanupInBackgroundAsync(string? transcriptionId, string? fileId, string apiKey)
+    private async Task CleanupInBackgroundAsync(string? transcriptionId, string? fileId, string baseUrl, string apiKey)
     {
         await Task.Yield();
 
         try
         {
-            await CleanupAsync(transcriptionId, fileId, apiKey);
+            await CleanupAsync(transcriptionId, fileId, baseUrl, apiKey);
         }
         catch (Exception ex)
         {
@@ -474,7 +593,7 @@ public sealed class SonioxPlugin
         }
     }
 
-    private async Task CleanupAsync(string? transcriptionId, string? fileId, string apiKey)
+    private async Task CleanupAsync(string? transcriptionId, string? fileId, string baseUrl, string apiKey)
     {
         using var cleanupCts = new CancellationTokenSource(_cleanupBudget);
         var cleanupToken = cleanupCts.Token;
@@ -482,7 +601,7 @@ public sealed class SonioxPlugin
         if (transcriptionId is not null)
         {
             var transcriptionDeleted = await DeleteBestEffortAsync(
-                $"{BaseUrl}/v1/transcriptions/{transcriptionId}",
+                $"{baseUrl}/v1/transcriptions/{transcriptionId}",
                 "transcription",
                 apiKey,
                 cleanupToken);
@@ -493,7 +612,7 @@ public sealed class SonioxPlugin
         if (fileId is not null && !cleanupToken.IsCancellationRequested)
         {
             await DeleteBestEffortAsync(
-                $"{BaseUrl}/v1/files/{fileId}",
+                $"{baseUrl}/v1/files/{fileId}",
                 "file",
                 apiKey,
                 cleanupToken);

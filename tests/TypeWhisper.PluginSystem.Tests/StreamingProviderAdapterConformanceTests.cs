@@ -122,7 +122,7 @@ public sealed class StreamingProviderAdapterConformanceTests
                 "de"
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
-        var soniox = await new SonioxWebSocketAdapter("soniox-key", ["de"])
+        var soniox = await new SonioxWebSocketAdapter("soniox-key", new Uri(SonioxPlugin.AvailableRegions[0].RealtimeUrl), ["de"])
             .GetConnectionOptionsAsync(CancellationToken.None);
         var speechmatics = await new SpeechmaticsWebSocketAdapter(
                 "speechmatics-key",
@@ -597,7 +597,7 @@ public sealed class StreamingProviderAdapterConformanceTests
     {
         IWebSocketSessionAdapter adapter = provider switch
         {
-            "Soniox" => new SonioxWebSocketAdapter("key", []),
+            "Soniox" => new SonioxWebSocketAdapter("key", new Uri(SonioxPlugin.AvailableRegions[0].RealtimeUrl), []),
             // Speechmatics rejects a null language at StartRecognition; passing null made
             // every Speechmatics case fault during start and tear the transport down, which
             // surfaced as "the channel has been closed" from the first NextSentAsync.

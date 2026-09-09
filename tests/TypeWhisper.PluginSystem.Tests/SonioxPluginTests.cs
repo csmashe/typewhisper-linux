@@ -371,6 +371,371 @@ public class SonioxPluginTests
     }
 
     [Fact]
+    public async Task ActivateAsync_UsesPersistedRegionEndpoint()
+    {
+        var handler = new CapturingHandler((request, _) =>
+        {
+            Assert.Equal("https://api.jp.soniox.com/v1/models", request.RequestUri?.ToString());
+            return JsonResponse("{}");
+        });
+        var host = new TestPluginHostServices();
+        host.SetSetting("region", "jp");
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("jp", sut.RegionId);
+        Assert.True(await sut.ValidateApiKeyAsync("probe-key"));
+    }
+
+    [Fact]
+    public async Task ActivateAsync_FallsBackToUsForUnknownRegion()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("region", "mars");
+        var sut = new SonioxPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("us", sut.RegionId);
+    }
+
+    [Fact]
+    public async Task SetRegion_PersistsRegionAndSwitchesEndpoint()
+    {
+        var handler = new CapturingHandler((request, _) =>
+        {
+            Assert.Equal("https://api.eu.soniox.com/v1/models", request.RequestUri?.ToString());
+            return JsonResponse("{}");
+        });
+        var host = new TestPluginHostServices();
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        sut.SetRegion("eu");
+
+        Assert.Equal("eu", sut.RegionId);
+        Assert.Equal("eu", host.GetSetting<string>("region"));
+        Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
+        Assert.True(await sut.ValidateApiKeyAsync("probe-key"));
+    }
+
+    [Fact]
+    public async Task DetectRegionAsync_ReturnsRegionWhereKeyAuthenticates()
+    {
+        var handler = new CapturingHandler((request, _) =>
+            JsonResponse("{}", request.RequestUri?.Host == "api.jp.soniox.com"
+                ? HttpStatusCode.OK : HttpStatusCode.Unauthorized));
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient);
+
+        Assert.Equal("jp", await sut.DetectRegionAsync("probe-key"));
+    }
+
+    [Fact]
+    public async Task DetectRegionAsync_ReturnsNullWhenNoRegionAccepts()
+    {
+        var seen = new List<string>();
+        var handler = new CapturingHandler((request, _) =>
+        {
+            seen.Add(request.RequestUri!.Host);
+            return JsonResponse("{}", HttpStatusCode.Unauthorized);
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient);
+
+        Assert.Null(await sut.DetectRegionAsync("probe-key"));
+        Assert.Equal(["api.soniox.com", "api.eu.soniox.com", "api.jp.soniox.com", "api.in.soniox.com"], seen);
+    }
+
+    [Fact]
+    public async Task DetectRegionAsync_ProbesSelectedRegionFirst()
+    {
+        var seen = new List<string>();
+        var handler = new CapturingHandler((request, _) =>
+        {
+            seen.Add(request.RequestUri!.ToString());
+            return JsonResponse("{}");
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient);
+        sut.SetRegion("jp");
+
+        Assert.Equal("jp", await sut.DetectRegionAsync("probe-key"));
+        Assert.Equal(["https://api.jp.soniox.com/v1/models"], seen);
+    }
+
+    [Fact]
+    public async Task DetectRegionAsync_SkipsRegionWhoseProbeTimesOut()
+    {
+        var seen = new List<string>();
+        var handler = new AsyncCapturingHandler(async (request, _, ct) =>
+        {
+            seen.Add(request.RequestUri!.Host);
+            if (request.RequestUri.Host == "api.soniox.com")
+                await Task.Delay(Timeout.Infinite, ct);
+            return JsonResponse("{}");
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient, regionProbeTimeout: TimeSpan.FromMilliseconds(50));
+
+        Assert.Equal("eu", await sut.DetectRegionAsync("probe-key"));
+        Assert.Equal(["api.soniox.com", "api.eu.soniox.com"], seen);
+    }
+
+    [Fact]
+    public async Task DetectRegionAsync_PropagatesCallerCancellation()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new AsyncCapturingHandler(async (_, _, ct) =>
+        {
+            started.SetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+            return JsonResponse("{}");
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient);
+        using var cts = new CancellationTokenSource();
+        var detection = sut.DetectRegionAsync("probe-key", cts.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
+
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => detection);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_SwitchesToRegionThatAcceptsKey()
+    {
+        var handler = new CapturingHandler((request, _) =>
+            JsonResponse("{}", request.RequestUri?.Host == "api.jp.soniox.com"
+                ? HttpStatusCode.OK : HttpStatusCode.Unauthorized));
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        host.SetSetting("region", "eu");
+        var sut = new SonioxPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.True(result.IsSuccess);
+        Assert.Equal("Settings.ApiKeyValidRegionSwitched", result.Message);
+        Assert.Equal("jp", sut.RegionId);
+        Assert.Equal("jp", host.GetSetting<string>("region"));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ReportsRegionWhenSelectedRegionAccepts()
+    {
+        var handler = new CapturingHandler((request, _) =>
+        {
+            Assert.Equal("api.jp.soniox.com", request.RequestUri?.Host);
+            return JsonResponse("{}");
+        });
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        host.SetSetting("region", "jp");
+        var sut = new SonioxPlugin(httpClient);
+        await sut.ActivateAsync(host);
+        var writes = host.SetSettingCount;
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.True(result.IsSuccess);
+        Assert.Equal("Settings.ApiKeyValidRegion", result.Message);
+        Assert.Equal(writes, host.SetSettingCount);
+    }
+
+    [Fact]
+    public void GetSettingDefinitions_ExposeRegionDropdown()
+    {
+        var sut = new SonioxPlugin();
+
+        var definitions = sut.GetSettingDefinitions();
+
+        Assert.Equal(2, definitions.Count);
+        Assert.Equal("region", definitions[1].Key);
+        Assert.Equal(PluginSettingKind.Dropdown, definitions[1].Kind);
+        Assert.Equal(["us", "eu", "jp", "in"], definitions[1].Options!.Select(option => option.Value));
+    }
+
+    [Fact]
+    public async Task SetSettingValueAsync_RegionPersistsAndReadsBack()
+    {
+        var host = new TestPluginHostServices();
+        var sut = new SonioxPlugin();
+        await sut.ActivateAsync(host);
+
+        await sut.SetSettingValueAsync("region", "in");
+
+        Assert.Equal("in", await sut.GetSettingValueAsync("region"));
+        Assert.Equal("in", host.GetSetting<string>("region"));
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_UsesSelectedRegionForEveryRequest()
+    {
+        var handler = new SonioxFlowHandler(_ => { }, expectedHost: "api.eu.soniox.com");
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        host.SetSetting("region", "eu");
+        var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.TranscribeAsync([1, 2, 3], "en", false, null, CancellationToken.None);
+        await sut.LastCleanupTask;
+
+        Assert.Equal("Hello", result.Text);
+        Assert.Equal(["api.eu.soniox.com"], handler.DeletedHosts);
+    }
+
+    [Fact]
+    public async Task Cleanup_UsesRegionSnapshotWhenRegionChangesMidTranscription()
+    {
+        SonioxPlugin sut = null!;
+        // ReSharper disable once AccessToModifiedClosure -- the handler needs the plugin it is injected into; assigned once before any request
+        var handler = new SonioxFlowHandler(_ => sut.SetRegion("jp"),
+            _ => Task.FromResult(JsonResponse("{}", HttpStatusCode.InternalServerError)),
+            expectedHost: "api.eu.soniox.com");
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        host.SetSetting("region", "eu");
+        sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero);
+        await sut.ActivateAsync(host);
+
+        await sut.TranscribeAsync([1, 2, 3], "en", false, null, CancellationToken.None);
+        await sut.LastCleanupTask;
+
+        Assert.Equal("jp", sut.RegionId);
+        Assert.Equal(["api.eu.soniox.com", "api.eu.soniox.com"], handler.DeletedHosts);
+        Assert.Equal([
+            "/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721",
+            "/v1/files/84c32fc6-4fb5-4e7a-b656-b5ec70493753",
+        ], handler.DeletedPaths);
+    }
+
+    [Fact]
+    public async Task StartStreaming_UsesRegionalRealtimeEndpoint()
+    {
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        host.SetSetting("region", "eu");
+        var sut = new SonioxPlugin();
+        await sut.ActivateAsync(host);
+
+        Uri? connected = null;
+        sut.ConnectStreaming = (_, realtimeUri, _, _) =>
+        {
+            connected = realtimeUri;
+            throw new InvalidOperationException("connection captured");
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.StartStreamingWithLanguageHintsAsync(["de"], CancellationToken.None));
+        Assert.Equal("wss://stt-rt.eu.soniox.com/transcribe-websocket", connected?.ToString());
+
+        sut.SetRegion("in");
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.StartStreamingAsync(null, CancellationToken.None));
+        Assert.Equal("wss://stt-rt.in.soniox.com/transcribe-websocket", connected?.ToString());
+
+        var adapter = new SonioxWebSocketAdapter("key", connected!, []);
+        var options = await adapter.GetConnectionOptionsAsync(CancellationToken.None);
+        Assert.Equal(connected, options.Uri);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_KeepsRegionSavedWhileProbesWereRunning()
+    {
+        SonioxPlugin? plugin = null;
+        var handler = new CapturingHandler((request, _) =>
+        {
+            // The first probe (the selected EU region) is answered after the user has saved
+            // another region, so the detection result belongs to stale settings.
+            // ReSharper disable once AccessToModifiedClosure -- the handler needs the plugin it is injected into; assigned once before any request
+            if (request.RequestUri?.Host == "api.eu.soniox.com")
+                plugin!.SetRegion("in");
+
+            return JsonResponse("{}", request.RequestUri?.Host == "api.jp.soniox.com"
+                ? HttpStatusCode.OK : HttpStatusCode.Unauthorized);
+        });
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        host.SetSetting("region", "eu");
+        var sut = new SonioxPlugin(httpClient);
+        plugin = sut;
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Settings.SettingsChangedDuringProbe", result.Message);
+        Assert.Equal("in", sut.RegionId);
+        Assert.Equal("in", host.GetSetting<string>("region"));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_RejectsResultWhenKeyChangedDuringProbe()
+    {
+        SonioxPlugin? plugin = null;
+        var handler = new AsyncCapturingHandler(async (request, _, _) =>
+        {
+            // ReSharper disable once AccessToModifiedClosure -- the handler needs the plugin it is injected into; assigned once before any request
+            if (request.RequestUri?.Host == "api.eu.soniox.com")
+                await plugin!.SetApiKeyAsync("replacement-key");
+
+            return JsonResponse("{}");
+        });
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        host.SetSetting("region", "eu");
+        var sut = new SonioxPlugin(httpClient);
+        plugin = sut;
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Settings.SettingsChangedDuringProbe", result.Message);
+        Assert.Equal("eu", sut.RegionId);
+    }
+
+    [Fact]
+    public async Task SetRegion_KeepsLiveRegionWhenPersistenceFails()
+    {
+        var host = new TestPluginHostServices { SetSettingException = new IOException("disk full") };
+        var sut = new SonioxPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Throws<IOException>(() => sut.SetRegion("eu"));
+        Assert.Equal("us", sut.RegionId);
+
+        host.SetSettingException = null;
+        sut.SetRegion("eu");
+
+        Assert.Equal("eu", sut.RegionId);
+        Assert.Equal("eu", host.GetSetting<string>("region"));
+    }
+
+    [Fact]
+    public void SettingsLocalization_AllLocalesExposeTheSameKeys()
+    {
+        var english = LoadLocalization("en");
+        var keys = english.EnumerateObject().Select(property => property.Name).Order().ToArray();
+        Assert.DoesNotContain("Settings.ApiKeyValid", keys);
+        foreach (var language in (string[])["de", "es", "ru"])
+        {
+            var localized = LoadLocalization(language);
+            Assert.Equal(keys, localized.EnumerateObject().Select(property => property.Name).Order().ToArray());
+            Assert.NotEqual(english.GetProperty("Settings.Region").GetString(),
+                localized.GetProperty("Settings.Region").GetString());
+        }
+    }
+
+    [Fact]
     public Task TranscribeWithLanguageHintsAsync_PreservesOrderAndCleansUp() =>
         RunHintedAsyncFlowAsync((sut, hints) =>
             sut.TranscribeWithLanguageHintsAsync([1, 2, 3], hints, translate: false, prompt: null, CancellationToken.None));
@@ -1137,6 +1502,17 @@ public class SonioxPluginTests
         return doc.RootElement.Clone();
     }
 
+    private static JsonElement LoadLocalization(string language)
+    {
+        var basePath = Path.GetFullPath(AppContext.BaseDirectory);
+        var relativeLocalizationPath = Path.Join(
+            "..", "..", "..", "..", "..",
+            "plugins", "TypeWhisper.Plugin.Soniox", "Localization", $"{language}.json");
+        var localizationPath = Path.GetFullPath(relativeLocalizationPath, basePath);
+        using var doc = JsonDocument.Parse(File.ReadAllText(localizationPath));
+        return doc.RootElement.Clone();
+    }
+
     private static HttpResponseMessage JsonResponse(string json, HttpStatusCode statusCode = HttpStatusCode.OK) =>
         new(statusCode)
         {
@@ -1149,14 +1525,19 @@ public class SonioxPluginTests
     private sealed class SonioxFlowHandler(
         Action<string> inspectCreateBody,
         Func<CancellationToken, Task<HttpResponseMessage>>? deleteResponder = null,
-        string status = "completed") : HttpMessageHandler
+        string status = "completed",
+        string? expectedHost = null) : HttpMessageHandler
     {
         public List<string> DeletedPaths { get; } = [];
+        public List<string> DeletedHosts { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
+            if (expectedHost is not null)
+                Assert.Equal(expectedHost, request.RequestUri?.Host);
+
             if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v1/files")
                 return JsonResponse("""{ "id": "84c32fc6-4fb5-4e7a-b656-b5ec70493753" }""", HttpStatusCode.Created);
 
@@ -1176,6 +1557,7 @@ public class SonioxPluginTests
             if (request.Method == HttpMethod.Delete)
             {
                 DeletedPaths.Add(request.RequestUri!.AbsolutePath);
+                DeletedHosts.Add(request.RequestUri.Host);
                 return deleteResponder is null
                     ? NoContentResponse()
                     : await deleteResponder(cancellationToken);
@@ -1223,9 +1605,11 @@ public class SonioxPluginTests
         private readonly Dictionary<string, JsonElement> _settings = [];
         public Dictionary<string, string?> Secrets { get; } = [];
         public List<(PluginLogLevel Level, string Message)> Logs { get; } = [];
+        public int SetSettingCount { get; private set; }
         public int NotifyCapabilitiesChangedCount { get; private set; }
         public Exception? StoreSecretException { get; init; }
         public Exception? DeleteSecretException { get; set; }
+        public Exception? SetSettingException { get; set; }
 
         public Task StoreSecretAsync(string key, string value)
         {
@@ -1253,8 +1637,14 @@ public class SonioxPluginTests
                 ? value.Deserialize<T>(s_jsonOptions)
                 : default;
 
-        public void SetSetting<T>(string key, T value) =>
+        public void SetSetting<T>(string key, T value)
+        {
+            if (SetSettingException is not null)
+                throw SetSettingException;
+
+            SetSettingCount++;
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
+        }
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;
