@@ -215,7 +215,7 @@ public sealed class FillerWordsPluginTests
 
         Assert.NotNull(result);
         Assert.True(result.IsSuccess);
-        Assert.Equal("2 words", result.Message);
+        Assert.Equal("Words in the list: 2", result.Message);
     }
 
     [Fact]

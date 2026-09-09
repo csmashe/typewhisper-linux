@@ -237,8 +237,20 @@ public sealed class FillerWordFilterTests
         Assert.DoesNotContain("um", FillerWordFilter.DefaultWordsFor("de"));
         Assert.Contains("ähm", FillerWordFilter.DefaultWordsFor("de"));
         Assert.Contains("えっと", FillerWordFilter.DefaultWordsFor("ja"));
+        Assert.Contains("ehm", FillerWordFilter.DefaultWordsFor("es-MX"));
+        Assert.Contains("э-э", FillerWordFilter.DefaultWordsFor("ru"));
+        Assert.DoesNotContain("um", FillerWordFilter.DefaultWordsFor("ru"));
         Assert.Empty(FillerWordFilter.DefaultWordsFor(null));
     }
+
+    [Theory]
+    [InlineData("es", "Bueno, eh, vamos", "Bueno, vamos")]
+    [InlineData("es", "Este libro es mío", "Este libro es mío")]
+    [InlineData("ru", "Я, э-э, думаю, что да", "Я, думаю, что да")]
+    [InlineData("ru", "Это гм пять миллиметров", "Это пять миллиметров")]
+    [InlineData("ru", "Ну, 5 мм хватит", "Ну, 5 мм хватит")]
+    public void Remove_StripsLanguageScopedDefaults(string language, string input, string expected) =>
+        Assert.Equal(expected, FillerWordFilter.Remove(input, FillerWordFilter.DefaultWordsFor(language)));
 
     [Fact]
     public void DefaultWordsText_RoundTripsThroughTheParser() =>

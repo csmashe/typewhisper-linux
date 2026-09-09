@@ -1,7 +1,7 @@
 {
   "Settings.Title": "Füllwörter",
   "Settings.Hint": "Ein Wort pro Zeile; Kommas und Semikolons trennen ebenfalls. Beginnt eine Zeile mit einem Sprachcode und Doppelpunkt (de: äh, ähm), gilt sie nur für diese gesprochene Sprache; andere Zeilen gelten für alle Sprachen.",
-  "Settings.WordCount": "{0} Wörter",
+  "Settings.WordCount": "Wörter in der Liste: {0}",
   "Manifest.Name": "Füllwörter",
   "Manifest.Description": "Entfernt Füllwörter wie „ähm“ und „äh“ aus Transkriptionen"
 }

@@ -20,6 +20,9 @@ public static partial class FillerWordFilter
     [
         new("en", ["ah", "ahh", "eh", "ehm", "hm", "hmm", "uh", "uhh", "um", "umm"]),
         new("de", ["äh", "ähm", "hm", "hmm"]),
+        // Only hesitation sounds: "este", "pues" and "ну" are real words far more often than fillers.
+        new("es", ["eh", "ehm", "em", "mmm"]),
+        new("ru", ["э", "э-э", "эм", "эмм", "ммм", "гм"]),
         new(
             "ja",
             [
