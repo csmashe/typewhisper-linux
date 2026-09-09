@@ -343,18 +343,21 @@
                                                     <Button Content="‹"
                                                             Classes="chip-remove"
                                                             ToolTip.Tip="{loc:Str Dictation.MoveLanguageEarlier}"
+                                                            AutomationProperties.Name="{loc:Str Dictation.MoveLanguageEarlier}"
                                                             Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).MoveAdditionalLanguageEarlierCommand}"
                                                             CommandParameter="{Binding}" />
                                                     <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                                     <Button Content="›"
                                                             Classes="chip-remove"
                                                             ToolTip.Tip="{loc:Str Dictation.MoveLanguageLater}"
+                                                            AutomationProperties.Name="{loc:Str Dictation.MoveLanguageLater}"
                                                             Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).MoveAdditionalLanguageLaterCommand}"
                                                             CommandParameter="{Binding}" />
                                                     <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                                     <Button Content="×"
                                                             Classes="chip-remove"
                                                             ToolTip.Tip="{loc:Str Dictation.RemoveLanguage}"
+                                                            AutomationProperties.Name="{loc:Str Dictation.RemoveLanguage}"
                                                             Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).RemoveAdditionalLanguageCommand}"
                                                             CommandParameter="{Binding}" />
                                                 </StackPanel>

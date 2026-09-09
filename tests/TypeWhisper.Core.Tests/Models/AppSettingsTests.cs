@@ -24,6 +24,16 @@ public class AppSettingsTests
         Assert.Equal(["fr", "en"], (AppSettings.Default with { Language = "de", LanguageHints = ["fr", "en"] }).GetLanguageHints());
 
     [Fact]
+    public void LanguageHints_NullJsonValue_DeserializesAsEmpty()
+    {
+        var settings = JsonSerializer.Deserialize<AppSettings>("""{ "language": "de", "languageHints": null }""", s_jsonOptions);
+
+        Assert.NotNull(settings);
+        Assert.Empty(settings.LanguageHints);
+        Assert.Equal(["de"], settings.GetLanguageHints());
+    }
+
+    [Fact]
     public void NormalizeLanguageHints_TrimsDedupesAndDropsAuto() =>
         Assert.Equal(["de", "en"], AppSettings.NormalizeLanguageHints([" de ", "en", "DE", "", "auto", null]));
 

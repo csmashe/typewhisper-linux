@@ -84,6 +84,7 @@ public sealed class DictationSectionViewModelLocalizationTests
             [
                 nameof(DictationSectionViewModel.IsAdditionalLanguagesVisible),
                 nameof(DictationSectionViewModel.HasAdditionalLanguages),
+                nameof(DictationSectionViewModel.SelectedAdditionalLanguage),
                 nameof(DictationSectionViewModel.IsEnglishOutputVariantVisible),
                 nameof(DictationSectionViewModel.IsGermanOutputVariantVisible),
                 nameof(DictationSectionViewModel.AudioDuckingUnavailableReason),

@@ -37,7 +37,13 @@ public record AppSettings
     public string TransformSelectionHotkey { get; init; } = "";
     public string Language { get; init; } = "auto";
     /// <summary>Ordered spoken-language hints; the first entry mirrors Language, empty means unrestricted auto-detection.</summary>
-    public IReadOnlyList<string> LanguageHints { get; init; } = [];
+    public IReadOnlyList<string> LanguageHints
+    {
+        get;
+        // JsonSerializer passes null for a null JSON value; the reconcile path compares the lists.
+        // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract
+        init => field = value ?? [];
+    } = [];
     public bool AutoPaste { get; init; } = true;
 
     public Dictionary<string, TextInsertionStrategy> AppInsertionStrategies
