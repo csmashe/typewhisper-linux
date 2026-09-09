@@ -1,3 +1,4 @@
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.PluginSDK;
 using Xunit;
@@ -6,6 +7,17 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class LanguageSelectionResolverTests
 {
+    [Fact]
+    public void ResolveHints_ProfileLanguageAndHintsOverrideGlobal()
+    {
+        var profile = new Profile { Id = "test", Name = "Test", InputLanguage = "fr", InputLanguageHints = ["en"] };
+        Assert.Equal(["fr", "en"], LanguageSelectionResolver.ResolveHints(profile, AppSettings.Default.WithLanguageHints(["de"])));
+    }
+
+    [Fact]
+    public void ResolveHints_NoProfile_UsesSettings() =>
+        Assert.Equal(["de", "en"], LanguageSelectionResolver.ResolveHints(null, AppSettings.Default.WithLanguageHints(["de", "en"])));
+
     [Fact]
     public void Resolve_BlankOverride_UsesNextPrecedenceValue()
     {

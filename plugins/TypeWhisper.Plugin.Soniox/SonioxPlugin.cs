@@ -124,15 +124,21 @@ public sealed class SonioxPlugin
     public bool SupportsTranslation => false;
 
     public bool SupportsStreaming => true;
+    public bool SupportsLanguageHints => true;
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
+        => await StartStreamingWithLanguageHintsAsync(
+            NormalizeLanguage(language) is { } l ? [l] : [], ct);
+
+    public async Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
+        IReadOnlyList<string> languageHints, CancellationToken ct)
     {
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
-        return await SonioxStreamingSession.ConnectAsync(ApiKey!, language, ct);
+        return await SonioxStreamingSession.ConnectAsync(ApiKey!, languageHints, ct);
     }
 
     public void SelectModel(string modelId)
@@ -153,6 +159,32 @@ public sealed class SonioxPlugin
         if (translate)
             throw new InvalidOperationException("Soniox does not support translation.");
 
+        return await TranscribeCoreAsync(
+            wavAudio, NormalizeLanguage(language) is { } l ? [l] : [], fallbackLanguage: NormalizeLanguage(language), ct);
+    }
+
+    // Soniox has no progress callback, so the polling preview is the batch call with every hint.
+    public Task<PluginTranscriptionResult> TranscribeStreamingWithLanguageHintsAsync(
+        byte[] wavAudio, IReadOnlyList<string> languageHints, bool translate, string? prompt,
+        Func<string, bool> onProgress, CancellationToken ct) =>
+        TranscribeWithLanguageHintsAsync(wavAudio, languageHints, translate, prompt, ct);
+
+    // Hints are advisory, so none of them is claimed as the detected language when the
+    // transcript itself carries no language; only an explicit single language is.
+    public async Task<PluginTranscriptionResult> TranscribeWithLanguageHintsAsync(
+        byte[] wavAudio, IReadOnlyList<string> languageHints, bool translate, string? prompt,
+        CancellationToken ct)
+    {
+        if (translate)
+            throw new InvalidOperationException("Soniox does not support translation.");
+
+        return await TranscribeCoreAsync(wavAudio, languageHints, fallbackLanguage: null, ct);
+    }
+
+    private async Task<PluginTranscriptionResult> TranscribeCoreAsync(
+        byte[] wavAudio, IReadOnlyList<string> languageHints, string? fallbackLanguage, CancellationToken ct)
+    {
+
         // Snapshot the key once so a concurrent settings change can't swap it
         // out partway through the multi-request async flow below.
         var apiKey = ApiKey;
@@ -165,10 +197,16 @@ public sealed class SonioxPlugin
         try
         {
             fileId = await UploadFileAsync(wavAudio, apiKey, ct);
-            transcriptionId = await CreateTranscriptionAsync(fileId, language, apiKey, ct);
+            var normalizedLanguageHints = languageHints
+                .Select(NormalizeLanguage)
+                .Where(static language => language is not null)
+                .Select(static language => language!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            transcriptionId = await CreateTranscriptionAsync(fileId, normalizedLanguageHints, apiKey, ct);
             var completedDetails = await WaitUntilCompletedAsync(transcriptionId, apiKey, ct);
             var transcriptJson = await FetchTranscriptAsync(transcriptionId, apiKey, ct);
-            var result = ParseTranscript(transcriptJson, completedDetails, NormalizeLanguage(language));
+            var result = ParseTranscript(transcriptJson, completedDetails, fallbackLanguage);
             // Chain rather than replace so an overlapping transcription's cleanup is never lost
             // and DeactivateAsync can drain every pending deletion.
             var cleanup = CleanupInBackgroundAsync(transcriptionId, fileId, apiKey);
@@ -332,7 +370,7 @@ public sealed class SonioxPlugin
 
     private async Task<string> CreateTranscriptionAsync(
         string fileId,
-        string? language,
+        List<string> languageHints,
         string apiKey,
         CancellationToken ct)
     {
@@ -342,8 +380,8 @@ public sealed class SonioxPlugin
             ["file_id"] = fileId,
         };
 
-        if (NormalizeLanguage(language) is { } normalizedLanguage)
-            payload["language_hints"] = new[] { normalizedLanguage };
+        if (languageHints.Count > 0)
+            payload["language_hints"] = languageHints;
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/transcriptions");
         AddAuthorization(request, apiKey);

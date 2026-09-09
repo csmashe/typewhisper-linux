@@ -13,6 +13,31 @@ public class AppSettingsTests
     };
 
     [Fact]
+    public void GetLanguageHints_AutoLanguage_IsEmpty() => Assert.Empty(AppSettings.Default.GetLanguageHints());
+
+    [Fact]
+    public void GetLanguageHints_SingleLanguage_WrapsLegacyLanguage() =>
+        Assert.Equal(["de"], (AppSettings.Default with { Language = "de" }).GetLanguageHints());
+
+    [Fact]
+    public void GetLanguageHints_ExplicitHints_WinOverLanguage() =>
+        Assert.Equal(["fr", "en"], (AppSettings.Default with { Language = "de", LanguageHints = ["fr", "en"] }).GetLanguageHints());
+
+    [Fact]
+    public void NormalizeLanguageHints_TrimsDedupesAndDropsAuto() =>
+        Assert.Equal(["de", "en"], AppSettings.NormalizeLanguageHints([" de ", "en", "DE", "", "auto", null]));
+
+    [Fact]
+    public void WithLanguageHints_MirrorsFirstHintIntoLanguage()
+    {
+        var settings = AppSettings.Default.WithLanguageHints([" de ", "en"]);
+        Assert.Equal("de", settings.Language);
+        Assert.Equal(["de", "en"], settings.LanguageHints);
+        Assert.Equal("auto", settings.WithLanguageHints([]).Language);
+        Assert.Empty(settings.WithLanguageHints([]).LanguageHints);
+    }
+
+    [Fact]
     public void DefaultEnglishOutputVariant_PreservesTranscribedSpelling()
     {
         Assert.Equal(EnglishOutputVariant.AsTranscribed, AppSettings.Default.EnglishOutputVariant);

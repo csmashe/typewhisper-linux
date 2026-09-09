@@ -56,6 +56,10 @@ public interface ITranscriptionEngineRole
     /// <summary>Whether this engine supports real-time streaming transcription via <see cref="IStreamingSession" />.</summary>
     bool SupportsStreaming => false;
 
+    /// <summary>Whether the engine consumes every ordered language hint natively; otherwise the host sends the first hint only.</summary>
+    // ReSharper disable once UnusedMember.Global
+    bool SupportsLanguageHints => false;
+
     /// <summary>ISO language codes supported by this engine, or empty for all.</summary>
     IReadOnlyList<string> SupportedLanguages => [];
 
@@ -165,6 +169,12 @@ public interface ITranscriptionEngineRole
         // ReSharper restore UnusedParameter.Global
     );
 
+    /// <summary>Transcribes WAV audio with ordered language hints.</summary>
+    // ReSharper disable once UnusedMember.Global
+    Task<PluginTranscriptionResult> TranscribeWithLanguageHintsAsync(
+        byte[] wavAudio, IReadOnlyList<string> languageHints, bool translate, string? prompt, CancellationToken ct) =>
+        TranscribeAsync(wavAudio, FirstLanguageHint(languageHints), translate, prompt, ct);
+
     /// <summary>Whether the given model's files are downloaded and ready to use.</summary>
     // ReSharper disable once UnusedParameter.Global
     bool IsModelDownloaded(string modelId)
@@ -217,6 +227,12 @@ public interface ITranscriptionEngineRole
         throw new NotSupportedException();
     }
 
+    /// <summary>Opens a real-time streaming session with ordered language hints.</summary>
+    // ReSharper disable once UnusedMember.Global
+    Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
+        IReadOnlyList<string> languageHints, CancellationToken ct) =>
+        StartStreamingAsync(FirstLanguageHint(languageHints), ct);
+
     /// <summary>Unloads the currently loaded model from memory to free resources.</summary>
     Task UnloadModelAsync()
     {
@@ -240,4 +256,14 @@ public interface ITranscriptionEngineRole
     {
         return TranscribeAsync(wavAudio, language, translate, prompt, ct);
     }
+
+    /// <summary>Transcribes audio with progress updates and ordered language hints.</summary>
+    // ReSharper disable once UnusedMember.Global
+    Task<PluginTranscriptionResult> TranscribeStreamingWithLanguageHintsAsync(
+        byte[] wavAudio, IReadOnlyList<string> languageHints, bool translate, string? prompt,
+        Func<string, bool> onProgress, CancellationToken ct) =>
+        TranscribeStreamingAsync(wavAudio, FirstLanguageHint(languageHints), translate, prompt, onProgress, ct);
+
+    private static string? FirstLanguageHint(IReadOnlyList<string> languageHints) =>
+        languageHints.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))?.Trim();
 }

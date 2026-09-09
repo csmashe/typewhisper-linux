@@ -63,13 +63,15 @@ public sealed class SettingsService : ISettingsService
     public void Save(AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        Commit(_ => settings);
+        // A replacement object carries no "what changed" signal, so it is normalized on its own
+        // terms rather than reconciled against the previous snapshot.
+        Commit(_ => NormalizeLanguageHints(settings));
     }
 
     public AppSettings Update(Func<AppSettings, AppSettings> mutate)
     {
         ArgumentNullException.ThrowIfNull(mutate);
-        return Commit(mutate);
+        return Commit(current => ReconcileLanguageHints(current, mutate(current)));
     }
 
     private AppSettings Commit(Func<AppSettings, AppSettings> update)
@@ -167,7 +169,35 @@ public sealed class SettingsService : ISettingsService
             JsonSerializer.Deserialize<AppSettings>(json, s_jsonOptions)
             ?? throw new JsonException("Settings JSON deserialized to null.");
         settings = ApplyHistoryRetentionMigration(settings, json);
-        return ApplyAccelerationMigration(settings, json);
+        settings = ApplyAccelerationMigration(settings, json);
+        return ApplyLanguageHintsMigration(settings);
+    }
+
+    // A file that predates hints carries only Language; normalizing mirrors it into the list.
+    private static AppSettings ApplyLanguageHintsMigration(AppSettings settings) =>
+        NormalizeLanguageHints(settings);
+
+    // A stored list wins; an empty or null list beside an explicit Language keeps that language.
+    private static AppSettings NormalizeLanguageHints(AppSettings settings) =>
+        settings.WithLanguageHints(settings.LanguageHints is { Count: > 0 } stored ? stored : settings.GetLanguageHints());
+
+    // The picker writes Language while the hint list writes LanguageHints: whichever side an
+    // update changed leads and the other follows.
+    private static AppSettings ReconcileLanguageHints(AppSettings previous, AppSettings next)
+    {
+        var languageChanged = !string.Equals(previous.Language, next.Language, StringComparison.Ordinal);
+        var hintsChanged = !previous.LanguageHints.SequenceEqual(next.LanguageHints, StringComparer.Ordinal);
+        if (!languageChanged || hintsChanged)
+        {
+            // The list is the source of truth when it has entries; an empty list beside an
+            // explicit Language keeps that language, and an empty list beside "auto" is auto.
+            return NormalizeLanguageHints(next);
+        }
+
+        // Only the picker moved: it leads and the tail follows; "auto" clears the list.
+        var isAuto = string.IsNullOrWhiteSpace(next.Language)
+            || next.Language.Equals("auto", StringComparison.OrdinalIgnoreCase);
+        return next.WithLanguageHints(isAuto ? [] : [next.Language, .. next.LanguageHints.Skip(1)]);
     }
 
     /// <summary>

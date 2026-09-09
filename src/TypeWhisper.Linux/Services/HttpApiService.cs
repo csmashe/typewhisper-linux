@@ -1606,10 +1606,7 @@ public sealed partial class HttpApiService : IDisposable
         }
 
         var settings = _settings.Current;
-        var languageSelection = LanguageSelectionResolver.Resolve(
-            opts.Language,
-            settings.Language
-        );
+        var (languageSelection, languageHints) = ResolveRequestLanguage(opts.Language, opts.LanguageHints, settings);
         var configuredLanguage = languageSelection.LanguageTag;
 
         // A recognized extension passes the format gate without ffmpeg, but the
@@ -1650,11 +1647,6 @@ public sealed partial class HttpApiService : IDisposable
                 )
             );
         }
-        var prompt = MergePrompt(
-            opts.Prompt,
-            BuildLanguageHintsPrompt(opts.LanguageHints),
-            _dictionary.GetTermsForPrompt()
-        );
 
         // Hold the lease only around TranscribeAsync so no concurrent caller
         // can swap the shared plugin's model mid-run.
@@ -1676,9 +1668,21 @@ public sealed partial class HttpApiService : IDisposable
         await using (lease)
         {
             var plugin = lease.Plugin;
+            // Engines without native hints would otherwise lose every hint the selection
+            // does not already express.
+            var unexpressedHints = languageHints.Count(hint =>
+                !string.Equals(hint, configuredLanguage, StringComparison.OrdinalIgnoreCase));
+            var prompt = MergePrompt(
+                opts.Prompt,
+                !plugin.SupportsLanguageHints && unexpressedHints > 0
+                    ? BuildLanguageHintsPrompt(languageHints)
+                    : null,
+                _dictionary.GetTermsForPrompt()
+            );
             result = await plugin.TranscribeAsync(
                 wav,
                 languageSelection,
+                languageHints,
                 opts.Task == TranscriptionTask.Translate,
                 prompt,
                 ct
@@ -1711,7 +1715,7 @@ public sealed partial class HttpApiService : IDisposable
                 TranscriptionTask = effectiveTask,
                 DetectedLanguage = result.DetectedLanguage,
                 ConfiguredLanguage = configuredLanguage,
-                ConfiguredLanguageCandidates = opts.LanguageHints,
+                ConfiguredLanguageCandidates = AppSettings.NormalizeLanguageHints([configuredLanguage, .. languageHints]),
                 TranscriptionNumberNormalizationEnabled =
                     settings.TranscriptionNumberNormalizationEnabled,
                 EnglishOutputVariant = settings.EnglishOutputVariant,
@@ -1871,6 +1875,7 @@ public sealed partial class HttpApiService : IDisposable
             processNames = profile.ProcessNames,
             urlPatterns = profile.UrlPatterns,
             inputLanguage = profile.InputLanguage,
+            inputLanguageHints = profile.InputLanguageHints,
             translationTarget = profile.TranslationTarget,
             selectedTask = profile.SelectedTask,
             modelOverride = profile.TranscriptionModelOverride,
@@ -2361,6 +2366,30 @@ public sealed partial class HttpApiService : IDisposable
         return string.IsNullOrWhiteSpace(clean) || clean.Any(c => !char.IsLetterOrDigit(c))
             ? "wav"
             : clean;
+    }
+
+    // Request hints are advisory, as they always were on this API: they never replace the
+    // language selection (explicit from the request, else the global one), and engines with native
+    // hints receive them as hints. "auto" plus hints, which the local-file route accepts, keeps
+    // automatic detection with the hints alongside.
+    internal static (LanguageSelection Selection, IReadOnlyList<string> Hints) ResolveRequestLanguage(
+        string? requestLanguage,
+        IReadOnlyList<string> requestHints,
+        AppSettings settings
+    )
+    {
+        if (!string.IsNullOrWhiteSpace(requestLanguage))
+        {
+            return (
+                LanguageSelectionResolver.Resolve(requestLanguage),
+                AppSettings.NormalizeLanguageHints([requestLanguage, .. requestHints])
+            );
+        }
+
+        var globalHints = settings.GetLanguageHints();
+        return requestHints.Count > 0
+            ? (LanguageSelectionResolver.ResolvePrimary(globalHints), AppSettings.NormalizeLanguageHints(requestHints))
+            : (LanguageSelectionResolver.ResolvePrimary(globalHints), globalHints);
     }
 
     private static string? BuildLanguageHintsPrompt(IReadOnlyList<string> languageHints)

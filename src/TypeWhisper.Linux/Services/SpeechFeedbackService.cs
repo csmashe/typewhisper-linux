@@ -688,16 +688,13 @@ public sealed class SpeechFeedbackService : IDisposable
             return request;
         }
 
-        var configuredLanguage = _settings.Current.Language;
-        if (
-            string.IsNullOrWhiteSpace(configuredLanguage)
-            || string.Equals(configuredLanguage, "auto", StringComparison.OrdinalIgnoreCase)
-        )
+        var languageHints = _settings.Current.GetLanguageHints();
+        if (languageHints.Count == 0)
         {
             return request;
         }
 
-        return request with { Language = configuredLanguage };
+        return request with { Language = languageHints[0] };
     }
 
     private static bool ShouldUseConfiguredLanguageFallback(TtsPurpose purpose)

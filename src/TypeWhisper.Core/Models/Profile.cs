@@ -17,6 +17,7 @@ public sealed record Profile
     public IReadOnlyList<string> ProcessNames { get; init; } = [];
     public IReadOnlyList<string> UrlPatterns { get; init; } = [];
     public string? InputLanguage { get; init; }
+    public IReadOnlyList<string> InputLanguageHints { get; init; } = [];
     public string? TranslationTarget { get; init; }
     public string? SelectedTask { get; init; }
     public bool? WhisperModeOverride { get; init; }
@@ -29,4 +30,23 @@ public sealed record Profile
     public bool? DeveloperFormattingOverride { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; init; } = DateTime.UtcNow;
+
+    /// <summary>
+    ///     A blank InputLanguage inherits the global hints and "auto" clears them; otherwise the
+    ///     profile language leads and any stored hints only extend it. The editor writes
+    ///     InputLanguage alone, so hints never outrank what it shows.
+    /// </summary>
+    public IReadOnlyList<string> GetLanguageHints(IReadOnlyList<string> globalHints)
+    {
+        if (string.IsNullOrWhiteSpace(InputLanguage))
+        {
+            return AppSettings.NormalizeLanguageHints(globalHints);
+        }
+
+        // A hand-edited profiles.json may carry an explicit null in the hints.
+        // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract
+        return InputLanguage.Trim().Equals("auto", StringComparison.OrdinalIgnoreCase)
+            ? []
+            : AppSettings.NormalizeLanguageHints([InputLanguage, .. InputLanguageHints ?? []]);
+    }
 }
