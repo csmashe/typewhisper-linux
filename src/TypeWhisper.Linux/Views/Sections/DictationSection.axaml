@@ -33,6 +33,25 @@
             <Setter Property="VerticalAlignment" Value="Center" />
             <Setter Property="HorizontalAlignment" Value="Right" />
         </Style>
+        <Style Selector="Border.chip">
+            <Setter Property="Background" Value="#1B2430" />
+            <Setter Property="BorderBrush" Value="#223243" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="999" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Margin" Value="0,0,6,6" />
+        </Style>
+        <Style Selector="Button.chip-remove">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Width" Value="18" />
+            <Setter Property="Height" Value="18" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="#8A9AAE" />
+        </Style>
     </UserControl.Styles>
 
     <ScrollViewer VerticalScrollBarVisibility="Auto"
@@ -266,12 +285,12 @@
             <TextBlock Text="{loc:Str Dictation.Language}"
                        Classes="group-title" />
             <Border Classes="settings-panel">
-                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,240"
                               RowDefinitions="Auto,Auto">
-                            <TextBlock Text="{loc:Str Dictation.SpokenLanguage}"
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{loc:Str Dictation.SpokenLanguage}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
                                       Grid.Row="0"
@@ -296,13 +315,78 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="1"
+                    <Border Grid.Row="1" Background="#18FFFFFF"
+                            IsVisible="{Binding IsAdditionalLanguagesVisible}" />
+                    <Border Grid.Row="2" Classes="row"
+                            IsVisible="{Binding IsAdditionalLanguagesVisible}">
+                        <Grid ColumnDefinitions="*,240">
+                            <StackPanel Grid.Column="0" Spacing="4">
+                                <TextBlock Text="{loc:Str Dictation.AdditionalLanguages}"
+                                           Classes="row-label" />
+                                <TextBlock Text="{loc:Str Dictation.AdditionalLanguagesHint}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           TextWrapping="Wrap" />
+                                <ItemsControl ItemsSource="{Binding AdditionalLanguages}"
+                                              IsVisible="{Binding HasAdditionalLanguages}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:SpokenLanguageOption">
+                                            <Border Classes="chip">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <TextBlock Text="{Binding DisplayName}" FontSize="11" />
+                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
+                                                    <Button Content="‹"
+                                                            Classes="chip-remove"
+                                                            ToolTip.Tip="{loc:Str Dictation.MoveLanguageEarlier}"
+                                                            Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).MoveAdditionalLanguageEarlierCommand}"
+                                                            CommandParameter="{Binding}" />
+                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
+                                                    <Button Content="›"
+                                                            Classes="chip-remove"
+                                                            ToolTip.Tip="{loc:Str Dictation.MoveLanguageLater}"
+                                                            Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).MoveAdditionalLanguageLaterCommand}"
+                                                            CommandParameter="{Binding}" />
+                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
+                                                    <Button Content="×"
+                                                            Classes="chip-remove"
+                                                            ToolTip.Tip="{loc:Str Dictation.RemoveLanguage}"
+                                                            Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).RemoveAdditionalLanguageCommand}"
+                                                            CommandParameter="{Binding}" />
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Spacing="6">
+                                <ComboBox ItemsSource="{Binding AvailableAdditionalLanguages}"
+                                          SelectedItem="{Binding SelectedAdditionalLanguage}"
+                                          HorizontalAlignment="Stretch">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:SpokenLanguageOption">
+                                            <TextBlock Text="{Binding DisplayName}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Button Content="{loc:Str Dictation.AddLanguage}"
+                                        Command="{Binding AddAdditionalLanguageCommand}"
+                                        HorizontalAlignment="Stretch" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="3"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="2"
+                    <Border Grid.Row="4"
                             Classes="row">
                         <Grid ColumnDefinitions="*,240">
-                            <TextBlock Text="{loc:Str Dictation.TargetLanguage}"
+                            <TextBlock Grid.Column="0" Text="{loc:Str Dictation.TargetLanguage}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
                                       ItemsSource="{Binding TranslationTargetOptions}"
@@ -317,12 +401,12 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="3" Background="#18FFFFFF"
+                    <Border Grid.Row="5" Background="#18FFFFFF"
                             IsVisible="{Binding IsEnglishOutputVariantVisible}" />
-                    <Border Grid.Row="4" Classes="row"
+                    <Border Grid.Row="6" Classes="row"
                             IsVisible="{Binding IsEnglishOutputVariantVisible}">
                         <Grid ColumnDefinitions="*,240">
-                            <StackPanel Spacing="4">
+                            <StackPanel Grid.Column="0" Spacing="4">
                                 <TextBlock Text="{loc:Str Dictation.EnglishOutputVariant}"
                                            Classes="row-label" />
                                 <TextBlock Text="{loc:Str Dictation.EnglishOutputVariantHint}"
@@ -343,12 +427,12 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="5" Background="#18FFFFFF"
+                    <Border Grid.Row="7" Background="#18FFFFFF"
                             IsVisible="{Binding IsGermanOutputVariantVisible}" />
-                    <Border Grid.Row="6" Classes="row"
+                    <Border Grid.Row="8" Classes="row"
                             IsVisible="{Binding IsGermanOutputVariantVisible}">
                         <Grid ColumnDefinitions="*,240">
-                            <StackPanel Spacing="4">
+                            <StackPanel Grid.Column="0" Spacing="4">
                                 <TextBlock Text="{loc:Str Dictation.GermanOutputVariant}"
                                            Classes="row-label" />
                                 <TextBlock Text="{loc:Str Dictation.GermanOutputVariantHint}"

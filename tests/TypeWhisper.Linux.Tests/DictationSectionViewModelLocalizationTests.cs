@@ -30,7 +30,7 @@ public sealed class DictationSectionViewModelLocalizationTests
                     {
                         ["firefox"] = TextInsertionStrategy.DirectTyping,
                     },
-                }
+                }.WithLanguageHints(["fr", "de"])
             );
             using var pluginManager = TestPluginManagerFactory.Create();
             var commands = new SystemCommandAvailabilityService();
@@ -73,6 +73,7 @@ public sealed class DictationSectionViewModelLocalizationTests
                 sut.LanguageChoices,
                 option => option.Code == "auto"
             );
+            var chipBefore = Assert.Single(sut.AdditionalLanguages);
             var cleanupBefore = sut.SelectedCleanupLevelOption!;
             var englishBefore = sut.SelectedEnglishOutputVariantOption!;
             var germanBefore = sut.SelectedGermanOutputVariantOption!;
@@ -81,6 +82,8 @@ public sealed class DictationSectionViewModelLocalizationTests
             var appInsertionBefore = appStrategyRow.SelectedStrategyOption!;
             HashSet<string?> expectedPropertyChanges =
             [
+                nameof(DictationSectionViewModel.IsAdditionalLanguagesVisible),
+                nameof(DictationSectionViewModel.HasAdditionalLanguages),
                 nameof(DictationSectionViewModel.IsEnglishOutputVariantVisible),
                 nameof(DictationSectionViewModel.IsGermanOutputVariantVisible),
                 nameof(DictationSectionViewModel.AudioDuckingUnavailableReason),
@@ -110,6 +113,11 @@ public sealed class DictationSectionViewModelLocalizationTests
             };
             sut.PropertyChanged += (_, args) => propertyChanges.Add(args.PropertyName);
 
+            sut.SelectedAdditionalLanguage = Assert.Single(
+                sut.AvailableAdditionalLanguages,
+                option => option.Code == "en"
+            );
+
             Loc.Instance.CurrentLanguage = "de";
 
             Assert.Superset(expectedPropertyChanges, propertyChanges);
@@ -124,6 +132,12 @@ public sealed class DictationSectionViewModelLocalizationTests
             );
             Assert.NotEqual(languageBefore.DisplayName, autoLanguageAfter.DisplayName);
             Assert.Equal("fr", sut.SelectedLanguageOption?.Code);
+            Assert.Equal("en", sut.SelectedAdditionalLanguage?.Code);
+            var chipAfter = Assert.Single(sut.AdditionalLanguages);
+            Assert.Equal("de", chipAfter.Code);
+            Assert.NotSame(chipBefore, chipAfter);
+            Assert.Equal(sut.LanguageChoices.Single(option => option.Code == "de").DisplayName, chipAfter.DisplayName);
+            Assert.True(sut.IsAdditionalLanguagesVisible);
             Assert.NotEqual(cleanupBefore.DisplayName, sut.SelectedCleanupLevelOption?.DisplayName);
             Assert.NotSame(cleanupBefore, sut.SelectedCleanupLevelOption);
             Assert.Equal(CleanupLevel.High, sut.SelectedCleanupLevelOption?.Value);

@@ -17,6 +17,115 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class DictationSectionViewModelTests
 {
     [Fact]
+    public void AdditionalLanguages_LoadFromSettingsHintsTail()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default.WithLanguageHints(["de", "en", "fr"]),
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+
+        Assert.Equal("de", context.Sut.Language);
+        Assert.Equal(["en", "fr"], context.Sut.AdditionalLanguages.Select(option => option.Code));
+        Assert.True(context.Sut.IsAdditionalLanguagesVisible);
+        Assert.Equal(["de", "en", "fr"], context.Settings.Object.Current.LanguageHints);
+    }
+
+    [Fact]
+    public void AdditionalLanguages_AddReorderRemove_PersistOrderedHints()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default.WithLanguageHints(["de"]),
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+
+        context.Sut.SelectedAdditionalLanguage = context.Sut.AvailableAdditionalLanguages.Single(option => option.Code == "en");
+        context.Sut.AddAdditionalLanguageCommand.Execute(null);
+        Assert.Null(context.Sut.SelectedAdditionalLanguage);
+        context.Sut.SelectedAdditionalLanguage = context.Sut.AvailableAdditionalLanguages.Single(option => option.Code == "fr");
+        context.Sut.AddAdditionalLanguageCommand.Execute(null);
+        var french = context.Sut.AdditionalLanguages.Single(option => option.Code == "fr");
+        context.Sut.MoveAdditionalLanguageEarlierCommand.Execute(french);
+        Assert.Equal(["de", "fr", "en"], context.Settings.Object.Current.LanguageHints);
+        Assert.Equal("de", context.Settings.Object.Current.Language);
+        context.Sut.MoveAdditionalLanguageEarlierCommand.Execute(french);
+        Assert.Equal(["de", "fr", "en"], context.Settings.Object.Current.LanguageHints);
+        context.Sut.MoveAdditionalLanguageLaterCommand.Execute(french);
+        context.Sut.MoveAdditionalLanguageLaterCommand.Execute(french);
+        Assert.Equal(["de", "en", "fr"], context.Settings.Object.Current.LanguageHints);
+        context.Sut.RemoveAdditionalLanguageCommand.Execute(french);
+        Assert.Equal(["de", "en"], context.Settings.Object.Current.LanguageHints);
+    }
+
+    [Fact]
+    public void AdditionalLanguages_AddDuplicate_IsIgnored()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default.WithLanguageHints(["de", "en"]),
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+
+        context.Sut.SelectedAdditionalLanguage = new SpokenLanguageOption("EN", "English");
+        context.Sut.AddAdditionalLanguageCommand.Execute(null);
+        Assert.Equal("en", Assert.Single(context.Sut.AdditionalLanguages).Code);
+        Assert.Equal(["de", "en"], context.Settings.Object.Current.LanguageHints);
+        Assert.Null(context.Sut.SelectedAdditionalLanguage);
+    }
+
+    [Fact]
+    public void AvailableAdditionalLanguages_ExcludesAutoPrimaryAndChips()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default.WithLanguageHints(["de", "en"]),
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+
+        Assert.Equal(
+            context.Sut.LanguageChoices.Where(option => option.Code is not ("auto" or "de" or "en")),
+            context.Sut.AvailableAdditionalLanguages);
+        context.Sut.SelectedAdditionalLanguage = context.Sut.AvailableAdditionalLanguages.Single(option => option.Code == "fr");
+        context.Sut.AddAdditionalLanguageCommand.Execute(null);
+        Assert.DoesNotContain(context.Sut.AvailableAdditionalLanguages, option => option.Code == "fr");
+        context.Sut.RemoveAdditionalLanguageCommand.Execute(context.Sut.AdditionalLanguages.Single(option => option.Code == "fr"));
+        Assert.Contains(context.Sut.AvailableAdditionalLanguages, option => option.Code == "fr");
+    }
+
+    [Fact]
+    public void Language_SetToAuto_ClearsAdditionalLanguages()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default.WithLanguageHints(["de", "en"]),
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+
+        context.Sut.Language = "auto";
+        Assert.Empty(context.Sut.AdditionalLanguages);
+        Assert.Empty(context.Settings.Object.Current.LanguageHints);
+        Assert.Equal("auto", context.Settings.Object.Current.Language);
+        Assert.False(context.Sut.IsAdditionalLanguagesVisible);
+        Assert.False(context.Sut.HasAdditionalLanguages);
+    }
+
+    [Fact]
+    public void Language_SetToChipCode_DropsThatChip()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default.WithLanguageHints(["de", "en"]),
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+
+        context.Sut.Language = "en";
+        Assert.Empty(context.Sut.AdditionalLanguages);
+        Assert.Equal(["en"], context.Settings.Object.Current.LanguageHints);
+        Assert.Equal("en", context.Settings.Object.Current.Language);
+    }
+
+    [Fact]
+    public void AdditionalLanguages_UnknownCode_IsKeptWithCodeAsName()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default.WithLanguageHints(["de", "xx"]),
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+
+        var chip = Assert.Single(context.Sut.AdditionalLanguages);
+        Assert.Equal("xx", chip.Code);
+        Assert.Equal("xx", chip.DisplayName);
+    }
+
+    [Fact]
     public void EnglishOutputVariant_LoadsFromSettings()
     {
         using var context = new ViewModelTestContext(
