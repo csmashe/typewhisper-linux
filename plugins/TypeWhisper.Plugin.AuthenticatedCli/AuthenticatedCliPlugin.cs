@@ -78,6 +78,8 @@ public sealed class AuthenticatedCliPlugin :
             .ToList();
     }
 
+    internal string? RuntimeDirectory { get; set; } = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
+
     public string PluginId => "com.typewhisper.authenticated-cli";
 
     public string PluginName => Loc.L("Manifest.Name");
@@ -328,7 +330,8 @@ public sealed class AuthenticatedCliPlugin :
             );
         }
 
-        var tempDirectory = CreateTempDirectory();
+        var scratchDirectory = CreateTempDirectory();
+        var tempDirectory = scratchDirectory.Path;
         try
         {
             var schemaPath = Path.Join(tempDirectory, "result.schema.json");
@@ -430,7 +433,7 @@ public sealed class AuthenticatedCliPlugin :
         }
         finally
         {
-            if (!await DeleteTempDirectoryAsync(tempDirectory).ConfigureAwait(false))
+            if (!await DeleteTempDirectoryAsync(scratchDirectory).ConfigureAwait(false))
             {
                 LogCleanupFailure(descriptor, "request");
             }
@@ -605,7 +608,8 @@ public sealed class AuthenticatedCliPlugin :
             );
         }
 
-        var tempDirectory = CreateTempDirectory();
+        var scratchDirectory = CreateTempDirectory();
+        var tempDirectory = scratchDirectory.Path;
         try
         {
             var versionProbe = await RunProbeAsync(
@@ -758,7 +762,7 @@ public sealed class AuthenticatedCliPlugin :
         }
         finally
         {
-            if (!await DeleteTempDirectoryAsync(tempDirectory).ConfigureAwait(false))
+            if (!await DeleteTempDirectoryAsync(scratchDirectory).ConfigureAwait(false))
             {
                 LogCleanupFailure(descriptor, "probe");
             }
@@ -1213,20 +1217,91 @@ public sealed class AuthenticatedCliPlugin :
     private static string? NullIfBlank(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
 
-    private static string TempRoot() =>
-        Path.GetFullPath(Path.Join(Path.GetTempPath(), "TypeWhisper", "AuthenticatedCli"));
-
-    // 0700 all the way down: the per-request directory holds the prompt envelope's schema and the
-    // CLI's scratch state, and a per-request 0700 protects nothing if a shared parent on a
-    // world-writable /tmp is a symlink another local account planted.
-    private static string CreateTempDirectory()
+    // Prefer the per-user runtime directory, then the plugin's own data directory. The shared
+    // Unix temp directory is never used: the first user's 0700 root locks every other user out.
+    // Keep created segments private and refuse symlinks so another local account cannot redirect
+    // the prompt schema or CLI scratch state through a planted parent directory.
+    internal static ScratchDirectory CreateScratchDirectory(string? runtimeDirectory, Func<string?> pluginDataDirectory)
     {
-        var root = TempRoot();
-        CreatePrivateDirectory(Path.GetDirectoryName(root)!);
+        if (OperatingSystem.IsWindows())
+        {
+            var windowsRoot = Path.GetFullPath(Path.Join(Path.GetTempPath(), "TypeWhisper", "AuthenticatedCli"));
+            CreatePrivateDirectory(Path.GetDirectoryName(windowsRoot)!);
+            CreatePrivateDirectory(windowsRoot);
+            return CreateRequestDirectory(windowsRoot);
+        }
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(runtimeDirectory)
+                && Path.IsPathRooted(runtimeDirectory)
+                && IsPrivateDirectory(runtimeDirectory))
+            {
+                var parent = Path.Join(runtimeDirectory, "typewhisper");
+                CreatePrivateDirectory(parent);
+                var runtimeRoot = Path.Join(parent, "authenticated-cli");
+                CreatePrivateDirectory(runtimeRoot);
+                return CreateRequestDirectory(runtimeRoot);
+            }
+        }
+        catch (Exception ex) when (ex is PluginRequestException
+                                   or IOException
+                                   or UnauthorizedAccessException
+                                   or NotSupportedException)
+        {
+            // Even a private runtime directory can be unusable by this account.
+        }
+
+        string? dataDirectory;
+        try
+        {
+            dataDirectory = pluginDataDirectory();
+        }
+        catch (Exception ex) when (ex is PluginRequestException
+                                   or IOException
+                                   or UnauthorizedAccessException
+                                   or NotSupportedException)
+        {
+            throw CreateTempRootFailure("<plugin data directory>", ex);
+        }
+
+        if (string.IsNullOrWhiteSpace(dataDirectory) || !Path.IsPathRooted(dataDirectory))
+        {
+            throw CreateTempRootFailure(dataDirectory ?? "<plugin data directory>", null);
+        }
+
+        try
+        {
+            Directory.CreateDirectory(dataDirectory);
+            // The host may create this parent as 0755; only shared write access is unsafe.
+            if (new DirectoryInfo(dataDirectory).LinkTarget is not null
+                || (File.GetUnixFileMode(dataDirectory) & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
+            {
+                throw CreateTempRootFailure(dataDirectory, null);
+            }
+        }
+        catch (Exception ex) when (ex is IOException
+                                   or UnauthorizedAccessException
+                                   or NotSupportedException)
+        {
+            throw CreateTempRootFailure(dataDirectory, ex);
+        }
+
+        var root = Path.Join(dataDirectory, "scratch");
         CreatePrivateDirectory(root);
+        return CreateRequestDirectory(root);
+    }
+
+    internal readonly record struct ScratchDirectory(string Root, string Path);
+
+    private ScratchDirectory CreateTempDirectory() =>
+        CreateScratchDirectory(RuntimeDirectory, () => _host?.PluginDataDirectory);
+
+    private static ScratchDirectory CreateRequestDirectory(string root)
+    {
         var directory = Path.Join(root, Guid.NewGuid().ToString("N"));
         CreatePrivateDirectory(directory);
-        return directory;
+        return new ScratchDirectory(root, directory);
     }
 
     internal static void CreatePrivateDirectory(string path)
@@ -1254,7 +1329,28 @@ public sealed class AuthenticatedCliPlugin :
                                    or UnauthorizedAccessException
                                    or NotSupportedException)
         {
-            throw CreateTempRootFailure(ex);
+            throw CreateTempRootFailure(path, ex);
+        }
+    }
+
+    private static bool IsPrivateDirectory(string path)
+    {
+        try
+        {
+            if (!Directory.Exists(path))
+            {
+                return false;
+            }
+
+            VerifyPrivateDirectory(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is PluginRequestException
+                                   or IOException
+                                   or UnauthorizedAccessException
+                                   or NotSupportedException)
+        {
+            return false;
         }
     }
 
@@ -1264,7 +1360,7 @@ public sealed class AuthenticatedCliPlugin :
     {
         if (new DirectoryInfo(path).LinkTarget is not null)
         {
-            throw CreateTempRootFailure(null);
+            throw CreateTempRootFailure(path, null);
         }
 
         if (OperatingSystem.IsWindows())
@@ -1277,22 +1373,22 @@ public sealed class AuthenticatedCliPlugin :
                                     | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
         if ((File.GetUnixFileMode(path) & shared) != 0)
         {
-            throw CreateTempRootFailure(null);
+            throw CreateTempRootFailure(path, null);
         }
     }
 
-    private static PluginRequestException CreateTempRootFailure(Exception? innerException) =>
+    private static PluginRequestException CreateTempRootFailure(string path, Exception? innerException) =>
         new(
-            "The provider CLI scratch directory is not a private directory this user owns.",
+            $"The provider CLI scratch directory '{path}' is not a private directory this user owns.",
             PluginRequestFailureKind.Configuration,
             isTransient: false,
             innerException: innerException
         );
 
-    private static async Task<bool> DeleteTempDirectoryAsync(string directory)
+    private static async Task<bool> DeleteTempDirectoryAsync(ScratchDirectory directory)
     {
-        var root = TempRoot();
-        var fullPath = Path.GetFullPath(directory);
+        var root = Path.GetFullPath(directory.Root);
+        var fullPath = Path.GetFullPath(directory.Path);
         if (!fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
         {
             return false;

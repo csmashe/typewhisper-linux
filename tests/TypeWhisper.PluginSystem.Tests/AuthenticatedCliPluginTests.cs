@@ -15,10 +15,14 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 // The provider CLIs are discovered by file name on PATH, so every end-to-end case runs against a
 // shell shim named codex/claude/opencode that execs the FakeProviderCli assembly.
-public sealed class AuthenticatedCliPluginTests
+public sealed class AuthenticatedCliPluginTests : IDisposable
 {
     private static readonly JsonSerializerOptions s_manifestJsonOptions =
         new() { PropertyNameCaseInsensitive = true };
+
+    private readonly ScratchTestDirectories _hostDirectories = new();
+
+    public void Dispose() => _hostDirectories.Dispose();
 
     [Fact]
     public async Task Dispose_ReturnsWhilePollNotificationWaitsForDisposingThread()
@@ -229,7 +233,7 @@ public sealed class AuthenticatedCliPluginTests
         var probeRunner = CreateRunner();
         var runner = new RequestFailureRunner(probeRunner, failure);
         // ReSharper disable once AccessToDisposedClosure -- the discovery delegate only runs while the plugin is active, before the installation is disposed.
-        using var plugin = new AuthenticatedCliPlugin(new CliExecutableDiscovery(() => fake.DirectoryPath), runner);
+        using var plugin = new AuthenticatedCliPlugin(new CliExecutableDiscovery(() => fake.DirectoryPath), runner) { RuntimeDirectory = null };
         var host = CreateHost();
         host.SetupGet(service => service.Localization).Returns(new PluginLocalization(PluginDirectory(), locale));
         await plugin.ActivateAsync(host.Object);
@@ -254,7 +258,7 @@ public sealed class AuthenticatedCliPluginTests
         using var fake = FakeCliInstallation.Create("success", "codex");
         fake.Install("opencode");
         // ReSharper disable once AccessToDisposedClosure -- the discovery delegate only runs while the plugin is active, before the installation is disposed.
-        using var plugin = new AuthenticatedCliPlugin(new CliExecutableDiscovery(() => fake.DirectoryPath), null);
+        using var plugin = new AuthenticatedCliPlugin(new CliExecutableDiscovery(() => fake.DirectoryPath), null) { RuntimeDirectory = null };
         var firstScope = new PluginProcessSupervisorScope(plugin.PluginId, new ProcessRunner());
         var firstHost = CreateHost();
         firstHost.SetupGet(host => host.Processes).Returns(firstScope);
@@ -631,6 +635,355 @@ public sealed class AuthenticatedCliPluginTests
             stopwatch.Elapsed < TimeSpan.FromSeconds(1),
             $"Stripping escape sequences took {stopwatch.Elapsed}."
         );
+    }
+
+    [Fact]
+    public void CreateScratchDirectory_PrefersPrivateRuntimeDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        var runtime = directories.CreatePrivate("runtime");
+        var scratch = AuthenticatedCliPlugin.CreateScratchDirectory(runtime, directories.DataProvider);
+        var root = scratch.Root;
+
+        AssertPrivateScratchDirectory(scratch);
+        Assert.Equal(Path.Join(runtime, "typewhisper", "authenticated-cli"), root);
+        Assert.Equal(ScratchTestDirectories.PrivateMode, GetUnixMode(Path.Join(runtime, "typewhisper")));
+        Assert.Equal(ScratchTestDirectories.PrivateMode, GetUnixMode(root));
+
+        var next = AuthenticatedCliPlugin.CreateScratchDirectory(runtime, directories.DataProvider);
+        Assert.Equal(root, next.Root);
+        Assert.NotEqual(scratch.Path, next.Path);
+        AssertPrivateScratchDirectory(next);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("nonexistent")]
+    public void CreateScratchDirectory_FallsBackToPluginDataDirectoryWithoutRuntimeDirectory(string? runtime)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        if (runtime == "nonexistent")
+        {
+            runtime = Path.Join(directories.Root, runtime);
+        }
+        Assert.False(Directory.Exists(directories.DataPath));
+
+        var scratch = AuthenticatedCliPlugin.CreateScratchDirectory(runtime, directories.DataProvider);
+        var root = scratch.Root;
+
+        AssertPrivateScratchDirectory(scratch);
+        Assert.Equal(Path.Join(directories.DataPath, "scratch"), root);
+        Assert.True(Directory.Exists(directories.DataPath));
+        Assert.Equal(ScratchTestDirectories.PrivateMode, GetUnixMode(root));
+    }
+
+    [Fact]
+    public void CreateScratchDirectory_FallsBackWhenRuntimeDirectoryIsShared()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        var runtime = directories.CreatePrivate("runtime");
+        SetUnixMode(runtime, ScratchTestDirectories.PrivateMode
+            | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+            | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+
+        var scratch = AuthenticatedCliPlugin.CreateScratchDirectory(runtime, directories.DataProvider);
+
+        Assert.Equal(Path.Join(directories.DataPath, "scratch"), scratch.Root);
+        AssertPrivateScratchDirectory(scratch);
+    }
+
+    [Fact]
+    public void CreateScratchDirectory_FallsBackWhenRuntimeSegmentIsSymlinked()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        var runtime = directories.CreatePrivate("runtime");
+        var target = directories.CreatePrivate("target");
+        var link = Path.Join(runtime, "typewhisper");
+        Directory.CreateSymbolicLink(link, target);
+
+        var scratch = AuthenticatedCliPlugin.CreateScratchDirectory(runtime, directories.DataProvider);
+
+        Assert.Equal(Path.Join(directories.DataPath, "scratch"), scratch.Root);
+        AssertPrivateScratchDirectory(scratch);
+    }
+
+    [Fact]
+    public void CreateScratchDirectory_FallsBackWhenRuntimeChildCannotBeCreated()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        var runtime = directories.CreatePrivate("runtime");
+        var child = directories.CreatePrivate(Path.Join("runtime", "typewhisper"));
+        SetUnixMode(child, ScratchTestDirectories.PrivateMode
+            | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+            | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+
+        var scratch = AuthenticatedCliPlugin.CreateScratchDirectory(runtime, directories.DataProvider);
+
+        Assert.Equal(Path.Join(directories.DataPath, "scratch"), scratch.Root);
+        AssertPrivateScratchDirectory(scratch);
+    }
+
+    [Fact]
+    public void CreateScratchDirectory_RefusesSymlinkedScratchDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        directories.CreatePrivate("data");
+        var target = directories.CreatePrivate("target");
+        var link = Path.Join(directories.DataPath, "scratch");
+        Directory.CreateSymbolicLink(link, target);
+
+        var error = Assert.Throws<PluginRequestException>(() =>
+            AuthenticatedCliPlugin.CreateScratchDirectory(null, directories.DataProvider));
+
+        Assert.Equal(PluginRequestFailureKind.Configuration, error.FailureKind);
+        Assert.Contains(link, error.Message);
+    }
+
+    [Fact]
+    public void CreateScratchDirectory_RefusesWritableDataDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        var data = directories.CreatePrivate("data");
+        SetUnixMode(data, ScratchTestDirectories.PrivateMode
+            | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
+            | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+
+        var error = Assert.Throws<PluginRequestException>(() =>
+            AuthenticatedCliPlugin.CreateScratchDirectory(null, () => data));
+
+        Assert.Equal(PluginRequestFailureKind.Configuration, error.FailureKind);
+        Assert.Contains(data, error.Message);
+    }
+
+    [Fact]
+    public void CreateScratchDirectory_RefusesSymlinkedDataDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        var target = directories.CreatePrivate("target");
+        Directory.CreateSymbolicLink(directories.DataPath, target);
+
+        var error = Assert.Throws<PluginRequestException>(() =>
+            AuthenticatedCliPlugin.CreateScratchDirectory(null, directories.DataProvider));
+
+        Assert.Equal(PluginRequestFailureKind.Configuration, error.FailureKind);
+        Assert.Contains(directories.DataPath, error.Message);
+    }
+
+    [Fact]
+    public void CreateScratchDirectory_AllowsReadableDataDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        var data = directories.CreatePrivate("data");
+        const UnixFileMode mode = ScratchTestDirectories.PrivateMode
+            | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+            | UnixFileMode.OtherRead | UnixFileMode.OtherExecute;
+        SetUnixMode(data, mode);
+
+        var scratch = AuthenticatedCliPlugin.CreateScratchDirectory(null, () => data);
+        var root = scratch.Root;
+
+        AssertPrivateScratchDirectory(scratch);
+        Assert.Equal(Path.Join(data, "scratch"), root);
+        Assert.Equal(mode, GetUnixMode(data));
+        Assert.Equal(ScratchTestDirectories.PrivateMode, GetUnixMode(root));
+    }
+
+    [Fact]
+    public void CreateScratchDirectory_ReadsDataDirectoryLazily()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        var runtime = directories.CreatePrivate("runtime");
+
+        var scratch = AuthenticatedCliPlugin.CreateScratchDirectory(runtime, () => throw new IOException("Unavailable"));
+
+        Assert.Equal(Path.Join(runtime, "typewhisper", "authenticated-cli"), scratch.Root);
+        AssertPrivateScratchDirectory(scratch);
+    }
+
+    [Theory]
+    [InlineData("plugin")]
+    [InlineData("io")]
+    [InlineData("access")]
+    [InlineData("unsupported")]
+    public void CreateScratchDirectory_ReportsDataDirectoryGetterFailure(string failure)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Exception cause = failure switch
+        {
+            "plugin" => new PluginRequestException("Unavailable", PluginRequestFailureKind.Configuration),
+            "io" => new IOException("Unavailable"),
+            "access" => new UnauthorizedAccessException("Unavailable"),
+            _ => new NotSupportedException("Unavailable"),
+        };
+
+        var error = Assert.Throws<PluginRequestException>(() =>
+            AuthenticatedCliPlugin.CreateScratchDirectory(null, () => throw cause));
+
+        Assert.Equal(PluginRequestFailureKind.Configuration, error.FailureKind);
+        Assert.False(error.IsTransient);
+        Assert.Contains("<plugin data directory>", error.Message);
+        Assert.Same(cause, error.InnerException);
+    }
+
+    [Fact]
+    public void CreateScratchDirectory_WithoutAnyLocation_Fails()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var error = Assert.Throws<PluginRequestException>(() =>
+            AuthenticatedCliPlugin.CreateScratchDirectory(null, () => null));
+
+        Assert.Equal(PluginRequestFailureKind.Configuration, error.FailureKind);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CreateScratchDirectory_NeverUsesTheSharedTempDirectory(bool useRuntime)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        var runtime = useRuntime ? directories.CreatePrivate("runtime") : null;
+        var scratch = AuthenticatedCliPlugin.CreateScratchDirectory(runtime, directories.DataProvider);
+        var root = scratch.Root;
+
+        AssertPrivateScratchDirectory(scratch);
+        Assert.False(root.StartsWith(
+            Path.Join(Path.GetTempPath(), "TypeWhisper"),
+            StringComparison.Ordinal
+        ));
+    }
+
+    [Fact]
+    public void CreateScratchDirectory_FallsBackWhenRuntimeRootIsUnwritable()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        var runtime = directories.CreatePrivate("runtime");
+        directories.CreatePrivate(Path.Join("runtime", "typewhisper"));
+        var runtimeRoot = directories.CreatePrivate(Path.Join("runtime", "typewhisper", "authenticated-cli"));
+        SetUnixMode(runtimeRoot, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            var scratch = AuthenticatedCliPlugin.CreateScratchDirectory(runtime, directories.DataProvider);
+
+            Assert.Equal(Path.Join(directories.DataPath, "scratch"), scratch.Root);
+            AssertPrivateScratchDirectory(scratch);
+            Assert.Empty(ExistingTempDirectories(runtimeRoot));
+        }
+        finally
+        {
+            SetUnixMode(runtimeRoot, ScratchTestDirectories.PrivateMode);
+        }
+    }
+
+    private static void AssertPrivateScratchDirectory(AuthenticatedCliPlugin.ScratchDirectory directory)
+    {
+        Assert.Equal(directory.Root, Path.GetDirectoryName(directory.Path));
+        Assert.True(Guid.TryParseExact(Path.GetFileName(directory.Path), "N", out _));
+        Assert.True(Directory.Exists(directory.Path));
+        Assert.Equal(ScratchTestDirectories.PrivateMode, GetUnixMode(directory.Path));
+    }
+
+    private sealed class ScratchTestDirectories : IDisposable
+    {
+        internal const UnixFileMode PrivateMode =
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
+        internal ScratchTestDirectories()
+        {
+            // Captures the path string, not the disposable helper, so the delegate stays valid
+            // for the resolver's synchronous call without a disposed-closure warning.
+            var dataPath = DataPath;
+            DataProvider = () => dataPath;
+        }
+
+        internal string Root { get; } = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        internal string DataPath => Path.Join(Root, "data");
+        internal Func<string?> DataProvider { get; }
+
+        internal string CreatePrivate(string name)
+        {
+            var path = Path.Join(Root, name);
+            Directory.CreateDirectory(path);
+            SetUnixMode(path, PrivateMode);
+            return path;
+        }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Root))
+            {
+                Directory.Delete(Root, recursive: true);
+            }
+        }
     }
 
     [Fact]
@@ -1096,8 +1449,14 @@ public sealed class AuthenticatedCliPluginTests
     {
         using var fake = FakeCliInstallation.Create("success", "codex");
         using var plugin = CreatePlugin(fake.DirectoryPath);
-        await plugin.ActivateAsync(CreateHost().Object);
-        var before = ExistingTempDirectories();
+        var host = CreateHost();
+        await plugin.ActivateAsync(host.Object);
+        var (root, path) = AuthenticatedCliPlugin.CreateScratchDirectory(
+            plugin.RuntimeDirectory,
+            () => host.Object.PluginDataDirectory
+        );
+        Directory.Delete(path);
+        var before = ExistingTempDirectories(root);
 
         await GetRole(plugin, "authenticated-cli-codex").ProcessAsync(
             "Instruction",
@@ -1110,13 +1469,88 @@ public sealed class AuthenticatedCliPluginTests
         await plugin.DeactivateAsync();
 
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (ExistingTempDirectories().Except(before, StringComparer.Ordinal).Any()
+        while (ExistingTempDirectories(root).Except(before, StringComparer.Ordinal).Any()
                && DateTime.UtcNow < deadline)
         {
             await Task.Delay(50);
         }
 
-        Assert.Empty(ExistingTempDirectories().Except(before, StringComparer.Ordinal));
+        Assert.Empty(ExistingTempDirectories(root).Except(before, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Request_UsesIsolatedRuntimeDirectoryAndRemovesItsTemporaryDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        var runtime = directories.CreatePrivate("runtime");
+        using var fake = FakeCliInstallation.Create("success", "codex");
+        using var plugin = CreatePlugin(fake.DirectoryPath);
+        plugin.RuntimeDirectory = runtime;
+        await plugin.ActivateAsync(CreateHost().Object);
+
+        await GetRole(plugin, "authenticated-cli-codex").ProcessAsync(
+            "Instruction",
+            "Input",
+            "default",
+            CancellationToken.None
+        );
+        await plugin.DeactivateAsync();
+
+        using var capture = JsonDocument.Parse(await File.ReadAllTextAsync(fake.CapturePath));
+        var requestDirectory = capture.RootElement.GetProperty("workingDirectory").GetString()!;
+        var root = Path.Join(runtime, "typewhisper", "authenticated-cli");
+        Assert.Equal(root, Path.GetDirectoryName(requestDirectory));
+        Assert.Equal(requestDirectory, capture.RootElement.GetProperty("environment").GetProperty("TMPDIR").GetString());
+        Assert.Contains("result.schema.json", capture.RootElement.GetProperty("workingDirectoryEntries")
+            .EnumerateArray().Select(entry => entry.GetString()));
+        Assert.False(Directory.Exists(requestDirectory));
+        Assert.Empty(ExistingTempDirectories(root));
+    }
+
+    [Fact]
+    public async Task Request_FallsBackWhenRuntimeRootIsUnwritable()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        var runtime = directories.CreatePrivate("runtime");
+        directories.CreatePrivate(Path.Join("runtime", "typewhisper"));
+        var runtimeRoot = directories.CreatePrivate(Path.Join("runtime", "typewhisper", "authenticated-cli"));
+        SetUnixMode(runtimeRoot, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            using var fake = FakeCliInstallation.Create("success", "codex");
+            using var plugin = CreatePlugin(fake.DirectoryPath);
+            plugin.RuntimeDirectory = runtime;
+            var host = CreateHost();
+            await plugin.ActivateAsync(host.Object);
+
+            await GetRole(plugin, "authenticated-cli-codex").ProcessAsync(
+                "Instruction",
+                "Input",
+                "default",
+                CancellationToken.None
+            );
+            await plugin.DeactivateAsync();
+
+            using var capture = JsonDocument.Parse(await File.ReadAllTextAsync(fake.CapturePath));
+            var requestDirectory = capture.RootElement.GetProperty("workingDirectory").GetString()!;
+            Assert.Equal(Path.Join(host.Object.PluginDataDirectory, "scratch"), Path.GetDirectoryName(requestDirectory));
+            Assert.False(Directory.Exists(requestDirectory));
+            Assert.Empty(ExistingTempDirectories(runtimeRoot));
+        }
+        finally
+        {
+            SetUnixMode(runtimeRoot, ScratchTestDirectories.PrivateMode);
+        }
     }
 
     [Fact]
@@ -1460,7 +1894,7 @@ public sealed class AuthenticatedCliPluginTests
     [Fact]
     public void Providers_ExposeThreeStableRolesWithSelectionIds()
     {
-        using var plugin = new AuthenticatedCliPlugin();
+        using var plugin = new AuthenticatedCliPlugin { RuntimeDirectory = null };
 
         Assert.Equal(3, plugin.AdditionalLlmProviders.Count);
         Assert.Same(plugin.AdditionalLlmProviders, plugin.AdditionalLlmProviders);
@@ -1480,7 +1914,7 @@ public sealed class AuthenticatedCliPluginTests
             s_manifestJsonOptions
         );
 
-        using var plugin = new AuthenticatedCliPlugin();
+        using var plugin = new AuthenticatedCliPlugin { RuntimeDirectory = null };
 
         Assert.NotNull(manifest);
         Assert.Equal(manifest.Version, plugin.PluginVersion);
@@ -1640,7 +2074,7 @@ public sealed class AuthenticatedCliPluginTests
         + $"\"cost\":{cost},\"variants\":{variants}}}";
 
     private static AuthenticatedCliPlugin CreatePlugin(string processPath) =>
-        new(new CliExecutableDiscovery(() => processPath), CreateRunner());
+        new(new CliExecutableDiscovery(() => processPath), CreateRunner()) { RuntimeDirectory = null };
 
     private static CliProcessRunner CreateRunner() =>
         new(new PluginProcessSupervisorScope(
@@ -1648,9 +2082,11 @@ public sealed class AuthenticatedCliPluginTests
             new ProcessRunner()
         ), new PluginLocalization(PluginDirectory(), "en"));
 
-    private static Mock<IPluginHostServices> CreateHost()
+    private Mock<IPluginHostServices> CreateHost()
     {
         var host = new Mock<IPluginHostServices>();
+        var dataDirectory = _hostDirectories.CreatePrivate(Guid.NewGuid().ToString("N"));
+        host.SetupGet(service => service.PluginDataDirectory).Returns(dataDirectory);
         host.Setup(service => service.GetSetting<string>(It.IsAny<string>())).Returns((string?)null);
         host.SetupGet(service => service.Localization)
             .Returns(new PluginLocalization(PluginDirectory(), "en"));
@@ -1698,11 +2134,8 @@ public sealed class AuthenticatedCliPluginTests
         );
     }
 
-    private static string[] ExistingTempDirectories()
-    {
-        var root = Path.Join(Path.GetTempPath(), "TypeWhisper", "AuthenticatedCli");
-        return Directory.Exists(root) ? Directory.GetDirectories(root) : [];
-    }
+    private static string[] ExistingTempDirectories(string root) =>
+        Directory.Exists(root) ? Directory.GetDirectories(root) : [];
 
     private static async Task<bool> WaitForProcessExitAsync(int processId, TimeSpan timeout)
     {
