@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Insertion;
 using TypeWhisper.PluginSDK.Processes;
 
@@ -34,6 +35,7 @@ public enum InsertionFailureReason
     FocusFailed,
     PasteRetriesExhausted,
     PartialTypingFailure,
+    LockedFieldUnavailable,
 }
 
 public sealed record TextInsertionRequest(
@@ -43,7 +45,8 @@ public sealed record TextInsertionRequest(
     string? TargetProcessName = null,
     string? TargetWindowTitle = null,
     bool AutoEnter = false,
-    TextInsertionStrategy Strategy = TextInsertionStrategy.Auto
+    TextInsertionStrategy Strategy = TextInsertionStrategy.Auto,
+    LockedFocusTarget? LockedFocusTarget = null
 );
 
 /// <summary>
@@ -101,6 +104,7 @@ public sealed class TextInsertionService
     private static readonly bool s_pasteDiagEnabled =
         Environment.GetEnvironmentVariable("TW_PASTE_DIAG") == "1";
 
+    private readonly IAtSpiEventClient? _atSpiClient;
     private readonly IErrorLogService? _errorLog;
     private readonly Func<bool> _isRecording;
     private readonly IPasteConfirmationSource? _pasteConfirmation;
@@ -115,13 +119,15 @@ public sealed class TextInsertionService
         SystemCommandAvailabilityService commands,
         IPasteConfirmationSource? pasteConfirmation = null,
         IProcessRunner? processRunner = null,
-        Func<bool>? isAnotherSessionRecording = null
+        Func<bool>? isAnotherSessionRecording = null,
+        IAtSpiEventClient? atSpiClient = null
     )
         : this(
             new LinuxTextInsertionPlatform(commands, processRunner),
             errorLog,
             pasteConfirmation,
-            isAnotherSessionRecording
+            isAnotherSessionRecording,
+            atSpiClient
         )
     {
     }
@@ -130,10 +136,12 @@ public sealed class TextInsertionService
         ITextInsertionPlatform platform,
         IErrorLogService? errorLog = null,
         IPasteConfirmationSource? pasteConfirmation = null,
-        Func<bool>? isAnotherSessionRecording = null
+        Func<bool>? isAnotherSessionRecording = null,
+        IAtSpiEventClient? atSpiClient = null
     )
     {
         _platform = platform;
+        _atSpiClient = atSpiClient;
         _errorLog = errorLog;
         _pasteConfirmation = pasteConfirmation;
         _isRecording = isAnotherSessionRecording ?? (static () => false);
@@ -156,6 +164,27 @@ public sealed class TextInsertionService
     // recorded before the partial-delivery abort, so the reason value alone can't tell
     // whether a prefix already landed. Reset per request.
     public bool LastTypingDeliveredPartialText { get; private set; }
+
+    private async Task<bool> RestoreLockedFocusAsync(LockedFocusTarget lockedTarget)
+    {
+        if (_atSpiClient is null || lockedTarget.Element is not { } target)
+        {
+            return false;
+        }
+
+        if (await _atSpiClient.IsElementFocusedAsync(target) == true)
+        {
+            return true;
+        }
+
+        if (_isRecording() || !await _atSpiClient.TryGrabFocusAsync(target))
+        {
+            return false;
+        }
+
+        await _platform.DelayAsync(s_focusDelay);
+        return await _atSpiClient.IsElementFocusedAsync(target) == true;
+    }
 
     public async Task<InsertionResult> InsertTextAsync(
         string text,
@@ -195,7 +224,7 @@ public sealed class TextInsertionService
 
         if (string.IsNullOrEmpty(text))
         {
-            return autoEnter ? await SendEnterOnlyAsync(targetWindowId) : InsertionResult.NoText;
+            return autoEnter ? await SendEnterOnlyAsync(targetWindowId, request.LockedFocusTarget) : InsertionResult.NoText;
         }
 
         if (strategy is TextInsertionStrategy.CopyOnly)
@@ -240,7 +269,7 @@ public sealed class TextInsertionService
 
         if (shouldTypeDirectly)
         {
-            var directResult = await TypeTextAsync(text, targetWindowId, autoEnter);
+            var directResult = await TypeTextAsync(text, targetWindowId, autoEnter, request.LockedFocusTarget);
             if (
                 strategy is TextInsertionStrategy.DirectTyping
                 || directResult is not InsertionResult.Failed
@@ -293,6 +322,24 @@ public sealed class TextInsertionService
             LogInsertionFallback(
                 "Auto paste fell back to clipboard: the clipboard never served the dictated text, "
                 + $"so {pasteShortcut} was not sent (it would have pasted nothing or stale content)."
+            );
+            return requiresSafeTerminalPaste
+                ? await HandleTerminalMultilinePasteFailureAsync(
+                    text,
+                    previousClipboard,
+                    previousClipboardHasNonTextFormats
+                )
+                : InsertionResult.CopiedToClipboard;
+        }
+
+        if (
+            request.LockedFocusTarget is { } lockedTarget
+            && !await RestoreLockedFocusAsync(lockedTarget)
+        )
+        {
+            LastFailureReason = InsertionFailureReason.LockedFieldUnavailable;
+            LogInsertionFallback(
+                "Auto paste fell back to clipboard: the field focused at recording start could not be restored."
             );
             return requiresSafeTerminalPaste
                 ? await HandleTerminalMultilinePasteFailureAsync(
@@ -811,7 +858,8 @@ public sealed class TextInsertionService
     private async Task<InsertionResult> TypeTextAsync(
         string text,
         string? targetWindowId,
-        bool autoEnter
+        bool autoEnter,
+        LockedFocusTarget? lockedTarget
     )
     {
         if (!await FocusTargetWindowAsync(targetWindowId))
@@ -819,6 +867,22 @@ public sealed class TextInsertionService
             LastFailureReason = InsertionFailureReason.FocusFailed;
             LogInsertionFallback("Direct typing fell back: target window could not be focused.");
             return InsertionResult.Failed;
+        }
+
+        if (lockedTarget is not null && !await RestoreLockedFocusAsync(lockedTarget))
+        {
+            LastFailureReason = InsertionFailureReason.LockedFieldUnavailable;
+            LogInsertionFallback(
+                "Auto paste fell back to clipboard: the field focused at recording start could not be restored."
+            );
+            if (!_platform.IsClipboardSetAvailable)
+            {
+                return InsertionResult.MissingClipboardTool;
+            }
+
+            return await _platform.SetClipboardTextAsync(text)
+                ? InsertionResult.CopiedToClipboard
+                : InsertionResult.Failed;
         }
 
         if (!await _platform.TypeTextAsync(text))
@@ -841,22 +905,32 @@ public sealed class TextInsertionService
         return InsertionResult.Typed;
     }
 
-    private async Task<InsertionResult> SendEnterOnlyAsync(string? targetWindowId)
+    private async Task<InsertionResult> SendEnterOnlyAsync(
+        string? targetWindowId,
+        LockedFocusTarget? lockedTarget
+    )
     {
         if (!_platform.IsPasteAvailable)
         {
             return InsertionResult.MissingPasteTool;
         }
 
-        if (await FocusTargetWindowAsync(targetWindowId))
+        if (!await FocusTargetWindowAsync(targetWindowId))
+        {
+            LogInsertionFallback("Enter command failed: target window could not be focused.");
+            return InsertionResult.ActionFailed;
+        }
+
+        if (lockedTarget is null || await RestoreLockedFocusAsync(lockedTarget))
         {
             return await _platform.SendEnterAsync()
                 ? InsertionResult.ActionHandled
                 : InsertionResult.ActionFailed;
         }
 
-        LogInsertionFallback("Enter command failed: target window could not be focused.");
-        return InsertionResult.ActionFailed;
+        LastFailureReason = InsertionFailureReason.LockedFieldUnavailable;
+        LogInsertionFallback("Enter command skipped: the field focused at recording start could not be restored.");
+        return InsertionResult.NoText;
     }
 
     private static bool ShouldTypeDirectly(string? processName, string? windowTitle)

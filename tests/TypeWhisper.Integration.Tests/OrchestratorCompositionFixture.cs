@@ -237,7 +237,8 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
                 new TextInsertionService(
                     insertionPlatform,
                     sp.GetRequiredService<IErrorLogService>(),
-                    sp.GetRequiredService<IPasteConfirmationSource>()
+                    sp.GetRequiredService<IPasteConfirmationSource>(),
+                    atSpiClient: sp.GetRequiredService<IAtSpiEventClient>()
                 )
             )
         );

@@ -183,7 +183,8 @@ internal static class ServiceRegistrations
                 sp.GetRequiredService<SystemCommandAvailabilityService>(),
                 sp.GetRequiredService<IPasteConfirmationSource>(),
                 sp.GetRequiredService<IProcessRunner>(),
-                isAnotherSessionRecording: () => audioRecording.IsRecording
+                isAnotherSessionRecording: () => audioRecording.IsRecording,
+                atSpiClient: sp.GetRequiredService<IAtSpiEventClient>()
             );
         });
         services.AddSingleton<YdotoolSetupHelper>();

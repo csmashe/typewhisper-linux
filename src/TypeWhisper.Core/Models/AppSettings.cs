@@ -45,6 +45,7 @@ public record AppSettings
         init => field = value ?? [];
     } = [];
     public bool AutoPaste { get; init; } = true;
+    public bool LockPasteToFocusedField { get; init; }
 
     public Dictionary<string, TextInsertionStrategy> AppInsertionStrategies
     {

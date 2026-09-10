@@ -10,6 +10,198 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class TextInsertionServiceTests
 {
+    [Theory]
+    [InlineData(TextInsertionStrategy.ClipboardPaste, false)]
+    [InlineData(TextInsertionStrategy.DirectTyping, false)]
+    [InlineData(TextInsertionStrategy.ClipboardPaste, true)]
+    [InlineData(TextInsertionStrategy.DirectTyping, true)]
+    public async Task LockedField_AnotherSessionRecording_NeverGrabsFocus(
+        TextInsertionStrategy strategy, bool initiallyFocused)
+    {
+        var client = new FakeAtSpiEventClient { FocusedResult = initiallyFocused };
+        client.OnGrabFocus = () => client.FocusedResult = true;
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(
+            platform, isAnotherSessionRecording: static () => true, atSpiClient: client);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", Strategy: strategy,
+            LockedFocusTarget: new LockedFocusTarget(new AtSpiElementRef("app", "/field"))
+        ));
+
+        Assert.Equal(0, client.GrabFocusCount);
+        if (initiallyFocused)
+        {
+            Assert.Equal(strategy == TextInsertionStrategy.DirectTyping
+                ? InsertionResult.Typed : InsertionResult.Pasted, result);
+            Assert.Equal(InsertionFailureReason.None, sut.LastFailureReason);
+        }
+        else
+        {
+            Assert.Equal(InsertionResult.CopiedToClipboard, result);
+            Assert.Equal(InsertionFailureReason.LockedFieldUnavailable, sut.LastFailureReason);
+            Assert.Equal("dictated", platform.Clipboard);
+            Assert.Null(platform.TypedText);
+            Assert.False(platform.PasteSent);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EnterOnly_UnrestorableLockedField_DoesNotSendEnter(bool hasElement)
+    {
+        var client = new FakeAtSpiEventClient { FocusedResult = false, GrabFocusResult = false };
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(platform, atSpiClient: client);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "", AutoEnter: true,
+            LockedFocusTarget: new LockedFocusTarget(hasElement ? new AtSpiElementRef("app", "/field") : null)
+        ));
+
+        Assert.Equal(InsertionResult.NoText, result);
+        Assert.Equal(InsertionFailureReason.LockedFieldUnavailable, sut.LastFailureReason);
+        Assert.False(platform.EnterSent);
+        Assert.False(platform.PasteSent);
+        Assert.Equal(hasElement ? 1 : 0, client.GrabFocusCount);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LockedField_RestoresFocusBeforePaste(bool initiallyFocused)
+    {
+        var order = new List<string>();
+        var client = new FakeAtSpiEventClient { FocusedResult = initiallyFocused };
+        client.OnGrabFocus = () =>
+        {
+            order.Add("grab");
+            client.FocusedResult = true;
+        };
+        var platform = new FakeTextInsertionPlatform
+        {
+            OnPasteSent = () => order.Add("paste"),
+            OnDelay = delay =>
+            {
+                if (delay == TimeSpan.FromMilliseconds(100))
+                {
+                    order.Add("settle");
+                }
+            },
+        };
+        var sut = new TextInsertionService(platform, atSpiClient: client);
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", LockedFocusTarget: new LockedFocusTarget(new AtSpiElementRef("app", "/field"))
+        ));
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(initiallyFocused ? 0 : 1, client.GrabFocusCount);
+        Assert.Equal(initiallyFocused ? 1 : 2, client.FocusReadCount);
+        Assert.Equal<string>(
+            initiallyFocused ? ["settle", "paste"] : ["settle", "grab", "settle", "paste"],
+            order
+        );
+    }
+
+    [Theory]
+    [InlineData(false, false, true)]
+    [InlineData(null, true, true)]
+    [InlineData(false, true, true)]
+    [InlineData(false, false, false)]
+    public async Task LockedField_Unavailable_LeavesClipboardWithoutPasting(
+        bool? focused, bool grabSucceeds, bool injectClient
+    )
+    {
+        var platform = new FakeTextInsertionPlatform();
+        var client = new FakeAtSpiEventClient
+        {
+            FocusedResult = focused,
+            GrabFocusResult = grabSucceeds,
+        };
+        var log = new RecordingErrorLogService();
+        var sut = new TextInsertionService(platform, log, atSpiClient: injectClient ? client : null);
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", LockedFocusTarget: new LockedFocusTarget(new AtSpiElementRef("app", "/field"))
+        ));
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal(InsertionFailureReason.LockedFieldUnavailable, sut.LastFailureReason);
+        Assert.Equal("dictated", platform.Clipboard);
+        Assert.False(platform.PasteSent);
+        Assert.Contains(log.AddedEntries, entry => entry.Message.Contains("field focused at recording start"));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DirectTyping_LockedField_RestoresBeforeTypingWithoutClipboard(bool initiallyFocused)
+    {
+        // Ordered log of the field gate and the keystrokes: the text may only be typed once
+        // the locked field has been verified as focused.
+        var events = new List<string>();
+        var client = new FakeAtSpiEventClient
+        {
+            FocusedResult = initiallyFocused,
+            OnFocusRead = () => events.Add("focus-read"),
+        };
+        client.OnGrabFocus = () =>
+        {
+            events.Add("grab-focus");
+            client.FocusedResult = true;
+        };
+        var platform = new FakeTextInsertionPlatform
+        {
+            ClipboardSetAvailable = false,
+            OnDelay = _ => events.Add("delay"),
+            OnTypeText = () => events.Add("type"),
+        };
+        var sut = new TextInsertionService(platform, atSpiClient: client);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", Strategy: TextInsertionStrategy.DirectTyping,
+            LockedFocusTarget: new LockedFocusTarget(new AtSpiElementRef("app", "/field"))
+        ));
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("dictated", platform.TypedText);
+        // The typing path has its own settle delay, so only the gate's events are ordered here;
+        // the grab must be followed by a settle delay and a re-check before anything is typed.
+        Assert.Equal(
+            initiallyFocused
+                ? ["focus-read", "type"]
+                : ["focus-read", "grab-focus", "focus-read", "type"],
+            events.Where(e => e != "delay"));
+        if (!initiallyFocused)
+        {
+            Assert.Equal("delay", events[events.IndexOf("grab-focus") + 1]);
+        }
+        Assert.Equal(0, platform.SetClipboardCount);
+        Assert.False(platform.PasteSent);
+    }
+
+    [Theory]
+    [InlineData(TextInsertionStrategy.DirectTyping, true)]
+    [InlineData(TextInsertionStrategy.DirectTyping, false)]
+    [InlineData(TextInsertionStrategy.ClipboardPaste, false)]
+    public async Task LockedField_UnrestorableOrNull_FallsBackToClipboard(
+        TextInsertionStrategy strategy, bool hasElement)
+    {
+        var client = new FakeAtSpiEventClient { FocusedResult = false, GrabFocusResult = false };
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(platform, atSpiClient: client);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", Strategy: strategy,
+            LockedFocusTarget: new LockedFocusTarget(hasElement ? new AtSpiElementRef("app", "/field") : null)
+        ));
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal(InsertionFailureReason.LockedFieldUnavailable, sut.LastFailureReason);
+        Assert.Equal("dictated", platform.Clipboard);
+        Assert.Null(platform.TypedText);
+        Assert.False(platform.PasteSent);
+        Assert.Equal(hasElement ? 1 : 0, client.FocusReadCount);
+    }
+
     [Fact]
     public async Task InsertTextAsync_successful_auto_paste_restores_previous_clipboard()
     {
@@ -3381,9 +3573,12 @@ public sealed class TextInsertionServiceTests
             return Task.FromResult(succeeded);
         }
 
+        public Action? OnTypeText { get; init; }
+
         public Task<bool> TypeTextAsync(string text)
         {
             TypedText = text;
+            OnTypeText?.Invoke();
             LastFailureReason = TypeSucceeds
                 ? InsertionFailureReason.None
                 : TypeFailureReason;
@@ -3552,6 +3747,39 @@ public sealed class TextInsertionServiceTests
         {
             TextReadRequests.Add((element, maxLength));
             return Task.FromResult(TextByElement.GetValueOrDefault(element));
+        }
+
+        public event Action? RunningChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public bool? FocusedResult { get; set; } = true;
+        private static bool? EditableResult => true;
+        public bool GrabFocusResult { get; init; } = true;
+        public int FocusReadCount { get; private set; }
+        public int GrabFocusCount { get; private set; }
+        public Action? OnGrabFocus { get; set; }
+        public Action? OnFocusRead { get; init; }
+
+        public Task<bool?> IsElementFocusedAsync(AtSpiElementRef element)
+        {
+            FocusReadCount++;
+            OnFocusRead?.Invoke();
+            return Task.FromResult(FocusedResult);
+        }
+
+        public Task<bool?> IsElementEditableAsync(AtSpiElementRef element)
+        {
+            return Task.FromResult(EditableResult);
+        }
+
+        public Task<bool> TryGrabFocusAsync(AtSpiElementRef element)
+        {
+            GrabFocusCount++;
+            OnGrabFocus?.Invoke();
+            return Task.FromResult(GrabFocusResult);
         }
 
         public Task<bool?> IsPasswordFieldAsync(AtSpiElementRef element)
