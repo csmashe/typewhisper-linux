@@ -10,6 +10,10 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed partial class DictationOrchestrator
 {
+    private readonly Lock _recoveryLock = new();
+    private CancellationTokenSource? _recoveryCts;
+    private TaskCompletionSource? _recoveryCompletion;
+
     private PipelineOptions BuildPipelineOptions(
         RecordingContext context,
         double duration,
@@ -167,6 +171,19 @@ public sealed partial class DictationOrchestrator
         }
     }
 
+    internal async Task CancelRecoveryAndDrainAsync()
+    {
+        Task cancellation;
+        Task completion;
+        lock (_recoveryLock)
+        {
+            cancellation = _recoveryCts?.CancelAsync() ?? Task.CompletedTask;
+            completion = _recoveryCompletion?.Task ?? Task.CompletedTask;
+        }
+        await cancellation.ConfigureAwait(false);
+        await completion.ConfigureAwait(false);
+    }
+
     /// <summary>Sanitized failure text for display; blank exception messages fall back to a localized string.</summary>
     private static string SanitizeForDisplay(string? message, params string?[] secrets) =>
         FailureMessageSanitizer.Sanitize(message, secrets) ?? Loc.Instance["Common.UnknownError"];
@@ -180,12 +197,23 @@ public sealed partial class DictationOrchestrator
     /// </summary>
     public async Task<TranscriptionRecord> RetryFromHistoryAsync(string recordId, CancellationToken ct = default)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_inFlightTracker.TryBeginRecovery())
-            throw new InvalidOperationException(Loc.Instance["History.RetryBusy"]);
+        CancellationTokenSource recoveryCts;
+        TaskCompletionSource completion;
+        lock (_recoveryLock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_inFlightTracker.TryBeginRecovery())
+                throw new InvalidOperationException(Loc.Instance["History.RetryBusy"]);
+            recoveryCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _recoveryCts = recoveryCts;
+            _recoveryCompletion = completion;
+        }
+        ct = recoveryCts.Token;
 
         try
         {
+            _hotkey.IsCancelShortcutEnabled = true;
             var record = _history.Records.FirstOrDefault(candidate => candidate.Id == recordId);
             var path = _sessionAudioFiles.GetAudioPath(record?.AudioFileName);
             if (record is null || path is null)
@@ -301,7 +329,15 @@ public sealed partial class DictationOrchestrator
         }
         finally
         {
-            _inFlightTracker.EndRecovery();
+            lock (_recoveryLock)
+            {
+                _hotkey.IsCancelShortcutEnabled = false;
+                _recoveryCts = null;
+                _recoveryCompletion = null;
+                recoveryCts.Dispose();
+                _inFlightTracker.EndRecovery();
+                completion.TrySetResult();
+            }
         }
     }
 }

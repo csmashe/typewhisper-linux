@@ -20,6 +20,33 @@ namespace TypeWhisper.PluginSystem.Tests;
 // self-gated ProcessStreamingAsync + the reflection-free frame parsers.
 public sealed class ClaudePluginTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RequestFailure_LogsStatusAndReasonWithoutBody(bool streaming)
+    {
+        const string body = "private transcript and remembered context";
+        using var client = new HttpClient(new CapturingHandler((_, _) =>
+            new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                ReasonPhrase = "Bad Request", Content = new StringContent(body),
+            }));
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "key" } };
+        using var sut = new ClaudePlugin(client);
+        await sut.ActivateAsync(host);
+        await Assert.ThrowsAsync<PluginRequestException>(async () =>
+        {
+            if (streaming)
+            {
+                await foreach (var _ in sut.ProcessStreamingAsync("system", "user", "claude", CancellationToken.None)) { }
+            }
+            else
+                await sut.ProcessAsync("system", "user", "claude", CancellationToken.None);
+        });
+        Assert.Contains("Anthropic API error 400: Bad Request", host.Messages);
+        Assert.All(host.Messages, message => Assert.DoesNotContain(body, message));
+    }
+
     [Fact]
     public Task RequestFailures_AreClassified() =>
         ProviderFailureAssertions.VerifyAsync<ClaudePlugin>();
@@ -292,7 +319,8 @@ public sealed class ClaudePluginTests
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();
         public IReadOnlyList<string> AvailableProfileNames => [];
-        public void Log(PluginLogLevel level, string message) { }
+        public List<string> Messages { get; } = [];
+        public void Log(PluginLogLevel level, string message) => Messages.Add(message);
         public void NotifyCapabilitiesChanged() { }
         public IPluginLocalization Localization { get; } = new TestPluginLocalization();
     }

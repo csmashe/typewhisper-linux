@@ -41,7 +41,8 @@ public sealed class PromptProcessingService
         string inputText,
         LlmCallCapture? capture = null,
         CancellationToken ct = default,
-        bool wrapInput = true
+        bool wrapInput = true,
+        LlmRequestRetryBudget? retryBudget = null
     )
     {
         var (provider, modelId) = ResolveProvider(action);
@@ -81,7 +82,8 @@ public sealed class PromptProcessingService
         );
 
         var response = await LlmRequestRetryPolicy.ExecuteAsync(
-            token => provider.ProcessAsync(systemPrompt, userPrompt, modelId, token), ct);
+            token => provider.ProcessAsync(systemPrompt, userPrompt, modelId, token), ct,
+            budget: retryBudget);
         provenance?.ResponseReceived = response;
 
         return response;
@@ -103,7 +105,8 @@ public sealed class PromptProcessingService
         LlmCallCapture? capture = null,
         [EnumeratorCancellation]
         CancellationToken ct = default,
-        bool wrapInput = true
+        bool wrapInput = true,
+        LlmRequestRetryBudget? retryBudget = null
     )
     {
         var (provider, modelId) = ResolveProvider(action);
@@ -143,7 +146,7 @@ public sealed class PromptProcessingService
         );
 
         var source = LlmRequestRetryPolicy.ExecuteStreamingAsync(
-            token => provider.ProcessStreamingAsync(systemPrompt, userPrompt, modelId, token), ct);
+            token => provider.ProcessStreamingAsync(systemPrompt, userPrompt, modelId, token), ct, retryBudget);
 
         // Accumulate the streamed reply so the Inspect panel can show the full
         // response. A mid-stream fault or cancel still records whatever arrived

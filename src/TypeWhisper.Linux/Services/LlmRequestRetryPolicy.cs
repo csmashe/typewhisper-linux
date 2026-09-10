@@ -9,17 +9,22 @@ internal static class LlmRequestRetryPolicy
     internal static async Task<T> ExecuteAsync<T>(
         Func<CancellationToken, Task<T>> attempt,
         CancellationToken ct,
-        Action<PluginRequestException, int, TimeSpan>? onRetry = null
+        Action<PluginRequestException, int, TimeSpan>? onRetry = null,
+        LlmRequestRetryBudget? budget = null
     )
     {
+        budget ??= new LlmRequestRetryBudget();
+        // Even after streaming exhausts the allowance, permit one batch compatibility attempt.
+        var maxAttempts = Math.Max(1, budget.RemainingAttempts);
         for (var retry = 1; ; retry++)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
+                budget.RecordAttempt();
                 return await attempt(ct);
             }
-            catch (PluginRequestException ex) when (retry <= 2 && IsTransient(ex) && !ct.IsCancellationRequested)
+            catch (PluginRequestException ex) when (retry < maxAttempts && ex.IsTransient && IsTransient(ex) && !ct.IsCancellationRequested)
             {
                 var delay = GetDelay(ex, retry);
                 Trace.WriteLine($"[LlmRequestRetryPolicy] Retry {retry}: {ex.FailureKind}, delay {delay.TotalMilliseconds} ms");
@@ -31,7 +36,8 @@ internal static class LlmRequestRetryPolicy
 
     internal static async IAsyncEnumerable<T> ExecuteStreamingAsync<T>(
         Func<CancellationToken, IAsyncEnumerable<T>> attempt,
-        [EnumeratorCancellation] CancellationToken ct
+        [EnumeratorCancellation] CancellationToken ct,
+        LlmRequestRetryBudget? budget = null
     )
     {
         IAsyncEnumerator<T>? enumerator = null;
@@ -47,7 +53,7 @@ internal static class LlmRequestRetryPolicy
                 }
                 enumerator = attempt(token).GetAsyncEnumerator(token);
                 return await enumerator.MoveNextAsync();
-            }, ct);
+            }, ct, budget: budget);
 
             if (!hasFirst)
                 yield break;

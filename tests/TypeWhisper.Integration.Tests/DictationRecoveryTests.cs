@@ -6,6 +6,7 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK;
 using Xunit;
 
 namespace TypeWhisper.Integration.Tests;
@@ -165,6 +166,81 @@ public sealed class DictationRecoveryTests
         await retry;
         Assert.True(await fixture.Orchestrator.StartAsync() > 0);
         await fixture.Orchestrator.CancelAsync();
+    });
+
+    [Theory]
+    [InlineData("cancel")]
+    [InlineData("caller")]
+    [InlineData("shutdown")]
+    public Task RetryCancellation_DrainsLeaseAndClearsRecovery(string cancellation) => BoundedTest.RunAsync(async () =>
+    {
+        await using var fixture = new OrchestratorCompositionFixture();
+        fixture.Plugin.EnqueueFailure("initial failure");
+        await DictateAsync(fixture);
+        var failed = Assert.Single(fixture.History.Records);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Plugin.EnqueueResult(async ct =>
+        {
+            entered.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return new PluginTranscriptionResult("unreachable", "en", 1);
+        });
+        using var caller = new CancellationTokenSource();
+        var retry = fixture.Orchestrator.RetryFromHistoryAsync(failed.Id, caller.Token);
+        await BoundedTest.WaitAsync(entered.Task);
+        switch (cancellation)
+        {
+            case "caller":
+                await caller.CancelAsync();
+                break;
+            case "shutdown":
+                await fixture.Orchestrator.CloseToggleGateAsync();
+                await fixture.Orchestrator.CancelRecoveryAndDrainAsync();
+                break;
+            default:
+                await fixture.Orchestrator.CancelAsync();
+                break;
+        }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => retry);
+        await fixture.Provider.GetRequiredService<ModelManagerService>().UnloadModelAsync();
+        Assert.Equal(failed, Assert.Single(fixture.History.Records));
+        if (cancellation != "shutdown")
+        {
+            Assert.True(await fixture.Orchestrator.StartAsync() > 0);
+            await fixture.Orchestrator.CancelAsync();
+        }
+    });
+
+    [Theory]
+    [InlineData(PluginRequestFailureKind.ServerError, true, 3, 1)]
+    [InlineData(PluginRequestFailureKind.Authentication, false, 1, 0)]
+    [InlineData(PluginRequestFailureKind.ServerError, false, 1, 0)]
+    public Task PromptFailure_BoundsTotalCallsAndSanitizesProcessedInput(
+        PluginRequestFailureKind kind, bool transient, int streamCalls, int batchCalls) => BoundedTest.RunAsync(async () =>
+    {
+        await using var fixture = new OrchestratorCompositionFixture();
+        fixture.Provider.GetRequiredService<IPromptActionService>().AddAction(new PromptAction
+        {
+            Id = "prompt", Name = "Prompt", SystemPrompt = "Rewrite the input.",
+            ProviderOverride = "plugin:integration.scripted-llm:scripted-llm-model",
+        });
+        fixture.Provider.GetRequiredService<IProfileService>().AddProfile(new Profile
+        {
+            Id = "profile", Name = "Profile", PromptActionId = "prompt",
+        });
+        fixture.Llm.Failure = new PluginRequestException("processing failed: hello?", kind,
+            retryAfter: TimeSpan.Zero, isTransient: transient);
+        var overlays = new ConcurrentQueue<DictationOverlayState>();
+        fixture.Orchestrator.OverlayStateChanged += (_, state) => overlays.Enqueue(state);
+        fixture.Plugin.EnqueueText("hello question mark");
+        await DictateAsync(fixture, "profile");
+        Assert.Equal(streamCalls, fixture.Llm.StreamCalls);
+        Assert.Equal(batchCalls, fixture.Llm.BatchCalls);
+        var failed = Assert.Single(fixture.History.Records);
+        Assert.Equal("hello question mark", failed.RawText);
+        Assert.Equal("processing failed: [redacted]", failed.FailureMessage);
+        Assert.DoesNotContain("hello?", fixture.Provider.GetRequiredService<IErrorLogService>().ExportDiagnostics());
+        Assert.All(overlays, state => Assert.DoesNotContain("hello?", state.FeedbackText ?? ""));
     });
 
     private static async Task DictateAsync(OrchestratorCompositionFixture fixture, string? profileId = null)

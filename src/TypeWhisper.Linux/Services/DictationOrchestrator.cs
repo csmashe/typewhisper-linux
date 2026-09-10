@@ -1283,6 +1283,8 @@ public sealed partial class DictationOrchestrator : IDisposable
     // cancelAllCommands widens the scope from the newest command (Escape/IPC cancel) to all of them.
     private async Task CancelInFlightWorkAsync(bool cancelAllCommands = false)
     {
+        await CancelRecoveryAndDrainAsync().ConfigureAwait(false);
+
         CancellationTokenSource[] commandSources;
         if (cancelAllCommands)
         {
@@ -2671,13 +2673,16 @@ public sealed partial class DictationOrchestrator : IDisposable
             Trace.WriteLine($"[Dictation] {message}");
             ReportStatus(context, message);
 
+            var retryBudget = new LlmRequestRetryBudget();
             var (result, streamFaulted) = await RunPromptActionStreamWithFallbackAsync(
-                _promptProcessing.ProcessStreamingAsync(promptAction, text, context.Capture, token),
+                _promptProcessing.ProcessStreamingAsync(promptAction, text, context.Capture, token,
+                    retryBudget: retryBudget),
                 () => _promptProcessing.ProcessAsync(
                     promptAction,
                     text,
                     context.Capture,
-                    token
+                    token,
+                    retryBudget: retryBudget
                 ),
                 accumulated =>
                 {
@@ -2715,16 +2720,20 @@ public sealed partial class DictationOrchestrator : IDisposable
 
             return result;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             throw;
         }
         catch (Exception ex)
         {
-            var message = $"Prompt action '{promptAction.Name}' failed: {SanitizeForDisplay(ex.Message, text, promptAction.SystemPrompt)}";
+            var sanitized = SanitizeForDisplay(ex.Message, text, promptAction.SystemPrompt);
+            var message = $"Prompt action '{promptAction.Name}' failed: {sanitized}";
             Trace.WriteLine($"[Dictation] {ex.GetType().Name}: {message}");
             ReportStatus(context, message);
-            throw;
+            throw ex is PluginRequestException failure
+                ? new PluginRequestException(sanitized,
+                    failure.FailureKind, failure.HttpStatusCode, failure.RetryAfter, failure.IsTransient)
+                : new InvalidOperationException(sanitized);
         }
     }
 
@@ -2738,13 +2747,10 @@ public sealed partial class DictationOrchestrator : IDisposable
         var pump = new LlmStreamPump(onAccumulated);
         var streamed = await pump.RunAsync(source, token);
 
-        // Streaming→batch fallback: retry with the batch path when the pump
-        // faulted OR yielded nothing (proxy EOF, empty 200). ReceivedAnyChunk
-        // distinguishes a legitimately empty single-chunk result from a silent
-        // empty stream — the single chunk is already a completed ProcessAsync call.
-        // The caller passes the capture on the fallback: the batch retry is a
-        // distinct call whose response is the text actually used, so it must be
-        // recorded too — otherwise saved provenance shows only the failed stream.
+        if (pump.Failure is { } failure
+            && (pump.ReceivedAnyChunk || failure is PluginRequestException { IsTransient: false }))
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+
         var result = pump.Faulted || !pump.ReceivedAnyChunk
             ? await runBatch()
             : streamed;

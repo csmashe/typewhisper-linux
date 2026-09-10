@@ -893,6 +893,9 @@ public class App : Application
             Debug.WriteLine($"[App] Dictation toggle-gate close failed: {ex.Message}");
         }
 
+        if (dictation is not null)
+            await dictation.CancelRecoveryAndDrainAsync().ConfigureAwait(false);
+
         DisposeDictationBeforeAudio(
             dictation,
             services.GetService<AudioRecordingService>()
