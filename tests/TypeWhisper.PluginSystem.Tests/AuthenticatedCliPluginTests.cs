@@ -95,6 +95,10 @@ public sealed class AuthenticatedCliPluginTests
             {
                 Assert.Empty(snapshot.Candidates);
             }
+
+            var definition = plugin.GetSettingDefinitions().Single(definition =>
+                definition.Key == Descriptor(CliProviderKind.Codex).InstallationSettingKey);
+            Assert.Contains(requested, definition.Options!.Select(option => option.Value));
         }
         finally
         {
@@ -144,6 +148,10 @@ public sealed class AuthenticatedCliPluginTests
             Assert.Equal(CliAvailabilityState.Ready, snapshot.State);
             Assert.Equal(secondPath, snapshot.ExecutablePath);
             Assert.Equal(firstPath, Assert.Single(snapshot.Candidates));
+
+            var definition = plugin.GetSettingDefinitions().Single(definition =>
+                definition.Key == Descriptor(CliProviderKind.Codex).InstallationSettingKey);
+            Assert.Equal(["", firstPath, secondPath], definition.Options!.Select(option => option.Value));
         }
         finally
         {

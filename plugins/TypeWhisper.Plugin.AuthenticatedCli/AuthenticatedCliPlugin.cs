@@ -1438,12 +1438,26 @@ public sealed class AuthenticatedCliPlugin :
         CliProviderDescriptor descriptor
     )
     {
+        string? configured;
+        lock (_stateLock)
+        {
+            configured = _selectedExecutables.GetValueOrDefault(descriptor.Key);
+        }
+
+        var candidates = GetSnapshot(descriptor).Candidates;
         var options = new List<PluginSettingOption>
         {
             new("", GetString("Settings.AutomaticInstallation")),
         };
-        options.AddRange(GetSnapshot(descriptor).Candidates
+        options.AddRange(candidates
             .Select(candidate => new PluginSettingOption(candidate, candidate)));
+        // A retained alias is deduplicated out of the candidates, and a missing selection
+        // must stay visible so the user can see what is configured.
+        if (!string.IsNullOrWhiteSpace(configured) && !candidates.Contains(configured, StringComparer.Ordinal))
+        {
+            options.Add(new PluginSettingOption(configured, configured));
+        }
+
         return options;
     }
 
