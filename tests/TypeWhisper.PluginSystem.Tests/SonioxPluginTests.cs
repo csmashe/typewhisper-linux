@@ -704,6 +704,39 @@ public class SonioxPluginTests
     }
 
     [Fact]
+    public async Task ValidateAsync_RejectsResultWhenKeyIsReplacedAndRestoredDuringProbe()
+    {
+        SonioxPlugin? plugin = null;
+        var handler = new AsyncCapturingHandler(async (request, _, _) =>
+        {
+            if (request.RequestUri?.Host != "api.eu.soniox.com")
+                return JsonResponse("{}");
+
+            // The key reads the same as the probed one afterwards, but it was saved twice in
+            // between, so comparing values alone would accept and commit a stale result.
+            // ReSharper disable once AccessToModifiedClosure -- the handler needs the plugin it is injected into; assigned once before any request
+            var target = plugin!;
+            await target.SetApiKeyAsync("replacement-key");
+            await target.SetApiKeyAsync("soniox-key");
+            return JsonResponse("{}");
+        });
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        host.SetSetting("region", "eu");
+        var sut = new SonioxPlugin(httpClient);
+        plugin = sut;
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Settings.SettingsChangedDuringProbe", result.Message);
+        Assert.Equal("eu", sut.RegionId);
+        Assert.Equal("soniox-key", sut.ApiKey);
+    }
+
+    [Fact]
     public async Task SetRegion_KeepsLiveRegionWhenPersistenceFails()
     {
         var host = new TestPluginHostServices { SetSettingException = new IOException("disk full") };

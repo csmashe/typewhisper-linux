@@ -60,7 +60,8 @@ public sealed class SonioxPlugin
     private readonly TimeSpan _regionProbeTimeout;
     private readonly SemaphoreSlim _apiKeyWriteLock = new(1, 1);
     private readonly Lock _cleanupChainLock = new();
-    private readonly Lock _regionLock = new();
+    private readonly Lock _settingsLock = new();
+    private long _settingsVersion;
 
     private IPluginHostServices? _host;
     private string _selectedModelId = DefaultModelId;
@@ -155,10 +156,11 @@ public sealed class SonioxPlugin
     public async Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
         IReadOnlyList<string> languageHints, CancellationToken ct)
     {
-        if (!IsConfigured)
+        var settings = CaptureSettings();
+        if (string.IsNullOrEmpty(settings.ApiKey))
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
-        return await ConnectStreaming(ApiKey!, RealtimeUri, languageHints, ct);
+        return await ConnectStreaming(settings.ApiKey, new Uri(settings.Region.RealtimeUrl), languageHints, ct);
     }
 
     public void SelectModel(string modelId)
@@ -204,11 +206,9 @@ public sealed class SonioxPlugin
     private async Task<PluginTranscriptionResult> TranscribeCoreAsync(
         byte[] wavAudio, IReadOnlyList<string> languageHints, string? fallbackLanguage, CancellationToken ct)
     {
-
         // Snapshot the key and region once so a concurrent settings change can't swap the key
         // or the region out partway through the multi-request async flow below.
-        var apiKey = ApiKey;
-        var region = Region;
+        var (apiKey, region, _) = CaptureSettings();
         if (string.IsNullOrEmpty(apiKey))
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
@@ -286,24 +286,24 @@ public sealed class SonioxPlugin
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrEmpty(ApiKey))
+        var probed = CaptureSettings();
+        if (string.IsNullOrEmpty(probed.ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyRequired"));
 
-        var probedKey = ApiKey;
-        var probedRegionId = RegionId;
-        var detected = await DetectRegionAsync(probedKey, ct);
+        var detected = await DetectRegionAsync(probed.ApiKey, probed.Region, ct);
         if (detected is null)
             return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
 
         var detectedLabel = Loc.L(ResolveRegion(detected).LabelKey);
-        lock (_regionLock)
+        lock (_settingsLock)
         {
-            // The probes can take a while; if the key or region was saved again meanwhile, the
-            // result belongs to the old settings and must neither be reported nor persisted.
-            if (!string.Equals(ApiKey, probedKey, StringComparison.Ordinal) || RegionId != probedRegionId)
+            // The probes can take a while; if the key or region was saved again meanwhile (even
+            // back to the same values), the result belongs to the settings that were probed and
+            // must neither be reported nor persisted.
+            if (_settingsVersion != probed.Version)
                 return new PluginSettingsValidationResult(false, Loc.L("Settings.SettingsChangedDuringProbe"));
 
-            if (detected == probedRegionId)
+            if (detected == probed.Region.Id)
                 return new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValidRegion", detectedLabel));
 
             SetRegionLocked(detected);
@@ -333,7 +333,21 @@ public sealed class SonioxPlugin
 
     internal string RegionId { get; private set; } = DefaultRegionId;
     internal SonioxRegion Region => ResolveRegion(RegionId);
-    internal Uri RealtimeUri => new(Region.RealtimeUrl);
+
+    /// <summary>
+    /// The key and region as they stood at one instant, plus the settings version they were read
+    /// at. Request flows use the pair so a settings save can't mix a new key with an old region,
+    /// and validation commits its result only while the version is unchanged.
+    /// </summary>
+    internal readonly record struct SettingsSnapshot(string? ApiKey, SonioxRegion Region, long Version);
+
+    internal SettingsSnapshot CaptureSettings()
+    {
+        lock (_settingsLock)
+        {
+            return new SettingsSnapshot(ApiKey, Region, _settingsVersion);
+        }
+    }
 
     private static SonioxRegion ResolveRegion(string? id) =>
         AvailableRegions.FirstOrDefault(region =>
@@ -344,7 +358,7 @@ public sealed class SonioxPlugin
 
     internal void SetRegion(string? regionId)
     {
-        lock (_regionLock)
+        lock (_settingsLock)
         {
             SetRegionLocked(regionId);
         }
@@ -360,6 +374,7 @@ public sealed class SonioxPlugin
         // same value can be saved again.
         _host?.SetSetting(RegionSettingKey, normalized);
         RegionId = normalized;
+        _settingsVersion++;
     }
 
     /// <summary>Opens the realtime session; tests replace it to observe the endpoint the plugin picks.</summary>
@@ -367,13 +382,15 @@ public sealed class SonioxPlugin
         static async (apiKey, realtimeUri, languageHints, ct) =>
             await SonioxStreamingSession.ConnectAsync(apiKey, realtimeUri, languageHints, ct);
 
-    internal async Task<string?> DetectRegionAsync(string apiKey, CancellationToken ct = default)
+    internal Task<string?> DetectRegionAsync(string apiKey, CancellationToken ct = default) =>
+        DetectRegionAsync(apiKey, Region, ct);
+
+    private async Task<string?> DetectRegionAsync(string apiKey, SonioxRegion selected, CancellationToken ct)
     {
         var normalized = NormalizeApiKey(apiKey);
         if (normalized is null)
             return null;
 
-        var selected = Region;
         // The selected region answers in one request normally; a key only works in its own
         // region, so the fallback sweep is a correction, not a guess.
         foreach (var region in AvailableRegions.Where(r => r.Id != selected.Id).Prepend(selected))
@@ -419,8 +436,13 @@ public sealed class SonioxPlugin
             }
 
             // Update in-memory state after the persistence call succeeds so a
-            // failing secret store leaves the live key untouched.
-            ApiKey = normalized;
+            // failing secret store leaves the live key untouched. The write shares the region's
+            // lock so snapshots never pair a new key with an old region.
+            lock (_settingsLock)
+            {
+                ApiKey = normalized;
+                _settingsVersion++;
+            }
 
             if (wasConfigured == IsConfigured)
                 hostToNotify = null;
