@@ -76,16 +76,21 @@ internal static class OpenAiTranscriptionClient
                 && endElement.ValueKind == JsonValueKind.Number
                 ? endElement.GetDouble()
                 : 0;
-            segments.Add(new PluginTranscriptionSegment(segmentText, start, end));
+            float? probability = segment.TryGetProperty("no_speech_prob", out var p)
+                && p.ValueKind == JsonValueKind.Number
+                ? (float)p.GetDouble()
+                : null;
+            segments.Add(new PluginTranscriptionSegment(segmentText, start, end)
+            {
+                NoSpeechProbability = probability,
+            });
 
-            if (!segment.TryGetProperty("no_speech_prob", out var probabilityElement)
-                || probabilityElement.ValueKind != JsonValueKind.Number)
-                continue;
-
-            var probability = (float)probabilityElement.GetDouble();
-            minNoSpeechProbability = minNoSpeechProbability is null
-                ? probability
-                : Math.Min(minNoSpeechProbability.Value, probability);
+            if (probability is not null)
+            {
+                minNoSpeechProbability = minNoSpeechProbability is null
+                    ? probability
+                    : Math.Min(minNoSpeechProbability.Value, probability.Value);
+            }
         }
 
         return new PluginTranscriptionResult(

@@ -4,6 +4,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.OpenAi;
 using TypeWhisper.PluginSDK;
@@ -767,6 +768,56 @@ public partial class OpenAiPluginTests
 
         Assert.Equal("fr", current.DetectedLanguage);
         Assert.Equal("en", legacy.DetectedLanguage);
+    }
+
+    [Fact]
+    public void GPTTranscribeResponseParser_PreservesSegmentNoSpeechProbability()
+    {
+        var result = OpenAiTranscriptionClient.ParseTranscriptionResponse("""
+            {
+                "text": "Please send the updated draft. See you tomorrow. Thank you.",
+                "language": "en",
+                "duration": 8.0,
+                "segments": [
+                    { "text": " Please send the updated draft.", "start": 0.0, "end": 3.0, "no_speech_prob": 0.02 },
+                    { "text": " See you tomorrow.", "start": 3.0, "end": 5.0 },
+                    { "text": " Thank you.", "start": 5.0, "end": 8.0, "no_speech_prob": 0.95 }
+                ]
+            }
+            """);
+
+        Assert.Equal(3, result.Segments.Count);
+        Assert.Equal(0.02f, result.Segments[0].NoSpeechProbability);
+        Assert.Null(result.Segments[1].NoSpeechProbability);
+        Assert.Equal(0.95f, result.Segments[2].NoSpeechProbability);
+        Assert.Equal(0.02f, result.NoSpeechProbability);
+        Assert.Equal(0.0, result.Segments[0].Start);
+        Assert.Equal(3.0, result.Segments[0].End);
+        Assert.Equal(3.0, result.Segments[1].Start);
+        Assert.Equal(5.0, result.Segments[1].End);
+        Assert.Equal(5.0, result.Segments[2].Start);
+        Assert.Equal(8.0, result.Segments[2].End);
+    }
+
+    [Fact]
+    public void GPTTranscribeResponseParser_TerminalSilenceSegmentIsTrimmedByHost()
+    {
+        var result = OpenAiTranscriptionClient.ParseTranscriptionResponse("""
+            {
+                "text": "Please send the updated draft. Thank you.",
+                "language": "en",
+                "duration": 8.0,
+                "segments": [
+                    { "text": " Please send the updated draft.", "start": 0.0, "end": 5.0, "no_speech_prob": 0.02 },
+                    { "text": " Thank you.", "start": 5.0, "end": 8.0, "no_speech_prob": 0.95 }
+                ]
+            }
+            """);
+
+        var trimmed = TerminalHallucinationTrimmer.Trim(result);
+
+        Assert.Equal("Please send the updated draft.", trimmed.Text);
+        Assert.Single(trimmed.Segments);
     }
 
     [Fact]
