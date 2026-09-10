@@ -147,6 +147,133 @@ public sealed class TextInsertionServiceTests
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LockedField_ConsentWithdrawnAfterFirstFocusRead_MakesNoFurtherAtSpiCalls(bool initiallyFocused)
+    {
+        var consent = true;
+        var client = new FakeAtSpiEventClient
+        {
+            FocusedResult = initiallyFocused,
+            OnFocusRead = () => consent = false,
+        };
+        client.OnGrabFocus = () => client.FocusedResult = true;
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(
+            platform, atSpiClient: client, learningConsent: () => consent);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", Strategy: TextInsertionStrategy.DirectTyping,
+            LockedFocusTarget: new LockedFocusTarget(new AtSpiElementRef("app", "/field"))
+        ));
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal(InsertionFailureReason.None, sut.LastFailureReason);
+        Assert.Equal(1, client.FocusReadCount);
+        Assert.Equal(0, client.GrabFocusCount);
+        Assert.Equal(0, client.EligibilityReadCount);
+    }
+
+    [Fact]
+    public async Task LockedField_ConsentWithdrawnAfterGrab_MakesNoFurtherAtSpiCalls()
+    {
+        var consent = true;
+        var client = new FakeAtSpiEventClient { FocusedResult = false };
+        client.OnGrabFocus = () =>
+        {
+            client.FocusedResult = true;
+            consent = false;
+        };
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(
+            platform, atSpiClient: client, learningConsent: () => consent);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", Strategy: TextInsertionStrategy.DirectTyping,
+            LockedFocusTarget: new LockedFocusTarget(new AtSpiElementRef("app", "/field"))
+        ));
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal(InsertionFailureReason.None, sut.LastFailureReason);
+        Assert.Equal(1, client.GrabFocusCount);
+        Assert.Equal(1, client.FocusReadCount);
+        Assert.Equal(0, client.EligibilityReadCount);
+    }
+
+    [Fact]
+    public async Task LockedField_ConsentWithdrawnDuringEligibilityRead_SkipsTheEditableRead()
+    {
+        var consent = true;
+        var client = new FakeAtSpiEventClient
+        {
+            FocusedResult = true,
+            OnPasswordRead = () => consent = false,
+        };
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(
+            platform, atSpiClient: client, learningConsent: () => consent);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", Strategy: TextInsertionStrategy.DirectTyping,
+            LockedFocusTarget: new LockedFocusTarget(new AtSpiElementRef("app", "/field"))
+        ));
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal(InsertionFailureReason.None, sut.LastFailureReason);
+        Assert.Equal(1, client.EligibilityReadCount);
+        Assert.Equal(0, client.GrabFocusCount);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LockedField_WithoutLearningConsent_IgnoresAnUnavailableTarget(bool autoEnter)
+    {
+        var client = new FakeAtSpiEventClient();
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(
+            platform, atSpiClient: client, learningConsent: static () => false);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            autoEnter ? "" : "dictated", AutoEnter: autoEnter, Strategy: TextInsertionStrategy.DirectTyping,
+            LockedFocusTarget: new LockedFocusTarget(null)
+        ));
+
+        Assert.Equal(autoEnter ? InsertionResult.ActionHandled : InsertionResult.Typed, result);
+        if (autoEnter)
+        {
+            Assert.True(platform.EnterSent);
+        }
+
+        Assert.Equal(InsertionFailureReason.None, sut.LastFailureReason);
+        Assert.Equal(0, client.GrabFocusCount);
+    }
+
+    [Fact]
+    public async Task EnterOnly_ConsentWithdrawnDuringRestore_StillSendsEnter()
+    {
+        var consent = true;
+        var client = new FakeAtSpiEventClient
+        {
+            FocusedResult = false,
+            OnFocusRead = () => consent = false,
+        };
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(
+            platform, atSpiClient: client, learningConsent: () => consent);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "", AutoEnter: true,
+            LockedFocusTarget: new LockedFocusTarget(new AtSpiElementRef("app", "/field"))
+        ));
+
+        Assert.Equal(InsertionResult.ActionHandled, result);
+        Assert.True(platform.EnterSent);
+        Assert.Equal(InsertionFailureReason.None, sut.LastFailureReason);
+        Assert.Equal(0, client.GrabFocusCount);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task EnterOnly_UnrestorableLockedField_DoesNotSendEnter(bool hasElement)
@@ -3863,8 +3990,10 @@ public sealed class TextInsertionServiceTests
         public bool GrabFocusResult { get; init; } = true;
         public int FocusReadCount { get; private set; }
         public int GrabFocusCount { get; private set; }
+        public int EligibilityReadCount { get; private set; }
         public Action? OnGrabFocus { get; set; }
         public Action? OnFocusRead { get; init; }
+        public Action? OnPasswordRead { get; init; }
 
         public Task<bool?> IsElementFocusedAsync(AtSpiElementRef element)
         {
@@ -3875,6 +4004,7 @@ public sealed class TextInsertionServiceTests
 
         public Task<bool?> IsElementEditableAsync(AtSpiElementRef element)
         {
+            EligibilityReadCount++;
             return Task.FromResult(EditableResult);
         }
 
@@ -3887,6 +4017,8 @@ public sealed class TextInsertionServiceTests
 
         public Task<bool?> IsPasswordFieldAsync(AtSpiElementRef element)
         {
+            EligibilityReadCount++;
+            OnPasswordRead?.Invoke();
             return Task.FromResult(PasswordRoleByElement.GetValueOrDefault(element, PasswordResult));
         }
 

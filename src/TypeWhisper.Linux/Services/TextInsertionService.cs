@@ -170,25 +170,35 @@ public sealed class TextInsertionService
     // whether a prefix already landed. Reset per request.
     public bool LastTypingDeliveredPartialText { get; private set; }
 
-    // Consent can be withdrawn while a window-focus wait is in flight, so the captured element is
-    // consulted only when consent still holds at the moment it would be touched; without consent
-    // the insertion proceeds as if no field had been locked.
-    private LockedFocusTarget? LockedTargetIfConsented(LockedFocusTarget? lockedTarget) =>
-        _learningConsent() ? lockedTarget : null;
-
-    private async Task<bool> RestoreLockedFocusAsync(LockedFocusTarget lockedTarget)
+    // true = restored and still eligible; false = the field cannot be restored (callers fall back);
+    // null = consent was withdrawn while the restore was in flight (callers proceed as if no field had been locked).
+    private async Task<bool?> RestoreLockedFocusAsync(LockedFocusTarget lockedTarget)
     {
+        if (!_learningConsent())
+        {
+            return null;
+        }
+
         if (_atSpiClient is null || lockedTarget.Element is not { } target)
         {
             return false;
         }
 
+        // Consent can be withdrawn at any point while the restore is in flight (a window-focus wait
+        // precedes it, and every AT-SPI call below awaits), so it is re-read before each call that
+        // touches the element; a withdrawal turns the restore into "no field was locked".
+        var focused = await _atSpiClient.IsElementFocusedAsync(target) == true;
+        if (!_learningConsent())
+        {
+            return null;
+        }
+
         // The field's role and state can change between capture and paste (a password toggle, a
         // control turning read-only), so eligibility is checked again on the field that is about to
         // receive text — on the already-focused path and after a grab has settled.
-        if (await _atSpiClient.IsElementFocusedAsync(target) == true)
+        if (focused)
         {
-            return await _atSpiClient.IsLockableFieldAsync(target);
+            return await IsLockableIfConsentedAsync(target);
         }
 
         if (_isRecording() || !await _atSpiClient.TryGrabFocusAsync(target))
@@ -197,8 +207,34 @@ public sealed class TextInsertionService
         }
 
         await _platform.DelayAsync(s_focusDelay);
-        return await _atSpiClient.IsElementFocusedAsync(target) == true
-            && await _atSpiClient.IsLockableFieldAsync(target);
+        if (!_learningConsent())
+        {
+            return null;
+        }
+
+        if (await _atSpiClient.IsElementFocusedAsync(target) != true)
+        {
+            return false;
+        }
+
+        return _learningConsent() ? await IsLockableIfConsentedAsync(target) : null;
+    }
+
+    // Mirrors AtSpiEventClientExtensions.IsLockableFieldAsync (fail-closed: positively not a password
+    // field AND positively editable) but re-reads consent between its two AT-SPI reads.
+    private async Task<bool?> IsLockableIfConsentedAsync(AtSpiElementRef target)
+    {
+        if (await _atSpiClient!.IsPasswordFieldAsync(target) != false)
+        {
+            return false;
+        }
+
+        if (!_learningConsent())
+        {
+            return null;
+        }
+
+        return await _atSpiClient.IsElementEditableAsync(target) == true;
     }
 
     public async Task<InsertionResult> InsertTextAsync(
@@ -348,8 +384,8 @@ public sealed class TextInsertionService
         }
 
         if (
-            LockedTargetIfConsented(request.LockedFocusTarget) is { } lockedTarget
-            && !await RestoreLockedFocusAsync(lockedTarget)
+            request.LockedFocusTarget is { } lockedTarget
+            && await RestoreLockedFocusAsync(lockedTarget) is false
         )
         {
             LastFailureReason = InsertionFailureReason.LockedFieldUnavailable;
@@ -884,8 +920,7 @@ public sealed class TextInsertionService
             return InsertionResult.Failed;
         }
 
-        lockedTarget = LockedTargetIfConsented(lockedTarget);
-        if (lockedTarget is not null && !await RestoreLockedFocusAsync(lockedTarget))
+        if (lockedTarget is not null && await RestoreLockedFocusAsync(lockedTarget) is false)
         {
             LastFailureReason = InsertionFailureReason.LockedFieldUnavailable;
             LogInsertionFallback(
@@ -937,8 +972,7 @@ public sealed class TextInsertionService
             return InsertionResult.ActionFailed;
         }
 
-        lockedTarget = LockedTargetIfConsented(lockedTarget);
-        if (lockedTarget is null || await RestoreLockedFocusAsync(lockedTarget))
+        if (lockedTarget is null || await RestoreLockedFocusAsync(lockedTarget) is not false)
         {
             return await _platform.SendEnterAsync()
                 ? InsertionResult.ActionHandled
