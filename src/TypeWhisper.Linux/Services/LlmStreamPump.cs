@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Text;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -28,6 +30,25 @@ internal sealed class LlmStreamPump
     }
 
     public bool Faulted { get; private set; }
+
+    // The fault that set Faulted, so ThrowIfNonRetryableFault can tell a retryable stream
+    // failure from one a batch retry would hit identically (a signed-out provider).
+    private Exception? Fault { get; set; }
+
+    /// <summary>
+    ///     Rethrows a configuration fault — a signed-out or uninstalled selected provider — because
+    ///     the batch path resolves that same selection and fails identically. Every other fault
+    ///     keeps the caller's streaming&#8594;batch fallback, including non-transient ones that can be
+    ///     specific to the streaming request (a gateway rejecting <c>stream=true</c>, a stream-parse
+    ///     error reported as <see cref="PluginRequestFailureKind.Unknown" />).
+    /// </summary>
+    public void ThrowIfNonRetryableFault()
+    {
+        if (Fault is PluginRequestException { FailureKind: PluginRequestFailureKind.Configuration })
+        {
+            ExceptionDispatchInfo.Capture(Fault).Throw();
+        }
+    }
 
     /// <summary>
     ///     True once the source yielded at least one item (even ""). Distinguishes
@@ -92,6 +113,7 @@ internal sealed class LlmStreamPump
             // recoverable: keep the partial and let the caller fall back.
             Trace.WriteLine($"[LlmStreamPump] Fault: {ex.GetType().Name}: {ex.Message}");
             Faulted = true;
+            Fault = ex;
             EmitFinal();
             return _sb.ToString();
         }

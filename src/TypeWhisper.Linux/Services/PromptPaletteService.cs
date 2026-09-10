@@ -137,7 +137,7 @@ public sealed class PromptPaletteService
         string? targetWindowId
     )
     {
-        if (!_processing.IsAnyProviderAvailable)
+        if (_processing.HasNoProviderForRequest(action.ProviderOverride))
         {
             await CloseWindowAsync(window);
             await ShowWarningAsync(
@@ -352,6 +352,8 @@ public sealed class PromptPaletteService
             // Streaming timed out (no user cancel) — fall back to batch.
             return await BatchAsync(action, capturedText, userToken);
         }
+
+        pump.ThrowIfNonRetryableFault();
 
         // Fall back to batch when the pump faulted or yielded nothing. A single
         // empty chunk (bulk-yield path) still sets ReceivedAnyChunk so it is not re-run.

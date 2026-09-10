@@ -13,20 +13,70 @@ public sealed class PromptProcessingService
     private readonly MemoryService _memory;
     private readonly PluginManager _pluginManager;
     private readonly ISettingsService _settings;
+    private readonly IErrorLogService? _errorLog;
+
+    // Configuration problems already written to the error log. A broken selection repeats on every
+    // dictation, and several can be broken at once (a prompt override, the default, the spoken
+    // command provider), so each distinct message logs once until a request succeeds. Locked
+    // because concurrent dictations share the service.
+    private readonly HashSet<string> _loggedProviderProblems = new(StringComparer.Ordinal);
 
     public PromptProcessingService(
         PluginManager pluginManager,
         ISettingsService settings,
-        MemoryService memory
+        MemoryService memory,
+        IErrorLogService? errorLog = null
     )
     {
         _pluginManager = pluginManager;
         _settings = settings;
         _memory = memory;
+        _errorLog = errorLog;
     }
 
-    public bool IsAnyProviderAvailable =>
-        _pluginManager.LlmProviders.Any(provider => provider.IsAvailable);
+    /// <summary>
+    ///     Whether a request would find no provider at all. An explicit selection (prompt override,
+    ///     else the configured default) is resolved strictly by <see cref="ResolveProvider(string?)" />
+    ///     and reports its own specific failure, so callers must not pre-empt it with a generic
+    ///     "no provider configured" message.
+    /// </summary>
+    public bool HasNoProviderForRequest(string? providerOverride = null)
+    {
+        return !HasSelectedProvider(providerOverride)
+               && !_pluginManager.LlmProviders.Any(provider => provider.IsAvailable);
+    }
+
+    private bool HasSelectedProvider(string? providerOverride)
+    {
+        return !string.IsNullOrWhiteSpace(providerOverride)
+               || !string.IsNullOrWhiteSpace(_settings.Current.DefaultLlmProvider);
+    }
+
+    /// <summary>
+    ///     The localized reason the effective selection (<paramref name="providerOverride" />, else
+    ///     the configured default) cannot serve a request, or null when it can — and when nothing is
+    ///     selected, which stays <see cref="HasNoProviderForRequest" />'s case. Lets a caller refuse
+    ///     before it opens the microphone rather than after a recording is already spent.
+    /// </summary>
+    public string? TryDescribeSelectedProviderProblem(string? providerOverride = null)
+    {
+        var selection = string.IsNullOrWhiteSpace(providerOverride)
+            ? _settings.Current.DefaultLlmProvider
+            : providerOverride;
+        return string.IsNullOrWhiteSpace(selection)
+            ? null
+            : DescribeProviderProblem(ResolvePluginModelId(selection), selection);
+    }
+
+    // Renders "plugin:<id>:<model>" as "<id> · <model>"; anything else is shown as-is. The raw
+    // selection string is an internal id and reads as noise in a user-facing message.
+    internal static string DescribeSelection(string selection)
+    {
+        var parts = selection.Split(':', 3);
+        return parts.Length == 3 && string.Equals(parts[0], "plugin", StringComparison.Ordinal)
+            ? $"{parts[1]} · {parts[2]}"
+            : selection;
+    }
 
     // CA1068: ct deliberately precedes the trailing optional `wrapInput` flag. This is the
     // canonical signature reconciled during the 0.12.0 #41↔#44 integration and shared verbatim
@@ -47,7 +97,7 @@ public sealed class PromptProcessingService
         var (provider, modelId) = ResolveProvider(action);
         if (provider is null)
         {
-            throw new InvalidOperationException("No enabled LLM provider is available.");
+            throw new InvalidOperationException(Localization.Loc.Instance["Prompts.NoProvider"]);
         }
 
         var systemPrompt = action.SystemPrompt;
@@ -108,7 +158,7 @@ public sealed class PromptProcessingService
         var (provider, modelId) = ResolveProvider(action);
         if (provider is null)
         {
-            throw new InvalidOperationException("No enabled LLM provider is available.");
+            throw new InvalidOperationException(Localization.Loc.Instance["Prompts.NoProvider"]);
         }
 
         var systemPrompt = action.SystemPrompt;
@@ -173,7 +223,7 @@ public sealed class PromptProcessingService
         var (provider, modelId) = ResolveProvider(providerOverride: null);
         if (provider is null)
         {
-            throw new InvalidOperationException("No enabled LLM provider is available.");
+            throw new InvalidOperationException(Localization.Loc.Instance["Prompts.NoProvider"]);
         }
 
         var userPrompt = FormatPromptActionInput(inputText);
@@ -259,20 +309,13 @@ public sealed class PromptProcessingService
     {
         if (!string.IsNullOrWhiteSpace(providerOverride))
         {
-            var overrideResult = ResolvePluginModelId(providerOverride);
-            if (overrideResult.Provider is not null)
-            {
-                return overrideResult;
-            }
+            return RequireConfiguredProvider(ResolvePluginModelId(providerOverride), providerOverride);
         }
 
-        if (!string.IsNullOrWhiteSpace(_settings.Current.DefaultLlmProvider))
+        var defaultProvider = _settings.Current.DefaultLlmProvider;
+        if (!string.IsNullOrWhiteSpace(defaultProvider))
         {
-            var defaultResult = ResolvePluginModelId(_settings.Current.DefaultLlmProvider);
-            if (defaultResult.Provider is not null)
-            {
-                return defaultResult;
-            }
+            return RequireConfiguredProvider(ResolvePluginModelId(defaultProvider), defaultProvider);
         }
 
         foreach (var provider in _pluginManager.LlmProviders)
@@ -308,10 +351,80 @@ public sealed class PromptProcessingService
         // Match by LLM selection ID so additional provider roles (OpenAI-compatible
         // profiles) resolve too. For normal plugins the selection ID equals the
         // plugin/manifest ID, so previously-saved selections keep resolving.
+        // Unavailable providers resolve too, so RequireConfiguredProvider can tell a signed-out
+        // provider apart from one that is no longer installed.
         var provider = _pluginManager.LlmProviders.FirstOrDefault(candidate =>
-            candidate.GetLlmSelectionId() == pluginId && candidate.IsAvailable
+            candidate.GetLlmSelectionId() == pluginId
         );
 
         return provider is null ? (null, string.Empty) : (provider, modelId);
+    }
+
+    // An explicitly selected provider never silently falls through to another one: with CLI
+    // providers that flip between ready and signed out, that would send the user's text to — and
+    // bill — a provider they did not pick.
+    private (ILlmProviderRole Provider, string ModelId) RequireConfiguredProvider(
+        (ILlmProviderRole? Provider, string ModelId) resolved,
+        string selection
+    )
+    {
+        var problem = DescribeProviderProblem(resolved, selection);
+        if (problem is not null)
+        {
+            throw new PluginRequestException(
+                problem,
+                PluginRequestFailureKind.Configuration,
+                isTransient: false
+            );
+        }
+
+        return (resolved.Provider!, resolved.ModelId);
+    }
+
+    // Single source of the two configuration messages, shared by the up-front guards and the
+    // throwing path so both name the same problem. Logging here (rather than at each of the four
+    // call sites) puts exactly one error-log entry behind every prompt, palette, transform and
+    // spoken-command configuration failure.
+    private string? DescribeProviderProblem(
+        (ILlmProviderRole? Provider, string ModelId) resolved,
+        string selection
+    )
+    {
+        string? problem = null;
+        if (resolved.Provider is null)
+        {
+            problem = Localization.Loc.Instance.GetString(
+                "Prompts.SelectedProviderMissing",
+                DescribeSelection(selection)
+            );
+        }
+        else if (!resolved.Provider.IsAvailable)
+        {
+            problem = Localization.Loc.Instance.GetString(
+                "Prompts.SelectedProviderUnavailable",
+                resolved.Provider.ProviderName
+            );
+        }
+
+        string? newProblem = null;
+        lock (_loggedProviderProblems)
+        {
+            if (problem is null)
+            {
+                // The selection works again, so a later failure is worth logging afresh.
+                _loggedProviderProblems.Clear();
+            }
+            else if (_loggedProviderProblems.Add(problem))
+            {
+                newProblem = problem;
+            }
+        }
+
+        if (newProblem is not null)
+        {
+            _errorLog?.AddEntry(newProblem, ErrorCategory.Prompt);
+        }
+
+        return problem;
     }
 }

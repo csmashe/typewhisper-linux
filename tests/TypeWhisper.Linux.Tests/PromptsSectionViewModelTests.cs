@@ -456,6 +456,221 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ProviderOptions_ListUnavailableProviderWithUnavailableLabel()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var provider = new FakeLlmProviderPlugin(
+            "com.typewhisper.cli",
+            "CLI Provider",
+            "default",
+            "Provider default"
+        )
+        {
+            IsAvailable = false,
+        };
+        using var pluginManager = TestPluginManagerFactory.Create(
+            [provider],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
+            ]
+        );
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { DefaultLlmProvider = "plugin:com.typewhisper.cli:default" }
+        );
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+
+        var option = Assert.Single(
+            sut.AvailableProviders,
+            candidate => candidate.Value == "plugin:com.typewhisper.cli:default"
+        );
+        Assert.Equal("CLI Provider / Provider default (unavailable)", option.Label);
+        Assert.True(option.IsUnavailable);
+        Assert.True(sut.ShowProviderWarning);
+    }
+
+    [Fact]
+    public void ProviderOptions_KeepStaleSelectionsAsPlaceholdersOnRefresh()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var provider = new FakeLlmProviderPlugin(
+            "com.typewhisper.openai",
+            "OpenAI",
+            "gpt-4.1-mini"
+        );
+        using var pluginManager = TestPluginManagerFactory.Create(
+            [provider],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
+            ]
+        );
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenCommandLlmProvider = "plugin:uninstalled:command-model" }
+        );
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
+        {
+            EditProviderOverride = "plugin:uninstalled:edit-model",
+        };
+
+        InvokeRefreshPluginOptions(sut);
+
+        Assert.Equal("plugin:uninstalled:edit-model", sut.EditProviderOverride);
+        var editOption = Assert.IsType<ProviderOption>(sut.SelectedEditProvider);
+        Assert.Equal("plugin:uninstalled:edit-model", editOption.Value);
+        Assert.Equal("uninstalled · edit-model (unavailable)", editOption.Label);
+        var commandOption = Assert.IsType<ProviderOption>(sut.SelectedSpokenCommandProvider);
+        Assert.Equal("plugin:uninstalled:command-model", commandOption.Value);
+        Assert.True(commandOption.IsUnavailable);
+        Assert.Equal(
+            "plugin:uninstalled:command-model",
+            settings.Object.Current.SpokenCommandLlmProvider
+        );
+    }
+
+    [Fact]
+    public void SelectingAction_WithStaleOverride_ShowsPlaceholderWithoutARefresh()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "existing",
+                Name = "Existing",
+                SystemPrompt = "x",
+                ProviderOverride = "plugin:uninstalled:edit-model",
+            }
+        );
+        var provider = new FakeLlmProviderPlugin(
+            "com.typewhisper.openai",
+            "OpenAI",
+            "gpt-4.1-mini"
+        );
+        using var pluginManager = TestPluginManagerFactory.Create(
+            [provider],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
+            ]
+        );
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+
+        // The UI order: the editor hydrates the action; no plugin state change rebuilds the list.
+        sut.SelectedAction = sut.Actions.Single(action => action.Id == "existing");
+
+        var selected = Assert.IsType<ProviderOption>(sut.SelectedEditProvider);
+        Assert.Equal("plugin:uninstalled:edit-model", selected.Value);
+        Assert.Equal("uninstalled · edit-model (unavailable)", selected.Label);
+        Assert.True(selected.IsUnavailable);
+        Assert.Contains(selected, sut.AvailableProviders);
+    }
+
+    [Fact]
+    public void SelectingAnotherAction_DropsThePreviousStaleOverridePlaceholder()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "first",
+                Name = "First",
+                SystemPrompt = "x",
+                ProviderOverride = "plugin:uninstalled:first-model",
+            }
+        );
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "second",
+                Name = "Second",
+                SystemPrompt = "y",
+                ProviderOverride = "plugin:uninstalled:second-model",
+            }
+        );
+        var provider = new FakeLlmProviderPlugin(
+            "com.typewhisper.openai",
+            "OpenAI",
+            "gpt-4.1-mini"
+        );
+        using var pluginManager = TestPluginManagerFactory.Create(
+            [provider],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
+            ]
+        );
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+        sut.SelectedAction = sut.Actions.Single(action => action.Id == "first");
+        sut.SelectedAction = sut.Actions.Single(action => action.Id == "second");
+
+        // Only the action being edited contributes a placeholder; the resolved options stay.
+        Assert.DoesNotContain(
+            sut.AvailableProviders,
+            option => option.Value == "plugin:uninstalled:first-model"
+        );
+        Assert.Contains(
+            sut.AvailableProviders,
+            option => option.Value == "plugin:uninstalled:second-model"
+        );
+        Assert.Contains(
+            sut.AvailableProviders,
+            option => option.Value == "plugin:com.typewhisper.openai:gpt-4.1-mini"
+        );
+
+        // Deselecting clears the editor, so its placeholder goes with it.
+        sut.SelectedAction = null;
+
+        Assert.DoesNotContain(
+            sut.AvailableProviders,
+            option => option.Value == "plugin:uninstalled:second-model"
+        );
+    }
+
+    [Fact]
+    public void DefaultProviderPlaceholder_NamesFirstAvailableOption()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var unavailable = new FakeLlmProviderPlugin(
+            "com.typewhisper.cli",
+            "CLI Provider",
+            "default",
+            "Provider default"
+        )
+        {
+            IsAvailable = false,
+        };
+        var available = new FakeLlmProviderPlugin(
+            "com.typewhisper.openai",
+            "OpenAI",
+            "gpt-4.1-mini"
+        );
+        using var pluginManager = TestPluginManagerFactory.Create(
+            [unavailable, available],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(
+                    _tempDir,
+                    unavailable.PluginId,
+                    unavailable
+                ),
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, available.PluginId, available),
+            ]
+        );
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+
+        var defaultOption = Assert.Single(sut.AvailableProviders, candidate => candidate.Value is null);
+        Assert.Equal("Use default provider (OpenAI / GPT-4.1 Mini)", defaultOption.Label);
+        Assert.False(sut.ShowProviderWarning);
+    }
+
+    [Fact]
     public void SelectedEditProvider_IgnoresTransientSelectionChangesDuringProviderRefresh()
     {
         var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
@@ -599,6 +814,16 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
+    private static void InvokeRefreshPluginOptions(PromptsSectionViewModel viewModel)
+    {
+        var method =
+            typeof(PromptsSectionViewModel).GetMethod(
+                "RefreshPluginOptions",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            ) ?? throw new MissingMethodException(nameof(PromptsSectionViewModel), "RefreshPluginOptions");
+        method.Invoke(viewModel, null);
+    }
+
     private static void SetPrivateField(object target, string fieldName, object value)
     {
         var field =
@@ -615,18 +840,23 @@ public sealed class PromptsSectionViewModelTests : IDisposable
 
     private sealed class FakeLlmProviderPlugin : ILlmProviderPlugin
     {
-        public FakeLlmProviderPlugin(string pluginId, string providerName, string modelId)
+        public FakeLlmProviderPlugin(
+            string pluginId,
+            string providerName,
+            string modelId,
+            string modelDisplayName = "GPT-4.1 Mini"
+        )
         {
             PluginId = pluginId;
             ProviderName = providerName;
-            SupportedModels = [new PluginModelInfo(modelId, "GPT-4.1 Mini")];
+            SupportedModels = [new PluginModelInfo(modelId, modelDisplayName)];
         }
 
         public string PluginId { get; }
         public string PluginName => ProviderName;
         public string PluginVersion => "1.0.0";
         public string ProviderName { get; }
-        public bool IsAvailable => true;
+        public bool IsAvailable { get; init; } = true;
         public IReadOnlyList<PluginModelInfo> SupportedModels { get; }
 
         public Task ActivateAsync(IPluginHostServices host)

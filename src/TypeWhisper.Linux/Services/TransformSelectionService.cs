@@ -203,13 +203,25 @@ public sealed class TransformSelectionService
 
     public event EventHandler<DictationOverlayState>? OverlayStateChanged;
 
+    /// <summary>
+    ///     Why the transform must be refused before the selection is captured and the microphone
+    ///     opens, or null when it may proceed. A configured-but-unavailable provider is a
+    ///     configuration fact known now, so failing after the recording would just waste it.
+    ///     Exposed internally for unit testing.
+    /// </summary>
+    internal static string? DescribeProviderRefusal(PromptProcessingService promptProcessing)
+    {
+        return promptProcessing.HasNoProviderForRequest()
+            ? "No LLM provider available. Please configure an API key in Plugins."
+            : promptProcessing.TryDescribeSelectedProviderProblem();
+    }
+
     private async Task StartAsync()
     {
-        if (!_promptProcessing.IsAnyProviderAvailable)
+        var providerRefusal = DescribeProviderRefusal(_promptProcessing);
+        if (providerRefusal is not null)
         {
-            await ShowWarningAsync(
-                "No LLM provider available. Please configure an API key in Plugins."
-            );
+            await ShowWarningAsync(providerRefusal);
             return;
         }
 

@@ -3,6 +3,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 using Xunit;
@@ -210,17 +211,80 @@ public sealed class LlmCleanupServiceTests
         Assert.Equal("Hello", result);
     }
 
-    private static LlmCleanupService CreateService(IReadOnlyList<ILlmProviderRole> providers)
+    [Fact]
+    public async Task CleanAsync_LogsTheSameFailureAgain_AfterASuccessfulCleanup()
+    {
+        var provider = new FakeLlmProviderPlugin("polished text")
+        {
+            ProcessException = new InvalidOperationException("Provider failed."),
+        };
+        var entries = new List<string>();
+        var sut = CreateService([provider], errorLog: RecordingErrorLog(entries));
+
+        await sut.CleanAsync("uh hello", CleanupLevel.Medium);
+        provider.ProcessException = null;
+        await sut.CleanAsync("uh hello", CleanupLevel.Medium);
+        provider.ProcessException = new InvalidOperationException("Provider failed.");
+        await sut.CleanAsync("uh hello", CleanupLevel.Medium);
+
+        Assert.Equal(2, entries.Count);
+        Assert.All(
+            entries,
+            entry => Assert.Equal(
+                "AI cleanup failed and fell back to Light cleanup: Provider failed.",
+                entry
+            )
+        );
+    }
+
+    [Fact]
+    public async Task CleanAsync_ConfigurationFailure_LogsExactlyOneEntry()
+    {
+        var signedOut = new FakeLlmProviderPlugin("unused") { IsAvailable = false };
+        var entries = new List<string>();
+        var errorLog = RecordingErrorLog(entries);
+        var sut = CreateService(
+            [signedOut],
+            errorLog,
+            new AppSettings { DefaultLlmProvider = "plugin:com.test.cleanup:model-a" }
+        );
+
+        var result = await sut.CleanAsync("uh hello", CleanupLevel.Medium);
+
+        // PromptProcessingService already logged the provider problem; the wrapper would be the
+        // same event described twice.
+        Assert.Equal("Hello", result);
+        Assert.Equal(
+            Loc.Instance.GetString("Prompts.SelectedProviderUnavailable", "Cleanup Provider"),
+            Assert.Single(entries)
+        );
+    }
+
+    private static IErrorLogService RecordingErrorLog(List<string> entries)
+    {
+        var errorLog = new Mock<IErrorLogService>();
+        errorLog
+            .Setup(service => service.AddEntry(It.IsAny<string>(), It.IsAny<string>()))
+            .Callback<string, string>((message, _) => entries.Add(message));
+        return errorLog.Object;
+    }
+
+    private static LlmCleanupService CreateService(
+        IReadOnlyList<ILlmProviderRole> providers,
+        IErrorLogService? errorLog = null,
+        AppSettings? appSettings = null
+    )
     {
         var pluginManager = TestPluginManagerFactory.Create(providers);
         var settings = new Mock<ISettingsService>();
-        settings.SetupGet(service => service.Current).Returns(new AppSettings());
+        settings.SetupGet(service => service.Current).Returns(appSettings ?? new AppSettings());
         var promptProcessing = new PromptProcessingService(
             pluginManager,
             settings.Object,
-            new MemoryService(pluginManager)
+            new MemoryService(pluginManager),
+            errorLog
         );
-        return new LlmCleanupService(new CleanupService(), promptProcessing);
+        return new LlmCleanupService(new CleanupService(), promptProcessing, errorLog);
     }
 
     private sealed class FakeLlmProviderPlugin : ILlmProviderPlugin
@@ -236,14 +300,14 @@ public sealed class LlmCleanupServiceTests
         public string? LastSystemPrompt { get; private set; }
         public string? LastUserText { get; private set; }
         public bool ThrowOnProcess { get; init; }
-        public Exception? ProcessException { get; init; }
+        public Exception? ProcessException { get; set; }
         public Action<CancellationToken>? BeforeProcess { get; init; }
 
         public string PluginId => "com.test.cleanup";
         public string PluginName => "Cleanup Provider";
         public string PluginVersion => "1.0.0";
         public string ProviderName => "Cleanup Provider";
-        public bool IsAvailable => true;
+        public bool IsAvailable { get; init; } = true;
         public IReadOnlyList<PluginModelInfo> SupportedModels { get; }
 
         public Task ActivateAsync(IPluginHostServices host)
