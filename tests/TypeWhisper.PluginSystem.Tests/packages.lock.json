@@ -623,6 +623,12 @@
           "TypeWhisper.PluginSDK": "[0.13.2, )"
         }
       },
+      "typewhisper.plugin.meta": {
+        "type": "Project",
+        "dependencies": {
+          "TypeWhisper.PluginSDK": "[0.13.2, )"
+        }
+      },
       "typewhisper.plugin.microsoftai": {
         "type": "Project",
         "dependencies": {

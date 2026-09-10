@@ -8,6 +8,7 @@ using TypeWhisper.Plugin.Deepgram;
 using TypeWhisper.Plugin.ElevenLabs;
 using TypeWhisper.Plugin.Gladia;
 using TypeWhisper.Plugin.OpenAi;
+using TypeWhisper.Plugin.Meta;
 using TypeWhisper.Plugin.Reson8;
 using TypeWhisper.Plugin.SmallestAi;
 using TypeWhisper.Plugin.Soniox;
@@ -26,6 +27,7 @@ public sealed class StreamingProviderAdapterConformanceTests
     // test runner from enumerating the rows individually.
     public static TheoryData<string> MigratedAdapters =>
         [
+            "Meta",
             "AssemblyAI",
             "Deepgram",
             "ElevenLabs",
@@ -45,6 +47,7 @@ public sealed class StreamingProviderAdapterConformanceTests
     private static IWebSocketSessionAdapter CreateMigratedAdapter(string provider) =>
         provider switch
         {
+            "Meta" => new MetaWebSocketAdapter(new MetaRealtimeConnectionOptions("key", MetaPlugin.DefaultTranscriptionModelId, "PUSH_TO_TALK", [], [])),
             "AssemblyAI" => new AssemblyAiWebSocketAdapter("key", "en"),
             "Deepgram" => new DeepgramWebSocketAdapter("key", "nova-3", "en"),
             "ElevenLabs" => new ElevenLabsWebSocketAdapter(
@@ -563,13 +566,19 @@ public sealed class StreamingProviderAdapterConformanceTests
         await finalize.WaitAsync(s_timeout);
     }
 
-    private static Task<WebSocketSessionPump> StartAsync(
+    private static async Task<WebSocketSessionPump> StartAsync(
         IWebSocketSessionAdapter adapter,
-        ScriptedWebSocketTransport transport
-    ) =>
-        WebSocketSessionPump
-            .StartConnectedAsync(adapter, transport, CancellationToken.None)
-            .WaitAsync(s_timeout);
+        ScriptedWebSocketTransport transport)
+    {
+        var starting = WebSocketSessionPump.StartConnectedAsync(adapter, transport, CancellationToken.None);
+        // ReSharper disable once InvertIf -- inverting would duplicate the awaited start into both branches.
+        if (adapter is MetaWebSocketAdapter)
+        {
+            await transport.NextSentAsync();
+            transport.EnqueueText("""{"sessionId":"meta-session"}""");
+        }
+        return await starting.WaitAsync(s_timeout);
+    }
 
     // A start that faults disposes the transport, and disposal completes its sent channel — so
     // awaiting the first send reports "the channel has been closed" and buries the reason the
