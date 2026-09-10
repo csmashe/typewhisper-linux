@@ -20,6 +20,29 @@ public sealed class ProcessRunnerTests
     private static readonly TimeSpan s_postExitGrace = TimeSpan.FromMilliseconds(250);
 
     [Fact]
+    public void ProcessOneShotOptions_preserves_original_constructor_signature()
+    {
+        var timeout = TimeSpan.FromSeconds(12);
+        var input = new Utf8ProcessInput("input");
+        var grace = TimeSpan.FromSeconds(1);
+        var options = new ProcessOneShotOptions(timeout, input, ProcessCaptureMode.Binary,
+            ProcessCaptureMode.Discard, ProcessPostExitPipePolicy.AbandonAfterGrace, grace);
+
+        Assert.NotNull(typeof(ProcessOneShotOptions).GetConstructor(
+            [typeof(TimeSpan?), typeof(ProcessInput), typeof(ProcessCaptureMode),
+                typeof(ProcessCaptureMode), typeof(ProcessPostExitPipePolicy), typeof(TimeSpan?)]));
+        Assert.Equal(timeout, options.Timeout);
+        Assert.Same(input, options.StandardInput);
+        Assert.Equal(ProcessCaptureMode.Binary, options.StandardOutput);
+        Assert.Equal(ProcessCaptureMode.Discard, options.StandardError);
+        Assert.Equal(ProcessPostExitPipePolicy.AbandonAfterGrace, options.PostExitPipePolicy);
+        Assert.Equal(grace, options.PostExitDrainGrace);
+        Assert.Null(options.MaximumStandardOutputBytes);
+        Assert.Null(options.MaximumStandardErrorBytes);
+        Assert.False(options.ClearInheritedEnvironment);
+    }
+
+    [Fact]
     public async Task RunAsync_with_detachAfterExit_abandons_promptly_when_descendant_holds_stdout_open()
     {
         var pidFile = NewPidFile();
@@ -747,9 +770,11 @@ public sealed class ProcessRunnerTests
         var result = await new ProcessRunner().RunOneShotAsync(
             ChildCommand("flood", (4 * 1024 * 1024).ToString()),
             new ProcessOneShotOptions(
-                Timeout: TimeSpan.FromSeconds(30),
-                MaximumStandardOutputBytes: 64 * 1024
+                Timeout: TimeSpan.FromSeconds(30)
             )
+            {
+                MaximumStandardOutputBytes = 64 * 1024,
+            }
         );
 
         Assert.Equal(ProcessRunStatus.OutputLimitExceeded, result.Status);
@@ -768,9 +793,11 @@ public sealed class ProcessRunnerTests
         var result = await new ProcessRunner().RunOneShotAsync(
             ChildCommand("flood", (1024 * 1024).ToString()),
             new ProcessOneShotOptions(
-                Timeout: TimeSpan.FromSeconds(30),
-                MaximumStandardErrorBytes: 1024
+                Timeout: TimeSpan.FromSeconds(30)
             )
+            {
+                MaximumStandardErrorBytes = 1024,
+            }
         );
 
         Assert.Equal(ProcessRunStatus.OutputLimitExceeded, result.Status);
@@ -783,10 +810,12 @@ public sealed class ProcessRunnerTests
         var result = await new ProcessRunner().RunOneShotAsync(
             ChildCommand("flood", (16 * 1024).ToString()),
             new ProcessOneShotOptions(
-                Timeout: TimeSpan.FromSeconds(30),
-                MaximumStandardOutputBytes: 16 * 1024,
-                MaximumStandardErrorBytes: 16 * 1024
+                Timeout: TimeSpan.FromSeconds(30)
             )
+            {
+                MaximumStandardOutputBytes = 16 * 1024,
+                MaximumStandardErrorBytes = 16 * 1024,
+            }
         );
 
         Assert.Equal(ProcessRunStatus.Exited, result.Status);
@@ -803,9 +832,11 @@ public sealed class ProcessRunnerTests
             new ProcessOneShotOptions(
                 Timeout: TimeSpan.FromSeconds(30),
                 StandardOutput: ProcessCaptureMode.Discard,
-                StandardError: ProcessCaptureMode.Discard,
-                MaximumStandardOutputBytes: 32 * 1024
+                StandardError: ProcessCaptureMode.Discard
             )
+            {
+                MaximumStandardOutputBytes = 32 * 1024,
+            }
         );
 
         Assert.Equal(ProcessRunStatus.OutputLimitExceeded, result.Status);
@@ -824,10 +855,11 @@ public sealed class ProcessRunnerTests
         // which reads as a runaway child rather than the caller's bad argument.
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => new ProcessRunner().RunOneShotAsync(
             ChildCommand("flood", "1024"),
-            new ProcessOneShotOptions(
-                MaximumStandardOutputBytes: standardOutputBytes,
-                MaximumStandardErrorBytes: standardErrorBytes
-            )
+            new ProcessOneShotOptions
+            {
+                MaximumStandardOutputBytes = standardOutputBytes,
+                MaximumStandardErrorBytes = standardErrorBytes,
+            }
         ));
     }
 
@@ -989,11 +1021,17 @@ public sealed class ProcessRunnerTests
 
         await Assert.ThrowsAsync<NotSupportedException>(() => legacy.RunOneShotAsync(
             command,
-            new ProcessOneShotOptions(MaximumStandardOutputBytes: 1024)
+            new ProcessOneShotOptions
+            {
+                MaximumStandardOutputBytes = 1024,
+            }
         ));
         var error = await Assert.ThrowsAsync<NotSupportedException>(() => legacy.RunOneShotAsync(
             command,
-            new ProcessOneShotOptions(ClearInheritedEnvironment: true)
+            new ProcessOneShotOptions
+            {
+                ClearInheritedEnvironment = true,
+            }
         ));
 
         Assert.Contains("inherited environment", error.Message, StringComparison.Ordinal);

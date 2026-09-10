@@ -36,8 +36,13 @@ internal interface ICliProcessRunner
 ///     built from an allow-list, so nothing but the variables the CLI needs to find its own login
 ///     reaches the child.
 /// </summary>
-internal sealed class CliProcessRunner(IPluginProcessSupervisor supervisor) : ICliProcessRunner
+internal sealed class CliProcessRunner(
+    IPluginProcessSupervisor supervisor,
+    IPluginLocalization? localization = null
+) : ICliProcessRunner
 {
+    private IPluginLocalization? Loc => localization;
+
     private static readonly Encoding s_strictUtf8 = new UTF8Encoding(false, true);
 
     // Forced by the runner, so an override that targets one is a programming error, not a setting.
@@ -86,13 +91,15 @@ internal sealed class CliProcessRunner(IPluginProcessSupervisor supervisor) : IC
                 Timeout: request.Timeout,
                 StandardInput: new Utf8ProcessInput(request.StandardInput),
                 StandardOutput: ProcessCaptureMode.Binary,
-                StandardError: ProcessCaptureMode.Binary,
-                MaximumStandardOutputBytes: request.MaximumStandardOutputBytes,
-                MaximumStandardErrorBytes: request.MaximumStandardErrorBytes,
+                StandardError: ProcessCaptureMode.Binary
+            )
+            {
+                MaximumStandardOutputBytes = request.MaximumStandardOutputBytes,
+                MaximumStandardErrorBytes = request.MaximumStandardErrorBytes,
                 // Every request and probe goes through here, so the allow-list below is the
                 // child's whole environment rather than an addition to the host's.
-                ClearInheritedEnvironment: true
-            ),
+                ClearInheritedEnvironment = true,
+            },
             cancellationToken
         ).ConfigureAwait(false);
         stopwatch.Stop();
@@ -101,7 +108,7 @@ internal sealed class CliProcessRunner(IPluginProcessSupervisor supervisor) : IC
         {
             case ProcessRunStatus.TimedOut:
                 throw new PluginRequestException(
-                    "The provider CLI timed out.",
+                    Loc.L("Error.Timeout"),
                     PluginRequestFailureKind.Timeout,
                     isTransient: false
                 );
@@ -110,14 +117,14 @@ internal sealed class CliProcessRunner(IPluginProcessSupervisor supervisor) : IC
                 // for a #! script, for instance), so it travels with the failure.
                 throw new PluginRequestException(
                     string.IsNullOrWhiteSpace(outcome.StartError)
-                        ? "The provider CLI could not be started."
-                        : $"The provider CLI could not be started: {outcome.StartError.Trim()}",
+                        ? Loc.L("Error.LaunchFailed")
+                        : Loc.L("Error.LaunchFailedDetail", outcome.StartError.Trim()),
                     PluginRequestFailureKind.Configuration,
                     isTransient: false
                 );
             case ProcessRunStatus.OutputLimitExceeded:
                 throw new PluginRequestException(
-                    "The provider CLI produced too much output.",
+                    Loc.L("Error.OutputLimit"),
                     PluginRequestFailureKind.Unknown,
                     isTransient: false
                 );
@@ -142,7 +149,7 @@ internal sealed class CliProcessRunner(IPluginProcessSupervisor supervisor) : IC
         catch (DecoderFallbackException ex)
         {
             throw new PluginRequestException(
-                "The provider CLI returned output that was not valid UTF-8.",
+                Loc.L("Error.InvalidUtf8"),
                 PluginRequestFailureKind.Unknown,
                 isTransient: false,
                 innerException: ex

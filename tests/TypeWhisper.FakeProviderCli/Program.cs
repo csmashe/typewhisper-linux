@@ -158,6 +158,12 @@ internal static class Program
             return 2;
         }
 
+        if (scenario.Contains("catalog-several", StringComparison.Ordinal))
+        {
+            WriteModel("alpha-free", "Alpha Free", inputCost: 0, outputCost: 0, cacheCost: 0);
+            WriteModel("zeta-free", "Zeta Free", inputCost: 0, outputCost: 0, cacheCost: 0);
+        }
+
         WriteModel("paid-model", "Paid Model", inputCost: 1, outputCost: 2, cacheCost: 0);
         if (!scenario.Contains("catalog-none", StringComparison.Ordinal))
         {

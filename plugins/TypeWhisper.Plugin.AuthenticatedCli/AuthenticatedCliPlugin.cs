@@ -42,6 +42,7 @@ public sealed class AuthenticatedCliPlugin :
     private readonly Dictionary<string, string?> _selectedExecutables = new(StringComparer.Ordinal);
     private readonly CliExecutableDiscovery _discovery;
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private readonly ICliProcessRunner? _injectedRunner;
     private ICliProcessRunner? _runner;
     private OpenCodeModelCatalogLoader? _openCodeCatalogLoader;
     private List<OpenCodeCatalogModel> _openCodeFreeModels = [];
@@ -64,6 +65,7 @@ public sealed class AuthenticatedCliPlugin :
     internal AuthenticatedCliPlugin(CliExecutableDiscovery discovery, ICliProcessRunner? runner)
     {
         _discovery = discovery;
+        _injectedRunner = runner;
         SetRunner(runner);
         _snapshots = CliProviderDescriptor.All.ToDictionary(
             descriptor => descriptor.Key,
@@ -96,10 +98,7 @@ public sealed class AuthenticatedCliPlugin :
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         _host = host;
-        if (_runner is null)
-        {
-            SetRunner(new CliProcessRunner(host.Processes));
-        }
+        SetRunner(_injectedRunner ?? new CliProcessRunner(host.Processes, host.Localization));
 
         foreach (var descriptor in CliProviderDescriptor.All)
         {
@@ -225,7 +224,7 @@ public sealed class AuthenticatedCliPlugin :
             && !string.Equals(model, "default", StringComparison.Ordinal))
         {
             throw new PluginRequestException(
-                "The selected model is not supported by the provider CLI.",
+                Loc.L("Error.UnsupportedModel"),
                 PluginRequestFailureKind.InvalidRequest,
                 isTransient: false
             );
@@ -241,7 +240,7 @@ public sealed class AuthenticatedCliPlugin :
         if (descriptor.Kind == CliProviderKind.OpenCode && !IsCurrentOpenCodeFreeModel(model))
         {
             throw new PluginRequestException(
-                "The selected OpenCode model is not in the current verified free Zen catalog.",
+                Loc.L("Error.ModelNotFree"),
                 PluginRequestFailureKind.InvalidRequest,
                 isTransient: false
             );
@@ -268,7 +267,7 @@ public sealed class AuthenticatedCliPlugin :
             if (!ResolvedPathStillMatches(descriptor, snapshot))
             {
                 throw new PluginRequestException(
-                    $"{descriptor.Key} CLI executable changed since it was verified.",
+                    Loc.L("Error.ExecutableChanged", descriptor.Key),
                     PluginRequestFailureKind.Configuration,
                     isTransient: false
                 );
@@ -287,7 +286,7 @@ public sealed class AuthenticatedCliPlugin :
         if (Encoding.UTF8.GetByteCount(standardInput) > MaximumInputBytes)
         {
             throw new PluginRequestException(
-                "The workflow input is too large for provider CLI processing.",
+                Loc.L("Error.InputTooLarge"),
                 PluginRequestFailureKind.RequestTooLarge,
                 isTransient: false
             );
@@ -316,7 +315,7 @@ public sealed class AuthenticatedCliPlugin :
             {
                 // ProcessAsync may fail only with PluginRequestException.
                 throw new PluginRequestException(
-                    "The provider CLI request directory could not be prepared.",
+                    Loc.L("Error.RequestDirectory"),
                     PluginRequestFailureKind.Unknown,
                     isTransient: false,
                     innerException: ex
@@ -344,7 +343,7 @@ public sealed class AuthenticatedCliPlugin :
                     if (!IsCurrentOpenCodeFreeModel(model))
                     {
                         throw new PluginRequestException(
-                            "The selected OpenCode model is no longer in the current verified free Zen catalog.",
+                            Loc.L("Error.ModelNoLongerFree"),
                             PluginRequestFailureKind.InvalidRequest,
                             isTransient: false
                         );
@@ -386,7 +385,7 @@ public sealed class AuthenticatedCliPlugin :
             catch (Exception ex) when (ex is JsonException or CliProtocolException or FormatException)
             {
                 throw new PluginRequestException(
-                    "The provider CLI returned an invalid structured result.",
+                    Loc.L("Error.InvalidResult"),
                     PluginRequestFailureKind.Unknown,
                     isTransient: false,
                     innerException: ex
@@ -1056,7 +1055,7 @@ public sealed class AuthenticatedCliPlugin :
 
     // Order matters: a network failure that also mentions authentication or a model stays
     // transient, so a blip does not read as a sign-out and disable the provider.
-    private static PluginRequestException ClassifyFailure(
+    private PluginRequestException ClassifyFailure(
         CliProviderDescriptor descriptor,
         string failureText
     )
@@ -1073,7 +1072,7 @@ public sealed class AuthenticatedCliPlugin :
                 "timeout"))
         {
             return new PluginRequestException(
-                $"{descriptor.Key} CLI could not reach the provider.",
+                Loc.L("Error.Network", descriptor.Key),
                 PluginRequestFailureKind.Network,
                 isTransient: true
             );
@@ -1092,7 +1091,7 @@ public sealed class AuthenticatedCliPlugin :
                 "authentication failed"))
         {
             return new PluginRequestException(
-                $"{descriptor.Key} CLI is not signed in.",
+                Loc.L("Error.Authentication", descriptor.Key),
                 PluginRequestFailureKind.Authentication,
                 isTransient: false
             );
@@ -1101,7 +1100,7 @@ public sealed class AuthenticatedCliPlugin :
         if (ContainsAny(text, "rate limit", "too many requests", "quota"))
         {
             return new PluginRequestException(
-                $"{descriptor.Key} CLI rate limit was reached.",
+                Loc.L("Error.RateLimit", descriptor.Key),
                 PluginRequestFailureKind.RateLimit,
                 isTransient: true
             );
@@ -1110,7 +1109,7 @@ public sealed class AuthenticatedCliPlugin :
         if (ContainsAny(text, "permission", "forbidden", "subscription", "entitlement"))
         {
             return new PluginRequestException(
-                $"{descriptor.Key} account is not permitted to process this request.",
+                Loc.L("Error.Permission", descriptor.Key),
                 PluginRequestFailureKind.Permission,
                 isTransient: false
             );
@@ -1126,14 +1125,14 @@ public sealed class AuthenticatedCliPlugin :
                 "unknown option"))
         {
             return new PluginRequestException(
-                $"{descriptor.Key} CLI rejected the request configuration.",
+                Loc.L("Error.InvalidRequest", descriptor.Key),
                 PluginRequestFailureKind.InvalidRequest,
                 isTransient: false
             );
         }
 
         return new PluginRequestException(
-            $"{descriptor.Key} CLI exited without a valid result.",
+            Loc.L("Error.NoResult", descriptor.Key),
             PluginRequestFailureKind.Unknown,
             isTransient: false
         );
@@ -1150,7 +1149,7 @@ public sealed class AuthenticatedCliPlugin :
         ) is { } resolved
         && string.Equals(resolved, snapshot.ResolvedExecutablePath, StringComparison.Ordinal);
 
-    private static PluginRequestException CreateAvailabilityFailure(
+    private PluginRequestException CreateAvailabilityFailure(
         CliProviderDescriptor descriptor,
         CliAvailabilityState state
     )
@@ -1159,7 +1158,7 @@ public sealed class AuthenticatedCliPlugin :
             ? PluginRequestFailureKind.Authentication
             : PluginRequestFailureKind.Configuration;
         return new PluginRequestException(
-            $"{descriptor.Key} CLI is not ready: {state}.",
+            Loc.L("Error.NotReady", descriptor.Key, Loc.L($"State.{state}")),
             failureKind,
             isTransient: false
         );
@@ -1503,6 +1502,7 @@ public sealed class AuthenticatedCliPlugin :
                 ? preferred
                 : models.Count > 0 ? models[0].Id : null;
             return models
+                .OrderByDescending(model => string.Equals(model.Id, recommended, StringComparison.Ordinal))
                 .Select(model => new PluginModelInfo(model.Id, model.DisplayName)
                 {
                     IsRecommended = string.Equals(model.Id, recommended, StringComparison.Ordinal),

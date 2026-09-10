@@ -9,6 +9,7 @@ using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.AuthenticatedCli;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -18,6 +19,156 @@ public sealed class AuthenticatedCliPluginTests
 {
     private static readonly JsonSerializerOptions s_manifestJsonOptions =
         new() { PropertyNameCaseInsensitive = true };
+
+    [Theory]
+    [InlineData("en", ProcessRunStatus.TimedOut, null, "The provider CLI timed out.")]
+    [InlineData("en", ProcessRunStatus.StartFailed, null, "The provider CLI could not be started.")]
+    [InlineData("en", ProcessRunStatus.StartFailed, "missing interpreter", "The provider CLI could not be started: missing interpreter")]
+    [InlineData("en", ProcessRunStatus.OutputLimitExceeded, null, "The provider CLI produced too much output.")]
+    [InlineData("en", ProcessRunStatus.Exited, null, "The provider CLI returned output that was not valid UTF-8.")]
+    [InlineData("de", ProcessRunStatus.TimedOut, null, "Das Zeitlimit für die Anbieter-CLI wurde überschritten.")]
+    [InlineData("de", ProcessRunStatus.StartFailed, null, "Die Anbieter-CLI konnte nicht gestartet werden.")]
+    [InlineData("de", ProcessRunStatus.StartFailed, "missing interpreter", "Die Anbieter-CLI konnte nicht gestartet werden: missing interpreter")]
+    [InlineData("de", ProcessRunStatus.OutputLimitExceeded, null, "Die Anbieter-CLI hat zu viele Ausgabedaten erzeugt.")]
+    [InlineData("de", ProcessRunStatus.Exited, null, "Die Anbieter-CLI hat eine Ausgabe mit ungültiger UTF-8-Kodierung zurückgegeben.")]
+    [InlineData("es", ProcessRunStatus.TimedOut, null, "Se agotó el tiempo de espera de la CLI del proveedor.")]
+    [InlineData("es", ProcessRunStatus.StartFailed, null, "No se pudo iniciar la CLI del proveedor.")]
+    [InlineData("es", ProcessRunStatus.StartFailed, "missing interpreter", "No se pudo iniciar la CLI del proveedor: missing interpreter")]
+    [InlineData("es", ProcessRunStatus.OutputLimitExceeded, null, "La CLI del proveedor generó demasiados datos de salida.")]
+    [InlineData("es", ProcessRunStatus.Exited, null, "La CLI del proveedor devolvió datos con una codificación UTF-8 no válida.")]
+    [InlineData("ru", ProcessRunStatus.TimedOut, null, "Превышено время ожидания CLI провайдера.")]
+    [InlineData("ru", ProcessRunStatus.StartFailed, null, "Не удалось запустить CLI провайдера.")]
+    [InlineData("ru", ProcessRunStatus.StartFailed, "missing interpreter", "Не удалось запустить CLI провайдера: missing interpreter")]
+    [InlineData("ru", ProcessRunStatus.OutputLimitExceeded, null, "CLI провайдера выдал слишком много данных.")]
+    [InlineData("ru", ProcessRunStatus.Exited, null, "CLI провайдера вернул данные в недопустимой кодировке UTF-8.")]
+    public async Task RunnerFailures_ReturnLocalizedText(
+        string locale, ProcessRunStatus status, string? diagnostic, string expected)
+    {
+        var supervisor = new Mock<IPluginProcessSupervisor>();
+        supervisor.Setup(service => service.RunOneShotAsync(It.IsAny<ProcessCommand>(),
+                It.IsAny<ProcessOneShotOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessRunOutcome(status, null, [0xff], [], ProcessOutputStatus.Complete, diagnostic));
+        var runner = new CliProcessRunner(supervisor.Object, new PluginLocalization(PluginDirectory(), locale));
+        var request = new CliProcessRequest("/bin/true", [], "", Path.GetTempPath(), [],
+            TimeSpan.FromSeconds(1), 1024, 1024);
+
+        var error = await Assert.ThrowsAsync<PluginRequestException>(() => runner.RunAsync(request, CancellationToken.None));
+
+        Assert.Equal(expected, error.Message);
+        Assert.False(error.IsTransient);
+    }
+
+    [Theory]
+    [InlineData("en", "network authentication failed", PluginRequestFailureKind.Network, true, "codex CLI could not reach the provider.")]
+    [InlineData("en", "not logged in", PluginRequestFailureKind.Authentication, false, "codex CLI is not signed in.")]
+    [InlineData("en", "rate limit exceeded", PluginRequestFailureKind.RateLimit, true, "codex CLI rate limit was reached.")]
+    [InlineData("en", "forbidden", PluginRequestFailureKind.Permission, false, "codex account is not permitted to process this request.")]
+    [InlineData("en", "unknown model", PluginRequestFailureKind.InvalidRequest, false, "codex CLI rejected the request configuration.")]
+    [InlineData("en", "unexpected failure", PluginRequestFailureKind.Unknown, false, "codex CLI exited without a valid result.")]
+    [InlineData("de", "network authentication failed", PluginRequestFailureKind.Network, true, "Die CLI codex konnte den Anbieter nicht erreichen.")]
+    [InlineData("de", "not logged in", PluginRequestFailureKind.Authentication, false, "Die CLI codex ist nicht angemeldet.")]
+    [InlineData("de", "rate limit exceeded", PluginRequestFailureKind.RateLimit, true, "Das Anfragelimit der CLI codex wurde erreicht.")]
+    [InlineData("de", "forbidden", PluginRequestFailureKind.Permission, false, "Das Konto codex ist nicht berechtigt, diese Anfrage zu verarbeiten.")]
+    [InlineData("de", "unknown model", PluginRequestFailureKind.InvalidRequest, false, "Die CLI codex hat die Anfragekonfiguration abgelehnt.")]
+    [InlineData("de", "unexpected failure", PluginRequestFailureKind.Unknown, false, "Die CLI codex wurde ohne gültiges Ergebnis beendet.")]
+    [InlineData("es", "network authentication failed", PluginRequestFailureKind.Network, true, "La CLI codex no pudo conectarse con el proveedor.")]
+    [InlineData("es", "not logged in", PluginRequestFailureKind.Authentication, false, "No se ha iniciado sesión en la CLI codex.")]
+    [InlineData("es", "rate limit exceeded", PluginRequestFailureKind.RateLimit, true, "Se alcanzó el límite de solicitudes de la CLI codex.")]
+    [InlineData("es", "forbidden", PluginRequestFailureKind.Permission, false, "La cuenta de codex no tiene permiso para procesar esta solicitud.")]
+    [InlineData("es", "unknown model", PluginRequestFailureKind.InvalidRequest, false, "La CLI codex rechazó la configuración de la solicitud.")]
+    [InlineData("es", "unexpected failure", PluginRequestFailureKind.Unknown, false, "La CLI codex finalizó sin un resultado válido.")]
+    [InlineData("ru", "network authentication failed", PluginRequestFailureKind.Network, true, "CLI codex не удалось подключиться к провайдеру.")]
+    [InlineData("ru", "not logged in", PluginRequestFailureKind.Authentication, false, "Вход в CLI codex не выполнен.")]
+    [InlineData("ru", "rate limit exceeded", PluginRequestFailureKind.RateLimit, true, "Достигнут лимит запросов CLI codex.")]
+    [InlineData("ru", "forbidden", PluginRequestFailureKind.Permission, false, "У учётной записи codex нет разрешения на обработку этого запроса.")]
+    [InlineData("ru", "unknown model", PluginRequestFailureKind.InvalidRequest, false, "CLI codex отклонил конфигурацию запроса.")]
+    [InlineData("ru", "unexpected failure", PluginRequestFailureKind.Unknown, false, "CLI codex завершился без допустимого результата.")]
+    public async Task RequestClassification_ReturnsLocalizedText(
+        string locale, string failure, PluginRequestFailureKind kind, bool transient, string expected)
+    {
+        using var fake = FakeCliInstallation.Create("success", "codex");
+        var probeRunner = CreateRunner();
+        var runner = new RequestFailureRunner(probeRunner, failure);
+        // ReSharper disable once AccessToDisposedClosure -- the discovery delegate only runs while the plugin is active, before the installation is disposed.
+        using var plugin = new AuthenticatedCliPlugin(new CliExecutableDiscovery(() => fake.DirectoryPath), runner);
+        var host = CreateHost();
+        host.SetupGet(service => service.Localization).Returns(new PluginLocalization(PluginDirectory(), locale));
+        await plugin.ActivateAsync(host.Object);
+        var role = GetRole(plugin, "authenticated-cli-codex");
+        try
+        {
+            var error = await Assert.ThrowsAsync<PluginRequestException>(() => role.ProcessAsync(
+                "Instruction", "Input", "default", CancellationToken.None));
+            Assert.Equal(expected, error.Message);
+            Assert.Equal(kind, error.FailureKind);
+            Assert.Equal(transient, error.IsTransient);
+        }
+        finally
+        {
+            await plugin.DeactivateAsync();
+        }
+    }
+
+    [Fact]
+    public async Task DisableAndReenable_UsesTheNewHostProcessScope()
+    {
+        using var fake = FakeCliInstallation.Create("success", "codex");
+        fake.Install("opencode");
+        // ReSharper disable once AccessToDisposedClosure -- the discovery delegate only runs while the plugin is active, before the installation is disposed.
+        using var plugin = new AuthenticatedCliPlugin(new CliExecutableDiscovery(() => fake.DirectoryPath), null);
+        var firstScope = new PluginProcessSupervisorScope(plugin.PluginId, new ProcessRunner());
+        var firstHost = CreateHost();
+        firstHost.SetupGet(host => host.Processes).Returns(firstScope);
+        await plugin.ActivateAsync(firstHost.Object);
+        await plugin.RefreshFromSettingsAsync();
+        var role = GetRole(plugin, "authenticated-cli-codex");
+        Assert.Equal("processed", await role.ProcessAsync("Instruction", "Input", "default", CancellationToken.None));
+        await plugin.DeactivateAsync();
+        firstScope.Retire();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => firstScope.RunOneShotAsync(
+            new ProcessCommand("/bin/true", []), new ProcessOneShotOptions()));
+
+        var secondScope = new PluginProcessSupervisorScope(plugin.PluginId, new ProcessRunner());
+        var secondHost = CreateHost();
+        secondHost.SetupGet(host => host.Processes).Returns(secondScope);
+        try
+        {
+            await plugin.ActivateAsync(secondHost.Object);
+            await plugin.RefreshFromSettingsAsync();
+            Assert.Same(role, GetRole(plugin, "authenticated-cli-codex"));
+            Assert.True(role.IsAvailable);
+            Assert.Equal("processed", await role.ProcessAsync("Instruction", "Input", "default", CancellationToken.None));
+            var openCode = GetRole(plugin, "authenticated-cli-opencode");
+            Assert.True(openCode.IsAvailable);
+            Assert.Equal("processed", await openCode.ProcessAsync("Instruction", "Input",
+                Assert.Single(openCode.SupportedModels).Id, CancellationToken.None));
+        }
+        finally
+        {
+            await plugin.DeactivateAsync();
+            secondScope.Retire();
+        }
+    }
+
+    [Fact]
+    public async Task OpenCodePreferredModel_IsFirstAndRecommendedAmongSeveralFreeModels()
+    {
+        using var fake = FakeCliInstallation.Create("catalog-several", "opencode");
+        using var plugin = CreatePlugin(fake.DirectoryPath);
+        var host = CreateHost();
+        host.Setup(service => service.GetSetting<string>("opencodeModel")).Returns("opencode/zeta-free");
+        await plugin.ActivateAsync(host.Object);
+        await plugin.RefreshFromSettingsAsync();
+        var role = GetRole(plugin, "authenticated-cli-opencode");
+        Assert.Equal(3, role.SupportedModels.Count);
+        Assert.Equal("opencode/zeta-free", role.SupportedModels[0].Id);
+        Assert.Equal("opencode/zeta-free", Assert.Single(role.SupportedModels, model => model.IsRecommended).Id);
+
+        await plugin.SetSettingValueAsync("opencodeModel", "opencode/muse-spark-1.3-contributor-free", CancellationToken.None);
+        Assert.Equal("opencode/muse-spark-1.3-contributor-free", role.SupportedModels[0].Id);
+        Assert.True(role.SupportedModels[0].IsRecommended);
+        await plugin.DeactivateAsync();
+    }
 
     [Fact]
     public async Task CodexProvider_UsesStructuredStdinAndFixedArguments()
@@ -1325,6 +1476,14 @@ public sealed class AuthenticatedCliPluginTests
         }
     }
 
+    private sealed class RequestFailureRunner(ICliProcessRunner probeRunner, string failure) : ICliProcessRunner
+    {
+        public Task<CliProcessResult> RunAsync(CliProcessRequest request, CancellationToken cancellationToken) =>
+            request.Arguments.Contains("--json")
+                ? Task.FromResult(new CliProcessResult(1, "", failure, TimeSpan.Zero, 0, failure.Length))
+                : probeRunner.RunAsync(request, cancellationToken);
+    }
+
     private static string VerboseModel(
         string headerId,
         string name,
@@ -1348,7 +1507,7 @@ public sealed class AuthenticatedCliPluginTests
         new(new PluginProcessSupervisorScope(
             "com.typewhisper.authenticated-cli",
             new ProcessRunner()
-        ));
+        ), new PluginLocalization(PluginDirectory(), "en"));
 
     private static Mock<IPluginHostServices> CreateHost()
     {

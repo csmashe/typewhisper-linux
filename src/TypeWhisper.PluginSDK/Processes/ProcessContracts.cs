@@ -28,30 +28,31 @@ public enum ProcessPostExitPipePolicy
     AbandonAfterGrace,
 }
 
-/// <param name="MaximumStandardOutputBytes">
-///     Ceiling on captured stdout bytes, or null for unbounded. Must not be negative. Once a
-///     stream passes its ceiling the supervisor stops reading it, terminates the child, and
-///     reports <see cref="ProcessRunStatus.OutputLimitExceeded" /> with
-///     <see cref="ProcessOutputStatus.Truncated" /> and what was captured up to the ceiling, so
-///     a runaway child cannot grow the host's memory without bound.
-/// </param>
-/// <param name="MaximumStandardErrorBytes">The same ceiling for stderr.</param>
-/// <param name="ClearInheritedEnvironment">
-///     When true the child starts from an empty environment instead of a copy of the host's, so
-///     only <see cref="ProcessCommand.Environment" /> reaches it. Default false: an existing
-///     caller that only adds a variable keeps inheriting everything else.
-/// </param>
 public sealed record ProcessOneShotOptions(
     TimeSpan? Timeout = null,
     ProcessInput? StandardInput = null,
     ProcessCaptureMode StandardOutput = ProcessCaptureMode.Utf8Text,
     ProcessCaptureMode StandardError = ProcessCaptureMode.Utf8Text,
     ProcessPostExitPipePolicy PostExitPipePolicy = ProcessPostExitPipePolicy.RequireEof,
-    TimeSpan? PostExitDrainGrace = null,
-    int? MaximumStandardOutputBytes = null,
-    int? MaximumStandardErrorBytes = null,
-    bool ClearInheritedEnvironment = false
-);
+    TimeSpan? PostExitDrainGrace = null
+)
+{
+    /// <summary>
+    /// Ceiling on captured stdout bytes, or null for unbounded. Must not be negative. Once a
+    /// stream passes its ceiling the supervisor terminates the child and reports
+    /// <see cref="ProcessRunStatus.OutputLimitExceeded" /> with truncated captured output.
+    /// </summary>
+    public int? MaximumStandardOutputBytes { get; init; }
+
+    /// <summary>The same ceiling for stderr.</summary>
+    public int? MaximumStandardErrorBytes { get; init; }
+
+    /// <summary>
+    /// Start with an empty environment so only <see cref="ProcessCommand.Environment" />
+    /// reaches the child. Defaults to false to preserve inherited environment behavior.
+    /// </summary>
+    public bool ClearInheritedEnvironment { get; init; }
+}
 
 public enum ProcessRunStatus
 {
