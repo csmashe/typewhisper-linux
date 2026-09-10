@@ -159,6 +159,7 @@
   "Dashboard.LongestStreak": "Racha más larga",
   "Dashboard.Models": "Modelos",
   "Dashboard.NoActivity": "Sin actividad en este periodo.",
+  "Dashboard.NoRecentActivity": "Sin actividad reciente.",
   "Dashboard.NoAppUsage": "Sin uso de aplicaciones en este periodo.",
   "Dashboard.NoLanguageData": "No hay datos de idioma en este periodo.",
   "Dashboard.NoModelData": "No hay datos de modelos en este periodo.",

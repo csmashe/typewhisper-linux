@@ -51,4 +51,41 @@ public sealed class UsageStatisticsRegistrationTests
             Directory.Delete(directory, recursive: true);
         }
     }
+
+    [Fact]
+    public void HistoryBecomingAvailable_IsBackfilledBeforeTheFirstCountedRecord()
+    {
+        var directory = Path.Join(Path.GetTempPath(), $"tw_statistics_registration_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var older = new TranscriptionRecord
+            {
+                Id = "older",
+                Timestamp = new DateTime(2026, 9, 8, 12, 0, 0, DateTimeKind.Utc),
+                RawText = "hello world",
+                FinalText = "hello world",
+                DurationSeconds = 1,
+            };
+            var history = new Mock<IHistoryService>(MockBehavior.Strict);
+            // Startup and the first live record see unreadable history; the second retries successfully.
+            history.SetupSequence(service => service.Records).Returns([]).Returns([]).Returns([older]);
+            history.SetupSequence(service => service.RecordsAvailable).Returns(false).Returns(false).Returns(true);
+            var services = new ServiceCollection();
+            services.AddSingleton(history.Object);
+            ServiceRegistrations.RegisterUsageStatistics(services, directory);
+            using var provider = services.BuildServiceProvider();
+            var statistics = provider.GetRequiredService<IUsageStatisticsService>();
+
+            statistics.RecordTranscription(older with { Id = "first", Timestamp = older.Timestamp.AddMinutes(1) });
+            Assert.False(statistics.HasAnyStatistics);
+
+            statistics.RecordTranscription(older with { Id = "second", Timestamp = older.Timestamp.AddMinutes(2) });
+            Assert.Equal(2, Assert.Single(statistics.Days).TranscriptionCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
 }

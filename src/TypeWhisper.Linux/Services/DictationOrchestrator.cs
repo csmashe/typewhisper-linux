@@ -3786,8 +3786,17 @@ public sealed class DictationOrchestrator : IDisposable
                     IsSpokenCommand = true,
                     LlmCalls = context.Capture?.Calls ?? [],
                 };
+            // Statistics before history: RecordTranscription may still be catching up from history, and a
+            // record persisted first would be imported by that backfill and then counted a second time.
+            try
+            {
+                _usageStatistics?.RecordTranscription(record);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Command] RecordTranscription failed: {ex.Message}");
+            }
             _history.AddRecord(record);
-            _usageStatistics?.RecordTranscription(record);
         }
         catch (Exception ex)
         {
@@ -3852,8 +3861,17 @@ public sealed class DictationOrchestrator : IDisposable
                     ),
                     LlmCalls = context.Capture?.Calls ?? [],
                 };
+            // Statistics before history: RecordTranscription may still be catching up from history, and a
+            // record persisted first would be imported by that backfill and then counted a second time.
+            try
+            {
+                _usageStatistics?.RecordTranscription(record);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] RecordTranscription failed: {ex.Message}");
+            }
             _history.AddRecord(record);
-            _usageStatistics?.RecordTranscription(record);
         }
         catch (Exception ex)
         {

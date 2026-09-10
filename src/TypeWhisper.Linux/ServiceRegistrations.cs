@@ -276,13 +276,21 @@ internal static class ServiceRegistrations
 
     private static UsageStatisticsService CreateUsageStatisticsService(string dataPath, IHistoryService history)
     {
-        var statistics = new UsageStatisticsService(Path.Join(dataPath, "usage-statistics.json"));
-        var records = history.Records;
-        if (history.RecordsAvailable)
+        var statistics = new UsageStatisticsService(
+            Path.Join(dataPath, "usage-statistics.json"),
+            historyBackfillSource: () => ReadHistoryForBackfill(history));
+        if (ReadHistoryForBackfill(history) is { } records)
         {
             statistics.BackfillFromHistoryIfNeeded(records);
         }
         return statistics;
+    }
+
+    // Records first, then the flag: HistoryService decides RecordsAvailable while reading Records.
+    private static IReadOnlyList<TranscriptionRecord>? ReadHistoryForBackfill(IHistoryService history)
+    {
+        var records = history.Records;
+        return history.RecordsAvailable ? records : null;
     }
 
 }

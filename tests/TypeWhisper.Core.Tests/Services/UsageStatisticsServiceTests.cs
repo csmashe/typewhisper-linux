@@ -35,6 +35,103 @@ public sealed class UsageStatisticsServiceTests : IDisposable
     }
 
     [Fact]
+    public void RecordTranscription_RetriesHistoryBackfillFromSourceBeforeCounting()
+    {
+        var timestamp = new DateTime(2026, 9, 8, 12, 0, 0, DateTimeKind.Utc);
+        var older = CreateRecord("older", timestamp.AddHours(-1), "older record");
+        var calls = 0;
+        var service = new UsageStatisticsService(
+            Path.Join(_directory, "retry.json"),
+            new FixedTimeProvider(TimeZoneInfo.Utc),
+            historyBackfillSource: () => ++calls == 1 ? null : [older]);
+
+        service.RecordTranscription(CreateRecord("first", timestamp, "first live record"));
+        Assert.False(service.HasAnyStatistics);
+
+        service.RecordTranscription(CreateRecord("second", timestamp, "second live record"));
+        Assert.Equal(2, Assert.Single(service.Days).TranscriptionCount);
+
+        service.RecordTranscription(CreateRecord("third", timestamp, "third live record"));
+        Assert.Equal(3, Assert.Single(service.Days).TranscriptionCount);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public void RecordTranscription_CountsLiveRecordWhenBackfillNotificationThrows()
+    {
+        var timestamp = new DateTime(2026, 9, 8, 12, 0, 0, DateTimeKind.Utc);
+        var older = CreateRecord("older", timestamp.AddHours(-1), "older record");
+        var calls = 0;
+        var service = new UsageStatisticsService(
+            Path.Join(_directory, "notification.json"),
+            new FixedTimeProvider(TimeZoneInfo.Utc),
+            historyBackfillSource: () =>
+            {
+                calls++;
+                return [older];
+            });
+        var events = 0;
+        service.StatisticsChanged += () =>
+        {
+            if (++events == 1)
+            {
+                throw new InvalidOperationException("Subscriber failed.");
+            }
+        };
+
+        Assert.Throws<InvalidOperationException>(() =>
+            service.RecordTranscription(CreateRecord("first", timestamp, "first live record")));
+        Assert.Equal(2, Assert.Single(service.Days).TranscriptionCount);
+
+        service.RecordTranscription(CreateRecord("second", timestamp, "second live record"));
+        Assert.Equal(3, Assert.Single(service.Days).TranscriptionCount);
+        Assert.Equal(1, calls);
+        Assert.Equal(2, events);
+    }
+
+    [Fact]
+    public async Task BackfillFromHistoryIfNeeded_MaterializesRecordsBeforeUpdating()
+    {
+        var timestamp = new DateTime(2026, 9, 8, 12, 0, 0, DateTimeKind.Utc);
+        var service = new UsageStatisticsService(
+            Path.Join(_directory, "materialized.json"),
+            new FixedTimeProvider(TimeZoneInfo.Utc));
+        using var enumerationStarted = new ManualResetEventSlim();
+        using var readCompleted = new ManualResetEventSlim();
+        var timeout = TimeSpan.FromSeconds(5);
+        var readCompletedDuringEnumeration = false;
+
+        // ReSharper disable AccessToDisposedClosure -- enumeration runs synchronously inside BackfillFromHistoryIfNeeded and the read task is awaited, so both closures finish before the events are disposed
+        var read = Task.Factory.StartNew(() =>
+        {
+            if (!enumerationStarted.Wait(timeout))
+            {
+                return;
+            }
+
+            _ = service.Days;
+            readCompleted.Set();
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+        service.BackfillFromHistoryIfNeeded(new LazyRecordCollection(Records()));
+        await read.WaitAsync(timeout);
+
+        Assert.True(readCompletedDuringEnumeration, "The store read was blocked while records were enumerated.");
+        Assert.Equal(2, Assert.Single(service.Days).TranscriptionCount);
+        Assert.Equal(4, Assert.Single(service.Days).TotalWords);
+        return;
+
+        IEnumerable<TranscriptionRecord> Records()
+        {
+            yield return CreateRecord("one", timestamp, "first record");
+            enumerationStarted.Set();
+            readCompletedDuringEnumeration = readCompleted.Wait(timeout);
+            yield return CreateRecord("two", timestamp, "second record");
+        }
+        // ReSharper restore AccessToDisposedClosure
+    }
+
+    [Fact]
     public void UnwritableParent_DropsRecordsAndBackfillWithoutEventsAndAllowsRetry()
     {
         Directory.CreateDirectory(_directory);
@@ -193,9 +290,11 @@ public sealed class UsageStatisticsServiceTests : IDisposable
         service = new UsageStatisticsService(path);
         service.RecordTranscription(record with { Language = "en-GB", AppProcessName = "NOTES" });
         service.RecordTranscription(record with { Language = null, AppProcessName = null, AppName = null });
+        service.RecordTranscription(record with { Language = "-en", AppProcessName = null, AppName = null });
         var day = Assert.Single(service.Days);
         Assert.Equal(2, day.LanguageCounts["EN"]);
-        Assert.Equal(1, day.LanguageCounts["unknown"]);
+        Assert.Equal(2, day.LanguageCounts["unknown"]);
+        Assert.DoesNotContain("", day.LanguageCounts.Keys);
         Assert.Equal(2, day.AppCounts["notes"]);
         Assert.Single(day.AppCounts);
         Assert.Equal(("unknown", (string?)null), UsageStatisticsService.ParseModelKey(UsageStatisticsService.BuildModelKey(null, null)));
@@ -243,6 +342,16 @@ public sealed class UsageStatisticsServiceTests : IDisposable
         Assert.Equal(1, events);
         service.RecordTranscription(record);
         Assert.Equal(2, events);
+    }
+
+    private sealed class LazyRecordCollection(IEnumerable<TranscriptionRecord> records)
+        : IReadOnlyCollection<TranscriptionRecord>
+    {
+        public int Count => 2;
+
+        public IEnumerator<TranscriptionRecord> GetEnumerator() => records.GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     private sealed class FixedTimeProvider(TimeZoneInfo zone) : TimeProvider

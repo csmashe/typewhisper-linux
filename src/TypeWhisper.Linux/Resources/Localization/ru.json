@@ -159,6 +159,7 @@
   "Dashboard.LongestStreak": "Самая длинная серия",
   "Dashboard.Models": "Модели",
   "Dashboard.NoActivity": "Нет активности за этот период.",
+  "Dashboard.NoRecentActivity": "Нет недавней активности.",
   "Dashboard.NoAppUsage": "Нет использования приложений за этот период.",
   "Dashboard.NoLanguageData": "Нет данных о языках за этот период.",
   "Dashboard.NoModelData": "Нет данных о моделях за этот период.",

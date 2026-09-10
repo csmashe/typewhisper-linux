@@ -22,6 +22,7 @@ public sealed class UsageStatisticsService : IUsageStatisticsService
 
     private readonly AtomicJsonStore<UsageStatisticsStore> _store;
     private readonly TimeProvider _timeProvider;
+    private readonly Func<IReadOnlyList<TranscriptionRecord>?>? _historyBackfillSource;
 
     public IReadOnlyList<UsageStatisticsDaySnapshot> Days
     {
@@ -44,9 +45,13 @@ public sealed class UsageStatisticsService : IUsageStatisticsService
 
     public event Action? StatisticsChanged;
 
-    public UsageStatisticsService(string filePath, TimeProvider? timeProvider = null)
+    public UsageStatisticsService(
+        string filePath,
+        TimeProvider? timeProvider = null,
+        Func<IReadOnlyList<TranscriptionRecord>?>? historyBackfillSource = null)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _historyBackfillSource = historyBackfillSource;
         _store = new AtomicJsonStore<UsageStatisticsStore>(
             filePath,
             static () => new UsageStatisticsStore(),
@@ -67,9 +72,15 @@ public sealed class UsageStatisticsService : IUsageStatisticsService
             return;
         }
 
-        bool changed;
+        var changed = false;
         try
         {
+            if (_historyBackfillSource is not null && !_store.Current.HistoryBackfillCompleted
+                && _historyBackfillSource() is { } records)
+            {
+                changed = BackfillFromHistoryIfNeededCore(records);
+            }
+
             _store.Update(store =>
             {
                 if (!store.HistoryBackfillCompleted)
@@ -79,12 +90,12 @@ public sealed class UsageStatisticsService : IUsageStatisticsService
                 var updated = CloneStore(store);
                 AddToStore(updated, record);
                 return updated;
-            }, out changed);
+            }, out var recordChanged);
+            changed |= recordChanged;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             Trace.WriteLine($"[UsageStatisticsService] Failed to record transcription: {ex.Message}");
-            return;
         }
         if (changed)
         {
@@ -95,9 +106,19 @@ public sealed class UsageStatisticsService : IUsageStatisticsService
     public void BackfillFromHistoryIfNeeded(IEnumerable<TranscriptionRecord> records)
     {
         ArgumentNullException.ThrowIfNull(records);
+        if (BackfillFromHistoryIfNeededCore(records))
+        {
+            StatisticsChanged?.Invoke();
+        }
+    }
+
+    private bool BackfillFromHistoryIfNeededCore(IEnumerable<TranscriptionRecord> records)
+    {
         bool changed;
         try
         {
+            // A caller's lazy sequence must not run under the statistics store lock.
+            var materializedRecords = records.ToArray();
             _store.Update(store =>
             {
                 if (store.HistoryBackfillCompleted)
@@ -105,7 +126,7 @@ public sealed class UsageStatisticsService : IUsageStatisticsService
                     return store;
                 }
                 var updated = CloneStore(store);
-                foreach (var record in records)
+                foreach (var record in materializedRecords)
                 {
                     if (IsValid(record))
                     {
@@ -119,12 +140,9 @@ public sealed class UsageStatisticsService : IUsageStatisticsService
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             Trace.WriteLine($"[UsageStatisticsService] Failed to backfill history: {ex.Message}");
-            return;
+            return false;
         }
-        if (changed)
-        {
-            StatisticsChanged?.Invoke();
-        }
+        return changed;
     }
 
     private static bool IsValid(TranscriptionRecord record) =>
@@ -176,7 +194,8 @@ public sealed class UsageStatisticsService : IUsageStatisticsService
         var modelKey = BuildModelKey(record.EngineUsed, record.ModelUsed);
         day.ModelCounts[modelKey] = day.ModelCounts.GetValueOrDefault(modelKey) + 1;
 
-        var languageKey = NormalizeValue(record.Language, "unknown").Split('-')[0].ToLowerInvariant();
+        var primarySubtag = NormalizeValue(record.Language, "unknown").Split('-')[0];
+        var languageKey = NormalizeValue(primarySubtag, "unknown").ToLowerInvariant();
         day.LanguageCounts[languageKey] = day.LanguageCounts.GetValueOrDefault(languageKey) + 1;
 
         NormalizeHours(day);

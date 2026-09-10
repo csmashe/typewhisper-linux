@@ -544,7 +544,7 @@
                     Padding="16"
                     MinHeight="220">
                 <Grid>
-                    <TextBlock Text="{loc:Str Dashboard.NoActivity}"
+                    <TextBlock Text="{loc:Str Dashboard.NoRecentActivity}"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"
                                FontSize="14"
