@@ -164,10 +164,12 @@ public sealed class OpenAiPlugin
         }
 
         AuthMode = OpenAiAuthModeExtensions.Parse(host.GetSetting<string>(AuthModeSettingName));
-        _selectedApiKeyModelId = host.GetSetting<string>(SelectedLlmModelSettingName);
-        _selectedChatGptModelId = host.GetSetting<string>(SelectedChatGptModelSettingName);
+        var rawApiKeySelection = host.GetSetting<string>(SelectedLlmModelSettingName);
+        _selectedApiKeyModelId = NormalizeModelSelection(rawApiKeySelection);
+        var rawChatGptSelection = host.GetSetting<string>(SelectedChatGptModelSettingName);
+        _selectedChatGptModelId = NormalizeModelSelection(rawChatGptSelection);
         var migratedChatGptSelection = false;
-        if (_selectedChatGptModelId is null && AuthMode == OpenAiAuthMode.ChatGpt && _selectedApiKeyModelId is not null)
+        if (rawChatGptSelection is null && AuthMode == OpenAiAuthMode.ChatGpt && rawApiKeySelection is not null)
         {
             _selectedChatGptModelId = _selectedApiKeyModelId;
             migratedChatGptSelection = true;
@@ -188,11 +190,13 @@ public sealed class OpenAiPlugin
         var removedLlmModelIds = (cachedLlmModels ?? []).OfType<OpenAiFetchedModel>()
             .Select(model => model.Id)
             .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim())
             .Except(_fetchedLlmModels.Select(model => model.Id), StringComparer.OrdinalIgnoreCase)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var removedChatGptModelIds = (cachedChatGptModels ?? []).OfType<OpenAiChatGptModel>()
             .Select(model => model.Slug)
             .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim())
             .Except(_fetchedChatGptModels.Select(model => model.Slug), StringComparer.OrdinalIgnoreCase)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         // An id the sanitizer just rejected must not survive unknown-id preservation.
@@ -880,14 +884,18 @@ public sealed class OpenAiPlugin
 
     // A persisted cache is trusted no more than a live response: a hand-edited or pre-filter settings
     // file must not surface blank ids or hidden ChatGPT models, or let one become the selection.
+    // Ids are trimmed so padding never reaches the API; ChatGPT catalogs are deduplicated afterwards,
+    // so a padded entry no longer duplicates a real model there.
     private static List<OpenAiFetchedModel> SanitizeApiModels(IEnumerable<OpenAiFetchedModel?>? models) =>
         (models ?? []).OfType<OpenAiFetchedModel>()
             .Where(model => !string.IsNullOrWhiteSpace(model.Id))
+            .Select(model => model with { Id = model.Id.Trim() })
             .ToList();
 
     private static List<OpenAiChatGptModel> SanitizeChatGptModels(IEnumerable<OpenAiChatGptModel?>? models) =>
         (models ?? []).OfType<OpenAiChatGptModel>()
             .Where(IsVisibleChatGptModel)
+            .Select(model => model with { Slug = model.Slug.Trim() })
             .DistinctBy(model => model.Slug, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -912,6 +920,7 @@ public sealed class OpenAiPlugin
 
     internal void SelectLlmModel(string modelId)
     {
+        modelId = modelId.Trim();
         if (SupportedModels.All(model => !string.Equals(model.Id, modelId, StringComparison.Ordinal)))
             modelId = (SupportedModels.Count > 0 ? SupportedModels[0] : null)?.Id ?? modelId;
 
@@ -1381,6 +1390,8 @@ public sealed class OpenAiPlugin
 
     private static string? NormalizeApiKey(string? apiKey) =>
         string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
+
+    private static string? NormalizeModelSelection(string? id) => string.IsNullOrWhiteSpace(id) ? null : id.Trim();
 
     // The typed invoker maps "auto" to null already; this only catches direct/legacy callers.
     private static string? NormalizeLanguage(string? language)

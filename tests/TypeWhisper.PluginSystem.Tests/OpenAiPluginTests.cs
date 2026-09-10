@@ -1065,6 +1065,161 @@ public partial class OpenAiPluginTests
     }
 
     [Fact]
+    public async Task Activate_TrimsCachedApiModelIds()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "apiKey");
+        host.SetSetting("selectedLLMModel", "gpt-4.1-mini");
+        host.SetSetting("fetchedLLMModels", new List<OpenAiFetchedModel>
+        {
+            new(" gpt-4.1-mini ", null),
+            new("gpt-4.1-mini", null),
+        });
+        host.SetSetting("fetchedTranscriptionModels", new List<OpenAiFetchedModel> { new(" whisper-1 ", null) });
+        host.Secrets["api-key"] = "sk-test";
+        host.SettingWrites.Clear();
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.All(sut.SupportedModels, model => Assert.Equal(model.Id.Trim(), model.Id));
+        Assert.All(sut.TranscriptionModels, model => Assert.Equal(model.Id.Trim(), model.Id));
+        Assert.Contains(sut.TranscriptionModels, model => model.Id == "whisper-1");
+        Assert.Equal("gpt-4.1-mini", sut.SelectedLlmModelId);
+        Assert.Empty(host.SettingWrites);
+    }
+
+    [Fact]
+    public async Task Activate_KeepsPaddedSelectionOfPaddedCacheEntry()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "apiKey");
+        host.SetSetting("selectedLLMModel", " gpt-4.1-mini ");
+        host.SetSetting("fetchedLLMModels", new List<OpenAiFetchedModel>
+        {
+            new("gpt-4.1", null),
+            new(" gpt-4.1-mini ", null),
+        });
+        host.Secrets["api-key"] = "sk-test";
+        host.SettingWrites.Clear();
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("gpt-4.1-mini", sut.SelectedLlmModelId);
+        Assert.Empty(host.SettingWrites);
+    }
+
+    [Fact]
+    public async Task Activate_MigratesPaddedChatGptSelectionTrimmed()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("selectedLLMModel", " gpt-5 ");
+        host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel>
+        {
+            new("gpt-5.5", "GPT-5.5", "list", 1, null),
+            new(" gpt-5 ", "GPT-5", "list", 1, null),
+        });
+        host.Secrets["oauth-access-token"] = "access-token";
+        host.Secrets["oauth-refresh-token"] = "refresh-token";
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("gpt-5", host.GetSetting<string>("selectedChatGPTModel"));
+        Assert.Equal("gpt-5", sut.SelectedLlmModelId);
+    }
+
+    [Fact]
+    public async Task Activate_TrimsAndDeduplicatesCachedChatGptSlugs()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel>
+        {
+            new(" gpt-5 ", "GPT-5", "list", 1, null),
+            new("gpt-5", "Duplicate", "list", 1, null),
+        });
+        host.Secrets["oauth-access-token"] = "access-token";
+        host.Secrets["oauth-refresh-token"] = "refresh-token";
+        host.SettingWrites.Clear();
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("gpt-5", Assert.Single(sut.SupportedModels).Id);
+        Assert.Empty(host.SettingWrites);
+    }
+
+    [Fact]
+    public async Task Activate_BlankChatGptSelection_DoesNotMigrate()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("selectedChatGPTModel", "   ");
+        host.SetSetting("selectedLLMModel", "gpt-5");
+        host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel>
+        {
+            new("gpt-5.5", "GPT-5.5", "list", 1, null),
+            new("gpt-5", "GPT-5", "list", 1, null),
+        });
+        host.Secrets["oauth-access-token"] = "access-token";
+        host.Secrets["oauth-refresh-token"] = "refresh-token";
+        host.SettingWrites.Clear();
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Empty(host.SettingWrites);
+        Assert.Equal("   ", host.GetSetting<string>("selectedChatGPTModel"));
+        Assert.Equal("gpt-5.5", sut.SelectedLlmModelId);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Activate_BlankLegacySelection_StillMigratesFallback(string legacy)
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("selectedLLMModel", legacy);
+        host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel>
+        {
+            new("gpt-5.5", "GPT-5.5", "list", 1, null),
+            new("gpt-5", "GPT-5", "list", 1, null),
+        });
+        host.Secrets["oauth-access-token"] = "access-token";
+        host.Secrets["oauth-refresh-token"] = "refresh-token";
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("gpt-5.5", host.GetSetting<string>("selectedChatGPTModel"));
+        Assert.Equal("gpt-5.5", sut.SelectedLlmModelId);
+    }
+
+    [Fact]
+    public async Task SelectLlmModel_TrimsPaddedIdAgainstTrimmedCatalog()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "apiKey");
+        host.SetSetting("fetchedLLMModels", new List<OpenAiFetchedModel>
+        {
+            new("gpt-4.1", null),
+            new(" gpt-4.1-mini ", null),
+        });
+        host.Secrets["api-key"] = "sk-test";
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+        await sut.SetSettingValueAsync("selectedLLMModel", " gpt-4.1-mini ");
+
+        Assert.Equal("gpt-4.1-mini", sut.SelectedLlmModelId);
+        Assert.Equal("gpt-4.1-mini", host.GetSetting<string>("selectedLLMModel"));
+    }
+
+    [Fact]
     public async Task ActivateAsync_UsesCachedAccountSpecificChatGptModels()
     {
         var host = new TestPluginHostServices();
