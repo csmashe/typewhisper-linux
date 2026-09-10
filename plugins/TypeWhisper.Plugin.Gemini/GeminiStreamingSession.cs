@@ -24,7 +24,7 @@ internal sealed class GeminiStreamingSession : IStreamingSession, IStreamingSess
     private readonly WebSocketSessionPump _pump;
     private readonly GeminiWebSocketAdapter _adapter;
     private readonly IWebSocketTransport _transport;
-    private long _lastAudibleAudioTick;
+    private long _lastAudibleSequence;
 
     private GeminiStreamingSession(WebSocketSessionPump pump, GeminiWebSocketAdapter adapter, IWebSocketTransport transport)
     {
@@ -72,11 +72,13 @@ internal sealed class GeminiStreamingSession : IStreamingSession, IStreamingSess
         return new GeminiStreamingSession(pump, adapter, transport);
     }
 
-    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
+    public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
     {
-        if (IsAudible(pcm16Audio.Span))
-            Volatile.Write(ref _lastAudibleAudioTick, Environment.TickCount64);
-        return _pump.SendAudioAsync(pcm16Audio, ct);
+        var audible = IsAudible(pcm16Audio.Span);
+        await _pump.SendAudioAsync(pcm16Audio, ct);
+        // Take the sequence after sending so finals received in flight leave this audio untranscribed.
+        if (audible)
+            Volatile.Write(ref _lastAudibleSequence, _adapter.NextActivity());
     }
 
     internal static bool IsAudible(ReadOnlySpan<byte> pcm16Audio)
@@ -104,7 +106,7 @@ internal sealed class GeminiStreamingSession : IStreamingSession, IStreamingSess
 
         var finalsAtStart = _adapter.FinalCount;
         var tailExpected = _adapter.HasPendingUtterance
-            || Volatile.Read(ref _lastAudibleAudioTick) > _adapter.LastFinalTick;
+            || Volatile.Read(ref _lastAudibleSequence) > _adapter.LastFinalSequence;
 
         // No server completion signal exists: a pending interim or audible audio sent after
         // the last final is evidence of untranscribed speech. An expected tail fails finalization
@@ -208,11 +210,14 @@ internal sealed class GeminiWebSocketAdapter(
     private int _hasPendingUtterance;
     private int _completedPendingUtterances;
     private int _finalCount;
-    private long _lastFinalTick;
+    private long _activitySequence;
+    private long _lastFinalSequence;
     internal int CompletedPendingUtterances => Volatile.Read(ref _completedPendingUtterances);
     internal int FinalCount => Volatile.Read(ref _finalCount);
-    internal long LastFinalTick => Volatile.Read(ref _lastFinalTick);
+    internal long LastFinalSequence => Volatile.Read(ref _lastFinalSequence);
     internal bool HasPendingUtterance => Volatile.Read(ref _hasPendingUtterance) != 0;
+
+    internal long NextActivity() => Interlocked.Increment(ref _activitySequence);
 
     public string ProviderName => "Gemini";
     public WebSocketReadinessPolicy Readiness =>
@@ -327,7 +332,7 @@ internal sealed class GeminiWebSocketAdapter(
             {
                 // Publish the final before the completion counter: FinalizeAsync exits early on
                 // a completed pending utterance and must then see that final as arrived.
-                Volatile.Write(ref _lastFinalTick, Environment.TickCount64);
+                Volatile.Write(ref _lastFinalSequence, NextActivity());
                 Interlocked.Increment(ref _finalCount);
                 if (Interlocked.Exchange(ref _hasPendingUtterance, 0) != 0)
                     Interlocked.Increment(ref _completedPendingUtterances);

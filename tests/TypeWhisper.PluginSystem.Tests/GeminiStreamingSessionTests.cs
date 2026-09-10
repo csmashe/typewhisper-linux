@@ -230,10 +230,8 @@ public sealed class GeminiStreamingSessionTests
         if (throughCoordinator)
             await coordinator.StartAsync(CancellationToken.None);
         await SendPrefixFinalAsync(session, transport);
-        await Task.Delay(1);
         await session.SendAudioAsync(AudibleAudio(300), CancellationToken.None);
         await transport.NextSentAsync();
-        await Task.Delay(50);
 
         var finalize = throughCoordinator
             ? coordinator.FinalizeAsync(CancellationToken.None)
@@ -253,13 +251,68 @@ public sealed class GeminiStreamingSessionTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FinalizeAsync_FinalArrivingWhileAudioSendIsInFlight_StillExpectsTail(bool throughCoordinator)
+    {
+        var transport = new ScriptedWebSocketTransport();
+        await using var session = await ConnectAsync(transport);
+        var role = new Mock<ITranscriptionEngineRole>();
+        role.Setup(x => x.StartStreamingAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(session);
+        await using var coordinator = new StreamingTranscriptionCoordinator(
+            role.Object, LanguageSelection.Explicit("en"), [], 1, (_, _) => { }, _ => { });
+        if (throughCoordinator)
+            await coordinator.StartAsync(CancellationToken.None);
+        transport.BlockNextSend();
+        var send = session.SendAudioAsync(AudibleAudio(300), CancellationToken.None);
+        await transport.WaitForBlockedSendAsync().WaitAsync(s_timeout);
+        await SendPrefixFinalAsync(session, transport);
+        transport.ReleaseBlockedSend();
+        await send.WaitAsync(s_timeout);
+        await transport.NextSentAsync();
+
+        var finalize = throughCoordinator
+            ? coordinator.FinalizeAsync(CancellationToken.None)
+            : session.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        if (throughCoordinator)
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => finalize.WaitAsync(s_timeout));
+            Assert.IsType<TimeoutException>(error.InnerException);
+        }
+        else
+        {
+            var error = await Assert.ThrowsAsync<TimeoutException>(() => finalize.WaitAsync(s_timeout));
+            Assert.Contains("did not arrive in time", error.Message);
+        }
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_FinalRightAfterAudibleAudio_DoesNotExpectTail()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        await using var session = await ConnectAsync(transport);
+        var finals = new ConcurrentQueue<string>();
+        session.TranscriptReceived += e => { if (e.IsFinal) finals.Enqueue(e.Text); };
+        await session.SendAudioAsync(AudibleAudio(300), CancellationToken.None);
+        await transport.NextSentAsync();
+        await SendPrefixFinalAsync(session, transport);
+
+        var finalize = session.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        await finalize.WaitAsync(s_timeout);
+
+        Assert.Equal(["Prefix."], finals);
+    }
+
     [Fact]
     public async Task FinalizeAsync_AudibleTailAndNormalClose_Throws()
     {
         var transport = new ScriptedWebSocketTransport();
         await using var session = await ConnectAsync(transport);
         await SendPrefixFinalAsync(session, transport);
-        await Task.Delay(1);
         await session.SendAudioAsync(AudibleAudio(300), CancellationToken.None);
         await transport.NextSentAsync();
         var finalize = session.FinalizeAsync(CancellationToken.None);
@@ -287,10 +340,8 @@ public sealed class GeminiStreamingSessionTests
         var finals = new ConcurrentQueue<string>();
         session.TranscriptReceived += e => { if (e.IsFinal) finals.Enqueue(e.Text); };
         await SendPrefixFinalAsync(session, transport);
-        await Task.Delay(1);
         await session.SendAudioAsync(AudibleAudio(300), CancellationToken.None);
         await transport.NextSentAsync();
-        await Task.Delay(50);
 
         var finalize = throughCoordinator
             ? coordinator.FinalizeAsync(CancellationToken.None)
