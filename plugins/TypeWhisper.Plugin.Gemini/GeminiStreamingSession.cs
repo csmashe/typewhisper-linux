@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net.WebSockets;
 using System.Runtime.ExceptionServices;
 using System.Text;
@@ -15,11 +16,15 @@ internal sealed class GeminiStreamingSession : IStreamingSession, IStreamingSess
 
     internal const string FinalizePayload = """{"realtimeInput":{"audioStreamEnd":true}}""";
 
+    private const float AudibleRmsThreshold = 0.02f;
+    private const int TailCollectionWindowMs = 1500;
+
     private static readonly string[] s_responseModalities = ["TEXT"];
 
     private readonly WebSocketSessionPump _pump;
     private readonly GeminiWebSocketAdapter _adapter;
     private readonly IWebSocketTransport _transport;
+    private long _lastAudibleAudioTick;
 
     private GeminiStreamingSession(WebSocketSessionPump pump, GeminiWebSocketAdapter adapter, IWebSocketTransport transport)
     {
@@ -67,23 +72,54 @@ internal sealed class GeminiStreamingSession : IStreamingSession, IStreamingSess
         return new GeminiStreamingSession(pump, adapter, transport);
     }
 
-    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct) =>
-        _pump.SendAudioAsync(pcm16Audio, ct);
+    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
+    {
+        if (IsAudible(pcm16Audio.Span))
+            Volatile.Write(ref _lastAudibleAudioTick, Environment.TickCount64);
+        return _pump.SendAudioAsync(pcm16Audio, ct);
+    }
+
+    internal static bool IsAudible(ReadOnlySpan<byte> pcm16Audio)
+    {
+        var sampleCount = pcm16Audio.Length / 2;
+        if (sampleCount == 0)
+            return false;
+
+        double sumSquares = 0;
+        for (var sample = 0; sample < sampleCount; sample++)
+        {
+            var normalized = BinaryPrimitives.ReadInt16LittleEndian(pcm16Audio.Slice(sample * 2, 2)) / 32768f;
+            sumSquares += normalized * normalized;
+        }
+        var rms = Math.Sqrt(sumSquares / sampleCount);
+        return rms >= AudibleRmsThreshold;
+    }
 
     public async Task FinalizeAsync(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         ThrowIfPumpFaulted();
-        var completedUtterances = _adapter.CompletedPendingUtterances;
+        var completedAtStart = _adapter.CompletedPendingUtterances;
         await _pump.FinalizeAsync(ct);
 
-        // Always collect after EOF: the first interim may still be in flight.
-        var deadline = Environment.TickCount64 + 1500;
+        var finalsAtStart = _adapter.FinalCount;
+        var tailExpected = _adapter.HasPendingUtterance
+            || Volatile.Read(ref _lastAudibleAudioTick) > _adapter.LastFinalTick;
+
+        // No server completion signal exists: a pending interim or audible audio sent after
+        // the last final is evidence of untranscribed speech. An expected tail fails finalization
+        // when no final arrives after EOF, so the coordinator/orchestrator fall back to batch
+        // transcription of captured audio rather than delivering a partial transcript.
+        // A completed pending utterance ends collection early; finals without interims are
+        // collected until the window closes. The coordinator's grace window follows.
+        // Without tail evidence, keep the bounded window as a safety net for speech below
+        // the energy threshold.
+        var deadline = Environment.TickCount64 + TailCollectionWindowMs;
         while (_transport.State == WebSocketState.Open)
         {
             ct.ThrowIfCancellationRequested();
             ThrowIfPumpFaulted();
-            if ((_adapter.CompletedPendingUtterances != completedUtterances && !_adapter.HasPendingUtterance)
+            if ((_adapter.CompletedPendingUtterances != completedAtStart && !_adapter.HasPendingUtterance)
                 || Environment.TickCount64 >= deadline)
                 break;
             await Task.Delay(25, ct);
@@ -91,13 +127,14 @@ internal sealed class GeminiStreamingSession : IStreamingSession, IStreamingSess
 
         ct.ThrowIfCancellationRequested();
         ThrowIfPumpFaulted();
-        if (_adapter.HasPendingUtterance)
+        var tailMissing = _adapter.HasPendingUtterance || (tailExpected && _adapter.FinalCount == finalsAtStart);
+        if (tailMissing)
         {
             if (_transport.State != WebSocketState.Open)
                 throw new PluginRequestException(
                     "Gemini streaming connection closed before the tail transcript finalized.",
                     PluginRequestFailureKind.ServerError);
-            throw new TimeoutException("Gemini streaming tail transcript did not finalize in time.");
+            throw new TimeoutException("Gemini streaming tail transcript did not arrive in time.");
         }
     }
 
@@ -170,7 +207,11 @@ internal sealed class GeminiWebSocketAdapter(
 {
     private int _hasPendingUtterance;
     private int _completedPendingUtterances;
+    private int _finalCount;
+    private long _lastFinalTick;
     internal int CompletedPendingUtterances => Volatile.Read(ref _completedPendingUtterances);
+    internal int FinalCount => Volatile.Read(ref _finalCount);
+    internal long LastFinalTick => Volatile.Read(ref _lastFinalTick);
     internal bool HasPendingUtterance => Volatile.Read(ref _hasPendingUtterance) != 0;
 
     public string ProviderName => "Gemini";
@@ -179,6 +220,7 @@ internal sealed class GeminiWebSocketAdapter(
 
     // Google documents no server signal after audioStreamEnd, so a session that ends cleanly
     // must not fault solely for lacking a terminal signal. The session collects pending tails.
+    // The session also expects a tail when audible audio was sent after the last final.
     public WebSocketTerminalPolicy Terminal => WebSocketTerminalPolicy.None;
     public WebSocketKeepAlivePolicy? KeepAlive => null;
     public WebSocketClosePolicy ClosePolicy => WebSocketClosePolicy.Default;
@@ -283,6 +325,10 @@ internal sealed class GeminiWebSocketAdapter(
             if (TryGetTranscriptText(serverContent, "inputTranscription", "input_transcription")
                 is { } finalText)
             {
+                // Publish the final before the completion counter: FinalizeAsync exits early on
+                // a completed pending utterance and must then see that final as arrived.
+                Volatile.Write(ref _lastFinalTick, Environment.TickCount64);
+                Interlocked.Increment(ref _finalCount);
                 if (Interlocked.Exchange(ref _hasPendingUtterance, 0) != 0)
                     Interlocked.Increment(ref _completedPendingUtterances);
                 return new WebSocketInboundResult(

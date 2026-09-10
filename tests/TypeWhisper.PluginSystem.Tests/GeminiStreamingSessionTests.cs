@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using Moq;
@@ -30,12 +31,7 @@ public sealed class GeminiStreamingSessionTests
         var finals = new ConcurrentQueue<string>();
         session.TranscriptReceived += e => { if (e.IsFinal) finals.Enqueue(e.Text); };
         if (delayedInterim)
-        {
-            var prefix = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            session.TranscriptReceived += e => { if (e.IsFinal) prefix.TrySetResult(); };
-            transport.EnqueueText("""{"serverContent":{"inputTranscription":{"text":"Prefix."}}}""");
-            await prefix.Task.WaitAsync(s_timeout);
-        }
+            await SendPrefixFinalAsync(session, transport);
         else
             await OpenTailAsync(session, transport);
         await Task.Delay(200);
@@ -217,6 +213,206 @@ public sealed class GeminiStreamingSessionTests
         // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel must trip the token before the assertion below; CancelAsync would defer it.
         cts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finalize);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FinalizeAsync_AudibleTailWithoutTranscript_FailsForBatchFallback(bool throughCoordinator)
+    {
+        var transport = new ScriptedWebSocketTransport();
+        await using var session = await ConnectAsync(transport);
+        var role = new Mock<ITranscriptionEngineRole>();
+        role.Setup(x => x.StartStreamingAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(session);
+        await using var coordinator = new StreamingTranscriptionCoordinator(
+            role.Object, LanguageSelection.Explicit("en"), [], 1, (_, _) => { }, _ => { });
+        if (throughCoordinator)
+            await coordinator.StartAsync(CancellationToken.None);
+        await SendPrefixFinalAsync(session, transport);
+        await Task.Delay(1);
+        await session.SendAudioAsync(AudibleAudio(300), CancellationToken.None);
+        await transport.NextSentAsync();
+        await Task.Delay(50);
+
+        var finalize = throughCoordinator
+            ? coordinator.FinalizeAsync(CancellationToken.None)
+            : session.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        await Task.Delay(250);
+        Assert.False(finalize.IsCompleted);
+        if (throughCoordinator)
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => finalize.WaitAsync(s_timeout));
+            Assert.IsType<TimeoutException>(error.InnerException);
+        }
+        else
+        {
+            var error = await Assert.ThrowsAsync<TimeoutException>(() => finalize.WaitAsync(s_timeout));
+            Assert.Contains("did not arrive in time", error.Message);
+        }
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_AudibleTailAndNormalClose_Throws()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        await using var session = await ConnectAsync(transport);
+        await SendPrefixFinalAsync(session, transport);
+        await Task.Delay(1);
+        await session.SendAudioAsync(AudibleAudio(300), CancellationToken.None);
+        await transport.NextSentAsync();
+        var finalize = session.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        transport.EnqueueClose();
+
+        var error = await Assert.ThrowsAsync<PluginRequestException>(() => finalize.WaitAsync(s_timeout));
+        Assert.Equal(PluginRequestFailureKind.ServerError, error.FailureKind);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FinalizeAsync_AudibleTailWithDelayedFirstEvent_CollectsTail(bool throughCoordinator)
+    {
+        var transport = new ScriptedWebSocketTransport();
+        await using var session = await ConnectAsync(transport);
+        var role = new Mock<ITranscriptionEngineRole>();
+        role.Setup(x => x.StartStreamingAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(session);
+        await using var coordinator = new StreamingTranscriptionCoordinator(
+            role.Object, LanguageSelection.Explicit("en"), [], 1, (_, _) => { }, _ => { });
+        if (throughCoordinator)
+            await coordinator.StartAsync(CancellationToken.None);
+        var finals = new ConcurrentQueue<string>();
+        session.TranscriptReceived += e => { if (e.IsFinal) finals.Enqueue(e.Text); };
+        await SendPrefixFinalAsync(session, transport);
+        await Task.Delay(1);
+        await session.SendAudioAsync(AudibleAudio(300), CancellationToken.None);
+        await transport.NextSentAsync();
+        await Task.Delay(50);
+
+        var finalize = throughCoordinator
+            ? coordinator.FinalizeAsync(CancellationToken.None)
+            : session.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        await Task.Delay(900);
+        transport.EnqueueText("""{"serverContent":{"interimInputTranscription":{"text":"Tail"}}}""");
+        await Task.Delay(100);
+        transport.EnqueueText("""{"serverContent":{"inputTranscription":{"text":"Tail."}}}""");
+        await finalize.WaitAsync(s_timeout);
+
+        Assert.Equal(["Prefix.", "Tail."], finals);
+        if (throughCoordinator)
+            Assert.Equal("Prefix.\nTail.", await (Task<string>)finalize);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FinalizeAsync_SilentTail_CompletesWithoutTail(bool throughCoordinator)
+    {
+        var transport = new ScriptedWebSocketTransport();
+        await using var session = await ConnectAsync(transport);
+        var role = new Mock<ITranscriptionEngineRole>();
+        role.Setup(x => x.StartStreamingAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(session);
+        await using var coordinator = new StreamingTranscriptionCoordinator(
+            role.Object, LanguageSelection.Explicit("en"), [], 1, (_, _) => { }, _ => { });
+        if (throughCoordinator)
+            await coordinator.StartAsync(CancellationToken.None);
+        var finals = new ConcurrentQueue<string>();
+        session.TranscriptReceived += e => { if (e.IsFinal) finals.Enqueue(e.Text); };
+        await session.SendAudioAsync(AudibleAudio(300), CancellationToken.None);
+        await transport.NextSentAsync();
+        await SendPrefixFinalAsync(session, transport);
+        await session.SendAudioAsync(SilentAudio(500), CancellationToken.None);
+        await transport.NextSentAsync();
+
+        var finalize = throughCoordinator
+            ? coordinator.FinalizeAsync(CancellationToken.None)
+            : session.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        await finalize.WaitAsync(s_timeout);
+
+        Assert.Equal(["Prefix."], finals);
+        if (throughCoordinator)
+            Assert.Equal("Prefix.", await (Task<string>)finalize);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FinalizeAsync_FinalsWithoutInterims_AreCollectedForTheWholeWindow(bool throughCoordinator)
+    {
+        var transport = new ScriptedWebSocketTransport();
+        await using var session = await ConnectAsync(transport);
+        var role = new Mock<ITranscriptionEngineRole>();
+        role.Setup(x => x.StartStreamingAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(session);
+        await using var coordinator = new StreamingTranscriptionCoordinator(
+            role.Object, LanguageSelection.Explicit("en"), [], 1, (_, _) => { }, _ => { });
+        if (throughCoordinator)
+            await coordinator.StartAsync(CancellationToken.None);
+        var finals = new ConcurrentQueue<string>();
+        session.TranscriptReceived += e => { if (e.IsFinal) finals.Enqueue(e.Text); };
+        await session.SendAudioAsync(AudibleAudio(300), CancellationToken.None);
+        await transport.NextSentAsync();
+
+        var finalize = throughCoordinator
+            ? coordinator.FinalizeAsync(CancellationToken.None)
+            : session.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        var delivery = SendFinalsAsync();
+        await finalize.WaitAsync(s_timeout);
+        var collectedFinals = finals.ToArray();
+        await delivery;
+
+        Assert.Equal(["Tail one.", "Tail two."], collectedFinals);
+        if (throughCoordinator)
+            Assert.Equal("Tail one.\nTail two.", await (Task<string>)finalize);
+        return;
+
+        async Task SendFinalsAsync()
+        {
+            await Task.Delay(50);
+            transport.EnqueueText("""{"serverContent":{"inputTranscription":{"text":"Tail one."}}}""");
+            await Task.Delay(350);
+            transport.EnqueueText("""{"serverContent":{"inputTranscription":{"text":"Tail two."}}}""");
+        }
+    }
+
+    [Fact]
+    public void IsAudible_DetectsSpeechLevelSamples()
+    {
+        Assert.False(GeminiStreamingSession.IsAudible([]));
+        Assert.False(GeminiStreamingSession.IsAudible([0]));
+        Assert.False(GeminiStreamingSession.IsAudible(SilentAudio(100)));
+        var quietAudio = new byte[100 * 16 * 2];
+        for (var sample = 0; sample < quietAudio.Length / 2; sample++)
+            BinaryPrimitives.WriteInt16LittleEndian(quietAudio.AsSpan(sample * 2), 200);
+        Assert.False(GeminiStreamingSession.IsAudible(quietAudio));
+        var audibleAudio = AudibleAudio(100);
+        Assert.True(GeminiStreamingSession.IsAudible(audibleAudio));
+        Assert.True(GeminiStreamingSession.IsAudible([.. audibleAudio, 0]));
+    }
+
+    private static byte[] AudibleAudio(int milliseconds)
+    {
+        var audio = new byte[milliseconds * 16 * 2];
+        for (var sample = 0; sample < audio.Length / 2; sample++)
+            BinaryPrimitives.WriteInt16LittleEndian(audio.AsSpan(sample * 2), (short)(sample % 40 < 20 ? 8000 : -8000));
+        return audio;
+    }
+
+    private static byte[] SilentAudio(int milliseconds) => new byte[milliseconds * 16 * 2];
+
+    private static async Task SendPrefixFinalAsync(GeminiStreamingSession session, ScriptedWebSocketTransport transport)
+    {
+        var prefix = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.TranscriptReceived += e => { if (e.IsFinal) prefix.TrySetResult(); };
+        transport.EnqueueText("""{"serverContent":{"inputTranscription":{"text":"Prefix."}}}""");
+        await prefix.Task.WaitAsync(s_timeout);
     }
 
     private sealed class ObservedSession(GeminiStreamingSession inner) : IStreamingSession, IStreamingSessionHealth
