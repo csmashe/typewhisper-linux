@@ -8,6 +8,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.AssemblyAi;
@@ -63,7 +64,7 @@ public sealed class AssemblyAiPlugin
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
         return await AssemblyAiStreamingSession.ConnectAsync(ApiKey!, language, ct);
     }
 
@@ -84,8 +85,8 @@ public sealed class AssemblyAiPlugin
     )
     {
         if (!IsConfigured || SelectedModelId is null)
-            throw new InvalidOperationException(
-                "Plugin not configured. API key and model required."
+            throw new PluginRequestException(
+                "Plugin not configured. API key and model required.", PluginRequestFailureKind.Configuration
             );
 
         var uploadUrl = await UploadAudioAsync(wavAudio, ct);
@@ -100,13 +101,10 @@ public sealed class AssemblyAiPlugin
         request.Content = new ByteArrayContent(wavAudio);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
-        var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => $"AssemblyAI upload error {(int)errorResponse.StatusCode}: {errorBody}");
         var json = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException(
-                $"AssemblyAI upload error {(int)response.StatusCode}: {json}"
-            );
 
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.GetProperty("upload_url").GetString()
@@ -138,13 +136,10 @@ public sealed class AssemblyAiPlugin
             "application/json"
         );
 
-        var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => $"AssemblyAI submit error {(int)errorResponse.StatusCode}: {errorBody}");
         var json = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException(
-                $"AssemblyAI submit error {(int)response.StatusCode}: {json}"
-            );
 
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.GetProperty("id").GetString()
@@ -167,13 +162,10 @@ public sealed class AssemblyAiPlugin
             );
             request.Headers.Add("Authorization", ApiKey);
 
-            var response = await _httpClient.SendAsync(request, ct);
+            using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+                _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+                (errorResponse, errorBody) => $"AssemblyAI poll error {(int)errorResponse.StatusCode}: {errorBody}");
             var json = await response.Content.ReadAsStringAsync(ct);
-
-            if (!response.IsSuccessStatusCode)
-                throw new HttpRequestException(
-                    $"AssemblyAI poll error {(int)response.StatusCode}: {json}"
-                );
 
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;

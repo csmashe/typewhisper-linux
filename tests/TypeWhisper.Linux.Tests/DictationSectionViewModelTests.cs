@@ -16,6 +16,23 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class DictationSectionViewModelTests
 {
+    [Theory]
+    [InlineData("-1", -1, "-1")]
+    [InlineData("0", 1, "1")]
+    [InlineData("900", 365, "365")]
+    [InlineData("7", 7, "7")]
+    // Unparseable text is left in the box so the user can keep typing.
+    [InlineData("invalid", 30, "invalid")]
+    public void RecoveryRetention_ParsesAndClamps(string input, int expected, string expectedText)
+    {
+        using var context = new ViewModelTestContext(AppSettings.Default,
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+        Assert.Equal("30", context.Sut.DictationRecoveryRetentionDays);
+        context.Sut.DictationRecoveryRetentionDays = input;
+        Assert.Equal(expected, context.Settings.Object.Current.DictationRecoveryRetentionDays);
+        Assert.Equal(expectedText, context.Sut.DictationRecoveryRetentionDays);
+    }
+
     [Fact]
     public void AdditionalLanguages_LoadFromSettingsHintsTail()
     {

@@ -9,11 +9,18 @@ namespace TypeWhisper.Core.Services;
 // record-management and persistence logic in HistoryService.cs as a distinct export concern.
 public sealed partial class HistoryService
 {
+    // Failed records exist so the History UI can offer a retry; they carry no usable text, so
+    // exports see only successes — the same rule TotalRecords/TotalWords/TotalDuration follow.
+    private static TranscriptionRecord[] Exportable(
+        IReadOnlyList<TranscriptionRecord> records
+    ) => records.Where(r => r.Status == TranscriptionRecordStatus.Succeeded).ToArray();
+
     public string ExportToText(
         IReadOnlyList<TranscriptionRecord> records,
         ExportLabels? labels = null
     )
     {
+        records = Exportable(records);
         var l = labels ?? ExportLabels.Default;
         var sb = new StringBuilder();
         sb.AppendLine(l.Header);
@@ -39,6 +46,7 @@ public sealed partial class HistoryService
         ExportLabels? labels = null
     )
     {
+        records = Exportable(records);
         var l = labels ?? ExportLabels.Default;
         var sb = new StringBuilder();
         sb.AppendLine(
@@ -78,6 +86,7 @@ public sealed partial class HistoryService
         ExportLabels? labels = null
     )
     {
+        records = Exportable(records);
         var l = labels ?? ExportLabels.Default;
         var sb = new StringBuilder();
         sb.AppendLine($"# {l.Header}");
@@ -115,7 +124,7 @@ public sealed partial class HistoryService
 
     public string ExportToJson(IReadOnlyList<TranscriptionRecord> records)
     {
-        var data = records.Select(r => new
+        var data = Exportable(records).Select(r => new
         {
             id = r.Id,
             timestamp = r.Timestamp.ToString("o"),

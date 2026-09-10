@@ -27,6 +27,82 @@ public sealed class HistorySectionViewModelTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(TranscriptionRecordStatus.Succeeded, TextInsertionStatus.Pasted, true, true, false)]
+    [InlineData(TranscriptionRecordStatus.Succeeded, TextInsertionStatus.Failed, true, true, true)]
+    [InlineData(TranscriptionRecordStatus.TranscriptionFailed, TextInsertionStatus.Unknown, true, true, true)]
+    [InlineData(TranscriptionRecordStatus.ProcessingFailed, TextInsertionStatus.Unknown, true, true, true)]
+    [InlineData(TranscriptionRecordStatus.TranscriptionFailed, TextInsertionStatus.Unknown, false, true, false)]
+    [InlineData(TranscriptionRecordStatus.TranscriptionFailed, TextInsertionStatus.Unknown, true, false, false)]
+    public void RetryVisibility_RequiresFailureAudioAndRecoveryService(TranscriptionRecordStatus status,
+        TextInsertionStatus insertion, bool audioExists, bool canRetry, bool visible)
+    {
+        var audio = new SessionAudioFileService(Path.Join(_tempDir, "audio"));
+        var path = audioExists ? audio.SaveDictationCapture([1]) : "missing.wav";
+        var record = CreateRecord("raw") with
+        {
+            Status = status, InsertionStatus = insertion, AudioFileName = Path.GetFileName(path),
+            FailureMessage = "failure containing raw",
+        };
+        var owner = CreateViewModel(CreateHistoryService(), CreateDictionaryService(),
+            retry: canRetry ? (_, _) => Task.FromResult(record) : null);
+        var row = new HistoryRecordRow(record, owner);
+        Assert.Equal(visible, row.ShowRetry);
+        Assert.Equal(status != TranscriptionRecordStatus.Succeeded, row.HasFailure);
+        Assert.Equal(row.HasFailure || visible, row.ShowRetryPanel);
+        if (row.HasFailure)
+            Assert.DoesNotContain("raw", row.FailureMessage);
+    }
+
+    [Fact]
+    public void FailureMessage_BlankFailure_ShowsLocalizedFallback()
+    {
+        var record = CreateRecord("final") with
+        {
+            Status = TranscriptionRecordStatus.TranscriptionFailed, FailureMessage = "   ",
+        };
+        var row = new HistoryRecordRow(record, CreateViewModel(CreateHistoryService(), CreateDictionaryService()));
+
+        Assert.Equal(Loc.Instance["Common.UnknownError"], row.FailureMessage);
+    }
+
+    [Theory]
+    [InlineData("success")]
+    [InlineData("failure")]
+    [InlineData("missing")]
+    public async Task Retry_ShowsProgressAndLocalizedResult(string outcome)
+    {
+        var record = CreateRecord("private raw text") with { Status = TranscriptionRecordStatus.ProcessingFailed };
+        var completion = new TaskCompletionSource<TranscriptionRecord>();
+        var owner = CreateViewModel(CreateHistoryService(), CreateDictionaryService(),
+            retry: (_, _) => completion.Task);
+        var row = new HistoryRecordRow(record, owner);
+        var retry = row.RetryCommand.ExecuteAsync(null);
+        Assert.True(row.IsRetrying);
+        Assert.False(row.HasRetryResult);
+        switch (outcome)
+        {
+            case "success":
+                completion.SetResult(record with { Status = TranscriptionRecordStatus.Succeeded, FailureMessage = null });
+                break;
+            case "missing":
+                completion.SetException(new FileNotFoundException());
+                break;
+            default:
+                completion.SetException(new InvalidOperationException("failure: private raw text"));
+                break;
+        }
+        await retry;
+        Assert.False(row.IsRetrying);
+        Assert.True(row.HasRetryResult);
+        Assert.Equal(outcome switch
+        {
+            "success" => Loc.Instance["History.RetryCopied"],
+            "missing" => Loc.Instance["History.RetryAudioMissing"],
+            _ => Loc.Instance.GetString("History.RetryFailed", "failure: [redacted]"),
+        }, row.RetryResult);
+    }
+
     [Fact]
     public void SaveEdit_CreatesReviewableCorrectionSuggestion()
     {
@@ -199,7 +275,8 @@ public sealed class HistorySectionViewModelTests : IDisposable
         DictionaryService dictionary,
         SettingsService? settings = null,
         TimeZoneInfo? timeZone = null,
-        Func<DateTime>? utcNow = null
+        Func<DateTime>? utcNow = null,
+        Func<string, CancellationToken, Task<TranscriptionRecord>>? retry = null
     ) =>
         new(
             history,
@@ -213,7 +290,8 @@ public sealed class HistorySectionViewModelTests : IDisposable
             (AudioPlaybackService)
             FormatterServices.GetUninitializedObject(typeof(AudioPlaybackService)),
             timeZone ?? TimeZoneInfo.Local,
-            utcNow ?? (() => DateTime.UtcNow)
+            utcNow ?? (() => DateTime.UtcNow),
+            retry
         );
 #pragma warning restore SYSLIB0050
 

@@ -21,6 +21,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class OpenAiPluginTests
 {
     [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<OpenAiPlugin>();
+
+
+    [Fact]
     public void ResponsesParser_RejectsIncompleteTokenLimitedOutput()
     {
         var ex = Assert.Throws<PluginRequestException>(() => OpenAiResponsesClient.ParseResponse(
@@ -720,7 +725,7 @@ public class OpenAiPluginTests
             Assert.Equal(1, Volatile.Read(ref tokenPostCount));
 
             releaseFirstRefresh.TrySetResult(true);
-            await Assert.ThrowsAsync<InvalidOperationException>(() => failingRequest);
+            await Assert.ThrowsAsync<PluginRequestException>(() => failingRequest);
             Assert.Equal("OK", await waitingRequest.WaitAsync(timeoutCts.Token));
             Assert.Equal(2, Volatile.Read(ref tokenPostCount));
             Assert.Equal("recovered-access-token", host.Secrets["oauth-access-token"]);

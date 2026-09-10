@@ -16,6 +16,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class ElevenLabsPluginTests
 {
+    [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<ElevenLabsPlugin>();
+
+
     private static readonly JsonSerializerOptions s_manifestJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,

@@ -6,6 +6,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Soniox;
@@ -136,7 +137,7 @@ public sealed class SonioxPlugin
         IReadOnlyList<string> languageHints, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         return await SonioxStreamingSession.ConnectAsync(ApiKey!, languageHints, ct);
     }
@@ -189,7 +190,7 @@ public sealed class SonioxPlugin
         // out partway through the multi-request async flow below.
         var apiKey = ApiKey;
         if (string.IsNullOrEmpty(apiKey))
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         string? fileId = null;
         string? transcriptionId = null;
@@ -440,14 +441,10 @@ public sealed class SonioxPlugin
 
     private async Task<string> SendJsonAsync(HttpRequestMessage request, string operation, CancellationToken ct)
     {
-        using var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => $"{operation} error {(int)errorResponse.StatusCode}: {ExtractApiError(errorBody)}");
         var json = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new HttpRequestException(
-                $"{operation} error {(int)response.StatusCode}: {ExtractApiError(json)}");
-        }
 
         return json;
     }

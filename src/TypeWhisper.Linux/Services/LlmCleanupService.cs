@@ -2,6 +2,7 @@ using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -82,11 +83,14 @@ public sealed class LlmCleanupService
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[LlmCleanupService] Cleanup failed: {ex.Message}");
+            var safeMessage =
+                FailureMessageSanitizer.Sanitize(ex.Message, text, lightText, CleanupService.GetLlmSystemPrompt(level))
+                ?? Loc.Instance["Common.UnknownError"];
+            Trace.WriteLine($"[LlmCleanupService] Cleanup failed: {safeMessage}");
             // User-actionable: the requested Medium/High cleanup silently degraded to
             // Light because the LLM call failed (key, network, provider outage).
             _errorLog?.AddEntry(
-                $"AI cleanup failed and fell back to Light cleanup: {ex.Message}",
+                $"AI cleanup failed and fell back to Light cleanup: {safeMessage}",
                 ErrorCategory.Prompt
             );
             await NotifyStatusAsync(statusCallback, "Cleanup failed. Using Light cleanup.");

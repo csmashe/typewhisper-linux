@@ -742,14 +742,6 @@ public class App : Application
     /// </summary>
     internal static async Task TearDownAsync(IServiceProvider services)
     {
-        try
-        {
-            services.GetService<SessionAudioFileService>()?.DeleteSessionCaptures();
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[App] Session audio cleanup failed: {ex.Message}");
-        }
 
         try
         {
@@ -908,6 +900,15 @@ public class App : Application
 
         try
         {
+            services.GetService<SessionAudioFileService>()?.ApplyRetention(services.GetRequiredService<ISettingsService>().Current.DictationRecoveryRetentionDays);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Session audio cleanup failed: {ex.Message}");
+        }
+
+        try
+        {
             var models = services.GetService<ModelManagerService>();
             if (models is not null)
             {
@@ -1049,7 +1050,7 @@ public class App : Application
                 {
                     services
                         .GetRequiredService<SessionAudioFileService>()
-                        .DeleteSessionCaptures();
+                        .ApplyRetention(services.GetRequiredService<ISettingsService>().Current.DictationRecoveryRetentionDays);
                     return Task.CompletedTask;
                 },
                 Required: false

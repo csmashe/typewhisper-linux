@@ -132,7 +132,7 @@ public sealed class XaiPlugin
             throw new InvalidOperationException("xAI STT does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         using var form = new MultipartFormDataContent();
         var normalizedLanguage = NormalizeLanguage(language);
@@ -158,7 +158,7 @@ public sealed class XaiPlugin
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         return await XaiStreamingSession.ConnectAsync(ApiKey!, NormalizeLanguage(language), ct);
     }
@@ -176,7 +176,7 @@ public sealed class XaiPlugin
     public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var modelId = string.IsNullOrWhiteSpace(model)
             ? SelectedLlmModelId ?? SupportedModels[0].Id
@@ -198,7 +198,7 @@ public sealed class XaiPlugin
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var modelId = string.IsNullOrWhiteSpace(model)
             ? SelectedLlmModelId ?? SupportedModels[0].Id
@@ -242,7 +242,7 @@ public sealed class XaiPlugin
     public async Task<ITtsPlaybackSession> SpeakAsync(TtsSpeakRequest request, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var text = request.Text.Trim();
         if (string.IsNullOrWhiteSpace(text))

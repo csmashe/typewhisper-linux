@@ -6,6 +6,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Speechmatics;
@@ -62,7 +63,7 @@ public sealed class SpeechmaticsPlugin
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         // Defense in depth for direct/legacy callers; the typed host invoker rejects
         // automatic selection before entering the plugin.
@@ -92,7 +93,7 @@ public sealed class SpeechmaticsPlugin
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         // Defense in depth for direct/legacy callers; the typed host invoker rejects
         // automatic selection before entering the plugin.
@@ -120,22 +121,18 @@ public sealed class SpeechmaticsPlugin
         submitRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
         submitRequest.Content = submitContent;
 
-        using var submitResponse = await _httpClient.SendAsync(submitRequest, ct);
+        using var submitResponse = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, submitRequest, HttpCompletionOption.ResponseContentRead, ct,
+            // Status + reason only: the body can echo upload metadata and partial transcripts.
+            (errorResponse, _) =>
+            {
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    $"Speechmatics submit error {(int)errorResponse.StatusCode} ({errorResponse.ReasonPhrase})"
+                );
+                return $"Speechmatics API error {(int)errorResponse.StatusCode}: {errorResponse.ReasonPhrase}";
+            });
         var submitJson = await submitResponse.Content.ReadAsStringAsync(ct);
-
-        if (!submitResponse.IsSuccessStatusCode)
-        {
-            // Log only the stable HTTP status; the response body can echo
-            // upload metadata (and on retries, partial transcripts) which
-            // we don't want persisted in the plugin log.
-            _host?.Log(
-                PluginLogLevel.Warning,
-                $"Speechmatics submit error {(int)submitResponse.StatusCode} ({submitResponse.ReasonPhrase})"
-            );
-            throw new HttpRequestException(
-                $"Speechmatics API error {(int)submitResponse.StatusCode}: {submitResponse.ReasonPhrase}"
-            );
-        }
 
         using var submitDoc = JsonDocument.Parse(submitJson);
         var jobId =
@@ -165,19 +162,18 @@ public sealed class SpeechmaticsPlugin
             );
             statusRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
-            using var statusResponse = await _httpClient.SendAsync(statusRequest, ct);
+            using var statusResponse = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+                _httpClient, statusRequest, HttpCompletionOption.ResponseContentRead, ct,
+                // Status + reason only: the body can echo upload metadata and partial transcripts.
+                (errorResponse, _) =>
+                {
+                    _host?.Log(
+                        PluginLogLevel.Warning,
+                        $"Speechmatics status error {(int)errorResponse.StatusCode} ({errorResponse.ReasonPhrase}) for job {jobId}"
+                    );
+                    return $"Speechmatics status error {(int)errorResponse.StatusCode} for job {jobId}: {errorResponse.ReasonPhrase}";
+                });
             var statusJson = await statusResponse.Content.ReadAsStringAsync(ct);
-
-            if (!statusResponse.IsSuccessStatusCode)
-            {
-                _host?.Log(
-                    PluginLogLevel.Warning,
-                    $"Speechmatics status error {(int)statusResponse.StatusCode} ({statusResponse.ReasonPhrase}) for job {jobId}"
-                );
-                throw new HttpRequestException(
-                    $"Speechmatics status error {(int)statusResponse.StatusCode} for job {jobId}: {statusResponse.ReasonPhrase}"
-                );
-            }
 
             using var statusDoc = JsonDocument.Parse(statusJson);
             var job = statusDoc.RootElement.GetProperty("job");
@@ -195,20 +191,18 @@ public sealed class SpeechmaticsPlugin
                     _apiKey
                 );
 
-                using var transcriptResponse = await _httpClient.SendAsync(transcriptRequest, ct);
+                using var transcriptResponse = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+                    _httpClient, transcriptRequest, HttpCompletionOption.ResponseContentRead, ct,
+                    // Status + reason only: the body can echo upload metadata and partial transcripts.
+                    (errorResponse, _) =>
+                    {
+                        _host?.Log(
+                            PluginLogLevel.Warning,
+                            $"Speechmatics transcript error {(int)errorResponse.StatusCode} ({errorResponse.ReasonPhrase}) for job {jobId}"
+                        );
+                        return $"Speechmatics transcript error {(int)errorResponse.StatusCode} for job {jobId}: {errorResponse.ReasonPhrase}";
+                    });
                 var transcriptJson = await transcriptResponse.Content.ReadAsStringAsync(ct);
-
-                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
-                if (!transcriptResponse.IsSuccessStatusCode)
-                {
-                    _host?.Log(
-                        PluginLogLevel.Warning,
-                        $"Speechmatics transcript error {(int)transcriptResponse.StatusCode} ({transcriptResponse.ReasonPhrase}) for job {jobId}"
-                    );
-                    throw new HttpRequestException(
-                        $"Speechmatics transcript error {(int)transcriptResponse.StatusCode} for job {jobId}: {transcriptResponse.ReasonPhrase}"
-                    );
-                }
 
                 return ParseTranscript(transcriptJson, job);
             }

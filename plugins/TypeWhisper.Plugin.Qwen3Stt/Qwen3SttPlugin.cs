@@ -84,7 +84,7 @@ public sealed class Qwen3SttPlugin
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredBaseUrlRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredBaseUrlRequired"), PluginRequestFailureKind.Configuration);
 
         if (translate)
             throw new NotSupportedException(

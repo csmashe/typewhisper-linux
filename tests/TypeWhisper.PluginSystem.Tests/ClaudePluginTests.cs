@@ -21,6 +21,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 public sealed class ClaudePluginTests
 {
     [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<ClaudePlugin>();
+
+
+    [Fact]
     public async Task ProcessAsync_ScalesMaxTokensAndRejectsMaxTokensStopReason()
     {
         var input = string.Concat(Enumerable.Repeat("dictated input ", 1000));

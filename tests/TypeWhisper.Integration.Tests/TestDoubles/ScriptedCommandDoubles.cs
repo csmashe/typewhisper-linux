@@ -25,6 +25,7 @@ internal sealed class ScriptedLlmProvider : ILlmProviderRole
         [new(ModelId, "Scripted LLM model")];
 
     internal int BatchCalls => Volatile.Read(ref _batchCalls);
+    internal Exception? Failure { get; set; }
 
     internal void EnqueueStream(params string[] deltas)
     {
@@ -39,6 +40,8 @@ internal sealed class ScriptedLlmProvider : ILlmProviderRole
     )
     {
         ct.ThrowIfCancellationRequested();
+        if (Failure is { } failure)
+            throw failure;
         Interlocked.Increment(ref _batchCalls);
         return Task.FromResult(
             _streams.TryDequeue(out var deltas) ? string.Concat(deltas) : string.Empty
@@ -53,6 +56,8 @@ internal sealed class ScriptedLlmProvider : ILlmProviderRole
         CancellationToken ct
     )
     {
+        if (Failure is { } failure)
+            throw failure;
         if (!_streams.TryDequeue(out var deltas))
         {
             throw new InvalidOperationException("No scripted LLM stream remains.");

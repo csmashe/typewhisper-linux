@@ -8,6 +8,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Reson8;
@@ -123,7 +124,7 @@ public sealed class Reson8Plugin
             throw new InvalidOperationException("Reson8 does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         var pcm16 = WavPcm16Extractor.ExtractPcm16(wavAudio);
         using var request = new HttpRequestMessage(
@@ -133,11 +134,10 @@ public sealed class Reson8Plugin
         request.Content = new ByteArrayContent(pcm16);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
-        using var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => FormatApiError(errorResponse.StatusCode, errorBody));
         var json = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
-            ThrowForApiError(response.StatusCode, json);
 
         return ParseTranscriptionResponse(json, NormalizeLanguage(language), pcm16.Length);
     }
@@ -154,7 +154,7 @@ public sealed class Reson8Plugin
             throw new InvalidOperationException("Reson8 does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         return await RunStreamingWithBatchFallbackAsync(
             async markProgressStopped =>
@@ -244,7 +244,7 @@ public sealed class Reson8Plugin
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         return await Reson8StreamingSession.ConnectAsync(
             ApiKey!,
@@ -573,26 +573,18 @@ public sealed class Reson8Plugin
             ? property.GetString()
             : null;
 
-    private void ThrowForApiError(HttpStatusCode statusCode, string json)
+    private string FormatApiError(HttpStatusCode statusCode, string json)
     {
         var message = ExtractApiError(json);
-        // ReSharper disable once ConvertSwitchStatementToSwitchExpression -- subjective style; the statement switch reads fine here.
-        // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- the default arm intentionally covers the remaining enum values.
-        switch (statusCode)
+        return statusCode switch
         {
-            case HttpStatusCode.Unauthorized:
-                throw new UnauthorizedAccessException(Loc.L("Settings.InvalidApiKey"));
-            case HttpStatusCode.NotFound:
-                throw new KeyNotFoundException($"Reson8 custom model not found: {message}");
-            case HttpStatusCode.RequestEntityTooLarge:
-                throw new InvalidOperationException($"Reson8 file too large: {message}");
-            case HttpStatusCode.TooManyRequests:
-                throw new HttpRequestException($"Reson8 rate limit exceeded: {message}");
-            case HttpStatusCode.InternalServerError:
-                throw new HttpRequestException($"Reson8 server error: {message}");
-            default:
-                throw new HttpRequestException($"Reson8 API error {(int)statusCode}: {message}");
-        }
+            HttpStatusCode.Unauthorized => Loc.L("Settings.InvalidApiKey"),
+            HttpStatusCode.NotFound => $"Reson8 custom model not found: {message}",
+            HttpStatusCode.RequestEntityTooLarge => $"Reson8 file too large: {message}",
+            HttpStatusCode.TooManyRequests => $"Reson8 rate limit exceeded: {message}",
+            HttpStatusCode.InternalServerError => $"Reson8 server error: {message}",
+            _ => $"Reson8 API error {(int)statusCode}: {message}",
+        };
     }
 
     private static double PcmDurationSeconds(int pcm16ByteLength) =>

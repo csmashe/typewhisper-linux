@@ -47,11 +47,18 @@ public sealed partial class HistoryService : IHistoryService
 
     public IReadOnlyList<TranscriptionRecord> Records => ReadRecords().ToArray();
 
+    public bool TryGetRecords(out IReadOnlyList<TranscriptionRecord> records)
+    {
+        var available = ReadRecords(out var read);
+        records = read.ToArray();
+        return available;
+    }
+
     public event Action? RecordsChanged;
 
-    public int TotalRecords => ReadRecords().Length;
-    public int TotalWords => ReadRecords().Sum(r => r.WordCount);
-    public double TotalDuration => ReadRecords().Sum(r => r.DurationSeconds);
+    public int TotalRecords => ReadRecords().Count(r => r.Status == TranscriptionRecordStatus.Succeeded);
+    public int TotalWords => ReadRecords().Where(r => r.Status == TranscriptionRecordStatus.Succeeded).Sum(r => r.WordCount);
+    public double TotalDuration => ReadRecords().Where(r => r.Status == TranscriptionRecordStatus.Succeeded).Sum(r => r.DurationSeconds);
 
     /// <summary>
     ///     A read failure must not stop the app, so it degrades to empty — same contract as
@@ -60,14 +67,22 @@ public sealed partial class HistoryService : IHistoryService
     /// </summary>
     private ImmutableArray<TranscriptionRecord> ReadRecords()
     {
+        ReadRecords(out var records);
+        return records;
+    }
+
+    private bool ReadRecords(out ImmutableArray<TranscriptionRecord> records)
+    {
         try
         {
-            return _store.Current;
+            records = _store.Current;
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             Trace.WriteLine($"[HistoryService] Failed to load history: {ex.Message}");
-            return [];
+            records = [];
+            return false;
         }
     }
 
@@ -97,7 +112,24 @@ public sealed partial class HistoryService : IHistoryService
     public void AddRecord(TranscriptionRecord record)
     {
         _store.Update(current => current.Insert(0, record));
-        RecordsChanged?.Invoke();
+        RaiseRecordsChanged();
+    }
+
+    public bool TryReplaceRecord(TranscriptionRecord record)
+    {
+        var changed = false;
+        _store.Update(current =>
+        {
+            var index = FindIndex(current, existing => existing.Id == record.Id);
+            if (index < 0)
+                return current;
+
+            changed = true;
+            return current.SetItem(index, record);
+        });
+        if (changed)
+            RaiseRecordsChanged();
+        return changed;
     }
 
     public void UpdateRecord(string id, string finalText)
@@ -121,7 +153,7 @@ public sealed partial class HistoryService : IHistoryService
 
         if (changed)
         {
-            RecordsChanged?.Invoke();
+            RaiseRecordsChanged();
         }
     }
 
@@ -150,7 +182,7 @@ public sealed partial class HistoryService : IHistoryService
 
         if (changed)
         {
-            RecordsChanged?.Invoke();
+            RaiseRecordsChanged();
         }
     }
 
@@ -179,7 +211,7 @@ public sealed partial class HistoryService : IHistoryService
         }
 
         DeleteAudioFile(removedAudioFileName);
-        RecordsChanged?.Invoke();
+        RaiseRecordsChanged();
     }
 
     public void ClearAll()
@@ -206,7 +238,7 @@ public sealed partial class HistoryService : IHistoryService
         }
 
         DeleteAudioFiles(audioFiles);
-        RecordsChanged?.Invoke();
+        RaiseRecordsChanged();
     }
 
     public IReadOnlyList<TranscriptionRecord> Search(string query)
@@ -259,7 +291,25 @@ public sealed partial class HistoryService : IHistoryService
         }
 
         DeleteAudioFiles(removedAudioFiles);
-        RecordsChanged?.Invoke();
+        RaiseRecordsChanged();
+    }
+
+    private void RaiseRecordsChanged()
+    {
+        if (RecordsChanged is not { } handlers)
+            return;
+
+        foreach (var handler in handlers.GetInvocationList().Cast<Action>())
+        {
+            try
+            {
+                handler();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[HistoryService] RecordsChanged handler failed: {ex.GetType().Name}");
+            }
+        }
     }
 
     private static int FindIndex(

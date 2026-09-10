@@ -6,6 +6,24 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class DictationInFlightSessionTrackerTests
 {
     [Fact]
+    public void Recovery_ExcludesStartupAndAllInFlightSessions()
+    {
+        var tracker = new DictationInFlightSessionTracker();
+        Assert.True(tracker.TryBeginStartup());
+        Assert.False(tracker.TryBeginRecovery());
+        tracker.Begin(1);
+        tracker.EndStartup();
+        Assert.False(tracker.TryBeginRecovery());
+        tracker.End(1);
+        Assert.True(tracker.TryBeginRecovery());
+        Assert.False(tracker.TryBeginStartup());
+        Assert.False(tracker.TryBeginRecovery());
+        tracker.EndRecovery();
+        Assert.True(tracker.TryBeginStartup());
+        tracker.EndStartup();
+    }
+
+    [Fact]
     public void Contains_ReturnsFalse_ForUnknownSession()
     {
         var tracker = new DictationInFlightSessionTracker();

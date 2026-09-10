@@ -10,6 +10,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class Qwen3SttPluginTests
 {
     [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<Qwen3SttPlugin>();
+
+
+    [Fact]
     public async Task ActivateAsync_RestoresEndpointCredentialsAndSelectedModel()
     {
         var host = new TestPluginHostServices
@@ -175,7 +180,7 @@ public class Qwen3SttPluginTests
         );
         using var sut = await CreateConfiguredPluginAsync(handler);
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Assert.ThrowsAsync<PluginRequestException>(
             () =>
                 sut.TranscribeAsync(
                     [1],
@@ -263,7 +268,7 @@ public class Qwen3SttPluginTests
         using var sut = new Qwen3SttPlugin(new HttpClient(handler));
         sut.SetLocalization(new TestPluginLocalization());
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Assert.ThrowsAsync<PluginRequestException>(
             () =>
                 sut.TranscribeAsync(
                     [1],

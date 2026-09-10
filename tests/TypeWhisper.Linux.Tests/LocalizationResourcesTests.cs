@@ -18,6 +18,27 @@ public sealed class LocalizationResourcesTests
     private static readonly JsonSerializerOptions s_jsonOptions =
         new() { PropertyNameCaseInsensitive = true };
 
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
+    public void RecoveryKeys_AreTranslatedWithMatchingPlaceholders(string language)
+    {
+        string[] keys = ["History.Retry", "History.Retrying", "History.RetryCopied",
+            "History.RetryFailed", "History.RetryAudioMissing", "History.StatusTranscriptionFailed",
+            "History.StatusProcessingFailed", "Dictation.RecoveryRetention", "Dictation.RecoveryRetentionHint",
+            "History.RetryBusy", "History.RetryEmpty", "History.RetryClipboardFailed", "History.RetryRecordMissing"];
+        var catalog = Load(language);
+        foreach (var key in keys)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(catalog[key]));
+            if (language != "en")
+                Assert.NotEqual(Load("en")[key], catalog[key]);
+        }
+        Assert.Contains("{0}", catalog["History.RetryFailed"]);
+    }
+
     [Fact]
     public void CanonicalCatalogLoadsAndIsNonEmpty()
     {

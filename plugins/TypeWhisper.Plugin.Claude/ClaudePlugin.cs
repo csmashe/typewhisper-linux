@@ -75,7 +75,7 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
     )
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var requestBody = new
         {
@@ -92,19 +92,15 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
         request.Headers.Add("x-api-key", ApiKey);
         request.Headers.Add("anthropic-version", AnthropicVersion);
 
-        var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            // errorBody arrives credential-redacted, so it is safe for the plugin log.
+            (errorResponse, errorBody) =>
+            {
+                _host?.Log(PluginLogLevel.Error, $"Anthropic API error {errorResponse.StatusCode}: {errorBody}");
+                return $"Anthropic API returned {(int)errorResponse.StatusCode}: {errorBody}";
+            });
         var responseBody = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            _host?.Log(
-                PluginLogLevel.Error,
-                $"Anthropic API error {response.StatusCode}: {responseBody}"
-            );
-            throw new HttpRequestException(
-                $"Anthropic API returned {(int)response.StatusCode}: {responseBody}"
-            );
-        }
 
         using var doc = JsonDocument.Parse(responseBody);
         LlmResponseTruncationGuard.ThrowIfAnthropicResponseTruncated(doc.RootElement, "Anthropic");
@@ -130,7 +126,7 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var requestBody = new
         {
@@ -151,25 +147,17 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
 
         // ResponseHeadersRead so deltas surface as they arrive instead of
         // buffering the whole SSE body (the batch path reads the body to a string).
-        using var response = await _httpClient.SendAsync(
-            request,
-            HttpCompletionOption.ResponseHeadersRead,
-            ct
-        );
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseHeadersRead, ct,
+            // errorBody arrives credential-redacted, so it is safe for the plugin log.
+            (errorResponse, errorBody) =>
+            {
+                _host?.Log(PluginLogLevel.Error, $"Anthropic API error {errorResponse.StatusCode}: {errorBody}");
+                return $"Anthropic API returned {(int)errorResponse.StatusCode}: {errorBody}";
+            });
 
-        if (!response.IsSuccessStatusCode)
-        {
-            var errorBody = await response.Content.ReadAsStringAsync(ct);
-            _host?.Log(
-                PluginLogLevel.Error,
-                $"Anthropic API error {response.StatusCode}: {errorBody}"
-            );
-            throw new HttpRequestException(
-                $"Anthropic API returned {(int)response.StatusCode}: {errorBody}"
-            );
-        }
-
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        await using var stream = await OpenAiApiHelper.ReadBodyWithErrorHandlingAsync(
+            () => response.Content.ReadAsStreamAsync(ct), ct);
         using var reader = new StreamReader(stream);
 
         await foreach (var delta in SseEventDecoder.ReadValidatedAsync(reader, s_streamPolicy, ct))

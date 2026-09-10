@@ -210,8 +210,8 @@ public sealed class OpenAiPlugin
     )
     {
         if (!IsConfigured || _selectedApiModelName is null)
-            throw new InvalidOperationException(
-                "Plugin not configured. API key and model required."
+            throw new PluginRequestException(
+                "Plugin not configured. API key and model required.", PluginRequestFailureKind.Configuration
             );
 
         // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
@@ -253,7 +253,7 @@ public sealed class OpenAiPlugin
                 + "ChatGPT login can't authenticate the realtime endpoint."
             );
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
         if (SelectedModelId != OpenAiRealtimeStreamingSession.ModelId)
             throw new NotSupportedException(
                 "Select GPT Realtime Whisper to use OpenAI realtime streaming."
@@ -313,7 +313,7 @@ public sealed class OpenAiPlugin
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (UsesResponsesApi(modelId))
@@ -370,7 +370,7 @@ public sealed class OpenAiPlugin
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
@@ -421,7 +421,7 @@ public sealed class OpenAiPlugin
     public async Task<ITtsPlaybackSession> SpeakAsync(TtsSpeakRequest request, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var text = request.Text.Trim();
         if (string.IsNullOrWhiteSpace(text))
@@ -881,7 +881,7 @@ public sealed class OpenAiPlugin
                 return credentials;
 
             if (string.IsNullOrWhiteSpace(credentials.RefreshToken))
-                throw new InvalidOperationException(Loc.L("Settings.ChatGptLoginNotConfigured"));
+                throw new PluginRequestException(Loc.L("Settings.ChatGptLoginNotConfigured"), PluginRequestFailureKind.Configuration);
 
             var refreshed = await OpenAiOAuthClient.RefreshTokenAsync(
                 _httpClient,

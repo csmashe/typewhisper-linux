@@ -7,6 +7,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Gladia;
@@ -100,7 +101,7 @@ public sealed class GladiaPlugin
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         return await GladiaStreamingSession.ConnectAsync(_httpClient, _apiKey!, language, ct);
     }
@@ -130,7 +131,7 @@ public sealed class GladiaPlugin
         // Snapshot the key so a concurrent settings change cannot alter a multi-request job.
         var apiKey = _apiKey;
         if (string.IsNullOrEmpty(apiKey))
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         var audioUrl = await UploadAudioAsync(wavAudio, apiKey, ct);
         var job = await InitiateTranscriptionAsync(audioUrl, language, apiKey, ct);
@@ -304,15 +305,10 @@ public sealed class GladiaPlugin
         CancellationToken ct
     )
     {
-        using var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => $"{operation} error {(int)errorResponse.StatusCode}: {ExtractProviderDetails(errorBody)}");
         var json = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new HttpRequestException(
-                $"{operation} error {(int)response.StatusCode}: {ExtractProviderDetails(json)}"
-            );
-        }
 
         return json;
     }

@@ -32,6 +32,36 @@ public sealed class RecentTranscriptionStoreTests
     }
 
     [Fact]
+    public void MergedEntries_excludes_failed_records()
+    {
+        var store = new RecentTranscriptionStore();
+        var history = new[]
+        {
+            new TranscriptionRecord
+            {
+                Id = "failed",
+                Timestamp = DateTime.UtcNow,
+                RawText = "raw text",
+                FinalText = "raw text",
+                Status = TranscriptionRecordStatus.ProcessingFailed,
+            },
+            new TranscriptionRecord
+            {
+                Id = "ok",
+                Timestamp = DateTime.UtcNow.AddSeconds(-1),
+                RawText = "raw",
+                FinalText = "clean text",
+            },
+        };
+
+        var entries = store.MergedEntries(history, 10);
+
+        Assert.Single(entries);
+        Assert.Equal("clean text", entries[0].FinalText);
+        Assert.Null(store.LatestEntry([history[0]]));
+    }
+
+    [Fact]
     public void MergedEntries_applies_limit()
     {
         var store = new RecentTranscriptionStore();

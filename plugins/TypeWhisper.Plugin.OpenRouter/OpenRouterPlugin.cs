@@ -148,7 +148,7 @@ public sealed class OpenRouterPlugin
             throw new InvalidOperationException("OpenRouter STT does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         var modelId = SelectedModelId ?? TranscriptionModels[0].Id;
         return await SendAudioTranscriptionAsync(modelId, wavAudio, NormalizeLanguage(language), ct);
@@ -167,7 +167,7 @@ public sealed class OpenRouterPlugin
     public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
     {
         if (!IsAvailable)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var modelId = string.IsNullOrWhiteSpace(model)
             ? SelectedLlmModelId ?? SupportedModels[0].Id
@@ -189,7 +189,7 @@ public sealed class OpenRouterPlugin
         }
 
         if (!IsAvailable)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var modelId = string.IsNullOrWhiteSpace(model)
             ? SelectedLlmModelId ?? SupportedModels[0].Id

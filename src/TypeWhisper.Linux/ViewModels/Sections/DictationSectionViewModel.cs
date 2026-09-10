@@ -859,6 +859,7 @@ public partial class DictationSectionViewModel : ObservableObject
         IsUsingCustomModelStorage =
             AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is not null;
         AutoPaste = settings.AutoPaste;
+        DictationRecoveryRetentionDays = settings.DictationRecoveryRetentionDays.ToString(System.Globalization.CultureInfo.InvariantCulture);
         AutoAddDictionaryCorrections = settings.AutoAddDictionaryCorrections;
         TargetAppCorrectionLearningEnabled = settings.TargetAppCorrectionLearningEnabled;
         LiveTranscriptionEnabled = settings.LiveTranscriptionEnabled;
@@ -1856,6 +1857,20 @@ public partial class DictationSectionViewModel : ObservableObject
 
         _settings.Update(current => current with { GermanOutputVariant = value });
         OnPropertyChanged(nameof(SelectedGermanOutputVariantOption));
+    }
+
+    [ObservableProperty]
+    private string _dictationRecoveryRetentionDays = "30";
+
+    partial void OnDictationRecoveryRetentionDaysChanged(string value)
+    {
+        if (!int.TryParse(value, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var days))
+            return;
+        days = days == -1 ? -1 : Math.Clamp(days, 1, 365);
+        _settings.Update(current => current with { DictationRecoveryRetentionDays = days });
+        // The binding commits per keystroke, so show what was persisted rather than what was typed.
+        DictationRecoveryRetentionDays = days.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     partial void OnAutoPasteChanged(bool value)

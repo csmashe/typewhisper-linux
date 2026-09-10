@@ -11,6 +11,7 @@ public sealed class HistoryInsightsService : IHistoryInsightsService
 {
     public HistoryInsights Build(IReadOnlyList<TranscriptionRecord> records, int topAppCount = 5)
     {
+        records = [.. records.Where(record => record.Status == TranscriptionRecordStatus.Succeeded)];
         if (records.Count == 0)
         {
             return new HistoryInsights();

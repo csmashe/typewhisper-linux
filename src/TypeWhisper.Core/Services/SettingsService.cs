@@ -65,13 +65,13 @@ public sealed class SettingsService : ISettingsService
         ArgumentNullException.ThrowIfNull(settings);
         // A replacement object carries no "what changed" signal, so it is normalized on its own
         // terms rather than reconciled against the previous snapshot.
-        Commit(_ => NormalizeLanguageHints(settings));
+        Commit(_ => NormalizeSettings(settings));
     }
 
     public AppSettings Update(Func<AppSettings, AppSettings> mutate)
     {
         ArgumentNullException.ThrowIfNull(mutate);
-        return Commit(current => ReconcileLanguageHints(current, mutate(current)));
+        return Commit(current => NormalizeSettings(ReconcileLanguageHints(current, mutate(current))));
     }
 
     private AppSettings Commit(Func<AppSettings, AppSettings> update)
@@ -170,16 +170,26 @@ public sealed class SettingsService : ISettingsService
             ?? throw new JsonException("Settings JSON deserialized to null.");
         settings = ApplyHistoryRetentionMigration(settings, json);
         settings = ApplyAccelerationMigration(settings, json);
-        return ApplyLanguageHintsMigration(settings);
+        // A file that predates hints carries only Language; normalizing mirrors it into the list.
+        return NormalizeSettings(settings);
     }
 
-    // A file that predates hints carries only Language; normalizing mirrors it into the list.
-    private static AppSettings ApplyLanguageHintsMigration(AppSettings settings) =>
-        NormalizeLanguageHints(settings);
+    // Every path that admits settings from outside — a reloaded file, a wholesale Save, an Update —
+    // runs them through here, so each per-setting normalizer has one place to be registered.
+    private static AppSettings NormalizeSettings(AppSettings settings) =>
+        NormalizeRetention(NormalizeLanguageHints(settings));
 
     // A stored list wins; an empty or null list beside an explicit Language keeps that language.
     private static AppSettings NormalizeLanguageHints(AppSettings settings) =>
         settings.WithLanguageHints(settings.LanguageHints is { Count: > 0 } stored ? stored : settings.GetLanguageHints());
+
+    // -1 is the "delete captures at shutdown" sentinel; every other value is a day count in 1..365.
+    private static AppSettings NormalizeRetention(AppSettings settings) =>
+        settings with
+        {
+            DictationRecoveryRetentionDays = settings.DictationRecoveryRetentionDays == -1
+                ? -1 : Math.Clamp(settings.DictationRecoveryRetentionDays, 1, 365),
+        };
 
     // The picker writes Language while the hint list writes LanguageHints: whichever side an
     // update changed leads and the other follows.

@@ -67,6 +67,7 @@ public record AppSettings
     // default — avoids the rapid on/off thrash Toggle produces on a held key.
     public RecordingMode Mode { get; init; } = RecordingMode.Hybrid;
     public HistoryRetentionMode HistoryRetentionMode { get; init; } = HistoryRetentionMode.Duration;
+    public int DictationRecoveryRetentionDays { get; init; } = 30;
     public int HistoryRetentionMinutes { get; init; } = 90 * 24 * 60;
     public int? SelectedMicrophoneDevice { get; init; }
     public string? SelectedMicrophoneDeviceId { get; init; }

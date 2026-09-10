@@ -181,7 +181,7 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
             _ => DateTime.MinValue,
         };
 
-        var records = _history.Records.Where(r => r.Timestamp >= cutoff).ToList();
+        var records = _history.Records.Where(r => r.Timestamp >= cutoff && r.Status == TranscriptionRecordStatus.Succeeded).ToList();
         WordCount = records.Sum(r => r.WordCount);
         var totalSeconds = records.Sum(r => r.DurationSeconds);
         AverageWpm = totalSeconds > 0 ? (int)(WordCount / (totalSeconds / 60.0)) : 0;

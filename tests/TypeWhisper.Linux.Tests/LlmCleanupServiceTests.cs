@@ -12,6 +12,23 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class LlmCleanupServiceTests
 {
     [Fact]
+    public async Task CleanAsync_TransientFailureThenSuccess_RetriesOnce()
+    {
+        var attempts = 0;
+        var provider = new FakeLlmProviderPlugin("clean result")
+        {
+            BeforeProcess = _ =>
+            {
+                if (++attempts == 1)
+                    throw new PluginRequestException("network", PluginRequestFailureKind.Network, retryAfter: TimeSpan.Zero);
+            },
+        };
+        var sut = CreateService([provider]);
+        Assert.Equal("clean result", await sut.CleanAsync("uh hello", CleanupLevel.Medium));
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
     public async Task CleanAsync_Light_UsesDeterministicCleanup()
     {
         var sut = CreateService([]);

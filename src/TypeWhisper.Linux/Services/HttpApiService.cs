@@ -1824,7 +1824,11 @@ public sealed partial class HttpApiService : IDisposable
             ? parsedOffset
             : 0;
 
-        var records = string.IsNullOrWhiteSpace(query) ? _history.Records : _history.Search(query);
+        // Failed records exist so the History UI can offer a retry; they carry no usable text, so
+        // the API sees only successes — the same rule the exports and TotalRecords follow.
+        var records = (string.IsNullOrWhiteSpace(query) ? _history.Records : _history.Search(query))
+            .Where(record => record.Status == TranscriptionRecordStatus.Succeeded)
+            .ToArray();
 
         var paged = records
             .Skip(offset)
@@ -1847,7 +1851,7 @@ public sealed partial class HttpApiService : IDisposable
         return (
             200,
             Serialize(
-                new { total = records.Count, offset, limit, records = paged }
+                new { total = records.Length, offset, limit, records = paged }
             )
         );
     }
