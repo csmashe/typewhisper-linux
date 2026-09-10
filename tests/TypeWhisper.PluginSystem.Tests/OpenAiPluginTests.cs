@@ -956,6 +956,115 @@ public partial class OpenAiPluginTests
     }
 
     [Fact]
+    public async Task Activate_DropsInvalidCachedChatGptModels()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("selectedChatGPTModel", "hidden-model");
+        host.SetSetting(
+            "fetchedChatGPTModels",
+            new List<OpenAiChatGptModel>
+            {
+                null!,
+                new(null!, "Null slug", "list", 1, null),
+                new("   ", "Blank slug", "list", 1, null),
+                new("hidden-model", "Hidden model", "hide", 1, null),
+                new("gpt-5.5", "GPT-5.5", "list", 1, null),
+                new("GPT-5.5", "Duplicate", "list", 1, null),
+            });
+        host.Secrets["oauth-access-token"] = "access-token";
+        host.Secrets["oauth-refresh-token"] = "refresh-token";
+        host.SettingWrites.Clear();
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal(["gpt-5.5"], sut.SupportedModels.Select(model => model.Id).ToArray());
+        Assert.Equal("gpt-5.5", sut.SelectedLlmModelId);
+        Assert.Empty(host.SettingWrites);
+    }
+
+    [Fact]
+    public async Task Activate_AllInvalidChatGptCache_DoesNotKeepRejectedSelection()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("selectedChatGPTModel", "hidden-model");
+        host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel> { new("hidden-model", "Hidden model", "hide", 1, null) });
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal(
+            ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2", "gpt-5.2-codex", "gpt-5.1-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini"],
+            sut.SupportedModels.Select(model => model.Id).ToArray());
+        Assert.Equal(sut.SupportedModels[0].Id, sut.SelectedLlmModelId);
+    }
+
+    [Fact]
+    public async Task Activate_BlankApiSelection_FallsBackToFirstModel()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "apiKey");
+        host.SetSetting("selectedLLMModel", "   ");
+        host.SetSetting("fetchedLLMModels", new List<OpenAiFetchedModel> { new("   ", null) });
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("gpt-5.5", sut.SupportedModels[0].Id);
+        Assert.Equal(sut.SupportedModels[0].Id, sut.SelectedLlmModelId);
+    }
+
+    [Fact]
+    public async Task Activate_MigratesChatGptSelectionOnlyAfterSanitizing()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("selectedLLMModel", "hidden-model");
+        host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel>
+        {
+            new("hidden-model", "Hidden model", "hide", 1, null),
+            new("gpt-5.5", "GPT-5.5", "list", 1, null),
+        });
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("gpt-5.5", host.GetSetting<string>("selectedChatGPTModel"));
+        Assert.Equal("gpt-5.5", sut.SelectedLlmModelId);
+    }
+
+    [Fact]
+    public async Task Activate_DropsInvalidCachedApiModels()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "apiKey");
+        host.SetSetting(
+            "fetchedLLMModels",
+            new List<OpenAiFetchedModel>
+            {
+                null!,
+                new("   ", null),
+                new("gpt-4.1-mini", null),
+            });
+        host.SetSetting(
+            "fetchedTranscriptionModels",
+            new List<OpenAiFetchedModel>
+            {
+                null!,
+                new("whisper-1", null),
+            });
+        host.Secrets["api-key"] = "sk-test";
+        host.SettingWrites.Clear();
+
+        using var sut = new OpenAiPlugin();
+        var exception = await Record.ExceptionAsync(() => sut.ActivateAsync(host));
+
+        Assert.Null(exception);
+        Assert.Equal(["gpt-4.1-mini"], sut.SupportedModels.Select(model => model.Id).ToArray());
+        Assert.Contains(sut.TranscriptionModels, model => model.Id == "whisper-1");
+        Assert.Empty(host.SettingWrites);
+    }
+
+    [Fact]
     public async Task ActivateAsync_UsesCachedAccountSpecificChatGptModels()
     {
         var host = new TestPluginHostServices();

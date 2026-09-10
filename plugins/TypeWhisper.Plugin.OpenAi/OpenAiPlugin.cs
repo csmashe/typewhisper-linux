@@ -166,27 +166,48 @@ public sealed class OpenAiPlugin
         AuthMode = OpenAiAuthModeExtensions.Parse(host.GetSetting<string>(AuthModeSettingName));
         _selectedApiKeyModelId = host.GetSetting<string>(SelectedLlmModelSettingName);
         _selectedChatGptModelId = host.GetSetting<string>(SelectedChatGptModelSettingName);
+        var migratedChatGptSelection = false;
         if (_selectedChatGptModelId is null && AuthMode == OpenAiAuthMode.ChatGpt && _selectedApiKeyModelId is not null)
         {
             _selectedChatGptModelId = _selectedApiKeyModelId;
-            host.SetSetting(SelectedChatGptModelSettingName, _selectedChatGptModelId);
+            migratedChatGptSelection = true;
         }
         _selectedVoiceId = NormalizeVoiceId(host.GetSetting<string>(SelectedVoiceSettingName));
         TtsInstructions = host.GetSetting<string>(TtsInstructionsSettingName) ?? "";
         ReasoningEffort = NormalizeReasoningEffort(host.GetSetting<string>(ReasoningEffortSettingName));
-        _fetchedLlmModels = host.GetSetting<List<OpenAiFetchedModel>>(FetchedLlmModelsSettingName) ?? [];
+        // Element-nullable: a hand-edited settings file can deserialize null list entries.
+        var cachedLlmModels = host.GetSetting<List<OpenAiFetchedModel?>>(FetchedLlmModelsSettingName);
+        _fetchedLlmModels = SanitizeApiModels(cachedLlmModels);
         TemperatureMode = NormalizeTemperatureMode(host.GetSetting<string>(TemperatureModeSettingName));
         TemperatureValue = NormalizeTemperatureValue(host.GetSetting<double?>(TemperatureValueSettingName));
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
 
-        _fetchedTranscriptionModels = host.GetSetting<List<OpenAiFetchedModel>>(FetchedTranscriptionModelsSettingName) ?? [];
-        _fetchedChatGptModels = host.GetSetting<List<OpenAiChatGptModel>>(FetchedChatGptModelsSettingName) ?? [];
+        _fetchedTranscriptionModels = SanitizeApiModels(host.GetSetting<List<OpenAiFetchedModel>>(FetchedTranscriptionModelsSettingName));
+        var cachedChatGptModels = host.GetSetting<List<OpenAiChatGptModel?>>(FetchedChatGptModelsSettingName);
+        _fetchedChatGptModels = SanitizeChatGptModels(cachedChatGptModels);
+        var removedLlmModelIds = (cachedLlmModels ?? []).OfType<OpenAiFetchedModel>()
+            .Select(model => model.Id)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Except(_fetchedLlmModels.Select(model => model.Id), StringComparer.OrdinalIgnoreCase)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var removedChatGptModelIds = (cachedChatGptModels ?? []).OfType<OpenAiChatGptModel>()
+            .Select(model => model.Slug)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Except(_fetchedChatGptModels.Select(model => model.Slug), StringComparer.OrdinalIgnoreCase)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // An id the sanitizer just rejected must not survive unknown-id preservation.
+        if (_selectedApiKeyModelId is not null && removedLlmModelIds.Contains(_selectedApiKeyModelId))
+            _selectedApiKeyModelId = null;
+        if (_selectedChatGptModelId is not null && removedChatGptModelIds.Contains(_selectedChatGptModelId))
+            _selectedChatGptModelId = null;
         ApplyTranscriptionCatalog(_fetchedTranscriptionModels, persist: false);
         SelectModelCore(
             host.GetSetting<string>(SelectedModelSettingName) ?? s_fallbackTranscriptionModelEntries[0].Id,
             persist: false);
         NormalizeSelectedLlmModel(persist: false, preserveUnknownWhenCatalogUnavailable: true, mode: OpenAiAuthMode.ApiKey);
         NormalizeSelectedLlmModel(persist: false, preserveUnknownWhenCatalogUnavailable: true, mode: OpenAiAuthMode.ChatGpt);
+        if (migratedChatGptSelection)
+            host.SetSetting(SelectedChatGptModelSettingName, _selectedChatGptModelId);
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -745,13 +766,7 @@ public sealed class OpenAiPlugin
             var decoded = JsonSerializer.Deserialize<OpenAiModelsResponse>(
                 json,
                 s_jsonReadOptions);
-            if (decoded?.Data is not { } apiModels)
-                return null;
-
-            return apiModels
-                .OfType<OpenAiFetchedModel>()
-                .Where(model => !string.IsNullOrWhiteSpace(model.Id))
-                .ToList();
+            return decoded?.Data is { } apiModels ? SanitizeApiModels(apiModels) : null;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -797,10 +812,7 @@ public sealed class OpenAiPlugin
             if (decoded?.Models is not { } catalogModels)
                 return null;
 
-            var visibleModels = catalogModels
-                .OfType<OpenAiChatGptModel>()
-                .Where(IsVisibleChatGptModel)
-                .DistinctBy(model => model.Slug, StringComparer.OrdinalIgnoreCase)
+            var visibleModels = SanitizeChatGptModels(catalogModels)
                 .OrderBy(model => model.Priority ?? int.MaxValue)
                 .ThenBy(model => model.Slug, StringComparer.Ordinal)
                 .ToList();
@@ -865,6 +877,19 @@ public sealed class OpenAiPlugin
         return !excludeSuffixes.Any(suffix => lowered.EndsWith(suffix, StringComparison.Ordinal))
             && !excludeContains.Any(fragment => lowered.Contains(fragment, StringComparison.Ordinal));
     }
+
+    // A persisted cache is trusted no more than a live response: a hand-edited or pre-filter settings
+    // file must not surface blank ids or hidden ChatGPT models, or let one become the selection.
+    private static List<OpenAiFetchedModel> SanitizeApiModels(IEnumerable<OpenAiFetchedModel?>? models) =>
+        (models ?? []).OfType<OpenAiFetchedModel>()
+            .Where(model => !string.IsNullOrWhiteSpace(model.Id))
+            .ToList();
+
+    private static List<OpenAiChatGptModel> SanitizeChatGptModels(IEnumerable<OpenAiChatGptModel?>? models) =>
+        (models ?? []).OfType<OpenAiChatGptModel>()
+            .Where(IsVisibleChatGptModel)
+            .DistinctBy(model => model.Slug, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     internal static bool IsVisibleChatGptModel(OpenAiChatGptModel model) =>
         !string.IsNullOrWhiteSpace(model.Slug)
@@ -1322,7 +1347,7 @@ public sealed class OpenAiPlugin
         var hasFetchedCatalog = isChatGpt
             ? _fetchedChatGptModels.Count > 0
             : _fetchedLlmModels.Count > 0;
-        if (selected is null
+        if (string.IsNullOrWhiteSpace(selected)
             || (!preserveUnknownWhenCatalogUnavailable || hasFetchedCatalog)
             && available.All(model =>
                 !string.Equals(model.Id, selected, StringComparison.Ordinal)))
