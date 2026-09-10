@@ -2,6 +2,7 @@
   "id": "com.typewhisper.gemini",
   "name": "Google Gemini",
   "version": "1.0.2",
+  "minHostVersion": "0.13.2",
   "author": "TypeWhisper",
   "description": "Google Gemini and Gemma LLM provider with dynamic model discovery",
   "networkAccess": "network",
