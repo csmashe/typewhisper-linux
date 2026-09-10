@@ -212,7 +212,7 @@ public sealed class TransformSelectionService
     internal static string? DescribeProviderRefusal(PromptProcessingService promptProcessing)
     {
         return promptProcessing.HasNoProviderForRequest()
-            ? "No LLM provider available. Please configure an API key in Plugins."
+            ? Localization.Loc.Instance["Prompts.NoProviderConfigure"]
             : promptProcessing.TryDescribeSelectedProviderProblem();
     }
 

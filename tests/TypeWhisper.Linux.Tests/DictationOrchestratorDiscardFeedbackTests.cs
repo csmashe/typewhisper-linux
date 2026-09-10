@@ -12,6 +12,21 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class DictationOrchestratorDiscardFeedbackTests
 {
+    [Fact]
+    public void Spoken_command_failure_shows_only_configuration_details()
+    {
+        var configuration = new PluginRequestException(
+            "Sign in to the selected CLI.",
+            PluginRequestFailureKind.Configuration,
+            isTransient: false
+        );
+        Assert.Equal(configuration.Message, DictationOrchestrator.DescribeSpokenCommandFailure(configuration));
+        Assert.Equal(
+            Loc.Instance["Command.Failed"],
+            DictationOrchestrator.DescribeSpokenCommandFailure(new InvalidOperationException("Internal detail"))
+        );
+    }
+
     [Theory]
     [InlineData((int)LinuxShortSpeechDecision.DiscardTooShort, "Overlay.TooShort")]
     [InlineData((int)LinuxShortSpeechDecision.DiscardNoSpeech, "Overlay.NoSpeech")]

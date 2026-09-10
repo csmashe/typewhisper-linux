@@ -49,7 +49,9 @@ internal sealed class CliExecutableDiscovery
                 continue;
             }
 
-            if (!IsUsableExecutable(candidate, executableName) || !seen.Add(candidate))
+            // PATH aliases for the same binary are one installation; keep the first path.
+            var resolved = ResolveRealPath(candidate, executableName);
+            if (resolved is null || !seen.Add(resolved))
             {
                 continue;
             }
@@ -67,6 +69,10 @@ internal sealed class CliExecutableDiscovery
     /// </summary>
     internal static bool IsUsableExecutable(string path, string executableName) =>
         ResolveRealPath(path, executableName) is not null;
+
+    internal static bool IsUsableAlias(string path, string candidate, string executableName) =>
+        ResolveRealPath(path, executableName) is { } resolved
+        && string.Equals(resolved, ResolveRealPath(candidate, executableName), StringComparison.Ordinal);
 
     /// <summary>
     ///     Returns the final link target of a usable candidate, or null when the path is not a

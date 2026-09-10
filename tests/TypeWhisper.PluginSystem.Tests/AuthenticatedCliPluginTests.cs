@@ -20,6 +20,137 @@ public sealed class AuthenticatedCliPluginTests
     private static readonly JsonSerializerOptions s_manifestJsonOptions =
         new() { PropertyNameCaseInsensitive = true };
 
+    [Fact]
+    public async Task Dispose_ReturnsWhilePollNotificationWaitsForDisposingThread()
+    {
+        using var fake = FakeCliInstallation.CreateEmpty("success");
+        using var plugin = CreatePlugin(fake.DirectoryPath);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var host = CreateHost();
+        // ReSharper disable AccessToDisposedClosure -- the finally block awaits the poll task that runs this callback before the events dispose.
+        host.Setup(service => service.NotifyCapabilitiesChanged()).Callback(() =>
+        {
+            entered.Set();
+            release.Wait();
+        });
+        // ReSharper restore AccessToDisposedClosure
+        await plugin.ActivateAsync(host.Object);
+        var poll = (Task)typeof(AuthenticatedCliPlugin)
+            .GetField("_pollTask", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(plugin)!;
+        Task? dispose = null;
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)), "The poll must reach the host notification.");
+            dispose = Task.Run(plugin.Dispose);
+            await dispose.WaitAsync(TimeSpan.FromSeconds(2));
+            var deactivate = plugin.DeactivateAsync();
+            Assert.False(deactivate.IsCompleted);
+            release.Set();
+            await deactivate.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            release.Set();
+            if (dispose is not null)
+            {
+                await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+
+            try
+            {
+                await poll.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancellation is the expected monitor shutdown outcome.
+            }
+        }
+
+        Assert.False(poll.IsFaulted);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SelectingUnknownExecutable_PersistsPathAndReportsMissingSelection(bool emptyInstallation)
+    {
+        using var fake = emptyInstallation
+            ? FakeCliInstallation.CreateEmpty("success")
+            : FakeCliInstallation.Create("success", "codex");
+        using var plugin = CreatePlugin(fake.DirectoryPath);
+        var host = CreateHost();
+        await plugin.ActivateAsync(host.Object);
+        try
+        {
+            var requested = Path.Join(fake.DirectoryPath, "other", "codex");
+            await plugin.SetSettingValueAsync("codexInstallation", $"  {requested}  ", CancellationToken.None);
+
+            host.Verify(service => service.SetSetting("codexInstallation", requested), Times.Once);
+            var snapshot = plugin.GetSnapshot(Descriptor(CliProviderKind.Codex));
+            Assert.Equal(CliAvailabilityState.SelectedExecutableMissing, snapshot.State);
+            Assert.Equal(requested, snapshot.ExecutablePath);
+            if (emptyInstallation)
+            {
+                Assert.Empty(snapshot.Candidates);
+            }
+        }
+        finally
+        {
+            await plugin.DeactivateAsync();
+        }
+    }
+
+    [Fact]
+    public void Discovery_DeduplicatesResolvedTargetsAndKeepsFirstPath()
+    {
+        using var fake = FakeCliInstallation.Create("success", "codex");
+        var first = Path.Join(fake.RootPath, "first-bin");
+        var second = Path.Join(fake.RootPath, "second-bin");
+        Directory.CreateDirectory(first);
+        Directory.CreateDirectory(second);
+        var firstPath = Path.Join(first, "codex");
+        File.CreateSymbolicLink(firstPath, fake.ExecutablePath("codex"));
+        File.CreateSymbolicLink(Path.Join(second, "codex"), fake.ExecutablePath("codex"));
+
+        var discovery = new CliExecutableDiscovery(() => $"{first}:{second}");
+        Assert.Equal(firstPath, Assert.Single(discovery.FindCandidates("codex")));
+    }
+
+    [Fact]
+    public async Task PreviouslySelectedExecutable_KeepsUsableAliasOfRetainedCandidate()
+    {
+        using var fake = FakeCliInstallation.Create("success", "codex");
+        var first = Path.Join(fake.RootPath, "first-bin");
+        var second = Path.Join(fake.RootPath, "second-bin");
+        Directory.CreateDirectory(first);
+        Directory.CreateDirectory(second);
+        var firstPath = Path.Join(first, "codex");
+        var secondPath = Path.Join(second, "codex");
+        File.CreateSymbolicLink(firstPath, fake.ExecutablePath("codex"));
+        File.CreateSymbolicLink(secondPath, fake.ExecutablePath("codex"));
+        using var plugin = CreatePlugin($"{first}:{second}");
+        var host = CreateHost();
+        host.Setup(service => service.GetSetting<string>("codexInstallation"))
+            .Returns(secondPath);
+
+        await plugin.ActivateAsync(host.Object);
+        try
+        {
+            await plugin.RefreshFromSettingsAsync();
+
+            var snapshot = plugin.GetSnapshot(Descriptor(CliProviderKind.Codex));
+            Assert.Equal(CliAvailabilityState.Ready, snapshot.State);
+            Assert.Equal(secondPath, snapshot.ExecutablePath);
+            Assert.Equal(firstPath, Assert.Single(snapshot.Candidates));
+        }
+        finally
+        {
+            await plugin.DeactivateAsync();
+        }
+    }
+
     [Theory]
     [InlineData("en", ProcessRunStatus.TimedOut, null, "The provider CLI timed out.")]
     [InlineData("en", ProcessRunStatus.StartFailed, null, "The provider CLI could not be started.")]

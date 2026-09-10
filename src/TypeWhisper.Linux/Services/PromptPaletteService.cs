@@ -22,6 +22,9 @@ public sealed class PromptPaletteService
     private readonly IServiceProvider _services;
     private readonly TextInsertionService _textInsertion;
 
+    internal static string NoProviderMessage =>
+        Loc.Instance["Prompts.NoProviderConfigure"];
+
     private bool _opening;
 
     public PromptPaletteService(
@@ -142,7 +145,7 @@ public sealed class PromptPaletteService
             await CloseWindowAsync(window);
             await ShowWarningAsync(
                 "TypeWhisper",
-                "No LLM provider available. Please configure an API key in Plugins."
+                NoProviderMessage
             );
             return;
         }

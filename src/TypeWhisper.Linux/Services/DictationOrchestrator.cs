@@ -3154,12 +3154,11 @@ public sealed class DictationOrchestrator : IDisposable
         {
             Trace.WriteLine($"[Command] Spoken command failed: {ex}");
             ReportStatus(context, $"Command failed: {ex.Message}");
-            // Same rule as the dictation path: a provider/plugin failure already carries an
-            // actionable message (signed-out provider, missing selection), so show it rather than
-            // the generic "Command failed" the overlay would otherwise be left with.
+            // RequireConfiguredProvider supplies actionable configuration failures (signed-out
+            // provider, missing selection). Other failures keep the generic command feedback.
             ShowFeedback(
                 context,
-                ex is InvalidOperationException ? ex.Message : Localization.Loc.Instance["Command.Failed"],
+                DescribeSpokenCommandFailure(ex),
                 true
             );
             PublishSessionTerminal(context.SessionId, "failed", ex.Message);
@@ -3187,6 +3186,11 @@ public sealed class DictationOrchestrator : IDisposable
         // Reached only via a catch (cancel/fail) — no savable result was produced.
         return null;
     }
+
+    internal static string DescribeSpokenCommandFailure(Exception ex) =>
+        ex is PluginRequestException { FailureKind: PluginRequestFailureKind.Configuration }
+            ? ex.Message
+            : Localization.Loc.Instance["Command.Failed"];
 
     // Result of a completed spoken command, for the history entry. SourceText is what the LLM
     // operated on — the selected text for an edit/transform, or the command itself for a create —

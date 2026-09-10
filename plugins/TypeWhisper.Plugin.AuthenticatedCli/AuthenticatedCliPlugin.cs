@@ -53,6 +53,7 @@ public sealed class AuthenticatedCliPlugin :
     private string? _preferredOpenCodeModel;
     private CancellationTokenSource? _lifetimeCancellation;
     private Task? _pollTask;
+    private Task? _shutdownTask;
     private IPluginHostServices? _host;
     private IPluginLocalization? _injectedLocalization;
     private bool _disposed;
@@ -110,6 +111,7 @@ public sealed class AuthenticatedCliPlugin :
         RestoreOpenCodeCatalog(host.GetSetting<OpenCodeModelCatalogCache>(OpenCodeCatalogSettingName));
 
         var cancellation = new CancellationTokenSource();
+        _shutdownTask = null;
         _lifetimeCancellation = cancellation;
         _pollTask = Task.Run(
             () => PollAvailabilityAsync(cancellation.Token),
@@ -120,36 +122,68 @@ public sealed class AuthenticatedCliPlugin :
 
     public async Task DeactivateAsync()
     {
-        var cancellation = _lifetimeCancellation;
-        var pollTask = _pollTask;
-        _lifetimeCancellation = null;
-        _pollTask = null;
-        if (cancellation is not null)
+        await StopAvailabilityMonitor("availability-monitor-stop").ConfigureAwait(false);
+        _host = null;
+    }
+
+    private Task StopAvailabilityMonitor(string errorEvent)
+    {
+        lock (_stateLock)
         {
-            await cancellation.CancelAsync().ConfigureAwait(false);
-            if (pollTask is not null)
+            if (_shutdownTask is not null)
             {
-                try
-                {
-                    await pollTask.ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    // Expected when the plugin is deactivated.
-                }
-                catch (Exception ex)
-                {
-                    _host?.Log(
-                        PluginLogLevel.Warning,
-                        $"event=availability-monitor-stop type={ex.GetType().Name}"
-                    );
-                }
+                return _shutdownTask;
             }
 
-            cancellation.Dispose();
-        }
+            var cancellation = _lifetimeCancellation;
+            var pollTask = _pollTask;
+            var host = _host;
+            _lifetimeCancellation = null;
+            _pollTask = null;
 
-        _host = null;
+            try
+            {
+                cancellation?.Cancel();
+            }
+            catch (Exception ex)
+            {
+                host?.Log(PluginLogLevel.Warning, $"event={errorEvent} type={ex.GetType().Name}");
+            }
+
+            _shutdownTask = DrainAvailabilityMonitorAsync(cancellation, pollTask, host);
+            return _shutdownTask;
+        }
+    }
+
+    private static async Task DrainAvailabilityMonitorAsync(
+        CancellationTokenSource? cancellation,
+        Task? pollTask,
+        IPluginHostServices? host
+    )
+    {
+        try
+        {
+            if (pollTask is not null)
+            {
+                await pollTask.ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when the plugin is deactivated.
+        }
+        catch (Exception ex)
+        {
+            host?.Log(
+                PluginLogLevel.Warning,
+                $"event=availability-monitor-stop type={ex.GetType().Name}"
+            );
+        }
+        finally
+        {
+            // The monitor may still observe its token until the drain completes.
+            cancellation?.Dispose();
+        }
     }
 
     private string GetString(string key, params object[] args) =>
@@ -200,9 +234,11 @@ public sealed class AuthenticatedCliPlugin :
         CancellationToken cancellationToken = default
     )
     {
+        executablePath = NullIfBlank(executablePath?.Trim());
         var candidates = _discovery.FindCandidates(descriptor.ExecutableName);
         var selected = candidates.FirstOrDefault(candidate =>
-            string.Equals(candidate, executablePath, StringComparison.Ordinal));
+            string.Equals(candidate, executablePath, StringComparison.Ordinal))
+            ?? NullIfBlank(executablePath);
         lock (_stateLock)
         {
             _selectedExecutables[descriptor.Key] = selected;
@@ -508,17 +544,6 @@ public sealed class AuthenticatedCliPlugin :
     {
         var checkedAt = DateTimeOffset.UtcNow;
         var candidates = _discovery.FindCandidates(descriptor.ExecutableName);
-        if (candidates.Count == 0)
-        {
-            return new CliAvailabilitySnapshot(
-                CliAvailabilityState.MissingExecutable,
-                null,
-                null,
-                candidates,
-                checkedAt
-            );
-        }
-
         string? configured;
         lock (_stateLock)
         {
@@ -527,11 +552,29 @@ public sealed class AuthenticatedCliPlugin :
 
         var selected = candidates.FirstOrDefault(candidate =>
             string.Equals(candidate, configured, StringComparison.Ordinal));
+        if (configured is not null && selected is null
+            && candidates.Any(candidate => CliExecutableDiscovery.IsUsableAlias(
+                configured, candidate, descriptor.ExecutableName)))
+        {
+            selected = configured;
+        }
+
         if (configured is not null && selected is null)
         {
             return new CliAvailabilitySnapshot(
                 CliAvailabilityState.SelectedExecutableMissing,
                 configured,
+                null,
+                candidates,
+                checkedAt
+            );
+        }
+
+        if (candidates.Count == 0)
+        {
+            return new CliAvailabilitySnapshot(
+                CliAvailabilityState.MissingExecutable,
+                null,
                 null,
                 candidates,
                 checkedAt
@@ -1450,16 +1493,9 @@ public sealed class AuthenticatedCliPlugin :
         }
 
         _disposed = true;
-        try
-        {
-            // The same drain as DeactivateAsync: a poll iteration still inside the refresh gate
-            // must finish first, and a SemaphoreSlim with no wait handle needs no disposal.
-            DeactivateAsync().GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            _host?.Log(PluginLogLevel.Warning, $"event=dispose-error type={ex.GetType().Name}");
-        }
+        // A host notification may marshal to the disposing thread, so Dispose must not wait
+        // for the poll. The async continuation logs drain faults and then disposes the source.
+        _ = StopAvailabilityMonitor("dispose-error");
 
         _host = null;
     }

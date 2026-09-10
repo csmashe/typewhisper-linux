@@ -34,6 +34,45 @@ public sealed class SelectedProviderRefusalTests : IDisposable
     }
 
     [Fact]
+    public void TransformSelection_NoProvider_UsesLocalizedConfigurationMessage()
+    {
+        using var pluginManager = CreatePluginManager();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var processing = new PromptProcessingService(
+            pluginManager, settings.Object, new MemoryService(pluginManager)
+        );
+
+        Assert.Equal(
+            Loc.Instance["Prompts.NoProviderConfigure"],
+            TransformSelectionService.DescribeProviderRefusal(processing)
+        );
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("unknown")]
+    [InlineData("MODEL-R")]
+    public void SelectedModel_RejectsBlankOrUnknownButAllowsKnownAndUnfetchedCatalogs(string modelId)
+    {
+        var ready = new FakeProvider("com.test.ready", "Ready Provider", "model-r");
+        using var pluginManager = CreatePluginManager(ready);
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var processing = new PromptProcessingService(
+            pluginManager, settings.Object, new MemoryService(pluginManager)
+        );
+
+        Assert.Null(processing.TryDescribeSelectedProviderProblem("plugin:com.test.ready:model-r"));
+        Assert.Equal(
+            Loc.Instance.GetString("Prompts.SelectedProviderMissing", $"com.test.ready · {modelId}"),
+            processing.TryDescribeSelectedProviderProblem($"plugin:com.test.ready:{modelId}")
+        );
+
+        ready.SupportedModels = [];
+        Assert.Null(processing.TryDescribeSelectedProviderProblem("plugin:com.test.ready:unfetched"));
+    }
+
+    [Fact]
     public void TransformSelection_RefusesUnavailableDefaultProvider_BeforeRecording()
     {
         var signedOut = new FakeProvider("com.test.cli", "CLI Provider", "default")
@@ -355,7 +394,7 @@ public sealed class SelectedProviderRefusalTests : IDisposable
         public string PluginVersion => "1.0.0";
         public string ProviderName { get; }
         public bool IsAvailable { get; init; } = true;
-        public IReadOnlyList<PluginModelInfo> SupportedModels { get; }
+        public IReadOnlyList<PluginModelInfo> SupportedModels { get; set; }
 
         public Task ActivateAsync(IPluginHostServices host)
         {

@@ -357,6 +357,16 @@ public sealed class PromptProcessingService
             candidate.GetLlmSelectionId() == pluginId
         );
 
+        // An unknown model is a configuration problem for the guards to surface, not a request
+        // the provider should reject later. An empty catalog may simply not have been fetched.
+        if (string.IsNullOrWhiteSpace(modelId)
+            || provider is not null && provider.SupportedModels.Count > 0
+            && !provider.SupportedModels.Any(model =>
+                string.Equals(model.Id, modelId, StringComparison.Ordinal)))
+        {
+            return (null, string.Empty);
+        }
+
         return provider is null ? (null, string.Empty) : (provider, modelId);
     }
 
