@@ -64,7 +64,7 @@ public sealed class SessionAudioFileService
             }
 
             var cutoff = DateTime.UtcNow.AddDays(-Math.Clamp(days, 1, 365));
-            var canPruneOrphans = true;
+            var canPruneOrphans = false;
             var referenced = new HashSet<string?>(StringComparer.Ordinal);
             if (_history is not null)
             {

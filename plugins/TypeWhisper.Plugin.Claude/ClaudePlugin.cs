@@ -94,10 +94,10 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
 
         using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
             _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
-            (errorResponse, errorBody) =>
+            (errorResponse, _) =>
             {
                 _host?.Log(PluginLogLevel.Error, $"Anthropic API error {(int)errorResponse.StatusCode}: {errorResponse.ReasonPhrase}");
-                return $"Anthropic API returned {(int)errorResponse.StatusCode}: {errorBody}";
+                return $"Anthropic API returned {(int)errorResponse.StatusCode}: {errorResponse.ReasonPhrase}";
             });
         var responseBody = await response.Content.ReadAsStringAsync(ct);
 
@@ -148,10 +148,10 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
         // buffering the whole SSE body (the batch path reads the body to a string).
         using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
             _httpClient, request, HttpCompletionOption.ResponseHeadersRead, ct,
-            (errorResponse, errorBody) =>
+            (errorResponse, _) =>
             {
                 _host?.Log(PluginLogLevel.Error, $"Anthropic API error {(int)errorResponse.StatusCode}: {errorResponse.ReasonPhrase}");
-                return $"Anthropic API returned {(int)errorResponse.StatusCode}: {errorBody}";
+                return $"Anthropic API returned {(int)errorResponse.StatusCode}: {errorResponse.ReasonPhrase}";
             });
 
         await using var stream = await OpenAiApiHelper.ReadBodyWithErrorHandlingAsync(

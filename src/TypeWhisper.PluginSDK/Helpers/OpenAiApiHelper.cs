@@ -132,13 +132,13 @@ public static class OpenAiApiHelper
     /// <exception cref="OperationCanceledException">The caller cancelled the operation.</exception>
     public static PluginRequestException MapBodyReadFailure(Exception ex, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         if (ex is OperationCanceledException)
         {
             return new PluginRequestException(
                 "API response body timed out.", PluginRequestFailureKind.Timeout, innerException: ex);
         }
 
-        ct.ThrowIfCancellationRequested();
         return new PluginRequestException(
             "Network error while reading the response body.",
             PluginRequestFailureKind.Network, innerException: ex);
@@ -176,6 +176,8 @@ public static class OpenAiApiHelper
                     continue;
 
                 var secret = Uri.UnescapeDataString(pair[1]);
+                if (pair[1].Length > 0 && !string.Equals(pair[1], secret, StringComparison.Ordinal))
+                    message = message.Replace(pair[1], "[redacted]", StringComparison.Ordinal);
                 if (secret.Length > 0)
                     message = message.Replace(secret, "[redacted]", StringComparison.Ordinal);
             }

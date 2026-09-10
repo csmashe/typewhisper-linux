@@ -1283,7 +1283,8 @@ public sealed partial class DictationOrchestrator : IDisposable
     // cancelAllCommands widens the scope from the newest command (Escape/IPC cancel) to all of them.
     private async Task CancelInFlightWorkAsync(bool cancelAllCommands = false)
     {
-        await CancelRecoveryAndDrainAsync().ConfigureAwait(false);
+        if (!await CancelRecoveryAndDrainAsync().ConfigureAwait(false))
+            Trace.WriteLine("[Dictation] Recovery did not drain; continuing cancellation of in-flight work.");
 
         CancellationTokenSource[] commandSources;
         if (cancelAllCommands)
@@ -1916,6 +1917,17 @@ public sealed partial class DictationOrchestrator : IDisposable
     }
 
     /// <summary>
+    ///     True when a profile explicitly names a prompt action but no automatic action
+    ///     resolves (disabled, removed, or manual-only). An unavailable action must fail
+    ///     with a routing error rather than silently insert unprocessed text.
+    ///     Exposed internally for unit testing.
+    /// </summary>
+    internal static bool IsPromptActionUnavailable(string? promptActionId, bool promptActionResolved)
+    {
+        return !string.IsNullOrWhiteSpace(promptActionId) && !promptActionResolved;
+    }
+
+    /// <summary>
     ///     Classifies a thrown insertion/action exception into the InsertionResult that
     ///     should be recorded in Recents/History instead of silently dropping the
     ///     transcription (audit §2 M6). Exposed internally for unit testing.
@@ -2268,6 +2280,14 @@ public sealed partial class DictationOrchestrator : IDisposable
             );
 
             var promptAction = ResolvePromptAction(context);
+            var promptActionUnavailable = IsPromptActionUnavailable(context.Profile?.PromptActionId, promptAction is not null);
+            if (promptActionUnavailable)
+            {
+                Trace.WriteLine(
+                    $"[Dictation] Configured prompt action '{context.Profile?.PromptActionId}' is unavailable "
+                    + "(disabled, removed, or manual-only) — routing as a failure instead of falling back to ordinary text insertion."
+                );
+            }
             failurePrompt = promptAction?.SystemPrompt;
             var translationTarget = context.Profile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
             var cleanupLevel = ResolveCleanupLevel(context, promptAction);
@@ -2361,6 +2381,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             if (
                 actionPlugin is null
                 && !actionPluginUnavailable
+                && !promptActionUnavailable
                 && !commandResult.CancelInsertion
             )
             {
@@ -2400,7 +2421,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 {
                     insertion = InsertionResult.NoText;
                 }
-                else if (actionPluginUnavailable)
+                else if (actionPluginUnavailable || promptActionUnavailable)
                 {
                     insertion = InsertionResult.ActionUnavailable;
                 }
@@ -2476,7 +2497,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                         ClipboardFallbackMessage(context.AppProcess),
                     InsertionResult.ActionHandled => "Action completed.",
                     InsertionResult.ActionFailed => "Action failed.",
-                    InsertionResult.ActionUnavailable => "Action destination unavailable.",
+                    InsertionResult.ActionUnavailable => promptActionUnavailable
+                        ? "Configured prompt action is unavailable." : "Action destination unavailable.",
                     InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
                     InsertionResult.MissingPasteTool =>
                         $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
@@ -2587,7 +2609,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                     pipelineResult,
                     cleanupLevel,
                     engineProviderId,
-                    engineModelId
+                    engineModelId,
+                    promptActionUnavailable
                 );
             }
         }
@@ -3752,7 +3775,8 @@ public sealed partial class DictationOrchestrator : IDisposable
         PostProcessingResult pipelineResult,
         CleanupLevel cleanupLevel,
         string engineUsed,
-        string? modelUsed
+        string? modelUsed,
+        bool promptActionUnavailable
     )
     {
         try
@@ -3772,7 +3796,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 ) with
                 {
                     InsertionStatus = ToTextInsertionStatus(insertion),
-                    InsertionFailureReason = InsertionFailureReasonFor(insertion),
+                    InsertionFailureReason = InsertionFailureReasonFor(insertion, promptActionUnavailable),
                     CleanupLevelUsed = cleanupLevel,
                     CleanupApplied = WasPipelineStepChanged(
                         pipelineResult,
@@ -3836,13 +3860,14 @@ public sealed partial class DictationOrchestrator : IDisposable
         );
     }
 
-    private static string? InsertionFailureReasonFor(InsertionResult insertion)
+    private static string? InsertionFailureReasonFor(InsertionResult insertion, bool promptActionUnavailable)
     {
         return insertion switch
         {
             InsertionResult.ActionFailed => "Action plugin failed.",
             InsertionResult.ActionUnavailable =>
-                "Configured action plugin destination is unavailable.",
+                promptActionUnavailable ? "Configured prompt action is unavailable."
+                    : "Configured action plugin destination is unavailable.",
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             InsertionResult.MissingPasteTool => "Automatic paste tool is unavailable.",
             InsertionResult.Failed => "Text insertion failed.",

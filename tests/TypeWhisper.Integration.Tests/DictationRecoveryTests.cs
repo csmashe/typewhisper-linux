@@ -14,6 +14,150 @@ namespace TypeWhisper.Integration.Tests;
 public sealed class DictationRecoveryTests
 {
     [Fact]
+    public Task UnavailablePrompt_RoutesFailureAndRetryPreservesRecord() => BoundedTest.RunAsync(async () =>
+    {
+        await using var fixture = new OrchestratorCompositionFixture();
+        fixture.Provider.GetRequiredService<IProfileService>().AddProfile(new Profile
+        {
+            Id = "stale-profile", Name = "Stale profile", PromptActionId = "removed-prompt",
+        });
+        fixture.Plugin.EnqueueText("preserved transcript");
+        await DictateAsync(fixture, "stale-profile");
+        var record = Assert.Single(fixture.History.Records);
+        Assert.Equal(TextInsertionStatus.ActionUnavailable, record.InsertionStatus);
+        Assert.Equal("Configured prompt action is unavailable.", record.InsertionFailureReason);
+        Assert.Equal("preserved transcript", record.RawText);
+        Assert.Empty(fixture.InsertionPlatform.ClipboardWrites);
+        Assert.Empty(fixture.InsertionPlatform.Typed);
+        fixture.Plugin.EnqueueText("retry transcript");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Orchestrator.RetryFromHistoryAsync(record.Id));
+        Assert.Equal(Loc.Instance["History.RetryPromptActionUnavailable"], error.Message);
+        Assert.Equal(record, Assert.Single(fixture.History.Records));
+    });
+
+    [Fact]
+    public Task RetryUnavailablePrompt_PreservesOriginalStatus() => BoundedTest.RunAsync(async () =>
+    {
+        await using var fixture = new OrchestratorCompositionFixture();
+        fixture.Plugin.EnqueueFailure("original failure");
+        await DictateAsync(fixture);
+        fixture.Provider.GetRequiredService<IProfileService>().AddProfile(new Profile
+        {
+            Id = "stale-profile", Name = "Stale profile", PromptActionId = "removed-prompt",
+        });
+        var record = Assert.Single(fixture.History.Records) with { ProfileName = "Stale profile" };
+        Assert.True(fixture.History.TryReplaceRecord(record));
+        fixture.Plugin.EnqueueText("retry transcript");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Orchestrator.RetryFromHistoryAsync(record.Id));
+        Assert.Equal(Loc.Instance["History.RetryPromptActionUnavailable"], error.Message);
+        Assert.Equal(record, Assert.Single(fixture.History.Records));
+    });
+
+    [Fact]
+    public Task RetryPromptDisabledDuringTranscription_RecordsProcessingFailure() => BoundedTest.RunAsync(async () =>
+    {
+        await using var fixture = new OrchestratorCompositionFixture();
+        var actions = fixture.Provider.GetRequiredService<IPromptActionService>();
+        var action = new PromptAction
+        {
+            Id = "recovery-prompt", Name = "Recovery prompt", SystemPrompt = "Rewrite the input.",
+            ProviderOverride = "plugin:integration.scripted-llm:scripted-llm-model",
+        };
+        actions.AddAction(action);
+        fixture.Provider.GetRequiredService<IProfileService>().AddProfile(new Profile
+        {
+            Id = "recovery-profile", Name = "Recovery profile", PromptActionId = action.Id,
+        });
+        fixture.Llm.Failure = new InvalidOperationException("original processing failure");
+        fixture.Plugin.EnqueueText("preserved raw text");
+        await DictateAsync(fixture, "recovery-profile");
+        var record = Assert.Single(fixture.History.Records);
+        Assert.Equal(TranscriptionRecordStatus.ProcessingFailed, record.Status);
+        Assert.Equal("preserved raw text", record.FinalText);
+        fixture.Llm.Failure = null;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Plugin.EnqueueResult(async ct =>
+        {
+            entered.SetResult();
+            await release.Task.WaitAsync(ct);
+            return new PluginTranscriptionResult("new raw text", "en", 1);
+        });
+        var retry = fixture.Orchestrator.RetryFromHistoryAsync(record.Id);
+        try
+        {
+            await BoundedTest.WaitAsync(entered.Task);
+            actions.UpdateAction(action with { IsEnabled = false });
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => retry);
+        Assert.Equal(Loc.Instance["History.RetryPromptActionUnavailable"], error.Message);
+        var failed = Assert.Single(fixture.History.Records);
+        Assert.Equal(TranscriptionRecordStatus.ProcessingFailed, failed.Status);
+        Assert.Equal(error.Message, failed.FailureMessage);
+        Assert.Equal("new raw text", failed.RawText);
+        Assert.Equal(record.FinalText, failed.FinalText);
+    });
+
+    [Fact]
+    public Task RecoveryDrain_TimesOutWhileProviderIgnoresCancellation() => BoundedTest.RunAsync(async () =>
+    {
+        await using var fixture = new OrchestratorCompositionFixture();
+        fixture.Plugin.EnqueueFailure("original failure");
+        await DictateAsync(fixture);
+        var record = Assert.Single(fixture.History.Records);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Plugin.EnqueueResult(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+            return new PluginTranscriptionResult("recovered", "en", 1);
+        });
+        using var caller = new CancellationTokenSource();
+        var retry = fixture.Orchestrator.RetryFromHistoryAsync(record.Id, caller.Token);
+        try
+        {
+            await BoundedTest.WaitAsync(entered.Task);
+            var drain = fixture.Orchestrator.CancelRecoveryAndDrainAsync(TimeSpan.FromMilliseconds(50));
+            Assert.False(await BoundedTest.WaitAsync(drain));
+            Assert.False(retry.IsCompleted);
+        }
+        finally
+        {
+            await caller.CancelAsync();
+            release.TrySetResult();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => retry);
+        }
+        Assert.Equal(record, Assert.Single(fixture.History.Records));
+        Assert.True(await fixture.Orchestrator.CancelRecoveryAndDrainAsync());
+    });
+
+    [Fact]
+    public Task RetryProviderFailureAfterCancellation_PreservesRecord() => BoundedTest.RunAsync(async () =>
+    {
+        await using var fixture = new OrchestratorCompositionFixture();
+        fixture.Plugin.EnqueueFailure("original failure");
+        await DictateAsync(fixture);
+        var record = Assert.Single(fixture.History.Records);
+        using var caller = new CancellationTokenSource();
+        // ReSharper disable once AccessToDisposedClosure -- the queued result runs inside the awaited retry, before the source disposes.
+        fixture.Plugin.EnqueueResult(_ =>
+        {
+            caller.Cancel();
+            throw new PluginRequestException("provider canceled", PluginRequestFailureKind.ServerError);
+        });
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            fixture.Orchestrator.RetryFromHistoryAsync(record.Id, caller.Token));
+        Assert.Equal(record, Assert.Single(fixture.History.Records));
+    });
+
+    [Fact]
     public Task TranscriptionFailure_RetainsCapture_AndRetryReplacesAndCopies() => BoundedTest.RunAsync(async () =>
     {
         await using var fixture = new OrchestratorCompositionFixture();

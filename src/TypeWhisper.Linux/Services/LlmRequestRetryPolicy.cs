@@ -24,6 +24,10 @@ internal static class LlmRequestRetryPolicy
                 budget.RecordAttempt();
                 return await attempt(ct);
             }
+            catch (PluginRequestException) when (ct.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(ct);
+            }
             catch (PluginRequestException ex) when (retry < maxAttempts && ex.IsTransient && IsTransient(ex) && !ct.IsCancellationRequested)
             {
                 var delay = GetDelay(ex, retry);
@@ -62,12 +66,25 @@ internal static class LlmRequestRetryPolicy
             {
                 ct.ThrowIfCancellationRequested();
                 yield return enumerator!.Current;
-            } while (await enumerator.MoveNextAsync());
+            } while (await MoveNextOrThrowCanceledAsync(enumerator, ct));
         }
         finally
         {
             if (enumerator is not null)
                 await enumerator.DisposeAsync();
+        }
+    }
+
+    private static async ValueTask<bool> MoveNextOrThrowCanceledAsync<T>(
+        IAsyncEnumerator<T> enumerator, CancellationToken ct)
+    {
+        try
+        {
+            return await enumerator.MoveNextAsync();
+        }
+        catch (PluginRequestException) when (ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(ct);
         }
     }
 

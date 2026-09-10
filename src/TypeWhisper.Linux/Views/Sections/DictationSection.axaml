@@ -891,16 +891,19 @@
                     </Border>
                 </Grid>
             </Border>
-            <Border Classes="row">
-                <Grid ColumnDefinitions="*,Auto">
-                    <StackPanel Spacing="4" Margin="0,0,16,0">
-                        <TextBlock Text="{loc:Str Dictation.RecoveryRetention}" Classes="row-label" />
-                        <TextBlock Text="{loc:Str Dictation.RecoveryRetentionHint}" TextWrapping="Wrap"
-                                   FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                    </StackPanel>
-                    <TextBox Grid.Column="1" Width="80" VerticalAlignment="Center"
-                             Text="{Binding DictationRecoveryRetentionDays}" />
-                </Grid>
+            <TextBlock Text="{loc:Str Dictation.Recovery}" Classes="group-title" />
+            <Border Classes="settings-panel">
+                <Border Classes="row">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Spacing="4" Margin="0,0,16,0">
+                            <TextBlock Text="{loc:Str Dictation.RecoveryRetention}" Classes="row-label" />
+                            <TextBlock Text="{loc:Str Dictation.RecoveryRetentionHint}" TextWrapping="Wrap"
+                                       FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <TextBox Grid.Column="1" Width="80" VerticalAlignment="Center"
+                                 Text="{Binding DictationRecoveryRetentionDays}" />
+                    </Grid>
+                </Border>
             </Border>
         </StackPanel>
     </ScrollViewer>

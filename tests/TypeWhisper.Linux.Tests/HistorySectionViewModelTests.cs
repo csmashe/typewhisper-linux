@@ -70,6 +70,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
     [InlineData("success")]
     [InlineData("failure")]
     [InlineData("missing")]
+    [InlineData("canceled")]
     public async Task Retry_ShowsProgressAndLocalizedResult(string outcome)
     {
         var record = CreateRecord("private raw text") with { Status = TranscriptionRecordStatus.ProcessingFailed };
@@ -85,6 +86,9 @@ public sealed class HistorySectionViewModelTests : IDisposable
             case "success":
                 completion.SetResult(record with { Status = TranscriptionRecordStatus.Succeeded, FailureMessage = null });
                 break;
+            case "canceled":
+                completion.SetException(new OperationCanceledException());
+                break;
             case "missing":
                 completion.SetException(new FileNotFoundException());
                 break;
@@ -99,6 +103,7 @@ public sealed class HistorySectionViewModelTests : IDisposable
         {
             "success" => Loc.Instance["History.RetryCopied"],
             "missing" => Loc.Instance["History.RetryAudioMissing"],
+            "canceled" => Loc.Instance["History.RetryCanceled"],
             _ => Loc.Instance.GetString("History.RetryFailed", "failure: [redacted]"),
         }, row.RetryResult);
     }

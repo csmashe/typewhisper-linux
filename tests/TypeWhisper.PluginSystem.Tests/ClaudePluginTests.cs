@@ -34,7 +34,7 @@ public sealed class ClaudePluginTests
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "key" } };
         using var sut = new ClaudePlugin(client);
         await sut.ActivateAsync(host);
-        await Assert.ThrowsAsync<PluginRequestException>(async () =>
+        var error = await Assert.ThrowsAsync<PluginRequestException>(async () =>
         {
             if (streaming)
             {
@@ -43,6 +43,8 @@ public sealed class ClaudePluginTests
             else
                 await sut.ProcessAsync("system", "user", "claude", CancellationToken.None);
         });
+        Assert.Equal("Anthropic API returned 400: Bad Request", error.Message);
+        Assert.DoesNotContain(body, error.Message);
         Assert.Contains("Anthropic API error 400: Bad Request", host.Messages);
         Assert.All(host.Messages, message => Assert.DoesNotContain(body, message));
     }

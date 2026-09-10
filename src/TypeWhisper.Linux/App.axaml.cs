@@ -893,8 +893,12 @@ public class App : Application
             Debug.WriteLine($"[App] Dictation toggle-gate close failed: {ex.Message}");
         }
 
-        if (dictation is not null)
-            await dictation.CancelRecoveryAndDrainAsync().ConfigureAwait(false);
+        var recoveryDrained = dictation is null || await dictation.CancelRecoveryAndDrainAsync().ConfigureAwait(false);
+        if (!ApplyRecoveryDrainResult(recoveryDrained))
+        {
+            Debug.WriteLine("[App] Recovery is still running; skipping dictation, audio, model and provider disposal.");
+            return;
+        }
 
         DisposeDictationBeforeAudio(
             dictation,
@@ -945,6 +949,15 @@ public class App : Application
 
     internal static bool SkipProviderDisposal =>
         Volatile.Read(ref s_skipProviderDisposal) != 0;
+
+    internal static bool ApplyRecoveryDrainResult(bool recoveryDrained)
+    {
+        if (recoveryDrained)
+            return true;
+
+        Volatile.Write(ref s_skipProviderDisposal, 1);
+        return false;
+    }
 
     internal static ShutdownDisposalDecision ApplyHttpApiDrainResult(
         bool httpApiDrained,

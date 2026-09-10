@@ -43,22 +43,6 @@ public sealed partial class DictationOrchestrator
                 + $"url='{context.AppUrl ?? "<unknown>"}', "
                 + $"promptAction='{promptAction?.Name ?? "<none>"}')."
             );
-
-            if (
-                !string.IsNullOrWhiteSpace(context.Profile.PromptActionId)
-                && promptAction is null
-            )
-            {
-                // Fail early before building the pipeline — no point running
-                // lower-priority steps on a transcript we'll reject anyway.
-                var message =
-                    $"Prompt action for profile '{context.Profile.Name}' is disabled or missing.";
-                Trace.WriteLine(
-                    $"[Dictation] {message} actionId='{context.Profile.PromptActionId}'."
-                );
-                ReportStatus(context, message);
-                throw new InvalidOperationException(message);
-            }
         }
 
         var translationTarget =
@@ -171,17 +155,28 @@ public sealed partial class DictationOrchestrator
         }
     }
 
-    internal async Task CancelRecoveryAndDrainAsync()
+    private static readonly TimeSpan s_recoveryDrainBudget = TimeSpan.FromSeconds(5);
+
+    internal async Task<bool> CancelRecoveryAndDrainAsync(TimeSpan? timeout = null)
     {
-        Task cancellation;
-        Task completion;
-        lock (_recoveryLock)
+        try
         {
-            cancellation = _recoveryCts?.CancelAsync() ?? Task.CompletedTask;
-            completion = _recoveryCompletion?.Task ?? Task.CompletedTask;
+            Task cancellation;
+            Task completion;
+            lock (_recoveryLock)
+            {
+                cancellation = _recoveryCts?.CancelAsync() ?? Task.CompletedTask;
+                completion = _recoveryCompletion?.Task ?? Task.CompletedTask;
+            }
+            await Task.WhenAll(cancellation, completion)
+                .WaitAsync(timeout ?? s_recoveryDrainBudget).ConfigureAwait(false);
+            return true;
         }
-        await cancellation.ConfigureAwait(false);
-        await completion.ConfigureAwait(false);
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Recovery drain failed: {ex.GetType().Name}");
+            return false;
+        }
     }
 
     /// <summary>Sanitized failure text for display; blank exception messages fall back to a localized string.</summary>
@@ -227,6 +222,9 @@ public sealed partial class DictationOrchestrator
                 Capture = _settings.Current.CaptureLlmProvenance ? new LlmCallCapture() : null,
                 TranscriptionTaskUsed = record.TranscriptionTaskUsed,
             };
+            if (IsPromptActionUnavailable(profile?.PromptActionId, ResolvePromptAction(context) is not null))
+                throw new InvalidOperationException(Loc.Instance["History.RetryPromptActionUnavailable"]);
+
             var rawText = "";
             var finalText = "";
             var originalRecord = record;
@@ -259,6 +257,10 @@ public sealed partial class DictationOrchestrator
                 var duration = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav);
                 var language = ResolvePostProcessingSourceLanguage(result.DetectedLanguage,
                     selection.LanguageTag, translate, supportsTranslation);
+                // If the action became unavailable during transcription, the catch records ProcessingFailed
+                // with the localized message and new raw text, preserving the previous final text.
+                if (IsPromptActionUnavailable(profile?.PromptActionId, ResolvePromptAction(context) is not null))
+                    throw new InvalidOperationException(Loc.Instance["History.RetryPromptActionUnavailable"]);
                 var processed = await _pipeline.ProcessAsync(rawText,
                     BuildPipelineOptions(context, duration, language, selection.LanguageTag,
                         languageHints, translate, supportsTranslation, false), ct);
@@ -294,6 +296,10 @@ public sealed partial class DictationOrchestrator
                     PendingCorrectionSuggestions = [],
                     LlmCalls = context.Capture?.Calls ?? [],
                 };
+            }
+            catch (PluginRequestException) when (ct.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {

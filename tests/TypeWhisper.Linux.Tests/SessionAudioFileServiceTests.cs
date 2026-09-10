@@ -8,6 +8,15 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class SessionAudioFileServiceTests : IDisposable
 {
+    [Fact]
+    public void ApplyRetention_WithoutHistory_KeepsFreshCapture()
+    {
+        var service = new SessionAudioFileService(_audioDirectory);
+        var path = service.SaveDictationCapture([1, 2, 3]);
+        service.ApplyRetention(30);
+        Assert.True(File.Exists(path));
+    }
+
     private readonly string _audioDirectory = TestPaths.CreateTempDirectory(
         "TypeWhisper.SessionAudioFileServiceTests"
     );

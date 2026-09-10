@@ -8,6 +8,29 @@ namespace TypeWhisper.PluginSystem.Tests;
 public sealed class OpenAiApiHelperTests
 {
     [Fact]
+    public void BodyCancellation_PrefersCallerToken()
+    {
+        using var caller = new CancellationTokenSource();
+        caller.Cancel();
+        Assert.Throws<OperationCanceledException>(() =>
+            OpenAiApiHelper.MapBodyReadFailure(new OperationCanceledException(), caller.Token));
+        Assert.Equal(PluginRequestFailureKind.Timeout,
+            OpenAiApiHelper.MapBodyReadFailure(new OperationCanceledException(), CancellationToken.None).FailureKind);
+    }
+
+    [Fact]
+    public async Task QuerySecrets_RedactsEncodedAndDecodedForms()
+    {
+        using var client = new HttpClient(new AsyncHandler((_, _) =>
+            throw new HttpRequestException("key=abc%2Fdef and abc/def")));
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.test/api?key=abc%2Fdef");
+        var error = await Assert.ThrowsAsync<PluginRequestException>(() =>
+            OpenAiApiHelper.SendWithErrorHandlingAsync(client, request, CancellationToken.None));
+        Assert.DoesNotContain("abc%2Fdef", error.Message);
+        Assert.DoesNotContain("abc/def", error.Message);
+    }
+
+    [Fact]
     public async Task SendWithErrorHandlingAsync_PrivateTaskCancellation_IsClassifiedTimeout()
     {
         using var httpClient = new HttpClient(

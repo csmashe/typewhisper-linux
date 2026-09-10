@@ -602,6 +602,10 @@ public partial class HistoryRecordRow : ObservableObject
         {
             RetryResult = Loc.Instance["History.RetryAudioMissing"];
         }
+        catch (OperationCanceledException)
+        {
+            RetryResult = Loc.Instance["History.RetryCanceled"];
+        }
         catch (Exception ex)
         {
             RetryResult = Loc.Instance.GetString("History.RetryFailed",

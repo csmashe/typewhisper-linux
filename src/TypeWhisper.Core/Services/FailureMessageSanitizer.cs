@@ -24,6 +24,7 @@ public static partial class FailureMessageSanitizer
         if (string.IsNullOrWhiteSpace(message))
             return null;
 
+        // Replacements can expand and cascade, so only whole-message processing is exact.
         var forms = secrets.Where(secret => !string.IsNullOrEmpty(secret))
             .SelectMany(secret => new[]
             {
@@ -52,20 +53,75 @@ public static partial class FailureMessageSanitizer
         if (secret.Length <= windowLength)
             return message;
 
+        // Build a suffix automaton of the secret, with O(secret.Length) states.
+        var states = new List<SuffixState> { new(0, -1) };
+        var last = 0;
+        foreach (var character in secret)
+        {
+            var current = states.Count;
+            states.Add(new SuffixState(states[last].Length + 1, 0));
+            var previous = last;
+            while (previous >= 0 && states[previous].Transitions.TryAdd(character, current))
+                previous = states[previous].Link;
+
+            if (previous >= 0)
+            {
+                var next = states[previous].Transitions[character];
+                if (states[previous].Length + 1 == states[next].Length)
+                    states[current].Link = next;
+                else
+                {
+                    var clone = states.Count;
+                    states.Add(new SuffixState(states[previous].Length + 1, states[next].Link,
+                        new Dictionary<char, int>(states[next].Transitions)));
+                    while (previous >= 0
+                           && states[previous].Transitions.TryGetValue(character, out var target) && target == next)
+                    {
+                        states[previous].Transitions[character] = clone;
+                        previous = states[previous].Link;
+                    }
+                    states[next].Link = clone;
+                    states[current].Link = clone;
+                }
+            }
+            last = current;
+        }
+
         // Mark spans before replacing so overlapping windows cannot leave fragments behind.
         var redacted = new bool[message.Length];
-        for (var offset = 0; offset <= secret.Length - windowLength; offset++)
+        // The old scan unions [i, i + ext(i,o)) for every message position i and secret offset o
+        // with equal 24-character windows, where ext is their common-prefix length. This is exactly
+        // the union of all common substrings of length >= 24, equivalently [p - L(p) + 1, p] for
+        // each L(p) >= 24: L(p) is the longest substring ending at p that occurs in the secret,
+        // and every shorter suffix of that match also occurs in the secret.
+        var state = 0;
+        var length = 0;
+        var lastMarked = -1;
+        for (var position = 0; position < message.Length; position++)
         {
-            var window = secret.Substring(offset, windowLength);
-            for (var hit = message.IndexOf(window, StringComparison.Ordinal); hit >= 0;
-                 hit = message.IndexOf(window, hit + 1, StringComparison.Ordinal))
+            var character = message[position];
+            while (state != 0 && !states[state].Transitions.ContainsKey(character))
             {
-                var length = windowLength;
-                while (hit + length < message.Length && offset + length < secret.Length
-                       && message[hit + length] == secret[offset + length])
-                    length++;
-                Array.Fill(redacted, true, hit, length);
+                state = states[state].Link;
+                length = states[state].Length;
             }
+            if (states[state].Transitions.TryGetValue(character, out var next))
+            {
+                state = next;
+                length++;
+            }
+            else
+                length = 0;
+
+            if (length < windowLength)
+                continue;
+
+            // L(p+1) <= L(p) + 1, so starts never decrease. Mark each position at most once;
+            // together with amortized suffix-link traversal, the scan is O(message.Length).
+            var start = Math.Max(position - length + 1, lastMarked + 1);
+            for (var index = start; index <= position; index++)
+                redacted[index] = true;
+            lastMarked = position;
         }
 
         var result = new System.Text.StringBuilder();
@@ -77,6 +133,13 @@ public static partial class FailureMessageSanitizer
                 result.Append("[redacted]");
         }
         return result.ToString();
+    }
+
+    private sealed class SuffixState(int length, int link, Dictionary<char, int>? transitions = null)
+    {
+        public int Length { get; } = length;
+        public int Link { get; set; } = link;
+        public Dictionary<char, int> Transitions { get; } = transitions ?? [];
     }
 
     [GeneratedRegex(@"\s+")]

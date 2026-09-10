@@ -11,6 +11,50 @@ public sealed class LlmRequestRetryPolicyTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task ProviderFailureAfterCancellation_StreamingPrefersCancellation(bool afterFirst)
+    {
+        using var caller = new CancellationTokenSource();
+        var attempts = 0;
+        var received = new List<string>();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var item in LlmRequestRetryPolicy.ExecuteStreamingAsync(Attempt, caller.Token))
+                received.Add(item);
+        });
+        Assert.Equal(1, attempts);
+        Assert.Equal(afterFirst ? ["first"] : Array.Empty<string>(), received);
+        return;
+
+        async IAsyncEnumerable<string> Attempt([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+        {
+            attempts++;
+            await Task.Yield();
+            if (afterFirst)
+                yield return "first";
+            await caller.CancelAsync();
+            throw new PluginRequestException("provider failure", PluginRequestFailureKind.ServerError);
+        }
+    }
+
+    [Fact]
+    public async Task ProviderFailureAfterCancellation_BatchPrefersCancellation()
+    {
+        using var caller = new CancellationTokenSource();
+        var attempts = 0;
+        // ReSharper disable once AccessToDisposedClosure -- the attempt runs inside the awaited ExecuteAsync call, before the source disposes.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            LlmRequestRetryPolicy.ExecuteAsync<string>(_ =>
+            {
+                attempts++;
+                caller.Cancel();
+                throw new PluginRequestException("provider failure", PluginRequestFailureKind.ServerError);
+            }, caller.Token));
+        Assert.Equal(1, attempts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task StreamingBodyReset_RetriesOnlyBeforeFirstToken(bool afterToken)
     {
         var attempts = 0;
