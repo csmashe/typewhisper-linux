@@ -1,4 +1,5 @@
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Core.Tests.Services;
@@ -41,7 +42,11 @@ public class PostProcessingPipelineTests
     {
         var result = await _sut.ProcessAsync(
             input,
-            new PipelineOptions { NormalizeSpokenLineBreaks = true }
+            new PipelineOptions
+            {
+                TranscriptionNumberNormalizationEnabled = false,
+                NormalizeSpokenLineBreaks = true,
+            }
         );
         Assert.Equal(expected, result.Text);
     }
@@ -143,7 +148,7 @@ public class PostProcessingPipelineTests
     {
         var options = new PipelineOptions
         {
-            DictionaryCorrector = text => text.Replace("teh", "the")
+            DictionaryCorrector = text => text.Replace("teh", "the"),
         };
 
         var result = await _sut.ProcessAsync("teh quick fox", options);
@@ -155,7 +160,7 @@ public class PostProcessingPipelineTests
     {
         var options = new PipelineOptions
         {
-            SnippetExpander = text => text.Replace("brb", "be right back")
+            SnippetExpander = text => text.Replace("brb", "be right back"),
         };
 
         var result = await _sut.ProcessAsync("brb", options);
@@ -169,7 +174,7 @@ public class PostProcessingPipelineTests
         {
             CleanupHandler = (text, _) => Task.FromResult(text.Trim()),
             SnippetExpander = text => text.Replace("brb", "be right back"),
-            DictionaryCorrector = text => text
+            DictionaryCorrector = text => text,
         };
 
         var result = await _sut.ProcessAsync(" brb ", options);
@@ -185,7 +190,7 @@ public class PostProcessingPipelineTests
     {
         var options = new PipelineOptions
         {
-            LlmHandler = (text, _) => Task.FromResult(text.ToUpperInvariant())
+            LlmHandler = (text, _) => Task.FromResult(text.ToUpperInvariant()),
         };
 
         var result = await _sut.ProcessAsync("hello", options);
@@ -198,7 +203,7 @@ public class PostProcessingPipelineTests
         var options = new PipelineOptions
         {
             LlmHandler = (_, _) => throw new InvalidOperationException("LLM failed"),
-            RequireLlmSuccess = true
+            RequireLlmSuccess = true,
         };
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -224,10 +229,88 @@ public class PostProcessingPipelineTests
         {
             TranslationHandler = (text, _, tgt, _) => Task.FromResult($"[{tgt}] {text}"),
             TranslationTarget = "fr",
-            DetectedLanguage = "en"
+            DetectedLanguage = "en",
         };
 
         var result = await _sut.ProcessAsync("hello", options);
+        Assert.Equal("[fr] hello", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_RequiredTranslationFailure_RethrowsOriginalException()
+    {
+        var expected = new IOException("translation unavailable");
+        var options = new PipelineOptions
+        {
+            TranslationHandler = (_, _, _, _) => throw expected,
+            TranslationTarget = "fr",
+            DetectedLanguage = "en",
+            RequireTranslationSuccess = true,
+        };
+
+        var ex = await Assert.ThrowsAsync<IOException>(() => _sut.ProcessAsync("hello", options));
+
+        // Bare `throw;` must preserve the original exception instance, not wrap or re-create it.
+        Assert.Same(expected, ex);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_RequireTranslationSuccessWithoutHandler_Throws()
+    {
+        var options = new PipelineOptions { RequireTranslationSuccess = true, TranslationTarget = "fr" };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _sut.ProcessAsync("hello", options)
+        );
+        Assert.Equal("Required translation is not configured.", ex.Message);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_TranslationFailureNotRequired_KeepsCurrentText()
+    {
+        var translationAttempted = false;
+        var options = new PipelineOptions
+        {
+            TranslationHandler = (_, _, _, _) =>
+            {
+                translationAttempted = true;
+                throw new IOException("translation unavailable");
+            },
+            TranslationTarget = "fr",
+            DetectedLanguage = "en",
+        };
+
+        var result = await _sut.ProcessAsync("hello", options);
+
+        // Prove the step actually ran and failed, then the failure was swallowed.
+        Assert.True(translationAttempted);
+        Assert.Equal("hello", result.Text);
+        var translationStep = Assert.Single(result.Steps, s => s.Name == PostProcessingStepNames.Translation);
+        Assert.False(translationStep.Succeeded);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_RequireTranslationSuccess_DoesNotRethrowNonTranslationFailure()
+    {
+        var translated = false;
+        var options = new PipelineOptions
+        {
+            // A non-Translation step fails; RequireTranslationSuccess must not turn this into a rethrow.
+            CleanupHandler = (_, _) => throw new IOException("cleanup unavailable"),
+            TranslationHandler = (text, _, _, _) =>
+            {
+                translated = true;
+                return Task.FromResult($"[fr] {text}");
+            },
+            TranslationTarget = "fr",
+            DetectedLanguage = "en",
+            RequireTranslationSuccess = true,
+        };
+
+        var result = await _sut.ProcessAsync("hello", options);
+
+        // Cleanup failure was swallowed; Translation still ran and succeeded on the current text.
+        Assert.True(translated);
         Assert.Equal("[fr] hello", result.Text);
     }
 
@@ -244,7 +327,7 @@ public class PostProcessingPipelineTests
             },
             TranslationTarget = "it",
             EffectiveSourceLanguage = "it",
-            DetectedLanguage = "en"
+            DetectedLanguage = "en",
         };
 
         var result = await _sut.ProcessAsync("ciao mondo", options);
@@ -260,7 +343,7 @@ public class PostProcessingPipelineTests
         {
             TranslationHandler = (text, _, tgt, _) => Task.FromResult($"[{tgt}] {text}"),
             TranslationTarget = "en",
-            DetectedLanguage = "en"
+            DetectedLanguage = "en",
         };
 
         var result = await _sut.ProcessAsync("hello", options);
@@ -283,7 +366,7 @@ public class PostProcessingPipelineTests
                         executionOrder.Add("Plugin100");
                         return Task.FromResult(text + "+P100");
                     }
-                )
+                ),
             ],
             LlmHandler = (text, _) =>
             {
@@ -304,7 +387,7 @@ public class PostProcessingPipelineTests
             {
                 executionOrder.Add("Dictionary");
                 return text + "+DICT";
-            }
+            },
         };
 
         var result = await _sut.ProcessAsync("start", options);
@@ -312,6 +395,151 @@ public class PostProcessingPipelineTests
         // Priority order: Plugin(100) → LLM(300) → Snippets(500) → Boosting(550) → Dictionary(600)
         Assert.Equal(["Plugin100", "LLM", "Snippets", "Boosting", "Dictionary"], executionOrder);
         Assert.Equal("start+P100+LLM+SNP+BOOST+DICT", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NumberNormalization_RunsBeforeLaterPostProcessing()
+    {
+        var executionOrder = new List<string>();
+
+        var options = new PipelineOptions
+        {
+            TranscriptionNumberNormalizationEnabled = true,
+            TranscriptionTask = TranscriptionTask.Transcribe,
+            DetectedLanguage = "en",
+            ConfiguredLanguage = "en",
+            AppFormatter = (text, _) =>
+            {
+                executionOrder.Add($"Formatting:{text}");
+                return text + "+FMT";
+            },
+            LlmHandler = (text, _) =>
+            {
+                executionOrder.Add($"LLM:{text}");
+                return Task.FromResult(text + "+LLM");
+            },
+            SnippetExpander = text =>
+            {
+                executionOrder.Add($"Snippets:{text}");
+                return text + "+SNP";
+            },
+            VocabularyBooster = text =>
+            {
+                executionOrder.Add($"Boosting:{text}");
+                return text + "+BOOST";
+            },
+            DictionaryCorrector = text =>
+            {
+                executionOrder.Add($"Dictionary:{text}");
+                return text + "+DICT";
+            },
+            TranslationHandler = (text, _, _, _) =>
+            {
+                executionOrder.Add($"Translation:{text}");
+                return Task.FromResult(text + "+TR");
+            },
+            TranslationTarget = "fr",
+        };
+
+        var result = await _sut.ProcessAsync("twenty three", options);
+
+        Assert.Equal("23+FMT+LLM+SNP+BOOST+DICT+TR", result.Text);
+        Assert.Equal(
+            [
+                "Formatting:23",
+                "LLM:23+FMT",
+                "Snippets:23+FMT+LLM",
+                "Boosting:23+FMT+LLM+SNP",
+                "Dictionary:23+FMT+LLM+SNP+BOOST",
+                "Translation:23+FMT+LLM+SNP+BOOST+DICT",
+            ],
+            executionOrder);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NumberNormalizationGloballyDisabled_PreservesWords()
+    {
+        var options = new PipelineOptions
+        {
+            TranscriptionNumberNormalizationEnabled = false,
+            DetectedLanguage = "en",
+        };
+
+        var result = await _sut.ProcessAsync("twenty three", options);
+
+        Assert.Equal("twenty three", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NumberNormalizationGloballyEnabled_NormalizesWords()
+    {
+        var options = new PipelineOptions
+        {
+            TranscriptionNumberNormalizationEnabled = true,
+            DetectedLanguage = "en",
+        };
+
+        var result = await _sut.ProcessAsync("twenty three", options);
+
+        Assert.Equal("23", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NumberNormalization_UsesLaterConfiguredLanguageCandidate()
+    {
+        var options = new PipelineOptions
+        {
+            TranscriptionNumberNormalizationEnabled = true,
+            DetectedLanguage = "de",
+            ConfiguredLanguage = "de",
+            ConfiguredLanguageCandidates = ["de", "en"],
+        };
+
+        var result = await _sut.ProcessAsync("Set the value to twenty three", options);
+
+        Assert.Equal("Set the value to 23", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NumberNormalization_NoLanguageInformation_FallsBackToEnglish()
+    {
+        var options = new PipelineOptions
+        {
+            TranscriptionNumberNormalizationEnabled = true,
+        };
+
+        var result = await _sut.ProcessAsync("Set the value to twenty three", options);
+
+        Assert.Equal("Set the value to 23", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NumberNormalization_NoLanguageInformation_PreservesEnglishWordsThatAreForeignNumbers()
+    {
+        var options = new PipelineOptions
+        {
+            TranscriptionNumberNormalizationEnabled = true,
+        };
+
+        var result = await _sut.ProcessAsync("the value is null", options);
+
+        Assert.Equal("the value is null", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NumberNormalization_UsesEnglishForTranslateTask()
+    {
+        var options = new PipelineOptions
+        {
+            TranscriptionNumberNormalizationEnabled = true,
+            TranscriptionTask = TranscriptionTask.Translate,
+            DetectedLanguage = "de",
+            ConfiguredLanguage = "de",
+        };
+
+        var result = await _sut.ProcessAsync("twenty three", options);
+
+        Assert.Equal("23", result.Text);
     }
 
     [Fact]
@@ -330,7 +558,7 @@ public class PostProcessingPipelineTests
                         executionOrder.Add("Plugin100");
                         return Task.FromResult(text + "+P100");
                     }
-                )
+                ),
             ],
             CleanupHandler = (text, _) =>
             {
@@ -346,7 +574,7 @@ public class PostProcessingPipelineTests
             {
                 executionOrder.Add("Snippets");
                 return text + "+SNP";
-            }
+            },
         };
 
         var result = await _sut.ProcessAsync("start", options);
@@ -387,8 +615,8 @@ public class PostProcessingPipelineTests
                         executionOrder.Add("Plugin400");
                         return Task.FromResult(text + "+P400");
                     }
-                )
-            ]
+                ),
+            ],
         };
 
         var result = await _sut.ProcessAsync("start", options);
@@ -414,7 +642,7 @@ public class PostProcessingPipelineTests
                         executionOrder.Add("Plugin400");
                         return Task.FromResult(text);
                     }
-                )
+                ),
             ],
             LlmHandler = (text, _) =>
             {
@@ -425,7 +653,7 @@ public class PostProcessingPipelineTests
             {
                 executionOrder.Add("Snippets");
                 return text;
-            }
+            },
         };
 
         await _sut.ProcessAsync("test", options);
@@ -444,9 +672,9 @@ public class PostProcessingPipelineTests
                 new PluginPostProcessor(
                     100,
                     (_, _) => throw new InvalidOperationException("Plugin failed")
-                )
+                ),
             ],
-            DictionaryCorrector = text => text + "+DICT"
+            DictionaryCorrector = text => text + "+DICT",
         };
 
         var result = await _sut.ProcessAsync("hello", options);
@@ -456,6 +684,69 @@ public class PostProcessingPipelineTests
         Assert.Contains(
             result.Steps,
             step => step is { Succeeded: false, ErrorMessage: "Plugin failed" }
+        );
+    }
+
+    [Fact]
+    public async Task ProcessAsync_InternalCleanupCancellation_ContinuesAfterFailure()
+    {
+        using var privateCts = new CancellationTokenSource();
+        await privateCts.CancelAsync();
+
+        var options = new PipelineOptions
+        {
+            CleanupHandler = async (text, _) =>
+            {
+                // ReSharper disable once AccessToDisposedClosure -- runs synchronously while ProcessAsync is awaited, before the using disposes privateCts.
+                await Task.Delay(Timeout.Infinite, privateCts.Token);
+                return text;
+            },
+            SnippetExpander = text => text + "+SNIPPET",
+        };
+
+        var result = await _sut.ProcessAsync("hello", options, CancellationToken.None);
+
+        Assert.Equal("hello+SNIPPET", result.Text);
+        Assert.Contains(
+            result.Steps,
+            step => step is { Name: "Cleanup", Succeeded: false }
+        );
+    }
+
+    [Fact]
+    public async Task ProcessAsync_InternalPluginTaskCancellation_ContinuesAfterFailure()
+    {
+        using var unrelatedCts = new CancellationTokenSource();
+        await unrelatedCts.CancelAsync();
+
+        var options = new PipelineOptions
+        {
+            PluginPostProcessors =
+            [
+                new PluginPostProcessor(
+                    100,
+                    // ReSharper disable once AccessToDisposedClosure -- thrown synchronously while ProcessAsync is awaited, before the using disposes unrelatedCts.
+                    (_, _) => throw new TaskCanceledException(
+                        "Simulated internal HTTP timeout",
+                        null,
+                        unrelatedCts.Token
+                    )
+                ),
+            ],
+            DictionaryCorrector = text => text + "+DICT",
+        };
+
+        var result = await _sut.ProcessAsync("hello", options, CancellationToken.None);
+
+        Assert.Equal("hello+DICT", result.Text);
+        Assert.Contains(
+            result.Steps,
+            step => step is
+            {
+                Name: "Plugin(100)",
+                Succeeded: false,
+                ErrorMessage: "Simulated internal HTTP timeout",
+            }
         );
     }
 
@@ -470,7 +761,7 @@ public class PostProcessingPipelineTests
                 sourceLanguage = src;
                 return Task.FromResult(text);
             },
-            TranslationTarget = "fr"
+            TranslationTarget = "fr",
         };
 
         await _sut.ProcessAsync("bonjour", options);
@@ -492,6 +783,33 @@ public class PostProcessingPipelineTests
     }
 
     [Fact]
+    public async Task ProcessAsync_StepCancelsCallerTokenThenThrows_Propagates()
+    {
+        using var cts = new CancellationTokenSource();
+
+        var options = new PipelineOptions
+        {
+            PluginPostProcessors =
+            [
+                new PluginPostProcessor(
+                    100,
+                    (_, _) =>
+                    {
+                        // ReSharper disable AccessToDisposedClosure -- runs synchronously while ProcessAsync is awaited, before the using disposes cts.
+                        cts.Cancel();
+                        throw new OperationCanceledException(cts.Token);
+                        // ReSharper restore AccessToDisposedClosure
+                    }
+                ),
+            ],
+        };
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            _sut.ProcessAsync("test", options, cts.Token)
+        );
+    }
+
+    [Fact]
     public async Task ProcessAsync_StatusCallback_CalledForLlmAndTranslation()
     {
         var statusCalls = new List<string>();
@@ -506,7 +824,7 @@ public class PostProcessingPipelineTests
             {
                 statusCalls.Add(status);
                 return Task.CompletedTask;
-            }
+            },
         };
 
         await _sut.ProcessAsync("test", options);
@@ -533,7 +851,7 @@ public class PostProcessingPipelineTests
                 return Task.FromResult(text);
             },
             TranslationTarget = "fr",
-            DetectedLanguage = "en"
+            DetectedLanguage = "en",
         };
 
         await _sut.ProcessAsync("test", options);
@@ -558,7 +876,7 @@ public class PostProcessingPipelineTests
             {
                 executionOrder.Add("Dictionary");
                 return text.Replace("TypeWhisper", "TYPEWHISPER");
-            }
+            },
         };
 
         var result = await _sut.ProcessAsync("type whisper", options);
@@ -582,8 +900,9 @@ public class PostProcessingPipelineTests
     {
         var options = new PipelineOptions
         {
+            TranscriptionNumberNormalizationEnabled = false,
             AppFormatter = AppFormatterService.Format,
-            TargetProcessName = "OUTLOOK"
+            TargetProcessName = "OUTLOOK",
         };
 
         var result = await _sut.ProcessAsync("- one\n- two", options);

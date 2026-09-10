@@ -1,0 +1,47 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        x:Class="TypeWhisper.Linux.Views.LearnedCorrectionToastWindow"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent"
+        WindowDecorations="None"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        CanResize="False"
+        SizeToContent="WidthAndHeight">
+    <!-- Edge-to-edge dark fill with rounded corners and NO transparent margin or light stroke:
+         a translucent border or clear margin renders as a milky white haze on NVIDIA + XWayland
+         (same reason the dictation overlay drops its margins/strokes). -->
+    <Border x:Name="Root"
+            Background="#1E1E1E"
+            CornerRadius="12"
+            Padding="18"
+            MinWidth="260">
+        <StackPanel Orientation="Horizontal"
+                    Spacing="14"
+                    VerticalAlignment="Center">
+            <TextBlock x:Name="MessageText"
+                       VerticalAlignment="Center"
+                       TextWrapping="Wrap"
+                       MaxWidth="420"
+                       FontSize="16"
+                       FontWeight="SemiBold"
+                       Foreground="#66E3A2" />
+            <!-- Solid dark fill, no border: a light 1px stroke reads as white haze on the
+                 rounded edge under NVIDIA + XWayland. -->
+            <Button x:Name="UndoButton"
+                    VerticalAlignment="Center"
+                    MinHeight="34"
+                    Padding="16,6"
+                    FontSize="14"
+                    FontWeight="SemiBold"
+                    Background="#2A2A2A"
+                    Foreground="#F0FFFFFF"
+                    BorderThickness="0"
+                    CornerRadius="8" />
+        </StackPanel>
+    </Border>
+</Window>

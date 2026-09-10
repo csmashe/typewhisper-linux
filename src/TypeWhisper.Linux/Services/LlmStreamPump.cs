@@ -72,16 +72,24 @@ internal sealed class LlmStreamPump
                 lastFlushMs = stopwatch.Elapsed.TotalMilliseconds;
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // User stopped — rethrow so the caller skips the batch retry.
+            // Caller stopped — rethrow so the caller skips the batch retry.
             EmitFinal();
             throw;
         }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            // Caller cancellation wins if a dependency fault completes in the
+            // same race window.
+            EmitFinal();
+            throw new OperationCanceledException(ct);
+        }
         catch (Exception ex)
         {
-            // Plugin enumerators can throw arbitrary types. Treat all non-cancel
-            // faults as recoverable: keep the partial and let the caller fall back.
+            // Plugin enumerators can throw arbitrary types, including an OCE while
+            // the caller token is still live. Treat every dependency fault as
+            // recoverable: keep the partial and let the caller fall back.
             Trace.WriteLine($"[LlmStreamPump] Fault: {ex.GetType().Name}: {ex.Message}");
             Faulted = true;
             EmitFinal();

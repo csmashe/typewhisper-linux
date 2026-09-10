@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using TypeWhisper.Core;
+using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -53,55 +54,108 @@ public sealed class LinuxPreferencesService
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        WriteIndented = true, PropertyNameCaseInsensitive = true
+        WriteIndented = true, PropertyNameCaseInsensitive = true,
     };
 
-    private readonly string _path;
+    private readonly AtomicJsonStore<LinuxPreferences> _store;
 
     public LinuxPreferencesService()
+        : this(Path.Join(TypeWhisperEnvironment.BasePath, "linux-preferences.json")) { }
+
+    internal LinuxPreferencesService(
+        string path,
+        Action<string, string>? atomicWrite = null
+    )
     {
-        _path = Path.Join(TypeWhisperEnvironment.BasePath, "linux-preferences.json");
-        Load();
+        var options = new AtomicJsonStoreOptions<LinuxPreferences>
+        {
+            JsonOptions = s_jsonOptions,
+            CorruptFilePolicy = AtomicJsonCorruptFilePolicy.PreserveAndReset,
+            Diagnostic = diagnostic =>
+                Debug.WriteLine(
+                    $"[LinuxPreferencesService] {diagnostic.Kind} at "
+                    + $"'{diagnostic.Path}': {diagnostic.Exception?.Message}"
+                ),
+        };
+        _store = new AtomicJsonStore<LinuxPreferences>(
+            path,
+            () => LinuxPreferences.Default,
+            options,
+            atomicWrite ?? AtomicFileWrite.WriteAllText
+        );
+        // Settle corrupt-file recovery now; an unreadable file must not stop startup.
+        _ = ReadCurrent();
     }
 
-    public LinuxPreferences Current { get; private set; } = LinuxPreferences.Default;
+    public LinuxPreferences Current => ReadCurrent();
 
-    public LinuxPreferences Load()
+    /// <summary>
+    ///     A read failure degrades to defaults rather than failing the app. Safe: a later
+    ///     <see cref="Save" /> goes through the store, which still refuses to overwrite an
+    ///     unreadable primary.
+    /// </summary>
+    private LinuxPreferences ReadCurrent()
     {
-        if (!File.Exists(_path))
-        {
-            return Current;
-        }
-
         try
         {
-            var json = File.ReadAllText(_path);
-            Current =
-                JsonSerializer.Deserialize<LinuxPreferences>(json, s_jsonOptions)
-                ?? LinuxPreferences.Default;
+            return _store.Current;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Debug.WriteLine($"[LinuxPreferencesService] Load failed: {ex.Message}");
-            Current = LinuxPreferences.Default;
+            return LinuxPreferences.Default;
         }
+    }
 
-        return Current;
+    // ReSharper disable once UnusedMethodReturnValue.Global -- returns Current so callers that reload on demand get the fresh value.
+    // ReSharper disable once MemberCanBePrivate.Global -- public reload entry point mirroring ISettingsService.Load().
+    // ReSharper disable once UnusedMember.Global -- the constructor primes the store via Current instead, so nothing calls this in-tree today.
+    public LinuxPreferences Load()
+    {
+        return _store.Reload();
     }
 
     public void Save(LinuxPreferences next)
     {
-        Current = next;
+        ArgumentNullException.ThrowIfNull(next);
+        Commit(_ => next);
+    }
+
+    public LinuxPreferences Update(Func<LinuxPreferences, LinuxPreferences> mutate)
+    {
+        ArgumentNullException.ThrowIfNull(mutate);
+        return Commit(mutate);
+    }
+
+    private LinuxPreferences Commit(
+        Func<LinuxPreferences, LinuxPreferences> update
+    )
+    {
+        var changed = false;
+        LinuxPreferences committed;
         try
         {
-            Directory.CreateDirectory(TypeWhisperEnvironment.BasePath);
-            File.WriteAllText(_path, JsonSerializer.Serialize(next, s_jsonOptions));
-            Changed?.Invoke(next);
+            committed = _store.Update(
+                current =>
+                {
+                    var next = update(current);
+                    changed = !EqualityComparer<LinuxPreferences>.Default.Equals(next, current);
+                    return next;
+                }
+            );
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[LinuxPreferencesService] Save failed: {ex.Message}");
+            throw;
         }
+
+        if (changed)
+        {
+            Changed?.Invoke(committed);
+        }
+
+        return committed;
     }
 
     // ReSharper disable once EventNeverSubscribedTo.Global -- public API; raised on preference changes for external/future subscribers.

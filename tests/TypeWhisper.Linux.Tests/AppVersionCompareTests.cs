@@ -44,4 +44,67 @@ public sealed class AppVersionCompareTests
         Assert.True(AppVersion.Compare("0.1.0", "") > 0);
         Assert.Equal(0, AppVersion.Compare(null, ""));
     }
+
+    [Theory]
+    [InlineData("0.13.0")]
+    [InlineData("0.13.0-rc.2")]
+    [InlineData("0.13.0-rc.2+sha.abc-123")]
+    [InlineData("1.0.0-alpha.beta-1")]
+    [InlineData("999999999999999999999999.0.1")]
+    public void TryParseStrict_AcceptsValidSemVer(string version)
+    {
+        Assert.True(AppVersion.TryParseStrict(version, out _));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("0.13")]
+    [InlineData("0.13.0.1")]
+    [InlineData("v0.13.0")]
+    [InlineData("01.13.0")]
+    [InlineData("0.13.0-rc.02")]
+    [InlineData("0.13.0-rc..2")]
+    [InlineData("0.13.0-rc_2")]
+    [InlineData("0.13.0-")]
+    [InlineData("0.13.0+")]
+    [InlineData("0.13.0+build..sha")]
+    [InlineData(" 0.13.0")]
+    public void TryParseStrict_RejectsMalformedSemVer(string? version)
+    {
+        Assert.False(AppVersion.TryParseStrict(version, out _));
+    }
+
+    [Theory]
+    [InlineData("0.13.0-rc.2", "0.13.0")]
+    [InlineData("0.13.0-rc.2", "0.13.0-rc.10")]
+    public void TryCompareStrict_UsesSemVerPrereleasePrecedence(string older, string newer)
+    {
+        Assert.True(AppVersion.TryCompareStrict(older, newer, out var comparison));
+        Assert.True(comparison < 0);
+
+        Assert.True(AppVersion.TryCompareStrict(newer, older, out comparison));
+        Assert.True(comparison > 0);
+    }
+
+    [Fact]
+    public void TryCompareStrict_IgnoresBuildMetadata()
+    {
+        Assert.True(
+            AppVersion.TryCompareStrict(
+                "0.13.0-rc.2+sha.abc",
+                "0.13.0-rc.2+sha.def",
+                out var comparison
+            )
+        );
+        Assert.Equal(0, comparison);
+    }
+
+    [Fact]
+    public void TryCompareStrict_RejectsMalformedInput()
+    {
+        Assert.False(AppVersion.TryCompareStrict("0.13", "0.13.0", out _));
+        Assert.False(AppVersion.TryCompareStrict("0.13.0", "not-semver", out _));
+    }
 }

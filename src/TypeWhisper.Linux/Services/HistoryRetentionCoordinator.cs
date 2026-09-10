@@ -117,6 +117,6 @@ public sealed class HistoryRetentionCoordinator : IDisposable
         Startup,
         SettingsChanged,
         HistoryChanged,
-        Shutdown
+        Shutdown,
     }
 }

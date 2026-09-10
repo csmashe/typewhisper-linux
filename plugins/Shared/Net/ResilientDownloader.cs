@@ -67,7 +67,8 @@ internal static class ResilientDownloader
     /// </param>
     /// <param name="verifyComplete">
     ///     Caller integrity check run on the completed partial <em>before</em> the
-    ///     atomic move; it must throw on mismatch. Required when resuming.
+    ///     atomic move; it must throw on mismatch. Required when resuming, or when
+    ///     the server omits an exact total (Content-Length/Content-Range).
     /// </param>
     /// <param name="ct">Cancellation for the whole operation (user cancel).</param>
     public static async Task DownloadToFileAsync(
@@ -202,8 +203,14 @@ internal static class ResilientDownloader
                     }
                 }
 
-                // Only a server-declared total gates here (approxTotalBytes never does); a
-                // missing total falls through to verifyComplete rather than a false incomplete.
+                // approxTotalBytes never gates completeness. Without a declared total, a
+                // verifier is mandatory: clean EOF alone can't prove the object ended.
+                if (declaredTotal is null && verifyComplete is null)
+                    throw new DownloadIncompleteException(
+                        "Download cannot be verified: the server did not declare an exact "
+                            + "total length and the caller supplied no completion verifier."
+                    );
+
                 if (onDisk < declaredTotal)
                     throw new DownloadIncompleteException(
                         $"Download incomplete: wrote {onDisk} of {declaredTotal.Value} "
@@ -264,8 +271,8 @@ internal static class ResilientDownloader
 internal sealed class DownloadStalledException(string message) : Exception(message);
 
 /// <summary>
-///     Thrown when the server declared a total length (Content-Length on a 200,
-///     Content-Range total on a 206) but the body ended before that many bytes
-///     arrived.
+///     Thrown when the body ended before a server-declared total length
+///     (Content-Length on a 200, Content-Range total on a 206), or when neither
+///     a total nor a caller verifier can establish completeness.
 /// </summary>
 internal sealed class DownloadIncompleteException(string message) : Exception(message);

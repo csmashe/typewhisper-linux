@@ -6,5 +6,5 @@ public enum CleanupLevel
     None,
     Light,
     Medium,
-    High
+    High,
 }

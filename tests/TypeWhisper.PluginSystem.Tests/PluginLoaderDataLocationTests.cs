@@ -1,8 +1,8 @@
 using System.Reflection;
-using TypeWhisper.Core;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.Script;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.Tests;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -13,26 +13,24 @@ namespace TypeWhisper.PluginSystem.Tests;
 /// </summary>
 public sealed class PluginLoaderDataLocationTests : IDisposable
 {
-    private readonly PluginLoader _loader = new();
+    private readonly PluginLoader _loader;
+    private readonly string _pluginDataRoot;
     private readonly string _tempDir;
 
     public PluginLoaderDataLocationTests()
     {
-        _tempDir = Path.Join(
-            Path.GetTempPath(),
-            "tw-loader-data-" + Guid.NewGuid().ToString("N")
+        _tempDir = TestPaths.CreateTempDirectory(
+            "TypeWhisper.PluginLoaderDataLocationTests"
         );
-        Directory.CreateDirectory(_tempDir);
+        _pluginDataRoot = TestPaths.EnsureIsolated(Path.Join(_tempDir, "PluginData"));
+        _loader = new PluginLoader(_pluginDataRoot);
     }
 
     public void Dispose()
     {
         try
         {
-            if (Directory.Exists(_tempDir))
-            {
-                Directory.Delete(_tempDir, true);
-            }
+            TestPaths.DeleteDirectory(_tempDir);
         }
         catch
         {
@@ -74,7 +72,7 @@ public sealed class PluginLoaderDataLocationTests : IDisposable
         Assert.NotNull(dataDirField);
         var receivedDir = (string?)dataDirField.GetValue(scriptPlugin.Instance);
         Assert.Equal(
-            Path.Join(TypeWhisperEnvironment.PluginDataPath, scriptPlugin.Manifest.Id),
+            Path.Join(_pluginDataRoot, scriptPlugin.Manifest.Id),
             receivedDir
         );
     }

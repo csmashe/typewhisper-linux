@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "author": "TypeWhisper",
   "description": "Process transcriptions through custom shell scripts",
+  "networkAccess": "userControlled",
+  "categories": ["postProcessing"],
   "assemblyName": "TypeWhisper.Plugin.Script.dll",
   "pluginClass": "TypeWhisper.Plugin.Script.ScriptPlugin"
 }

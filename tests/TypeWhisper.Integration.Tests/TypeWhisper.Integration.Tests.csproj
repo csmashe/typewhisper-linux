@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NET.Test.Sdk"/>
+        <PackageReference Include="xunit"/>
+        <PackageReference Include="xunit.runner.visualstudio"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App"/>
+        <!-- No AdditionalProperties here: differing global properties make MSBuild
+             treat TypeWhisper.Linux as a second, distinct build that shares the same
+             obj/bin directories with the plain reference the other test projects
+             carry. In a solution build the two run concurrently and collide on
+             typewhisper.pdb. Skip the plugin deployment with
+             -p:DeployBundledLinuxPlugins=false on the command line instead. -->
+        <ProjectReference Include="..\..\src\TypeWhisper.Linux\TypeWhisper.Linux.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Compile Include="../TestPaths.cs" Link="TestPaths.cs"/>
+        <Compile Include="../PluginManagerTestAccess.cs" Link="PluginManagerTestAccess.cs"/>
+    </ItemGroup>
+</Project>

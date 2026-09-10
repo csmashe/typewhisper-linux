@@ -1,4 +1,5 @@
 using System.Net;
+using System.Buffers.Binary;
 using System.Text.Json;
 using TypeWhisper.Plugin.SupertonicTts;
 using TypeWhisper.PluginSDK;
@@ -9,6 +10,8 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class SupertonicTtsPluginTests
 {
+    private static readonly TimeSpan s_coordinationTimeout = TimeSpan.FromSeconds(5);
+
     [Fact]
     public void Manifest_DeclaresLocalTtsPlugin()
     {
@@ -18,8 +21,8 @@ public class SupertonicTtsPluginTests
 
         Assert.Equal("com.typewhisper.supertonic-tts", root.GetProperty("id").GetString());
         Assert.Equal("Supertonic TTS", root.GetProperty("name").GetString());
-        Assert.Equal("tts", root.GetProperty("category").GetString());
-        Assert.True(root.GetProperty("isLocal").GetBoolean());
+        Assert.Equal(["tts"], root.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
+        Assert.Equal("local", root.GetProperty("networkAccess").GetString());
         Assert.Equal("TypeWhisper.Plugin.SupertonicTts.dll", root.GetProperty("assemblyName").GetString());
         Assert.Equal("TypeWhisper.Plugin.SupertonicTts.SupertonicTtsPlugin", root.GetProperty("pluginClass").GetString());
     }
@@ -71,7 +74,10 @@ public class SupertonicTtsPluginTests
     {
         var assets = new FakeSupertonicAssets { AreAssetsReadyValue = false };
         var sut = new SupertonicTtsPlugin(assets, _ => new FakeSupertonicSynthesizer());
-        await sut.ActivateAsync(new TestPluginHostServices());
+        await sut.ActivateAsync(new TestPluginHostServices
+        {
+            PcmPlayback = new RecordingPcmPlaybackService(),
+        });
 
         var empty = await sut.SpeakAsync(new TtsSpeakRequest("   ", "en"), CancellationToken.None);
         Assert.False(empty.IsActive);
@@ -82,22 +88,31 @@ public class SupertonicTtsPluginTests
     }
 
     [Fact]
+    public async Task SpeakAsync_SkipsInferenceWhenHostPcmPlaybackIsUnavailable()
+    {
+        var assets = new FakeSupertonicAssets { AreAssetsReadyValue = true };
+        var synthesizer = new FakeSupertonicSynthesizer();
+        var sut = new SupertonicTtsPlugin(assets, _ => synthesizer);
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        var session = await sut.SpeakAsync(
+            new TtsSpeakRequest("Do not synthesize", "en"),
+            CancellationToken.None
+        );
+
+        Assert.False(session.IsActive);
+        Assert.Null(synthesizer.LastRequest);
+        Assert.False(synthesizer.Started.IsCompleted);
+    }
+
+    [Fact]
     public async Task SpeakAsync_UsesSynthesizerWithSelectedVoiceLanguageAndSettings()
     {
         var assets = new FakeSupertonicAssets { AreAssetsReadyValue = true, AssetRoot = "/models/supertonic-3" };
         var synth = new FakeSupertonicSynthesizer();
-        float[]? playedSamples = null;
-        int? playedSampleRate = null;
-        var sut = new SupertonicTtsPlugin(
-            assets,
-            _ => synth,
-            (samples, sampleRate) =>
-            {
-                playedSamples = samples;
-                playedSampleRate = sampleRate;
-                return new FakeTtsPlaybackSession();
-            });
-        await sut.ActivateAsync(new TestPluginHostServices());
+        var playback = new RecordingPcmPlaybackService();
+        var sut = new SupertonicTtsPlugin(assets, _ => synth);
+        await sut.ActivateAsync(new TestPluginHostServices { PcmPlayback = playback });
         sut.SelectVoice("F3");
         sut.SetSpeed(1.25);
         sut.SetDenoisingSteps(12);
@@ -110,9 +125,21 @@ public class SupertonicTtsPluginTests
         Assert.EndsWith(Path.Join("voice_styles", "F3.json"), synth.LastRequest?.VoiceStylePath);
         Assert.Equal(1.25, synth.LastRequest?.Speed);
         Assert.Equal(12, synth.LastRequest?.DenoisingSteps);
-        Assert.NotNull(playedSamples);
-        Assert.Equal([0.1f, -0.1f], playedSamples);
-        Assert.Equal(24_000, playedSampleRate);
+        var playbackRequest = Assert.Single(playback.Requests);
+        Assert.Equal(PcmSampleFormat.Float32, playbackRequest.Format);
+        Assert.Equal(24_000, playbackRequest.SampleRate);
+        Assert.Equal(1, playbackRequest.Channels);
+        Assert.Equal(2 * sizeof(float), playbackRequest.Payload.Length);
+        Assert.Equal(
+            [0.1f, -0.1f],
+            Enumerable.Range(0, 2)
+                .Select(i => BitConverter.Int32BitsToSingle(
+                    BinaryPrimitives.ReadInt32LittleEndian(
+                        playbackRequest.Payload.Span.Slice(i * sizeof(float), sizeof(float))
+                    )
+                ))
+                .ToArray()
+        );
     }
 
     [Fact]
@@ -125,13 +152,13 @@ public class SupertonicTtsPluginTests
             calls.Add(request.RequestUri!.ToString());
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent("payload"u8.ToArray())
+                Content = new ByteArrayContent("payload"u8.ToArray()),
             };
         });
         var files = new[]
         {
             new SupertonicAssetFile("onnx/a.onnx", "https://example.test/a.onnx", 1),
-            new SupertonicAssetFile("voice_styles/M1.json", "https://example.test/M1.json", 1)
+            new SupertonicAssetFile("voice_styles/M1.json", "https://example.test/M1.json", 1),
         };
         using var httpClient = new HttpClient(handler);
         var sut = new SupertonicAssetManager(tempDir, httpClient, files, "https://example.test/LICENSE");
@@ -170,7 +197,7 @@ public class SupertonicTtsPluginTests
                 SupertonicTtsPlugin.LicenseAcceptedSettingName,
                 SupertonicTtsPlugin.SelectedVoiceSettingName,
                 SupertonicTtsPlugin.SpeedSettingName,
-                SupertonicTtsPlugin.DenoisingStepsSettingName
+                SupertonicTtsPlugin.DenoisingStepsSettingName,
             ],
             keys);
 
@@ -237,7 +264,7 @@ public class SupertonicTtsPluginTests
         {
             var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent("short"u8.ToArray())
+                Content = new ByteArrayContent("short"u8.ToArray()),
             };
             response.Content.Headers.ContentLength = 4096; // server claims more than it sent
             return response;
@@ -289,22 +316,63 @@ public class SupertonicTtsPluginTests
         var gate = new TaskCompletionSource();
         var synth = new FakeSupertonicSynthesizer { Gate = gate.Task };
         var assets = new FakeSupertonicAssets { AreAssetsReadyValue = true };
-        var sut = new SupertonicTtsPlugin(assets, _ => synth, (_, _) => new FakeTtsPlaybackSession());
-        await sut.ActivateAsync(new TestPluginHostServices());
+        var sut = new SupertonicTtsPlugin(assets, _ => synth);
+        await sut.ActivateAsync(new TestPluginHostServices
+        {
+            PcmPlayback = new RecordingPcmPlaybackService(),
+        });
+        using var speakCts = new CancellationTokenSource();
+        Task<ITtsPlaybackSession>? speak = null;
+        Task? deactivate = null;
 
-        var speak = Task.Run(() => sut.SpeakAsync(new TtsSpeakRequest("Hello", "en"), CancellationToken.None));
-        await synth.Started;
+        try
+        {
+            // ReSharper disable once MethodSupportsCancellation -- Task.Run must schedule unconditionally; speakCts.Token would cancel scheduling, not the synthesis under test.
+            // ReSharper disable once AccessToDisposedClosure -- the task is awaited (speak.WaitAsync / CompleteBestEffort) before the using var speakCts is disposed at scope end.
+            speak = Task.Run(() =>
+                sut.SpeakAsync(new TtsSpeakRequest("Hello", "en"), speakCts.Token));
+            // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; wiring a token here would make the deadline racy with the finally's teardown cancel instead of fixed.
+            await synth.Started.WaitAsync(s_coordinationTimeout);
 
-        var deactivate = sut.DeactivateAsync();
-        await Task.Delay(50);
-        Assert.False(deactivate.IsCompleted);
-        Assert.False(synth.Disposed);
+            deactivate = sut.DeactivateAsync();
+            // ReSharper disable once MethodSupportsCancellation -- fixed settle window proving DeactivateAsync stays pending while synthesis is in flight; a token would defeat the check.
+            await Task.Delay(50);
+            Assert.False(deactivate.IsCompleted);
+            Assert.False(synth.Disposed);
 
-        gate.SetResult();
-        await speak;
-        await deactivate;
+            gate.SetResult();
+            // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; wiring a token here would make the deadline racy with the finally's teardown cancel instead of fixed.
+            await speak.WaitAsync(s_coordinationTimeout);
+            // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; wiring a token here would make the deadline racy with the finally's teardown cancel instead of fixed.
+            await deactivate.WaitAsync(s_coordinationTimeout);
 
-        Assert.True(synth.Disposed);
+            Assert.True(synth.Disposed);
+        }
+        finally
+        {
+            gate.TrySetResult();
+            // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel is the teardown signal; CancelAsync buys nothing in cleanup.
+            speakCts.Cancel();
+            await CompleteBestEffort(speak);
+            deactivate ??= sut.DeactivateAsync();
+            await CompleteBestEffort(deactivate);
+        }
+    }
+
+    private static async Task CompleteBestEffort(params Task?[] tasks)
+    {
+        var activeTasks = tasks.Where(task => task is not null).Cast<Task>().ToArray();
+        if (activeTasks.Length == 0)
+            return;
+
+        try
+        {
+            await Task.WhenAll(activeTasks).WaitAsync(s_coordinationTimeout);
+        }
+        catch
+        {
+            // Best-effort bounded observation after releasing the gate and canceling speech.
+        }
     }
 
     private static string FindRepoFile(params string[] parts)
@@ -360,13 +428,6 @@ public class SupertonicTtsPluginTests
         public void Dispose() => Disposed = true;
     }
 
-    private sealed class FakeTtsPlaybackSession : ITtsPlaybackSession
-    {
-        public bool IsActive => true;
-        public event EventHandler? Completed;
-        public void Stop() => Completed?.Invoke(this, EventArgs.Empty);
-    }
-
     private sealed class CapturingHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
@@ -379,7 +440,7 @@ public class SupertonicTtsPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];
@@ -398,6 +459,8 @@ public class SupertonicTtsPluginTests
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
+        public IPluginPcmPlaybackService PcmPlayback { get; set; } =
+            UnavailablePluginPcmPlaybackService.Instance;
         public string? ActiveAppProcessName => null;
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();

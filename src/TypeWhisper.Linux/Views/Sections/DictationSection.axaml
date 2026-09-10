@@ -269,10 +269,12 @@
                 <Grid RowDefinitions="Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
-                        <Grid ColumnDefinitions="*,240">
+                        <Grid ColumnDefinitions="*,240"
+                              RowDefinitions="Auto,Auto">
                             <TextBlock Text="{loc:Str Dictation.SpokenLanguage}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
+                                      Grid.Row="0"
                                       ItemsSource="{Binding LanguageChoices}"
                                       SelectedItem="{Binding SelectedLanguageOption}"
                                       HorizontalAlignment="Stretch">
@@ -282,6 +284,15 @@
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
+                            <TextBlock Grid.Row="1"
+                                       Grid.Column="0"
+                                       Grid.ColumnSpan="2"
+                                       Text="{Binding LanguageSelectionWarning}"
+                                       IsVisible="{Binding LanguageSelectionRequired}"
+                                       FontSize="12"
+                                       Foreground="#D6B45F"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
                         </Grid>
                     </Border>
 
@@ -311,7 +322,7 @@
             <TextBlock Text="{loc:Str Dictation.Settings}"
                        Classes="group-title" />
             <Border Classes="settings-panel">
-                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
@@ -405,6 +416,74 @@
 
                     <Border Grid.Row="6"
                             Classes="row">
+                        <StackPanel Spacing="12">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="{loc:Str Dictation.TargetAppCorrectionLearning}"
+                                               Classes="row-label" />
+                                    <TextBlock
+                                        Text="{loc:Str Dictation.TargetAppCorrectionLearningHint}"
+                                        FontSize="11"
+                                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                                <ToggleSwitch Grid.Column="1"
+                                              IsChecked="{Binding TargetAppCorrectionLearningEnabled}"
+                                              HorizontalAlignment="Right" />
+                            </Grid>
+
+                            <!-- The session accessibility flag is off, so Chromium/Electron
+                                 and Qt apps won't expose text to correction learning until
+                                 the user enables it. -->
+                            <Border IsVisible="{Binding ShowAccessibilityBridgeSetup}"
+                                    Background="#14D6B45F"
+                                    BorderBrush="#33D6B45F"
+                                    BorderThickness="1"
+                                    CornerRadius="10"
+                                    Padding="14,12">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Text="{loc:Str Dictation.A11yBridgeSetupExplanation}"
+                                               FontSize="12"
+                                               Foreground="#E4C475"
+                                               TextWrapping="Wrap" />
+                                    <Button Content="{loc:Str Dictation.A11yBridgeEnableButton}"
+                                            Command="{Binding EnableAccessibilityBridgeCommand}"
+                                            HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- The bridge is on and this app turned it on; offer to remove
+                                 it. -->
+                            <Border IsVisible="{Binding ShowAccessibilityBridgeRemove}"
+                                    Background="#0FFFFFFF"
+                                    BorderBrush="#1AFFFFFF"
+                                    BorderThickness="1"
+                                    CornerRadius="10"
+                                    Padding="14,12">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Text="{loc:Str Dictation.A11yBridgeRemoveExplanation}"
+                                               FontSize="12"
+                                               Foreground="#8A9AAE"
+                                               TextWrapping="Wrap" />
+                                    <Button Content="{loc:Str Dictation.A11yBridgeRemoveButton}"
+                                            Command="{Binding RemoveAccessibilityBridgeCommand}"
+                                            HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="{Binding AccessibilityBridgeStatus}"
+                                       FontSize="12"
+                                       Foreground="#8A9AAE"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding AccessibilityBridgeStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="7"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="8"
+                            Classes="row">
                         <Grid ColumnDefinitions="*,240">
                             <TextBlock Text="{loc:Str Dictation.AutoCleanup}"
                                        Classes="row-label" />
@@ -421,10 +500,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="7"
+                    <Border Grid.Row="9"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="8"
+                    <Border Grid.Row="10"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBlock Text="{loc:Str Common.WhisperMode}"
@@ -435,10 +514,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="9"
+                    <Border Grid.Row="11"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="10"
+                    <Border Grid.Row="12"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
@@ -457,10 +536,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="11"
+                    <Border Grid.Row="13"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="12"
+                    <Border Grid.Row="14"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBlock Text="{loc:Str Dictation.TranscribeShortQuietClips}"
@@ -471,10 +550,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="13"
+                    <Border Grid.Row="15"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="14"
+                    <Border Grid.Row="16"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBlock Text="{loc:Str Dictation.AutoStopOnSilence}"
@@ -485,10 +564,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="15"
+                    <Border Grid.Row="17"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="16"
+                    <Border Grid.Row="18"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBlock Text="{loc:Str Dictation.SilenceTimeoutSeconds}"
@@ -500,10 +579,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="17"
+                    <Border Grid.Row="19"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="18"
+                    <Border Grid.Row="20"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
@@ -520,10 +599,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="19"
+                    <Border Grid.Row="21"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="20"
+                    <Border Grid.Row="22"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
@@ -541,10 +620,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="21"
+                    <Border Grid.Row="23"
                             Background="#18FFFFFF" />
 
-                    <Border Grid.Row="22"
+                    <Border Grid.Row="24"
                             Classes="row">
                         <Grid ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="4">
@@ -559,6 +638,26 @@
                             <ToggleSwitch Grid.Column="1"
                                           IsChecked="{Binding LiveTranscriptionStreamingEnabled}"
                                           IsEnabled="{Binding LiveTranscriptionEnabled}"
+                                          HorizontalAlignment="Right" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="25"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="26"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="{loc:Str Dictation.NormalizeNumbers}"
+                                           Classes="row-label" />
+                                <TextBlock Text="{loc:Str Dictation.NormalizeNumbersHint}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding TranscriptionNumberNormalizationEnabled}"
                                           HorizontalAlignment="Right" />
                         </Grid>
                     </Border>

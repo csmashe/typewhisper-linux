@@ -2,6 +2,7 @@
 // ReSharper/Qodana cannot see used from this project (they are consumed by external plugins/
 // the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.PluginSDK;
 
@@ -40,16 +41,43 @@ public interface IPluginHostServices
     /// <summary>Localization service; loads strings from the plugin's Localization/ subdirectory (e.g. en.json).</summary>
     IPluginLocalization Localization { get; }
 
+    /// <summary>Host-owned child-process supervision scoped to this plugin.</summary>
+    /// <remarks>Older hosts fail clearly when a plugin requires this capability.</remarks>
+    // ReSharper disable once UnusedMemberInSuper.Global
+    IPluginProcessSupervisor Processes =>
+        throw new NotSupportedException(
+            "This plugin host does not provide process supervision."
+        );
+
+    /// <summary>Host-owned playback for interleaved PCM audio.</summary>
+    /// <remarks>
+    ///     Unlike <see cref="Processes"/>, this default returns the unavailable sentinel
+    ///     instead of throwing, so plugins can preflight without a try/catch. It doesn't
+    ///     help old hosts, though: the load context resolves TypeWhisper.PluginSDK to the
+    ///     host's own copy, so an old host's SDK never sees this default.
+    /// </remarks>
+    // ReSharper disable once UnusedMemberInSuper.Global
+    IPluginPcmPlaybackService PcmPlayback =>
+        UnavailablePluginPcmPlaybackService.Instance;
+
     /// <summary>Stores a secret value using the platform secret store, scoped to the plugin.</summary>
+    /// <remarks>
+    ///     Throws an <see cref="IOException"/> or similar exception if persistence fails; the
+    ///     mutation is not applied when it throws.
+    /// </remarks>
     // ReSharper disable once UnusedMemberInSuper.Global
     Task StoreSecretAsync(string key, string value);
 
     /// <summary>Loads a previously stored secret, or null if not found.</summary>
-    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedMemberInSuper.Global
     Task<string?> LoadSecretAsync(string key);
 
     /// <summary>Deletes a stored secret.</summary>
-    // ReSharper disable once UnusedMember.Global
+    /// <remarks>
+    ///     Throws an <see cref="IOException"/> or similar exception if persistence fails; the
+    ///     mutation is not applied when it throws.
+    /// </remarks>
+    // ReSharper disable once UnusedMemberInSuper.Global
     Task DeleteSecretAsync(string key);
 
     /// <summary>Gets a per-plugin setting value deserialized from JSON, or default if not found.</summary>
@@ -57,6 +85,10 @@ public interface IPluginHostServices
     T? GetSetting<T>(string key);
 
     /// <summary>Sets a per-plugin setting value (serialized to JSON).</summary>
+    /// <remarks>
+    ///     Throws an <see cref="IOException"/> or similar exception if persistence fails; the
+    ///     mutation is not applied when it throws.
+    /// </remarks>
     // ReSharper disable once UnusedMemberInSuper.Global
     void SetSetting<T>(string key, T value);
 
@@ -66,7 +98,9 @@ public interface IPluginHostServices
 
     /// <summary>
     ///     Notifies the host that the plugin's capabilities have changed (e.g. new models available).
-    ///     The host will rebuild its capability indices and update the UI accordingly.
+    ///     The host will rebuild its capability indices and update the UI accordingly. This method
+    ///     may notify host subscribers synchronously on the calling thread; subscribers are
+    ///     responsible for marshalling UI work to the UI thread.
     /// </summary>
     // ReSharper disable once UnusedMemberInSuper.Global
     void NotifyCapabilitiesChanged();
@@ -78,4 +112,19 @@ public interface IPluginHostServices
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedParameter.Global
     void SetStreamingDisplayActive(bool active) { }
+
+    /// <summary>Opens a host-managed transactional JSON state file for this plugin.</summary>
+    /// <remarks>
+    ///     Older hosts fail clearly when a plugin requires this capability.
+    /// </remarks>
+    // ReSharper disable once UnusedMemberInSuper.Global
+    IPluginStateStore<T> OpenStateStore<T>(
+        string fileName,
+        Func<T> createDefault,
+        PluginStateStoreOptions? options = null
+    )
+        where T : notnull =>
+        throw new NotSupportedException(
+            "This plugin host does not provide transactional state stores."
+        );
 }

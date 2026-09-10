@@ -16,7 +16,7 @@ internal enum ShortcutMatchKind
     TransformSelection,
     Cancel,
     PromptAction,
-    Profile
+    Profile,
 }
 
 /// <summary>

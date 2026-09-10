@@ -2,6 +2,7 @@ using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Insertion;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -15,7 +16,8 @@ public enum InsertionResult
     ActionFailed,
     MissingClipboardTool,
     MissingPasteTool,
-    Failed
+    Failed,
+    ActionUnavailable,
 }
 
 /// <summary>
@@ -30,7 +32,8 @@ public enum InsertionFailureReason
     YdotoolSocketUnreachable,
     NoWaylandTypingTool,
     FocusFailed,
-    PasteRetriesExhausted
+    PasteRetriesExhausted,
+    PartialTypingFailure,
 }
 
 public sealed record TextInsertionRequest(
@@ -55,45 +58,85 @@ public sealed record TextInsertionRequest(
 public sealed class TextInsertionService
 {
     private const int PasteAttemptCount = 3;
+    private const string ClipboardNonTextCouldNotRestoreMessage =
+        "Clipboard preservation skipped: the previous clipboard offered a non-text format (e.g. an image or file list) that cannot be captured as plain text, so it was replaced and could not be restored.";
+    // Both call sites reach here after the dictated text is already on the clipboard, so the
+    // message must not imply the previous content survived.
+    private const string ClipboardRichRestoreSkippedMessage =
+        "Clipboard preservation skipped: the previous clipboard also offered a richer, non-text format (e.g. HTML) that a plain-text restore would have lost, so it was not restored. The clipboard now holds the dictated text — copy the original content again if you still need it.";
+    private const string ClipboardUnprovableRestoreSkippedMessage =
+        "Clipboard preservation skipped: the clipboard no longer reads back as text — another app may have replaced it with an image or file list — so the previous text was not restored over it.";
+    private const string ClipboardRichRestoreLossyMessage =
+        "Clipboard preservation was lossy: the previous clipboard also offered a richer, non-text format (e.g. HTML) that could not be restored; only its plain-text content was restored.";
     private static readonly TimeSpan s_focusDelay = TimeSpan.FromMilliseconds(100);
-    private static readonly TimeSpan s_clipboardRestoreDelayDefault = TimeSpan.FromMilliseconds(200);
+
+    // After the paste chord we hold our text on the clipboard this long before restoring the user's
+    // previous content. On Wayland the target reads the clipboard asynchronously, so restoring
+    // too soon races the paste: the app reads back the restored (old) content and nothing lands.
+    // 200 ms was marginal for GTK apps and lost the race outright once accessibility is active
+    // (AT-SPI makes the app do extra per-event work, delaying its clipboard read) — e.g. the
+    // target-app correction-learning feature. 500 ms comfortably covers GTK4's async paste.
+    private static readonly TimeSpan s_clipboardRestoreDelayDefault = TimeSpan.FromMilliseconds(500);
 
     // KDE Plasma's Klipper races us when restoring the clipboard — the
     // ~600 ms delay matches what OpenWhispr landed after the same race.
     private static readonly TimeSpan s_clipboardRestoreDelayKde = TimeSpan.FromMilliseconds(600);
     private static readonly TimeSpan s_pasteRetryDelay = TimeSpan.FromMilliseconds(75);
+
+    // Pre-paste readiness: wl-copy forks a child to own the selection, and until that
+    // child is actually serving, GTK's async paste read finds nothing (or the user's
+    // stale previous clipboard when wl-copy silently died) and inserts nothing. Verify
+    // the clipboard serves OUR text before sending the keystroke — happy path is a
+    // single ~20-50 ms read; the retry delay only accrues while the serve is late.
+    private const int ClipboardVerifyAttempts = 4;
+    private static readonly TimeSpan s_clipboardVerifyRetryDelay = TimeSpan.FromMilliseconds(40);
+
+    // How long the event-driven restore waits for a positive "text landed" signal
+    // before falling back to the fixed floor delay above.
+    private static readonly TimeSpan s_pasteConfirmTimeout = TimeSpan.FromSeconds(2);
+
+    // Env-gated per-paste diagnostics (TW_PASTE_DIAG=1): verify attempts, restore
+    // gate (confirmed vs floor) + elapsed, and whether AT-SPI knew a focused element
+    // at paste time — the signal that would justify a future pre-paste focus gate.
+    private static readonly bool s_pasteDiagEnabled =
+        Environment.GetEnvironmentVariable("TW_PASTE_DIAG") == "1";
+
     private readonly IErrorLogService? _errorLog;
+    private readonly Func<bool> _isRecording;
+    private readonly IPasteConfirmationSource? _pasteConfirmation;
 
     private readonly ITextInsertionPlatform _platform;
-
-    public TextInsertionService()
-        : this(new LinuxTextInsertionPlatform())
-    {
-    }
-
-    public TextInsertionService(IErrorLogService errorLog)
-        : this(new LinuxTextInsertionPlatform(), errorLog)
-    {
-    }
 
     // DI-preferred ctor: passes the shared SystemCommandAvailabilityService so the platform
     // subscribes to snapshot refreshes and rebuilds its chain live after ydotool setup —
     // without this the singleton's chain is frozen at startup and ydotool changes need a restart.
     public TextInsertionService(
         IErrorLogService errorLog,
-        SystemCommandAvailabilityService commands
+        SystemCommandAvailabilityService commands,
+        IPasteConfirmationSource? pasteConfirmation = null,
+        IProcessRunner? processRunner = null,
+        Func<bool>? isAnotherSessionRecording = null
     )
-        : this(new LinuxTextInsertionPlatform(commands), errorLog)
+        : this(
+            new LinuxTextInsertionPlatform(commands, processRunner),
+            errorLog,
+            pasteConfirmation,
+            isAnotherSessionRecording
+        )
     {
     }
 
     internal TextInsertionService(
         ITextInsertionPlatform platform,
-        IErrorLogService? errorLog = null
+        IErrorLogService? errorLog = null,
+        IPasteConfirmationSource? pasteConfirmation = null,
+        Func<bool>? isAnotherSessionRecording = null
     )
     {
         _platform = platform;
         _errorLog = errorLog;
+        _pasteConfirmation = pasteConfirmation;
+        _isRecording = isAnotherSessionRecording ?? (static () => false);
     }
 
     /// <summary>
@@ -105,6 +148,14 @@ public sealed class TextInsertionService
     /// </summary>
     public InsertionFailureReason LastFailureReason { get; private set; } =
         InsertionFailureReason.None;
+
+    // Whether the last direct-typing attempt aborted mid-sequence after already
+    // delivering part of the text. Both the clipboard-fallback suppression and the
+    // orchestrator's completion message key on this fact rather than on
+    // LastFailureReason: a structural reason (e.g. ydotool socket unreachable) can be
+    // recorded before the partial-delivery abort, so the reason value alone can't tell
+    // whether a prefix already landed. Reset per request.
+    public bool LastTypingDeliveredPartialText { get; private set; }
 
     public async Task<InsertionResult> InsertTextAsync(
         string text,
@@ -132,6 +183,7 @@ public sealed class TextInsertionService
     public async Task<InsertionResult> InsertTextAsync(TextInsertionRequest request)
     {
         LastFailureReason = InsertionFailureReason.None;
+        LastTypingDeliveredPartialText = false;
 
         var text = request.Text;
         var autoPaste = request.AutoPaste;
@@ -151,6 +203,11 @@ public sealed class TextInsertionService
             autoPaste = false;
         }
 
+        var targetIsTerminal = IsTerminalApp(targetProcessName);
+        var requiresSafeTerminalPaste =
+            autoPaste && targetIsTerminal && ContainsLineBreak(text);
+        var pasteShortcut = targetIsTerminal ? "Ctrl+Shift+V" : "Ctrl+V";
+
         if (autoPaste && !_platform.IsPasteAvailable)
         {
             LastFailureReason = InsertionFailureReason.NoWaylandTypingTool;
@@ -159,6 +216,10 @@ public sealed class TextInsertionService
 
         var shouldTypeDirectly =
             autoPaste
+            // Shift+Return is still Return in ordinary terminal protocols, so direct-typing
+            // multiline text can submit each partial line as a shell command — overriding
+            // even an explicit DirectTyping preference.
+            && !requiresSafeTerminalPaste
             && strategy switch
             {
                 TextInsertionStrategy.DirectTyping => true,
@@ -174,7 +235,7 @@ public sealed class TextInsertionService
                          && string.IsNullOrEmpty(targetWindowTitle)
                          && _platform.PrefersDirectTypingForUnknownTarget
                          && IsAsciiSafe(text)
-                     )
+                     ),
             };
 
         if (shouldTypeDirectly)
@@ -183,6 +244,11 @@ public sealed class TextInsertionService
             if (
                 strategy is TextInsertionStrategy.DirectTyping
                 || directResult is not InsertionResult.Failed
+                // Partial delivery already happened under the failed backend; falling
+                // through would clipboard-paste the complete text again and duplicate
+                // the prefix that's already in the target app. (Keyed on the delivery
+                // fact, not LastFailureReason — see the property comment.)
+                || LastTypingDeliveredPartialText
             )
             {
                 return directResult;
@@ -195,6 +261,8 @@ public sealed class TextInsertionService
         }
 
         var previousClipboard = await _platform.TryGetClipboardTextAsync();
+        var previousClipboardHasNonTextFormats =
+            await _platform.ClipboardHasNonTextFormatsAsync();
         if (!await _platform.SetClipboardTextAsync(text))
         {
             return InsertionResult.Failed;
@@ -211,60 +279,250 @@ public sealed class TextInsertionService
             LogInsertionFallback(
                 "Auto paste fell back to clipboard: target window could not be focused."
             );
-            return InsertionResult.CopiedToClipboard;
+            return requiresSafeTerminalPaste
+                ? await HandleTerminalMultilinePasteFailureAsync(
+                    text,
+                    previousClipboard,
+                    previousClipboardHasNonTextFormats
+                )
+                : InsertionResult.CopiedToClipboard;
         }
 
-        if (!await TrySendPasteAsync())
+        if (!await VerifyClipboardServesAsync(text))
         {
-            // Prefer the platform's diagnostic (e.g. "compositor unsupported")
-            // over the generic retries-exhausted reason.
-            if (LastFailureReason == InsertionFailureReason.None)
+            LogInsertionFallback(
+                "Auto paste fell back to clipboard: the clipboard never served the dictated text, "
+                + $"so {pasteShortcut} was not sent (it would have pasted nothing or stale content)."
+            );
+            return requiresSafeTerminalPaste
+                ? await HandleTerminalMultilinePasteFailureAsync(
+                    text,
+                    previousClipboard,
+                    previousClipboardHasNonTextFormats
+                )
+                : InsertionResult.CopiedToClipboard;
+        }
+
+        if (s_pasteDiagEnabled)
+        {
+            var focusKnown = _pasteConfirmation?.HasFocusedElement;
+            PasteDiag(
+                $"focused element known at {pasteShortcut}: {focusKnown?.ToString() ?? "n/a (AT-SPI not running)"}"
+            );
+        }
+
+        // Arm the confirmation watch BEFORE the keystroke: the target's text-changed
+        // fires while the paste chord is being processed, so a subscription made in the restore
+        // step (after the paste) misses it every time and waits out the full timeout.
+        var pasteWatch = _pasteConfirmation?.BeginWatch(text);
+
+        // Until the watch is handed to RestorePreviousClipboardAsync (which owns its disposal),
+        // any throw from the paste/enter path must still release the AT-SPI subscription.
+        var watchHandedOff = false;
+        try
+        {
+            if (!await TrySendPasteAsync(targetIsTerminal))
             {
-                LastFailureReason = InsertionFailureReason.PasteRetriesExhausted;
+                // Prefer the platform's diagnostic (e.g. "compositor unsupported")
+                // over the generic retries-exhausted reason.
+                if (LastFailureReason == InsertionFailureReason.None)
+                {
+                    LastFailureReason = InsertionFailureReason.PasteRetriesExhausted;
+                }
+
+                LogInsertionFallback(
+                    $"Auto paste fell back to clipboard: {pasteShortcut} could not be sent after retries."
+                );
+                return requiresSafeTerminalPaste
+                    ? await HandleTerminalMultilinePasteFailureAsync(
+                        text,
+                        previousClipboard,
+                        previousClipboardHasNonTextFormats
+                    )
+                    : InsertionResult.CopiedToClipboard;
             }
 
-            LogInsertionFallback(
-                "Auto paste fell back to clipboard: Ctrl+V could not be sent after retries."
+            bool? deliveryConfirmed = null;
+            if (autoEnter)
+            {
+                // GTK and Wayland targets read the clipboard asynchronously after Ctrl+V; Enter
+                // must not overtake that read and submit an empty or stale field. The gate result
+                // is passed to restore so it does not start a second full timeout.
+                var stopwatch = s_pasteDiagEnabled ? Stopwatch.StartNew() : null;
+                deliveryConfirmed = await AwaitPasteDeliveryAsync(pasteWatch);
+                PasteDiag(
+                    $"enter gate: {(deliveryConfirmed.Value ? "confirmed" : "floor")} after {stopwatch?.ElapsedMilliseconds ?? 0} ms"
+                );
+
+                if (!await _platform.SendEnterAsync())
+                {
+                    LogInsertionFallback(
+                        $"Auto paste sent {pasteShortcut}, but Enter could not be sent."
+                    );
+                }
+            }
+
+            // Awaited inline (not fire-and-forget) so rapid consecutive dictations stay
+            // serialized: the next insertion's clipboard snapshot must not race this restore.
+            watchHandedOff = true;
+            await RestorePreviousClipboardAsync(
+                text,
+                previousClipboard,
+                previousClipboardHasNonTextFormats,
+                pasteWatch,
+                deliveryConfirmed
             );
-            return InsertionResult.CopiedToClipboard;
+            return InsertionResult.Pasted;
         }
-
-        if (autoEnter && !await _platform.SendEnterAsync())
+        finally
         {
-            LogInsertionFallback("Auto paste sent Ctrl+V, but Enter could not be sent.");
+            if (!watchHandedOff)
+            {
+                pasteWatch?.Dispose();
+            }
         }
-
-        await RestorePreviousClipboardAsync(previousClipboard);
-        return InsertionResult.Pasted;
     }
 
-    public async Task<string> CaptureSelectedTextAsync()
+    /// <summary>
+    ///     Types a chunk of streamed text directly via the platform typing backend — no clipboard,
+    ///     no per-chunk focus delay — for streaming a spoken-command result onto the page. The caller
+    ///     ensures the target holds focus. Terminal multiline chunks are rejected defensively; the
+    ///     orchestrator normally keeps recognized terminals out of streaming entirely so their
+    ///     completed result can use the content-aware one-shot policy.
+    /// </summary>
+    public async Task<(bool Succeeded, bool DeliveredPartialText)> TypeStreamChunkAsync(
+        string text,
+        string? targetProcessName = null
+    )
+    {
+        if (IsTerminalApp(targetProcessName) && ContainsLineBreak(text))
+        {
+            return (false, false);
+        }
+
+        var ok = await _platform.TypeTextAsync(text);
+        return (ok, !ok && _platform.LastTypingDeliveredPartialText);
+    }
+
+    /// <summary>
+    ///     Best-effort re-activates the captured target window before a streaming insertion types
+    ///     into it, so output lands in the window the command was issued from rather than whatever
+    ///     holds focus after the LLM round-trip. Mirrors the focus step <see cref="InsertTextAsync(TextInsertionRequest)" />
+    ///     performs; returns false when the target could not be confirmed focused.
+    /// </summary>
+    public Task<bool> FocusWindowAsync(string? targetWindowId)
+    {
+        return FocusTargetWindowAsync(targetWindowId);
+    }
+
+    /// <summary>
+    ///     Whether the Auto insertion policy would deliver to this target by direct typing based on
+    ///     the app alone (terminals, supported browsers, Codex windows) — independent of text content.
+    ///     Lets a streaming caller decide whether typing each chunk matches what the one-shot insert
+    ///     would do, or whether it must defer to the content-aware one-shot path (clipboard paste for
+    ///     GUI targets, ASCII-safety for unknown ones). Because a stream's eventual newline content is
+    ///     unknown, streaming callers must additionally exclude terminal processes.
+    /// </summary>
+    public static bool AppPrefersDirectTyping(string? processName, string? windowTitle)
+    {
+        return ShouldTypeDirectly(processName, windowTitle);
+    }
+
+    // A single synthesized Ctrl+C can be dropped by the compositor or the app; retry a few times.
+    private const int CopyProbeAttempts = 3;
+
+    public async Task<string> CaptureSelectedTextAsync(bool targetIsTerminal = false)
+    {
+        // No PRIMARY-selection fallback: after an edit types over the selection PRIMARY holds a stale
+        // leftover, so a failed copy probe means empty. targetIsTerminal switches the probe to
+        // Ctrl+Shift+C — a plain Ctrl+C in a terminal is SIGINT, not copy, so it captures nothing and
+        // would interrupt whatever is running there.
+        var captured = await ProbeSelectionViaCopyAsync(targetIsTerminal);
+        return string.IsNullOrWhiteSpace(captured) ? "" : captured;
+    }
+
+    private async Task<string> ProbeSelectionViaCopyAsync(bool targetIsTerminal)
     {
         var previousClipboard = await _platform.TryGetClipboardTextAsync();
+        var previousClipboardHasNonTextFormats =
+            await _platform.ClipboardHasNonTextFormatsAsync();
 
-        if (!await _platform.SendCopyAsync())
+        // Only prime a sentinel when the clipboard already holds text we can detect against and
+        // restore: a null read means it's empty or non-text (an image / file list) we must not
+        // clobber. Skipping it there is safe — a no-op copy leaves the read empty anyway. The
+        // sentinel only earns its keep against stale text, which a copy with no selection would
+        // otherwise leave intact and misread.
+        var useSentinel = previousClipboard is not null;
+        var sentinel = $"⁣TW-SEL-PROBE-{Guid.NewGuid():N}";
+        if (useSentinel)
         {
-            return "";
+            await _platform.SetClipboardTextAsync(sentinel);
         }
 
-        await _platform.DelayAsync(TimeSpan.FromMilliseconds(150));
-        var selectedText = await _platform.TryGetClipboardTextAsync() ?? "";
-
-        if (previousClipboard is not null)
+        var afterCopy = "";
+        for (var attempt = 1; attempt <= CopyProbeAttempts; attempt++)
         {
-            await _platform.SetClipboardTextAsync(previousClipboard);
+            if (!await _platform.SendCopyAsync(targetIsTerminal))
+            {
+                // No usable injection backend — retrying won't help.
+                break;
+            }
+
+            await _platform.DelayAsync(TimeSpan.FromMilliseconds(150));
+            afterCopy = await _platform.TryGetClipboardTextAsync() ?? "";
+
+            // With a sentinel, a real selection copied when the clipboard diverges from it.
+            // Without one, any non-empty read is the selection.
+            var gotSelection = useSentinel
+                ? !string.Equals(afterCopy, sentinel, StringComparison.Ordinal)
+                : afterCopy.Length > 0;
+            if (gotSelection)
+            {
+                break;
+            }
         }
 
-        return selectedText;
+        if (!useSentinel)
+        {
+            if (previousClipboardHasNonTextFormats)
+            {
+                LogInsertionFallback(ClipboardNonTextCouldNotRestoreMessage);
+            }
+
+            return afterCopy;
+        }
+
+        if (previousClipboardHasNonTextFormats)
+        {
+            LogInsertionFallback(ClipboardRichRestoreLossyMessage);
+        }
+
+        await _platform.SetClipboardTextAsync(previousClipboard!);
+        return string.Equals(afterCopy, sentinel, StringComparison.Ordinal) ? "" : afterCopy;
     }
 
     private async Task<bool> FocusTargetWindowAsync(string? targetWindowId)
     {
-        if (string.IsNullOrWhiteSpace(targetWindowId)
-            || _platform.GetActiveWindowId() == targetWindowId)
+        var activeWindowId = _platform.GetActiveWindowId();
+        if (string.IsNullOrWhiteSpace(targetWindowId) || activeWindowId == targetWindowId)
         {
             await _platform.DelayAsync(s_focusDelay);
             return true;
+        }
+
+        // Activating a predecessor's target while another session is recording would corrupt that
+        // session's window snapshot/profile match (PA4). A null active id means Wayland without
+        // xdotool, where activation is a no-op — suppressing there would only degrade benign
+        // insertions. Residual: the predicate reads false for a session that is STARTING, and the
+        // whole start cue (prior-speech stop, start sound/TTS) runs before capture opens, so an
+        // activation landing in that interval is missed; closing it needs a shared focus/start
+        // arbiter, deliberately out of scope.
+        if (activeWindowId is not null && _isRecording())
+        {
+            Trace.WriteLine(
+                $"Suppressed focus activation for target window '{targetWindowId}' because another session is recording."
+            );
+            return false;
         }
 
         var focusRequested = await _platform.ActivateWindowAsync(targetWindowId);
@@ -272,30 +530,247 @@ public sealed class TextInsertionService
         return focusRequested || _platform.GetActiveWindowId() == targetWindowId;
     }
 
-    private async Task RestorePreviousClipboardAsync(string? previousClipboard)
+    /// <summary>
+    ///     Confirms the clipboard actually serves <paramref name="expected" /> before we
+    ///     send the paste chord, with one clipboard re-set + re-verify when the first pass fails
+    ///     (wl-copy occasionally dies before its serving child takes over the selection).
+    /// </summary>
+    private async Task<bool> VerifyClipboardServesAsync(string expected)
     {
-        var delay = _platform.IsKdePlasma ? s_clipboardRestoreDelayKde : s_clipboardRestoreDelayDefault;
-        await _platform.DelayAsync(delay);
-        if (previousClipboard is null)
+        if (await WaitForClipboardToServeAsync(expected))
         {
-            return;
+            return true;
+        }
+
+        PasteDiag("clipboard verify exhausted; re-setting clipboard once");
+        return await _platform.SetClipboardTextAsync(expected)
+               && await WaitForClipboardToServeAsync(expected);
+    }
+
+    private async Task<bool> WaitForClipboardToServeAsync(string expected)
+    {
+        for (var attempt = 0; attempt < ClipboardVerifyAttempts; attempt++)
+        {
+            if (attempt > 0)
+            {
+                await _platform.DelayAsync(s_clipboardVerifyRetryDelay);
+            }
+
+            // wl-paste may append a trailing newline the write never had — compare
+            // content modulo that, matching the ownership check in the restore below.
+            var read = await _platform.TryGetClipboardTextAsync();
+            if (
+                read is null
+                || !string.Equals(
+                    read.TrimEnd('\n'),
+                    expected.TrimEnd('\n'),
+                    StringComparison.Ordinal
+                )
+            )
+            {
+                continue;
+            }
+
+            PasteDiag($"clipboard verified serving on attempt {attempt + 1}");
+            return true;
+        }
+
+        PasteDiag($"clipboard verify failed after {ClipboardVerifyAttempts} attempts");
+        return false;
+    }
+
+    /// <summary>
+    ///     Failure exit for terminal multiline auto-paste. The clipboard already holds our
+    ///     staged text but no keystroke was sent, so — unlike the paste path — there is no
+    ///     in-flight transfer to protect. Restore a faithfully captured plain-text predecessor;
+    ///     otherwise retain the staged text as a manual-paste fallback. Ownership-checked like
+    ///     the post-paste restore: if the user copied something newer while the insert was
+    ///     failing, leave their copy alone rather than clobbering it with the stale snapshot.
+    ///     The result classifies the FINAL clipboard state:
+    ///     <see cref="InsertionResult.CopiedToClipboard" /> when the staged text is still
+    ///     reliably on the clipboard for the user to paste by hand,
+    ///     <see cref="InsertionResult.Failed" /> when it is not.
+    /// </summary>
+    private async Task<InsertionResult> HandleTerminalMultilinePasteFailureAsync(
+        string stagedText,
+        string? previousClipboard,
+        bool previousClipboardHasNonTextFormats
+    )
+    {
+        // First read after the staging write — the widest wl-paste lag window there is, so use
+        // the same retrying read as the pre-paste verify rather than a single shot that would
+        // mistake a lagged read for the user having copied something newer.
+        if (!await WaitForClipboardToServeAsync(stagedText))
+        {
+            return InsertionResult.Failed;
+        }
+
+        if (previousClipboard is null || previousClipboardHasNonTextFormats)
+        {
+            if (previousClipboardHasNonTextFormats)
+            {
+                LogInsertionFallback(
+                    previousClipboard is null
+                        ? ClipboardNonTextCouldNotRestoreMessage
+                        : ClipboardRichRestoreSkippedMessage
+                );
+            }
+
+            return InsertionResult.CopiedToClipboard;
         }
 
         try
         {
-            await _platform.SetClipboardTextAsync(previousClipboard);
+            if (await _platform.SetClipboardTextAsync(previousClipboard))
+            {
+                // A predecessor equal to what we staged leaves our text on the clipboard,
+                // so the restore succeeding is still a clipboard delivery.
+                return string.Equals(
+                    previousClipboard.TrimEnd('\n'),
+                    stagedText.TrimEnd('\n'),
+                    StringComparison.Ordinal
+                )
+                    ? InsertionResult.CopiedToClipboard
+                    : InsertionResult.Failed;
+            }
         }
         catch
         {
-            /* best effort restore */
+            /* verify the final clipboard state below */
+        }
+
+        // Single-shot on purpose, unlike the wait above: the restore write already ran and
+        // returned (or threw), so there is no in-flight backend left to catch up with —
+        // retrying here would just wait around for the staged text to reappear and could
+        // report a delivery over what is actually a lost restore.
+        try
+        {
+            var current = await _platform.TryGetClipboardTextAsync();
+            return current is not null
+                   && string.Equals(
+                       current.TrimEnd('\n'),
+                       stagedText.TrimEnd('\n'),
+                       StringComparison.Ordinal
+                   )
+                ? InsertionResult.CopiedToClipboard
+                : InsertionResult.Failed;
+        }
+        catch
+        {
+            return InsertionResult.Failed;
         }
     }
 
-    private async Task<bool> TrySendPasteAsync()
+    private async Task RestorePreviousClipboardAsync(
+        string pastedText,
+        string? previousClipboard,
+        bool previousClipboardHasNonTextFormats,
+        IPasteWatch? watch,
+        bool? deliveryConfirmed
+    )
+    {
+        if (previousClipboard is null)
+        {
+            if (previousClipboardHasNonTextFormats)
+            {
+                LogInsertionFallback(ClipboardNonTextCouldNotRestoreMessage);
+            }
+
+            // Nothing to restore — no restore write can cut off the in-flight paste,
+            // so there is nothing to wait for either. Still drop the watch armed
+            // before the paste chord: its event subscription must not outlive the insertion.
+            watch?.Dispose();
+            return;
+        }
+
+        using (watch)
+        {
+            // Event-driven gate: a positive "text landed" signal means the target has read
+            // the clipboard, so restoring now cannot cut off the transfer. The watch was
+            // armed before the keystroke, so a text-changed that already fired is latched
+            // and confirms instantly. Indeterminate (no watch — confirmer absent or AT-SPI
+            // idle — or no event within the window) falls back to the fixed floor delay
+            // that previously bounded this race on its own. Auto-enter has already paid this
+            // gate before sending Enter, so reuse its result instead of re-arming a fresh timeout.
+            if (deliveryConfirmed is null)
+            {
+                var stopwatch = s_pasteDiagEnabled ? Stopwatch.StartNew() : null;
+                deliveryConfirmed = await AwaitPasteDeliveryAsync(watch);
+                PasteDiag(
+                    $"restore gate: {(deliveryConfirmed.Value ? "confirmed" : "floor")} after {stopwatch?.ElapsedMilliseconds ?? 0} ms"
+                );
+            }
+            else
+            {
+                PasteDiag(
+                    $"restore gate: {(deliveryConfirmed.Value ? "confirmed" : "floor")} reused from enter gate"
+                );
+            }
+
+            // Ownership check: only restore when the clipboard still holds OUR text —
+            // content equality, not identity, since Wayland re-serves can differ by a
+            // trailing newline. If another app replaced it meanwhile, restoring would
+            // clobber the user's newer copy.
+            var current = await _platform.TryGetClipboardTextAsync();
+            if (current is null)
+            {
+                // Null is not proof the clipboard is still ours: another app may have replaced
+                // it with content serving no plain text (an image, a file list), or the read
+                // timed out. Unproven ownership is not permission to overwrite.
+                LogInsertionFallback(ClipboardUnprovableRestoreSkippedMessage);
+                return;
+            }
+
+            if (
+                !string.Equals(
+                    current.TrimEnd('\n'),
+                    pastedText.TrimEnd('\n'),
+                    StringComparison.Ordinal
+                )
+            )
+            {
+                return;
+            }
+
+            if (previousClipboardHasNonTextFormats)
+            {
+                LogInsertionFallback(ClipboardRichRestoreSkippedMessage);
+                return;
+            }
+
+            try
+            {
+                await _platform.SetClipboardTextAsync(previousClipboard);
+            }
+            catch
+            {
+                /* best effort restore */
+            }
+        }
+    }
+
+    private async Task<bool> AwaitPasteDeliveryAsync(IPasteWatch? watch)
+    {
+        var confirmed =
+            watch is not null
+            && await watch.WaitAsync(s_pasteConfirmTimeout, CancellationToken.None) == true;
+        if (!confirmed)
+        {
+            await _platform.DelayAsync(
+                _platform.IsKdePlasma
+                    ? s_clipboardRestoreDelayKde
+                    : s_clipboardRestoreDelayDefault
+            );
+        }
+
+        return confirmed;
+    }
+
+    private async Task<bool> TrySendPasteAsync(bool useTerminalShortcut)
     {
         for (var attempt = 1; attempt <= PasteAttemptCount; attempt++)
         {
-            if (await _platform.SendPasteAsync())
+            if (await _platform.SendPasteAsync(useTerminalShortcut))
             {
                 return true;
             }
@@ -312,7 +787,15 @@ public sealed class TextInsertionService
                 or InsertionFailureReason.NoWaylandTypingTool
             )
             {
-                LastFailureReason = platformReason;
+                // First-failing structural reason within this request wins — a later,
+                // more generic reason from this fallback's own chain walk must not
+                // downgrade an earlier specific one (e.g. "ydotool socket unreachable"
+                // is a more useful hint than the generic "no typing tool").
+                if (LastFailureReason == InsertionFailureReason.None)
+                {
+                    LastFailureReason = platformReason;
+                }
+
                 return false;
             }
 
@@ -345,6 +828,7 @@ public sealed class TextInsertionService
                 LastFailureReason = _platform.LastFailureReason;
             }
 
+            LastTypingDeliveredPartialText = _platform.LastTypingDeliveredPartialText;
             LogInsertionFallback("Direct typing failed.");
             return InsertionResult.Failed;
         }
@@ -380,7 +864,7 @@ public sealed class TextInsertionService
         return ContainsCodex(processName)
                || ContainsCodex(windowTitle)
                || ShouldTypeBrowserDirectly(processName, windowTitle)
-               || IsTerminalProcess(processName);
+               || IsTerminalApp(processName);
 
         static bool ContainsCodex(string? value)
         {
@@ -402,45 +886,50 @@ public sealed class TextInsertionService
                        || title.Contains("Gmail", StringComparison.OrdinalIgnoreCase)
                    );
         }
+    }
 
-        // Terminals bind Ctrl+V to readline quoted-insert, not paste. Direct typing is used
-        // instead. Substring match on "terminal" (not suffix) is intentional: GNOME/MATE use
-        // a client-server model so the process is "gnome-terminal-server", and Linux truncates
-        // /proc/pid/comm to 15 bytes, yielding "gnome-terminal-" — contains "terminal", but
-        // doesn't end with it. The trailing `EndsWith("term")` catches xfce4-terminal etc.
-        static bool IsTerminalProcess(string? value)
+    /// <summary>
+    ///     Whether the target process is a terminal emulator. Terminals bind Ctrl+V to
+    ///     readline quoted-insert (not paste) and map plain Ctrl+C to SIGINT (copy is
+    ///     Ctrl+Shift+C), so both text insertion and selection-capture must be
+    ///     terminal-aware. Substring match on "terminal" (not suffix) is intentional:
+    ///     GNOME/MATE use a client-server model so the process is "gnome-terminal-server",
+    ///     and Linux truncates /proc/pid/comm to 15 bytes, yielding "gnome-terminal-" —
+    ///     contains "terminal" but doesn't end with it. The trailing `EndsWith("term")`
+    ///     catches xfce4-terminal etc.
+    /// </summary>
+    public static bool IsTerminalApp(string? processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName))
         {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return false;
-            }
-
-            var process = ProcessNameNormalizer.Normalize(value);
-            if (
-                process.Equals("kitty", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("gnome-terminal", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("konsole", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("alacritty", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("wezterm", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("xterm", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("tilix", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("ghostty", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("foot", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("ptyxis", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("terminator", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("warp", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("hyper", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("st", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("urxvt", StringComparison.OrdinalIgnoreCase)
-                || process.Equals("rxvt", StringComparison.OrdinalIgnoreCase)
-            )
-            {
-                return true;
-            }
-
-            return process.Contains("terminal", StringComparison.OrdinalIgnoreCase)
-                   || process.EndsWith("term", StringComparison.OrdinalIgnoreCase);
+            return false;
         }
+
+        var process = ProcessNameNormalizer.Normalize(processName);
+        if (
+            process.Equals("kitty", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("gnome-terminal", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("konsole", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("alacritty", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("wezterm", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("xterm", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("tilix", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("ghostty", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("foot", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("ptyxis", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("terminator", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("warp", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("hyper", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("st", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("urxvt", StringComparison.OrdinalIgnoreCase)
+            || process.Equals("rxvt", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return true;
+        }
+
+        return process.Contains("terminal", StringComparison.OrdinalIgnoreCase)
+               || process.EndsWith("term", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -466,6 +955,23 @@ public sealed class TextInsertionService
         }
 
         return true;
+    }
+
+    private static bool ContainsLineBreak(string text)
+    {
+        return text.AsSpan().IndexOfAny('\r', '\n') >= 0;
+    }
+
+    /// <summary>
+    ///     Env-gated (TW_PASTE_DIAG=1) per-paste diagnostic trace. Off by default so the
+    ///     hot path stays silent; used to validate the paste-readiness fix in the field.
+    /// </summary>
+    private static void PasteDiag(string message)
+    {
+        if (s_pasteDiagEnabled)
+        {
+            Trace.WriteLine($"[PasteDiag] {message}");
+        }
     }
 
     private void LogInsertionFallback(string message)
@@ -500,14 +1006,43 @@ internal interface ITextInsertionPlatform
     bool PrefersDirectTypingForUnknownTarget { get; }
 
     InsertionFailureReason LastFailureReason { get; }
+
+    /// <summary>
+    ///     True when the most recent typing attempt aborted mid-sequence after at least
+    ///     one segment had already reached the target. The caller must then suppress the
+    ///     clipboard fallback — a full re-paste would duplicate the delivered prefix —
+    ///     regardless of which failure reason was recorded.
+    /// </summary>
+    bool LastTypingDeliveredPartialText { get; }
+
     Task<string?> TryGetClipboardTextAsync();
     Task<bool> SetClipboardTextAsync(string text);
+
+    /// <summary>
+    ///     True when the clipboard currently offers a MIME type beyond ordinary plain text
+    ///     (an image, a file list, HTML, etc.) — queried before an insertion overwrites the
+    ///     clipboard, so a caller can tell whether the value it is about to destroy was
+    ///     something a plain-text round trip cannot faithfully preserve or restore.
+    /// </summary>
+    Task<bool> ClipboardHasNonTextFormatsAsync();
+
     Task DelayAsync(TimeSpan delay);
     string? GetActiveWindowId();
     Task<bool> ActivateWindowAsync(string windowId);
-    Task<bool> SendPasteAsync();
+
+    /// <summary>
+    ///     Synthesizes a paste. When <paramref name="useTerminalShortcut" /> is true,
+    ///     sends Ctrl+Shift+V (terminals map plain Ctrl+V to readline quoted-insert);
+    ///     otherwise Ctrl+V.
+    /// </summary>
+    Task<bool> SendPasteAsync(bool useTerminalShortcut = false);
     Task<bool> TypeTextAsync(string text);
-    Task<bool> SendCopyAsync();
+
+    /// <summary>
+    ///     Synthesizes a copy. When <paramref name="useTerminalShortcut" /> is true,
+    ///     sends Ctrl+Shift+C (terminals map plain Ctrl+C to SIGINT); otherwise Ctrl+C.
+    /// </summary>
+    Task<bool> SendCopyAsync(bool useTerminalShortcut);
     Task<bool> SendEnterAsync();
 }
 
@@ -520,9 +1055,38 @@ internal interface ITextInsertionPlatform
 /// </summary>
 internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 {
+    private static readonly TimeSpan s_clipboardOperationTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan s_injectorProcessTimeout = TimeSpan.FromSeconds(60);
+
+    private static readonly HashSet<string> s_waylandTextSafeTargets =
+        new(StringComparer.OrdinalIgnoreCase) { "STRING", "UTF8_STRING", "TEXT" };
+
+    // X11 TARGETS listings always include protocol/negotiation targets that carry no
+    // content of their own alongside the plain-text encodings. None count as non-text content.
+    private static readonly HashSet<string> s_x11TextSafeTargets = new(
+        [
+            "TARGETS",
+            "MULTIPLE",
+            "SAVE_TARGETS",
+            "TIMESTAMP",
+            // ICCCM metadata and side-effect targets that Xt/Motif-based owners routinely
+            // advertise. Treating them as content would strand the clipboard on plain-text copies.
+            "LENGTH",
+            "DELETE",
+            "INSERT_SELECTION",
+            "INSERT_PROPERTY",
+            "STRING",
+            "UTF8_STRING",
+            "TEXT",
+            "COMPOUND_TEXT",
+        ],
+        StringComparer.OrdinalIgnoreCase
+    );
+
     // kept injected as a DI/test seam; not consumed in-tree
     // ReSharper disable once NotAccessedField.Local
     private readonly SystemCommandAvailabilityService? _commands;
+    private readonly IProcessRunner _ioRunner;
     private readonly bool _isWayland;
     private readonly ProcessRunnerWithEnv _processRunner;
 
@@ -534,21 +1098,19 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     private List<InputBackend> _chain;
     private HashSet<InputBackend> _disabled = [];
+    private bool _abortChainAfterAttempt;
 
     private LinuxCapabilitySnapshot _snapshot;
 
-    public LinuxTextInsertionPlatform()
-        : this(
-            new SystemCommandAvailabilityService(),
-            DefaultProcessRunnerWithEnv,
-            DefaultProcessRunnerWithStderr
-        )
+    public LinuxTextInsertionPlatform(
+        SystemCommandAvailabilityService commands,
+        IProcessRunner? processRunner = null
+    )
+        : this(commands.GetSnapshot(), processRunner ?? new ProcessRunner())
     {
-    }
-
-    public LinuxTextInsertionPlatform(SystemCommandAvailabilityService commands)
-        : this(commands, DefaultProcessRunnerWithEnv, DefaultProcessRunnerWithStderr)
-    {
+        _commands = commands;
+        // Rebuild chain in place whenever the snapshot refreshes (e.g. after ydotool setup).
+        commands.SnapshotChanged += OnSnapshotChanged;
     }
 
     internal LinuxTextInsertionPlatform(
@@ -595,6 +1157,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         >? processRunnerWithStderr = null
     )
     {
+        _ioRunner = new ProcessRunner();
         _snapshot = snapshot;
         _processRunner = processRunner;
         _processRunnerWithStderr = processRunnerWithStderr;
@@ -602,8 +1165,21 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         _chain = BuildChain(snapshot);
     }
 
+    internal LinuxTextInsertionPlatform(
+        LinuxCapabilitySnapshot snapshot,
+        IProcessRunner processRunner
+    )
+    {
+        _ioRunner = processRunner;
+        _snapshot = snapshot;
+        _processRunner = DefaultProcessRunnerWithEnv;
+        _processRunnerWithStderr = DefaultProcessRunnerWithStderr;
+        _isWayland = snapshot.SessionType == "Wayland";
+        _chain = BuildChain(snapshot);
+    }
+
     public bool IsClipboardSetAvailable =>
-        _isWayland ? IsCommandAvailable("wl-copy") : IsCommandAvailable("xclip");
+        UsesWaylandClipboard ? IsCommandAvailable("wl-copy") : IsCommandAvailable("xclip");
 
     public bool IsPasteAvailable => _chain.Count > 0;
 
@@ -622,26 +1198,44 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
 
+    public bool LastTypingDeliveredPartialText { get; private set; }
+
+    private bool UsesWaylandClipboard =>
+        _snapshot.ClipboardToolName == LinuxCapabilitySnapshot.WlClipboardToolName;
+
     public async Task<string?> TryGetClipboardTextAsync()
     {
-        var psi = _isWayland
-            ? new ProcessStartInfo("wl-paste", "--no-newline")
-            : new ProcessStartInfo("xclip", "-selection clipboard -o");
-        psi.RedirectStandardOutput = true;
-        psi.RedirectStandardError = true;
-        psi.UseShellExecute = false;
+        var useWaylandClipboard = UsesWaylandClipboard;
+        var fileName = useWaylandClipboard ? "wl-paste" : "xclip";
+        IReadOnlyList<string> args = useWaylandClipboard
+            ? ["--no-newline"]
+            : ["-selection", "clipboard", "-o"];
 
         try
         {
-            using var p = Process.Start(psi);
-            if (p is null)
+            var result = await _ioRunner.RunAsync(
+                fileName,
+                args,
+                timeout: s_clipboardOperationTimeout
+            ).ConfigureAwait(false);
+            if (result.TimedOut)
             {
+                Trace.WriteLine(
+                    $"[TextInsertionService] clipboard read timed out after {s_clipboardOperationTimeout.TotalSeconds:0} seconds and was killed."
+                );
                 return null;
             }
 
-            var output = await p.StandardOutput.ReadToEndAsync();
-            await p.WaitForExitAsync();
-            return p.ExitCode == 0 ? output : null;
+            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
+            if (!result.Started)
+            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] clipboard read failed: {result.StandardError}"
+                );
+                return null;
+            }
+
+            return result.Succeeded ? result.StandardOutput : null;
         }
         catch (Exception ex)
         {
@@ -650,27 +1244,97 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
     }
 
-    public async Task<bool> SetClipboardTextAsync(string text)
+    public async Task<bool> ClipboardHasNonTextFormatsAsync()
     {
-        var psi = _isWayland
-            ? new ProcessStartInfo("wl-copy")
-            : new ProcessStartInfo("xclip", "-selection clipboard");
-        psi.RedirectStandardInput = true;
-        psi.RedirectStandardError = true;
-        psi.UseShellExecute = false;
+        var useWaylandClipboard = UsesWaylandClipboard;
+        var fileName = useWaylandClipboard ? "wl-paste" : "xclip";
+        IReadOnlyList<string> args = useWaylandClipboard
+            ? ["--list-types"]
+            : ["-selection", "clipboard", "-o", "-t", "TARGETS"];
 
         try
         {
-            using var p = Process.Start(psi);
-            if (p is null)
+            var result = await _ioRunner.RunAsync(
+                fileName,
+                args,
+                timeout: s_clipboardOperationTimeout
+            ).ConfigureAwait(false);
+            if (result.TimedOut)
             {
+                Trace.WriteLine(
+                    $"[TextInsertionService] clipboard format listing timed out after {s_clipboardOperationTimeout.TotalSeconds:0} seconds and was killed."
+                );
                 return false;
             }
 
-            await p.StandardInput.WriteAsync(text);
-            p.StandardInput.Close();
-            await p.WaitForExitAsync();
-            return p.ExitCode == 0;
+            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
+            if (!result.Started)
+            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] clipboard format listing failed: {result.StandardError}"
+                );
+                return false;
+            }
+
+            return result.Succeeded
+                   && ListingHasNonTextFormats(result.StandardOutput, useWaylandClipboard);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[TextInsertionService] clipboard format listing failed: {ex.Message}"
+            );
+            return false;
+        }
+    }
+
+    internal static bool ListingHasNonTextFormats(string listing, bool isWayland)
+    {
+        var textSafe = isWayland ? s_waylandTextSafeTargets : s_x11TextSafeTargets;
+        return listing.Split('\n').Any(rawLine =>
+        {
+            var target = rawLine.Trim();
+            return target.Length != 0
+                   && !textSafe.Contains(target)
+                   && !target.StartsWith("text/plain", StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    public async Task<bool> SetClipboardTextAsync(string text)
+    {
+        var useWaylandClipboard = UsesWaylandClipboard;
+        var fileName = useWaylandClipboard ? "wl-copy" : "xclip";
+        IReadOnlyList<string> args = useWaylandClipboard ? [] : ["-selection", "clipboard"];
+
+        try
+        {
+            var result = await _ioRunner.RunAsync(
+                fileName,
+                args,
+                standardInput: text,
+                timeout: s_clipboardOperationTimeout,
+                // wl-copy/xclip leave a selection-serving daemon holding our stdout pipe; without
+                // this every clipboard write would block the full timeout (~5 s) draining it.
+                detachAfterExit: true
+            ).ConfigureAwait(false);
+            if (result.TimedOut)
+            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] clipboard write timed out after {s_clipboardOperationTimeout.TotalSeconds:0} seconds and was killed."
+                );
+                return false;
+            }
+
+            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
+            if (!result.Started)
+            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] clipboard write failed: {result.StandardError}"
+                );
+                return false;
+            }
+
+            return result.Succeeded;
         }
         catch (Exception ex)
         {
@@ -692,7 +1356,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             return null;
         }
 
-        var output = RunXdotoolSync("getactivewindow");
+        var output = RunXdotoolSync(["getactivewindow"]);
         return string.IsNullOrWhiteSpace(output) ? null : output;
     }
 
@@ -715,15 +1379,23 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                == 0;
     }
 
-    public async Task<bool> SendPasteAsync()
+    public async Task<bool> SendPasteAsync(bool useTerminalShortcut = false)
     {
         return await WalkChainAsync(async backend =>
             backend switch
             {
-                InputBackend.Wtype => await RunWtypeAsync("-M", "ctrl", "v", "-m", "ctrl"),
-                InputBackend.Xdotool => await SendModifiedKeyAsync("Control_L", "v"),
-                InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.PasteArgs()),
-                _ => false
+                InputBackend.Wtype => useTerminalShortcut
+                    ? await RunWtypeAsync("-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl")
+                    : await RunWtypeAsync("-M", "ctrl", "v", "-m", "ctrl"),
+                InputBackend.Xdotool => useTerminalShortcut
+                    ? await SendModifiedKeyAsync(["Control_L", "Shift_L"], "v")
+                    : await SendModifiedKeyAsync("Control_L", "v"),
+                InputBackend.Ydotool => await RunYdotoolAsync(
+                    useTerminalShortcut
+                        ? YdotoolBackend.TerminalPasteArgs()
+                        : YdotoolBackend.PasteArgs()
+                ),
+                _ => false,
             }
         );
     }
@@ -733,10 +1405,10 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         // Map newlines to Shift+Enter rather than a bare Return so that
         // dictated paragraph breaks insert a newline instead of submitting
         // in chat boxes (Slack / Discord / web chat / Claude's box), where
-        // Enter sends. Shift+Enter inserts a newline in effectively every
-        // app — editors, terminals, chat — so this is safe across all
-        // direct-typed targets. The clipboard-paste path is unaffected
-        // (pasted multiline text does not trigger a submit).
+        // Enter sends. The strategy layer must keep terminal multiline text
+        // out of this method: terminal protocols still deliver Shift+Return
+        // as Return, which can submit partial shell commands. The clipboard-
+        // paste path is unaffected (pasted multiline text does not submit).
         return WalkChainAsync(backend => TypeWithNewlinesAsync(backend, text));
     }
 
@@ -749,26 +1421,60 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             return await TypeSegmentAsync(backend, normalized);
         }
 
-        // A backend that fails mid-stream returns false and the chain retries
-        // the next backend from scratch — same all-or-nothing risk the single
-        // type() call already carried; partial duplication needs a rare
-        // mid-sequence failure (the first call fails fast on a dead backend).
         var segments = normalized.Split('\n');
+        var delivered = false;
         for (var i = 0; i < segments.Length; i++)
         {
-            if (i > 0 && !await SendShiftEnterAsync(backend))
+            if (i > 0)
             {
-                return false;
+                if (!await SendShiftEnterAsync(backend))
+                {
+                    return FailPartway(delivered);
+                }
+
+                // A landed Shift+Enter is itself delivery: it puts a newline in the
+                // target even when every segment so far was empty (leading/blank
+                // lines). Count it so a later failure fails closed instead of letting
+                // the chain retype from scratch and duplicate the newline.
+                delivered = true;
             }
 
             var segment = segments[i];
-            if (segment.Length > 0 && !await TypeSegmentAsync(backend, segment))
+            if (segment.Length == 0)
             {
-                return false;
+                continue;
             }
+
+            if (!await TypeSegmentAsync(backend, segment))
+            {
+                return FailPartway(delivered);
+            }
+
+            delivered = true;
         }
 
         return true;
+
+        // A failure after at least one segment already reached the target means
+        // retrying — with this backend or the next — would retype from the start
+        // and duplicate what's already there (or resubmit a partial shell command
+        // in a terminal). Stop the chain instead of risking a silent duplicate.
+        bool FailPartway(bool hasDelivered)
+        {
+            if (!hasDelivered)
+            {
+                return false;
+            }
+
+            _abortChainAfterAttempt = true;
+            LastTypingDeliveredPartialText = true;
+            if (LastFailureReason == InsertionFailureReason.None)
+            {
+                LastFailureReason = InsertionFailureReason.PartialTypingFailure;
+            }
+
+            return false;
+        }
     }
 
     private async Task<bool> TypeSegmentAsync(InputBackend backend, string segment)
@@ -782,7 +1488,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 null
             ) == 0,
             InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.TypeArgs(segment)),
-            _ => false
+            _ => false,
         };
     }
 
@@ -797,19 +1503,25 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 null
             ) == 0,
             InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.ShiftEnterArgs()),
-            _ => false
+            _ => false,
         };
     }
 
-    public async Task<bool> SendCopyAsync()
+    public async Task<bool> SendCopyAsync(bool useTerminalShortcut)
     {
         return await WalkChainAsync(async backend =>
             backend switch
             {
-                InputBackend.Wtype => await RunWtypeAsync("-M", "ctrl", "c", "-m", "ctrl"),
-                InputBackend.Xdotool => await SendModifiedKeyAsync("Control_L", "c"),
-                InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.CopyArgs()),
-                _ => false
+                InputBackend.Wtype => useTerminalShortcut
+                    ? await RunWtypeAsync("-M", "ctrl", "-M", "shift", "c", "-m", "shift", "-m", "ctrl")
+                    : await RunWtypeAsync("-M", "ctrl", "c", "-m", "ctrl"),
+                InputBackend.Xdotool => useTerminalShortcut
+                    ? await SendModifiedKeyAsync(["Control_L", "Shift_L"], "c")
+                    : await SendModifiedKeyAsync("Control_L", "c"),
+                InputBackend.Ydotool => await RunYdotoolAsync(
+                    useTerminalShortcut ? YdotoolBackend.TerminalCopyArgs() : YdotoolBackend.CopyArgs()
+                ),
+                _ => false,
             }
         );
     }
@@ -826,7 +1538,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                     null
                 ) == 0,
                 InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.EnterArgs()),
-                _ => false
+                _ => false,
             }
         );
     }
@@ -857,6 +1569,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         var chain = _chain;
         var disabled = _disabled;
         LastFailureReason = InsertionFailureReason.None;
+        _abortChainAfterAttempt = false;
+        LastTypingDeliveredPartialText = false;
         if (chain.Count == 0)
         {
             LastFailureReason = InsertionFailureReason.NoWaylandTypingTool;
@@ -876,6 +1590,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             if (await attempt(backend))
             {
                 return true;
+            }
+
+            if (_abortChainAfterAttempt)
+            {
+                break;
             }
         }
 
@@ -926,10 +1645,10 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 }
             }
 
-            if (snapshot.HasXdotool)
-            {
-                chain.Add(InputBackend.Xdotool);
-            }
+            // xdotool is never added on Wayland: XTEST reaches only XWayland
+            // surfaces and can exit 0 even when the native-Wayland target received
+            // nothing — and nothing here can tell whether the focused surface
+            // is XWayland.
         }
         else if (snapshot.HasXdotool)
         {
@@ -939,25 +1658,49 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         return chain;
     }
 
-    private async Task<bool> SendModifiedKeyAsync(string modifier, string key)
+    private Task<bool> SendModifiedKeyAsync(string modifier, string key)
     {
-        var keyDown =
-            await RunWithEnv("xdotool", ["keydown", "--clearmodifiers", modifier], null)
-            == 0;
+        return SendModifiedKeyAsync([modifier], key);
+    }
+
+    // Holds every modifier down (in order), taps the key, then releases the
+    // modifiers in reverse — so Ctrl+Shift+C etc. arrive as a real chord. Only
+    // modifiers that actually went down are released, so a failed keydown never
+    // leaves a stuck modifier.
+    private async Task<bool> SendModifiedKeyAsync(IReadOnlyList<string> modifiers, string key)
+    {
+        var pressed = new List<string>(modifiers.Count);
+        var allDown = true;
+        foreach (var modifier in modifiers)
+        {
+            if (await RunWithEnv("xdotool", ["keydown", "--clearmodifiers", modifier], null) == 0)
+            {
+                pressed.Add(modifier);
+            }
+            else
+            {
+                allDown = false;
+                break;
+            }
+        }
+
         var keySent = false;
         try
         {
-            if (keyDown)
+            if (allDown)
             {
                 keySent = await RunWithEnv("xdotool", ["key", key], null) == 0;
             }
         }
         finally
         {
-            await RunWithEnv("xdotool", ["keyup", modifier], null);
+            for (var i = pressed.Count - 1; i >= 0; i--)
+            {
+                await RunWithEnv("xdotool", ["keyup", pressed[i]], null);
+            }
         }
 
-        return keyDown && keySent;
+        return allDown && keySent;
     }
 
     private static bool IsCommandAvailable(string command)
@@ -965,39 +1708,15 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         return SystemCommandAvailabilityService.IsCommandAvailable(command);
     }
 
-    private static string? RunXdotoolSync(string arguments)
+    private string? RunXdotoolSync(IReadOnlyList<string> arguments)
     {
         try
         {
-            var psi = new ProcessStartInfo("xdotool", arguments)
-            {
-                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
-            };
-            using var p = Process.Start(psi);
-            if (p is null)
-            {
-                return null;
-            }
-
-            var stdoutTask = p.StandardOutput.ReadToEndAsync();
-            var stderrTask = p.StandardError.ReadToEndAsync();
-            if (!p.WaitForExit(1000))
-            {
-                try
-                {
-                    p.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
-                return null;
-            }
-
-            var output = stdoutTask.GetAwaiter().GetResult();
-            stderrTask.GetAwaiter().GetResult();
-            return p.ExitCode == 0 ? output.Trim() : null;
+            var result = _ioRunner.RunProbe(
+                new ProcessCommand("xdotool", arguments),
+                new ProcessOneShotOptions(Timeout: TimeSpan.FromSeconds(1))
+            );
+            return result.Succeeded ? result.StandardOutputText.Trim() : null;
         }
         catch (Exception ex)
         {
@@ -1083,7 +1802,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         return _processRunner(fileName, args, env);
     }
 
-    private static async Task<int> DefaultProcessRunnerWithEnv(
+    private async Task<int> DefaultProcessRunnerWithEnv(
         string fileName,
         IReadOnlyList<string> args,
         IReadOnlyDictionary<string, string>? env
@@ -1091,28 +1810,30 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     {
         try
         {
-            var psi = new ProcessStartInfo(fileName) { RedirectStandardError = true, UseShellExecute = false };
-            foreach (var arg in args)
+            var result = await _ioRunner.RunAsync(
+                fileName,
+                args,
+                environment: env,
+                timeout: s_injectorProcessTimeout
+            ).ConfigureAwait(false);
+            if (result.TimedOut)
             {
-                psi.ArgumentList.Add(arg);
-            }
-
-            if (env is not null)
-            {
-                foreach (var (key, value) in env)
-                {
-                    psi.Environment[key] = value;
-                }
-            }
-
-            using var p = Process.Start(psi);
-            if (p is null)
-            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] {fileName} timed out after {s_injectorProcessTimeout.TotalSeconds:0} seconds and was killed."
+                );
                 return -1;
             }
 
-            await p.WaitForExitAsync();
-            return p.ExitCode;
+            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
+            if (!result.Started)
+            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] {fileName} failed: {result.StandardError}"
+                );
+                return -1;
+            }
+
+            return result.ExitCode;
         }
         catch (Exception ex)
         {
@@ -1121,34 +1842,36 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
     }
 
-    private static async Task<(int exitCode, string stderr)> DefaultProcessRunnerWithStderr(
+    private async Task<(int exitCode, string stderr)> DefaultProcessRunnerWithStderr(
         string fileName,
         IReadOnlyList<string> args
     )
     {
         try
         {
-            var psi = new ProcessStartInfo(fileName)
+            var result = await _ioRunner.RunAsync(
+                fileName,
+                args,
+                timeout: s_injectorProcessTimeout
+            ).ConfigureAwait(false);
+            if (result.TimedOut)
             {
-                RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false
-            };
-            foreach (var arg in args)
-            {
-                psi.ArgumentList.Add(arg);
-            }
-
-            using var p = Process.Start(psi);
-            if (p is null)
-            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] {fileName} timed out after {s_injectorProcessTimeout.TotalSeconds:0} seconds and was killed."
+                );
                 return (-1, string.Empty);
             }
 
-            var stderrTask = p.StandardError.ReadToEndAsync();
-            var stdoutTask = p.StandardOutput.ReadToEndAsync();
-            await p.WaitForExitAsync();
-            var stderr = await stderrTask.ConfigureAwait(false);
-            await stdoutTask.ConfigureAwait(false);
-            return (p.ExitCode, stderr);
+            // ReSharper disable once InvertIf -- early-return guard clause; inverting would nest the happy path
+            if (!result.Started)
+            {
+                Trace.WriteLine(
+                    $"[TextInsertionService] {fileName} failed: {result.StandardError}"
+                );
+                return (-1, string.Empty);
+            }
+
+            return (result.ExitCode, result.StandardError);
         }
         catch (Exception ex)
         {
@@ -1163,7 +1886,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         None,
         Xdotool,
         Wtype,
-        Ydotool
+        Ydotool,
     }
 
     internal delegate Task<int> ProcessRunnerWithEnv(

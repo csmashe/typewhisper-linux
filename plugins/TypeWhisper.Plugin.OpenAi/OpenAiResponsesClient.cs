@@ -1,4 +1,3 @@
-using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK.Helpers;
@@ -48,6 +47,9 @@ internal sealed class OpenAiResponsesClient
         var body = new Dictionary<string, JsonElement>
         {
             ["model"] = OpenAiJson.Element(model),
+            ["max_output_tokens"] = OpenAiJson.Element(!string.IsNullOrWhiteSpace(reasoningEffort)
+                ? LlmOutputTokenBudget.CalculateWithReasoningReserve(systemPrompt, userText)
+                : LlmOutputTokenBudget.Calculate(systemPrompt, userText)),
             ["instructions"] = OpenAiJson.Element(instructions),
             ["input"] = OpenAiJson.Element(new[]
             {
@@ -56,9 +58,9 @@ internal sealed class OpenAiResponsesClient
                     role = "user",
                     content = new[]
                     {
-                        new { type = "input_text", text = userText }
-                    }
-                }
+                        new { type = "input_text", text = userText },
+                    },
+                },
             }),
             ["store"] = OpenAiJson.Element(false),
         };
@@ -73,6 +75,7 @@ internal sealed class OpenAiResponsesClient
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
+        LlmResponseTruncationGuard.ThrowIfResponsesApiIncomplete(root, "OpenAI");
 
         if (root.TryGetProperty("output_text", out var outputText)
             && outputText.ValueKind == JsonValueKind.String)
@@ -82,6 +85,7 @@ internal sealed class OpenAiResponsesClient
                 return text;
         }
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (root.TryGetProperty("output", out var output)
             && output.ValueKind == JsonValueKind.Array)
         {

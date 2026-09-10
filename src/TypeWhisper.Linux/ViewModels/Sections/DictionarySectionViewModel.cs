@@ -92,7 +92,7 @@ public partial class DictionarySectionViewModel : ObservableObject
         {
             1 => Loc.Instance["Dictionary.EmptyTitleTerms"],
             2 => Loc.Instance["Dictionary.EmptyTitleCorrections"],
-            _ => Loc.Instance["Dictionary.EmptyTitleAll"]
+            _ => Loc.Instance["Dictionary.EmptyTitleAll"],
         };
 
     public string EmptyStateSubtitle =>
@@ -100,7 +100,7 @@ public partial class DictionarySectionViewModel : ObservableObject
         {
             1 => Loc.Instance["Dictionary.EmptySubtitleTerms"],
             2 => Loc.Instance["Dictionary.EmptySubtitleCorrections"],
-            _ => Loc.Instance["Dictionary.EmptySubtitleAll"]
+            _ => Loc.Instance["Dictionary.EmptySubtitleAll"],
         };
 
     public bool IsNewTypeCorrection
@@ -192,7 +192,7 @@ public partial class DictionarySectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { VocabularyBoostingEnabled = value });
+        _settings.Update(current => current with { VocabularyBoostingEnabled = value });
     }
 
     partial void OnNewEntryTypeChanged(DictionaryEntryType value)
@@ -210,7 +210,7 @@ public partial class DictionarySectionViewModel : ObservableObject
             string stringValue when int.TryParse(stringValue, out var parsed) => parsed,
             // Leave the current tab unchanged for any other value; the
             // [ObservableProperty] setter's equality guard makes this a no-op.
-            _ => SelectedTab
+            _ => SelectedTab,
         };
     }
 
@@ -239,7 +239,7 @@ public partial class DictionarySectionViewModel : ObservableObject
                     : NewReplacement.Trim(),
                 CaseSensitive = CaseSensitive,
                 IsEnabled = true,
-                Priority = Math.Clamp(NewPriority, 0, 999)
+                Priority = Math.Clamp(NewPriority, 0, 999),
             }
         );
 
@@ -312,7 +312,7 @@ public partial class DictionarySectionViewModel : ObservableObject
     private void SaveEnabledPacks()
     {
         var enabledIds = Packs.Where(pack => pack.IsEnabled).Select(pack => pack.Pack.Id).ToArray();
-        _settings.Save(_settings.Current with { EnabledPackIds = enabledIds });
+        _settings.Update(current => current with { EnabledPackIds = enabledIds });
     }
 
     private void Refresh()
@@ -326,7 +326,7 @@ public partial class DictionarySectionViewModel : ObservableObject
             1 => entries.Where(entry => entry.EntryType == DictionaryEntryType.Term),
             2 => entries.Where(entry => entry.EntryType == DictionaryEntryType.Correction),
             3 => [],
-            _ => entries
+            _ => entries,
         };
 
         if (!string.IsNullOrWhiteSpace(SearchText))

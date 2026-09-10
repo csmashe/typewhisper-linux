@@ -1,6 +1,6 @@
-using System.Diagnostics;
 using Avalonia.Controls;
 using Avalonia.Input.Platform;
+using System.Diagnostics;
 using TypeWhisper.Linux.ViewModels.Sections;
 
 namespace TypeWhisper.Linux.Views.Sections;
@@ -15,11 +15,10 @@ public partial class ShortcutsSection : UserControl
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
-        // Re-probe keyboard access whenever this section is shown, so the no-access
-        // banner / compositor fallback reflect access granted since the (eagerly
-        // constructed) view model was built — e.g. via first-run onboarding.
+        // Re-probe keyboard access and managed desktop-integration state whenever this
+        // section is shown. Both checks are read-only; writes remain explicit actions.
         AttachedToVisualTree += (_, _) =>
-            (DataContext as ShortcutsSectionViewModel)?.RefreshKeyboardAccess();
+            (DataContext as ShortcutsSectionViewModel)?.RefreshSectionState();
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)

@@ -6,6 +6,9 @@ namespace TypeWhisper.Linux.Views;
 
 public partial class RecentTranscriptionsPaletteWindow : Window
 {
+    private readonly TaskCompletionSource _closed = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
     private readonly RecentTranscriptionsPaletteViewModel _viewModel;
 
     // Guards Close() against re-entry: Deactivated can fire again while the
@@ -29,6 +32,7 @@ public partial class RecentTranscriptionsPaletteWindow : Window
         DataContext = viewModel;
         Opened += OnOpened;
         Deactivated += OnDeactivated;
+        Closed += OnClosed;
         KeyDown += OnKeyDown;
     }
 
@@ -54,6 +58,11 @@ public partial class RecentTranscriptionsPaletteWindow : Window
         {
             RequestClose();
         }
+    }
+
+    private void OnClosed(object? sender, EventArgs e)
+    {
+        _closed.TrySetResult();
     }
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
@@ -102,15 +111,18 @@ public partial class RecentTranscriptionsPaletteWindow : Window
         }
     }
 
-    private void SelectAndClose(RecentTranscriptionPaletteItem? item)
+    // ReSharper disable once AsyncVoidMethod -- called from synchronous KeyDown/PointerReleased
+    // handlers; awaits _closed.Task so selection runs only after the window has closed.
+    private async void SelectAndClose(RecentTranscriptionPaletteItem? item)
     {
-        if (item is null)
+        if (item is null || _isSelecting)
         {
             return;
         }
 
         _isSelecting = true;
         RequestClose();
+        await _closed.Task;
         _viewModel.Select(item);
     }
 }

@@ -7,7 +7,7 @@ namespace TypeWhisper.Linux.Services;
 
 /// <summary>
 ///     Owns the lifetime of a single <see cref="IStreamingSession" />: connects via
-///     <see cref="ITranscriptionEnginePlugin.StartStreamingAsync" />, accepts live PCM
+///     <see cref="ITranscriptionEngineRole.StartStreamingAsync" />, accepts live PCM
 ///     audio frames from the audio tap, drives the session's sender on a single reader
 ///     task, and exposes the joined final-segment text on <see cref="FinalizeAsync" />.
 ///     Mirrors upstream Windows <c>StreamingHandler.cs</c>'s A9/A10 concurrency
@@ -34,20 +34,29 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     private const int FinalizeGracePollMs = 25;
 
     private readonly StringBuilder _finalSegments = new();
-    private readonly string? _language;
+    private readonly TimeSpan _finalizeSenderTimeout;
+    private readonly TimeSpan _finalizeSessionTimeout;
+    private readonly LanguageSelection _languageSelection;
 
     private readonly Lock _lock = new();
     private readonly Action<Exception> _onFault;
     private readonly Action<int, string> _onPartial;
     private readonly Queue<byte[]> _pending = new();
 
-    private readonly ITranscriptionEnginePlugin _plugin;
+    private readonly ITranscriptionEngineRole _plugin;
+    private readonly StreamingSampleRateConverter _sampleRateConverter = new(16000);
     private readonly int _sessionVersion;
     private Channel<byte[]>? _channel;
     private CancellationTokenSource? _cts;
     private bool _disposed;
 
     private bool _finalizing;
+
+    // Once a finalize deadline expires, DisposeAsync must not issue another
+    // session FinalizeAsync: a sender that ignored cancellation may still be
+    // inside SendAudioAsync, and concurrent send/finalize violates the
+    // streaming-session contract.
+    private bool _skipSessionFinalize;
 
     // TickCount64 of the last late final received; 0 if none yet. Used by the
     // FinalizeAsync grace-window debounce so multi-final EOF flushes are caught.
@@ -60,17 +69,23 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     private Action<StreamingTranscriptEvent>? _transcriptHandler;
 
     public StreamingTranscriptionCoordinator(
-        ITranscriptionEnginePlugin plugin,
-        string? language,
+        ITranscriptionEngineRole plugin,
+        LanguageSelection languageSelection,
         int sessionVersion,
         Action<int, string> onPartial,
-        Action<Exception> onFault)
+        Action<Exception> onFault,
+        TimeSpan? finalizeSenderTimeout = null,
+        TimeSpan? finalizeSessionTimeout = null)
     {
         _plugin = plugin;
-        _language = language;
+        _languageSelection = languageSelection;
         _sessionVersion = sessionVersion;
         _onPartial = onPartial;
         _onFault = onFault;
+        _finalizeSenderTimeout = finalizeSenderTimeout
+                                 ?? TimeSpan.FromMilliseconds(FinalizeSenderTimeoutMs);
+        _finalizeSessionTimeout = finalizeSessionTimeout
+                                  ?? TimeSpan.FromMilliseconds(FinalizeSessionTimeoutMs);
     }
 
     public bool Faulted { get; private set; }
@@ -125,6 +140,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             _open = false;
             _pending.Clear();
             _pendingBytes = 0;
+            _sampleRateConverter.Reset();
         }
 
         channel?.Writer.TryComplete();
@@ -133,20 +149,35 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             session.TranscriptReceived -= handler;
         }
 
-        // Drain the sender before tearing down the session — CleanupSessionAsync must not
-        // call FinalizeAsync/DisposeAsync while a plugin SendAudioAsync is still in flight.
-        if (senderTask is not null)
+        // Drain the sender before graceful cleanup; if it will not drain, skip
+        // session FinalizeAsync and dispose directly. When FinalizeAsync already
+        // timed out this sender, re-waiting would burn another full deadline
+        // before the batch fallback — short-circuit.
+        var skipSessionFinalize = Volatile.Read(ref _skipSessionFinalize);
+        var senderDrained = senderTask is null;
+        if (senderTask is not null && !skipSessionFinalize)
         {
-            try { await senderTask.WaitAsync(TimeSpan.FromMilliseconds(FinalizeSenderTimeoutMs)); }
+            try
+            {
+                await senderTask.WaitAsync(_finalizeSenderTimeout);
+                senderDrained = true;
+            }
             catch
             {
-                /* best effort — proceed with cleanup either way */
+                senderDrained = senderTask.IsCompleted;
             }
         }
 
         if (session is not null)
         {
-            await CleanupSessionAsync(session);
+            if (skipSessionFinalize || !senderDrained)
+            {
+                await DisposeSessionAsync(session, _finalizeSessionTimeout);
+            }
+            else
+            {
+                await CleanupSessionAsync(session, _finalizeSessionTimeout);
+            }
         }
 
         try { _cts?.Dispose(); }
@@ -161,12 +192,14 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
-            var lang = _language == "auto" ? null : _language;
-            var session = await _plugin.StartStreamingAsync(lang, _cts.Token);
+            var session = await _plugin.StartStreamingAsync(
+                _languageSelection,
+                _cts.Token
+            );
 
             var channel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(ChannelCapacity)
             {
-                FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true, SingleWriter = false
+                FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true, SingleWriter = false,
             });
 
             var handler = OnTranscriptReceived;
@@ -194,7 +227,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
             if (!published)
             {
-                await CleanupSessionAsync(session);
+                await CleanupSessionAsync(session, _finalizeSessionTimeout);
             }
         }
         catch (OperationCanceledException) when (_disposed || _finalizing || ct.IsCancellationRequested)
@@ -215,36 +248,22 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             return;
         }
 
-        var sixteen = sampleRate != 16000
-            ? AudioRecordingService.ResampleToSampleRate(samples, sampleRate, 16000)
-            : samples;
-
-        var pcm16 = new byte[sixteen.Length * 2];
-        for (var i = 0; i < sixteen.Length; i++)
-        {
-            var s = AudioRecordingService.ToPcm16(sixteen[i]);
-            pcm16[i * 2] = (byte)(s & 0xFF);
-            pcm16[i * 2 + 1] = (byte)((s >> 8) & 0xFF);
-        }
-
-        Channel<byte[]>? channel;
         lock (_lock)
         {
-            channel = _open ? _channel : null;
-            if (channel is null)
+            if (_disposed || _finalizing || Faulted)
             {
-                _pending.Enqueue(pcm16);
-                _pendingBytes += pcm16.Length;
-                while (_pendingBytes > MaxPendingBytes && _pending.TryDequeue(out var dropped))
-                {
-                    _pendingBytes -= dropped.Length;
-                }
-
                 return;
             }
-        }
 
-        channel.Writer.TryWrite(pcm16);
+            if (sampleRate is 16000 or <= 0)
+            {
+                EnqueueSamplesUnderLock(_sampleRateConverter.Complete());
+                EnqueueSamplesUnderLock(samples);
+                return;
+            }
+
+            EnqueueSamplesUnderLock(_sampleRateConverter.Append(samples, sampleRate));
+        }
     }
 
     public async Task<string> FinalizeAsync(CancellationToken ct)
@@ -262,6 +281,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             // Set _finalizing under lock so StartAsync's publish guard sees it atomically.
             // Any session that connects after this will be torn down by StartAsync, not published.
             _finalizing = true;
+            EnqueueSamplesUnderLock(_sampleRateConverter.Complete());
             channel = _channel;
             session = _session;
             senderTask = _senderTask;
@@ -286,12 +306,22 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
         channel?.Writer.TryComplete();
 
         // ct is the soft "give up sooner" signal; timeouts are hard upper bounds for misbehaving plugins.
+        var senderDrainTimedOut = false;
         if (senderTask is not null)
         {
-            try { await senderTask.WaitAsync(TimeSpan.FromMilliseconds(FinalizeSenderTimeoutMs), ct); }
-            catch
+            try
             {
-                /* best effort */
+                await senderTask.WaitAsync(_finalizeSenderTimeout, ct);
+            }
+            catch (TimeoutException)
+            {
+                senderDrainTimedOut = true;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Caller abandoned the dictation — keep the non-fault result
+                // contract, but do not finalize while the sender may be in flight.
+                return SnapshotFinalSegments();
             }
         }
 
@@ -302,16 +332,121 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             return SnapshotFinalSegments();
         }
 
+        // ReSharper disable once ConvertIfStatementToSwitchStatement
+        // These are independent short-circuit guards over different variables
+        // (Faulted, drain-timeout+cancel, drain-timeout), not one switchable expression.
+        if (senderDrainTimedOut && ct.IsCancellationRequested)
+        {
+            return SnapshotFinalSegments();
+        }
+
+        if (senderDrainTimedOut)
+        {
+            Volatile.Write(ref _skipSessionFinalize, true);
+            Trace.WriteLine(
+                $"[StreamingCoordinator] Sender-drain deadline exhausted after "
+                + $"{_finalizeSenderTimeout.TotalMilliseconds:0} ms; streaming result is ineligible."
+            );
+            throw new TimeoutException(
+                $"Streaming sender-drain deadline exhausted after "
+                + $"{_finalizeSenderTimeout.TotalMilliseconds:0} ms."
+            );
+        }
+
         Exception? sessionFinalizeFault = null;
+        TimeoutException? sessionFinalizeTimeout = null;
+
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement
+        // Kept beside the sessionFinalizeFault/sessionFinalizeTimeout state it mutates,
+        // ahead of the finalize block that calls it; moving it would split the group.
+        void RecordSessionFinalizeTimeout(Exception? innerException = null)
+        {
+            Volatile.Write(ref _skipSessionFinalize, true);
+            sessionFinalizeTimeout = new TimeoutException(
+                $"Streaming session-finalize deadline exhausted after "
+                + $"{_finalizeSessionTimeout.TotalMilliseconds:0} ms.",
+                innerException
+            );
+            Trace.WriteLine(
+                $"[StreamingCoordinator] Session-finalize deadline exhausted after "
+                + $"{_finalizeSessionTimeout.TotalMilliseconds:0} ms; "
+                + "streaming result is ineligible."
+            );
+        }
+
         if (session is not null)
         {
-            using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            sessionCts.CancelAfter(FinalizeSessionTimeoutMs);
-            try { await session.FinalizeAsync(sessionCts.Token); }
+            var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            Task? sessionFinalizeTask = null;
+            try
+            {
+                // Call inside the try so a plugin that throws synchronously from
+                // FinalizeAsync is still captured as a provider fault below.
+                sessionFinalizeTask = session.FinalizeAsync(sessionCts.Token);
+
+                // Hard deadline: even a plugin that ignores cancellation cannot
+                // block teardown. deadlineTask is the SOLE deadline source and
+                // drives sessionCts — a separate CancelAfter timer could cancel
+                // (and complete) a cancellation-honoring plugin an instant before
+                // deadlineTask elapses, making it win the race indistinguishably
+                // from on-time success. With one source the WhenAny winner is
+                // authoritative.
+                var deadlineTask = Task.Delay(_finalizeSessionTimeout, CancellationToken.None);
+                var completedTask = await Task.WhenAny(sessionFinalizeTask, deadlineTask)
+                    .WaitAsync(ct);
+
+                if (completedTask == deadlineTask)
+                {
+                    try { await sessionCts.CancelAsync(); }
+                    catch
+                    {
+                        /* best effort */
+                    }
+
+                    ObserveLateFault(sessionFinalizeTask);
+
+                    if (ct.IsCancellationRequested)
+                    {
+                        // Caller abandonment stays non-fault, but the abandoned
+                        // finalize means disposal must not issue a second
+                        // FinalizeAsync on this session.
+                        Volatile.Write(ref _skipSessionFinalize, true);
+                        Trace.WriteLine(
+                            "[StreamingCoordinator] FinalizeAsync session canceled by caller."
+                        );
+                    }
+                    else
+                    {
+                        RecordSessionFinalizeTimeout();
+                    }
+                }
+                else
+                {
+                    // Finalize won the race — await it so a provider-thrown fault
+                    // stays classified as a provider fault.
+                    await sessionFinalizeTask;
+                }
+            }
+            catch (OperationCanceledException ex) when (ct.IsCancellationRequested)
+            {
+                // Caller abandonment via .WaitAsync(ct) while the plugin ignores its
+                // token: the finalize task is still running, so mark it abandoned
+                // and observe any late fault.
+                Volatile.Write(ref _skipSessionFinalize, true);
+                ObserveLateFault(sessionFinalizeTask);
+                Trace.WriteLine(
+                    $"[StreamingCoordinator] FinalizeAsync session canceled: {ex.Message}"
+                );
+            }
             catch (OperationCanceledException ex)
             {
-                // Bounded-wait timeout or caller cancel — not a session fault.
-                Trace.WriteLine($"[StreamingCoordinator] FinalizeAsync session canceled: {ex.Message}");
+                // Deadline cancellation is handled on the deadline-win branch; an
+                // OCE here is the provider surfacing its own cancellation — a
+                // provider fault.
+                Trace.WriteLine(
+                    $"[StreamingCoordinator] FinalizeAsync session fault: {ex.Message}"
+                );
+                sessionFinalizeFault = ex;
             }
             catch (Exception ex)
             {
@@ -320,6 +455,27 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
                 // batch fallback. Without this, a partial transcript is silently treated as success.
                 Trace.WriteLine($"[StreamingCoordinator] FinalizeAsync session fault: {ex.Message}");
                 sessionFinalizeFault = ex;
+            }
+            finally
+            {
+                // Both abandonment paths (deadline win, caller cancel) leave the finalize task
+                // running with this token. Disposing now would turn its next Register /
+                // Task.Delay(token) into an ObjectDisposedException instead of the cancellation we
+                // just requested, so defer until it settles.
+                if (sessionFinalizeTask is null || sessionFinalizeTask.IsCompleted)
+                {
+                    sessionCts.Dispose();
+                }
+                else
+                {
+                    _ = sessionFinalizeTask.ContinueWith(
+                        static (_, state) => ((CancellationTokenSource)state!).Dispose(),
+                        sessionCts,
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default
+                    );
+                }
             }
         }
 
@@ -337,6 +493,11 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
             try { await Task.Delay(FinalizeGracePollMs, ct); }
             catch (OperationCanceledException) { break; }
+        }
+
+        if (sessionFinalizeTimeout is not null)
+        {
+            throw sessionFinalizeTimeout;
         }
 
         if (sessionFinalizeFault is not null)
@@ -372,14 +533,19 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
                 await session.SendAudioAsync(chunk, ct);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             // Normal teardown — Finalize or Dispose closed the writer.
         }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            // Teardown/caller cancellation wins a race with a dependency fault.
+        }
         catch (Exception ex)
         {
-            // Plugin SendAudioAsync is external and can throw arbitrary types;
-            // route all non-cancel failures through HandleFault so batch fallback fires.
+            // Plugin SendAudioAsync is external and can throw arbitrary types,
+            // including an OCE while the sender token is still live; route every
+            // dependency fault through HandleFault so batch fallback fires.
             HandleFault(ex);
         }
     }
@@ -446,6 +612,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             _transcriptHandler = null;
             _pending.Clear();
             _pendingBytes = 0;
+            _sampleRateConverter.Reset();
             _open = false;
         }
 
@@ -465,20 +632,64 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
         if (session is not null)
         {
-            _ = CleanupSessionAsync(session);
+            _ = CleanupSessionAsync(session, _finalizeSessionTimeout);
         }
     }
 
-    private static async Task CleanupSessionAsync(IStreamingSession session)
+    private static async Task CleanupSessionAsync(
+        IStreamingSession session,
+        TimeSpan finalizeTimeout)
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(FinalizeSessionTimeoutMs));
+        using var cts = new CancellationTokenSource(finalizeTimeout);
         try { await session.FinalizeAsync(cts.Token); }
         catch
         {
             /* best effort */
         }
 
-        try { await session.DisposeAsync(); }
+        await DisposeSessionAsync(session, finalizeTimeout);
+    }
+
+    // Fault-only continuation for an abandoned task so a late exception cannot
+    // surface as an unobserved task exception.
+    private static void ObserveLateFault(Task? task) =>
+        _ = task?.ContinueWith(
+            static t => _ = t.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
+
+    private static async Task DisposeSessionAsync(
+        IStreamingSession session,
+        TimeSpan disposeTimeout)
+    {
+        Task disposeTask;
+        try
+        {
+            disposeTask = session.DisposeAsync().AsTask();
+        }
+        catch
+        {
+            /* synchronous throw from DisposeAsync — nothing left to await */
+            return;
+        }
+
+        try
+        {
+            // Bound disposal too: a provider blocked in DisposeAsync (or still
+            // ignoring cancellation in SendAudioAsync) must not stall the
+            // complete-WAV batch fallback the caller runs next.
+            await disposeTask.WaitAsync(disposeTimeout);
+        }
+        catch (TimeoutException)
+        {
+            Trace.WriteLine(
+                $"[StreamingCoordinator] Session DisposeAsync exceeded "
+                + $"{disposeTimeout.TotalMilliseconds:0} ms; detaching from teardown."
+            );
+            ObserveLateFault(disposeTask);
+        }
         catch
         {
             /* best effort */
@@ -505,6 +716,36 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             {
                 Trace.WriteLine("[StreamingCoordinator] FlushPending TryWrite returned false");
             }
+        }
+    }
+
+    private void EnqueueSamplesUnderLock(float[] samples)
+    {
+        if (samples.Length == 0)
+        {
+            return;
+        }
+
+        var pcm16 = new byte[samples.Length * 2];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var sample = AudioRecordingService.ToPcm16(samples[i]);
+            pcm16[i * 2] = (byte)(sample & 0xFF);
+            pcm16[i * 2 + 1] = (byte)((sample >> 8) & 0xFF);
+        }
+
+        var channel = _open ? _channel : null;
+        if (channel is not null)
+        {
+            channel.Writer.TryWrite(pcm16);
+            return;
+        }
+
+        _pending.Enqueue(pcm16);
+        _pendingBytes += pcm16.Length;
+        while (_pendingBytes > MaxPendingBytes && _pending.TryDequeue(out var dropped))
+        {
+            _pendingBytes -= dropped.Length;
         }
     }
 }

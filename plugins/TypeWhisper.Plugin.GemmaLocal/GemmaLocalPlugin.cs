@@ -1,17 +1,23 @@
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// ReSharper disable UnusedType.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
+using System.Collections.Immutable;
 using System.Diagnostics;
-using System.IO;
-using System.Net.Http;
 using LLama;
 using LLama.Common;
 using LLama.Sampling;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.GemmaLocal;
 
 public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
-    private static readonly IReadOnlyList<GemmaModelDefinition> Models =
+    private static readonly IReadOnlyList<GemmaModelDefinition> s_models =
     [
         new(
             "gemma4-e2b-it-q4",
@@ -44,47 +50,64 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromHours(2) };
     private readonly SemaphoreSlim _inferenceLock = new(1, 1);
+    private readonly Action<string, string?> _modelRoutingGuard;
+
+    // Guards SelectedModelId only: _inferenceLock is held across the multi-second native load, so
+    // it can't also serialize selection without freezing the settings UI. Never held across await.
+    private readonly Lock _selectionLock = new();
     private IPluginHostServices? _host;
-    private string? _selectedModelId;
     private LLamaWeights? _weights;
     private LLamaContext? _context;
-    private string? _loadedModelId;
     private bool _streamResponses = true;
     private CancellationTokenSource? _startupCts;
     private Task? _startupTask;
 
     public string PluginId => "com.typewhisper.gemma-local";
     public string PluginName => "Gemma 4 (Local)";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
+
+    public GemmaLocalPlugin()
+        : this(null, EnsureRequestedModelIsActive) { }
+
+    internal GemmaLocalPlugin(
+        string? loadedModelId,
+        Action<string, string?> modelRoutingGuard
+    )
+    {
+        LoadedModelId = loadedModelId;
+        _modelRoutingGuard =
+            modelRoutingGuard ?? throw new ArgumentNullException(nameof(modelRoutingGuard));
+    }
 
     public Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _selectedModelId = host.GetSetting<string>("selectedModel");
+        SelectedModelId = host.GetSetting<string>("selectedModel");
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
-        host.Log(PluginLogLevel.Info, $"Activated (model={_selectedModelId})");
+        host.Log(PluginLogLevel.Info, $"Activated (model={SelectedModelId})");
 
-        // A persisted ID may name a model that no longer exists in Models
+        // A persisted ID may name a model that no longer exists in s_models
         // (e.g. after a release that drops a quant). IsModelDownloaded calls
         // GetModelDefinition, which throws — that would surface as a plugin
         // activation failure. Clear the stale setting instead.
-        if (!string.IsNullOrEmpty(_selectedModelId)
-            && Models.All(m => m.Id != _selectedModelId))
+        if (!string.IsNullOrEmpty(SelectedModelId)
+            && s_models.All(m => m.Id != SelectedModelId))
         {
             host.Log(
                 PluginLogLevel.Warning,
-                $"Persisted model '{_selectedModelId}' is no longer available; clearing selection."
+                $"Persisted model '{SelectedModelId}' is no longer available; clearing selection."
             );
-            _selectedModelId = null;
+            SelectedModelId = null;
             host.SetSetting("selectedModel", string.Empty);
         }
 
         // Auto-load previously selected model in background (don't block app startup).
         // Track the task + CTS so DeactivateAsync can cancel and await it instead of
         // letting it race back to life and recreate _weights/_context after teardown.
-        if (!string.IsNullOrEmpty(_selectedModelId) && IsModelDownloaded(_selectedModelId))
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
+        if (!string.IsNullOrEmpty(SelectedModelId) && IsModelDownloaded(SelectedModelId))
         {
-            var modelId = _selectedModelId;
+            var modelId = SelectedModelId;
             _startupCts = new CancellationTokenSource();
             var startupCt = _startupCts.Token;
             _startupTask = Task.Run(async () =>
@@ -121,6 +144,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         {
             try
             {
+                // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in these teardown paths; CancelAsync() only defers callbacks, with no benefit here.
                 startupCts.Cancel();
             }
             catch (ObjectDisposedException) { }
@@ -143,6 +167,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         // Acquire _inferenceLock so we can't dispose _context/_weights while
         // ProcessAsync is mid-inference. Mirrors the unload path in
         // SetSettingValueAsync and LoadModelAsync.
+        // ReSharper disable once MethodSupportsCancellation -- short teardown/unload path; adding a cancellation point offers no real value.
         await _inferenceLock.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -161,7 +186,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                 Key: "selectedModel",
                 Label: Loc.L("Settings.Model"),
                 Description: Loc.L("Settings.ModelDescription"),
-                Options: Models
+                Options: s_models
                     .Select(m => new PluginSettingOption(
                         m.Id,
                         $"{m.DisplayName} ({m.SizeDescription})"
@@ -180,7 +205,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         Task.FromResult(
             key switch
             {
-                "selectedModel" => _selectedModelId,
+                "selectedModel" => SelectedModelId,
                 LlmStreamingSettings.StreamResponsesSettingKey => _streamResponses ? "true" : "false",
                 _ => null,
             }
@@ -211,7 +236,11 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                _selectedModelId = null;
+                lock (_selectionLock)
+                {
+                    SelectedModelId = null;
+                }
+
                 _host?.SetSetting("selectedModel", string.Empty);
                 UnloadModel();
             }
@@ -229,13 +258,13 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
     public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_selectedModelId))
+        if (string.IsNullOrWhiteSpace(SelectedModelId))
             return Task.FromResult<PluginSettingsValidationResult?>(
                 new PluginSettingsValidationResult(false, Loc.L("Settings.SelectModel"))
             );
 
         return Task.FromResult<PluginSettingsValidationResult?>(
-            _loadedModelId == _selectedModelId
+            LoadedModelId == SelectedModelId
                 ? new PluginSettingsValidationResult(true, Loc.L("Settings.ModelReady"))
                 : new PluginSettingsValidationResult(false, Loc.L("Settings.ModelSelectedNotLoaded"))
         );
@@ -253,6 +282,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             var progress = new Progress<double>(p =>
             {
                 var pct = (int)(p * 100);
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (pct != lastPct && pct % 5 == 0)
                 {
                     lastPct = pct;
@@ -267,17 +297,10 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     }
 
     public string ProviderName => "Gemma 4 (Local)";
-    public bool IsAvailable => _loadedModelId is not null;
+    public bool IsAvailable => LoadedModelId is not null;
 
-    public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
-        Models
-            .Select(m => new PluginModelInfo(m.Id, m.DisplayName)
-            {
-                SizeDescription = m.SizeDescription,
-                EstimatedSizeMB = m.EstimatedSizeMB,
-                IsRecommended = m.IsRecommended,
-            })
-            .ToList();
+    public IReadOnlyList<PluginModelInfo> SupportedModels =>
+        GetSupportedModels(LoadedModelId);
 
     public async Task<string> ProcessAsync(
         string systemPrompt,
@@ -289,27 +312,35 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         await _inferenceLock.WaitAsync(ct);
         try
         {
+            _modelRoutingGuard(model, LoadedModelId);
+
             if (_context is null || _weights is null)
                 throw new InvalidOperationException(
                     "No model loaded. Download and load a model first."
                 );
 
             var prompt = FormatGemmaPrompt(systemPrompt, userText);
+            var promptTokenCount = _context.Tokenize(prompt, addBos: true, special: true).Length;
 
             var executor = new StatelessExecutor(_weights, _context.Params);
             var inferenceParams = new InferenceParams
             {
-                MaxTokens = 2048,
+                MaxTokens = LlmOutputTokenBudget.FitToContext(
+                    LlmOutputTokenBudget.Calculate(systemPrompt, userText),
+                    promptTokenCount, checked((int)_context.ContextSize), ProviderName),
                 AntiPrompts = ["<end_of_turn>", "<eos>"],
                 SamplingPipeline = new DefaultSamplingPipeline { Temperature = 0.3f },
             };
 
             var result = new System.Text.StringBuilder();
+            var generatedPieces = 0;
             await foreach (var token in executor.InferAsync(prompt, inferenceParams, ct))
             {
+                generatedPieces++;
                 result.Append(token);
             }
 
+            ThrowIfTokenBudgetExhausted(generatedPieces, inferenceParams.MaxTokens);
             return result.ToString().Trim();
         }
         finally
@@ -334,17 +365,22 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         await _inferenceLock.WaitAsync(ct);
         try
         {
+            _modelRoutingGuard(model, LoadedModelId);
+
             if (_context is null || _weights is null)
                 throw new InvalidOperationException(
                     "No model loaded. Download and load a model first."
                 );
 
             var prompt = FormatGemmaPrompt(systemPrompt, userText);
+            var promptTokenCount = _context.Tokenize(prompt, addBos: true, special: true).Length;
 
             var executor = new StatelessExecutor(_weights, _context.Params);
             var inferenceParams = new InferenceParams
             {
-                MaxTokens = 2048,
+                MaxTokens = LlmOutputTokenBudget.FitToContext(
+                    LlmOutputTokenBudget.Calculate(systemPrompt, userText),
+                    promptTokenCount, checked((int)_context.ContextSize), ProviderName),
                 AntiPrompts = ["<end_of_turn>", "<eos>"],
                 SamplingPipeline = new DefaultSamplingPipeline { Temperature = 0.3f },
             };
@@ -353,10 +389,14 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             // through so the overlay renders the local model's output live. (The
             // batch sibling trims the accumulated result; the streamed text is not
             // trimmed — Gemma's model-turn output is normally clean.)
+            var generatedPieces = 0;
             await foreach (var token in executor.InferAsync(prompt, inferenceParams, ct))
             {
+                generatedPieces++;
                 yield return token;
             }
+
+            ThrowIfTokenBudgetExhausted(generatedPieces, inferenceParams.MaxTokens);
         }
         finally
         {
@@ -364,8 +404,26 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         }
     }
 
-    internal string? SelectedModelId => _selectedModelId;
-    internal string? LoadedModelId => _loadedModelId;
+    // The executor yields one piece per generated token and ends identically on an
+    // anti-prompt or on the cap, so hitting the cap is the only truncation signal.
+    internal static bool IsTokenBudgetExhausted(int generatedPieces, int maxTokens) =>
+        maxTokens > 0 && generatedPieces >= maxTokens;
+
+    private static void ThrowIfTokenBudgetExhausted(int generatedPieces, int maxTokens)
+    {
+        if (IsTokenBudgetExhausted(generatedPieces, maxTokens))
+        {
+            throw new PluginRequestException(
+                "Gemma 4 (Local) stopped the response at its output token limit.",
+                PluginRequestFailureKind.OutputTruncated,
+                isTransient: false);
+        }
+    }
+
+    internal string? SelectedModelId { get; private set; }
+
+    internal string? LoadedModelId { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -375,12 +433,68 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
-    internal IReadOnlyList<GemmaModelDefinition> ModelDefinitions => Models;
+    // ReSharper disable once ConvertToAutoPropertyWhenPossible -- expression-bodied accessor returning the shared static list; not an auto-property candidate.
+    internal static IReadOnlyList<GemmaModelDefinition> ModelDefinitions => s_models;
+
+    internal static IReadOnlyList<PluginModelInfo> GetSupportedModels(string? loadedModelId)
+    {
+        if (loadedModelId is null)
+            return ImmutableArray<PluginModelInfo>.Empty;
+
+        var model = GetModelDefinition(loadedModelId);
+        // ReSharper disable once UseCollectionExpression -- a collection expression targets IReadOnlyList and lowers to a ReadOnlySingleElementList; ImmutableArray.Create keeps the concrete ImmutableArray return type both branches (and the tests) rely on.
+        return ImmutableArray.Create(
+            new PluginModelInfo(model.Id, model.DisplayName)
+            {
+                SizeDescription = model.SizeDescription,
+                EstimatedSizeMB = model.EstimatedSizeMB,
+                IsRecommended = model.IsRecommended,
+            }
+        );
+    }
+
+    internal static void EnsureRequestedModelIsActive(
+        string requestedModelId,
+        string? activeModelId
+    )
+    {
+        if (
+            s_models.All(m =>
+                !string.Equals(m.Id, requestedModelId, StringComparison.Ordinal)
+            )
+        )
+        {
+            throw new InvalidOperationException(
+                $"Requested Gemma model '{requestedModelId}' is unknown; "
+                    + $"the active Gemma model is '{activeModelId ?? "(none)"}'."
+            );
+        }
+
+        if (activeModelId is null)
+        {
+            throw new InvalidOperationException(
+                $"Requested Gemma model '{requestedModelId}' cannot run because "
+                    + "the active Gemma model is '(none)'."
+            );
+        }
+
+        if (!string.Equals(requestedModelId, activeModelId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Requested Gemma model '{requestedModelId}' does not match "
+                    + $"the active Gemma model '{activeModelId}'."
+            );
+        }
+    }
 
     internal void SelectModel(string modelId)
     {
         _ = GetModelDefinition(modelId);
-        _selectedModelId = modelId;
+        lock (_selectionLock)
+        {
+            SelectedModelId = modelId;
+        }
+
         _host?.SetSetting("selectedModel", modelId);
         _host?.NotifyCapabilitiesChanged();
     }
@@ -456,6 +570,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                     bytesRead += read;
 
                     var now = DateTime.UtcNow;
+                    // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                     if ((now - lastReport).TotalMilliseconds > 250)
                     {
                         progress?.Report((double)bytesRead / totalBytes);
@@ -504,13 +619,13 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                 // The lock covers the full unload-then-load window so callers can't
                 // observe a torn state (e.g. _weights set but _context still old).
                 await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
-                var loaded = false;
+                bool loaded;
                 try
                 {
                     // If the user has switched models OR cleared the selection while we
                     // were queued behind the lock, abort: a late finish here would
                     // overwrite the newer state and load a model the user no longer wants.
-                    if (_selectedModelId != modelId)
+                    if (SelectedModelId != modelId)
                         return;
 
                     UnloadModel();
@@ -544,16 +659,18 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                     // so the user can switch selections while we're loading. If
                     // that happened, drop what we just loaded instead of letting
                     // the late finish silently roll back their newer choice.
-                    if (_selectedModelId != modelId)
+                    lock (_selectionLock)
+                    {
+                        loaded = SelectedModelId == modelId;
+                        if (loaded)
+                            LoadedModelId = modelId;
+                    }
+
+                    if (!loaded)
                     {
                         UnloadModel();
                         return;
                     }
-
-                    _loadedModelId = modelId;
-                    _selectedModelId = modelId;
-                    _host?.SetSetting("selectedModel", modelId);
-                    loaded = true;
                 }
                 finally
                 {
@@ -576,12 +693,12 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         _context = null;
         _weights?.Dispose();
         _weights = null;
-        _loadedModelId = null;
+        LoadedModelId = null;
     }
 
     // Helpers
 
-    private static string FormatGemmaPrompt(string systemPrompt, string userText)
+    internal static string FormatGemmaPrompt(string systemPrompt, string userText)
     {
         // Gemma instruction-tuned chat format with proper system turn
         var sb = new System.Text.StringBuilder();
@@ -591,7 +708,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             sb.Append("<start_of_turn>system\n");
             sb.Append(systemPrompt).Append('\n');
             sb.Append(
-                "IMPORTANT: Respond ONLY in the same language as the user's input. Output ONLY the requested result, nothing else. No explanations, no extra text."
+                "Output ONLY the requested result, nothing else. No explanations, no extra text."
             );
             sb.Append("<end_of_turn>\n");
         }
@@ -610,7 +727,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         Path.Join(GetModelDirectory(modelId), fileName);
 
     private static GemmaModelDefinition GetModelDefinition(string modelId) =>
-        Models.FirstOrDefault(m => m.Id == modelId)
+        s_models.FirstOrDefault(m => m.Id == modelId)
         ?? throw new ArgumentException($"Unknown model: {modelId}");
 
     private void Log(PluginLogLevel level, string message)
@@ -644,6 +761,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
         // Mirror DeactivateAsync: serialize teardown with any in-flight
         // ProcessAsync so we don't dispose _context/_weights mid-inference.
+        // ReSharper disable once MethodSupportsCancellation -- short teardown/unload path; adding a cancellation point offers no real value.
         _inferenceLock.Wait();
         try
         {
@@ -663,6 +781,7 @@ internal sealed record GemmaModelDefinition(
     string Id,
     string DisplayName,
     string SizeDescription,
+    // ReSharper disable once InconsistentNaming -- MB (megabyte) is the correct unit; the suggested Mb means megabit.
     int EstimatedSizeMB,
     bool IsRecommended,
     string DownloadUrl,

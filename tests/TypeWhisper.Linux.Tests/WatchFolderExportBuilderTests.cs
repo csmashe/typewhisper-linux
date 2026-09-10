@@ -43,7 +43,7 @@ public sealed class WatchFolderExportBuilderTests
     {
         var result = Result("caption") with
         {
-            Segments = [new TranscriptionSegment("caption", 1.2, 3.4)]
+            Segments = [new TranscriptionSegment("caption", 1.2, 3.4)],
         };
 
         var srt = WatchFolderExportBuilder.Build(

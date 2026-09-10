@@ -2,22 +2,46 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class PromptsSectionViewModel : ObservableObject
 {
+    private readonly IErrorLogService? _errorLog;
     private readonly PluginManager _pluginManager;
+    private readonly IProfileService _profiles;
     private readonly IPromptActionService _prompts;
     private readonly ISettingsService _settings;
+    private readonly HotkeyService _hotkeys;
+
+    [ObservableProperty]
+    private string _errorText = "";
+
+    // Set while hydrating the spoken-command properties from saved settings so the
+    // generated On<Property>Changed hooks don't persist the value straight back.
+    private bool _hydratingCommandSettings;
+
+    [ObservableProperty]
+    private bool _commandModeEnabled;
+
+    [ObservableProperty]
+    private string _commandKeyphrase = AppSettings.DefaultCommandKeyphrase;
 
     [ObservableProperty]
     private string? _editHotkeyKey;
+
+    [ObservableProperty]
+    private string? _hotkeyValidationMessage;
 
     [ObservableProperty]
     private string _editIcon = "\u2728";
@@ -55,20 +79,32 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     public PromptsSectionViewModel(
         IPromptActionService prompts,
+        IProfileService profiles,
+        HotkeyService hotkeys,
         PluginManager pluginManager,
-        ISettingsService settings
+        ISettingsService settings,
+        IErrorLogService? errorLog = null
     )
     {
         _prompts = prompts;
+        _profiles = profiles;
+        _hotkeys = hotkeys;
         _pluginManager = pluginManager;
         _settings = settings;
+        _errorLog = errorLog;
 
         _prompts.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshActions);
         _pluginManager.PluginStateChanged += (_, _) =>
             Dispatcher.UIThread.Post(RefreshPluginOptions);
-        _settings.SettingsChanged += _ =>
-            Dispatcher.UIThread.Post(() => OnPropertyChanged(nameof(DefaultLlmProvider)));
+        _settings.SettingsChanged += value =>
+            Dispatcher.UIThread.Post(() =>
+            {
+                OnPropertyChanged(nameof(DefaultLlmProvider));
+                OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
+                HydrateCommandSettings(value);
+            });
 
+        HydrateCommandSettings(_settings.Current);
         RefreshPluginOptions();
         RefreshActions();
     }
@@ -86,6 +122,8 @@ public partial class PromptsSectionViewModel : ObservableObject
     // ReSharper disable once MemberCanBeMadeStatic.Global
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string PromptsHint => Loc.Instance["Prompts.Hint"];
+
+    public bool HasError => !string.IsNullOrEmpty(ErrorText);
 
     public bool ShowProviderWarning => AvailableProviders.Count <= 1;
     // ReSharper disable once MemberCanBeMadeStatic.Global
@@ -108,7 +146,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                 return;
             }
 
-            _settings.Save(_settings.Current with { DefaultLlmProvider = value });
+            _settings.Update(current => current with { DefaultLlmProvider = value });
             OnPropertyChanged();
         }
     }
@@ -135,6 +173,36 @@ public partial class PromptsSectionViewModel : ObservableObject
     }
 
     /// <summary>
+    ///     Model used for spoken commands. Shares <see cref="AvailableProviders" />; the null "use
+    ///     default" option persists as no override, deferring to <see cref="DefaultLlmProvider" />.
+    /// </summary>
+    public ProviderOption? SelectedSpokenCommandProvider
+    {
+        get =>
+            AvailableProviders.FirstOrDefault(option =>
+                option.Value == _settings.Current.SpokenCommandLlmProvider)
+            ?? AvailableProviders.FirstOrDefault();
+        set
+        {
+            if (_isRefreshingProviders)
+            {
+                return;
+            }
+
+            if (string.Equals(
+                    _settings.Current.SpokenCommandLlmProvider,
+                    value?.Value,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _settings.Update(current => current with { SpokenCommandLlmProvider = value?.Value });
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>
     ///     Re-polls providers for their current model list so new server-side models
     ///     appear without a manual "Validate". The dropdown rebuilds via
     ///     <c>PluginStateChanged</c> once the fetch lands; debounce lives in
@@ -145,8 +213,61 @@ public partial class PromptsSectionViewModel : ObservableObject
         return _pluginManager.RefreshProviderModelsAsync();
     }
 
+    private void HydrateCommandSettings(AppSettings settings)
+    {
+        _hydratingCommandSettings = true;
+        try
+        {
+            CommandModeEnabled = settings.CommandModeEnabled;
+            CommandKeyphrase = string.IsNullOrWhiteSpace(settings.CommandKeyphrase)
+                ? AppSettings.DefaultCommandKeyphrase
+                : settings.CommandKeyphrase;
+        }
+        finally
+        {
+            _hydratingCommandSettings = false;
+        }
+    }
+
+    partial void OnCommandModeEnabledChanged(bool value)
+    {
+        if (_hydratingCommandSettings || _settings.Current.CommandModeEnabled == value)
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { CommandModeEnabled = value });
+    }
+
+    partial void OnCommandKeyphraseChanged(string value)
+    {
+        if (_hydratingCommandSettings)
+        {
+            return;
+        }
+
+        // Guard empty: an unset keyphrase would match every dictation, so fall back to the
+        // default. Normalizing re-enters this hook once with the trimmed value, which persists.
+        var normalized = string.IsNullOrWhiteSpace(value)
+            ? AppSettings.DefaultCommandKeyphrase
+            : value.Trim();
+        if (!string.Equals(normalized, value, StringComparison.Ordinal))
+        {
+            CommandKeyphrase = normalized;
+            return;
+        }
+
+        if (string.Equals(_settings.Current.CommandKeyphrase, normalized, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { CommandKeyphrase = normalized });
+    }
+
     partial void OnSelectedActionChanged(PromptAction? value)
     {
+        HotkeyValidationMessage = null;
         if (value is null)
         {
             if (!IsCreatingNew)
@@ -171,9 +292,15 @@ public partial class PromptsSectionViewModel : ObservableObject
         NotifyStateChanged();
     }
 
+    partial void OnEditHotkeyKeyChanged(string? value)
+    {
+        HotkeyValidationMessage = null;
+    }
+
     [RelayCommand]
     private void StartCreate()
     {
+        HotkeyValidationMessage = null;
         IsCreatingNew = true;
         ShowEditor = true;
         SelectedAction = null;
@@ -196,6 +323,41 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
+        var existing = _editingActionId is null
+            ? null
+            : _prompts.Actions.FirstOrDefault(action => action.Id == _editingActionId);
+        if (!IsCreatingNew && existing is null)
+        {
+            return;
+        }
+
+        // Disabled outcomes keep the draft chord unvalidated; the enable gate
+        // (ToggleEnabled here) validates it before it can ever bind.
+        string? hotkeyKey;
+        if (!IsCreatingNew && existing is { IsEnabled: false })
+        {
+            hotkeyKey = string.IsNullOrWhiteSpace(EditHotkeyKey) ? null : EditHotkeyKey;
+        }
+        else
+        {
+            var hotkeyValidation = _hotkeys.ValidatePromptActionHotkeyCandidate(
+                EditHotkeyKey,
+                _editingActionId,
+                _prompts.Actions,
+                _profiles.Profiles
+            );
+            if (!hotkeyValidation.IsValid)
+            {
+                HotkeyValidationMessage = GetHotkeyValidationMessage(hotkeyValidation.Status);
+                return;
+            }
+
+            hotkeyKey = hotkeyValidation.NormalizedHotkey;
+        }
+
+        EditHotkeyKey = hotkeyKey;
+        HotkeyValidationMessage = null;
+
         if (IsCreatingNew)
         {
             var action = new PromptAction
@@ -206,41 +368,49 @@ public partial class PromptsSectionViewModel : ObservableObject
                 Icon = EditIcon,
                 ProviderOverride = EditProviderOverride,
                 TargetActionPluginId = EditTargetActionPluginId,
-                HotkeyKey = NormalizeOptionalString(EditHotkeyKey),
+                HotkeyKey = hotkeyKey,
                 IsManualOnly = EditIsManualOnly,
                 IsEnabled = true,
-                SortOrder = _prompts.Actions.Count
+                SortOrder = _prompts.Actions.Count,
             };
 
-            _prompts.AddAction(action);
+            if (!TryMutate(() => _prompts.AddAction(action), "add a prompt action"))
+            {
+                return;
+            }
+
             RefreshActions();
             SelectById(action.Id);
             return;
         }
 
-        if (_editingActionId is null)
-        {
-            return;
-        }
-
-        var existing = _prompts.Actions.FirstOrDefault(action => action.Id == _editingActionId);
         if (existing is null)
         {
             return;
         }
 
-        _prompts.UpdateAction(
-            existing with
-            {
-                Name = EditName.Trim(),
-                SystemPrompt = EditSystemPrompt.Trim(),
-                Icon = EditIcon,
-                ProviderOverride = EditProviderOverride,
-                TargetActionPluginId = EditTargetActionPluginId,
-                HotkeyKey = NormalizeOptionalString(EditHotkeyKey),
-                IsManualOnly = EditIsManualOnly
-            }
-        );
+        if (
+            !TryMutate(
+                () =>
+                    _prompts.UpdateAction(
+                        existing with
+                        {
+                            Name = EditName.Trim(),
+                            SystemPrompt = EditSystemPrompt.Trim(),
+                            Icon = EditIcon,
+                            ProviderOverride = EditProviderOverride,
+                            TargetActionPluginId = EditTargetActionPluginId,
+                            HotkeyKey = hotkeyKey,
+                            IsManualOnly = EditIsManualOnly,
+                        }
+                    ),
+                "update a prompt action"
+            )
+        )
+        {
+            return;
+        }
+
         RefreshActions();
         SelectById(existing.Id);
     }
@@ -264,7 +434,11 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
-        _prompts.DeleteAction(SelectedAction.Id);
+        if (!TryMutate(() => _prompts.DeleteAction(SelectedAction.Id), "delete a prompt action"))
+        {
+            return;
+        }
+
         RefreshActions();
         SelectedAction = null;
         ShowEditor = false;
@@ -278,8 +452,43 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
-        _prompts.UpdateAction(action with { IsEnabled = !action.IsEnabled });
+        if (!action.IsEnabled)
+        {
+            var hotkeyValidation = _hotkeys.ValidatePromptActionHotkeyCandidate(
+                action.HotkeyKey,
+                action.Id,
+                _prompts.Actions,
+                _profiles.Profiles
+            );
+            if (!hotkeyValidation.IsValid)
+            {
+                SelectById(action.Id);
+                HotkeyValidationMessage = GetHotkeyValidationMessage(hotkeyValidation.Status);
+                return;
+            }
+        }
+
+        if (
+            !TryMutate(
+                () => _prompts.UpdateAction(action with { IsEnabled = !action.IsEnabled }),
+                "toggle a prompt action"
+            )
+        )
+        {
+            return;
+        }
+
         RefreshActions();
+    }
+
+    private static string GetHotkeyValidationMessage(HotkeyCandidateValidationStatus status)
+    {
+        return status switch
+        {
+            HotkeyCandidateValidationStatus.Malformed =>
+                Loc.Instance["Prompts.HotkeyMalformed"],
+            _ => Loc.Instance["Prompts.HotkeyCollision"],
+        };
     }
 
     [RelayCommand]
@@ -301,7 +510,11 @@ public partial class PromptsSectionViewModel : ObservableObject
         }
 
         (orderedIds[index], orderedIds[index - 1]) = (orderedIds[index - 1], orderedIds[index]);
-        _prompts.Reorder(orderedIds);
+        if (!TryMutate(() => _prompts.Reorder(orderedIds), "reorder prompt actions"))
+        {
+            return;
+        }
+
         RefreshActions();
     }
 
@@ -324,14 +537,22 @@ public partial class PromptsSectionViewModel : ObservableObject
         }
 
         (orderedIds[index], orderedIds[index + 1]) = (orderedIds[index + 1], orderedIds[index]);
-        _prompts.Reorder(orderedIds);
+        if (!TryMutate(() => _prompts.Reorder(orderedIds), "reorder prompt actions"))
+        {
+            return;
+        }
+
         RefreshActions();
     }
 
     [RelayCommand]
     private void SeedPresets()
     {
-        _prompts.SeedPresets();
+        if (!TryMutate(_prompts.SeedPresets, "seed prompt presets"))
+        {
+            return;
+        }
+
         RefreshActions();
     }
 
@@ -361,6 +582,29 @@ public partial class PromptsSectionViewModel : ObservableObject
         }
 
         NotifyStateChanged();
+    }
+
+    private bool TryMutate(Action mutation, string operation)
+    {
+        try
+        {
+            mutation();
+            ErrorText = "";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[PromptsSectionViewModel] Failed to {operation}: {ex}");
+            _errorLog?.AddEntry($"Could not {operation}: {ex.Message}", ErrorCategory.Prompt);
+            ErrorText = Loc.Instance.GetString("Prompts.SaveFailed", ex.Message);
+            RefreshActions();
+            return false;
+        }
+    }
+
+    partial void OnErrorTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasError));
     }
 
     private void RefreshPluginOptions()
@@ -434,6 +678,7 @@ public partial class PromptsSectionViewModel : ObservableObject
             ? selectedActionPlugin
             : null;
         OnPropertyChanged(nameof(SelectedEditProvider));
+        OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
         OnPropertyChanged(nameof(ShowProviderWarning));
     }
 
@@ -478,6 +723,7 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     private void ClearEditor()
     {
+        HotkeyValidationMessage = null;
         _editingActionId = null;
         EditName = "";
         EditSystemPrompt = "";
@@ -486,11 +732,6 @@ public partial class PromptsSectionViewModel : ObservableObject
         EditTargetActionPluginId = null;
         EditHotkeyKey = null;
         EditIsManualOnly = false;
-    }
-
-    private static string? NormalizeOptionalString(string? value)
-    {
-        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     private void NotifyStateChanged()

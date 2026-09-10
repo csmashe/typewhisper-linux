@@ -7,5 +7,5 @@ public enum DictionaryEntrySource
     Manual,
     Import,
     CorrectionSuggestion,
-    AutoLearned
+    AutoLearned,
 }

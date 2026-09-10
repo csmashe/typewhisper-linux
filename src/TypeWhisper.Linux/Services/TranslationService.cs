@@ -54,6 +54,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         string text,
         string sourceLang,
         string targetLang,
+        LlmCallCapture? capture = null,
         CancellationToken ct = default
     )
     {
@@ -65,17 +66,59 @@ public sealed class TranslationService : ITranslationService, IDisposable
         var llmProvider = GetConfiguredTranslationProvider();
         if (llmProvider is null)
         {
+            // Local Marian ONNX inference never leaves the machine, so there is no
+            // provider call to record — the raw≠final diff already shows the change.
             return await TranslateLocalAsync(text, sourceLang, targetLang, ct);
         }
 
         var model = llmProvider.SupportedModels[0].Id;
         var userText = $"Translate from {sourceLang} to {targetLang}:\n\n{text}";
-        return await llmProvider.ProcessAsync(TranslationSystemPrompt, userText, model, ct);
+        var provenance = RecordProvenance(capture, llmProvider, model, userText);
+        var translated = await llmProvider.ProcessAsync(TranslationSystemPrompt, userText, model, ct);
+        provenance?.ResponseReceived = translated;
+
+        return translated;
     }
 
-    private ILlmProviderPlugin? GetConfiguredTranslationProvider()
+    private ILlmProviderRole? GetConfiguredTranslationProvider()
     {
         return _pluginManager.LlmProviders.FirstOrDefault(provider => provider.IsAvailable);
+    }
+
+    // Mirrors PromptProcessingService.RecordProvenance for the translation call:
+    // records what is sent to the provider and returns the entry so the caller can
+    // attach the response (null when capture is disabled).
+    private LlmCallProvenance? RecordProvenance(
+        LlmCallCapture? capture,
+        ILlmProviderRole provider,
+        string modelId,
+        string userPrompt
+    )
+    {
+        if (capture is null)
+        {
+            return null;
+        }
+
+        var providerId = provider.GetLlmSelectionId();
+        // Look the plugin up by its owning plugin ID: a profile-backed role's
+        // selection ID is the profile's, which matches no manifest ID.
+        var plugin = _pluginManager.GetPlugin(provider.PluginId);
+        var ranLocally = plugin?.Metadata.RanLocally ?? false;
+
+        var provenance = new LlmCallProvenance
+        {
+            Stage = "Translation",
+            SystemPromptSent = TranslationSystemPrompt,
+            UserPromptSent = userPrompt,
+            ProviderName = provider.ProviderName,
+            ProviderId = providerId,
+            ModelId = modelId,
+            RanLocally = ranLocally,
+            InjectedMemoryContext = null,
+        };
+        capture.Add(provenance);
+        return provenance;
     }
 
     private async Task<string> TranslateLocalAsync(
@@ -222,7 +265,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
         {
             GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
             InterOpNumThreads = 1,
-            IntraOpNumThreads = Environment.ProcessorCount
+            IntraOpNumThreads = Environment.ProcessorCount,
         };
 
         var encoder = new InferenceSession(
@@ -258,7 +301,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
 
         using var encoderResults = model.Encoder.Run([
             NamedOnnxValue.CreateFromTensor("input_ids", inputIdsTensor),
-            NamedOnnxValue.CreateFromTensor("attention_mask", attentionMask)
+            NamedOnnxValue.CreateFromTensor("attention_mask", attentionMask),
         ]);
 
         var encoderHidden =
@@ -280,7 +323,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
             {
                 NamedOnnxValue.CreateFromTensor("input_ids", decoderInputIds),
                 NamedOnnxValue.CreateFromTensor("encoder_attention_mask", attentionMask),
-                NamedOnnxValue.CreateFromTensor("encoder_hidden_states", encoderHidden)
+                NamedOnnxValue.CreateFromTensor("encoder_hidden_states", encoderHidden),
             };
 
             using var decoderResults = model.Decoder.Run(decoderInputs);
@@ -342,7 +385,7 @@ public sealed class TranslationService : ITranslationService, IDisposable
                 var rid = RuntimeInformation.ProcessArchitecture switch
                 {
                     Architecture.Arm64 => "linux-arm64",
-                    _ => "linux-x64"
+                    _ => "linux-x64",
                 };
 
                 var candidate = Path.Join(

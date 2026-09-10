@@ -10,20 +10,28 @@ public static class LocalModelStoragePaths
     /// <summary>Name of the plugin-asset subfolder created under a custom model-storage root.</summary>
     public const string PluginDataFolderName = "PluginData";
 
-    private static string DefaultModelStoragePath => TypeWhisperEnvironment.ModelsPath;
-
     /// <summary>
     /// Resolves the active local model storage path.
     /// </summary>
-    public static string ResolveModelStoragePath(AppSettings settings) =>
+    public static string ResolveModelStoragePath(
+        AppSettings settings,
+        string? defaultModelStoragePath = null
+    ) =>
         AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is { } customPath
             ? Path.GetFullPath(customPath)
-            : DefaultModelStoragePath;
+            : ResolveDefaultRoot(
+                defaultModelStoragePath,
+                TypeWhisperEnvironment.ModelsPath,
+                nameof(defaultModelStoragePath));
 
     /// <summary>
     /// Resolves the active plugin asset directory for large model and runtime files.
     /// </summary>
-    public static string ResolvePluginAssetDirectory(AppSettings? settings, string? pluginId)
+    public static string ResolvePluginAssetDirectory(
+        AppSettings? settings,
+        string? pluginId,
+        string? defaultPluginDataPath = null
+    )
     {
         // Reject (rather than silently strip) path separators: stripping would map
         // distinct IDs like "com/test/id" and "id" onto the same directory and risk
@@ -41,12 +49,31 @@ public static class LocalModelStoragePaths
         if (settings is null
             || AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is null)
         {
-            return Path.Join(TypeWhisperEnvironment.PluginDataPath, safePluginId);
+            return Path.Join(
+                ResolveDefaultRoot(
+                    defaultPluginDataPath,
+                    TypeWhisperEnvironment.PluginDataPath,
+                    nameof(defaultPluginDataPath)),
+                safePluginId
+            );
         }
 
         return Path.Join(
             ResolveModelStoragePath(settings),
             PluginDataFolderName,
             safePluginId);
+    }
+
+    // Keep every result absolute; a blank or relative root would otherwise resolve
+    // assets against the process working directory.
+    private static string ResolveDefaultRoot(string? injected, string fallback, string paramName)
+    {
+        if (injected is null)
+        {
+            return fallback;
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(injected, paramName);
+        return Path.GetFullPath(injected);
     }
 }

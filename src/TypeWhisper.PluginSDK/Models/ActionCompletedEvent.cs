@@ -25,6 +25,24 @@ public sealed record ActionCompletedEvent : PluginEvent
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
     public string? Message { get; init; }
 
+    /// <summary>Validated HTTP(S) result URL offered to the user, if any.</summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
+    public string? Url { get; init; }
+
+    /// <summary>Freedesktop icon system name requested for the result notification.</summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
+    public string? Icon { get; init; }
+
+    /// <summary>Effective host-clamped result display duration in milliseconds.</summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
+    public int DisplayDurationMilliseconds { get; init; }
+
     /// <summary>Name of the foreground application.</summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedAutoPropertyAccessor.Global

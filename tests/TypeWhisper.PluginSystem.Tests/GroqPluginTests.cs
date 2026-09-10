@@ -18,7 +18,7 @@ public class GroqPluginTests
 {
     private static readonly JsonSerializerOptions s_manifestJsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
     };
 
     [Fact]
@@ -82,7 +82,7 @@ public class GroqPluginTests
             new List<FetchedLlmModel>
             {
                 new("openai/gpt-oss-120b", "OpenAI"),
-                new("llama-3.1-8b-instant", "Meta")
+                new("llama-3.1-8b-instant", "Meta"),
             }
         );
         host.SetSetting("selectedLlmModel", "whisper-large-v3");
@@ -192,6 +192,107 @@ public class GroqPluginTests
     }
 
     [Fact]
+    public async Task ProcessAsync_HidesReasoningForQwenModels()
+    {
+        var handler = new CapturingHandler((_, body) =>
+            {
+                using var doc = JsonDocument.Parse(
+                    body ?? throw new InvalidOperationException("Missing request body.")
+                );
+                Assert.Equal("qwen/qwen3-32b", doc.RootElement.GetProperty("model").GetString());
+                Assert.Equal("hidden", doc.RootElement.GetProperty("reasoning_format").GetString());
+
+                return JsonResponse("""{"choices":[{"message":{"content":"final answer"}}]}""");
+            }
+        );
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
+
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new GroqPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ProcessAsync("system", "user", "qwen/qwen3-32b", CancellationToken.None);
+
+        Assert.Equal("final answer", result);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_DoesNotSendReasoningFormatForOtherModels()
+    {
+        var handler = new CapturingHandler((request, body) =>
+            {
+                using var doc = JsonDocument.Parse(
+                    body ?? throw new InvalidOperationException("Missing request body.")
+                );
+                Assert.Equal("llama-3.3-70b-versatile", doc.RootElement.GetProperty("model").GetString());
+                Assert.False(doc.RootElement.TryGetProperty("reasoning_format", out _));
+
+                return JsonResponse("""{"choices":[{"message":{"content":"final answer"}}]}""");
+            }
+        );
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
+
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new GroqPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ProcessAsync(
+            "system", "user", "llama-3.3-70b-versatile", CancellationToken.None
+        );
+
+        Assert.Equal("final answer", result);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_HidesReasoningForQwenModels()
+    {
+        var sse = string.Join(
+            "\n",
+            """data: {"choices":[{"delta":{"content":"Hel"}}]}""",
+            "",
+            """data: {"choices":[{"delta":{"content":"lo"}}]}""",
+            "",
+            "data: [DONE]",
+            "",
+            ""
+        );
+        var handler = new CapturingHandler((_, body) =>
+            {
+                using var doc = JsonDocument.Parse(
+                    body ?? throw new InvalidOperationException("Missing request body.")
+                );
+                Assert.Equal("qwen/qwen3-32b", doc.RootElement.GetProperty("model").GetString());
+                Assert.Equal("hidden", doc.RootElement.GetProperty("reasoning_format").GetString());
+                Assert.True(doc.RootElement.GetProperty("stream").GetBoolean());
+
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+                };
+            }
+        );
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
+
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new GroqPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        await foreach (
+            var chunk in sut.ProcessStreamingAsync("system", "user", "qwen/qwen3-32b", CancellationToken.None)
+        )
+            chunks.Add(chunk);
+
+        Assert.Equal(["Hel", "lo"], chunks);
+    }
+
+    [Fact]
     public async Task ProcessAsync_UsesFallbackLlmModelWhenSelectionMissing()
     {
         var handler = new CapturingHandler((_, body) =>
@@ -292,6 +393,7 @@ public class GroqPluginTests
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
             "",
             "data: [DONE]",
+            "",
             ""
         );
         var handler = new CapturingHandler((request, body) =>
@@ -300,7 +402,7 @@ public class GroqPluginTests
                 capturedBody = body;
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                    Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
                 };
             }
         );
@@ -355,11 +457,43 @@ public class GroqPluginTests
         Assert.Equal("bulk", chunks[0]);
     }
 
+    [Fact]
+    public async Task TranscribeAsync_ReportsPerSegmentNoSpeechProbability()
+    {
+        var handler = new CapturingHandler((_, body) =>
+        {
+            Assert.Contains("verbose_json", body);
+            return JsonResponse("""
+                {
+                    "text": "Please send the updated draft. Thank you.",
+                    "language": "en",
+                    "duration": 8.0,
+                    "segments": [
+                        { "text": " Please send the updated draft.", "start": 0.0, "end": 5.0, "no_speech_prob": 0.02 },
+                        { "text": " Thank you.", "start": 5.0, "end": 8.0, "no_speech_prob": 0.95 }
+                    ]
+                }
+                """);
+        });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new GroqPlugin(httpClient);
+        await sut.ActivateAsync(host);
+        sut.SelectModel("whisper-large-v3");
+
+        var result = await sut.TranscribeAsync([4, 5, 6], "en", false, null, CancellationToken.None);
+
+        Assert.Equal("Please send the updated draft. Thank you.", result.Text);
+        Assert.Equal(2, result.Segments.Count);
+        Assert.Equal(0.95f, result.Segments[1].NoSpeechProbability);
+        Assert.Equal(0.02f, result.NoSpeechProbability);
+    }
+
     private static HttpResponseMessage JsonResponse(string json)
     {
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
     }
 
@@ -383,7 +517,7 @@ public class GroqPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

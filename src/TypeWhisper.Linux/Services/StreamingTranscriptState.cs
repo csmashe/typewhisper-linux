@@ -9,38 +9,42 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 internal sealed class StreamingTranscriptState
 {
+    // Keep corrector work outside this lock: correctors can take their own locks and do
+    // non-trivial list/regex work, so a full-method lock would make StartSession and
+    // StopSession wait behind them and introduce nested-lock ordering. Instead, snapshot
+    // under this lock and compare-and-commit under it after correction/stabilization.
+    private readonly Lock _lock = new();
     private string _confirmedText = "";
     private string _lastDisplayedText = "";
     private int _sessionVersion;
+    // Bumped on every _confirmedText commit. A value compare cannot tell "nobody committed" from
+    // "someone committed and stabilization landed back on the same string" — the ABA that would
+    // let a stale poll overwrite a newer result.
+    private int _commitRevision;
 
     public int StartSession()
     {
-        // Bump version first so any in-flight writer with the old version fails its re-check.
-        var newVersion = Interlocked.Increment(ref _sessionVersion);
-        _confirmedText = "";
-        _lastDisplayedText = "";
-        return newVersion;
+        lock (_lock)
+        {
+            _sessionVersion++;
+            _confirmedText = "";
+            _lastDisplayedText = "";
+            return _sessionVersion;
+        }
     }
 
     public string StopSession()
     {
-        var finalText = !string.IsNullOrWhiteSpace(_lastDisplayedText)
-            ? _lastDisplayedText
-            : _confirmedText;
-        InvalidateSession();
-        _confirmedText = "";
-        _lastDisplayedText = "";
-        return finalText;
-    }
-
-    private bool IsCurrentSession(int sessionVersion)
-    {
-        return sessionVersion == Volatile.Read(ref _sessionVersion);
-    }
-
-    private void InvalidateSession()
-    {
-        Interlocked.Increment(ref _sessionVersion);
+        lock (_lock)
+        {
+            var finalText = !string.IsNullOrWhiteSpace(_lastDisplayedText)
+                ? _lastDisplayedText
+                : _confirmedText;
+            _sessionVersion++;
+            _confirmedText = "";
+            _lastDisplayedText = "";
+            return finalText;
+        }
     }
 
     public bool TryApplyPolling(
@@ -51,9 +55,17 @@ internal sealed class StreamingTranscriptState
     )
     {
         displayText = "";
-        if (!IsCurrentSession(sessionVersion))
+        string confirmedSnapshot;
+        int revisionSnapshot;
+        lock (_lock)
         {
-            return false;
+            if (sessionVersion != _sessionVersion)
+            {
+                return false;
+            }
+
+            confirmedSnapshot = _confirmedText;
+            revisionSnapshot = _commitRevision;
         }
 
         var text = rawText.Trim();
@@ -62,25 +74,30 @@ internal sealed class StreamingTranscriptState
             return false;
         }
 
+        // Deliberately outside the lock; see the trade-off note on _lock.
         text = corrector(text);
         if (string.IsNullOrEmpty(text))
         {
             return false;
         }
 
-        var stable = StabilizeText(_confirmedText, text);
+        var stable = StabilizeText(confirmedSnapshot, text);
 
-        // Re-check before writing: StartSession/InvalidateSession may have bumped
-        // the version while we were correcting and stabilizing.
-        if (!IsCurrentSession(sessionVersion))
+        lock (_lock)
         {
-            return false;
-        }
+            // A version check alone cannot detect another poll committing within this same
+            // session; the revision compare discards this stale result instead of clobbering it.
+            if (sessionVersion != _sessionVersion || _commitRevision != revisionSnapshot)
+            {
+                return false;
+            }
 
-        _confirmedText = stable;
-        _lastDisplayedText = stable;
-        displayText = stable;
-        return true;
+            _commitRevision++;
+            _confirmedText = stable;
+            _lastDisplayedText = stable;
+            displayText = stable;
+            return true;
+        }
     }
 
     /// <summary>

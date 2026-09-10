@@ -151,7 +151,7 @@
                        Classes="section-title" />
 
             <Border Classes="panel">
-                <Grid RowDefinitions="Auto,1,Auto,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,Auto">
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
@@ -167,6 +167,27 @@
                     <Border Grid.Row="1" Background="#1AFFFFFF" />
 
                     <Border Grid.Row="2" Padding="18,14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <StackPanel Spacing="3">
+                                <TextBlock Text="{loc:Str Advanced.CaptureProvenance}"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center" />
+                                <TextBlock Text="{loc:Str Advanced.CaptureProvenanceHint}"
+                                           FontSize="12"
+                                           Foreground="#8A9AAE"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          IsChecked="{Binding CaptureLlmProvenance}"
+                                          IsEnabled="{Binding SaveToHistoryEnabled}"
+                                          VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="3" Background="#1AFFFFFF" />
+
+                    <Border Grid.Row="4" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
                             <TextBlock Text="{loc:Str Advanced.HistoryRetention}"
@@ -185,7 +206,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="3"
+                    <Border Grid.Row="5"
                             BorderBrush="#1AFFFFFF"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">

@@ -14,5 +14,5 @@ public enum PluginLogLevel
     // ReSharper disable once UnusedMember.Global
     Warning,
     // ReSharper disable once UnusedMember.Global
-    Error
+    Error,
 }

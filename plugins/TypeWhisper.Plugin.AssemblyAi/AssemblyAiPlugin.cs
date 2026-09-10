@@ -1,4 +1,9 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// ReSharper disable UnusedType.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -7,16 +12,18 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.AssemblyAi;
 
-public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class AssemblyAiPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.assemblyai.com";
 
     private readonly HttpClient _httpClient = new();
     private IPluginHostServices? _host;
-    private string? _apiKey;
-    private string? _selectedModelId;
 
-    private static readonly IReadOnlyList<PluginModelInfo> Models =
+    private static readonly IReadOnlyList<PluginModelInfo> s_models =
     [
         new("universal-3-pro", "Universal-3 Pro"),
         new("universal-2", "Universal-2"),
@@ -24,13 +31,13 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
 
     public string PluginId => "com.typewhisper.assemblyai";
     public string PluginName => "AssemblyAI";
-    public string PluginVersion => "1.1.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
-        _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
+        ApiKey = await host.LoadSecretAsync("api-key");
+        SelectedModelId = host.GetSetting<string>("selectedModel") ?? s_models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -42,27 +49,29 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
 
     public string ProviderId => "assemblyai";
     public string ProviderDisplayName => "AssemblyAI";
-    public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
+    public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
 
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels => Models;
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_models;
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
-        return await AssemblyAiStreamingSession.ConnectAsync(_apiKey!, language, ct);
+        return await AssemblyAiStreamingSession.ConnectAsync(ApiKey!, language, ct);
     }
 
     public void SelectModel(string modelId)
     {
-        if (Models.All(m => m.Id != modelId))
+        if (s_models.All(m => m.Id != modelId))
             throw new ArgumentException($"Unknown model: {modelId}");
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
@@ -74,7 +83,7 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
         CancellationToken ct
     )
     {
-        if (!IsConfigured || _selectedModelId is null)
+        if (!IsConfigured || SelectedModelId is null)
             throw new InvalidOperationException(
                 "Plugin not configured. API key and model required."
             );
@@ -87,7 +96,7 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
     private async Task<string> UploadAudioAsync(byte[] wavAudio, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v2/upload");
-        request.Headers.Add("Authorization", _apiKey);
+        request.Headers.Add("Authorization", ApiKey);
         request.Content = new ByteArrayContent(wavAudio);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
@@ -113,16 +122,16 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
         var body = new Dictionary<string, object>
         {
             ["audio_url"] = audioUrl,
-            ["speech_models"] = new[] { _selectedModelId! },
+            ["speech_models"] = new[] { SelectedModelId! },
         };
 
-        if (string.IsNullOrEmpty(language) || language == "auto")
+        if (string.IsNullOrEmpty(language))
             body["language_detection"] = true;
         else
             body["language_code"] = language;
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v2/transcript");
-        request.Headers.Add("Authorization", _apiKey);
+        request.Headers.Add("Authorization", ApiKey);
         request.Content = new StringContent(
             JsonSerializer.Serialize(body),
             Encoding.UTF8,
@@ -156,7 +165,7 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
                 HttpMethod.Get,
                 $"{BaseUrl}/v2/transcript/{transcriptId}"
             );
-            request.Headers.Add("Authorization", _apiKey);
+            request.Headers.Add("Authorization", ApiKey);
 
             var response = await _httpClient.SendAsync(request, ct);
             var json = await response.Content.ReadAsStringAsync(ct);
@@ -170,6 +179,7 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
             var root = doc.RootElement;
             var status = root.GetProperty("status").GetString();
 
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
             if (status == "error")
             {
                 var error = root.TryGetProperty("error", out var errEl)
@@ -178,13 +188,14 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
                 throw new InvalidOperationException($"AssemblyAI transcription failed: {error}");
             }
 
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (status == "completed")
             {
                 var text = root.GetProperty("text").GetString() ?? "";
                 var duration = root.TryGetProperty("audio_duration", out var durEl)
                     ? durEl.GetDouble()
                     : 0.0;
-                string? detectedLanguage = root.TryGetProperty("language_code", out var langEl)
+                var detectedLanguage = root.TryGetProperty("language_code", out var langEl)
                     ? langEl.GetString()
                     : null;
                 return new PluginTranscriptionResult(
@@ -199,7 +210,8 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
         throw new TimeoutException("AssemblyAI transcription timed out after 5 minutes");
     }
 
-    internal string? ApiKey => _apiKey;
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -212,7 +224,7 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+        ApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
         if (_host is not null)
         {
             if (string.IsNullOrWhiteSpace(apiKey))
@@ -260,7 +272,7 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
                 "selectedModel",
                 Loc.L("Settings.TranscriptionModel"),
                 Description: Loc.L("Settings.ModelDescription"),
-                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+                Options: s_models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
             ),
         ];
 
@@ -268,8 +280,8 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
         Task.FromResult(
             key switch
             {
-                "api-key" => _apiKey,
-                "selectedModel" => _selectedModelId,
+                "api-key" => ApiKey,
+                "selectedModel" => SelectedModelId,
                 _ => null,
             }
         );
@@ -294,10 +306,10 @@ public sealed partial class AssemblyAiPlugin : ITranscriptionEnginePlugin, IPlug
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        var valid = await ValidateApiKeyAsync(ApiKey, ct);
         return valid
             ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
             : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));

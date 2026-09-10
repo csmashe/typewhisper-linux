@@ -16,6 +16,34 @@
 
 ---
 
+## 1.0 RC Release-Gates
+
+Vor einem `v1.0.0-rc1` Tag müssen diese Checks abgeschlossen sein:
+
+- [ ] `dotnet restore TypeWhisper.slnx`
+- [ ] `dotnet build TypeWhisper.slnx -c Release --no-restore`
+- [ ] `dotnet test tests/TypeWhisper.Core.Tests/TypeWhisper.Core.Tests.csproj -c Release --no-build`
+- [ ] `dotnet test tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj -c Release --no-build`
+- [ ] `dotnet test tests/TypeWhisper.Linux.Tests/TypeWhisper.Linux.Tests.csproj -c Release --no-build`
+- [ ] `dotnet test tests/TypeWhisper.Cli.Tests/TypeWhisper.Cli.Tests.csproj -c Release --no-build`
+- [ ] Alle Plugin-Projekte unter `plugins/` in `Release` bauen.
+- [ ] GitHub `Package Dry Run` mit Channel `rc` für `win-x64` und `win-arm64` prüfen.
+- [ ] Release-Artefakte enthalten `Setup.exe`, `Portable.zip`, `.nupkg`, `RELEASES-*`, `assets.*.json` und `releases.*.json` für beide Architekturen.
+- [ ] Signatur/Publisher der `Setup.exe` prüfen; nicht signierte Installer sind ein Release-Blocker.
+
+### 1.0 RC Manuelle Smoke-Tests
+
+- [ ] Frischer Portable-Start auf Windows 11 x64: App startet, Tray reagiert, Settings öffnen.
+- [ ] Windows 10 22H2 mit virtuellen Audiogeräten, z.B. Voicemeeter: Startup hängt nicht, Settings öffnen, Aufnahme funktioniert.
+- [ ] Upgrade von `v0.8.4` auf `v1.0.0-rc1`: Einstellungen, History, Plugins und Hotkeys bleiben erhalten.
+- [ ] Update-Channel in Settings auf Release Candidate stellen und Update-Check ausführen.
+- [ ] Gebundelte Plugins sind sichtbar, Marketplace-/User-Plugin mit gleicher ID überschreibt die gebundelte Kopie.
+- [ ] OpenAI und Supertonic TTS erscheinen auf einem `1.0.0-rc1` Host als kompatible Marketplace-Plugins.
+- [ ] Groq Recorder transkribiert auch auf Systemen ohne Media-Foundation-AAC-Encoder per WAV-Fallback.
+- [ ] AMD-Pfad dokumentiert prüfen: `whisper.cpp` + Vulkan ist der empfohlene AMD-Weg; Parakeet/ONNX ist CPU/NVIDIA CUDA; ROCm ist manuell über `TYPEWHISPER_WHISPERCPP_ROCM_LIBRARY_PATH`; ZLUDA ist experimentell.
+
+---
+
 ## Phase 1: PostProcessingPipeline + DB Migration v6
 
 ### 1.1 DB Migration
@@ -43,47 +71,77 @@
 
 ## Phase 2: HTTP API
 
-### 2.1 Basis-Status
-```bash
-curl http://localhost:9876/v1/status
+> **Hinweis:** API Server muss in Einstellungen → Erweitert → API Server aktiviert sein. Standardmäßig ist Auth aus. Wenn "API-Token verlangen" aktiv ist, bleibt `/v1/status` öffentlich; alle anderen Routen brauchen `Authorization: Bearer <token>` oder `X-TypeWhisper-API-Token`.
+
+### 2.1 Discovery + Auth
+```powershell
+$discovery = Get-Content "$env:LOCALAPPDATA\TypeWhisper\api-discovery.json" | ConvertFrom-Json
+$token = $discovery.token
+$base = "http://localhost:$($discovery.port)"
+$env:TYPEWHISPER_API_TOKEN = $token
+$auth = "Authorization: Bearer $env:TYPEWHISPER_API_TOKEN"
+$json = "Content-Type: application/json"
+curl.exe "$base/v1/status"
+curl.exe -H $auth "$base/v1/models"
+curl.exe -i -X OPTIONS "$base/v1/models" `
+  -H "Origin: http://localhost:$($discovery.port)" `
+  -H "Access-Control-Request-Method: GET" `
+  -H "Access-Control-Request-Headers: authorization,content-type"
 ```
-→ JSON mit `version`, `is_recording`, `supports_streaming`, `supports_translation`
+→ `api-discovery.json` enthält `version`, `port`, `token`; `api-port` existiert weiter. `OPTIONS` antwortet mit `204` ohne JSON-Body. Der Preflight muss `Access-Control-Allow-Origin`, `-Allow-Methods` und `-Allow-Headers` zurückgeben — ohne einen erlaubten Loopback-`Origin` sendet die API bewusst keine CORS-Header.
 
 ### 2.2 History
-```bash
-# Alle Einträge
-curl "http://localhost:9876/v1/history?limit=5"
-# Suche
-curl "http://localhost:9876/v1/history?q=test"
-# Löschen (mit echter ID)
-curl -X DELETE "http://localhost:9876/v1/history?id=SOME_ID"
+```powershell
+curl.exe -H $auth "$base/v1/history?limit=5"
+curl.exe -H $auth "$base/v1/history?q=test"
+curl.exe -X DELETE -H $auth "$base/v1/history?id=SOME_ID"
 ```
 
-### 2.3 Profile
-```bash
-# Alle Profile
-curl http://localhost:9876/v1/profiles
+### 2.3 Workflows / Rules / Profiles
+```powershell
+curl.exe -H $auth "$base/v1/rules"
+curl.exe -H $auth "$base/v1/profiles"
+curl.exe -X PUT -H $auth "$base/v1/rules/toggle?id=SOME_WORKFLOW_ID"
+curl.exe -X PUT -H $auth "$base/v1/profiles/toggle?id=SOME_PROFILE_ID"
+```
+→ Windows liefert im Feld `bundle_identifiers` die vorhandenen Prozessnamen.
+
+### 2.4 Dictionary Terms + Corrections
+```powershell
+curl.exe -H $auth "$base/v1/dictionary/terms"
+curl.exe -X PUT -H $auth -H $json -d '{"terms":["TypeWhisper","Raycast"],"replace":false}' "$base/v1/dictionary/terms"
+curl.exe -X DELETE -H $auth -H $json -d '{"term":"Raycast"}' "$base/v1/dictionary/terms"
+
+curl.exe -H $auth "$base/v1/dictionary/corrections"
+curl.exe -X PUT -H $auth -H $json -d '{"original":"teh","replacement":"the","caseSensitive":false}' "$base/v1/dictionary/corrections"
+curl.exe -X DELETE -H $auth -H $json -d '{"original":"teh"}' "$base/v1/dictionary/corrections"
 ```
 
-### 2.4 Dictation Control
-```bash
-# Status prüfen
-curl http://localhost:9876/v1/dictation/status
-# Starten
-curl -X POST http://localhost:9876/v1/dictation/start
-# Stoppen
-curl -X POST http://localhost:9876/v1/dictation/stop
+### 2.5 Dictation Control
+```powershell
+curl.exe -H $auth "$base/v1/dictation/status"
+curl.exe -X POST -H $auth "$base/v1/dictation/start"
+curl.exe -X POST -H $auth "$base/v1/dictation/stop"
 ```
 
-### 2.5 Transcribe
-```bash
-# Audio-Datei senden
-curl -X POST http://localhost:9876/v1/transcribe \
-  -F "file=@test.wav" \
+### 2.6 Transcribe
+```powershell
+# Multipart oder raw audio
+curl.exe -X POST -H $auth "$base/v1/transcribe" `
+  -F "file=@test.wav" `
   -F "language=de"
+
+# Mac-kompatible Local-File-Route ohne Byte-Upload
+curl.exe -X POST -H $auth -H $json -d '{"path":"C:\\Audio\\test.wav","language_hints":["de","en"],"task":"transcribe"}' "$base/v1/transcribe/local-file?await_download=1"
 ```
 
-> **Hinweis:** API Server muss in Einstellungen → Allgemein aktiviert sein.
+### 2.7 CLI / Raycast-Pfad
+```powershell
+typewhisper status
+typewhisper models
+typewhisper transcribe C:\Audio\test.wav --language de --json
+typewhisper transcribe C:\Audio\test.wav --api-token $token --await-download
+```
 
 ---
 

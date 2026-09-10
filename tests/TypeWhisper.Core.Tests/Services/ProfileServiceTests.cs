@@ -6,6 +6,15 @@ namespace TypeWhisper.Core.Tests.Services;
 /// <summary>Covers <see cref="ProfileService" /> persistence/round-tripping and forced/hotkey-only profile matching rules.</summary>
 public sealed class ProfileServiceTests : IDisposable
 {
+    private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(5);
+
+    // The blocking writer holds the ProfileService lock until the test's finally (or Dispose)
+    // calls ReleaseFirst — which happens AFTER the orchestration's SpinUntil(s_testGuard) returns.
+    // Its own release-wait must therefore outlast s_testGuard by a wide margin, or under heavy load
+    // (parallel test projects) the two 5 s timers race and the writer times out first. This is a
+    // pure backstop against a genuinely wedged test, not part of the timing contract.
+    private static readonly TimeSpan s_writerReleaseGuard = TimeSpan.FromSeconds(60);
+
     private readonly string _filePath;
     private readonly ProfileService _sut;
 
@@ -24,13 +33,256 @@ public sealed class ProfileServiceTests : IDisposable
     }
 
     [Fact]
+    public void ToggleProfileEnabled_MissingId_DoesNotWriteOrNotify()
+    {
+        var original = new Profile
+        {
+            Id = "existing",
+            Name = "Existing",
+            IsEnabled = false,
+        };
+        new ProfileService(_filePath).AddProfile(original);
+        var writes = 0;
+        var service = new ProfileService(
+            _filePath,
+            (_, _) =>
+            {
+                Interlocked.Increment(ref writes);
+                throw new InvalidOperationException("A missing profile must not be written.");
+            }
+        );
+        var initialProfiles = service.Profiles;
+        var initialJson = File.ReadAllText(_filePath);
+        var notifications = 0;
+        service.ProfilesChanged += () => notifications++;
+
+        var result = service.ToggleProfileEnabled("missing");
+
+        Assert.Null(result);
+        Assert.Equal(0, writes);
+        Assert.Equal(0, notifications);
+        Assert.Equal(initialProfiles, service.Profiles);
+        Assert.False(Assert.Single(service.Profiles).IsEnabled);
+        Assert.Equal(initialJson, File.ReadAllText(_filePath));
+    }
+
+    [Fact]
+    public async Task ToggleProfileEnabled_ConcurrentSameProfile_AppliesBothInversions()
+    {
+        var original = new Profile
+        {
+            Id = "profile",
+            Name = "Profile",
+            IsEnabled = false,
+        };
+        new ProfileService(_filePath).AddProfile(original);
+        using var writer = new BlockingAfterCommitWriter();
+        var service = new ProfileService(_filePath, writer.Write);
+        var notifications = 0;
+        // ReSharper disable once AccessToModifiedClosure -- notifications is an intentional shared counter read via Volatile.Read below
+        service.ProfilesChanged += () => Interlocked.Increment(ref notifications);
+        var secondCallerStarted = CreateCompletionSource();
+        var secondCompletion = new TaskCompletionSource<Profile?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var firstToggle = RunOnDedicatedThread(() => service.ToggleProfileEnabled(original.Id));
+        Thread? secondThread = null;
+        bool secondReachedGateOrWriter;
+
+        try
+        {
+            await writer.FirstCommitted.WaitAsync(s_testGuard);
+            secondThread = new Thread(() =>
+            {
+                secondCallerStarted.TrySetResult();
+                try
+                {
+                    secondCompletion.TrySetResult(service.ToggleProfileEnabled(original.Id));
+                }
+                catch (Exception ex)
+                {
+                    secondCompletion.TrySetException(ex);
+                }
+            })
+            {
+                IsBackground = true,
+            };
+            secondThread.Start();
+            await secondCallerStarted.Task.WaitAsync(s_testGuard);
+
+            secondReachedGateOrWriter = SpinWait.SpinUntil(
+                // ReSharper disable once AccessToDisposedClosure -- lambda runs synchronously inside SpinUntil, before writer is disposed on scope exit
+                () =>
+                    writer.SecondEntered.IsCompleted
+                    || IsWaiting(secondThread)
+                    || !secondThread.IsAlive,
+                s_testGuard
+            );
+        }
+        finally
+        {
+            writer.ReleaseFirst();
+            await CompleteBestEffort(firstToggle, secondCompletion.Task);
+            if (secondThread is { IsAlive: true })
+            {
+                secondThread.Join(s_testGuard);
+            }
+        }
+
+        var results = await Task.WhenAll(firstToggle, secondCompletion.Task)
+            .WaitAsync(s_testGuard);
+
+        Assert.True(secondReachedGateOrWriter);
+        Assert.NotNull(results[0]);
+        Assert.True(results[0]!.IsEnabled);
+        Assert.NotNull(results[1]);
+        Assert.False(results[1]!.IsEnabled);
+        Assert.False(Assert.Single(service.Profiles).IsEnabled);
+        Assert.False(Assert.Single(new ProfileService(_filePath).Profiles).IsEnabled);
+        Assert.Equal(2, Volatile.Read(ref notifications));
+        Assert.Equal(2, writer.InvocationCount);
+        Assert.Equal(1, writer.MaximumConcurrency);
+        Assert.False(writer.SecondEnteredBeforeFirstRelease);
+    }
+
+    [Fact]
+    public async Task ToggleProfileEnabled_ConcurrentDifferentProfiles_PreservesBothAndKeepsDiskWithCache()
+    {
+        var profileA = new Profile
+        {
+            Id = "profile-a",
+            Name = "Profile A",
+            IsEnabled = false,
+            Priority = 20,
+        };
+        var profileB = new Profile
+        {
+            Id = "profile-b",
+            Name = "Profile B",
+            IsEnabled = false,
+            Priority = 10,
+        };
+        var seed = new ProfileService(_filePath);
+        seed.AddProfile(profileA);
+        seed.AddProfile(profileB);
+        using var writer = new BlockingAfterCommitWriter();
+        var service = new ProfileService(_filePath, writer.Write);
+        var notifications = 0;
+        // ReSharper disable once AccessToModifiedClosure -- notifications is an intentional shared counter read via Volatile.Read below
+        service.ProfilesChanged += () => Interlocked.Increment(ref notifications);
+        var secondCallerStarted = CreateCompletionSource();
+        var secondCompletion = new TaskCompletionSource<Profile?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var firstToggle = RunOnDedicatedThread(() => service.ToggleProfileEnabled(profileA.Id));
+        Thread? secondThread = null;
+        bool secondReachedGateOrWriter;
+
+        try
+        {
+            await writer.FirstCommitted.WaitAsync(s_testGuard);
+            secondThread = new Thread(() =>
+            {
+                secondCallerStarted.TrySetResult();
+                try
+                {
+                    secondCompletion.TrySetResult(service.ToggleProfileEnabled(profileB.Id));
+                }
+                catch (Exception ex)
+                {
+                    secondCompletion.TrySetException(ex);
+                }
+            })
+            {
+                IsBackground = true,
+            };
+            secondThread.Start();
+            await secondCallerStarted.Task.WaitAsync(s_testGuard);
+
+            secondReachedGateOrWriter = SpinWait.SpinUntil(
+                // ReSharper disable once AccessToDisposedClosure -- lambda runs synchronously inside SpinUntil, before writer is disposed on scope exit
+                () =>
+                    writer.SecondEntered.IsCompleted
+                    || IsWaiting(secondThread)
+                    || !secondThread.IsAlive,
+                s_testGuard
+            );
+        }
+        finally
+        {
+            writer.ReleaseFirst();
+            await CompleteBestEffort(firstToggle, secondCompletion.Task);
+            if (secondThread is { IsAlive: true })
+            {
+                secondThread.Join(s_testGuard);
+            }
+        }
+
+        var results = await Task.WhenAll(firstToggle, secondCompletion.Task)
+            .WaitAsync(s_testGuard);
+        var inMemory = service.Profiles
+            .Select(profile => (profile.Id, profile.IsEnabled))
+            .ToArray();
+        var persisted = new ProfileService(_filePath).Profiles
+            .Select(profile => (profile.Id, profile.IsEnabled))
+            .ToArray();
+
+        Assert.True(secondReachedGateOrWriter);
+        Assert.NotNull(results[0]);
+        Assert.True(results[0]!.IsEnabled);
+        Assert.NotNull(results[1]);
+        Assert.True(results[1]!.IsEnabled);
+        Assert.Equal(
+            [(profileA.Id, true), (profileB.Id, true)],
+            inMemory
+        );
+        Assert.Equal(inMemory, persisted);
+        Assert.Equal(2, Volatile.Read(ref notifications));
+        Assert.Equal(2, writer.InvocationCount);
+        Assert.Equal(1, writer.MaximumConcurrency);
+        Assert.False(writer.SecondEnteredBeforeFirstRelease);
+    }
+
+    [Fact]
+    public void AddProfile_WhenExistingFileIsUnreadable_PreservesItAndKeepsTheServiceUsable()
+    {
+        // The store's PreserveAndReset policy replaces the older "refuse every save while the
+        // file is corrupt" contract: the unreadable bytes are copied aside verbatim rather than
+        // held hostage at the original path, so a corrupt file can no longer strand profiles.
+        File.WriteAllText(_filePath, "{ not valid profile json");
+        var sut = new ProfileService(_filePath);
+
+        sut.AddProfile(new Profile { Id = "added", Name = "New" });
+
+        var preserved = Assert.Single(
+            Directory.EnumerateFiles(
+                Path.GetDirectoryName(_filePath)!,
+                Path.GetFileName(_filePath) + ".broken-*"
+            )
+        );
+        Assert.Equal("{ not valid profile json", File.ReadAllText(preserved));
+        Assert.Contains(new ProfileService(_filePath).Profiles, p => p.Id == "added");
+    }
+
+    [Fact]
+    public void AddProfile_WhenExistingFileIsBlank_StillSaves()
+    {
+        File.WriteAllText(_filePath, "   ");
+        var sut = new ProfileService(_filePath);
+
+        sut.AddProfile(new Profile { Id = "blank-file", Name = "New" });
+
+        Assert.Contains(new ProfileService(_filePath).Profiles, p => p.Id == "blank-file");
+    }
+
+    [Fact]
     public void PromptActionId_RoundTrips()
     {
         var profile = new Profile
         {
             Id = Guid.NewGuid().ToString(),
             Name = "Test Profile",
-            PromptActionId = "prompt-123"
+            PromptActionId = "prompt-123",
         };
 
         _sut.AddProfile(profile);
@@ -47,7 +299,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = Guid.NewGuid().ToString(),
             Name = "No Prompt",
-            PromptActionId = null
+            PromptActionId = null,
         };
 
         _sut.AddProfile(profile);
@@ -64,7 +316,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = Guid.NewGuid().ToString(),
             Name = "Test",
-            PromptActionId = null
+            PromptActionId = null,
         };
 
         _sut.AddProfile(profile);
@@ -82,7 +334,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = Guid.NewGuid().ToString(),
             Name = "With Hotkey",
-            HotkeyData = "{\"key\":\"Ctrl+1\"}"
+            HotkeyData = "{\"key\":\"Ctrl+1\"}",
         };
 
         _sut.AddProfile(profile);
@@ -111,7 +363,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = Guid.NewGuid().ToString(),
             Name = "Email",
-            StylePreset = ProfileStylePreset.FormalEmail
+            StylePreset = ProfileStylePreset.FormalEmail,
         };
 
         _sut.AddProfile(profile);
@@ -170,7 +422,7 @@ public sealed class ProfileServiceTests : IDisposable
             Id = Guid.NewGuid().ToString(),
             Name = "Selection",
             HotkeyData = "Ctrl+Shift+S",
-            HotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText
+            HotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
         };
 
         _sut.AddProfile(profile);
@@ -208,7 +460,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = "forced",
             Name = "Forced",
-            ProcessNames = ["never-matches"]
+            ProcessNames = ["never-matches"],
         };
         _sut.AddProfile(forced);
 
@@ -232,7 +484,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = "forced",
             Name = "Forced",
-            IsEnabled = false
+            IsEnabled = false,
         });
 
         var result = _sut.MatchProfile(null, null, "forced");
@@ -264,7 +516,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = "hotkey-only",
             Name = "Hotkey Only",
-            HotkeyData = "Ctrl+Alt+E"
+            HotkeyData = "Ctrl+Alt+E",
         });
 
         var result = _sut.MatchProfile("some-app", null);
@@ -282,7 +534,7 @@ public sealed class ProfileServiceTests : IDisposable
         {
             Id = "hotkey-only",
             Name = "Hotkey Only",
-            HotkeyData = "Ctrl+Alt+E"
+            HotkeyData = "Ctrl+Alt+E",
         });
 
         var result = _sut.MatchProfile("some-app", null, "hotkey-only");
@@ -299,12 +551,148 @@ public sealed class ProfileServiceTests : IDisposable
         _sut.AddProfile(new Profile
         {
             Id = "global",
-            Name = "Global"
+            Name = "Global",
         });
 
         var result = _sut.MatchProfile("some-app", null);
 
         Assert.Equal(MatchKind.Global, result.Kind);
         Assert.Equal("global", result.Profile!.Id);
+    }
+
+    private static TaskCompletionSource CreateCompletionSource()
+    {
+        return new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    // The first toggle blocks inside BlockingAfterCommitWriter while holding the service
+    // gate, so it must not run on a thread-pool thread. On a loaded CI runner the pool adds
+    // threads roughly once per second, so a queued work item can sit unstarted past
+    // s_testGuard and the test times out waiting for a commit that never got a thread to
+    // happen on. A dedicated thread starts regardless of pool pressure, matching how the
+    // second caller already runs.
+    private static Task<Profile?> RunOnDedicatedThread(Func<Profile?> toggle)
+    {
+        var completion = new TaskCompletionSource<Profile?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        new Thread(() =>
+        {
+            try
+            {
+                completion.TrySetResult(toggle());
+            }
+            catch (Exception ex)
+            {
+                completion.TrySetException(ex);
+            }
+        })
+        {
+            IsBackground = true,
+        }.Start();
+        return completion.Task;
+    }
+
+    private static bool IsWaiting(Thread thread)
+    {
+        return (thread.ThreadState & ThreadState.WaitSleepJoin) != 0;
+    }
+
+    private static async Task CompleteBestEffort(params Task?[] tasks)
+    {
+        var activeTasks = tasks.Where(task => task is not null).Cast<Task>().ToArray();
+        if (activeTasks.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await Task.WhenAll(activeTasks).WaitAsync(s_testGuard);
+        }
+        catch
+        {
+            // Best-effort bounded completion before temporary-file cleanup.
+        }
+    }
+
+    private sealed class BlockingAfterCommitWriter : IDisposable
+    {
+        private readonly TaskCompletionSource _firstCommitted = CreateCompletionSource();
+        private readonly ManualResetEventSlim _releaseFirst = new(false);
+        private readonly TaskCompletionSource _secondEntered = CreateCompletionSource();
+        private int _activeWriters;
+        private int _firstReleased;
+        private int _invocations;
+        private int _maximumConcurrency;
+        private int _secondEnteredBeforeFirstRelease;
+
+        public Task FirstCommitted => _firstCommitted.Task;
+        public Task SecondEntered => _secondEntered.Task;
+        public int InvocationCount => Volatile.Read(ref _invocations);
+        public int MaximumConcurrency => Volatile.Read(ref _maximumConcurrency);
+        public bool SecondEnteredBeforeFirstRelease =>
+            Volatile.Read(ref _secondEnteredBeforeFirstRelease) != 0;
+
+        public void Write(string path, string contents)
+        {
+            var invocation = Interlocked.Increment(ref _invocations);
+            var activeWriters = Interlocked.Increment(ref _activeWriters);
+            UpdateMaximum(activeWriters);
+            try
+            {
+                if (invocation == 1)
+                {
+                    AtomicFileWrite.WriteAllText(path, contents);
+                    _firstCommitted.TrySetResult();
+                    if (!_releaseFirst.Wait(s_writerReleaseGuard))
+                    {
+                        throw new TimeoutException("The first committed writer was not released.");
+                    }
+                }
+                else
+                {
+                    if (Volatile.Read(ref _firstReleased) == 0)
+                    {
+                        Interlocked.Exchange(ref _secondEnteredBeforeFirstRelease, 1);
+                    }
+
+                    _secondEntered.TrySetResult();
+                    AtomicFileWrite.WriteAllText(path, contents);
+                }
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeWriters);
+            }
+        }
+
+        public void ReleaseFirst()
+        {
+            Volatile.Write(ref _firstReleased, 1);
+            _releaseFirst.Set();
+        }
+
+        public void Dispose()
+        {
+            ReleaseFirst();
+            _releaseFirst.Dispose();
+        }
+
+        private void UpdateMaximum(int activeWriters)
+        {
+            var current = Volatile.Read(ref _maximumConcurrency);
+            while (
+                activeWriters > current
+                && Interlocked.CompareExchange(
+                    ref _maximumConcurrency,
+                    activeWriters,
+                    current
+                ) != current
+            )
+            {
+                current = Volatile.Read(ref _maximumConcurrency);
+            }
+        }
     }
 }

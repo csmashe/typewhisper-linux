@@ -10,5 +10,5 @@ public enum OverlayWidget
     Clock,
     Profile,
     HotkeyMode,
-    AppName
+    AppName,
 }

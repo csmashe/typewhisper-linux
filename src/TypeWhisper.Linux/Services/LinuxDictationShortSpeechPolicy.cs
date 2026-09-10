@@ -4,7 +4,7 @@ internal enum LinuxShortSpeechDecision
 {
     DiscardTooShort,
     DiscardNoSpeech,
-    Transcribe
+    Transcribe,
 }
 
 internal static class LinuxDictationShortSpeechPolicy

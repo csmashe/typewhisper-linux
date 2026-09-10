@@ -6,6 +6,11 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class LinuxStreamingTranscriptStateTests
 {
+    // The concurrency tests below hand off through TaskCompletionSources; bound every
+    // coordination await so a regression fails the test instead of hanging the run.
+    private static readonly TimeSpan s_testTimeout = TimeSpan.FromSeconds(5);
+
+
     [Fact]
     public void StopSession_ReturnsConfirmedPollingText()
     {
@@ -79,6 +84,98 @@ public sealed class LinuxStreamingTranscriptStateTests
 
         Assert.True(applied);
         Assert.Equal("the world", display);
+    }
+
+    [Fact]
+    public async Task TryApplyPolling_ConcurrentOlderHypothesis_DoesNotClobberNewerCommittedText()
+    {
+        var sut = new StreamingTranscriptState();
+        var session = sut.StartSession();
+        sut.TryApplyPolling(session, "hello", text => text, out _);
+        var aEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var callA = Task.Run(() =>
+            sut.TryApplyPolling(
+                session,
+                "hello world",
+                text =>
+                {
+                    aEntered.SetResult();
+                    releaseA.Task.Wait();
+                    return text;
+                },
+                out _
+            )
+        );
+
+        await aEntered.Task.WaitAsync(s_testTimeout);
+        var appliedB = sut.TryApplyPolling(
+            session,
+            "hello world how are you",
+            text => text,
+            out var displayB
+        );
+        releaseA.SetResult();
+        var appliedA = await callA.WaitAsync(s_testTimeout);
+
+        Assert.True(appliedB);
+        Assert.Equal("hello world how are you", displayB);
+        Assert.False(appliedA);
+        Assert.Equal("hello world how are you", sut.StopSession());
+    }
+
+    [Fact]
+    public async Task TryApplyPolling_StaleSessionCallback_NeverWritesAfterStopStart_EvenWhenNewSessionTextIsStillEmpty()
+    {
+        var sut = new StreamingTranscriptState();
+        var firstSession = sut.StartSession();
+        var staleEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseStale = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        var staleDisplay = "";
+        var staleCall = Task.Run(() =>
+            sut.TryApplyPolling(
+                firstSession,
+                "stale text",
+                text =>
+                {
+                    staleEntered.SetResult();
+                    releaseStale.Task.Wait();
+                    return text;
+                },
+                out staleDisplay
+            )
+        );
+
+        // The stale corrector has snapshotted _confirmedText="" at the first session's version.
+        await staleEntered.Task.WaitAsync(s_testTimeout);
+
+        // After Stop/Start the new confirmed buffer is also "", so only the version check can
+        // reject the stale write — release and await it before any session-2 commit.
+        sut.StopSession();
+        var secondSession = sut.StartSession();
+        releaseStale.SetResult();
+        var staleApplied = await staleCall.WaitAsync(s_testTimeout);
+
+        Assert.False(staleApplied);
+        Assert.Equal("", staleDisplay);
+
+        // The new session still sees clean state and commits only its own text.
+        var freshApplied = sut.TryApplyPolling(
+            secondSession,
+            "fresh text",
+            text => text,
+            out var freshDisplay
+        );
+
+        Assert.True(freshApplied);
+        Assert.Equal("fresh text", freshDisplay);
+        Assert.Equal("fresh text", sut.StopSession());
     }
 
     [Fact]

@@ -8,7 +8,7 @@ Speech-to-text and AI text processing for the Linux desktop. This repository is 
 
 If the TypeWhisper project releases an official Linux version, or if this port is merged into the main TypeWhisper branch, I plan to use the upstream Linux version instead. Until then, this branch exists as a practical Linux port adapted around Avalonia, Linux desktop services, and Linux-friendly install and startup behavior.
 
-Press a key, talk, and have clean, punctuated text land in whatever app you're in — tuned to feel as close to [Wispr Flow](https://wisprflow.ai/) as possible on Linux. TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary and snippet post-processing, and run prompt-based AI text actions through plugins.
+Press a key, talk, and have clean, punctuated text land in whatever app you're in — tuned to feel as close to [Wispr Flow](https://wisprflow.ai/) as possible on Linux. TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary, snippet, and spoken-number post-processing, and run prompt-based AI text actions through plugins.
 
 ## Documentation
 
@@ -28,10 +28,12 @@ Press a key, talk, and have clean, punctuated text land in whatever app you're i
 - **Local GPU acceleration** — optional NVIDIA CUDA for the bundled whisper.cpp and sherpa-onnx engines, with the runtime downloaded on demand rather than bundled — resumable downloads, and an in-app reset to recover from a bad cache. See [GPU & CUDA](https://github.com/csmashe/typewhisper-linux/wiki/GPU-and-CUDA).
 - **Smart per-app text insertion** — `Auto` / `Clipboard Paste` / `Direct Typing` / `Copy Only` keyed by process name, with session-aware Wayland backends (`wtype` / `ydotool` / `xdotool`). See [Text Insertion](https://github.com/csmashe/typewhisper-linux/wiki/Text-Insertion).
 - **AI text cleanup & formatting** in the Wispr-Flow style, driven by your own LLM, with profile style presets and developer-safe formatting. See [Text Cleanup](https://github.com/csmashe/typewhisper-linux/wiki/Text-Cleanup).
+- **Voice-native editing** — start a dictation with a keyphrase ("TypeWhisper") and the rest becomes a command that edits your highlighted text or writes new text at the cursor, instead of being typed verbatim. Ships disabled; enable it in [Prompts](https://github.com/csmashe/typewhisper-linux/wiki/Prompts).
 - **File transcription and a recorder** — batch queues, watch folders, subtitle (SRT/VTT) export, and longer WAV captures. See [File Transcription](https://github.com/csmashe/typewhisper-linux/wiki/File-Transcription) and [Recorder](https://github.com/csmashe/typewhisper-linux/wiki/Recorder).
-- **Personalization** — searchable history, a dictionary with term packs, snippets, and app/URL-matched profiles. See [Profiles](https://github.com/csmashe/typewhisper-linux/wiki/Profiles).
+- **Personalization** — searchable history, a dictionary with term packs, snippets, and app/URL-matched profiles. History also has an opt-in **Inspect** panel that shows exactly what was sent to the LLM for each entry — the raw→final diff, the exact prompt, injected memory context, and the reply, with local-vs-cloud labelling. See [Profiles](https://github.com/csmashe/typewhisper-linux/wiki/Profiles) and [History](https://github.com/csmashe/typewhisper-linux/wiki/History).
+- **Learns from your corrections** in the Wispr-Flow style — when you type over a dictated word in the target app to fix it, TypeWhisper silently learns the correction (via AT-SPI) and auto-applies it to future dictations. A brief toast shows what was learned and offers **Undo**. Off by default (it reads the focused field); enable it under [Dictation](https://github.com/csmashe/typewhisper-linux/wiki/Dictation) settings, and review or remove learned entries in the [Dictionary](https://github.com/csmashe/typewhisper-linux/wiki/Dictionary).
 - **A localized interface** — English, German, Spanish, or Russian, switched live (or Auto, to follow your system locale). See [General Settings](https://github.com/csmashe/typewhisper-linux/wiki/General-Settings).
-- **Automation** — a local [HTTP API](https://github.com/csmashe/typewhisper-linux/wiki/HTTP-API) and an installable `typewhisper` [CLI](https://github.com/csmashe/typewhisper-linux/wiki/CLI).
+- **Automation** — a local, authenticated [HTTP API](https://github.com/csmashe/typewhisper-linux/wiki/HTTP-API) and a `typewhisper-cli` [CLI](https://github.com/csmashe/typewhisper-linux/wiki/CLI) bundled in every package.
 - **Desktop integration** — tray icon, XDG autostart, single-instance handoff, and a user-level installer. See [Desktop Integration](https://github.com/csmashe/typewhisper-linux/wiki/Desktop-Integration).
 
 Everything here is Linux-specific work adapted from the upstream macOS/Windows project: Wayland/X11 global hotkeys, compositor-native window and URL detection, session audio handling, and Linux packaging. The deep how-and-why for each lives in the wiki — start with [Wayland Notes](https://github.com/csmashe/typewhisper-linux/wiki/Wayland-Notes) if you're on Wayland.
@@ -43,7 +45,7 @@ I run this branch as my daily driver and tune it to feel as close to [Wispr Flow
 The stack I actually use day to day:
 
 - **Transcription** — the bundled whisper.cpp engine on the GPU (CUDA 12), running the full `large-v3` model. Since I'm running on a GPU there's headroom for it, so I moved up from `large-v3-turbo` to the full model. It's fully local, runs fine on my GTX 1070, and accurate enough that I rarely re-record.
-- **Cleanup** — an OpenAI-compatible LLM server (Ollama) running on a separate machine on my LAN — an RTX 3090 box. I now run cleanup through a custom dictation-cleanup model we're still putting together; it isn't released yet (more on that below). If you want the same setup today, I recommend `mistral-small:24b` — it's what I ran before and still works well. My **Auto Clean Up Text** prompt drives the model, and it's written to clean dictation the way Wispr Flow does: strip filler words ("um", "uh", "like"), fix capitalization and punctuation, apply spoken self-corrections in place, and format lists when I clearly ask for one — without ever adding, answering, or dropping anything I actually said. The **Auto Format** profile binds that prompt to a single hotkey (`Ctrl+Alt+E`), so dictation goes straight through cleanup before it's inserted. Both ship seeded but disabled on a fresh install, so you can turn them on and point the cleanup at your own LLM.
+- **Cleanup** — an OpenAI-compatible LLM server (Ollama) running on a separate machine on my LAN — an RTX 3090 box. I now run cleanup through a custom dictation-cleanup model we're still putting together; it isn't released yet (more on that below). If you want the same setup today, I recommend `mistral-small:24b` — it's what I ran before and still works well. My **Auto Clean Up Text** prompt drives the model, and it's written to clean dictation the way Wispr Flow does: strip filler words ("um", "uh", "like"), fix capitalization and punctuation, apply spoken self-corrections in place, and format lists when I clearly ask for one — without ever adding, answering, or dropping anything I actually said. The **Auto Format** profile binds that prompt to a single hotkey (`Ctrl+Alt+E`), so dictation goes straight through cleanup before it's inserted. Both ship seeded but disabled on a fresh install, so you can turn them on and point the cleanup at your own LLM. If your server runs a reasoning model, its thinking is stripped before insertion, and each OpenAI-compatible endpoint has a **Thinking Mode** setting to turn it off for cleanup entirely.
 - **Insertion** — auto-paste is on, and on GNOME Wayland the text is delivered through `ydotool`.
 - **Hotkeys** — I run in **Hybrid** activation mode: a quick tap toggles recording, and holding acts as push-to-talk.
 
@@ -55,11 +57,24 @@ I keep the rest deliberately minimal for latency and predictability — audio du
 
 Tagged releases on [GitHub Releases](https://github.com/csmashe/typewhisper-linux/releases) ship four `linux-x64` formats — **AppImage**, Debian/Ubuntu **`.deb`**, Fedora/RHEL **`.rpm`**, and a no-root **tarball** — each bundling the self-contained .NET runtime and the Linux plugins. See **[Installation](https://github.com/csmashe/typewhisper-linux/wiki/Installation)** for which format to pick and the per-format commands, and **[Requirements](https://github.com/csmashe/typewhisper-linux/wiki/Requirements)** for the optional desktop helpers (`pactl`, `playerctl`, `wtype` / `ydotool` / `xdotool`, `pw-play` / `paplay` / `aplay`, …).
 
+### Tarball and AppImage system libraries
+
+The `.deb` and `.rpm` install required system libraries through the package manager; tarball and AppImage users must install the equivalent libraries from the [Requirements](https://github.com/csmashe/typewhisper-linux/wiki/Requirements) page first.
+
 Whichever format you install, the first-run [Setup Wizard](https://github.com/csmashe/typewhisper-linux/wiki/Setup-Wizard) checks what's needed and gets you set up with everything required — the typing/paste backend, the global-dictation hotkey, active-window detection, and more — so you don't have to wire it up by hand.
 
 ### Build from source
 
-Requires the **.NET 10 SDK**.
+Requires the **.NET 10 SDK** and `python3`. `global.json` pins a 10.0.100 floor so CI is reproducible, and rolls forward from there — your distribution's package is enough:
+
+```bash
+sudo dnf install dotnet-sdk-10.0      # Fedora / RHEL
+sudo apt install dotnet-sdk-10.0      # Debian / Ubuntu
+```
+
+The floor is deliberately on the `10.0.1xx` feature band. Fedora, RHEL and Debian ship *source-built* .NET, which only ever tracks that band, so pinning one of Microsoft's `10.0.2xx`/`10.0.3xx` bands would lock every distro contributor out — `rollForward` only rolls forward, never back. Microsoft's own builds are newer bands and satisfy the pin too, if you prefer one.
+
+The build bundles the Linux plugins, reading the authoritative list in `plugins/catalog.json` via `scripts/plugin-catalog-deploy-map.py`. Skip that step with `-p:DeployBundledLinuxPlugins=false`.
 
 ```bash
 git clone https://github.com/csmashe/typewhisper-linux.git
@@ -71,7 +86,7 @@ dotnet run --project src/TypeWhisper.Linux
 To install a clickable launcher and icon for the current user (publishes self-contained, bundles the Linux plugins, and registers a `.desktop` entry):
 
 ```bash
-./scripts/install-linux-app.sh      # ./scripts/uninstall-linux-app.sh to remove
+./scripts/install-linux-app.sh      # ./scripts/uninstall-linux-app.sh to remove (keeps your data; add --purge to delete it too)
 ```
 
 ## Project Layout

@@ -18,6 +18,95 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public partial class WhisperCppPluginTests
 {
+    private const float TranscriptionNoSpeechThreshold = 0.8f;
+    private static readonly TimeSpan s_coordinationTimeout = TimeSpan.FromSeconds(5);
+
+    [Fact]
+    public void InitializeCudaDependencies_CustomPluginAssetDirectory_UsesSharedConfiguredRoot()
+    {
+        using var temp = new TempAssetDir();
+        var storageRoot = Path.Join(temp.Path, "selected-storage");
+        var pluginAssetDirectory = Path.Join(
+            storageRoot,
+            "PluginData",
+            "com.typewhisper.whisper-cpp"
+        );
+        var host = CreateHostMock(pluginAssetDirectory);
+        using var plugin = new WhisperCppPlugin();
+
+        plugin.InitializeCudaDependenciesForTests(host.Object);
+
+        Assert.Equal(
+            Path.Join(storageRoot, "Runtimes", "cuda"),
+            plugin.CudaRuntimeCacheRootForTests
+        );
+    }
+
+    [Fact]
+    public async Task AccumulateSegmentsAsync_SpeechThenTrailingSilence_UsesMinimumProbability()
+    {
+        var result = await WhisperCppPlugin.AccumulateSegmentsAsync(
+            AsAsyncEnumerable(
+                Segment("  Hello world.  ", 0.05f, language: "en", endSeconds: 1.25),
+                Segment(" Thank you. ", 0.95f, language: "en", endSeconds: 1.5)
+            ),
+            TranscriptionNoSpeechThreshold
+        );
+
+        Assert.Equal("Hello world.", result.Text);
+        Assert.Equal(0.05f, result.NoSpeechProbability);
+        Assert.Equal("en", result.DetectedLanguage);
+        Assert.Equal(1.5, result.DurationSeconds);
+    }
+
+    [Fact]
+    public async Task AccumulateSegmentsAsync_AllSegmentsSilent_ReturnsEmptyTextAndMinimumProbability()
+    {
+        var result = await WhisperCppPlugin.AccumulateSegmentsAsync(
+            AsAsyncEnumerable(Segment("Noise", 0.9f), Segment("Thank you.", 0.95f)),
+            TranscriptionNoSpeechThreshold
+        );
+
+        Assert.Empty(result.Text);
+        Assert.Equal(0.9f, result.NoSpeechProbability);
+    }
+
+    [Fact]
+    public async Task AccumulateSegmentsAsync_NoSegments_ReturnsEmptyTextAndNullProbability()
+    {
+        var result = await WhisperCppPlugin.AccumulateSegmentsAsync(
+            AsAsyncEnumerable(),
+            TranscriptionNoSpeechThreshold
+        );
+
+        Assert.Empty(result.Text);
+        Assert.Null(result.NoSpeechProbability);
+    }
+
+    [Fact]
+    public async Task AccumulateSegmentsAsync_MultipleSpeechSegments_JoinsTextAndUsesMinimumProbability()
+    {
+        var result = await WhisperCppPlugin.AccumulateSegmentsAsync(
+            AsAsyncEnumerable(Segment(" First ", 0.1f), Segment(" second. ", 0.3f)),
+            TranscriptionNoSpeechThreshold
+        );
+
+        Assert.Equal("First second.", result.Text);
+        Assert.Equal(0.1f, result.NoSpeechProbability);
+    }
+
+    [Fact]
+    public async Task AccumulateSegmentsAsync_SilenceThenSpeech_UsesMinimumProbabilityRegardlessOfOrder()
+    {
+        var result = await WhisperCppPlugin.AccumulateSegmentsAsync(
+            AsAsyncEnumerable(Segment("Thank you.", 0.95f), Segment(" Speech ", 0.05f)),
+            TranscriptionNoSpeechThreshold
+        );
+
+        Assert.Equal("Speech", result.Text);
+        Assert.Equal(0.05f, result.NoSpeechProbability);
+    }
+
     [Fact]
     public void SupportedAccelerationBackends_IsCpuAndNvidiaCuda()
     {
@@ -190,22 +279,39 @@ public partial class WhisperCppPluginTests
         var host = CreateHostMock(temp.Path);
         var provisioner = new BlockingProvisioner();
         var installer = new NoopWhisperInstaller(temp.Path);
+        using var loadCts = new CancellationTokenSource();
+        Task? loadTask = null;
 
-        var plugin = new WhisperCppPlugin();
-        plugin.SetCudaDependenciesForTests(provisioner, installer);
-        await plugin.ActivateAsync(host.Object);
-        WriteDummyModel(temp.Path, "ggml-tiny.bin");
+        try
+        {
+            var plugin = new WhisperCppPlugin();
+            plugin.SetCudaDependenciesForTests(provisioner, installer);
+            await plugin.ActivateAsync(host.Object);
+            WriteDummyModel(temp.Path, "ggml-tiny.bin");
 
-        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
-        var loadTask = plugin.LoadModelAsync("tiny", CancellationToken.None);
+            plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+            var runningLoadTask = plugin.LoadModelAsync("tiny", loadCts.Token);
+            loadTask = runningLoadTask;
 
-        await provisioner.Started;
-        // User switches to CPU while the (blocked) CUDA provision is in flight.
-        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
-        provisioner.Release();
+            // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; wiring loadCts.Token here would make the deadline racy with the finally's teardown cancel instead of fixed.
+            await provisioner.Started.WaitAsync(s_coordinationTimeout);
+            // User switches to CPU while the (blocked) CUDA provision is in flight.
+            plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+            provisioner.Release();
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => loadTask);
-        Assert.Contains("Compute backend changed", ex.Message);
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; wiring loadCts.Token here would make the deadline racy with the finally's teardown cancel instead of fixed.
+                () => runningLoadTask.WaitAsync(s_coordinationTimeout)
+            );
+            Assert.Contains("Compute backend changed", ex.Message);
+        }
+        finally
+        {
+            provisioner.Release();
+            // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel is the teardown signal; CancelAsync buys nothing in cleanup.
+            loadCts.Cancel();
+            await CompleteBestEffort(loadTask);
+        }
     }
 
     // Once Whisper.net's one-shot native loader has failed (poisoned static), a subsequent
@@ -239,6 +345,39 @@ public partial class WhisperCppPluginTests
         var modelsDir = Path.Join(assetDir, "Models");
         Directory.CreateDirectory(modelsDir);
         File.WriteAllText(Path.Join(modelsDir, fileName), "dummy");
+    }
+
+    private static WhisperCppTranscriptionSegment Segment(
+        string text,
+        float noSpeechProbability,
+        string? language = null,
+        double endSeconds = 0
+    ) => new(text, language, TimeSpan.FromSeconds(endSeconds), noSpeechProbability);
+
+    private static async IAsyncEnumerable<WhisperCppTranscriptionSegment> AsAsyncEnumerable(
+        params WhisperCppTranscriptionSegment[] segments
+    )
+    {
+        foreach (var segment in segments)
+        {
+            await Task.Yield();
+            yield return segment;
+        }
+    }
+
+    private static async Task CompleteBestEffort(Task? task)
+    {
+        if (task is null)
+            return;
+
+        try
+        {
+            await task.WaitAsync(s_coordinationTimeout);
+        }
+        catch
+        {
+            // Cleanup is observation-only and must remain bounded.
+        }
     }
 
     // A provisioner that blocks inside EnsureReadyAsync until released, signaling when it
@@ -314,6 +453,29 @@ public partial class WhisperCppPluginTests
 
 public partial class SherpaOnnxPluginTests
 {
+    private static readonly TimeSpan s_coordinationTimeout = TimeSpan.FromSeconds(5);
+
+    [Fact]
+    public void InitializeCudaDependencies_CustomPluginAssetDirectory_UsesSharedConfiguredRoot()
+    {
+        using var temp = new TempAssetDir();
+        var storageRoot = Path.Join(temp.Path, "selected-storage");
+        var pluginAssetDirectory = Path.Join(
+            storageRoot,
+            "PluginData",
+            "com.typewhisper.sherpa-onnx"
+        );
+        var host = CreateHostMock(pluginAssetDirectory);
+        using var plugin = new SherpaOnnxPlugin();
+
+        plugin.InitializeCudaDependenciesForTests(host.Object);
+
+        Assert.Equal(
+            Path.Join(storageRoot, "Runtimes", "cuda"),
+            plugin.CudaRuntimeCacheRootForTests
+        );
+    }
+
     [Fact]
     public void SupportedAccelerationBackends_IsCpuAndNvidiaCuda()
     {
@@ -498,6 +660,21 @@ public partial class SherpaOnnxPluginTests
         return host.Object;
     }
 
+    private static async Task CompleteBestEffort(Task? task)
+    {
+        if (task is null)
+            return;
+
+        try
+        {
+            await task.WaitAsync(s_coordinationTimeout);
+        }
+        catch
+        {
+            // Cleanup is observation-only and must remain bounded.
+        }
+    }
+
     // CI-portable state-machine test mirroring the whisper one: a CUDA load whose backend
     // is switched to CPU mid-provision must abort. The injected provisioner blocks inside
     // EnsureReadyAsync; once the backend is switched to CPU the wiring guard skips
@@ -517,22 +694,112 @@ public partial class SherpaOnnxPluginTests
         var host = CreateHostMock(temp.Path);
         var provisioner = new SherpaBlockingProvisioner();
         var installer = new NoopSherpaInstaller(temp.Path);
+        using var loadCts = new CancellationTokenSource();
+        Task? loadTask = null;
 
-        var plugin = new SherpaOnnxPlugin();
-        plugin.SetCudaDependenciesForTests(provisioner, installer);
-        await plugin.ActivateAsync(host.Object);
+        try
+        {
+            var plugin = new SherpaOnnxPlugin();
+            plugin.SetCudaDependenciesForTests(provisioner, installer);
+            await plugin.ActivateAsync(host.Object);
+            WriteParakeetModelFiles(temp.Path);
+
+            plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+            var runningLoadTask = plugin.LoadModelAsync(
+                "parakeet-tdt-0.6b",
+                loadCts.Token
+            );
+            loadTask = runningLoadTask;
+
+            // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; wiring loadCts.Token here would make the deadline racy with the finally's teardown cancel instead of fixed.
+            await provisioner.Started.WaitAsync(s_coordinationTimeout);
+            // User switches to CPU while the (blocked) CUDA provision is in flight.
+            plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+            provisioner.Release();
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; wiring loadCts.Token here would make the deadline racy with the finally's teardown cancel instead of fixed.
+                () => runningLoadTask.WaitAsync(s_coordinationTimeout)
+            );
+            Assert.Contains("Compute backend changed", ex.Message);
+        }
+        finally
+        {
+            provisioner.Release();
+            // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel is the teardown signal; CancelAsync buys nothing in cleanup.
+            loadCts.Cancel();
+            await CompleteBestEffort(loadTask);
+        }
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_NativeParseFailure_DeletesArtifactsAndMarksModelFetchable()
+    {
+        using var temp = new TempAssetDir();
+        var host = CreateHostMock(temp.Path);
+        using var plugin = new SherpaOnnxPlugin();
+        plugin.SetHostForTests(host.Object);
         WriteParakeetModelFiles(temp.Path);
+        plugin.SetParakeetRecognizerFactoryForTests(
+            (_, _) => throw new InvalidOperationException(
+                "Failed to load model because protobuf parsing failed."
+            )
+        );
 
-        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
-        var loadTask = plugin.LoadModelAsync("parakeet-tdt-0.6b", CancellationToken.None);
+        Assert.True(plugin.IsModelDownloaded("parakeet-tdt-0.6b"));
 
-        await provisioner.Started;
-        // User switches to CPU while the (blocked) CUDA provision is in flight.
-        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
-        provisioner.Release();
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => plugin.LoadModelAsync("parakeet-tdt-0.6b", CancellationToken.None)
+        );
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => loadTask);
-        Assert.Contains("Compute backend changed", ex.Message);
+        Assert.Contains("protobuf parsing failed", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(plugin.IsModelDownloaded("parakeet-tdt-0.6b"));
+        Assert.Empty(
+            Directory.GetFiles(Path.Join(temp.Path, "Models", "parakeet-tdt-0.6b"))
+        );
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_EnvironmentFailure_PreservesDownloadedArtifacts()
+    {
+        using var temp = new TempAssetDir();
+        var host = CreateHostMock(temp.Path);
+        using var plugin = new SherpaOnnxPlugin();
+        plugin.SetHostForTests(host.Object);
+        WriteParakeetModelFiles(temp.Path);
+        plugin.SetParakeetRecognizerFactoryForTests(
+            (_, _) => throw new InvalidOperationException(
+                "CUDA execution provider failed to initialize because libcudnn was unavailable."
+            )
+        );
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => plugin.LoadModelAsync("parakeet-tdt-0.6b", CancellationToken.None)
+        );
+
+        Assert.Contains("CUDA execution provider", ex.Message);
+        Assert.True(plugin.IsModelDownloaded("parakeet-tdt-0.6b"));
+        Assert.Equal(
+            4,
+            Directory.GetFiles(Path.Join(temp.Path, "Models", "parakeet-tdt-0.6b")).Length
+        );
+    }
+
+    [Fact]
+    public void ArtifactPreflight_CanaryTokensWithoutBlank_AcceptedButStillStructurallyChecked()
+    {
+        using var temp = new TempAssetDir();
+        var dir = WriteCanaryModelFiles(temp.Path);
+
+        // Canary (attention encoder-decoder) has no blank token; preflight must accept
+        // it, or a blank requirement would fail every Canary download and delete caches.
+        SherpaOnnxPlugin.RunArtifactPreflightForTests("canary-180m-flash", dir);
+
+        // The blank exemption must not switch off the remaining token checks.
+        File.WriteAllText(Path.Join(dir, "tokens.txt"), "<unk> 0\n<pad> not-an-id\n");
+        Assert.Throws<InvalidDataException>(
+            () => SherpaOnnxPlugin.RunArtifactPreflightForTests("canary-180m-flash", dir)
+        );
     }
 
     private static Mock<IPluginHostServices> CreateHostMock(string assetDir)
@@ -543,15 +810,37 @@ public partial class SherpaOnnxPluginTests
         return host;
     }
 
+    private static string WriteCanaryModelFiles(string assetDir)
+    {
+        var dir = Path.Join(assetDir, "Models", "canary-180m-flash");
+        Directory.CreateDirectory(dir);
+        foreach (var fileName in new[] { "encoder.int8.onnx", "decoder.int8.onnx" })
+            File.WriteAllBytes(Path.Join(dir, fileName), [0x08, 0x09, 0x3a, 0x02, 0x12, 0x00]);
+
+        // Real Canary vocab uses <unk>/<pad>/<|...|> tokens and no transducer blank symbol.
+        File.WriteAllText(Path.Join(dir, "tokens.txt"), "<unk> 0\nfoo 1\n");
+        return dir;
+    }
+
     private static void WriteParakeetModelFiles(string assetDir)
     {
         var dir = Path.Join(assetDir, "Models", "parakeet-tdt-0.6b");
         Directory.CreateDirectory(dir);
-        foreach (var f in new[]
+        foreach (var fileName in new[]
                  {
-                     "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"
+                     "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx",
                  })
-            File.WriteAllText(Path.Join(dir, f), "dummy");
+        {
+            // Minimal ONNX protobuf framing (ir_version=9, non-empty graph) for the
+            // structural preflight; the injected recognizer factory means these bytes
+            // never reach the native loader.
+            File.WriteAllBytes(
+                Path.Join(dir, fileName),
+                [0x08, 0x09, 0x3a, 0x02, 0x12, 0x00]
+            );
+        }
+
+        File.WriteAllText(Path.Join(dir, "tokens.txt"), "<blk> 0\n");
     }
 
     private sealed class SherpaBlockingProvisioner : SherpaCuda.CudaRuntimeProvisioner

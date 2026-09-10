@@ -63,8 +63,8 @@ public sealed class CorrectionSuggestionService
         [
             new CorrectionSuggestion
             {
-                Original = original, Replacement = replacement, Confidence = Math.Round(confidence, 2)
-            }
+                Original = original, Replacement = replacement, Confidence = Math.Round(confidence, 2),
+            },
         ];
     }
 
@@ -89,6 +89,19 @@ public sealed class CorrectionSuggestionService
         var maxTotal = Math.Max(originalTokenCount, correctedTokenCount);
         var maxChanged = Math.Max(originalChanged.Count, correctedChanged.Count);
         if (maxTotal > 3 && maxChanged > maxTotal / 2)
+        {
+            return false;
+        }
+
+        // Reject any changed token that straddles a line break. Tokenize only splits on
+        // spaces, so a word adjacent to a newline gloms into one token (e.g. "foo\nbar");
+        // a correction that embeds a line break is never a sensible word-level fix in
+        // either the history or target-app flow.
+        if (
+            originalChanged
+                .Concat(correctedChanged)
+                .Any(token => token.Trimmed.Contains('\n') || token.Trimmed.Contains('\r'))
+        )
         {
             return false;
         }

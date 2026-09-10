@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.Services;
@@ -7,7 +8,7 @@ public enum WatchFolderOutputFormat
     Markdown,
     PlainText,
     Srt,
-    Vtt
+    Vtt,
 }
 
 public sealed record WatchFolderOptions(
@@ -45,6 +46,17 @@ public sealed record WatchFolderHistoryItem
     public required string OutputPath { get; init; }
     public required bool Success { get; init; }
     public string? ErrorMessage { get; init; }
+
+    /// <summary>
+    ///     A completed transcription that still carries a message — e.g. the transcript was written
+    ///     but the source file could not be deleted. Distinct from <see cref="ShowsFailure" /> so the
+    ///     UI can show it without demoting the run to a failure.
+    /// </summary>
+    [JsonIgnore]
+    public bool ShowsWarning => Success && !string.IsNullOrEmpty(ErrorMessage);
+
+    [JsonIgnore]
+    public bool ShowsFailure => !Success && !string.IsNullOrEmpty(ErrorMessage);
 }
 
 public static class WatchFolderOutputFormats
@@ -68,7 +80,7 @@ public static class WatchFolderOutputFormats
             WatchFolderOutputFormat.PlainText => "txt",
             WatchFolderOutputFormat.Srt => "srt",
             WatchFolderOutputFormat.Vtt => "vtt",
-            _ => "md"
+            _ => "md",
         };
     }
 }

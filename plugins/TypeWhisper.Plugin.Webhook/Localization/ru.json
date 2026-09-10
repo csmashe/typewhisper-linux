@@ -18,6 +18,7 @@
   "Settings.MethodInvalid": "метод должен быть POST или PUT.",
   "Settings.HeaderMissingSeparator": "в строке заголовка '{0}' отсутствует разделитель ':'.",
   "Settings.HeaderEmptyName": "в строке заголовка '{0}' пустое имя.",
+  "Settings.HeaderPlaceholderWithoutStoredValue": "для заголовка '{0}' нет сохранённого значения, которое можно оставить; введите его настоящее значение.",
   "Settings.FailedToSaveSettings": "Не удалось сохранить настройки: {0}",
   "Settings.Saved": "Сохранено.",
   "Manifest.Name": "Webhook",

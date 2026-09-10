@@ -9,21 +9,15 @@ public sealed partial class DictionaryService
 {
     public string ExportToCsv()
     {
-        EnsureCacheLoaded();
-
         var sb = new StringBuilder();
         sb.AppendLine(
             "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source"
         );
 
-        List<DictionaryEntry> entries;
-        lock (_gate)
-        {
-            entries = _cache
-                .OrderBy(e => e.EntryType)
-                .ThenBy(e => e.Original, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
+        var entries = _store.Current
+            .OrderBy(e => e.EntryType)
+            .ThenBy(e => e.Original, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         foreach (var entry in entries)
         {
@@ -50,7 +44,6 @@ public sealed partial class DictionaryService
 
     public int ImportFromCsv(string csv)
     {
-        EnsureCacheLoaded();
         if (string.IsNullOrWhiteSpace(csv))
         {
             return 0;
@@ -64,13 +57,29 @@ public sealed partial class DictionaryService
 
         var imported = 0;
 
-        lock (_gate)
+        Commit(newCache =>
         {
-            var newCache = new List<DictionaryEntry>(_cache);
+            imported = 0;
             var startIndex = LooksLikeHeader(rows[0]) ? 1 : 0;
             var existingKeys = newCache
+                .Where(entry => entry.EntryType != DictionaryEntryType.Correction)
                 .Select(DictionaryEntryKey)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // Corrections merge by case-insensitive Original — the same identity
+            // UpsertCorrection uses — so an import can never create a conflicting
+            // duplicate; later rows (in-file or vs. cache) win.
+            var correctionIndexes = new Dictionary<string, int>(
+                StringComparer.OrdinalIgnoreCase
+            );
+
+            for (var i = 0; i < newCache.Count; i++)
+            {
+                var existing = newCache[i];
+                if (existing.EntryType == DictionaryEntryType.Correction)
+                {
+                    correctionIndexes.TryAdd(existing.Original, i);
+                }
+            }
 
             for (var i = startIndex; i < rows.Count; i++)
             {
@@ -121,8 +130,37 @@ public sealed partial class DictionaryService
                     IsEnabled = row.Count <= 4 || ReadBool(row, 4),
                     IsStarred = ReadBool(row, 5),
                     Priority = ReadInt(row, 6),
-                    Source = ReadSource(row, 7)
+                    Source = ReadSource(row, 7),
                 };
+
+                if (entryType == DictionaryEntryType.Correction)
+                {
+                    if (correctionIndexes.TryGetValue(original, out var existingIndex))
+                    {
+                        var existing = newCache[existingIndex];
+                        if (HasSameCsvFields(existing, entry))
+                        {
+                            continue;
+                        }
+
+                        newCache[existingIndex] = existing with
+                        {
+                            Replacement = entry.Replacement,
+                            CaseSensitive = entry.CaseSensitive,
+                            IsEnabled = entry.IsEnabled,
+                            IsStarred = entry.IsStarred,
+                            Priority = entry.Priority,
+                            Source = entry.Source,
+                        };
+                        imported++;
+                        continue;
+                    }
+
+                    correctionIndexes.Add(original, newCache.Count);
+                    newCache.Add(entry);
+                    imported++;
+                    continue;
+                }
 
                 if (!existingKeys.Add(DictionaryEntryKey(entry)))
                 {
@@ -133,19 +171,20 @@ public sealed partial class DictionaryService
                 imported++;
             }
 
-            if (imported > 0)
-            {
-                SaveToDisk(newCache);
-                _cache = newCache;
-            }
-        }
-
-        if (imported > 0)
-        {
-            EntriesChanged?.Invoke();
-        }
+            return imported > 0;
+        });
 
         return imported;
+    }
+
+    private static bool HasSameCsvFields(DictionaryEntry existing, DictionaryEntry incoming)
+    {
+        return existing.Replacement == incoming.Replacement
+               && existing.CaseSensitive == incoming.CaseSensitive
+               && existing.IsEnabled == incoming.IsEnabled
+               && existing.IsStarred == incoming.IsStarred
+               && existing.Priority == incoming.Priority
+               && existing.Source == incoming.Source;
     }
 
     private static string DictionaryEntryKey(DictionaryEntry entry)

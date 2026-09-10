@@ -20,5 +20,5 @@ public enum TtsPurpose
 
     /// <summary>User explicitly requested the text to be read aloud.</summary>
     // ReSharper disable once UnusedMember.Global
-    ManualReadback
+    ManualReadback,
 }

@@ -11,6 +11,18 @@ public record AppSettings
 {
     public const string DefaultSpokenFeedbackProviderId = "linux-system";
 
+    public const string DefaultCommandKeyphrase = "TypeWhisper";
+
+    /// <summary>
+    ///     Sentinel stored in <see cref="SelectedMicrophoneDeviceId" /> when the user
+    ///     opts to follow the system default capture device instead of pinning a
+    ///     specific microphone. Chosen to never collide with a real PortAudio device
+    ///     id (which is "name|channels"): the leading control marker is not part of
+    ///     any device name. When this is set, <see cref="SelectedMicrophoneDevice" />
+    ///     is ignored and the current OS default is resolved at capture time.
+    /// </summary>
+    public const string FollowSystemDefaultMicrophoneId = "follow-system-default";
+
     public const string LocalModelAccelerationAuto = "auto";
     public const string LocalModelAccelerationCpu = "cpu";
     public const string LocalModelAccelerationNvidiaCuda = "nvidia-cuda";
@@ -20,9 +32,6 @@ public record AppSettings
     public const int MaxPreviewBubbleAutoHideMilliseconds = 5000;
 
     public string ToggleHotkey { get; init; } = "Ctrl+Shift+F9";
-    public string PushToTalkHotkey { get; init; } = "Ctrl+Shift";
-    public string ToggleOnlyHotkey { get; init; } = "";
-    public string HoldOnlyHotkey { get; init; } = "";
     public string RecentTranscriptionsHotkey { get; init; } = "";
     public string CopyLastTranscriptionHotkey { get; init; } = "";
     public string TransformSelectionHotkey { get; init; } = "";
@@ -76,6 +85,7 @@ public record AppSettings
     public bool PauseMediaDuringRecording { get; init; }
     public bool SoundFeedbackEnabled { get; init; } = true;
     public bool TranscribeShortQuietClipsAggressively { get; init; }
+    public bool TranscriptionNumberNormalizationEnabled { get; init; } = true;
 
     // Live transcription (streaming preview while recording)
     public bool LiveTranscriptionEnabled { get; init; } = true;
@@ -118,6 +128,17 @@ public record AppSettings
     public bool VocabularyBoostingEnabled { get; init; }
     public bool AutoAddDictionaryCorrections { get; init; }
 
+    // Silently learn corrections when you type over a dictated word in the target app
+    // (Wispr-Flow-style). Default off — opt-in, since it reads other apps' field text.
+    public bool TargetAppCorrectionLearningEnabled { get; init; }
+
+    // True when TypeWhisper itself turned on the session accessibility flag
+    // (org.a11y.Status.IsEnabled) via the Dictation-settings bridge button. Gates the
+    // "Remove accessibility bridge" button across restarts: the flag is session-global
+    // (and persists via gsettings on GNOME), so removal is only ever offered for a state
+    // this app created — never for one a screen reader or other tool may rely on.
+    public bool AccessibilityBridgeEnabledByApp { get; init; }
+
     // Onboarding
     public bool HasCompletedOnboarding { get; init; }
     public string SelectedIndustryPresetId { get; init; } = "general";
@@ -125,6 +146,16 @@ public record AppSettings
     // Prompt Palette
     public string PromptPaletteHotkey { get; init; } = "";
     public string? DefaultLlmProvider { get; init; }
+
+    // Spoken commands (keyphrase command mode). When enabled, a dictation that starts
+    // with CommandKeyphrase is handed to the LLM as an instruction instead of typed.
+    // Ships disabled; the keyphrase defaults to the product name.
+    public bool CommandModeEnabled { get; init; }
+    public string CommandKeyphrase { get; init; } = DefaultCommandKeyphrase;
+
+    // LLM for ad-hoc spoken commands ("plugin:<pluginId>:<modelId>", like DefaultLlmProvider);
+    // null falls back to the default. A matched saved prompt uses that prompt's own override.
+    public string? SpokenCommandLlmProvider { get; init; }
 
     // Plugin state
     public Dictionary<string, bool> PluginEnabledState { get; init; } = new();
@@ -135,6 +166,12 @@ public record AppSettings
 
     // History
     public bool SaveToHistoryEnabled { get; init; } = true;
+
+    // Opt-in (default off): persists the exact prompts, provider, and injected
+    // memory context sent to the LLM per history entry (powers the Inspect panel).
+    // Piggybacks history storage, so it only takes effect when history saving is
+    // on; off by default because full prompts are more sensitive than the transcript.
+    public bool CaptureLlmProvenance { get; init; }
 
     // Spoken feedback (TTS readback after transcription)
     public bool SpokenFeedbackEnabled { get; init; }

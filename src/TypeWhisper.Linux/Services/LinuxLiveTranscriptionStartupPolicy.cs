@@ -7,7 +7,7 @@ internal enum LiveTranscriptionMode
 {
     None,
     Polling,
-    Streaming
+    Streaming,
 }
 
 // Selects the live-transcription mode for the recording loop. Ported from
@@ -17,7 +17,7 @@ internal static class LinuxLiveTranscriptionStartupPolicy
 {
     public static LiveTranscriptionMode Select(
         AppSettings settings,
-        ITranscriptionEnginePlugin? plugin)
+        ITranscriptionEngineRole? plugin)
     {
         if (!settings.LiveTranscriptionEnabled || plugin is null)
         {

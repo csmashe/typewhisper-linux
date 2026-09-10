@@ -81,6 +81,12 @@ public sealed class XdgPortalGlobalShortcutsBackend : IGlobalShortcutBackend
         remove { }
     }
 
+    public event EventHandler? DictationDiscardRequested
+    {
+        add { }
+        remove { }
+    }
+
     public event EventHandler? PromptPaletteRequested
     {
         add { }

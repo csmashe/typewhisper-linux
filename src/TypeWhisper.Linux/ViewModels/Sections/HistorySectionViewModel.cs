@@ -13,6 +13,22 @@ using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+internal static class PresentationDateTime
+{
+    internal static DateTime ToLocal(DateTime timestamp, TimeZoneInfo timeZone)
+    {
+        if (timestamp.Kind == DateTimeKind.Local)
+        {
+            return timestamp;
+        }
+
+        var utcTimestamp = timestamp.Kind == DateTimeKind.Utc
+            ? timestamp
+            : DateTime.SpecifyKind(timestamp, DateTimeKind.Utc);
+        return TimeZoneInfo.ConvertTimeFromUtc(utcTimestamp, timeZone);
+    }
+}
+
 public partial class HistorySectionViewModel : ObservableObject
 {
     // Thousands of entries: rows are materialized in pages and appended on scroll.
@@ -23,6 +39,8 @@ public partial class HistorySectionViewModel : ObservableObject
     private readonly IHistoryService _history;
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly ISettingsService _settings;
+    private readonly TimeZoneInfo _timeZone;
+    private readonly Func<DateTime> _utcNow;
 
     [ObservableProperty]
     private bool _isLoading;
@@ -49,12 +67,33 @@ public partial class HistorySectionViewModel : ObservableObject
         SessionAudioFileService sessionAudioFiles,
         AudioPlaybackService audioPlayback
     )
+        : this(
+            history,
+            dictionary,
+            settings,
+            sessionAudioFiles,
+            audioPlayback,
+            TimeZoneInfo.Local,
+            () => DateTime.UtcNow
+        ) { }
+
+    internal HistorySectionViewModel(
+        IHistoryService history,
+        IDictionaryService dictionary,
+        ISettingsService settings,
+        SessionAudioFileService sessionAudioFiles,
+        AudioPlaybackService audioPlayback,
+        TimeZoneInfo timeZone,
+        Func<DateTime> utcNow
+    )
     {
         _history = history;
         _dictionary = dictionary;
         _settings = settings;
         _sessionAudioFiles = sessionAudioFiles;
         _audioPlayback = audioPlayback;
+        _timeZone = timeZone;
+        _utcNow = utcNow;
 
         _history.RecordsChanged += () =>
         {
@@ -72,6 +111,11 @@ public partial class HistorySectionViewModel : ObservableObject
 
     public bool ShowTimeline => !IsLoading && HasVisibleRecords;
     public bool ShowEmptyState => !IsLoading && !HasVisibleRecords;
+
+    // Exposed to entry rows so the Inspect panel can explain an empty prompt list as
+    // "capture is off" (and point at the setting) rather than implying the LLM simply
+    // wasn't used.
+    public bool CaptureLlmProvenanceEnabled => _settings.Current.CaptureLlmProvenance;
     public bool HasVisibleRecords => Groups.Any(group => group.Entries.Count > 0);
     public bool HasMore => _shownCount < _filtered.Count;
 
@@ -88,7 +132,7 @@ public partial class HistorySectionViewModel : ObservableObject
             ".csv" => _history.ExportToCsv(visibleRecords),
             ".md" => _history.ExportToMarkdown(visibleRecords),
             ".json" => _history.ExportToJson(visibleRecords),
-            _ => _history.ExportToText(visibleRecords)
+            _ => _history.ExportToText(visibleRecords),
         };
     }
 
@@ -188,7 +232,7 @@ public partial class HistorySectionViewModel : ObservableObject
                 Id = Guid.NewGuid().ToString(),
                 EntryType = DictionaryEntryType.Term,
                 Original = term,
-                Source = DictionaryEntrySource.Manual
+                Source = DictionaryEntrySource.Manual,
             }
         );
     }
@@ -247,6 +291,11 @@ public partial class HistorySectionViewModel : ObservableObject
                    record.AudioFileName,
                    StringComparison.OrdinalIgnoreCase
                );
+    }
+
+    internal DateTime ToLocalPresentationTime(DateTime timestamp)
+    {
+        return PresentationDateTime.ToLocal(timestamp, _timeZone);
     }
 
     private async Task LoadAsync()
@@ -363,10 +412,12 @@ public partial class HistorySectionViewModel : ObservableObject
     private void AppendNextPage()
     {
         var end = Math.Min(_shownCount + PageSize, _filtered.Count);
+        var today = ToLocalPresentationTime(_utcNow()).Date;
         for (var i = _shownCount; i < end; i++)
         {
             var record = _filtered[i];
-            var groupName = ComputeDateGroup(record.Timestamp);
+            var row = new HistoryRecordRow(record, this);
+            var groupName = ComputeDateGroup(row.LocalTimestamp, today);
 
             // Records are newest-first; each record either extends the last group or starts a new one.
             var group =
@@ -377,7 +428,7 @@ public partial class HistorySectionViewModel : ObservableObject
                 Groups.Add(group);
             }
 
-            group.Entries.Add(new HistoryRecordRow(record, this));
+            group.Entries.Add(row);
         }
 
         _shownCount = end;
@@ -406,9 +457,8 @@ public partial class HistorySectionViewModel : ObservableObject
         SelectedAppFilter = AvailableApps.Contains(current) ? current : allApps;
     }
 
-    private static string ComputeDateGroup(DateTime timestamp)
+    private static string ComputeDateGroup(DateTime timestamp, DateTime today)
     {
-        var today = DateTime.Today;
         var date = timestamp.Date;
 
         if (date == today)
@@ -459,21 +509,27 @@ public partial class HistoryRecordRow : ObservableObject
     private bool _isExpanded;
 
     [ObservableProperty]
+    private bool _isInspectorVisible;
+
+    [ObservableProperty]
     private TranscriptionRecord _record;
 
     public HistoryRecordRow(TranscriptionRecord record, HistorySectionViewModel owner)
     {
         _record = record;
         _owner = owner;
+        LocalTimestamp = owner.ToLocalPresentationTime(record.Timestamp);
         SetCorrectionSuggestions(record.PendingCorrectionSuggestions);
     }
 
     public ObservableCollection<CorrectionSuggestionRow> CorrectionSuggestions { get; } = [];
 
-    public string TimeLabel => Record.Timestamp.ToString("HH:mm");
+    public DateTime LocalTimestamp { get; private set; }
+    public string TimeLabel => LocalTimestamp.ToString("HH:mm");
     public string DurationLabel => $"{Record.DurationSeconds:F1}s";
     public bool HasProfileName => !string.IsNullOrWhiteSpace(Record.ProfileName);
     public bool HasAppProcessName => !string.IsNullOrWhiteSpace(Record.AppProcessName);
+    public bool IsSpokenCommand => Record.IsSpokenCommand;
     public bool HasLanguage => !string.IsNullOrWhiteSpace(Record.Language);
     public bool HasSessionAudio => _owner.HasSessionAudio(Record);
     public bool IsPlaying => _owner.IsPlaying(Record);
@@ -486,6 +542,47 @@ public partial class HistoryRecordRow : ObservableObject
 
     public bool HasCorrectionSuggestions =>
         IsExpanded && !IsEditing && CorrectionSuggestions.Count > 0;
+
+    public bool HasLlmCalls => Record.LlmCalls.Count > 0;
+
+    // Distinguishes "capture is off" (guide the user to the setting) from "capture is
+    // on but this entry genuinely made no LLM call" (e.g. a raw dictation).
+    public string NoLlmCallsMessage =>
+        _owner.CaptureLlmProvenanceEnabled
+            ? Loc.Instance["History.Inspect.NoLlmCalls"]
+            : Loc.Instance["History.Inspect.CaptureOff"];
+
+    public bool ShowRawVsFinal =>
+        !string.Equals(Record.RawText, Record.FinalText, StringComparison.Ordinal);
+
+    public bool HasInspectorContent => HasLlmCalls || ShowRawVsFinal;
+    public bool ShowInspectorToggle => IsExpanded && !IsEditing && HasInspectorContent;
+    public bool ShowInspector =>
+        IsExpanded && !IsEditing && IsInspectorVisible && HasInspectorContent;
+
+    // Cached: a virtualized list recycles containers and re-evaluates these
+    // bindings whenever a row scrolls back into view, so recomputing the LCS diff
+    // and projection every access would be wasteful. Invalidated in
+    // OnRecordChanged when the underlying record is reassigned (e.g. after edit).
+    private IReadOnlyList<DiffSegment>? _rawVsFinalDiffCache;
+    private IReadOnlyList<LlmCallDisplay>? _inspectorCallsCache;
+
+    public IReadOnlyList<DiffSegment> RawVsFinalDiff =>
+        _rawVsFinalDiffCache ??= WordDiff.Compute(Record.RawText, Record.FinalText);
+
+    public IReadOnlyList<LlmCallDisplay> InspectorCalls =>
+        _inspectorCallsCache ??= Record.LlmCalls.Select(call => new LlmCallDisplay(call)).ToList();
+
+    partial void OnRecordChanged(TranscriptionRecord value)
+    {
+        LocalTimestamp = _owner.ToLocalPresentationTime(value.Timestamp);
+        _rawVsFinalDiffCache = null;
+        _inspectorCallsCache = null;
+        OnPropertyChanged(nameof(LocalTimestamp));
+        OnPropertyChanged(nameof(TimeLabel));
+        OnPropertyChanged(nameof(RawVsFinalDiff));
+        OnPropertyChanged(nameof(InspectorCalls));
+    }
 
     internal void SetCorrectionSuggestions(IEnumerable<CorrectionSuggestion> suggestions)
     {
@@ -515,6 +612,7 @@ public partial class HistoryRecordRow : ObservableObject
         else
         {
             IsEditing = false;
+            IsInspectorVisible = false;
             CorrectionSuggestions.Clear();
         }
 
@@ -526,10 +624,21 @@ public partial class HistoryRecordRow : ObservableObject
         NotifyExpansionStateChanged();
     }
 
+    partial void OnIsInspectorVisibleChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ShowInspector));
+    }
+
     [RelayCommand]
     private void ToggleExpand()
     {
         IsExpanded = !IsExpanded;
+    }
+
+    [RelayCommand]
+    private void ToggleInspector()
+    {
+        IsInspectorVisible = !IsInspectorVisible;
     }
 
     [RelayCommand]
@@ -549,6 +658,11 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(HasProfileName));
         OnPropertyChanged(nameof(HasAppProcessName));
         OnPropertyChanged(nameof(HasCorrectionSuggestions));
+        // Editing changes the final text, so raw≠final and the diff can change.
+        OnPropertyChanged(nameof(ShowRawVsFinal));
+        OnPropertyChanged(nameof(HasInspectorContent));
+        OnPropertyChanged(nameof(ShowInspectorToggle));
+        OnPropertyChanged(nameof(RawVsFinalDiff));
     }
 
     [RelayCommand]
@@ -607,6 +721,8 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(ShowExpandedMeta));
         OnPropertyChanged(nameof(ShowExpandedActions));
         OnPropertyChanged(nameof(HasCorrectionSuggestions));
+        OnPropertyChanged(nameof(ShowInspectorToggle));
+        OnPropertyChanged(nameof(ShowInspector));
     }
 }
 
@@ -630,4 +746,47 @@ public partial class CorrectionSuggestionRow : ObservableObject
 
     private double Confidence { get; }
     public string ConfidenceLabel => Confidence > 0 ? $"{Confidence:P0}" : "";
+}
+
+/// <summary>
+///     Read-only display projection of one <see cref="LlmCallProvenance" /> entry
+///     for the history Inspect panel: localized stage/badge labels plus the raw
+///     prompt text and per-block visibility flags.
+/// </summary>
+public sealed class LlmCallDisplay
+{
+    private readonly LlmCallProvenance _call;
+
+    public LlmCallDisplay(LlmCallProvenance call)
+    {
+        _call = call;
+    }
+
+    public string StageLabel =>
+        _call.Stage switch
+        {
+            "Cleanup" => Loc.Instance["History.Inspect.StageCleanup"],
+            "Translation" => Loc.Instance["History.Inspect.StageTranslation"],
+            "Memory" => Loc.Instance["History.Inspect.StageMemory"],
+            _ => Loc.Instance["History.Inspect.StagePromptAction"],
+        };
+
+    public string ProviderModelLabel => $"{_call.ProviderName} · {_call.ModelId}";
+
+    public bool RanLocally => _call.RanLocally;
+
+    public string NetworkBadgeText =>
+        _call.RanLocally
+            ? Loc.Instance["History.Inspect.StayedLocal"]
+            : Loc.Instance.GetString("History.Inspect.SentToProvider", _call.ProviderName);
+
+    public string SystemPromptSent => _call.SystemPromptSent;
+    public string UserPromptSent => _call.UserPromptSent;
+    public string? InjectedMemoryContext => _call.InjectedMemoryContext;
+    public string? ResponseReceived => _call.ResponseReceived;
+
+    public bool HasSystemPrompt => !string.IsNullOrWhiteSpace(_call.SystemPromptSent);
+    public bool HasUserPrompt => !string.IsNullOrWhiteSpace(_call.UserPromptSent);
+    public bool HasInjectedContext => !string.IsNullOrWhiteSpace(_call.InjectedMemoryContext);
+    public bool HasResponse => !string.IsNullOrWhiteSpace(_call.ResponseReceived);
 }

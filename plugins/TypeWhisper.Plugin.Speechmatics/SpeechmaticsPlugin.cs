@@ -1,4 +1,7 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -7,29 +10,32 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Speechmatics;
 
-public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class SpeechmaticsPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string BaseUrl = "https://asr.api.speechmatics.com/v2";
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
     private IPluginHostServices? _host;
     private string? _apiKey;
-    private string? _selectedModelId;
 
-    private static readonly IReadOnlyList<PluginModelInfo> Models =
+    private static readonly IReadOnlyList<PluginModelInfo> s_models =
     [
         new("enhanced", "Speechmatics Enhanced"),
     ];
 
     public string PluginId => "com.typewhisper.speechmatics";
     public string PluginName => "Speechmatics";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
         _apiKey = await host.LoadSecretAsync("api-key");
-        _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
+        SelectedModelId = host.GetSetting<string>("selectedModel") ?? s_models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -43,25 +49,23 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
     public string ProviderDisplayName => "Speechmatics";
     public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
 
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels => Models;
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_models;
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
 
     public bool SupportsStreaming => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Unsupported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
-        // Speechmatics v2 requires an explicit language code; it has no automatic
-        // language detection. The host maps an "auto" profile to null before calling
-        // here, so reject null/empty/"auto" rather than silently streaming as English
-        // (which produces garbage for non-English audio). Mirrors the batch
-        // TranscribeAsync guard; throwing makes the host fall back to batch, which
-        // applies the same guard and surfaces a clear error.
+        // Defense in depth for direct/legacy callers; the typed host invoker rejects
+        // automatic selection before entering the plugin.
         var normalized = language?.Trim().ToLowerInvariant();
         if (string.IsNullOrEmpty(normalized) || normalized == "auto")
             throw new NotSupportedException(
@@ -73,9 +77,9 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
 
     public void SelectModel(string modelId)
     {
-        if (Models.All(m => m.Id != modelId))
+        if (s_models.All(m => m.Id != modelId))
             throw new ArgumentException($"Unknown model: {modelId}");
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
@@ -90,25 +94,19 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
         if (!IsConfigured)
             throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
 
-        // Speechmatics v2 requires an explicit language code; it has no automatic
-        // language detection. Reject null/empty/"auto" rather than silently
-        // transcribing as English, which produces garbage output for non-English
-        // audio. Normalize first so " Auto " / "AUTO" / etc. from less-careful
-        // callers hit the same guard. Mirrors the StartStreamingAsync guard so the
-        // streaming→batch fallback path surfaces the same clear error.
+        // Defense in depth for direct/legacy callers; the typed host invoker rejects
+        // automatic selection before entering the plugin.
         var normalized = language?.Trim().ToLowerInvariant();
         if (string.IsNullOrEmpty(normalized) || normalized == "auto")
             throw new NotSupportedException(
                 "Speechmatics does not support automatic language detection. Choose an explicit language for this profile."
             );
 
-        var lang = normalized;
-
         var config = JsonSerializer.Serialize(
             new
             {
                 type = "transcription",
-                transcription_config = new { language = lang, operating_point = "enhanced" },
+                transcription_config = new { language = normalized, operating_point = "enhanced" },
             }
         );
 
@@ -185,6 +183,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
             var job = statusDoc.RootElement.GetProperty("job");
             var status = job.GetProperty("status").GetString();
 
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
             if (status == "done")
             {
                 using var transcriptRequest = new HttpRequestMessage(
@@ -199,6 +198,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
                 using var transcriptResponse = await _httpClient.SendAsync(transcriptRequest, ct);
                 var transcriptJson = await transcriptResponse.Content.ReadAsStringAsync(ct);
 
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (!transcriptResponse.IsSuccessStatusCode)
                 {
                     _host?.Log(
@@ -213,6 +213,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
                 return ParseTranscript(transcriptJson, job);
             }
 
+            // ReSharper disable once MergeIntoLogicalPattern -- subjective style; kept as-is.
             if (status == "rejected" || status == "deleted")
                 throw new InvalidOperationException($"Speechmatics job {jobId} {status}");
         }
@@ -235,6 +236,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
         {
             foreach (var result in results.EnumerateArray())
             {
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (
                     result.TryGetProperty("alternatives", out var alts)
                     && alts.ValueKind == JsonValueKind.Array
@@ -311,7 +313,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
                 "selectedModel",
                 Loc.L("Settings.TranscriptionModel"),
                 Description: Loc.L("Settings.ModelDescription"),
-                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+                Options: s_models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
             ),
         ];
 
@@ -320,7 +322,7 @@ public sealed partial class SpeechmaticsPlugin : ITranscriptionEnginePlugin, IPl
             key switch
             {
                 "api-key" => _apiKey,
-                "selectedModel" => _selectedModelId,
+                "selectedModel" => SelectedModelId,
                 _ => null,
             }
         );

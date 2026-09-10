@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "author": "TypeWhisper",
   "description": "Cloudflare Workers AI Whisper transcription engine",
+  "networkAccess": "network",
+  "categories": ["transcription"],
   "assemblyName": "TypeWhisper.Plugin.CloudflareAsr.dll",
   "pluginClass": "TypeWhisper.Plugin.CloudflareAsr.CloudflareAsrPlugin"
 }
