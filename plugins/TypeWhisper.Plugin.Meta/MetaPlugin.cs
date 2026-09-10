@@ -81,6 +81,7 @@ public sealed class MetaPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
     private readonly HttpClient _httpClient;
     private readonly Func<MetaRealtimeConnectionOptions, CancellationToken, Task<IStreamingSession>>
         _streamingSessionFactory;
+    private readonly Func<Task>? _beforeCatalogPersistenceForTests;
     private IPluginHostServices? _host;
     private List<MetaFetchedModel> _fetchedLlmModels = [];
     private List<MetaFetchedModel> _fetchedTranscriptionModels = [];
@@ -96,9 +97,11 @@ public sealed class MetaPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
     internal MetaPlugin(
         HttpClient httpClient,
         Func<MetaRealtimeConnectionOptions, CancellationToken, Task<IStreamingSession>>?
-            streamingSessionFactory = null)
+            streamingSessionFactory = null,
+        Func<Task>? beforeCatalogPersistenceForTests = null)
     {
         _httpClient = httpClient;
+        _beforeCatalogPersistenceForTests = beforeCatalogPersistenceForTests;
         _streamingSessionFactory = streamingSessionFactory
             ?? (async (options, ct) => await MetaRealtimeStreamingSession.ConnectAsync(
                 options.ApiKey,
@@ -444,17 +447,21 @@ public sealed class MetaPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
                 hostToNotify = _host;
             }
 
-            // Outside the lock: NotifyCapabilitiesChanged takes the host's lock and calls back
-            // into plugins, as SetApiKeyAsync's hostToNotify already accounts for.
-            // ReSharper disable once InvertIf -- keeps the persist-and-notify block together.
-            if (hostToNotify is not null)
+            if (_beforeCatalogPersistenceForTests is not null)
+                await _beforeCatalogPersistenceForTests();
+
+            lock (_catalogLock)
             {
-                hostToNotify.SetSetting(FetchedLlmModelsSettingName, llmModels);
-                hostToNotify.SetSetting(FetchedTranscriptionModelsSettingName, transcriptionModels);
-                hostToNotify.SetSetting(SelectedTranscriptionModelSettingName, selectedTranscriptionModelId);
-                hostToNotify.SetSetting(SelectedLlmModelSettingName, selectedLlmModelId);
-                hostToNotify.NotifyCapabilitiesChanged();
+                if (revision != _connectionRevision)
+                    return null;
+                hostToNotify?.SetSetting(FetchedLlmModelsSettingName, llmModels);
+                hostToNotify?.SetSetting(FetchedTranscriptionModelsSettingName, transcriptionModels);
+                hostToNotify?.SetSetting(SelectedTranscriptionModelSettingName, selectedTranscriptionModelId);
+                hostToNotify?.SetSetting(SelectedLlmModelSettingName, selectedLlmModelId);
             }
+
+            // Notification takes the host's lock and calls back into plugins.
+            hostToNotify?.NotifyCapabilitiesChanged();
 
             return catalog;
         }

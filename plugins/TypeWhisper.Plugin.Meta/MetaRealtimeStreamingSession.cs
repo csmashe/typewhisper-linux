@@ -280,7 +280,7 @@ internal sealed class MetaRealtimeTranscriptCollector
                 remaining = transcript[plain.Length..];
             else
             {
-                Trace.WriteLine($"Meta terminal transcript revised reported final text. Reported: '{formatted}'; terminal: '{transcript}'.");
+                Trace.WriteLine($"Meta terminal transcript mismatch: revised reported final text; reported segments={_reported.Count}; reported length={formatted.Length}; terminal length={transcript.Length}.");
                 throw new InvalidOperationException("Meta terminal transcript revised previously reported final text.");
             }
         }

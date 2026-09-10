@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Net.WebSockets;
 using TypeWhisper.Plugin.Meta;
@@ -288,6 +289,32 @@ public sealed class MetaPluginTests
             """{"type":"transcript","transcript":"Hallo Welt.","final":true}"""));
     }
 
+    [Fact]
+    public void Collector_TerminalRevisionDiagnosticsExcludeTranscriptText()
+    {
+        using var output = new StringWriter();
+        using var listener = new TextWriterTraceListener(output);
+        Trace.Listeners.Add(listener);
+        try
+        {
+            var collector = new MetaRealtimeTranscriptCollector("PUSH_TO_TALK");
+            collector.Apply("""{"type":"speechStart","turnId":1}""");
+            collector.Apply("""{"type":"speechComplete","turnId":1,"transcript":"private-original"}""");
+            var error = Assert.Throws<InvalidOperationException>(() => collector.Apply(
+                """{"type":"transcript","transcript":"confidential-revision","final":true}"""));
+            listener.Flush();
+            var diagnostics = output.ToString() + error;
+            Assert.Contains("mismatch: revised reported final text", diagnostics);
+            Assert.Contains("reported segments=1; reported length=16; terminal length=21", diagnostics);
+            Assert.DoesNotContain("private-original", diagnostics);
+            Assert.DoesNotContain("confidential-revision", diagnostics);
+        }
+        finally
+        {
+            Trace.Listeners.Remove(listener);
+        }
+    }
+
     [Theory]
     [InlineData("de", "German")]
     [InlineData("pt-BR", "Portuguese")]
@@ -567,6 +594,43 @@ public sealed class MetaPluginTests
         await refresh;
         Assert.Equal(0, sut.FetchedLlmModelCount);
         Assert.Equal(MetaPlugin.DefaultLlmModelId, sut.SelectedLlmModelId);
+    }
+
+    [Fact]
+    public async Task Catalog_DiscardsPersistenceWhenKeyChangesAfterRevisionCheck()
+    {
+        var beforePersistence = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumePersistence = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var client = new HttpClient(new RecordingHandler(HttpStatusCode.OK,
+            """{"data":[{"id":"muse-spark-stale"},{"id":"muse-voice-transcribe-stale"}]}"""));
+        using var sut = new MetaPlugin(client, beforeCatalogPersistenceForTests: async () =>
+        {
+            beforePersistence.SetResult();
+            await resumePersistence.Task;
+        });
+        var host = new FakePluginHostServices();
+        await sut.ActivateAsync(host);
+        await sut.SetApiKeyAsync("first");
+        var refresh = sut.RefreshAvailableModelsAsync();
+        await beforePersistence.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("muse-spark-stale", sut.SelectedLlmModelId);
+        await sut.SetApiKeyAsync("second");
+        var settingsAfterKeyChange = host.SettingsSnapshot;
+        var notificationsAfterKeyChange = host.NotifyCapabilitiesChangedCount;
+        host.SettingWrites.Clear();
+        resumePersistence.SetResult();
+
+        Assert.Null(await refresh.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Empty(host.SettingWrites);
+        Assert.Equal(settingsAfterKeyChange, host.SettingsSnapshot);
+        Assert.Equal(notificationsAfterKeyChange, host.NotifyCapabilitiesChangedCount);
+        using var reloaded = new MetaPlugin(client);
+        await reloaded.ActivateAsync(host);
+        Assert.Equal("second", reloaded.ApiKey);
+        Assert.Equal(0, reloaded.FetchedLlmModelCount);
+        Assert.Equal(0, reloaded.FetchedTranscriptionModelCount);
+        Assert.Equal(MetaPlugin.DefaultLlmModelId, reloaded.SelectedLlmModelId);
+        Assert.Equal(MetaPlugin.DefaultTranscriptionModelId, reloaded.SelectedModelId);
     }
 
     [Theory]
@@ -1040,6 +1104,7 @@ public sealed class MetaPluginTests
 
         public Dictionary<string, string> Secrets { get; } = [];
         public bool FailSecretWrites { get; set; }
+        public List<string> SettingWrites { get; } = [];
         public string SettingsSnapshot => JsonSerializer.Serialize(_settings);
         public int NotifyCapabilitiesChangedCount { get; private set; }
         public string PluginDataDirectory => Path.GetTempPath();
@@ -1071,7 +1136,11 @@ public sealed class MetaPluginTests
         public T? GetSetting<T>(string key) =>
             _settings.TryGetValue(key, out var value) ? value.Deserialize<T>() : default;
 
-        public void SetSetting<T>(string key, T value) => _settings[key] = JsonSerializer.SerializeToElement(value);
+        public void SetSetting<T>(string key, T value)
+        {
+            SettingWrites.Add(key);
+            _settings[key] = JsonSerializer.SerializeToElement(value);
+        }
         public void Log(PluginLogLevel level, string message) { }
         public void NotifyCapabilitiesChanged() => NotifyCapabilitiesChangedCount++;
     }
