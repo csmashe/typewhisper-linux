@@ -118,7 +118,14 @@ public sealed record DictationSpokenFormattingProfile
     /// <summary>The persisted strategy value, including unrecognized values for forward compatibility.</summary>
     public string? StrategyOverrideRaw { get; init; }
     /// <summary>The persisted verification value, including unrecognized values for forward compatibility.</summary>
-    public string VerificationStateRaw { get; init; } = "unknown";
+    public string VerificationStateRaw
+    {
+        get;
+        // JsonSerializer passes null for a null JSON value; fall back to "unknown" here so every
+        // reader, the store's normalization included, sees a string.
+        // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract
+        init => field = value ?? "unknown";
+    } = "unknown";
     /// <summary>The UTC time of the last user verification, when recorded.</summary>
     public DateTime? LastVerifiedAt { get; init; }
 

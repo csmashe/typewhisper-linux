@@ -59,8 +59,9 @@ public sealed class SpokenFormattingProfileStore
             ModelId = normalizedModel,
             LanguageCode = normalizedLanguage,
             StrategyOverrideRaw = strategy.ToRawValue(),
-            VerificationStateRaw = (verificationState ?? existing?.VerificationState
-                ?? SpokenFormattingVerificationState.Unknown).ToRawValue(),
+            VerificationStateRaw = verificationState?.ToRawValue()
+                ?? existing?.VerificationStateRaw
+                ?? SpokenFormattingVerificationState.Unknown.ToRawValue(),
             LastVerifiedAt = updateVerificationDate ? DateTime.UtcNow : existing?.LastVerifiedAt,
         };
 

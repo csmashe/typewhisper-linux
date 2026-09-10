@@ -100,7 +100,8 @@ public record AppSettings
     public IReadOnlyList<DictationSpokenFormattingProfile> SpokenFormattingProfiles
     {
         get;
-        // JsonSerializer passes null for a null JSON value; the load migration normalizes the list.
+        // JsonSerializer passes null for a null JSON value; SettingsService normalizes the list on
+        // load, Save, and Update.
         // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract
         init => field = value ?? [];
     } = [];

@@ -205,6 +205,8 @@ public class SpokenFormattingServiceTests
     [Theory]
     [InlineData("de")]
     [InlineData("en")]
+    [InlineData("es")]
+    [InlineData("ru")]
     public void Normalize_AppliesEveryEmbeddedRule(string language)
     {
         var rules = _rulesLoader.RuleSetFor(language)!.Rules;

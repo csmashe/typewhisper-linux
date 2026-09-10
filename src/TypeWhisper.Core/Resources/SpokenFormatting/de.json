@@ -20,6 +20,7 @@
     {"spoken": "wie geht es dir fragezeichen", "expected": "wie geht es dir?"},
     {"spoken": "hallo neue zeile welt", "expected": "hallo\nwelt"},
     {"spoken": "erster absatz neuer absatz zweiter absatz", "expected": "erster absatz\n\nzweiter absatz"},
-    {"spoken": "name tabulator wert", "expected": "name\twert"}
+    {"spoken": "name tabulator wert", "expected": "name\twert"},
+    {"spoken": "sie sagte anführungszeichen auf hallo anführungszeichen zu", "expected": "sie sagte „hallo“"}
   ]
 }

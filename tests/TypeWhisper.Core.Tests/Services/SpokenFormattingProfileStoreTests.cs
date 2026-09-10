@@ -28,6 +28,28 @@ public sealed class SpokenFormattingProfileStoreTests : IDisposable
     }
 
     [Fact]
+    public void SaveUserOverride_KeepsUnrecognizedVerificationStateWhenNotSupplied()
+    {
+        Directory.CreateDirectory(_directory);
+        var settings = new SettingsService(Path.Join(_directory, "settings.json"));
+        settings.Save(AppSettings.Default with
+        {
+            SpokenFormattingProfiles = [new DictationSpokenFormattingProfile
+            {
+                EngineId = "engine", ModelId = "model", LanguageCode = "en", VerificationStateRaw = "futureState",
+            }],
+        });
+        var store = new SpokenFormattingProfileStore(settings);
+
+        store.SaveUserOverride("engine", "model", "en", SpokenFormattingStrategy.Automatic);
+        Assert.Equal("futureState", Assert.Single(store.Profiles).VerificationStateRaw);
+
+        store.SaveUserOverride("engine", "model", "en", SpokenFormattingStrategy.Automatic,
+            SpokenFormattingVerificationState.UserVerifiedGood);
+        Assert.Equal("userVerifiedGood", Assert.Single(store.Profiles).VerificationStateRaw);
+    }
+
+    [Fact]
     public void NormalizeProfiles_DeduplicatesAndPreservesUnknownValues()
     {
         var profile = new DictationSpokenFormattingProfile

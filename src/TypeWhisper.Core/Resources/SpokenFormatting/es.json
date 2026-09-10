@@ -20,6 +20,7 @@
     {"spoken": "cómo estás signo de interrogación", "expected": "cómo estás?"},
     {"spoken": "hola nueva línea mundo", "expected": "hola\nmundo"},
     {"spoken": "primer párrafo nuevo párrafo segundo párrafo", "expected": "primer párrafo\n\nsegundo párrafo"},
-    {"spoken": "nombre tabulador valor", "expected": "nombre\tvalor"}
+    {"spoken": "nombre tabulador valor", "expected": "nombre\tvalor"},
+    {"spoken": "ella dijo abrir comillas hola cerrar comillas", "expected": "ella dijo «hola»"}
   ]
 }

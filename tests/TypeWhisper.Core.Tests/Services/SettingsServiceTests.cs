@@ -1,6 +1,7 @@
 using System.Text.Json;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Core.Services.SpokenFormatting;
 
 namespace TypeWhisper.Core.Tests.Services;
 
@@ -100,6 +101,59 @@ public sealed class SettingsServiceTests : IDisposable
         Assert.Equal("en", profile.LanguageCode);
         Assert.Equal("future", profile.StrategyOverrideRaw);
         Assert.Equal("futureState", profile.VerificationStateRaw);
+    }
+
+    [Fact]
+    public void Save_NormalizesSpokenFormattingProfiles()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with
+        {
+            SpokenFormattingProfiles = [new DictationSpokenFormattingProfile
+            {
+                EngineId = " engine ", ModelId = " model ", LanguageCode = "en-US", StrategyOverrideRaw = "AUTOMATIC",
+            }],
+        });
+
+        var profile = Assert.Single(sut.Current.SpokenFormattingProfiles);
+        Assert.Equal("engine", profile.EngineId);
+        Assert.Equal("model", profile.ModelId);
+        Assert.Equal("en", profile.LanguageCode);
+        Assert.Equal("automatic", profile.StrategyOverrideRaw);
+        Assert.Equal(profile, new SpokenFormattingProfileStore(sut).Profile("engine", "model", "en-GB"));
+    }
+
+    [Fact]
+    public void Update_NormalizesSpokenFormattingProfiles()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Update(current => current with
+        {
+            SpokenFormattingProfiles = [new DictationSpokenFormattingProfile
+            {
+                EngineId = " engine ", ModelId = " model ", LanguageCode = "en-US", StrategyOverrideRaw = "AUTOMATIC",
+            }],
+        });
+
+        var profile = Assert.Single(sut.Current.SpokenFormattingProfiles);
+        Assert.Equal("engine", profile.EngineId);
+        Assert.Equal("model", profile.ModelId);
+        Assert.Equal("en", profile.LanguageCode);
+        Assert.Equal("automatic", profile.StrategyOverrideRaw);
+        Assert.Equal(profile, new SpokenFormattingProfileStore(sut).Profile("engine", "model", "en-GB"));
+    }
+
+    [Fact]
+    public void Load_NullVerificationStateRaw_IsUnknown()
+    {
+        File.WriteAllText(_filePath, """
+            {"spokenFormattingProfiles":[
+                {"engineId":"engine","modelId":"model","languageCode":"en","verificationStateRaw":null}
+            ]}
+            """);
+
+        var profile = Assert.Single(new SettingsService(_filePath).Current.SpokenFormattingProfiles);
+        Assert.Equal("unknown", profile.VerificationStateRaw);
     }
 
     [Fact]
