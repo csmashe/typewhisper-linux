@@ -97,6 +97,33 @@ public sealed class DictationOrchestratorCompositionTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public Task HistorySavingDisabled_RecordsStatisticsWithoutHistoryEntry()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture();
+            fixture.Settings.Save(fixture.Settings.Current with { SaveToHistoryEnabled = false });
+            fixture.Plugin.EnqueueText("hello question mark");
+
+            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+            fixture.FeedNonSilentAudio();
+            var resultTask = fixture.WaitForResultAsync(sessionId);
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+            var result = await BoundedTest.WaitAsync(resultTask);
+
+            Assert.Equal("ready", result.Status);
+            Assert.Equal("hello?", result.Text);
+            Assert.Empty(fixture.History.Records);
+            var stats = Assert.Single(fixture.Statistics.Records);
+            Assert.Equal("hello question mark", stats.RawText);
+            Assert.Equal("hello?", stats.FinalText);
+            Assert.False(stats.IsSpokenCommand);
+            Assert.Equal("idle", fixture.Orchestrator.CurrentStateLabel);
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public Task CancelDuringCapture_DiscardsWithoutTranscriptionOrInsertion()
     {
         return BoundedTest.RunAsync(async () =>

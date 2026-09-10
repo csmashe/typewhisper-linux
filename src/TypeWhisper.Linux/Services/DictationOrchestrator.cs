@@ -2210,13 +2210,14 @@ public sealed class DictationOrchestrator : IDisposable
                 // trip.
                 _insertionOrder.Release(context.SessionId);
                 var outcome = await RunSpokenCommandAsync(spokenCommand, context, cancelToken);
-                // A spoken command is still a dictation the user issued: record it in
-                // history (with the LLM request/response captured on context.Capture)
-                // so it appears in the History list and Inspect panel like any other.
+                // A spoken command is still a dictation the user issued: always record
+                // statistics, and add a history entry only when history saving is enabled
+                // (with the LLM request/response captured on context.Capture) so it appears
+                // in the History list and Inspect panel like any other.
                 // RawText is the source the command acted on (selected text for an
                 // edit, the command itself for a create), so the raw→final diff reads
                 // "source → result".
-                if (outcome is not null && _settings.Current.SaveToHistoryEnabled)
+                if (outcome is not null)
                 {
                     AddSpokenCommandHistoryRecord(
                         context,
@@ -2651,26 +2652,24 @@ public sealed class DictationOrchestrator : IDisposable
                 }
             }
 
-            // Write to history last so stats reflect the just-completed capture
+            // Always record statistics and add a history entry only when history saving
+            // is enabled, last so stats reflect the just-completed capture
             // (and any memory-extraction provenance recorded above).
-            if (_settings.Current.SaveToHistoryEnabled)
-            {
-                AddHistoryRecord(
-                    context,
-                    transcriptionId,
-                    timestamp,
-                    rawText,
-                    finalText,
-                    duration,
-                    result,
-                    wavPath,
-                    insertion,
-                    pipelineResult,
-                    cleanupLevel,
-                    engineProviderId,
-                    engineModelId
-                );
-            }
+            AddHistoryRecord(
+                context,
+                transcriptionId,
+                timestamp,
+                rawText,
+                finalText,
+                duration,
+                result,
+                wavPath,
+                insertion,
+                pipelineResult,
+                cleanupLevel,
+                engineProviderId,
+                engineModelId
+            );
         }
         catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
         {
@@ -3743,11 +3742,12 @@ public sealed class DictationOrchestrator : IDisposable
         };
     }
 
-    // Writes a history entry for a completed spoken command. RawText is the source
-    // text the command acted on (selected text for an edit, the command itself for a
-    // create); FinalText is the generated/transformed text that was produced, so the
-    // raw→final diff reads "source → result". InsertionStatus is the real result of the
-    // insert (typed/pasted/copied). LlmCalls carries the command's request/response
+    // Records statistics for a completed spoken command and saves its history entry
+    // when history saving is enabled. RawText is the source text the command acted on
+    // (selected text for an edit, the command itself for a create); FinalText is the
+    // generated/transformed text that was produced, so the raw→final diff reads
+    // "source → result". InsertionStatus is the real result of the insert
+    // (typed/pasted/copied). LlmCalls carries the command's request/response
     // (context.Capture) so the Inspect panel shows it exactly like a dictation's prompt action.
     private void AddSpokenCommandHistoryRecord(
         RecordingContext context,
@@ -3796,7 +3796,10 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 Trace.WriteLine($"[Command] RecordTranscription failed: {ex.Message}");
             }
-            _history.AddRecord(record);
+            if (_settings.Current.SaveToHistoryEnabled)
+            {
+                _history.AddRecord(record);
+            }
         }
         catch (Exception ex)
         {
@@ -3804,6 +3807,8 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
+    // Records statistics for a completed dictation and saves its history entry when
+    // history saving is enabled.
     private void AddHistoryRecord(
         RecordingContext context,
         string id,
@@ -3871,7 +3876,10 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 Trace.WriteLine($"[Dictation] RecordTranscription failed: {ex.Message}");
             }
-            _history.AddRecord(record);
+            if (_settings.Current.SaveToHistoryEnabled)
+            {
+                _history.AddRecord(record);
+            }
         }
         catch (Exception ex)
         {
