@@ -365,7 +365,11 @@ internal static class GeminiTranscriptionClient
             var statusCode = (int)response.StatusCode;
             var retryAfter = response.Headers.RetryAfter?.Delta;
             if (retryAfter is null && response.Headers.RetryAfter?.Date is { } retryAt)
-                retryAfter = retryAt - DateTimeOffset.UtcNow;
+            {
+                // A past date means "retry now"; never hand a negative delay to the retry policy.
+                var untilRetry = retryAt - DateTimeOffset.UtcNow;
+                retryAfter = untilRetry > TimeSpan.Zero ? untilRetry : TimeSpan.Zero;
+            }
 
             var errorBody = await response.Content.ReadAsStringAsync(ct);
 

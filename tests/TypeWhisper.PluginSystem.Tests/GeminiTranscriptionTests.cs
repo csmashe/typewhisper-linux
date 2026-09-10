@@ -513,6 +513,38 @@ public sealed class GeminiTranscriptionTests
     }
 
     [Theory]
+    [InlineData(-1)]
+    [InlineData(1)]
+    public async Task Transcribe_ClampsRetryAfterDateToNonNegativeDelay(int minutesFromNow)
+    {
+        using var client = new HttpClient(new GeminiCapturingHandler((_, _) =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(
+                DateTimeOffset.UtcNow.AddMinutes(minutesFromNow));
+            return response;
+        }));
+        var host = new GeminiTestHost { Secrets = { ["api-key"] = "gemini-key" } };
+        using var sut = new GeminiPlugin(client);
+        await sut.ActivateAsync(host);
+
+        var failure = await Assert.ThrowsAsync<PluginRequestException>(
+            () => sut.TranscribeAsync(CreatePcm16Wav(), null, translate: false, prompt: null, CancellationToken.None));
+
+        Assert.Equal(PluginRequestFailureKind.RateLimit, failure.FailureKind);
+        Assert.Equal((int)HttpStatusCode.TooManyRequests, failure.HttpStatusCode);
+        if (minutesFromNow < 0)
+        {
+            Assert.Equal(TimeSpan.Zero, failure.RetryAfter);
+        }
+        else
+        {
+            Assert.True(failure.RetryAfter > TimeSpan.Zero);
+            Assert.True(failure.RetryAfter <= TimeSpan.FromMinutes(1));
+        }
+    }
+
+    [Theory]
     [InlineData(HttpStatusCode.Unauthorized, PluginRequestFailureKind.Authentication)]
     [InlineData(HttpStatusCode.Forbidden, PluginRequestFailureKind.Permission)]
     [InlineData(HttpStatusCode.RequestTimeout, PluginRequestFailureKind.Timeout)]
