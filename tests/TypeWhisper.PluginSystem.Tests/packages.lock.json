@@ -537,6 +537,12 @@
           "TypeWhisper.PluginSDK": "[0.13.0, )"
         }
       },
+      "typewhisper.plugin.authenticatedcli": {
+        "type": "Project",
+        "dependencies": {
+          "TypeWhisper.PluginSDK": "[0.13.0, )"
+        }
+      },
       "typewhisper.plugin.cerebras": {
         "type": "Project",
         "dependencies": {
@@ -729,6 +735,9 @@
         "dependencies": {
           "TypeWhisper.PluginSDK": "[0.13.0, )"
         }
+      },
+      "typewhisper.fakeprovidercli": {
+        "type": "Project"
       },
       "typewhisper.pluginsdk": {
         "type": "Project"

@@ -75,6 +75,23 @@ public interface IProcessRunner : IPluginProcessSupervisor
             );
         }
 
+        if (
+            options.MaximumStandardOutputBytes is not null
+            || options.MaximumStandardErrorBytes is not null
+        )
+        {
+            throw new NotSupportedException(
+                "This legacy process runner does not support output byte limits."
+            );
+        }
+
+        if (options.ClearInheritedEnvironment)
+        {
+            throw new NotSupportedException(
+                "This legacy process runner does not support clearing the inherited environment."
+            );
+        }
+
         var legacy = await RunAsync(
                 command.FileName,
                 command.Arguments,
@@ -158,6 +175,14 @@ public sealed class ProcessRunner : IProcessRunner
         // side-effecting command has already run, with its pumps left waiting.
         ValidateDelay(options.Timeout, nameof(options.Timeout));
         ValidateDelay(options.PostExitDrainGrace, nameof(options.PostExitDrainGrace));
+        ValidateCeiling(
+            options.MaximumStandardOutputBytes,
+            nameof(options.MaximumStandardOutputBytes)
+        );
+        ValidateCeiling(
+            options.MaximumStandardErrorBytes,
+            nameof(options.MaximumStandardErrorBytes)
+        );
         cancellationToken.ThrowIfCancellationRequested();
 
         Process? process;
@@ -177,23 +202,50 @@ public sealed class ProcessRunner : IProcessRunner
             return StartFailed($"Could not start {command.FileName}");
         }
 
+        var hasOutputLimit =
+            options.MaximumStandardOutputBytes is not null
+            || options.MaximumStandardErrorBytes is not null;
         using (process)
         using (var timeoutCts = options.Timeout is not null
                    ? new CancellationTokenSource(options.Timeout.Value)
                    : null)
-        using (var lifecycleCts = timeoutCts is not null
+        // A pump that hits its ceiling stops reading, which would leave the child blocked on a
+        // full pipe; cancelling here routes it into the same terminate-and-reap path as a timeout.
+        using (var limitCts = hasOutputLimit ? new CancellationTokenSource() : null)
+        using (var lifecycleCts = timeoutCts is not null || limitCts is not null
                    ? CancellationTokenSource.CreateLinkedTokenSource(
-                       cancellationToken,
-                       timeoutCts.Token
+                       [
+                           cancellationToken,
+                           .. timeoutCts is null ? (CancellationToken[])[] : [timeoutCts.Token],
+                           .. limitCts is null ? (CancellationToken[])[] : [limitCts.Token],
+                       ]
                    )
                    : null)
         {
             // The private deadline is armed above before pumps, input, or exit waiting begin.
             var lifecycleToken = lifecycleCts?.Token ?? cancellationToken;
-            var stdout = new CapturedPipe(options.StandardOutput);
-            var stderr = new CapturedPipe(options.StandardError);
-            var stdoutTask = PumpAsync(process.StandardOutput.BaseStream, stdout);
-            var stderrTask = PumpAsync(process.StandardError.BaseStream, stderr);
+            var stdout = new CapturedPipe(
+                options.StandardOutput,
+                options.MaximumStandardOutputBytes
+            );
+            var stderr = new CapturedPipe(
+                options.StandardError,
+                options.MaximumStandardErrorBytes
+            );
+            // ReSharper disable once AccessToDisposedClosure
+            // A pump that outlives the using block races with the dispose; CancelSafely swallows
+            // the ObjectDisposedException, which is the whole point of that helper.
+            Action? onLimitExceeded = limitCts is null ? null : () => CancelSafely(limitCts);
+            var stdoutTask = PumpAsync(
+                process.StandardOutput.BaseStream,
+                stdout,
+                onLimitExceeded
+            );
+            var stderrTask = PumpAsync(
+                process.StandardError.BaseStream,
+                stderr,
+                onLimitExceeded
+            );
             var inputTask = WriteInputAsync(process, options.StandardInput, lifecycleToken);
             var exitTask = process.WaitForExitAsync(lifecycleToken);
 
@@ -214,7 +266,7 @@ public sealed class ProcessRunner : IProcessRunner
                     throw;
                 }
 
-                return TimedOut(stdout, stderr);
+                return OutputLimitExceeded(stdout, stderr) ?? TimedOut(stdout, stderr);
             }
 
             var exitCode = process.ExitCode;
@@ -232,12 +284,13 @@ public sealed class ProcessRunner : IProcessRunner
                     // A stubborn inherited pipe keeps the cleanup above running for its whole
                     // grace; a cancel landing in that window must not be reported as success.
                     cancellationToken.ThrowIfCancellationRequested();
-                    return Exited(
-                        exitCode,
-                        stdout,
-                        stderr,
-                        ProcessOutputStatus.AbandonedAfterExit
-                    );
+                    return OutputLimitExceeded(stdout, stderr, exitCode)
+                           ?? Exited(
+                               exitCode,
+                               stdout,
+                               stderr,
+                               ProcessOutputStatus.AbandonedAfterExit
+                           );
                 }
                 catch (OperationCanceledException)
                 {
@@ -259,12 +312,13 @@ public sealed class ProcessRunner : IProcessRunner
                     await TerminateAndReapAsync(process).ConfigureAwait(false);
                     await AbandonPumpsAsync(process, stdoutTask, stderrTask).ConfigureAwait(false);
                     cancellationToken.ThrowIfCancellationRequested();
-                    return TimedOut(stdout, stderr);
+                    return OutputLimitExceeded(stdout, stderr) ?? TimedOut(stdout, stderr);
                 }
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            return Exited(exitCode, stdout, stderr, ProcessOutputStatus.Complete);
+            return OutputLimitExceeded(stdout, stderr, exitCode)
+                   ?? Exited(exitCode, stdout, stderr, ProcessOutputStatus.Complete);
         }
     }
 
@@ -409,12 +463,20 @@ public sealed class ProcessRunner : IProcessRunner
         }
     }
 
+    private static void ValidateCeiling(int? ceiling, string name)
+    {
+        if (ceiling is < 0)
+        {
+            throw new ArgumentOutOfRangeException(name, ceiling, $"{name} must be non-negative.");
+        }
+    }
+
     private static ProcessStartInfo CreateOneShotStartInfo(
         ProcessCommand command,
         ProcessOneShotOptions options
     )
     {
-        var startInfo = CreateNonShellStartInfo(command);
+        var startInfo = CreateNonShellStartInfo(command, options.ClearInheritedEnvironment);
         startInfo.RedirectStandardInput = options.StandardInput is not null;
         startInfo.RedirectStandardOutput = true;
         startInfo.RedirectStandardError = true;
@@ -439,7 +501,10 @@ public sealed class ProcessRunner : IProcessRunner
         return CreateNonShellStartInfo(command);
     }
 
-    private static ProcessStartInfo CreateNonShellStartInfo(ProcessCommand command)
+    private static ProcessStartInfo CreateNonShellStartInfo(
+        ProcessCommand command,
+        bool clearInheritedEnvironment = false
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command.FileName);
         var startInfo = new ProcessStartInfo(command.FileName)
@@ -450,6 +515,13 @@ public sealed class ProcessRunner : IProcessRunner
         foreach (var argument in command.Arguments)
         {
             startInfo.ArgumentList.Add(argument);
+        }
+
+        if (clearInheritedEnvironment)
+        {
+            // ProcessStartInfo.Environment starts as a copy of this process's; a caller that
+            // built an allow-list needs the copy gone, not just its own names layered on top.
+            startInfo.Environment.Clear();
         }
 
         if (command.Environment is not null)
@@ -555,7 +627,11 @@ public sealed class ProcessRunner : IProcessRunner
         }
     }
 
-    private static async Task PumpAsync(Stream source, CapturedPipe destination)
+    private static async Task PumpAsync(
+        Stream source,
+        CapturedPipe destination,
+        Action? onLimitExceeded = null
+    )
     {
         var buffer = new byte[16 * 1024];
         try
@@ -568,7 +644,13 @@ public sealed class ProcessRunner : IProcessRunner
                     return;
                 }
 
-                destination.Append(buffer.AsSpan(0, read));
+                // ReSharper disable once InvertIf
+                // The ceiling is a guard clause here; a 'continue' would read worse in this loop.
+                if (!destination.Append(buffer.AsSpan(0, read)))
+                {
+                    onLimitExceeded?.Invoke();
+                    return;
+                }
             }
         }
         catch (IOException)
@@ -656,6 +738,39 @@ public sealed class ProcessRunner : IProcessRunner
         );
     }
 
+    private static void CancelSafely(CancellationTokenSource source)
+    {
+        try
+        {
+            source.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The run already left its using block, so nothing is waiting on this source.
+        }
+    }
+
+    private static ProcessRunOutcome? OutputLimitExceeded(
+        CapturedPipe stdout,
+        CapturedPipe stderr,
+        int? exitCode = null
+    )
+    {
+        if (!stdout.LimitExceeded && !stderr.LimitExceeded)
+        {
+            return null;
+        }
+
+        return new ProcessRunOutcome(
+            ProcessRunStatus.OutputLimitExceeded,
+            exitCode,
+            stdout.Snapshot(),
+            stderr.Snapshot(),
+            ProcessOutputStatus.Truncated,
+            null
+        );
+    }
+
     private static ProcessRunOutcome TimedOut(CapturedPipe stdout, CapturedPipe stderr)
     {
         return new ProcessRunOutcome(
@@ -685,24 +800,66 @@ public sealed class ProcessRunner : IProcessRunner
         );
     }
 
-    private sealed class CapturedPipe(ProcessCaptureMode captureMode)
+    private sealed class CapturedPipe(ProcessCaptureMode captureMode, int? maximumBytes = null)
     {
         private readonly Lock _lock = new();
         private readonly MemoryStream? _capture =
             captureMode == ProcessCaptureMode.Discard ? null : new MemoryStream();
+        private long _discardedBytes;
+        private bool _limitExceeded;
 
-        public void Append(ReadOnlySpan<byte> value)
+        public bool LimitExceeded
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _limitExceeded;
+                }
+            }
+        }
+
+        /// <summary>
+        ///     Appends what fits under the ceiling and returns false once it is passed, so the
+        ///     caller stops reading. What was captured up to the ceiling is kept.
+        /// </summary>
+        public bool Append(ReadOnlySpan<byte> value)
         {
             // ReSharper disable once InconsistentlySynchronizedField -- readonly reference set
             // once in the initializer; the lock guards the stream's contents, not the field.
             if (_capture is null)
             {
-                return;
+                // Discarded output still counts against the ceiling: the cap bounds what the
+                // child may produce, not only what the caller asked to keep.
+                if (maximumBytes is not { } discardCeiling)
+                {
+                    return true;
+                }
+
+                lock (_lock)
+                {
+                    _discardedBytes += value.Length;
+                    _limitExceeded |= _discardedBytes > discardCeiling;
+                    return !_limitExceeded;
+                }
             }
 
             lock (_lock)
             {
-                _capture.Write(value);
+                if (maximumBytes is not { } ceiling)
+                {
+                    _capture.Write(value);
+                    return true;
+                }
+
+                var remaining = ceiling - _capture.Length;
+                if (remaining > 0)
+                {
+                    _capture.Write(value[..(int)Math.Min(remaining, value.Length)]);
+                }
+
+                _limitExceeded |= value.Length > remaining;
+                return !_limitExceeded;
             }
         }
 

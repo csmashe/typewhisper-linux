@@ -740,6 +740,98 @@ public sealed class ProcessRunnerTests
     }
 
     [Fact]
+    public async Task RunOneShotAsync_stops_a_child_that_passes_its_stdout_ceiling()
+    {
+        var stopwatch = Stopwatch.StartNew();
+
+        var result = await new ProcessRunner().RunOneShotAsync(
+            ChildCommand("flood", (4 * 1024 * 1024).ToString()),
+            new ProcessOneShotOptions(
+                Timeout: TimeSpan.FromSeconds(30),
+                MaximumStandardOutputBytes: 64 * 1024
+            )
+        );
+
+        Assert.Equal(ProcessRunStatus.OutputLimitExceeded, result.Status);
+        Assert.Equal(ProcessOutputStatus.Truncated, result.OutputStatus);
+        Assert.Null(result.ExitCode);
+        Assert.Equal(64 * 1024, result.StandardOutput.Length);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(20),
+            $"The run waited for the full timeout instead of stopping at the ceiling; elapsed {stopwatch.Elapsed}."
+        );
+    }
+
+    [Fact]
+    public async Task RunOneShotAsync_reports_a_stderr_ceiling_independently()
+    {
+        var result = await new ProcessRunner().RunOneShotAsync(
+            ChildCommand("flood", (1024 * 1024).ToString()),
+            new ProcessOneShotOptions(
+                Timeout: TimeSpan.FromSeconds(30),
+                MaximumStandardErrorBytes: 1024
+            )
+        );
+
+        Assert.Equal(ProcessRunStatus.OutputLimitExceeded, result.Status);
+        Assert.Equal(1024, result.StandardError.Length);
+    }
+
+    [Fact]
+    public async Task RunOneShotAsync_keeps_output_that_exactly_fills_the_ceiling()
+    {
+        var result = await new ProcessRunner().RunOneShotAsync(
+            ChildCommand("flood", (16 * 1024).ToString()),
+            new ProcessOneShotOptions(
+                Timeout: TimeSpan.FromSeconds(30),
+                MaximumStandardOutputBytes: 16 * 1024,
+                MaximumStandardErrorBytes: 16 * 1024
+            )
+        );
+
+        Assert.Equal(ProcessRunStatus.Exited, result.Status);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(16 * 1024, result.StandardOutput.Length);
+        Assert.Equal(16 * 1024, result.StandardError.Length);
+    }
+
+    [Fact]
+    public async Task RunOneShotAsync_applies_a_ceiling_to_discarded_output_too()
+    {
+        var result = await new ProcessRunner().RunOneShotAsync(
+            ChildCommand("flood", (1024 * 1024).ToString()),
+            new ProcessOneShotOptions(
+                Timeout: TimeSpan.FromSeconds(30),
+                StandardOutput: ProcessCaptureMode.Discard,
+                StandardError: ProcessCaptureMode.Discard,
+                MaximumStandardOutputBytes: 32 * 1024
+            )
+        );
+
+        Assert.Equal(ProcessRunStatus.OutputLimitExceeded, result.Status);
+        Assert.Empty(result.StandardOutput);
+    }
+
+    [Theory]
+    [InlineData(-1, null)]
+    [InlineData(null, -1)]
+    public async Task RunOneShotAsync_rejects_a_negative_output_ceiling(
+        int? standardOutputBytes,
+        int? standardErrorBytes
+    )
+    {
+        // Left unchecked a negative ceiling reports OutputLimitExceeded on the first byte read,
+        // which reads as a runaway child rather than the caller's bad argument.
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => new ProcessRunner().RunOneShotAsync(
+            ChildCommand("flood", "1024"),
+            new ProcessOneShotOptions(
+                MaximumStandardOutputBytes: standardOutputBytes,
+                MaximumStandardErrorBytes: standardErrorBytes
+            )
+        ));
+    }
+
+    [Fact]
     public async Task RunOneShotAsync_reports_abandoned_inherited_pipes_after_exit()
     {
         var pidFile = NewPidFile();
@@ -887,6 +979,39 @@ public sealed class ProcessRunnerTests
         Assert.Equal(ProcessRunStatus.StartFailed, result.Status);
         Assert.Null(result.ExitCode);
         Assert.False(string.IsNullOrWhiteSpace(result.StartError));
+    }
+
+    [Fact]
+    public async Task Legacy_runner_default_rejects_the_options_it_cannot_honour()
+    {
+        IPluginProcessSupervisor legacy = new LegacyProcessRunnerStub();
+        var command = new ProcessCommand("/bin/true", []);
+
+        await Assert.ThrowsAsync<NotSupportedException>(() => legacy.RunOneShotAsync(
+            command,
+            new ProcessOneShotOptions(MaximumStandardOutputBytes: 1024)
+        ));
+        var error = await Assert.ThrowsAsync<NotSupportedException>(() => legacy.RunOneShotAsync(
+            command,
+            new ProcessOneShotOptions(ClearInheritedEnvironment: true)
+        ));
+
+        Assert.Contains("inherited environment", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>An <see cref="IProcessRunner" /> that keeps every default interface member.</summary>
+    private sealed class LegacyProcessRunnerStub : IProcessRunner
+    {
+        public Task<ProcessRunResult> RunAsync(
+            string fileName,
+            IReadOnlyList<string> args,
+            IReadOnlyDictionary<string, string>? environment = null,
+            string? standardInput = null,
+            TimeSpan? timeout = null,
+            bool detachAfterExit = false,
+            CancellationToken ct = default
+        ) =>
+            Task.FromResult(new ProcessRunResult(true, false, 0, "", ""));
     }
 
     private static string NewPidFile()

@@ -28,13 +28,29 @@ public enum ProcessPostExitPipePolicy
     AbandonAfterGrace,
 }
 
+/// <param name="MaximumStandardOutputBytes">
+///     Ceiling on captured stdout bytes, or null for unbounded. Must not be negative. Once a
+///     stream passes its ceiling the supervisor stops reading it, terminates the child, and
+///     reports <see cref="ProcessRunStatus.OutputLimitExceeded" /> with
+///     <see cref="ProcessOutputStatus.Truncated" /> and what was captured up to the ceiling, so
+///     a runaway child cannot grow the host's memory without bound.
+/// </param>
+/// <param name="MaximumStandardErrorBytes">The same ceiling for stderr.</param>
+/// <param name="ClearInheritedEnvironment">
+///     When true the child starts from an empty environment instead of a copy of the host's, so
+///     only <see cref="ProcessCommand.Environment" /> reaches it. Default false: an existing
+///     caller that only adds a variable keeps inheriting everything else.
+/// </param>
 public sealed record ProcessOneShotOptions(
     TimeSpan? Timeout = null,
     ProcessInput? StandardInput = null,
     ProcessCaptureMode StandardOutput = ProcessCaptureMode.Utf8Text,
     ProcessCaptureMode StandardError = ProcessCaptureMode.Utf8Text,
     ProcessPostExitPipePolicy PostExitPipePolicy = ProcessPostExitPipePolicy.RequireEof,
-    TimeSpan? PostExitDrainGrace = null
+    TimeSpan? PostExitDrainGrace = null,
+    int? MaximumStandardOutputBytes = null,
+    int? MaximumStandardErrorBytes = null,
+    bool ClearInheritedEnvironment = false
 );
 
 public enum ProcessRunStatus
@@ -42,14 +58,22 @@ public enum ProcessRunStatus
     Exited,
     TimedOut,
     StartFailed,
+    OutputLimitExceeded,
 }
 
 public enum ProcessOutputStatus
 {
     Complete,
     AbandonedAfterExit,
+
+    /// <summary>The pumps were abandoned at a byte ceiling, so the capture stops mid-stream.</summary>
+    Truncated,
 }
 
+/// <param name="ExitCode">
+///     The child's exit code, or null when it never exited on its own — including a
+///     <see cref="ProcessRunStatus.OutputLimitExceeded" /> run that had to terminate it.
+/// </param>
 public sealed record ProcessRunOutcome(
     ProcessRunStatus Status,
     int? ExitCode,

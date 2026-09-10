@@ -12,9 +12,11 @@
         <Project Path="tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj"/>
         <Project Path="tests/TypeWhisper.Cli.Tests/TypeWhisper.Cli.Tests.csproj"/>
         <Project Path="tests/TypeWhisper.ProcessTestChild/TypeWhisper.ProcessTestChild.csproj"/>
+        <Project Path="tests/TypeWhisper.FakeProviderCli/TypeWhisper.FakeProviderCli.csproj"/>
     </Folder>
     <Folder Name="/plugins/">
         <Project Path="plugins/TypeWhisper.Plugin.AssemblyAi/TypeWhisper.Plugin.AssemblyAi.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.AuthenticatedCli/TypeWhisper.Plugin.AuthenticatedCli.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Cerebras/TypeWhisper.Plugin.Cerebras.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Claude/TypeWhisper.Plugin.Claude.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.CloudflareAsr/TypeWhisper.Plugin.CloudflareAsr.csproj"/>
