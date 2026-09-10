@@ -107,6 +107,7 @@ public sealed class TextInsertionService
     private readonly IAtSpiEventClient? _atSpiClient;
     private readonly IErrorLogService? _errorLog;
     private readonly Func<bool> _isRecording;
+    private readonly Func<bool> _learningConsent;
     private readonly IPasteConfirmationSource? _pasteConfirmation;
 
     private readonly ITextInsertionPlatform _platform;
@@ -120,14 +121,16 @@ public sealed class TextInsertionService
         IPasteConfirmationSource? pasteConfirmation = null,
         IProcessRunner? processRunner = null,
         Func<bool>? isAnotherSessionRecording = null,
-        IAtSpiEventClient? atSpiClient = null
+        IAtSpiEventClient? atSpiClient = null,
+        Func<bool>? learningConsent = null
     )
         : this(
             new LinuxTextInsertionPlatform(commands, processRunner),
             errorLog,
             pasteConfirmation,
             isAnotherSessionRecording,
-            atSpiClient
+            atSpiClient,
+            learningConsent
         )
     {
     }
@@ -137,7 +140,8 @@ public sealed class TextInsertionService
         IErrorLogService? errorLog = null,
         IPasteConfirmationSource? pasteConfirmation = null,
         Func<bool>? isAnotherSessionRecording = null,
-        IAtSpiEventClient? atSpiClient = null
+        IAtSpiEventClient? atSpiClient = null,
+        Func<bool>? learningConsent = null
     )
     {
         _platform = platform;
@@ -145,6 +149,7 @@ public sealed class TextInsertionService
         _errorLog = errorLog;
         _pasteConfirmation = pasteConfirmation;
         _isRecording = isAnotherSessionRecording ?? (static () => false);
+        _learningConsent = learningConsent ?? (static () => true);
     }
 
     /// <summary>
@@ -164,6 +169,12 @@ public sealed class TextInsertionService
     // recorded before the partial-delivery abort, so the reason value alone can't tell
     // whether a prefix already landed. Reset per request.
     public bool LastTypingDeliveredPartialText { get; private set; }
+
+    // Consent can be withdrawn while a window-focus wait is in flight, so the captured element is
+    // consulted only when consent still holds at the moment it would be touched; without consent
+    // the insertion proceeds as if no field had been locked.
+    private LockedFocusTarget? LockedTargetIfConsented(LockedFocusTarget? lockedTarget) =>
+        _learningConsent() ? lockedTarget : null;
 
     private async Task<bool> RestoreLockedFocusAsync(LockedFocusTarget lockedTarget)
     {
@@ -337,7 +348,7 @@ public sealed class TextInsertionService
         }
 
         if (
-            request.LockedFocusTarget is { } lockedTarget
+            LockedTargetIfConsented(request.LockedFocusTarget) is { } lockedTarget
             && !await RestoreLockedFocusAsync(lockedTarget)
         )
         {
@@ -873,6 +884,7 @@ public sealed class TextInsertionService
             return InsertionResult.Failed;
         }
 
+        lockedTarget = LockedTargetIfConsented(lockedTarget);
         if (lockedTarget is not null && !await RestoreLockedFocusAsync(lockedTarget))
         {
             LastFailureReason = InsertionFailureReason.LockedFieldUnavailable;
@@ -925,6 +937,7 @@ public sealed class TextInsertionService
             return InsertionResult.ActionFailed;
         }
 
+        lockedTarget = LockedTargetIfConsented(lockedTarget);
         if (lockedTarget is null || await RestoreLockedFocusAsync(lockedTarget))
         {
             return await _platform.SendEnterAsync()

@@ -178,13 +178,15 @@ internal static class ServiceRegistrations
         services.AddSingleton(sp =>
         {
             var audioRecording = sp.GetRequiredService<AudioRecordingService>();
+            var settings = sp.GetRequiredService<ISettingsService>();
             return new TextInsertionService(
                 sp.GetRequiredService<IErrorLogService>(),
                 sp.GetRequiredService<SystemCommandAvailabilityService>(),
                 sp.GetRequiredService<IPasteConfirmationSource>(),
                 sp.GetRequiredService<IProcessRunner>(),
                 isAnotherSessionRecording: () => audioRecording.IsRecording,
-                atSpiClient: sp.GetRequiredService<IAtSpiEventClient>()
+                atSpiClient: sp.GetRequiredService<IAtSpiEventClient>(),
+                learningConsent: () => settings.Current.TargetAppCorrectionLearningEnabled
             );
         });
         services.AddSingleton<YdotoolSetupHelper>();

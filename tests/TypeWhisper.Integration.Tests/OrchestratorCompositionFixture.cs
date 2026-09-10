@@ -234,13 +234,16 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
         );
         services.Replace(
             ServiceDescriptor.Singleton<TextInsertionService>(sp =>
-                new TextInsertionService(
+            {
+                var settings = sp.GetRequiredService<ISettingsService>();
+                return new TextInsertionService(
                     insertionPlatform,
                     sp.GetRequiredService<IErrorLogService>(),
                     sp.GetRequiredService<IPasteConfirmationSource>(),
-                    atSpiClient: sp.GetRequiredService<IAtSpiEventClient>()
-                )
-            )
+                    atSpiClient: sp.GetRequiredService<IAtSpiEventClient>(),
+                    learningConsent: () => settings.Current.TargetAppCorrectionLearningEnabled
+                );
+            })
         );
     }
 

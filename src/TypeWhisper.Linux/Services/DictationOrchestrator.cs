@@ -1487,6 +1487,7 @@ public sealed class DictationOrchestrator : IDisposable
                     // already order this read against the acquire.
                     OverlayToken = _overlayToken,
                     // Consent withdrawn mid-recording means the captured element must not be touched again.
+                    // TextInsertionService re-checks consent right before it touches the element.
                     LockedFocusField = learningConsent ? _recordingLockedField : null,
                 };
 

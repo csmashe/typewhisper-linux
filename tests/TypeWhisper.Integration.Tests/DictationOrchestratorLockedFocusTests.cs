@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.PluginSDK.Models;
 using Xunit;
 
 namespace TypeWhisper.Integration.Tests;
@@ -273,6 +274,140 @@ public sealed class DictationOrchestratorLockedFocusTests
             Assert.NotEqual(InsertionFailureReason.LockedFieldUnavailable,
                 fixture.Provider.GetRequiredService<TextInsertionService>().LastFailureReason);
             Assert.Equal(1, fixture.InsertionPlatform.PasteAttemptCount);
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task ConsentWithdrawnAfterStop_PastesWithoutTouchingTheField()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture(
+                focusedApp: ("gedit", "Editor")
+            );
+            // Keep the learner's listener lifecycle separate from the focus-lock assertions.
+            fixture.Provider.GetRequiredService<TargetAppCorrectionLearningService>().Dispose();
+            fixture.Settings.Update(settings => settings with
+            {
+                LockPasteToFocusedField = true,
+                TargetAppCorrectionLearningEnabled = true,
+            });
+            fixture.AtSpi.IsRunning = true;
+            fixture.AtSpi.CurrentFocusedElement = new AtSpiElementRef("app", "/initial");
+            // Non-ASCII text selects the paste path.
+            fixture.Plugin.EnqueueResult(_ =>
+            {
+                // Consent is withdrawn after StopAsync snapshotted it, while transcription is still running.
+                // ReSharper disable once AccessToDisposedClosure -- the callback runs inside the awaited dictation, before the fixture disposes.
+                fixture.Settings.Update(settings => settings with { TargetAppCorrectionLearningEnabled = false });
+                return Task.FromResult(new PluginTranscriptionResult("dictated café", "en", 1));
+            });
+
+            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+            await BoundedTest.WaitAsync(fixture.RecordingStarted.Task);
+            fixture.FeedNonSilentAudio();
+            var resultTask = fixture.WaitForResultAsync(sessionId);
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+            await BoundedTest.WaitAsync(resultTask);
+
+            Assert.Equal(0, fixture.AtSpi.FocusReadCount);
+            Assert.NotEqual(InsertionFailureReason.LockedFieldUnavailable,
+                fixture.Provider.GetRequiredService<TextInsertionService>().LastFailureReason);
+            Assert.Equal(1, fixture.InsertionPlatform.PasteAttemptCount);
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task ConsentWithdrawnDuringCommand_OneShotInsertionDoesNotTouchTheField()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture(
+                focusedApp: ("codex", "Editor")
+            );
+            // Keep the learner's listener lifecycle separate from the focus-lock assertions.
+            fixture.Provider.GetRequiredService<TargetAppCorrectionLearningService>().Dispose();
+            fixture.Settings.Update(settings => settings with
+            {
+                LockPasteToFocusedField = true,
+                TargetAppCorrectionLearningEnabled = true,
+                CommandModeEnabled = true,
+            });
+            var target = new AtSpiElementRef("app", "/initial");
+            fixture.AtSpi.IsRunning = true;
+            fixture.AtSpi.CurrentFocusedElement = target;
+            fixture.Plugin.EnqueueText("TypeWhisper write a haiku about the sea");
+            fixture.Llm.EnqueueStream("Waves fold the gray shore, ", "salt light drifts through pines.");
+
+            // ReSharper disable once AccessToDisposedClosure -- the callback runs inside the awaited dictation, before the fixture disposes.
+            fixture.Llm.BeforeBatchResponse = () => fixture.Settings.Update(settings => settings with
+            {
+                TargetAppCorrectionLearningEnabled = false,
+            });
+
+            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+            fixture.FeedNonSilentAudio();
+            var resultTask = fixture.WaitForResultAsync(sessionId);
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+            await BoundedTest.WaitAsync(resultTask);
+
+            Assert.Equal(1, fixture.Llm.BatchCalls);
+            Assert.Null(fixture.AtSpi.LastFocusReadElement);
+            Assert.Single(fixture.InsertionPlatform.Typed);
+            Assert.Equal(0, fixture.InsertionPlatform.PasteAttemptCount);
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task ConsentRestoredBeforeCommandInsertion_KeepsTheLockedField()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture(
+                focusedApp: ("codex", "Editor")
+            );
+            // Keep the learner's listener lifecycle separate from the focus-lock assertions.
+            fixture.Provider.GetRequiredService<TargetAppCorrectionLearningService>().Dispose();
+            fixture.Settings.Update(settings => settings with
+            {
+                LockPasteToFocusedField = true,
+                TargetAppCorrectionLearningEnabled = true,
+                CommandModeEnabled = true,
+            });
+            var target = new AtSpiElementRef("app", "/initial");
+            fixture.AtSpi.IsRunning = true;
+            fixture.AtSpi.CurrentFocusedElement = target;
+            fixture.Plugin.EnqueueResult(_ =>
+            {
+                // ReSharper disable once AccessToDisposedClosure -- the callback runs inside the awaited dictation, before the fixture disposes.
+                fixture.Settings.Update(settings => settings with
+                {
+                    TargetAppCorrectionLearningEnabled = false,
+                });
+                return Task.FromResult(new PluginTranscriptionResult(
+                    "TypeWhisper write a haiku about the sea", "en", 1));
+            });
+            fixture.Llm.EnqueueStream("Waves fold the gray shore, ", "salt light drifts through pines.");
+
+            // ReSharper disable once AccessToDisposedClosure -- the callback runs inside the awaited dictation, before the fixture disposes.
+            fixture.Llm.BeforeBatchResponse = () => fixture.Settings.Update(settings => settings with
+            {
+                TargetAppCorrectionLearningEnabled = true,
+            });
+
+            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+            fixture.FeedNonSilentAudio();
+            var resultTask = fixture.WaitForResultAsync(sessionId);
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+            await BoundedTest.WaitAsync(resultTask);
+
+            Assert.Equal(1, fixture.Llm.BatchCalls);
+            Assert.Equal(target, fixture.AtSpi.LastFocusReadElement);
+            Assert.Single(fixture.InsertionPlatform.Typed);
+            Assert.Equal(0, fixture.InsertionPlatform.PasteAttemptCount);
         });
     }
 

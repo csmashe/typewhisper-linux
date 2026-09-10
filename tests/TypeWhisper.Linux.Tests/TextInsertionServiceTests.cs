@@ -90,6 +90,63 @@ public sealed class TextInsertionServiceTests
     }
 
     [Theory]
+    [InlineData(TextInsertionStrategy.ClipboardPaste)]
+    [InlineData(TextInsertionStrategy.DirectTyping)]
+    public async Task LockedField_WithoutLearningConsent_InsertsWithoutTouchingTheField(
+        TextInsertionStrategy strategy)
+    {
+        var events = new List<string>();
+        var client = new FakeAtSpiEventClient
+        {
+            FocusedResult = false,
+            OnFocusRead = () => events.Add("focus-read"),
+        };
+        client.OnGrabFocus = () => client.FocusedResult = true;
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(
+            platform, atSpiClient: client, learningConsent: static () => false);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", Strategy: strategy,
+            LockedFocusTarget: new LockedFocusTarget(new AtSpiElementRef("app", "/field"))
+        ));
+
+        Assert.Equal(strategy == TextInsertionStrategy.DirectTyping
+            ? InsertionResult.Typed : InsertionResult.Pasted, result);
+        Assert.Equal(InsertionFailureReason.None, sut.LastFailureReason);
+        Assert.Equal(0, client.GrabFocusCount);
+        Assert.Empty(events);
+    }
+
+    [Fact]
+    public async Task LockedField_ConsentWithdrawnDuringWindowFocus_InsertsWithoutTouchingTheField()
+    {
+        var consent = true;
+        var events = new List<string>();
+        var client = new FakeAtSpiEventClient
+        {
+            FocusedResult = false,
+            OnFocusRead = () => events.Add("focus-read"),
+        };
+        client.OnGrabFocus = () => client.FocusedResult = true;
+        var platform = new FakeTextInsertionPlatform
+        {
+            OnActivateWindow = () => consent = false,
+        };
+        var sut = new TextInsertionService(
+            platform, atSpiClient: client, learningConsent: () => consent);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", TargetWindowId: "w1", Strategy: TextInsertionStrategy.DirectTyping,
+            LockedFocusTarget: new LockedFocusTarget(new AtSpiElementRef("app", "/field"))
+        ));
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal(0, client.GrabFocusCount);
+        Assert.Empty(events);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task EnterOnly_UnrestorableLockedField_DoesNotSendEnter(bool hasElement)
@@ -3541,6 +3598,7 @@ public sealed class TextInsertionServiceTests
         public List<TimeSpan> Delays { get; } = [];
         public Action<TimeSpan>? OnDelay { get; init; }
         public Action? OnEnterSent { get; init; }
+        public Action? OnActivateWindow { get; init; }
 
         public bool IsClipboardSetAvailable => ClipboardSetAvailable;
 
@@ -3592,6 +3650,7 @@ public sealed class TextInsertionServiceTests
         public Task<bool> ActivateWindowAsync(string windowId)
         {
             ActivationAttemptCount++;
+            OnActivateWindow?.Invoke();
             if (ActivateSucceeds)
             {
                 ActiveWindowId = windowId;
