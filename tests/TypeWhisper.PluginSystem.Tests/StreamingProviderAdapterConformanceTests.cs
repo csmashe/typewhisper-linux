@@ -566,6 +566,30 @@ public sealed class StreamingProviderAdapterConformanceTests
         await finalize.WaitAsync(s_timeout);
     }
 
+    [Fact]
+    public async Task Meta_StartFailureBeforeFirstSend_SurfacesOriginalException()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        // Like Speechmatics with a null language, a null language bias faults during
+        // startup message construction, before the transport sends anything.
+        var adapter = new MetaWebSocketAdapter(
+            new MetaRealtimeConnectionOptions(
+                "key",
+                MetaPlugin.DefaultTranscriptionModelId,
+                "PUSH_TO_TALK",
+                null!,
+                []
+            )
+        );
+
+        var exception = await Assert.ThrowsAsync<NullReferenceException>(
+            () => StartAsync(adapter, transport)
+        );
+        Assert.Equal("Object reference not set to an instance of an object.", exception.Message);
+        Assert.Empty(transport.DrainSent());
+        Assert.Equal(1, transport.DisposeCount);
+    }
+
     private static async Task<WebSocketSessionPump> StartAsync(
         IWebSocketSessionAdapter adapter,
         ScriptedWebSocketTransport transport)
@@ -574,7 +598,7 @@ public sealed class StreamingProviderAdapterConformanceTests
         // ReSharper disable once InvertIf -- inverting would duplicate the awaited start into both branches.
         if (adapter is MetaWebSocketAdapter)
         {
-            await transport.NextSentAsync();
+            await FirstSentOrStartFailureAsync(starting, transport);
             transport.EnqueueText("""{"sessionId":"meta-session"}""");
         }
         return await starting.WaitAsync(s_timeout);
