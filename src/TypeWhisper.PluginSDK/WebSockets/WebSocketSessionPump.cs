@@ -4,7 +4,7 @@ using System.Runtime.ExceptionServices;
 
 namespace TypeWhisper.PluginSDK.WebSockets;
 
-public sealed class WebSocketSessionPump : IStreamingSession
+public sealed class WebSocketSessionPump : IStreamingSession, IStreamingSessionHealth
 {
     private readonly IWebSocketSessionAdapter _adapter;
     private readonly IWebSocketTransport _transport;
@@ -44,6 +44,8 @@ public sealed class WebSocketSessionPump : IStreamingSession
     // in-tree callers happen to be internal to this file.
     public WebSocketSessionState State =>
         (WebSocketSessionState)Volatile.Read(ref _state);
+
+    public Exception? Fault => Volatile.Read(ref _sessionFault);
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived;
 

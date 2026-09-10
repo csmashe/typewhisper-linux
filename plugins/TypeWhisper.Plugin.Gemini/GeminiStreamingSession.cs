@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -6,7 +7,7 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.Gemini;
 
-internal sealed class GeminiStreamingSession : IStreamingSession
+internal sealed class GeminiStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
     private const string LiveWebSocketUrl =
         "wss://generativelanguage.googleapis.com/ws/"
@@ -17,11 +18,17 @@ internal sealed class GeminiStreamingSession : IStreamingSession
     private static readonly string[] s_responseModalities = ["TEXT"];
 
     private readonly WebSocketSessionPump _pump;
+    private readonly GeminiWebSocketAdapter _adapter;
+    private readonly IWebSocketTransport _transport;
 
-    private GeminiStreamingSession(WebSocketSessionPump pump)
+    private GeminiStreamingSession(WebSocketSessionPump pump, GeminiWebSocketAdapter adapter, IWebSocketTransport transport)
     {
         _pump = pump;
+        _adapter = adapter;
+        _transport = transport;
     }
+
+    public Exception? Fault => _pump.Fault;
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived
     {
@@ -37,30 +44,68 @@ internal sealed class GeminiStreamingSession : IStreamingSession
         GeminiTranscriptionMode mode,
         CancellationToken ct)
     {
+        var adapter = new GeminiWebSocketAdapter(apiKey, liveModelId, languageHints, customVocabulary, mode);
+        var transport = new ClientWebSocketTransport();
         var pump = await WebSocketSessionPump.ConnectAsync(
-            new GeminiWebSocketAdapter(apiKey, liveModelId, languageHints, customVocabulary, mode),
-            ct);
-        return new GeminiStreamingSession(pump);
+            adapter, ct, transportFactory: new SessionTransportFactory(transport));
+        return new GeminiStreamingSession(pump, adapter, transport);
     }
 
-    internal static async Task<GeminiStreamingSession> CreateConnectedSessionForTests(WebSocket ws)
+    private sealed class SessionTransportFactory(IWebSocketTransport transport) : IWebSocketTransportFactory
     {
-        var pump = await WebSocketSessionPump.StartConnectedAsync(
-            new GeminiWebSocketAdapter(
-                "",
-                GeminiPlugin.DefaultLiveTranscriptionModel,
-                [],
-                [],
-                GeminiTranscriptionMode.Smart),
-            new ClientWebSocketTransport(ws),
-            CancellationToken.None);
-        return new GeminiStreamingSession(pump);
+        public IWebSocketTransport Create() => transport;
+    }
+
+    internal static Task<GeminiStreamingSession> CreateConnectedSessionForTests(WebSocket ws) =>
+        CreateConnectedSessionForTests(new ClientWebSocketTransport(ws));
+
+    internal static async Task<GeminiStreamingSession> CreateConnectedSessionForTests(IWebSocketTransport transport)
+    {
+        var adapter = new GeminiWebSocketAdapter(
+            "", GeminiPlugin.DefaultLiveTranscriptionModel, [], [], GeminiTranscriptionMode.Smart);
+        var pump = await WebSocketSessionPump.StartConnectedAsync(adapter, transport, CancellationToken.None);
+        return new GeminiStreamingSession(pump, adapter, transport);
     }
 
     public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct) =>
         _pump.SendAudioAsync(pcm16Audio, ct);
 
-    public Task FinalizeAsync(CancellationToken ct) => _pump.FinalizeAsync(ct);
+    public async Task FinalizeAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        ThrowIfPumpFaulted();
+        var completedUtterances = _adapter.CompletedPendingUtterances;
+        await _pump.FinalizeAsync(ct);
+
+        // Always collect after EOF: the first interim may still be in flight.
+        var deadline = Environment.TickCount64 + 1500;
+        while (_transport.State == WebSocketState.Open)
+        {
+            ct.ThrowIfCancellationRequested();
+            ThrowIfPumpFaulted();
+            if ((_adapter.CompletedPendingUtterances != completedUtterances && !_adapter.HasPendingUtterance)
+                || Environment.TickCount64 >= deadline)
+                break;
+            await Task.Delay(25, ct);
+        }
+
+        ct.ThrowIfCancellationRequested();
+        ThrowIfPumpFaulted();
+        if (_adapter.HasPendingUtterance)
+        {
+            if (_transport.State != WebSocketState.Open)
+                throw new PluginRequestException(
+                    "Gemini streaming connection closed before the tail transcript finalized.",
+                    PluginRequestFailureKind.ServerError);
+            throw new TimeoutException("Gemini streaming tail transcript did not finalize in time.");
+        }
+    }
+
+    private void ThrowIfPumpFaulted()
+    {
+        if (Fault is { } fault)
+            ExceptionDispatchInfo.Capture(fault).Throw();
+    }
 
     public ValueTask DisposeAsync() => _pump.DisposeAsync();
 
@@ -123,12 +168,17 @@ internal sealed class GeminiWebSocketAdapter(
     GeminiTranscriptionMode mode
 ) : IWebSocketSessionAdapter
 {
+    private int _hasPendingUtterance;
+    private int _completedPendingUtterances;
+    internal int CompletedPendingUtterances => Volatile.Read(ref _completedPendingUtterances);
+    internal bool HasPendingUtterance => Volatile.Read(ref _hasPendingUtterance) != 0;
+
     public string ProviderName => "Gemini";
     public WebSocketReadinessPolicy Readiness =>
         WebSocketReadinessPolicy.Require("setupComplete");
 
     // Google documents no server signal after audioStreamEnd, so a session that ends cleanly
-    // must not fault; the coordinator's grace window still collects finals sent after finalize.
+    // must not fault solely for lacking a terminal signal. The session collects pending tails.
     public WebSocketTerminalPolicy Terminal => WebSocketTerminalPolicy.None;
     public WebSocketKeepAlivePolicy? KeepAlive => null;
     public WebSocketClosePolicy ClosePolicy => WebSocketClosePolicy.Default;
@@ -226,24 +276,28 @@ internal sealed class GeminiWebSocketAdapter(
             // including inside the coordinator's post-finalize grace window, where a turn that
             // began before the user stopped can complete ahead of the tail transcript. The loop
             // ends at dispose instead, and the Live API's 10-minute cap closes the socket
-            // normally, which is a clean end rather than a fault.
+            // normally; the session rejects closure if a known utterance remains pending.
 
             // Each inputTranscription frame is one finalized utterance; the coordinator joins
             // them with newlines, so they are emitted as they arrive rather than aggregated.
             if (TryGetTranscriptText(serverContent, "inputTranscription", "input_transcription")
                 is { } finalText)
             {
+                if (Interlocked.Exchange(ref _hasPendingUtterance, 0) != 0)
+                    Interlocked.Increment(ref _completedPendingUtterances);
                 return new WebSocketInboundResult(
                     [new StreamingTranscriptEvent(finalText, IsFinal: true)]);
             }
 
-            return TryGetTranscriptText(
-                    serverContent,
-                    "interimInputTranscription",
-                    "interim_input_transcription") is { } interimText
-                ? new WebSocketInboundResult(
-                    [new StreamingTranscriptEvent(interimText, IsFinal: false)])
-                : WebSocketInboundResult.Empty;
+            if (TryGetTranscriptText(serverContent, "interimInputTranscription", "interim_input_transcription")
+                is not { } interimText)
+            {
+                return WebSocketInboundResult.Empty;
+            }
+
+            Volatile.Write(ref _hasPendingUtterance, 1);
+            return new WebSocketInboundResult(
+                [new StreamingTranscriptEvent(interimText, IsFinal: false)]);
         }
     }
 

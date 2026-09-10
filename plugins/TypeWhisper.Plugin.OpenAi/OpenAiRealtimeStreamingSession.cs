@@ -11,7 +11,7 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.OpenAi;
 
-internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
+internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
     internal const string ModelId = "gpt-realtime-whisper";
     internal const int SourceSampleRate = 16_000;
@@ -28,6 +28,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession
         _pump = pump;
         _adapter = adapter;
     }
+
+    public Exception? Fault => _pump.Fault;
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived
     {
