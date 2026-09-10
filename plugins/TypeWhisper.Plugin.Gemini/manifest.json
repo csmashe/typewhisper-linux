@@ -1,9 +1,9 @@
 {
   "id": "com.typewhisper.gemini",
   "name": "Google Gemini",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "TypeWhisper",
-  "description": "Google Gemini LLM provider for prompt actions and translation",
+  "description": "Google Gemini and Gemma LLM provider with dynamic model discovery",
   "networkAccess": "network",
   "categories": ["llm"],
   "assemblyName": "TypeWhisper.Plugin.Gemini.dll",
