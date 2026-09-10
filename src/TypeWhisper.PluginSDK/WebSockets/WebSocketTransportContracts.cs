@@ -91,9 +91,6 @@ public sealed record WebSocketReadinessPolicy(bool Required, string SignalName)
 
 public sealed record WebSocketTerminalPolicy(bool Required, string SignalName)
 {
-    // ReSharper disable once UnusedMember.Global -- SDK counterpart to
-    // WebSocketReadinessPolicy.Immediate for adapters whose provider has no terminal
-    // signal; every in-tree provider currently documents one, so nothing calls it here.
     public static WebSocketTerminalPolicy None { get; } = new(false, "completion");
 
     public static WebSocketTerminalPolicy Require(string signalName) =>

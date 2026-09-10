@@ -1,6 +1,6 @@
 {
   "Settings.ApiKey": "Clave de API",
-  "Settings.ApiKeyDescription": "Necesaria para las solicitudes al LLM de Gemini.",
+  "Settings.ApiKeyDescription": "Necesaria para la transcripción de Gemini y las solicitudes al LLM.",
   "Settings.StreamResponses": "Transmitir respuestas",
   "Settings.StreamResponsesDescription": "Muestra la salida de la acción del prompt token a token a medida que se genera, en lugar de esperar a la respuesta completa.",
   "Settings.EnterApiKey": "Introduce primero una clave de API.",
@@ -8,9 +8,16 @@
   "Settings.ApiKeyInvalid": "La clave de API no es válida.",
   "Settings.ApiKeyNotConfigured": "Clave de API no configurada",
   "Manifest.Name": "Google Gemini",
-  "Manifest.Description": "Proveedor de LLM Google Gemini y Gemma con descubrimiento dinámico de modelos",
-  "Settings.ApiKeyValidFetched": "¡Clave de API válida! Modelos compatibles de Gemini y Gemma obtenidos: {0}.",
+  "Manifest.Description": "Transcripción de Google Gemini, dictado en vivo y proveedor de LLM Gemini/Gemma con descubrimiento dinámico de modelos",
+  "Settings.ApiKeyValidFetched": "¡Clave de API válida! Modelos obtenidos: {0} de chat, {1} de transcripción.",
   "Settings.LlmModelDescriptionFetched": "Modelos compatibles de Gemini y Gemma cargados desde la API: {0}.",
   "Settings.LlmModelDescriptionDefault": "Se usan los alias de Gemini integrados. Valida la clave de API para cargar los modelos de chat de Gemini y Gemma disponibles para ella.",
-  "Settings.LlmModel": "Modelo de LLM"
+  "Settings.LlmModel": "Modelo de LLM",
+  "Settings.TranscriptionModel": "Modelo de transcripción",
+  "Settings.TranscriptionModelsFetched": "Modelos de transcripción cargados desde la API: {0}.",
+  "Settings.TranscriptionModelFallback": "Se usa el modelo de transcripción de Gemini integrado. Valida la clave de API para cargar los modelos de transcripción disponibles para ella.",
+  "Settings.TranscriptionMode": "Estilo de transcripción",
+  "Settings.TranscriptionModeHint": "Inteligente elimina muletillas, aplica las correcciones dictadas y da formato al texto. Literal conserva las palabras tal como se pronunciaron.",
+  "Settings.ModeSmart": "Inteligente",
+  "Settings.ModeVerbatim": "Literal"
 }
