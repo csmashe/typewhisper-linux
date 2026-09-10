@@ -30,5 +30,10 @@
   "Settings.NoTranscriptionModelSelected": "Модель транскрипции не выбрана.",
   "Settings.NoLlmModelSelected": "Модель LLM не выбрана.",
   "Manifest.Name": "OpenAI-совместимый",
-  "Manifest.Description": "Подключение к любому OpenAI-совместимому серверу (Ollama, LM Studio, vLLM и т. д.)"
+  "Manifest.Description": "Подключение к любому OpenAI-совместимому серверу (Ollama, LM Studio, vLLM и т. д.)",
+  "Settings.LlmRequestTimeout": "Время ожидания запросов к LLM",
+  "Settings.LlmRequestTimeoutHelp": "Время ожидания каждого ответа LLM. Введите целое число от {0} до {1}. По умолчанию: {2} секунд.",
+  "Settings.LlmRequestTimeoutInvalid": "Введите целое число от {0} до {1} секунд.",
+  "Settings.LlmRequestTimedOut": "Время ожидания ответа языковой модели истекло.",
+  "Settings.RequestTimedOut": "Время ожидания запроса истекло."
 }
