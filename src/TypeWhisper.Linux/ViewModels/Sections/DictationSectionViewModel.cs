@@ -103,7 +103,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private readonly IAtSpiEventClient? _atSpiClient;
 
-    public bool IsLockPasteToFocusedFieldAvailable => _atSpiClient?.IsRunning == true;
+    public bool IsLockPasteToFocusedFieldAvailable => TargetAppCorrectionLearningEnabled && _atSpiClient?.IsRunning == true;
 
     [ObservableProperty]
     private CleanupLevel _cleanupLevel = CleanupLevel.None;

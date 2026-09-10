@@ -394,7 +394,16 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             }
 
             field = value;
-            RunningChanged?.Invoke();
+            // Mirrors the FocusChanged/TextChanged boundaries: a throwing subscriber must not abort the
+            // Dispose/StopAsync teardown that flips this flag.
+            try
+            {
+                RunningChanged?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[AtSpiEventClient] RunningChanged subscriber threw: {ex.Message}");
+            }
         }
     }
 

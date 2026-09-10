@@ -46,7 +46,8 @@ public sealed class DictationSectionViewModelTests
         var client = new Mock<IAtSpiEventClient>();
         var pendingNotifications = new Queue<Action>();
         using var context = new ViewModelTestContext(
-            AppSettings.Default, new FakeAudioDeviceEnumerator(), atSpiClient: client.Object,
+            AppSettings.Default with { TargetAppCorrectionLearningEnabled = true },
+            new FakeAudioDeviceEnumerator(), atSpiClient: client.Object,
             dispatchNotification: pendingNotifications.Enqueue
         );
         Assert.False(context.Sut.IsLockPasteToFocusedFieldAvailable);
@@ -63,6 +64,25 @@ public sealed class DictationSectionViewModelTests
             Assert.Contains(nameof(context.Sut.IsLockPasteToFocusedFieldAvailable), notifications);
             Assert.Equal(running, context.Sut.IsLockPasteToFocusedFieldAvailable);
         }
+    }
+
+    [Fact]
+    public void LockPasteAvailability_RequiresLearningConsent()
+    {
+        var client = new Mock<IAtSpiEventClient>();
+        client.SetupGet(value => value.IsRunning).Returns(true);
+        using var context = new ViewModelTestContext(
+            AppSettings.Default, new FakeAudioDeviceEnumerator(), atSpiClient: client.Object
+        );
+        var notifications = new List<string?>();
+        context.Sut.PropertyChanged += (_, args) => notifications.Add(args.PropertyName);
+
+        Assert.False(context.Sut.IsLockPasteToFocusedFieldAvailable);
+        context.Sut.TargetAppCorrectionLearningEnabled = true;
+        Assert.Contains(nameof(context.Sut.IsLockPasteToFocusedFieldAvailable), notifications);
+        Assert.True(context.Sut.IsLockPasteToFocusedFieldAvailable);
+        context.Sut.TargetAppCorrectionLearningEnabled = false;
+        Assert.False(context.Sut.IsLockPasteToFocusedFieldAvailable);
     }
 
     [Fact]

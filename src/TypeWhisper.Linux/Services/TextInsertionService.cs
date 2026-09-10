@@ -172,9 +172,12 @@ public sealed class TextInsertionService
             return false;
         }
 
+        // The field's role and state can change between capture and paste (a password toggle, a
+        // control turning read-only), so eligibility is checked again on the field that is about to
+        // receive text — on the already-focused path and after a grab has settled.
         if (await _atSpiClient.IsElementFocusedAsync(target) == true)
         {
-            return true;
+            return await _atSpiClient.IsLockableFieldAsync(target);
         }
 
         if (_isRecording() || !await _atSpiClient.TryGrabFocusAsync(target))
@@ -183,7 +186,8 @@ public sealed class TextInsertionService
         }
 
         await _platform.DelayAsync(s_focusDelay);
-        return await _atSpiClient.IsElementFocusedAsync(target) == true;
+        return await _atSpiClient.IsElementFocusedAsync(target) == true
+            && await _atSpiClient.IsLockableFieldAsync(target);
     }
 
     public async Task<InsertionResult> InsertTextAsync(

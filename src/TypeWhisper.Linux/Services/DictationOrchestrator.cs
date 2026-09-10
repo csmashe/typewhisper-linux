@@ -789,7 +789,7 @@ public sealed class DictationOrchestrator : IDisposable
             _lastSpeechDetectedAtUtc = _recordingStart;
             _silenceStopRequested = false;
 
-            var captureLockedField = startupSettings is { AutoPaste: true, LockPasteToFocusedField: true }
+            var captureLockedField = startupSettings is { AutoPaste: true, LockPasteToFocusedField: true, TargetAppCorrectionLearningEnabled: true }
                 && _atSpiClient?.IsRunning == true;
             AtSpiElementRef? initialFocusedElement;
             lock (_recordingSessionLock)
@@ -1444,6 +1444,7 @@ public sealed class DictationOrchestrator : IDisposable
             StreamingTranscriptionCoordinator? stoppedStreamingCoordinator;
             CancellationTokenSource? stoppedStreamingStartupCts;
             RecordingContext recordingContext;
+            var learningConsent = _settings.Current.TargetAppCorrectionLearningEnabled;
             lock (_recordingSessionLock)
             {
                 var stoppedSessionId = _recordingSession;
@@ -1485,7 +1486,8 @@ public sealed class DictationOrchestrator : IDisposable
                     // feedback gate takes (a real deadlock). The toggle gate's fences
                     // already order this read against the acquire.
                     OverlayToken = _overlayToken,
-                    LockedFocusField = _recordingLockedField,
+                    // Consent withdrawn mid-recording means the captured element must not be touched again.
+                    LockedFocusField = learningConsent ? _recordingLockedField : null,
                 };
 
                 _recordingAppProcess = null;
@@ -3563,6 +3565,13 @@ public sealed class DictationOrchestrator : IDisposable
             return null;
         }
 
+        // Consent withdrawn is feature unavailable (lock off); a stopped client still fails closed.
+        if (!_settings.Current.TargetAppCorrectionLearningEnabled)
+        {
+            Trace.WriteLine("[Dictation] Focus lock skipped: target-app correction learning is off.");
+            return null;
+        }
+
         if (_atSpiClient?.IsRunning != true)
         {
             Trace.WriteLine("[Dictation] Focus lock capture unavailable: accessibility client stopped.");
@@ -3577,10 +3586,7 @@ public sealed class DictationOrchestrator : IDisposable
                 return new LockedFocusTarget(null);
             }
 
-            if (
-                await _atSpiClient.IsPasswordFieldAsync(initialElement.Value).WaitAsync(cancellationToken) == false
-                && await _atSpiClient.IsElementEditableAsync(initialElement.Value).WaitAsync(cancellationToken) == true
-            )
+            if (await _atSpiClient.IsLockableFieldAsync(initialElement.Value, cancellationToken))
             {
                 return new LockedFocusTarget(initialElement);
             }

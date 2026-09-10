@@ -28,9 +28,12 @@ public sealed class DictationOrchestratorLockedFocusTests
             await using var fixture = new OrchestratorCompositionFixture(
                 focusedApp: ("firefox", "Editor")
             );
+            // Keep the learner's listener lifecycle separate from the focus-lock assertions.
+            fixture.Provider.GetRequiredService<TargetAppCorrectionLearningService>().Dispose();
             fixture.Settings.Update(settings => settings with
             {
                 LockPasteToFocusedField = enabled,
+                TargetAppCorrectionLearningEnabled = true,
                 AutoPaste = autoPaste,
             });
             var target = new AtSpiElementRef("app", "/initial");
@@ -73,7 +76,13 @@ public sealed class DictationOrchestratorLockedFocusTests
             await using var fixture = new OrchestratorCompositionFixture(
                 focusedApp: ("firefox", "Editor")
             );
-            fixture.Settings.Update(settings => settings with { LockPasteToFocusedField = true });
+            // Keep the learner's listener lifecycle separate from the focus-lock assertions.
+            fixture.Provider.GetRequiredService<TargetAppCorrectionLearningService>().Dispose();
+            fixture.Settings.Update(settings => settings with
+            {
+                LockPasteToFocusedField = true,
+                TargetAppCorrectionLearningEnabled = true,
+            });
             fixture.AtSpi.IsRunning = true;
             var target = new AtSpiElementRef("app", "/later");
             fixture.AtSpi.CurrentFocusedElement = null;
@@ -110,9 +119,12 @@ public sealed class DictationOrchestratorLockedFocusTests
             await using var fixture = new OrchestratorCompositionFixture(
                 focusedApp: ("codex", "Editor")
             );
+            // Keep the learner's listener lifecycle separate from the focus-lock assertions.
+            fixture.Provider.GetRequiredService<TargetAppCorrectionLearningService>().Dispose();
             fixture.Settings.Update(settings => settings with
             {
                 LockPasteToFocusedField = true,
+                TargetAppCorrectionLearningEnabled = true,
                 CommandModeEnabled = true,
             });
             var target = new AtSpiElementRef("app", "/initial");
@@ -150,7 +162,13 @@ public sealed class DictationOrchestratorLockedFocusTests
                 await using var fixture = new OrchestratorCompositionFixture(
                     focusedApp: ("firefox", "Editor")
                 );
-                fixture.Settings.Update(settings => settings with { LockPasteToFocusedField = true });
+                // Keep the learner's listener lifecycle separate from the focus-lock assertions.
+                fixture.Provider.GetRequiredService<TargetAppCorrectionLearningService>().Dispose();
+                fixture.Settings.Update(settings => settings with
+                {
+                    LockPasteToFocusedField = true,
+                    TargetAppCorrectionLearningEnabled = true,
+                });
                 fixture.AtSpi.IsRunning = true;
                 fixture.AtSpi.CurrentFocusedElement = new AtSpiElementRef("app", "/initial");
                 if (eligibilityTimesOut)
@@ -181,6 +199,80 @@ public sealed class DictationOrchestratorLockedFocusTests
             {
                 Loc.Instance.CurrentLanguage = previousLanguage;
             }
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task Recording_WithoutLearningConsent_PastesWithoutTouchingTheField()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture(
+                focusedApp: ("gedit", "Editor")
+            );
+            // Keep the learner's listener lifecycle separate from the focus-lock assertions.
+            fixture.Provider.GetRequiredService<TargetAppCorrectionLearningService>().Dispose();
+            fixture.Settings.Update(settings => settings with
+            {
+                LockPasteToFocusedField = true,
+                TargetAppCorrectionLearningEnabled = false,
+            });
+            fixture.AtSpi.IsRunning = true;
+            fixture.AtSpi.CurrentFocusedElement = new AtSpiElementRef("app", "/initial");
+            // Non-ASCII text selects paste even before the app snapshot is available.
+            fixture.Plugin.EnqueueText("dictated café");
+
+            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+            fixture.FeedNonSilentAudio();
+            var resultTask = fixture.WaitForResultAsync(sessionId);
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+            await BoundedTest.WaitAsync(resultTask);
+
+            Assert.Equal(0, fixture.AtSpi.FocusReadCount);
+            Assert.NotEqual(InsertionFailureReason.LockedFieldUnavailable,
+                fixture.Provider.GetRequiredService<TextInsertionService>().LastFailureReason);
+            Assert.Equal(1, fixture.InsertionPlatform.PasteAttemptCount);
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task ConsentWithdrawnMidRecording_DropsTheLockedField()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture(
+                focusedApp: ("gedit", "Editor")
+            );
+            // Keep the learner's listener lifecycle separate from the focus-lock assertions.
+            fixture.Provider.GetRequiredService<TargetAppCorrectionLearningService>().Dispose();
+            fixture.Settings.Update(settings => settings with
+            {
+                LockPasteToFocusedField = true,
+                TargetAppCorrectionLearningEnabled = true,
+            });
+            fixture.AtSpi.IsRunning = true;
+            fixture.AtSpi.CurrentFocusedElement = new AtSpiElementRef("app", "/initial");
+            // Non-ASCII text selects paste even before the app snapshot is available.
+            fixture.Plugin.EnqueueText("dictated café");
+
+            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+            // Wait for the captured field to commit before withdrawing consent.
+            await BoundedTest.WaitAsync(fixture.RecordingStarted.Task);
+            fixture.Settings.Update(settings => settings with
+            {
+                TargetAppCorrectionLearningEnabled = false,
+            });
+            fixture.FeedNonSilentAudio();
+            var resultTask = fixture.WaitForResultAsync(sessionId);
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+            await BoundedTest.WaitAsync(resultTask);
+
+            Assert.Equal(0, fixture.AtSpi.FocusReadCount);
+            Assert.NotEqual(InsertionFailureReason.LockedFieldUnavailable,
+                fixture.Provider.GetRequiredService<TextInsertionService>().LastFailureReason);
+            Assert.Equal(1, fixture.InsertionPlatform.PasteAttemptCount);
         });
     }
 

@@ -11,6 +11,49 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class TextInsertionServiceTests
 {
     [Theory]
+    [InlineData(true, true, true, TextInsertionStrategy.ClipboardPaste)]
+    [InlineData(true, true, true, TextInsertionStrategy.DirectTyping)]
+    [InlineData(true, null, true, TextInsertionStrategy.ClipboardPaste)]
+    [InlineData(true, null, true, TextInsertionStrategy.DirectTyping)]
+    [InlineData(true, false, false, TextInsertionStrategy.ClipboardPaste)]
+    [InlineData(true, false, false, TextInsertionStrategy.DirectTyping)]
+    [InlineData(true, false, null, TextInsertionStrategy.ClipboardPaste)]
+    [InlineData(true, false, null, TextInsertionStrategy.DirectTyping)]
+    [InlineData(false, true, true, TextInsertionStrategy.ClipboardPaste)]
+    [InlineData(false, true, true, TextInsertionStrategy.DirectTyping)]
+    [InlineData(false, null, true, TextInsertionStrategy.ClipboardPaste)]
+    [InlineData(false, null, true, TextInsertionStrategy.DirectTyping)]
+    [InlineData(false, false, false, TextInsertionStrategy.ClipboardPaste)]
+    [InlineData(false, false, false, TextInsertionStrategy.DirectTyping)]
+    [InlineData(false, false, null, TextInsertionStrategy.ClipboardPaste)]
+    [InlineData(false, false, null, TextInsertionStrategy.DirectTyping)]
+    public async Task LockedField_RevalidatesEligibilityBeforeInsertion(
+        bool initiallyFocused, bool? password, bool? editable, TextInsertionStrategy strategy)
+    {
+        var client = new FakeAtSpiEventClient
+        {
+            FocusedResult = initiallyFocused,
+            PasswordResult = password,
+            EditableResult = editable,
+        };
+        client.OnGrabFocus = () => client.FocusedResult = true;
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(platform, atSpiClient: client);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", Strategy: strategy,
+            LockedFocusTarget: new LockedFocusTarget(new AtSpiElementRef("app", "/field"))
+        ));
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal(InsertionFailureReason.LockedFieldUnavailable, sut.LastFailureReason);
+        Assert.Equal("dictated", platform.Clipboard);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal(initiallyFocused ? 0 : 1, client.GrabFocusCount);
+    }
+
+    [Theory]
     [InlineData(TextInsertionStrategy.ClipboardPaste, false)]
     [InlineData(TextInsertionStrategy.DirectTyping, false)]
     [InlineData(TextInsertionStrategy.ClipboardPaste, true)]
@@ -3756,7 +3799,8 @@ public sealed class TextInsertionServiceTests
         }
 
         public bool? FocusedResult { get; set; } = true;
-        private static bool? EditableResult => true;
+        public bool? EditableResult { get; init; } = true;
+        public bool? PasswordResult { get; init; } = false;
         public bool GrabFocusResult { get; init; } = true;
         public int FocusReadCount { get; private set; }
         public int GrabFocusCount { get; private set; }
@@ -3784,7 +3828,7 @@ public sealed class TextInsertionServiceTests
 
         public Task<bool?> IsPasswordFieldAsync(AtSpiElementRef element)
         {
-            return Task.FromResult(PasswordRoleByElement.GetValueOrDefault(element, false));
+            return Task.FromResult(PasswordRoleByElement.GetValueOrDefault(element, PasswordResult));
         }
 
         public Task<AtSpiScreenRect?> TryGetScreenExtentsAsync(AtSpiElementRef element)
