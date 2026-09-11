@@ -129,6 +129,8 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
             )
         );
 
+        services.Replace(ServiceDescriptor.Singleton<IUsageStatisticsService>(Statistics));
+
         Provider = services.BuildServiceProvider(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true }
         );
@@ -179,6 +181,7 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
     internal DictationOrchestrator Orchestrator { get; }
     internal AudioRecordingService Audio { get; }
     internal IHistoryService History { get; }
+    internal RecordingUsageStatistics Statistics { get; } = new();
     internal RecentTranscriptionStore RecentStore { get; }
     internal DictationSessionResultStore SessionResults { get; }
     internal PluginManager PluginManager { get; }
@@ -329,4 +332,18 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
         ) ?? throw new MissingFieldException(typeof(PluginManager).FullName, "_llmProviders");
         field.SetValue(pluginManager, new List<ILlmProviderRole> { provider });
     }
+}
+
+internal sealed class RecordingUsageStatistics : IUsageStatisticsService
+{
+    public List<TranscriptionRecord> Records { get; } = [];
+    public IReadOnlyList<UsageStatisticsDaySnapshot> Days => [];
+    public bool HasAnyStatistics => Records.Count > 0;
+    public event Action? StatisticsChanged;
+    public void RecordTranscription(TranscriptionRecord record)
+    {
+        Records.Add(record);
+        StatisticsChanged?.Invoke();
+    }
+    public void BackfillFromHistoryIfNeeded(IEnumerable<TranscriptionRecord> records) { }
 }

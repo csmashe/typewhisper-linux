@@ -1103,7 +1103,7 @@ public partial class DictationSectionViewModel : ObservableObject
         ];
     }
 
-    private static IReadOnlyList<SpokenLanguageOption> CreateLanguageChoices()
+    internal static IReadOnlyList<SpokenLanguageOption> CreateLanguageChoices()
     {
         return
         [

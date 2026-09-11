@@ -68,6 +68,7 @@ internal static class ServiceRegistrations
                     Loc.Instance.GetString("Common.OperationFailed", operation, reason)
             )
         );
+        RegisterUsageStatistics(services, dataPath);
         services.AddSingleton<IHistoryService>(
             new HistoryService(
                 Path.Join(dataPath, "history.json"),
@@ -271,4 +272,30 @@ internal static class ServiceRegistrations
         services.AddTransient<RecentTranscriptionsPaletteWindow>();
         services.AddTransient<WelcomeWizard>();
     }
+
+    internal static void RegisterUsageStatistics(IServiceCollection services, string dataPath)
+    {
+        services.AddSingleton<IUsageStatisticsService>(provider =>
+            CreateUsageStatisticsService(dataPath, provider.GetRequiredService<IHistoryService>()));
+    }
+
+    private static UsageStatisticsService CreateUsageStatisticsService(string dataPath, IHistoryService history)
+    {
+        var statistics = new UsageStatisticsService(
+            Path.Join(dataPath, "usage-statistics.json"),
+            historyBackfillSource: () => ReadHistoryForBackfill(history));
+        if (ReadHistoryForBackfill(history) is { } records)
+        {
+            statistics.BackfillFromHistoryIfNeeded(records);
+        }
+        return statistics;
+    }
+
+    // Records first, then the flag: HistoryService decides RecordsAvailable while reading Records.
+    private static IReadOnlyList<TranscriptionRecord>? ReadHistoryForBackfill(IHistoryService history)
+    {
+        var records = history.Records;
+        return history.RecordsAvailable ? records : null;
+    }
+
 }
