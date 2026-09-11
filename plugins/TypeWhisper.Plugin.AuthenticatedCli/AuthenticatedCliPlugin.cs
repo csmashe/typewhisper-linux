@@ -37,7 +37,10 @@ public sealed class AuthenticatedCliPlugin :
     private const string OpenCodeModelSettingName = "opencodeModel";
     private const int OpenCodeCatalogCacheVersion = 1;
 
+    private static readonly TimeSpan s_staleScratchAge = TimeSpan.FromHours(1);
+
     private readonly Lock _stateLock = new();
+    private readonly HashSet<string> _activeScratchDirectories = [];
     private readonly Dictionary<string, CliAvailabilitySnapshot> _snapshots;
     private readonly Dictionary<string, string?> _selectedExecutables = new(StringComparer.Ordinal);
     private readonly CliExecutableDiscovery _discovery;
@@ -1294,8 +1297,82 @@ public sealed class AuthenticatedCliPlugin :
 
     internal readonly record struct ScratchDirectory(string Root, string Path);
 
-    private ScratchDirectory CreateTempDirectory() =>
-        CreateScratchDirectory(RuntimeDirectory, () => _host?.PluginDataDirectory);
+    private ScratchDirectory CreateTempDirectory()
+    {
+        var scratch = CreateScratchDirectory(RuntimeDirectory, () => _host?.PluginDataDirectory);
+        HashSet<string> activeSnapshot;
+        lock (_stateLock)
+        {
+            _activeScratchDirectories.Add(Path.GetFullPath(scratch.Path));
+            activeSnapshot = new HashSet<string>(_activeScratchDirectories, StringComparer.Ordinal);
+        }
+
+        try
+        {
+            var removed = ReclaimStaleScratchDirectories(scratch.Root, activeSnapshot, DateTime.UtcNow);
+            if (removed.Count > 0)
+            {
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    $"event=scratch-reclaimed count={removed.Count} root={scratch.Root}"
+                );
+            }
+        }
+        catch (Exception)
+        {
+            // Best-effort reclamation, including logging, must never interrupt a request.
+        }
+
+        return scratch;
+    }
+
+    internal static IReadOnlyList<string> ReclaimStaleScratchDirectories(
+        string root,
+        IReadOnlySet<string> active,
+        DateTime nowUtc
+    )
+    {
+        var removed = new List<string>();
+        var activePaths = new HashSet<string>(active, StringComparer.Ordinal);
+        try
+        {
+            foreach (var directory in Directory.EnumerateDirectories(root))
+            {
+                try
+                {
+                    // Only recognizable request directories left by interrupted cleanup are candidates.
+                    // The age guard protects recent directories of another host process whose active set we cannot see.
+                    var name = Path.GetFileName(directory);
+                    if (name.Length != 32
+                        || name.Any(character => character is not (>= '0' and <= '9' or >= 'a' and <= 'f')))
+                    {
+                        continue;
+                    }
+
+                    var fullPath = Path.GetFullPath(directory);
+                    if (new DirectoryInfo(fullPath).LinkTarget is not null
+                        || activePaths.Contains(fullPath)
+                        || nowUtc - Directory.GetLastWriteTimeUtc(fullPath) <= s_staleScratchAge)
+                    {
+                        continue;
+                    }
+
+                    Directory.Delete(fullPath, recursive: true);
+                    removed.Add(fullPath);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // A child can disappear or become inaccessible during the sweep.
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A missing or inaccessible root should not prevent a request.
+        }
+
+        return removed;
+    }
 
     private static ScratchDirectory CreateRequestDirectory(string root)
     {
@@ -1385,36 +1462,46 @@ public sealed class AuthenticatedCliPlugin :
             innerException: innerException
         );
 
-    private static async Task<bool> DeleteTempDirectoryAsync(ScratchDirectory directory)
+    private async Task<bool> DeleteTempDirectoryAsync(ScratchDirectory directory)
     {
-        var root = Path.GetFullPath(directory.Root);
-        var fullPath = Path.GetFullPath(directory.Path);
-        if (!fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        try
         {
+            var root = Path.GetFullPath(directory.Root);
+            var fullPath = Path.GetFullPath(directory.Path);
+            if (!fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                try
+                {
+                    if (Directory.Exists(fullPath))
+                    {
+                        Directory.Delete(fullPath, recursive: true);
+                    }
+
+                    return true;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    if (attempt < 2)
+                    {
+                        await Task.Delay(50).ConfigureAwait(false);
+                    }
+                }
+            }
+
             return false;
         }
-
-        for (var attempt = 0; attempt < 3; attempt++)
+        finally
         {
-            try
+            lock (_stateLock)
             {
-                if (Directory.Exists(fullPath))
-                {
-                    Directory.Delete(fullPath, recursive: true);
-                }
-
-                return true;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                if (attempt < 2)
-                {
-                    await Task.Delay(50).ConfigureAwait(false);
-                }
+                _activeScratchDirectories.Remove(Path.GetFullPath(directory.Path));
             }
         }
-
-        return false;
     }
 
     private void LogCleanupFailure(CliProviderDescriptor descriptor, string operation) =>

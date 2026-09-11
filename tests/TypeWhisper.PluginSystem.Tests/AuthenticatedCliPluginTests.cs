@@ -944,6 +944,108 @@ public sealed class AuthenticatedCliPluginTests : IDisposable
         }
     }
 
+    [Fact]
+    public void ReclaimStaleScratchDirectories_RemovesOnlyStaleGuidChildren()
+    {
+        using var directories = new ScratchTestDirectories();
+        var root = directories.CreatePrivate("scratch");
+        var stale = directories.CreatePrivate(Path.Join("scratch", Guid.NewGuid().ToString("N")));
+        var fresh = directories.CreatePrivate(Path.Join("scratch", Guid.NewGuid().ToString("N")));
+        var notes = directories.CreatePrivate(Path.Join("scratch", "notes"));
+        var active = directories.CreatePrivate(Path.Join("scratch", Guid.NewGuid().ToString("N")));
+        var nowUtc = DateTime.UtcNow;
+        Directory.SetLastWriteTimeUtc(stale, nowUtc.AddHours(-2));
+        Directory.SetLastWriteTimeUtc(notes, nowUtc.AddHours(-2));
+        Directory.SetLastWriteTimeUtc(active, nowUtc.AddHours(-2));
+
+        var removed = AuthenticatedCliPlugin.ReclaimStaleScratchDirectories(
+            root, new HashSet<string>(StringComparer.Ordinal) { active }, nowUtc);
+
+        Assert.Equal(stale, Assert.Single(removed));
+        Assert.False(Directory.Exists(stale));
+        Assert.True(Directory.Exists(fresh));
+        Assert.True(Directory.Exists(notes));
+        Assert.True(Directory.Exists(active));
+        Assert.True(Directory.Exists(root));
+    }
+
+    [Fact]
+    public void ReclaimStaleScratchDirectories_SkipsSymlinkedChild()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        var root = directories.CreatePrivate("scratch");
+        var target = directories.CreatePrivate("target");
+        var sentinel = Path.Join(target, "sentinel");
+        File.WriteAllText(sentinel, "untouched");
+        var link = Path.Join(root, Guid.NewGuid().ToString("N"));
+        Directory.CreateSymbolicLink(link, target);
+        var nowUtc = DateTime.UtcNow + TimeSpan.FromHours(3);
+        Assert.True(nowUtc - Directory.GetLastWriteTimeUtc(link) > TimeSpan.FromHours(1));
+
+        var removed = AuthenticatedCliPlugin.ReclaimStaleScratchDirectories(root, new HashSet<string>(), nowUtc);
+
+        Assert.Empty(removed);
+        Assert.Equal(target, new DirectoryInfo(link).LinkTarget);
+        Assert.True(Directory.Exists(target));
+        Assert.Equal("untouched", File.ReadAllText(sentinel));
+    }
+
+    [Fact]
+    public void ReclaimStaleScratchDirectories_MissingRootReturnsEmpty()
+    {
+        using var directories = new ScratchTestDirectories();
+
+        var removed = AuthenticatedCliPlugin.ReclaimStaleScratchDirectories(
+            Path.Join(directories.Root, "missing"), new HashSet<string>(), DateTime.UtcNow);
+
+        Assert.Empty(removed);
+    }
+
+    [Fact]
+    public async Task Request_ReclaimsStaleScratchSiblings()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directories = new ScratchTestDirectories();
+        directories.CreatePrivate("data");
+        var root = directories.CreatePrivate(Path.Join("data", "scratch"));
+        using var fake = FakeCliInstallation.Create("success", "codex");
+        using var plugin = CreatePlugin(fake.DirectoryPath);
+        plugin.RuntimeDirectory = null;
+        var host = CreateHost();
+        host.SetupGet(service => service.PluginDataDirectory).Returns(directories.DataPath);
+        await plugin.ActivateAsync(host.Object);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (CliProviderDescriptor.All.Any(descriptor => plugin.GetSnapshot(descriptor).CheckedAt == default)
+               && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(50);
+        }
+
+        Assert.All(CliProviderDescriptor.All, descriptor =>
+            Assert.NotEqual(default, plugin.GetSnapshot(descriptor).CheckedAt));
+        var stale = directories.CreatePrivate(Path.Join("data", "scratch", Guid.NewGuid().ToString("N")));
+        Directory.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddHours(-2));
+
+        await GetRole(plugin, "authenticated-cli-codex").ProcessAsync(
+            "Instruction",
+            "Input",
+            "default",
+            CancellationToken.None
+        );
+        Assert.False(Directory.Exists(stale));
+        Assert.True(Directory.Exists(root));
+        await plugin.DeactivateAsync();
+    }
+
     private static void AssertPrivateScratchDirectory(AuthenticatedCliPlugin.ScratchDirectory directory)
     {
         Assert.Equal(directory.Root, Path.GetDirectoryName(directory.Path));
