@@ -3,6 +3,7 @@ using System.Text;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.ActiveWindow;
+using TypeWhisper.Core.Services.SpokenFormatting;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Models;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
@@ -77,6 +78,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IErrorLogService _errorLog;
     private readonly IDetectionFailureTracker _failureTracker;
     private readonly IHistoryService _history;
+    private readonly IUsageStatisticsService? _usageStatistics;
     private readonly HotkeyService _hotkey;
     private readonly IdeFileReferenceService _ideFileReferences;
     private readonly DictationInFlightSessionTracker _inFlightTracker = new();
@@ -88,6 +90,8 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly Lock _overlayStateLock = new();
     private readonly StreamingTranscriptState _partialTranscriptState = new();
     private readonly IPostProcessingPipeline _pipeline;
+    private readonly SpokenFormattingStrategyResolver _spokenFormattingResolver;
+    private readonly SpokenFormattingService _spokenFormatting;
     private readonly IProfileService _profiles;
     private readonly IPromptActionService _promptActions;
     private readonly PromptProcessingService _promptProcessing;
@@ -200,7 +204,10 @@ public sealed class DictationOrchestrator : IDisposable
         ISessionActivityMonitor sessionActivityMonitor,
         ActionPluginExecutionHost actionPluginExecutionHost,
         OverlayCoordinator overlayCoordinator,
-        IAtSpiEventClient? atSpiClient = null
+        IAtSpiEventClient? atSpiClient = null,
+        IUsageStatisticsService? usageStatistics = null,
+        SpokenFormattingStrategyResolver? spokenFormattingResolver = null,
+        SpokenFormattingService? spokenFormatting = null
     )
     {
         _atSpiClient = atSpiClient;
@@ -214,6 +221,7 @@ public sealed class DictationOrchestrator : IDisposable
         _mediaPause = mediaPause;
         _models = models;
         _history = history;
+        _usageStatistics = usageStatistics;
         _settings = settings;
         _activeWindow = activeWindow;
         _profiles = profiles;
@@ -223,6 +231,10 @@ public sealed class DictationOrchestrator : IDisposable
         _vocabularyBoosting = vocabularyBoosting;
         _cleanup = cleanup;
         _pipeline = pipeline;
+        var rulesLoader = new SpokenFormattingRulesLoader();
+        _spokenFormattingResolver = spokenFormattingResolver
+            ?? new SpokenFormattingStrategyResolver(new SpokenFormattingProfileStore(settings), rulesLoader);
+        _spokenFormatting = spokenFormatting ?? new SpokenFormattingService(rulesLoader);
         _translation = translation;
         _promptProcessing = promptProcessing;
         _memory = memory;
@@ -263,6 +275,12 @@ public sealed class DictationOrchestrator : IDisposable
             return MapOverlayStatusToStateLabel(snapshot.StatusText);
         }
     }
+
+    internal static Func<string, string>? CreateSpokenFormatter(
+        SpokenFormattingService service, ResolvedSpokenFormattingStrategy? strategy) =>
+        strategy is { Strategy: SpokenFormattingStrategy.FallbackOnly, RulesAvailable: true, LanguageCode: { } language }
+            ? text => service.Normalize(text, language)
+            : null;
 
     public void Dispose()
     {
@@ -1911,6 +1929,21 @@ public sealed class DictationOrchestrator : IDisposable
         return engineTranslatedToEnglish ? "en" : detectedLanguage ?? configuredLanguage;
     }
 
+    internal static ResolvedSpokenFormattingStrategy ResolveSpokenFormattingStrategy(
+        SpokenFormattingStrategyResolver resolver,
+        string? engineId,
+        string? modelId,
+        IReadOnlyList<string> languageHints,
+        string? postProcessingLanguage,
+        bool engineTranslated,
+        SpokenFormattingStrategy globalDefault)
+    {
+        // Engine translation makes the transcript language authoritative over source-language hints.
+        return resolver.Resolve(engineId, modelId,
+            engineTranslated && postProcessingLanguage is not null ? [postProcessingLanguage] : languageHints,
+            postProcessingLanguage, globalDefault);
+    }
+
     /// <summary>
     ///     True when a prompt action explicitly names a target action plugin but
     ///     no loaded plugin matches (disabled, removed, or renamed) — unlike "no
@@ -2238,13 +2271,14 @@ public sealed class DictationOrchestrator : IDisposable
                 // trip.
                 _insertionOrder.Release(context.SessionId);
                 var outcome = await RunSpokenCommandAsync(spokenCommand, context, cancelToken);
-                // A spoken command is still a dictation the user issued: record it in
-                // history (with the LLM request/response captured on context.Capture)
-                // so it appears in the History list and Inspect panel like any other.
+                // A spoken command is still a dictation the user issued: always record
+                // statistics, and add a history entry only when history saving is enabled
+                // (with the LLM request/response captured on context.Capture) so it appears
+                // in the History list and Inspect panel like any other.
                 // RawText is the source the command acted on (selected text for an
                 // edit, the command itself for a create), so the raw→final diff reads
                 // "source → result".
-                if (outcome is not null && _settings.Current.SaveToHistoryEnabled)
+                if (outcome is not null)
                 {
                     AddSpokenCommandHistoryRecord(
                         context,
@@ -2316,12 +2350,17 @@ public sealed class DictationOrchestrator : IDisposable
                 ))
                 .ToList();
 
+            var spokenStrategy = ResolveSpokenFormattingStrategy(
+                _spokenFormattingResolver, engineProviderId, engineModelId, languageHints, postProcessingLanguage,
+                translate && engineSupportsTranslation,
+                _settings.Current.SpokenFormattingStrategy);
             var pipelineResult = await _pipeline.ProcessAsync(
                 rawText,
                 new PipelineOptions
                 {
-                    NormalizeSpokenLineBreaks = true,
-                    NormalizeSpokenPunctuation = true,
+                    NormalizeSpokenLineBreaks = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
+                    NormalizeSpokenPunctuation = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
+                    SpokenFormatter = CreateSpokenFormatter(_spokenFormatting, spokenStrategy),
                     AppFormatter = AppFormatterService.Format,
                     TargetProcessName = context.AppProcess,
                     DictionaryCorrector = SelectFinalDictionaryCorrector(
@@ -2680,26 +2719,24 @@ public sealed class DictationOrchestrator : IDisposable
                 }
             }
 
-            // Write to history last so stats reflect the just-completed capture
+            // Always record statistics and add a history entry only when history saving
+            // is enabled, last so stats reflect the just-completed capture
             // (and any memory-extraction provenance recorded above).
-            if (_settings.Current.SaveToHistoryEnabled)
-            {
-                AddHistoryRecord(
-                    context,
-                    transcriptionId,
-                    timestamp,
-                    rawText,
-                    finalText,
-                    duration,
-                    result,
-                    wavPath,
-                    insertion,
-                    pipelineResult,
-                    cleanupLevel,
-                    engineProviderId,
-                    engineModelId
-                );
-            }
+            AddHistoryRecord(
+                context,
+                transcriptionId,
+                timestamp,
+                rawText,
+                finalText,
+                duration,
+                result,
+                wavPath,
+                insertion,
+                pipelineResult,
+                cleanupLevel,
+                engineProviderId,
+                engineModelId
+            );
         }
         catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
         {
@@ -3823,11 +3860,12 @@ public sealed class DictationOrchestrator : IDisposable
         };
     }
 
-    // Writes a history entry for a completed spoken command. RawText is the source
-    // text the command acted on (selected text for an edit, the command itself for a
-    // create); FinalText is the generated/transformed text that was produced, so the
-    // raw→final diff reads "source → result". InsertionStatus is the real result of the
-    // insert (typed/pasted/copied). LlmCalls carries the command's request/response
+    // Records statistics for a completed spoken command and saves its history entry
+    // when history saving is enabled. RawText is the source text the command acted on
+    // (selected text for an edit, the command itself for a create); FinalText is the
+    // generated/transformed text that was produced, so the raw→final diff reads
+    // "source → result". InsertionStatus is the real result of the insert
+    // (typed/pasted/copied). LlmCalls carries the command's request/response
     // (context.Capture) so the Inspect panel shows it exactly like a dictation's prompt action.
     private void AddSpokenCommandHistoryRecord(
         RecordingContext context,
@@ -3846,7 +3884,7 @@ public sealed class DictationOrchestrator : IDisposable
             var timestamp =
                 context.RecordingStart == default ? DateTime.UtcNow : context.RecordingStart;
 
-            _history.AddRecord(
+            var record =
                 BuildHistoryRecord(
                     context,
                     Guid.NewGuid().ToString(),
@@ -3865,8 +3903,21 @@ public sealed class DictationOrchestrator : IDisposable
                     PromptActionApplied = true,
                     IsSpokenCommand = true,
                     LlmCalls = context.Capture?.Calls ?? [],
-                }
-            );
+                };
+            // Statistics before history: RecordTranscription may still be catching up from history, and a
+            // record persisted first would be imported by that backfill and then counted a second time.
+            try
+            {
+                _usageStatistics?.RecordTranscription(record);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Command] RecordTranscription failed: {ex.Message}");
+            }
+            if (_settings.Current.SaveToHistoryEnabled)
+            {
+                _history.AddRecord(record);
+            }
         }
         catch (Exception ex)
         {
@@ -3874,6 +3925,8 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
+    // Records statistics for a completed dictation and saves its history entry when
+    // history saving is enabled.
     private void AddHistoryRecord(
         RecordingContext context,
         string id,
@@ -3892,7 +3945,7 @@ public sealed class DictationOrchestrator : IDisposable
     {
         try
         {
-            _history.AddRecord(
+            var record =
                 BuildHistoryRecord(
                     context,
                     id,
@@ -3930,8 +3983,21 @@ public sealed class DictationOrchestrator : IDisposable
                         PostProcessingStepNames.Translation
                     ),
                     LlmCalls = context.Capture?.Calls ?? [],
-                }
-            );
+                };
+            // Statistics before history: RecordTranscription may still be catching up from history, and a
+            // record persisted first would be imported by that backfill and then counted a second time.
+            try
+            {
+                _usageStatistics?.RecordTranscription(record);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] RecordTranscription failed: {ex.Message}");
+            }
+            if (_settings.Current.SaveToHistoryEnabled)
+            {
+                _history.AddRecord(record);
+            }
         }
         catch (Exception ex)
         {

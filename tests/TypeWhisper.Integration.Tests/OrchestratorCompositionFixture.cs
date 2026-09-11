@@ -37,7 +37,8 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
     // null (no snapshot, as on a headless box) unless the test depends on the resolved target.
     internal OrchestratorCompositionFixture(
         bool soundFeedbackEnabled = false,
-        (string Process, string Title)? focusedApp = null
+        (string Process, string Title)? focusedApp = null,
+        IPostProcessingPipeline? pipeline = null
     )
     {
         IntegrationEnvironment.ResetApplicationState();
@@ -45,6 +46,8 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
 
         var services = new ServiceCollection();
         ServiceRegistrations.Register(services);
+        if (pipeline is not null)
+            services.Replace(ServiceDescriptor.Singleton(pipeline));
 
         Settings = (SettingsService)(services
             .Single(descriptor => descriptor.ServiceType == typeof(ISettingsService))
@@ -126,6 +129,8 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
             )
         );
 
+        services.Replace(ServiceDescriptor.Singleton<IUsageStatisticsService>(Statistics));
+
         Provider = services.BuildServiceProvider(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true }
         );
@@ -176,6 +181,7 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
     internal DictationOrchestrator Orchestrator { get; }
     internal AudioRecordingService Audio { get; }
     internal IHistoryService History { get; }
+    internal RecordingUsageStatistics Statistics { get; } = new();
     internal RecentTranscriptionStore RecentStore { get; }
     internal DictationSessionResultStore SessionResults { get; }
     internal PluginManager PluginManager { get; }
@@ -330,4 +336,18 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
         ) ?? throw new MissingFieldException(typeof(PluginManager).FullName, "_llmProviders");
         field.SetValue(pluginManager, new List<ILlmProviderRole> { provider });
     }
+}
+
+internal sealed class RecordingUsageStatistics : IUsageStatisticsService
+{
+    public List<TranscriptionRecord> Records { get; } = [];
+    public IReadOnlyList<UsageStatisticsDaySnapshot> Days => [];
+    public bool HasAnyStatistics => Records.Count > 0;
+    public event Action? StatisticsChanged;
+    public void RecordTranscription(TranscriptionRecord record)
+    {
+        Records.Add(record);
+        StatisticsChanged?.Invoke();
+    }
+    public void BackfillFromHistoryIfNeeded(IEnumerable<TranscriptionRecord> records) { }
 }

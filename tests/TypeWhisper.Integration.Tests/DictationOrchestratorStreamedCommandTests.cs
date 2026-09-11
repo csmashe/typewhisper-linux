@@ -60,6 +60,37 @@ public sealed class DictationOrchestratorStreamedCommandTests
         });
     }
 
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task StreamedSpokenCommand_WithHistorySavingDisabled_RecordsStatisticsOnly()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture(
+                focusedApp: ("codex", "codex — integration")
+            );
+            fixture.Settings.Save(
+                fixture.Settings.Current with
+                {
+                    CommandModeEnabled = true,
+                    SaveToHistoryEnabled = false,
+                }
+            );
+            fixture.Plugin.EnqueueText(Command);
+            fixture.Llm.EnqueueStream(FirstDelta, SecondDelta, ThirdDelta);
+
+            var result = await RunCommandAsync(fixture);
+
+            Assert.Equal("ready", result.Status);
+            Assert.Equal(FirstDelta + SecondDelta + ThirdDelta, result.Text);
+            Assert.Empty(fixture.History.Records);
+            var stats = Assert.Single(fixture.Statistics.Records);
+            Assert.True(stats.IsSpokenCommand);
+            Assert.Equal(FirstDelta + SecondDelta + ThirdDelta, stats.FinalText);
+            Assert.Equal("idle", fixture.Orchestrator.CurrentStateLabel);
+        });
+    }
+
     private static async Task<DictationSessionResult> RunCommandAsync(
         OrchestratorCompositionFixture fixture
     )

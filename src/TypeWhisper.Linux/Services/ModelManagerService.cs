@@ -202,6 +202,17 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         return plugin.IsConfigured ? ModelStatus.Ready : ModelStatus.NotDownloaded;
     }
 
+    internal (string EngineId, string? ModelId)? ResolveTranscriptionIdentity(string? selectedModelId)
+    {
+        if (selectedModelId is null || !IsPluginModel(selectedModelId))
+            return null;
+
+        var (selectionId, modelId) = ParsePluginModelId(selectedModelId);
+        var engine = PluginManager.TranscriptionEngines.FirstOrDefault(
+            engine => engine.GetTranscriptionSelectionId() == selectionId);
+        return engine is null ? null : (engine.ProviderId, modelId);
+    }
+
     public bool IsDownloaded(string modelId)
     {
         if (!IsPluginModel(modelId))

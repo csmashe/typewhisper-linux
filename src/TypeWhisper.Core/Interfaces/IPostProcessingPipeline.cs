@@ -65,6 +65,9 @@ public sealed record PipelineOptions
     /// <summary>When true, LLM failures abort processing instead of falling back to the current text.</summary>
     public bool RequireLlmSuccess { get; init; }
 
+    /// <summary>When set, applies local spoken formatting and replaces both legacy spoken passes.</summary>
+    public Func<string, string>? SpokenFormatter { get; init; }
+
     /// <summary>Applies cleanup before prompt actions and snippets.</summary>
     public Func<string, CancellationToken, Task<string>>? CleanupHandler { get; init; }
 
@@ -131,6 +134,7 @@ public sealed record PostProcessingResult
 public static class PostProcessingStepNames
 {
     public const string ShortUtterancePunctuation = "ShortUtterancePunctuation";
+    public const string SpokenFormatting = "SpokenFormatting";
     public const string SpokenCommands = "SpokenCommands";
     public const string SpokenPunctuation = "SpokenPunctuation";
     public const string NumberNormalization = "NumberNormalization";
