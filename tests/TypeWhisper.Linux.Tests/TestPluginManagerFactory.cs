@@ -16,7 +16,8 @@ internal static class TestPluginManagerFactory
         IReadOnlyList<IActionPlugin>? actionPlugins = null,
         IReadOnlyList<ITtsProviderPlugin>? ttsProviders = null,
         IReadOnlyList<LoadedPlugin>? loadedPlugins = null,
-        IReadOnlyList<ITranscriptionEngineRole>? transcriptionEngines = null
+        IReadOnlyList<ITranscriptionEngineRole>? transcriptionEngines = null,
+        IEnumerable<string>? activatedPluginIds = null
     )
     {
         var activeWindow = new Mock<IActiveWindowService>();
@@ -54,6 +55,17 @@ internal static class TestPluginManagerFactory
         if (loadedPlugins is not null)
         {
             SetPrivateField(pluginManager, "_allPlugins", loadedPlugins.ToList());
+        }
+
+        // IsEnabled(id) reports activation, so seed the activated set directly rather than
+        // driving the async enable path (which needs a real host + settings round-trip).
+        if (activatedPluginIds is not null)
+        {
+            SetPrivateField(
+                pluginManager,
+                "_activatedPlugins",
+                new HashSet<string>(activatedPluginIds)
+            );
         }
 
         return pluginManager;

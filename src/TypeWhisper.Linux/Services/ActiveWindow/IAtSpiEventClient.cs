@@ -54,6 +54,9 @@ public interface IAtSpiEventClient
     /// </summary>
     bool IsRunning { get; }
 
+    /// <summary>Raised when <see cref="IsRunning" /> flips between true and false.</summary>
+    event Action? RunningChanged;
+
     /// <summary>
     ///     Connects to the a11y bus and registers event listeners on first call.
     ///     Returns <c>true</c> when the bus is reachable and listeners are live,
@@ -92,6 +95,21 @@ public interface IAtSpiEventClient
     ///     read fails.
     /// </summary>
     Task<string?> TryReadTextAsync(AtSpiElementRef element, int maxLength);
+
+    /// <summary>
+    ///     Returns <c>true</c> when focused, <c>false</c> when not focused, or <c>null</c>
+    ///     when the element's state cannot be read.
+    /// </summary>
+    Task<bool?> IsElementFocusedAsync(AtSpiElementRef element);
+
+    /// <summary>
+    ///     Returns <c>true</c> when editable, <c>false</c> when not editable, or <c>null</c>
+    ///     when the element's state cannot be read.
+    /// </summary>
+    Task<bool?> IsElementEditableAsync(AtSpiElementRef element);
+
+    /// <summary>Requests focus; returns <c>true</c> on success, <c>false</c> on any failure.</summary>
+    Task<bool> TryGrabFocusAsync(AtSpiElementRef element);
 
     /// <summary>
     ///     <c>true</c> when the element's AT-SPI role is PASSWORD_TEXT, <c>false</c> when it is

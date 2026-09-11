@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Text;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.ActiveWindow;
+using TypeWhisper.Core.Services.SpokenFormatting;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Models;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
@@ -35,6 +37,8 @@ internal sealed record RecordingContext(
     CancellationToken CancelToken
 )
 {
+    public LockedFocusTarget? LockedFocusField { get; init; }
+
     public OverlayPresentationToken? OverlayToken { get; init; }
 
     /// <summary>
@@ -74,6 +78,7 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IErrorLogService _errorLog;
     private readonly IDetectionFailureTracker _failureTracker;
     private readonly IHistoryService _history;
+    private readonly IUsageStatisticsService? _usageStatistics;
     private readonly HotkeyService _hotkey;
     private readonly IdeFileReferenceService _ideFileReferences;
     private readonly DictationInFlightSessionTracker _inFlightTracker = new();
@@ -85,6 +90,8 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly Lock _overlayStateLock = new();
     private readonly StreamingTranscriptState _partialTranscriptState = new();
     private readonly IPostProcessingPipeline _pipeline;
+    private readonly SpokenFormattingStrategyResolver _spokenFormattingResolver;
+    private readonly SpokenFormattingService _spokenFormatting;
     private readonly IProfileService _profiles;
     private readonly IPromptActionService _promptActions;
     private readonly PromptProcessingService _promptProcessing;
@@ -159,6 +166,9 @@ public sealed class DictationOrchestrator : IDisposable
     private string? _streamingProviderId;
     private CancellationTokenSource? _streamingStartupCts;
 
+    private readonly IAtSpiEventClient? _atSpiClient;
+    private LockedFocusTarget? _recordingLockedField;
+
     private EventHandler? _toggleHandler;
     private int _toggleGateCloseOutcome;
 
@@ -193,9 +203,14 @@ public sealed class DictationOrchestrator : IDisposable
         IErrorLogService errorLog,
         ISessionActivityMonitor sessionActivityMonitor,
         ActionPluginExecutionHost actionPluginExecutionHost,
-        OverlayCoordinator overlayCoordinator
+        OverlayCoordinator overlayCoordinator,
+        IAtSpiEventClient? atSpiClient = null,
+        IUsageStatisticsService? usageStatistics = null,
+        SpokenFormattingStrategyResolver? spokenFormattingResolver = null,
+        SpokenFormattingService? spokenFormatting = null
     )
     {
+        _atSpiClient = atSpiClient;
         _hotkey = hotkey;
         _audio = audio;
         _sessionAudioFiles = sessionAudioFiles;
@@ -206,6 +221,7 @@ public sealed class DictationOrchestrator : IDisposable
         _mediaPause = mediaPause;
         _models = models;
         _history = history;
+        _usageStatistics = usageStatistics;
         _settings = settings;
         _activeWindow = activeWindow;
         _profiles = profiles;
@@ -215,6 +231,10 @@ public sealed class DictationOrchestrator : IDisposable
         _vocabularyBoosting = vocabularyBoosting;
         _cleanup = cleanup;
         _pipeline = pipeline;
+        var rulesLoader = new SpokenFormattingRulesLoader();
+        _spokenFormattingResolver = spokenFormattingResolver
+            ?? new SpokenFormattingStrategyResolver(new SpokenFormattingProfileStore(settings), rulesLoader);
+        _spokenFormatting = spokenFormatting ?? new SpokenFormattingService(rulesLoader);
         _translation = translation;
         _promptProcessing = promptProcessing;
         _memory = memory;
@@ -255,6 +275,12 @@ public sealed class DictationOrchestrator : IDisposable
             return MapOverlayStatusToStateLabel(snapshot.StatusText);
         }
     }
+
+    internal static Func<string, string>? CreateSpokenFormatter(
+        SpokenFormattingService service, ResolvedSpokenFormattingStrategy? strategy) =>
+        strategy is { Strategy: SpokenFormattingStrategy.FallbackOnly, RulesAvailable: true, LanguageCode: { } language }
+            ? text => service.Normalize(text, language)
+            : null;
 
     public void Dispose()
     {
@@ -781,6 +807,16 @@ public sealed class DictationOrchestrator : IDisposable
             _lastSpeechDetectedAtUtc = _recordingStart;
             _silenceStopRequested = false;
 
+            var captureLockedField = startupSettings is { AutoPaste: true, LockPasteToFocusedField: true, TargetAppCorrectionLearningEnabled: true }
+                && _atSpiClient?.IsRunning == true;
+            AtSpiElementRef? initialFocusedElement;
+            lock (_recordingSessionLock)
+            {
+                _recordingWindowId = _activeWindow.GetActiveWindowId();
+                initialFocusedElement = captureLockedField ? _atSpiClient!.CurrentFocusedElement : null;
+                _recordingLockedField = captureLockedField ? new LockedFocusTarget(null) : null;
+            }
+
             // Set overlay to "Recording…" after the stream is confirmed open but
             // before slow startup work (playerctl). On Wayland the earlier
             // ordering made the stale feedback bubble linger until after PauseMedia.
@@ -921,7 +957,6 @@ public sealed class DictationOrchestrator : IDisposable
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
                 _recordingAppUrl = null;
-                _recordingWindowId = _activeWindow.GetActiveWindowId();
                 _recordingProfile = null;
             }
 
@@ -943,15 +978,21 @@ public sealed class DictationOrchestrator : IDisposable
                     matchedProfile = startupForcedMatch.Profile;
                 }
 
+                using var initialCts = new CancellationTokenSource(
+                    TimeSpan.FromMilliseconds(500)
+                );
+                var lockedFieldTask = CaptureLockedFieldAsync(
+                    captureLockedField,
+                    initialFocusedElement,
+                    initialCts.Token
+                );
+
                 try
                 {
                     // 50ms was too tight: xdotool's chain (window-id + title +
                     // pid → ProcessName) is three sequential subprocesses that
                     // can exceed 500ms. Runs in the background so it doesn't
                     // add user-visible latency.
-                    using var initialCts = new CancellationTokenSource(
-                        TimeSpan.FromMilliseconds(500)
-                    );
                     initialSnap = await _activeWindow
                         .GetActiveWindowSnapshotAsync(initialCts.Token)
                         .ConfigureAwait(false);
@@ -989,12 +1030,15 @@ public sealed class DictationOrchestrator : IDisposable
                     );
                 }
 
+                var lockedField = await lockedFieldTask.ConfigureAwait(false);
+
                 bool committed;
                 lock (_recordingSessionLock)
                 {
                     committed = _recordingSession == sessionId;
                     if (committed)
                     {
+                        _recordingLockedField = lockedField;
                         _recordingAppProcess = appProcess;
                         _recordingAppTitle = appTitle;
                         _recordingAppUrl = appUrl;
@@ -1418,6 +1462,7 @@ public sealed class DictationOrchestrator : IDisposable
             StreamingTranscriptionCoordinator? stoppedStreamingCoordinator;
             CancellationTokenSource? stoppedStreamingStartupCts;
             RecordingContext recordingContext;
+            var learningConsent = _settings.Current.TargetAppCorrectionLearningEnabled;
             lock (_recordingSessionLock)
             {
                 var stoppedSessionId = _recordingSession;
@@ -1459,12 +1504,16 @@ public sealed class DictationOrchestrator : IDisposable
                     // feedback gate takes (a real deadlock). The toggle gate's fences
                     // already order this read against the acquire.
                     OverlayToken = _overlayToken,
+                    // Consent withdrawn mid-recording means the captured element must not be touched again.
+                    // TextInsertionService re-checks consent right before it touches the element.
+                    LockedFocusField = learningConsent ? _recordingLockedField : null,
                 };
 
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
                 _recordingAppUrl = null;
                 _recordingWindowId = null;
+                _recordingLockedField = null;
                 _recordingProfile = null;
                 _recordingStart = default;
             }
@@ -1880,6 +1929,21 @@ public sealed class DictationOrchestrator : IDisposable
         return engineTranslatedToEnglish ? "en" : detectedLanguage ?? configuredLanguage;
     }
 
+    internal static ResolvedSpokenFormattingStrategy ResolveSpokenFormattingStrategy(
+        SpokenFormattingStrategyResolver resolver,
+        string? engineId,
+        string? modelId,
+        IReadOnlyList<string> languageHints,
+        string? postProcessingLanguage,
+        bool engineTranslated,
+        SpokenFormattingStrategy globalDefault)
+    {
+        // Engine translation makes the transcript language authoritative over source-language hints.
+        return resolver.Resolve(engineId, modelId,
+            engineTranslated && postProcessingLanguage is not null ? [postProcessingLanguage] : languageHints,
+            postProcessingLanguage, globalDefault);
+    }
+
     /// <summary>
     ///     True when a prompt action explicitly names a target action plugin but
     ///     no loaded plugin matches (disabled, removed, or renamed) — unlike "no
@@ -2207,13 +2271,14 @@ public sealed class DictationOrchestrator : IDisposable
                 // trip.
                 _insertionOrder.Release(context.SessionId);
                 var outcome = await RunSpokenCommandAsync(spokenCommand, context, cancelToken);
-                // A spoken command is still a dictation the user issued: record it in
-                // history (with the LLM request/response captured on context.Capture)
-                // so it appears in the History list and Inspect panel like any other.
+                // A spoken command is still a dictation the user issued: always record
+                // statistics, and add a history entry only when history saving is enabled
+                // (with the LLM request/response captured on context.Capture) so it appears
+                // in the History list and Inspect panel like any other.
                 // RawText is the source the command acted on (selected text for an
                 // edit, the command itself for a create), so the raw→final diff reads
                 // "source → result".
-                if (outcome is not null && _settings.Current.SaveToHistoryEnabled)
+                if (outcome is not null)
                 {
                     AddSpokenCommandHistoryRecord(
                         context,
@@ -2285,12 +2350,17 @@ public sealed class DictationOrchestrator : IDisposable
                 ))
                 .ToList();
 
+            var spokenStrategy = ResolveSpokenFormattingStrategy(
+                _spokenFormattingResolver, engineProviderId, engineModelId, languageHints, postProcessingLanguage,
+                translate && engineSupportsTranslation,
+                _settings.Current.SpokenFormattingStrategy);
             var pipelineResult = await _pipeline.ProcessAsync(
                 rawText,
                 new PipelineOptions
                 {
-                    NormalizeSpokenLineBreaks = true,
-                    NormalizeSpokenPunctuation = true,
+                    NormalizeSpokenLineBreaks = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
+                    NormalizeSpokenPunctuation = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
+                    SpokenFormatter = CreateSpokenFormatter(_spokenFormatting, spokenStrategy),
                     AppFormatter = AppFormatterService.Format,
                     TargetProcessName = context.AppProcess,
                     DictionaryCorrector = SelectFinalDictionaryCorrector(
@@ -2508,7 +2578,8 @@ public sealed class DictationOrchestrator : IDisposable
                             context.AppProcess,
                             context.AppTitle,
                             commandResult.AutoEnter,
-                            ResolveInsertionStrategy(context.AppProcess)
+                            ResolveInsertionStrategy(context.AppProcess),
+                            context.LockedFocusField
                         )
                     );
                 }
@@ -2648,26 +2719,24 @@ public sealed class DictationOrchestrator : IDisposable
                 }
             }
 
-            // Write to history last so stats reflect the just-completed capture
+            // Always record statistics and add a history entry only when history saving
+            // is enabled, last so stats reflect the just-completed capture
             // (and any memory-extraction provenance recorded above).
-            if (_settings.Current.SaveToHistoryEnabled)
-            {
-                AddHistoryRecord(
-                    context,
-                    transcriptionId,
-                    timestamp,
-                    rawText,
-                    finalText,
-                    duration,
-                    result,
-                    wavPath,
-                    insertion,
-                    pipelineResult,
-                    cleanupLevel,
-                    engineProviderId,
-                    engineModelId
-                );
-            }
+            AddHistoryRecord(
+                context,
+                transcriptionId,
+                timestamp,
+                rawText,
+                finalText,
+                duration,
+                result,
+                wavPath,
+                insertion,
+                pipelineResult,
+                cleanupLevel,
+                engineProviderId,
+                engineModelId
+            );
         }
         catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
         {
@@ -2965,9 +3034,10 @@ public sealed class DictationOrchestrator : IDisposable
             // can introduce a newline; the one-shot insertion can then safely paste multiline text
             // with Ctrl+Shift+V while preserving direct typing for a single-line result. Everything
             // else (copy-only, or an Auto GUI/unknown target the one-shot would paste) also routes
-            // through that one-shot insert.
+            // through that one-shot insert. Locked fields also need its exact-focus gate.
             var strategy = ResolveInsertionStrategy(context.AppProcess);
             var canStreamDirectly = _settings.Current.AutoPaste
+                && context.LockedFocusField is null
                 && !TextInsertionService.IsTerminalApp(context.AppProcess)
                 && (strategy is TextInsertionStrategy.DirectTyping
                     || (strategy is TextInsertionStrategy.Auto
@@ -3371,7 +3441,8 @@ public sealed class DictationOrchestrator : IDisposable
                 context.AppProcess,
                 context.AppTitle,
                 false,
-                ResolveInsertionStrategy(context.AppProcess)
+                ResolveInsertionStrategy(context.AppProcess),
+                context.LockedFocusField
             )
         );
 
@@ -3521,6 +3592,53 @@ public sealed class DictationOrchestrator : IDisposable
             : "Text insertion failed. Install xclip to enable clipboard insertion.";
     }
 
+    private async Task<LockedFocusTarget?> CaptureLockedFieldAsync(
+        bool enabled,
+        AtSpiElementRef? initialElement,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!enabled)
+        {
+            return null;
+        }
+
+        // Consent withdrawn is feature unavailable (lock off); a stopped client still fails closed.
+        if (!_settings.Current.TargetAppCorrectionLearningEnabled)
+        {
+            Trace.WriteLine("[Dictation] Focus lock skipped: target-app correction learning is off.");
+            return null;
+        }
+
+        if (_atSpiClient?.IsRunning != true)
+        {
+            Trace.WriteLine("[Dictation] Focus lock capture unavailable: accessibility client stopped.");
+            return new LockedFocusTarget(null);
+        }
+
+        try
+        {
+            if (initialElement is null)
+            {
+                Trace.WriteLine("[Dictation] Focus lock capture unavailable: no focused element.");
+                return new LockedFocusTarget(null);
+            }
+
+            if (await _atSpiClient.IsLockableFieldAsync(initialElement.Value, cancellationToken))
+            {
+                return new LockedFocusTarget(initialElement);
+            }
+
+            Trace.WriteLine("[Dictation] Focus lock rejected: field is password, read-only, or unreadable.");
+            return new LockedFocusTarget(null);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Focus lock capture failed: {ex.Message}");
+            return new LockedFocusTarget(null);
+        }
+    }
+
     /// <summary>
     ///     Reason-aware fallback notification for the
     ///     <see cref="InsertionResult.CopiedToClipboard" /> branch. The detail
@@ -3556,6 +3674,8 @@ public sealed class DictationOrchestrator : IDisposable
                 "Copied to clipboard. ydotool socket not reachable — open Settings → Text insertion to check daemon status.",
             InsertionFailureReason.NoWaylandTypingTool =>
                 $"Copied to clipboard. {_commands.GetSnapshot().PasteToolInstallHint}",
+            InsertionFailureReason.LockedFieldUnavailable =>
+                Localization.Loc.Instance["Dictation.LockedFieldGone"],
             InsertionFailureReason.FocusFailed =>
                 "Copied to clipboard. Target window could not be focused for auto-paste — paste with Ctrl+V.",
             _ => "Copied to clipboard (paste with Ctrl+V).",
@@ -3740,11 +3860,12 @@ public sealed class DictationOrchestrator : IDisposable
         };
     }
 
-    // Writes a history entry for a completed spoken command. RawText is the source
-    // text the command acted on (selected text for an edit, the command itself for a
-    // create); FinalText is the generated/transformed text that was produced, so the
-    // raw→final diff reads "source → result". InsertionStatus is the real result of the
-    // insert (typed/pasted/copied). LlmCalls carries the command's request/response
+    // Records statistics for a completed spoken command and saves its history entry
+    // when history saving is enabled. RawText is the source text the command acted on
+    // (selected text for an edit, the command itself for a create); FinalText is the
+    // generated/transformed text that was produced, so the raw→final diff reads
+    // "source → result". InsertionStatus is the real result of the insert
+    // (typed/pasted/copied). LlmCalls carries the command's request/response
     // (context.Capture) so the Inspect panel shows it exactly like a dictation's prompt action.
     private void AddSpokenCommandHistoryRecord(
         RecordingContext context,
@@ -3763,7 +3884,7 @@ public sealed class DictationOrchestrator : IDisposable
             var timestamp =
                 context.RecordingStart == default ? DateTime.UtcNow : context.RecordingStart;
 
-            _history.AddRecord(
+            var record =
                 BuildHistoryRecord(
                     context,
                     Guid.NewGuid().ToString(),
@@ -3782,8 +3903,21 @@ public sealed class DictationOrchestrator : IDisposable
                     PromptActionApplied = true,
                     IsSpokenCommand = true,
                     LlmCalls = context.Capture?.Calls ?? [],
-                }
-            );
+                };
+            // Statistics before history: RecordTranscription may still be catching up from history, and a
+            // record persisted first would be imported by that backfill and then counted a second time.
+            try
+            {
+                _usageStatistics?.RecordTranscription(record);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Command] RecordTranscription failed: {ex.Message}");
+            }
+            if (_settings.Current.SaveToHistoryEnabled)
+            {
+                _history.AddRecord(record);
+            }
         }
         catch (Exception ex)
         {
@@ -3791,6 +3925,8 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
+    // Records statistics for a completed dictation and saves its history entry when
+    // history saving is enabled.
     private void AddHistoryRecord(
         RecordingContext context,
         string id,
@@ -3809,7 +3945,7 @@ public sealed class DictationOrchestrator : IDisposable
     {
         try
         {
-            _history.AddRecord(
+            var record =
                 BuildHistoryRecord(
                     context,
                     id,
@@ -3847,8 +3983,21 @@ public sealed class DictationOrchestrator : IDisposable
                         PostProcessingStepNames.Translation
                     ),
                     LlmCalls = context.Capture?.Calls ?? [],
-                }
-            );
+                };
+            // Statistics before history: RecordTranscription may still be catching up from history, and a
+            // record persisted first would be imported by that backfill and then counted a second time.
+            try
+            {
+                _usageStatistics?.RecordTranscription(record);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] RecordTranscription failed: {ex.Message}");
+            }
+            if (_settings.Current.SaveToHistoryEnabled)
+            {
+                _history.AddRecord(record);
+            }
         }
         catch (Exception ex)
         {

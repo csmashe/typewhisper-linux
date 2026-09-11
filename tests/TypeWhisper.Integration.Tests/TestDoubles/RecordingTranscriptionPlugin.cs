@@ -29,10 +29,16 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
         [new(ModelId, "Scripted model")];
     public string? SelectedModelId { get; private set; } = ModelId;
-    public bool SupportsTranslation => false;
+    public bool SupportsTranslation { get; set; }
+    internal bool? ReceivedTranslate { get; private set; }
     public int TranscriptionCount => Volatile.Read(ref _transcriptionCount);
     public int LoadCount { get; private set; }
     public int UnloadCount { get; private set; }
+
+    internal void EnqueueResult(Func<CancellationToken, Task<PluginTranscriptionResult>> result)
+    {
+        _results.Enqueue(result);
+    }
 
     internal void EnqueueText(string text, string? language = "en")
     {
@@ -88,6 +94,7 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
     {
         ct.ThrowIfCancellationRequested();
         _receivedLanguages.Enqueue(language);
+        ReceivedTranslate = translate;
         Interlocked.Increment(ref _transcriptionCount);
         if (!_results.TryDequeue(out var result))
         {
