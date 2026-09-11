@@ -2145,6 +2145,7 @@ public sealed partial class HttpApiService : IDisposable
                     corrections = corrections.Select(c => new
                     {
                         original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive,
+                        isRegex = c.IsRegex,
                     }),
                     count = corrections.Count,
                 }
@@ -2205,6 +2206,7 @@ public sealed partial class HttpApiService : IDisposable
                     corrections = corrections.Select(c => new
                     {
                         original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive,
+                        isRegex = c.IsRegex,
                     }),
                     count = corrections.Count,
                 }
@@ -2256,6 +2258,7 @@ public sealed partial class HttpApiService : IDisposable
                     corrections = corrections.Select(c => new
                     {
                         original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive,
+                        isRegex = c.IsRegex,
                     }),
                     count = corrections.Count,
                 }

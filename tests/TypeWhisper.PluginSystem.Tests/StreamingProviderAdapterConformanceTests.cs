@@ -50,7 +50,8 @@ public sealed class StreamingProviderAdapterConformanceTests
             "ElevenLabs" => new ElevenLabsWebSocketAdapter(
                 "key",
                 "scribe_v2_realtime",
-                "en"
+                "en",
+                noVerbatim: true
             ),
             "Smallest AI" => new SmallestAiWebSocketAdapter("key", "en"),
             "Reson8" => new Reson8WebSocketAdapter(
@@ -98,7 +99,8 @@ public sealed class StreamingProviderAdapterConformanceTests
         var eleven = await new ElevenLabsWebSocketAdapter(
                 "eleven-key",
                 "scribe_v2_realtime",
-                "de"
+                "de",
+                noVerbatim: true
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
         var smallest = await new SmallestAiWebSocketAdapter("smallest-key", "de")
@@ -235,7 +237,7 @@ public sealed class StreamingProviderAdapterConformanceTests
     {
         var transport = new ScriptedWebSocketTransport();
         await using var pump = await StartAsync(
-            new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null),
+            new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null, noVerbatim: true),
             transport
         );
         var events = new ConcurrentQueue<StreamingTranscriptEvent>();
@@ -292,7 +294,7 @@ public sealed class StreamingProviderAdapterConformanceTests
                 """{"type":"Error","description":"rejected"}"""
             ),
             "ElevenLabs" => (
-                new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null),
+                new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null, noVerbatim: true),
                 """{"message_type":"auth_error","message":"rejected"}"""
             ),
             "SmallestAI" => (

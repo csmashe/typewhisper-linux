@@ -61,4 +61,57 @@ public sealed class AboutSectionViewModelTests : IDisposable
             presentationEntry.LocalTimestamp
         );
     }
+
+    [Fact]
+    public void ProjectLinkCommands_LaunchExpectedUrls()
+    {
+        var runner = new FakeProcessRunner();
+        var sut = CreateViewModel(runner);
+
+        sut.OpenProjectCommand.Execute(null);
+        sut.OpenDocsCommand.Execute(null);
+        sut.OpenIssuesCommand.Execute(null);
+        sut.OpenLicenseCommand.Execute(null);
+        sut.OpenUpstreamCommand.Execute(null);
+
+        Assert.Equal(
+            new[]
+            {
+                new Uri(AboutSectionViewModel.ProjectUrl),
+                new Uri(AboutSectionViewModel.DocsUrl),
+                new Uri(AboutSectionViewModel.IssuesUrl),
+                new Uri(AboutSectionViewModel.LicenseUrl),
+                new Uri(AboutSectionViewModel.UpstreamUrl),
+            },
+            runner.LaunchedUris
+        );
+    }
+
+    [Fact]
+    public void InstallAndDataLocations_AreRootedPaths()
+    {
+        var runner = new FakeProcessRunner();
+        var sut = CreateViewModel(runner);
+
+        Assert.False(string.IsNullOrWhiteSpace(sut.InstallLocation));
+        Assert.True(Path.IsPathRooted(sut.InstallLocation));
+        Assert.False(string.IsNullOrWhiteSpace(sut.DataLocation));
+        Assert.True(Path.IsPathRooted(sut.DataLocation));
+    }
+
+    private AboutSectionViewModel CreateViewModel(FakeProcessRunner runner)
+    {
+        var errorLog = new Mock<IErrorLogService>();
+        errorLog.SetupGet(service => service.Entries).Returns([]);
+        var preferences = new LinuxPreferencesService(
+            Path.Join(_tempDir, "linux-preferences.json")
+        );
+        return new AboutSectionViewModel(
+            errorLog.Object,
+            new SettingsBackupService(_tempDir),
+            new UpdateCheckService(preferences),
+            new UrlLauncher(runner),
+            TimeZoneInfo.Utc
+        );
+    }
 }
