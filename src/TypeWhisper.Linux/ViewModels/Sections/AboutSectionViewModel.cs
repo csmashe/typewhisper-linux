@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -115,13 +116,17 @@ public partial class AboutSectionViewModel : ObservableObject
     public string Architecture { get; } =
         RuntimeInformation.OSArchitecture.ToString();
 
-    // ReSharper disable once UnusedMember.Global  public ViewModel property (About-section project URL display); not currently bound in-tree
-    // ReSharper disable once ReplaceAutoPropertyWithComputedProperty -- kept as an instance auto-property; the computed form is flagged static (CA1822) on this bindable VM member.
-    public string ProjectUrl { get; } = "https://github.com/csmashe/typewhisper-linux";
+    internal const string ProjectUrl = "https://github.com/csmashe/typewhisper-linux";
+    internal const string IssuesUrl = ProjectUrl + "/issues";
+    internal const string DocsUrl = ProjectUrl + "/wiki";
+    internal const string LicenseUrl = ProjectUrl + "/blob/linux/LICENSE";
+    internal const string UpstreamUrl = "https://github.com/TypeWhisper/typewhisper-win";
 
-    // ReSharper disable once UnusedMember.Global  public ViewModel property (About-section upstream URL display); not currently bound in-tree
     // ReSharper disable once ReplaceAutoPropertyWithComputedProperty -- kept as an instance auto-property; the computed form is flagged static (CA1822) on this bindable VM member.
-    public string UpstreamUrl { get; } = "https://github.com/TypeWhisper/typewhisper-win";
+    public string InstallLocation { get; } = InstallLocationResolver.Resolve();
+
+    // ReSharper disable once ReplaceAutoPropertyWithComputedProperty -- kept as an instance auto-property; the computed form is flagged static (CA1822) on this bindable VM member.
+    public string DataLocation { get; } = TypeWhisperEnvironment.BasePath;
 
     public bool CanCheckForUpdates => !IsCheckingForUpdates;
 
@@ -214,6 +219,36 @@ public partial class AboutSectionViewModel : ObservableObject
     private void OpenReleasePage()
     {
         _urlLauncher.Open(LatestReleaseUrl);
+    }
+
+    [RelayCommand]
+    private void OpenProject()
+    {
+        _urlLauncher.Open(ProjectUrl);
+    }
+
+    [RelayCommand]
+    private void OpenIssues()
+    {
+        _urlLauncher.Open(IssuesUrl);
+    }
+
+    [RelayCommand]
+    private void OpenDocs()
+    {
+        _urlLauncher.Open(DocsUrl);
+    }
+
+    [RelayCommand]
+    private void OpenLicense()
+    {
+        _urlLauncher.Open(LicenseUrl);
+    }
+
+    [RelayCommand]
+    private void OpenUpstream()
+    {
+        _urlLauncher.Open(UpstreamUrl);
     }
 
     private void OnUpdateResultChanged(UpdateCheckResult result)

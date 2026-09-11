@@ -282,6 +282,23 @@
                                     <TextBlock Text="{loc:Str Profiles.UrlPatternsHint}"
                                                Classes="page-subtitle" />
                                 </StackPanel>
+                                <StackPanel IsVisible="{Binding IsContextMatchModeVisible}"
+                                            Margin="0,14,0,0">
+                                    <TextBlock Text="{loc:Str Profiles.ContextMatchMode}"
+                                               Classes="field-label" />
+                                    <ComboBox ItemsSource="{Binding ContextMatchModeOptions}"
+                                              SelectedItem="{Binding SelectedContextMatchModeOption}"
+                                              HorizontalAlignment="Stretch">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:ProfileContextMatchModeOption">
+                                                <TextBlock Text="{Binding Label}" />
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                    <TextBlock Text="{Binding SelectedContextMatchModeHint}"
+                                               Classes="page-subtitle"
+                                               Margin="0,6,0,0" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 
