@@ -409,7 +409,7 @@ public sealed class DashboardSectionViewModelTests : IDisposable
     }
 
     [Fact]
-    public void DayRollover_AmbiguousMidnightSchedulesFirstOccurrence()
+    public async Task DayRollover_AmbiguousMidnightSchedulesFirstOccurrence()
     {
         var rule = TimeZoneInfo.AdjustmentRule.CreateAdjustmentRule(
             new DateTime(2026, 1, 1), new DateTime(2026, 12, 31), TimeSpan.FromHours(1),
@@ -423,8 +423,10 @@ public sealed class DashboardSectionViewModelTests : IDisposable
         {
             UtcNow = new DateTimeOffset(2026, 10, 31, 22, 30, 0, TimeSpan.Zero),
         };
+        var history = new HistoryService(Path.Join(_tempDir, "history.json"));
+        await history.EnsureLoadedAsync();
         using var sut = new DashboardSectionViewModel(
-            new HistoryService(Path.Join(_tempDir, "history.json")),
+            history,
             new SettingsService(Path.Join(_tempDir, "settings.json")),
             new HistoryInsightsService(), new FakeStatistics(), zone,
             timeProvider: clock, postToUi: action => action());
