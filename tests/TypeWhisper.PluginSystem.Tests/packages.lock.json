@@ -579,6 +579,12 @@
           "TypeWhisper.PluginSDK": "[0.13.0, )"
         }
       },
+      "typewhisper.plugin.fillerwords": {
+        "type": "Project",
+        "dependencies": {
+          "TypeWhisper.PluginSDK": "[0.13.2, )"
+        }
+      },
       "typewhisper.plugin.fireworks": {
         "type": "Project",
         "dependencies": {
