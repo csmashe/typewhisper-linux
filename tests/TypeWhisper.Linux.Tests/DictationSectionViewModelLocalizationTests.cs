@@ -23,6 +23,8 @@ public sealed class DictationSectionViewModelLocalizationTests
                 {
                     Language = "fr",
                     CleanupLevel = CleanupLevel.High,
+                    EnglishOutputVariant = EnglishOutputVariant.UnitedKingdom,
+                    GermanOutputVariant = GermanOutputVariant.Switzerland,
                     LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu,
                     AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>
                     {
@@ -72,11 +74,15 @@ public sealed class DictationSectionViewModelLocalizationTests
                 option => option.Code == "auto"
             );
             var cleanupBefore = sut.SelectedCleanupLevelOption!;
+            var englishBefore = sut.SelectedEnglishOutputVariantOption!;
+            var germanBefore = sut.SelectedGermanOutputVariantOption!;
             var insertionBefore = sut.SelectedNewInsertionStrategyOption!;
             var appStrategyRow = Assert.Single(sut.AppInsertionStrategies);
             var appInsertionBefore = appStrategyRow.SelectedStrategyOption!;
             HashSet<string?> expectedPropertyChanges =
             [
+                nameof(DictationSectionViewModel.IsEnglishOutputVariantVisible),
+                nameof(DictationSectionViewModel.IsGermanOutputVariantVisible),
                 nameof(DictationSectionViewModel.AudioDuckingUnavailableReason),
                 nameof(DictationSectionViewModel.MediaPauseUnavailableReason),
                 nameof(DictationSectionViewModel.SoundFeedbackUnavailableReason),
@@ -93,6 +99,10 @@ public sealed class DictationSectionViewModelLocalizationTests
                 sut.SelectedLanguageOption = null;
             sut.CleanupLevelOptions.CollectionChanged += (_, _) =>
                 sut.SelectedCleanupLevelOption = null;
+            sut.EnglishOutputVariantOptions.CollectionChanged += (_, _) =>
+                sut.SelectedEnglishOutputVariantOption = null;
+            sut.GermanOutputVariantOptions.CollectionChanged += (_, _) =>
+                sut.SelectedGermanOutputVariantOption = null;
             sut.InsertionStrategyOptions.CollectionChanged += (_, _) =>
             {
                 sut.SelectedNewInsertionStrategyOption = null;
@@ -117,6 +127,12 @@ public sealed class DictationSectionViewModelLocalizationTests
             Assert.NotEqual(cleanupBefore.DisplayName, sut.SelectedCleanupLevelOption?.DisplayName);
             Assert.NotSame(cleanupBefore, sut.SelectedCleanupLevelOption);
             Assert.Equal(CleanupLevel.High, sut.SelectedCleanupLevelOption?.Value);
+            Assert.NotSame(englishBefore, sut.SelectedEnglishOutputVariantOption);
+            Assert.NotSame(germanBefore, sut.SelectedGermanOutputVariantOption);
+            Assert.NotEqual(englishBefore.DisplayName, sut.SelectedEnglishOutputVariantOption?.DisplayName);
+            Assert.NotEqual(germanBefore.DisplayName, sut.SelectedGermanOutputVariantOption?.DisplayName);
+            Assert.Equal(EnglishOutputVariant.UnitedKingdom, sut.SelectedEnglishOutputVariantOption?.Value);
+            Assert.Equal(GermanOutputVariant.Switzerland, sut.SelectedGermanOutputVariantOption?.Value);
             Assert.NotEqual(
                 insertionBefore.DisplayName,
                 sut.SelectedNewInsertionStrategyOption?.DisplayName

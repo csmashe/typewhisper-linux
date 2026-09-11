@@ -29,6 +29,9 @@ public sealed record PipelineOptions
     /// <summary>Global number normalization setting.</summary>
     public bool TranscriptionNumberNormalizationEnabled { get; init; } = true;
 
+    /// <summary>Whether model-supplied punctuation is preserved for one- or two-word utterances.</summary>
+    public bool ShortUtterancePunctuationEnabled { get; init; } = true;
+
     /// <summary>Transcription task used to choose normalization languages.</summary>
     public TranscriptionTask TranscriptionTask { get; init; } = TranscriptionTask.Transcribe;
 
@@ -37,6 +40,12 @@ public sealed record PipelineOptions
 
     /// <summary>Configured language hint candidates used when detected language does not normalize.</summary>
     public IReadOnlyList<string> ConfiguredLanguageCandidates { get; init; } = [];
+
+    /// <summary>Regional spelling variant applied to final written English output.</summary>
+    public EnglishOutputVariant EnglishOutputVariant { get; init; } = EnglishOutputVariant.AsTranscribed;
+
+    /// <summary>Regional spelling variant applied to final written German output.</summary>
+    public GermanOutputVariant GermanOutputVariant { get; init; } = GermanOutputVariant.AsTranscribed;
 
     /// <summary>Process name of the target app for formatting.</summary>
     public string? TargetProcessName { get; init; }
@@ -121,6 +130,7 @@ public sealed record PostProcessingResult
 
 public static class PostProcessingStepNames
 {
+    public const string ShortUtterancePunctuation = "ShortUtterancePunctuation";
     public const string SpokenCommands = "SpokenCommands";
     public const string SpokenPunctuation = "SpokenPunctuation";
     public const string NumberNormalization = "NumberNormalization";
@@ -129,6 +139,8 @@ public static class PostProcessingStepNames
     public const string Llm = "LLM";
     public const string Snippets = "Snippets";
     public const string VocabularyBoosting = "VocabularyBoosting";
+    public const string OutputVariant = "OutputVariant";
+    public const string TranslatedOutputVariant = "TranslatedOutputVariant";
     public const string Dictionary = "Dictionary";
     public const string Translation = "Translation";
 

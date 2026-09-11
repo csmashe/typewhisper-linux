@@ -1,18 +1,22 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services.NumberNormalization;
 
 namespace TypeWhisper.Core.Services;
 
 /// <summary>
 ///     Priority-based post-processing pipeline. Steps run in ascending priority order:
+///     ShortUtterancePunctuation=40 (only when disabled),
 ///     SpokenCommands=50, SpokenPunctuation=60, NumberNormalization=100, Formatting=150,
-///     Cleanup=250, LLM=300, Snippets=500, VocabularyBoosting=550, Dictionary=600, Translation=900.
+///     Cleanup=250, LLM=300, Snippets=500, VocabularyBoosting=550, OutputVariant=575,
+///     Dictionary=600, Translation=900, TranslatedOutputVariant=950.
 ///     Plugin post-processors insert at their own declared priority.
 /// </summary>
 public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
 {
+    private const int ShortUtterancePunctuationPriority = 40;
     private const int SpokenCommandsPriority = 50;
     private const int SpokenPunctuationPriority = 60;
     private const int NumberNormalizationPriority = 100;
@@ -21,8 +25,10 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
     private const int LlmPriority = 300;
     private const int SnippetPriority = 500;
     private const int VocabularyBoostingPriority = 550;
+    private const int OutputVariantPriority = 575;
     private const int DictionaryPriority = 600;
     private const int TranslationPriority = 900;
+    private const int TranslatedOutputVariantPriority = 950;
 
     public async Task<PostProcessingResult> ProcessAsync(
         string rawText,
@@ -136,6 +142,20 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
         )> BuildSteps(PipelineOptions options)
     {
         var steps = new List<(int, string, Func<string, CancellationToken, Task<string>>)>();
+
+        // Runs before every other step so the strip sees the model's raw one- or two-word output.
+        if (!options.ShortUtterancePunctuationEnabled)
+        {
+            steps.Add(
+                (
+                    ShortUtterancePunctuationPriority,
+                    PostProcessingStepNames.ShortUtterancePunctuation,
+                    (text, _) => Task.FromResult(
+                        ShortUtterancePunctuationService.NormalizeText(text, punctuationEnabled: false)
+                    )
+                )
+            );
+        }
 
         // Spoken line-break commands run first so the LLM sees real breaks, not the words.
         if (options.NormalizeSpokenLineBreaks)
@@ -253,6 +273,20 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
             );
         }
 
+        if (options.EnglishOutputVariant != EnglishOutputVariant.AsTranscribed
+            || options.GermanOutputVariant != GermanOutputVariant.AsTranscribed)
+        {
+            // Before the dictionary so a user correction can override a spelling rewrite; the text is
+            // still in the source language here, so no translation target is passed.
+            steps.Add(
+                (
+                    OutputVariantPriority,
+                    PostProcessingStepNames.OutputVariant,
+                    (text, _) => Task.FromResult(ApplyOutputVariants(text, options, translationTarget: null))
+                )
+            );
+        }
+
         if (options.DictionaryCorrector is not null)
         {
             steps.Add(
@@ -268,12 +302,13 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
         // comment explaining it) into both branches.
         if (
             options.TranslationHandler is not null
-            && !string.IsNullOrEmpty(options.TranslationTarget)
+            && !string.IsNullOrWhiteSpace(options.TranslationTarget)
         )
         {
             var detectedLang = options.DetectedLanguage;
             var effectiveLang = options.EffectiveSourceLanguage;
             var targetLang = options.TranslationTarget;
+            var translated = false;
 
             steps.Add(
                 (
@@ -292,16 +327,57 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
                             await options.StatusCallback("Translation");
                         }
 
-                        return await options.TranslationHandler(text, sourceLang, targetLang, ct);
+                        var result = await options.TranslationHandler(text, sourceLang, targetLang, ct);
+                        translated = true;
+                        return result;
                     }
                 )
             );
+
+            // Only text the translator actually produced is respelled here; when the source already
+            // matched the target the dictionary's earlier corrections must stand.
+            if (options.EnglishOutputVariant != EnglishOutputVariant.AsTranscribed
+                || options.GermanOutputVariant != GermanOutputVariant.AsTranscribed)
+            {
+                steps.Add(
+                    (
+                        TranslatedOutputVariantPriority,
+                        PostProcessingStepNames.TranslatedOutputVariant,
+                        (text, _) => Task.FromResult(
+                            translated ? ApplyOutputVariants(text, options, targetLang) : text
+                        )
+                    )
+                );
+            }
         }
 
         // Stable order by priority: List.Sort is unstable, so a plugin sharing a built-in
         // priority (e.g. 100) could run before or after the built-in step nondeterministically.
         // OrderBy is a stable sort, so equal priorities keep insertion order (built-ins first).
         return steps.OrderBy(static step => step.Item1).ToList();
+    }
+
+    private static string ApplyOutputVariants(string text, PipelineOptions options, string? translationTarget)
+    {
+        text = EnglishOutputNormalizationService.NormalizeText(
+            text,
+            options.EnglishOutputVariant,
+            options.TranscriptionTask,
+            options.DetectedLanguage,
+            options.ConfiguredLanguage,
+            options.ConfiguredLanguageCandidates,
+            translationTarget
+        );
+
+        return GermanOutputNormalizationService.NormalizeText(
+            text,
+            options.GermanOutputVariant,
+            options.TranscriptionTask,
+            options.DetectedLanguage,
+            options.ConfiguredLanguage,
+            options.ConfiguredLanguageCandidates,
+            translationTarget
+        );
     }
 
     // STT renders spoken commands inconsistently ("new line", "New Line.", "newline") and
