@@ -10,8 +10,8 @@ public sealed class AtSpiEventClientFocusTests
     [Fact]
     public void Dispose_ThrowingRunningChangedSubscriber_DoesNotAbort()
     {
-        // Disposed explicitly below: the disposal is the behaviour under test.
-        var client = CreateClient();
+        // Explicit disposal below is under test; the scope also cleans up if setup throws.
+        using var client = CreateClient();
         typeof(AtSpiEventClient).GetProperty(nameof(AtSpiEventClient.IsRunning))!
             .SetValue(client, true);
         var notificationCount = 0;
