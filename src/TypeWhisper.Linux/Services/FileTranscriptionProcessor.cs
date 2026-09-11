@@ -21,7 +21,8 @@ public sealed record FileTranscriptionProcessOptions(
     string? EngineId = null,
     string? ModelId = null,
     string? Language = null,
-    TranscriptionTask? Task = null
+    TranscriptionTask? Task = null,
+    IReadOnlyList<string>? LanguageHints = null
 );
 
 public sealed record FileTranscriptionProcessProgress(
@@ -43,6 +44,23 @@ public sealed class FileTranscriptionProcessor(
     IPostProcessingPipeline pipeline
 ) : IFileTranscriptionProcessor
 {
+    // An explicit language wins; a supplied list is the caller's snapshot even when empty (that
+    // means automatic), and only an absent list falls back to the settings at processing time.
+    internal static IReadOnlyList<string> ResolveLanguageHints(
+        FileTranscriptionProcessOptions? options,
+        AppSettings currentSettings
+    )
+    {
+        if (!string.IsNullOrWhiteSpace(options?.Language))
+        {
+            return AppSettings.NormalizeLanguageHints([options.Language]);
+        }
+
+        return options?.LanguageHints is { } snapshot
+            ? AppSettings.NormalizeLanguageHints(snapshot)
+            : currentSettings.GetLanguageHints();
+    }
+
     public async Task<FileTranscriptionProcessResult> ProcessAsync(
         string filePath,
         Action<FileTranscriptionProcessProgress> onProgress,
@@ -75,10 +93,8 @@ public sealed class FileTranscriptionProcessor(
         );
 
         var currentSettings = settings.Current;
-        var languageSelection = LanguageSelectionResolver.Resolve(
-            options?.Language,
-            currentSettings.Language
-        );
+        var languageHints = ResolveLanguageHints(options, currentSettings);
+        var languageSelection = LanguageSelectionResolver.ResolvePrimary(languageHints);
         var configuredLanguage = languageSelection.LanguageTag;
         var task =
             options?.Task
@@ -106,6 +122,7 @@ public sealed class FileTranscriptionProcessor(
             pluginResult = await lease.Plugin.TranscribeAsync(
                 wav,
                 languageSelection,
+                languageHints,
                 task == TranscriptionTask.Translate,
                 null,
                 cancellationToken
@@ -144,8 +161,8 @@ public sealed class FileTranscriptionProcessor(
         };
 
         // Segments feed subtitle export and never pass through the pipeline.
-        result = EnglishOutputNormalizationService.NormalizeResult(result, currentSettings.EnglishOutputVariant, effectiveTask, configuredLanguage);
-        result = GermanOutputNormalizationService.NormalizeResult(result, currentSettings.GermanOutputVariant, effectiveTask, configuredLanguage);
+        result = EnglishOutputNormalizationService.NormalizeResult(result, currentSettings.EnglishOutputVariant, effectiveTask, configuredLanguage, configuredLanguageCandidates: languageHints);
+        result = GermanOutputNormalizationService.NormalizeResult(result, currentSettings.GermanOutputVariant, effectiveTask, configuredLanguage, configuredLanguageCandidates: languageHints);
 
         var pipelineResult = await pipeline.ProcessAsync(
             result.Text,
@@ -158,6 +175,7 @@ public sealed class FileTranscriptionProcessor(
                 TranscriptionTask = effectiveTask,
                 DetectedLanguage = result.DetectedLanguage,
                 ConfiguredLanguage = configuredLanguage,
+                ConfiguredLanguageCandidates = languageHints,
                 TranscriptionNumberNormalizationEnabled =
                     currentSettings.TranscriptionNumberNormalizationEnabled,
                 EnglishOutputVariant = currentSettings.EnglishOutputVariant,

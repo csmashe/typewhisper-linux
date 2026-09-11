@@ -109,6 +109,7 @@ public sealed class DictationOrchestratorDiscardFeedbackTests
             StreamingProviderId: null,
             StreamingModelId: null,
             StreamingLanguageSelection: LanguageSelection.Automatic,
+            StreamingLanguageHints: [],
             CancelToken: CancellationToken.None
         );
     }

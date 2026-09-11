@@ -134,6 +134,13 @@ public partial class DictationSectionViewModel : ObservableObject
     private string _language = "auto";
 
     [ObservableProperty]
+    private SpokenLanguageOption? _selectedAdditionalLanguage;
+
+    // The dropdown's pending choice by code, so a rebuild of the choices (interface language,
+    // engine change) can restore it after the collection has been emptied and refilled.
+    private string? _pendingAdditionalLanguageCode;
+
+    [ObservableProperty]
     private bool _languageSelectionRequired;
 
     [ObservableProperty]
@@ -334,6 +341,14 @@ public partial class DictationSectionViewModel : ObservableObject
 
     public ObservableCollection<SpokenLanguageOption> LanguageChoices { get; } =
         new(CreateLanguageChoices());
+
+    public ObservableCollection<SpokenLanguageOption> AdditionalLanguages { get; } = [];
+    public ObservableCollection<SpokenLanguageOption> AvailableAdditionalLanguages { get; } = [];
+
+    public bool IsAdditionalLanguagesVisible =>
+        !string.Equals(Language, "auto", StringComparison.OrdinalIgnoreCase);
+
+    public bool HasAdditionalLanguages => AdditionalLanguages.Count > 0;
 
     public ObservableCollection<TranslationTargetOption> TranslationTargetOptions { get; } = [];
 
@@ -810,7 +825,21 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private void RefreshFromSettings(AppSettings settings)
     {
-        Language = string.IsNullOrWhiteSpace(settings.Language) ? "auto" : settings.Language;
+        var languageHints = settings.GetLanguageHints();
+        var wasLocalizedOptionRefresh = _isLocalizedOptionRefresh;
+        _isLocalizedOptionRefresh = true;
+        try
+        {
+            Language = languageHints.Count > 0 ? languageHints[0] : "auto";
+            ReplaceCollection(AdditionalLanguages, languageHints.Skip(1).Select(ResolveLanguageOption));
+        }
+        finally
+        {
+            _isLocalizedOptionRefresh = wasLocalizedOptionRefresh;
+        }
+        OnPropertyChanged(nameof(IsAdditionalLanguagesVisible));
+        OnPropertyChanged(nameof(HasAdditionalLanguages));
+        RefreshAvailableAdditionalLanguages();
         TranslationTargetLanguage = settings.TranslationTargetLanguage;
         CleanupLevel = settings.CleanupLevel;
         EnglishOutputVariant = settings.EnglishOutputVariant;
@@ -875,6 +904,7 @@ public partial class DictationSectionViewModel : ObservableObject
     {
         var acceleration = LocalModelAcceleration;
         var language = Language;
+        var additionalLanguageCodes = AdditionalLanguages.Select(option => option.Code).ToArray();
         var cleanupLevel = CleanupLevel;
         var englishOutputVariant = EnglishOutputVariant;
         var germanOutputVariant = GermanOutputVariant;
@@ -895,6 +925,10 @@ public partial class DictationSectionViewModel : ObservableObject
 
             LocalModelAcceleration = acceleration;
             Language = language;
+            ReplaceCollection(AdditionalLanguages, additionalLanguageCodes.Select(ResolveLanguageOption));
+            OnPropertyChanged(nameof(IsAdditionalLanguagesVisible));
+            OnPropertyChanged(nameof(HasAdditionalLanguages));
+            RefreshAvailableAdditionalLanguages();
             CleanupLevel = cleanupLevel;
             EnglishOutputVariant = englishOutputVariant;
             GermanOutputVariant = germanOutputVariant;
@@ -973,6 +1007,7 @@ public partial class DictationSectionViewModel : ObservableObject
             ReplaceCollection(LanguageChoices, choices);
             LanguageSelectionRequired = false;
             OnPropertyChanged(nameof(SelectedLanguageOption));
+            RefreshAvailableAdditionalLanguages();
             return;
         }
 
@@ -1005,6 +1040,93 @@ public partial class DictationSectionViewModel : ObservableObject
         _autoIsOnlyLanguageChoice = LanguageChoices is [{ Code: "auto" }];
         LanguageSelectionRequired = SelectedLanguageOption is null;
         OnPropertyChanged(nameof(LanguageSelectionWarning));
+        RefreshAvailableAdditionalLanguages();
+    }
+
+    // Labels come from the full catalog, not the engine-filtered choices: a chip the current
+    // engine cannot offer still shows its name rather than its code.
+    private static SpokenLanguageOption ResolveLanguageOption(string code) =>
+        CreateLanguageChoices().FirstOrDefault(option =>
+            string.Equals(option.Code, code, StringComparison.OrdinalIgnoreCase)) ?? new(code, code);
+
+    private void RefreshAvailableAdditionalLanguages()
+    {
+        var selectedCode = _pendingAdditionalLanguageCode;
+        ReplaceCollection(
+            AvailableAdditionalLanguages,
+            LanguageChoices.Where(option =>
+                !string.Equals(option.Code, "auto", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(option.Code, Language, StringComparison.OrdinalIgnoreCase)
+                && !AdditionalLanguages.Any(additional =>
+                    string.Equals(additional.Code, option.Code, StringComparison.OrdinalIgnoreCase)))
+        );
+        SelectedAdditionalLanguage = AvailableAdditionalLanguages.FirstOrDefault(option =>
+            string.Equals(option.Code, selectedCode, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void PersistLanguageHints()
+    {
+        if (!_isLocalizedOptionRefresh)
+        {
+            _settings.Update(current =>
+                current.WithLanguageHints([Language, .. AdditionalLanguages.Select(option => option.Code)]));
+        }
+        OnPropertyChanged(nameof(HasAdditionalLanguages));
+        RefreshAvailableAdditionalLanguages();
+    }
+
+    [RelayCommand]
+    private void AddAdditionalLanguage()
+    {
+        if (IsAdditionalLanguagesVisible
+            && SelectedAdditionalLanguage is { } option
+            && !string.Equals(option.Code, "auto", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(option.Code, Language, StringComparison.OrdinalIgnoreCase)
+            && !AdditionalLanguages.Any(existing =>
+                string.Equals(existing.Code, option.Code, StringComparison.OrdinalIgnoreCase)))
+        {
+            AdditionalLanguages.Add(option);
+        }
+        _pendingAdditionalLanguageCode = null;
+        SelectedAdditionalLanguage = null;
+        PersistLanguageHints();
+    }
+
+    partial void OnSelectedAdditionalLanguageChanged(SpokenLanguageOption? value)
+    {
+        if (value is not null)
+        {
+            _pendingAdditionalLanguageCode = value.Code;
+        }
+    }
+
+    [RelayCommand]
+    private void RemoveAdditionalLanguage(SpokenLanguageOption option)
+    {
+        AdditionalLanguages.Remove(option);
+        PersistLanguageHints();
+    }
+
+    [RelayCommand]
+    private void MoveAdditionalLanguageEarlier(SpokenLanguageOption option)
+    {
+        var index = AdditionalLanguages.IndexOf(option);
+        if (index > 0)
+        {
+            AdditionalLanguages.Move(index, index - 1);
+        }
+        PersistLanguageHints();
+    }
+
+    [RelayCommand]
+    private void MoveAdditionalLanguageLater(SpokenLanguageOption option)
+    {
+        var index = AdditionalLanguages.IndexOf(option);
+        if (index >= 0 && index < AdditionalLanguages.Count - 1)
+        {
+            AdditionalLanguages.Move(index, index + 1);
+        }
+        PersistLanguageHints();
     }
 
     private static IReadOnlyList<EnglishOutputVariantOption> CreateEnglishOutputVariantOptions()
@@ -1662,6 +1784,8 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnLanguageChanged(string value)
     {
+        OnPropertyChanged(nameof(IsAdditionalLanguagesVisible));
+        RefreshAvailableAdditionalLanguages();
         OnPropertyChanged(nameof(IsEnglishOutputVariantVisible));
         OnPropertyChanged(nameof(IsGermanOutputVariantVisible));
         if (_isLocalizedOptionRefresh)
@@ -1669,7 +1793,26 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Update(current => current with { Language = value });
+        if (string.Equals(value, "auto", StringComparison.OrdinalIgnoreCase))
+        {
+            // An empty hint list means unrestricted auto-detection, so the tail cannot survive an Auto primary.
+            AdditionalLanguages.Clear();
+        }
+        else
+        {
+            var matchingChip = AdditionalLanguages.FirstOrDefault(option =>
+                string.Equals(option.Code, value, StringComparison.OrdinalIgnoreCase));
+            if (matchingChip is not null)
+            {
+                AdditionalLanguages.Remove(matchingChip);
+            }
+        }
+        _settings.Update(current => current.WithLanguageHints(
+            string.Equals(value, "auto", StringComparison.OrdinalIgnoreCase)
+                ? []
+                : [value, .. AdditionalLanguages.Select(option => option.Code)]));
+        OnPropertyChanged(nameof(HasAdditionalLanguages));
+        RefreshAvailableAdditionalLanguages();
         LanguageSelectionRequired = false;
         OnPropertyChanged(nameof(SelectedLanguageOption));
     }

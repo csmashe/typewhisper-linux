@@ -79,6 +79,172 @@ public sealed class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void Load_LegacyLanguage_MigratesToSingleHint()
+    {
+        File.WriteAllText(_filePath, """
+        {
+          "language": "de"
+        }
+        """);
+
+        var loaded = new SettingsService(_filePath).Current;
+
+        Assert.Equal(["de"], loaded.LanguageHints);
+        Assert.Equal("de", loaded.Language);
+    }
+
+    [Fact]
+    public void SaveAndLoad_NormalizesOrderedLanguageHints()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with
+        {
+            LanguageHints = [" de ", "en", "DE", "", "auto"],
+        });
+
+        var loaded = new SettingsService(_filePath).Current;
+
+        Assert.Equal(["de", "en"], loaded.LanguageHints);
+        Assert.Equal("de", loaded.Language);
+    }
+
+    [Fact]
+    public void Load_NullLanguageHints_TreatsThemAsAbsent()
+    {
+        File.WriteAllText(_filePath, """{"language":"de","languageHints":null}""");
+        var loaded = new SettingsService(_filePath).Current;
+        Assert.Equal("de", loaded.Language);
+        Assert.Equal(["de"], loaded.LanguageHints);
+    }
+
+    [Fact]
+    public void Load_LegacyAutoLanguage_LeavesHintsEmpty()
+    {
+        File.WriteAllText(_filePath, """{"language":"auto"}""");
+        var loaded = new SettingsService(_filePath).Current;
+        Assert.Empty(loaded.LanguageHints);
+        Assert.Equal("auto", loaded.Language);
+    }
+
+    [Fact]
+    public void SaveAndLoad_LanguageWithEmptyHints_SurvivesReload()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with { Language = "de" });
+
+        var loaded = new SettingsService(_filePath).Current;
+
+        Assert.Equal("de", loaded.Language);
+        Assert.Equal(["de"], loaded.LanguageHints);
+    }
+
+    [Fact]
+    public void Update_LanguageChange_RewritesFirstHintAndKeepsTail()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default.WithLanguageHints(["de", "en"]));
+
+        var updated = sut.Update(current => current with { Language = "fr" });
+
+        Assert.Equal("fr", updated.Language);
+        Assert.Equal(["fr", "en"], updated.LanguageHints);
+    }
+
+    [Fact]
+    public void Update_LanguageChangeToTailEntry_DropsTheDuplicate()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default.WithLanguageHints(["de", "en"]));
+
+        var updated = sut.Update(current => current with { Language = "en" });
+
+        Assert.Equal(["en"], updated.LanguageHints);
+    }
+
+    [Fact]
+    public void Update_LanguageChangeToAuto_ClearsHints()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default.WithLanguageHints(["de", "en"]));
+
+        var updated = sut.Update(current => current with { Language = "auto" });
+
+        Assert.Equal("auto", updated.Language);
+        Assert.Empty(updated.LanguageHints);
+        Assert.Empty(new SettingsService(_filePath).Current.LanguageHints);
+    }
+
+    [Fact]
+    public void Update_WithLanguageHintsEmpty_ResetsToAuto()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default.WithLanguageHints(["de"]));
+
+        var updated = sut.Update(current => current.WithLanguageHints([]));
+
+        Assert.Equal("auto", updated.Language);
+        Assert.Empty(updated.LanguageHints);
+    }
+
+    [Fact]
+    public void Update_HintsEmptiedBesideAnExplicitLanguage_KeepsThatLanguage()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default.WithLanguageHints(["de", "en"]));
+
+        var updated = sut.Update(current => current with { LanguageHints = [] });
+
+        Assert.Equal("de", updated.Language);
+        Assert.Equal(["de"], updated.LanguageHints);
+    }
+
+    [Fact]
+    public void Save_FullObjectWithHints_UsesThoseHintsWhateverCameBefore()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with { Language = "de" });
+
+        sut.Save(AppSettings.Default with { LanguageHints = ["fr", "en"] });
+
+        Assert.Equal("fr", sut.Current.Language);
+        Assert.Equal(["fr", "en"], sut.Current.LanguageHints);
+    }
+
+    [Fact]
+    public void Save_SameHintsTwice_KeepsThem()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with { LanguageHints = ["de", "en"] });
+        sut.Save(AppSettings.Default with { LanguageHints = ["de", "en"] });
+
+        Assert.Equal("de", sut.Current.Language);
+        Assert.Equal(["de", "en"], sut.Current.LanguageHints);
+    }
+
+    [Fact]
+    public void Save_SameExplicitLanguageTwice_KeepsIt()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with { Language = "de" });
+        sut.Save(AppSettings.Default with { Language = "de" });
+
+        Assert.Equal("de", sut.Current.Language);
+        Assert.Equal(["de"], sut.Current.LanguageHints);
+    }
+
+    [Fact]
+    public void Update_HintsChange_MirrorsLanguage()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default.WithLanguageHints(["de", "en"]));
+
+        var updated = sut.Update(current => current with { LanguageHints = ["fr", "de"] });
+
+        Assert.Equal("fr", updated.Language);
+        Assert.Equal(["fr", "de"], updated.LanguageHints);
+    }
+
+    [Fact]
     public void Load_NoFile_ReturnsDefaults()
     {
         var sut = new SettingsService(_filePath);
@@ -94,6 +260,7 @@ public sealed class SettingsServiceTests : IDisposable
         var settings = AppSettings.Default with
         {
             Language = "de",
+            LanguageHints = ["de", "en"],
             HasCompletedOnboarding = true,
             VocabularyBoostingEnabled = true,
             AutoAddDictionaryCorrections = true,
@@ -118,6 +285,7 @@ public sealed class SettingsServiceTests : IDisposable
 
         var sut2 = new SettingsService(_filePath);
         Assert.Equal("de", sut2.Current.Language);
+        Assert.Equal(["de", "en"], sut2.Current.LanguageHints);
         Assert.True(sut2.Current.HasCompletedOnboarding);
         Assert.True(sut2.Current.VocabularyBoostingEnabled);
         Assert.True(sut2.Current.AutoAddDictionaryCorrections);
@@ -173,7 +341,7 @@ public sealed class SettingsServiceTests : IDisposable
     [Fact]
     public void Load_CorruptPrimary_FallsBackToBackup()
     {
-        var backup = AppSettings.Default with { Language = "de", HasCompletedOnboarding = true };
+        var backup = AppSettings.Default.WithLanguageHints(["de"]) with { HasCompletedOnboarding = true };
         var json = JsonSerializer.Serialize(backup, s_jsonOptions);
         File.WriteAllText(_filePath + ".bak", json);
         File.WriteAllText(_filePath, "{{not valid json!!");
@@ -428,7 +596,7 @@ public sealed class SettingsServiceTests : IDisposable
                 Interlocked.Increment(ref writerARuns);
                 writerAEntered.TrySetResult(true);
                 releaseWriterA.Task.WaitAsync(timeout).GetAwaiter().GetResult();
-                return current with { Language = "writer-a" };
+                return current.WithLanguageHints(["writer-a"]);
             })
         );
 

@@ -320,15 +320,15 @@ public sealed class TransformSelectionService
             var plugin = lease.Plugin;
 
             PublishStatus("Transcribing transform command...");
-            var languageSelection = LanguageSelectionResolver.Resolve(
-                _settings.Current.Language
-            );
+            var languageHints = _settings.Current.GetLanguageHints();
+            var languageSelection = LanguageSelectionResolver.ResolvePrimary(languageHints);
             string? command;
             try
             {
                 var transcription = await plugin.TranscribeAsync(
                     wav,
                     languageSelection,
+                    languageHints,
                     false,
                     null,
                     processingCts.Token

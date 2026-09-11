@@ -31,12 +31,12 @@ internal sealed class SonioxStreamingSession : IStreamingSession
 
     public static async Task<SonioxStreamingSession> ConnectAsync(
         string apiKey,
-        string? language,
+        IReadOnlyList<string> languageHints,
         CancellationToken ct
     )
     {
         var pump = await WebSocketSessionPump.ConnectAsync(
-            new SonioxWebSocketAdapter(apiKey, language),
+            new SonioxWebSocketAdapter(apiKey, languageHints),
             ct
         );
         return new SonioxStreamingSession(pump);
@@ -52,7 +52,7 @@ internal sealed class SonioxStreamingSession : IStreamingSession
     internal static string BuildConfigMessage(
         string apiKey,
         string model,
-        string? language
+        IReadOnlyList<string> languageHints
     )
     {
         var config = new Dictionary<string, object>
@@ -65,9 +65,9 @@ internal sealed class SonioxStreamingSession : IStreamingSession
             ["enable_endpoint_detection"] = true,
         };
 
-        if (!string.IsNullOrWhiteSpace(language))
+        if (languageHints.Count > 0)
         {
-            config["language_hints"] = new[] { language };
+            config["language_hints"] = languageHints;
         }
 
         return JsonSerializer.Serialize(config);
@@ -150,7 +150,7 @@ internal sealed class SonioxStreamingSession : IStreamingSession
 
 internal sealed class SonioxWebSocketAdapter(
     string apiKey,
-    string? language
+    IReadOnlyList<string> languageHints
 ) : IWebSocketSessionAdapter
 {
     private readonly SonioxTranscriptAggregator _aggregator = new();
@@ -179,7 +179,7 @@ internal sealed class SonioxWebSocketAdapter(
                         SonioxStreamingSession.BuildConfigMessage(
                             apiKey,
                             SonioxStreamingSession.RealtimeModel,
-                            language
+                            languageHints
                         )
                     ),
                     WebSocketMessageType.Text

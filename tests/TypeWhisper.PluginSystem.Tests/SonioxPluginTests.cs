@@ -18,6 +18,19 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class SonioxPluginTests
 {
     [Fact]
+    public void SupportsLanguageHints_IsTrue()
+    {
+        Assert.True(new SonioxPlugin().SupportsLanguageHints);
+    }
+
+    [Fact]
+    public void BuildConfigMessage_PreservesHintOrder()
+    {
+        using var doc = JsonDocument.Parse(SonioxSession.BuildConfigMessage("k", SonioxSession.RealtimeModel, ["de-DE", "en"]));
+        Assert.Equal(["de-DE", "en"], doc.RootElement.GetProperty("language_hints").EnumerateArray().Select(e => e.GetString()));
+    }
+
+    [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {
         var manifest = LoadManifest();
@@ -137,7 +150,7 @@ public class SonioxPluginTests
     [Fact]
     public void BuildConfigMessage_IncludesRawPcmFormatAndModel()
     {
-        var json = SonioxSession.BuildConfigMessage("k-123", SonioxSession.RealtimeModel, null);
+        var json = SonioxSession.BuildConfigMessage("k-123", SonioxSession.RealtimeModel, []);
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -151,12 +164,10 @@ public class SonioxPluginTests
         Assert.False(root.TryGetProperty("language_hints", out _));
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData(null)]
-    public void BuildConfigMessage_OmitsLanguageHints_WhenUnspecified(string? language)
+    [Fact]
+    public void BuildConfigMessage_OmitsLanguageHints_WhenEmpty()
     {
-        var json = SonioxSession.BuildConfigMessage("k", SonioxSession.RealtimeModel, language);
+        var json = SonioxSession.BuildConfigMessage("k", SonioxSession.RealtimeModel, []);
 
         using var doc = JsonDocument.Parse(json);
         Assert.False(doc.RootElement.TryGetProperty("language_hints", out _));
@@ -165,7 +176,7 @@ public class SonioxPluginTests
     [Fact]
     public void BuildConfigMessage_AddsLanguageHints_WhenLanguageGiven()
     {
-        var json = SonioxSession.BuildConfigMessage("k", SonioxSession.RealtimeModel, "de");
+        var json = SonioxSession.BuildConfigMessage("k", SonioxSession.RealtimeModel, ["de"]);
 
         using var doc = JsonDocument.Parse(json);
         var hints = doc.RootElement.GetProperty("language_hints");
@@ -357,6 +368,97 @@ public class SonioxPluginTests
         var sut = new SonioxPlugin(httpClient);
 
         Assert.True(await sut.ValidateApiKeyAsync(" probe-key "));
+    }
+
+    [Fact]
+    public Task TranscribeWithLanguageHintsAsync_PreservesOrderAndCleansUp() =>
+        RunHintedAsyncFlowAsync((sut, hints) =>
+            sut.TranscribeWithLanguageHintsAsync([1, 2, 3], hints, translate: false, prompt: null, CancellationToken.None));
+
+    [Fact]
+    public Task TranscribeStreamingWithLanguageHintsAsync_ForwardsEveryHintToTheBatchFlow() =>
+        RunHintedAsyncFlowAsync((sut, hints) =>
+            sut.TranscribeStreamingWithLanguageHintsAsync([1, 2, 3], hints, translate: false, prompt: null, static _ => true, CancellationToken.None));
+
+    [Fact]
+    public Task TranscribeWithLanguageHintsAsync_DoesNotClaimAHintWhenTokensCarryNoLanguage() =>
+        RunHintedAsyncFlowAsync(
+            (sut, hints) => sut.TranscribeWithLanguageHintsAsync([1, 2, 3], hints, translate: false, prompt: null, CancellationToken.None),
+            tokensCarryLanguage: false,
+            expectedDetectedLanguage: null);
+
+    private static async Task RunHintedAsyncFlowAsync(
+        Func<SonioxPlugin, IReadOnlyList<string>, Task<PluginTranscriptionResult>> transcribe,
+        bool tokensCarryLanguage = true,
+        string? expectedDetectedLanguage = "de")
+    {
+        var seen = new List<string>();
+        var handler = new CapturingHandler((request, body) =>
+        {
+            seen.Add($"{request.Method} {request.RequestUri}");
+            Assert.Equal("Bearer soniox-key", request.Headers.Authorization?.ToString());
+
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v1/files")
+            {
+                Assert.StartsWith("multipart/form-data", request.Content?.Headers.ContentType?.MediaType);
+                Assert.NotNull(body);
+                var multipartBody = Encoding.UTF8.GetString(body);
+                Assert.Contains("name=file", multipartBody);
+                Assert.Contains("filename=audio.wav", multipartBody);
+                return JsonResponse("""{ "id": "84c32fc6-4fb5-4e7a-b656-b5ec70493753", "filename": "audio.wav", "size": 3 }""", HttpStatusCode.Created);
+            }
+
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v1/transcriptions")
+            {
+                using var doc = JsonDocument.Parse(body ?? throw new InvalidOperationException("Missing body"));
+                var root = doc.RootElement;
+                Assert.Equal("stt-async-v5", root.GetProperty("model").GetString());
+                Assert.Equal("84c32fc6-4fb5-4e7a-b656-b5ec70493753", root.GetProperty("file_id").GetString());
+                Assert.Equal(["de", "en"], root.GetProperty("language_hints").EnumerateArray().Select(e => e.GetString()!).ToArray());
+                return JsonResponse("""{ "id": "73d4357d-cad2-4338-a60d-ec6f2044f721", "status": "queued" }""", HttpStatusCode.Created);
+            }
+
+            if (request.Method == HttpMethod.Get && request.RequestUri?.AbsolutePath == "/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721")
+            {
+                var pollCount = seen.Count(item => item == "GET https://api.soniox.com/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721");
+                return pollCount == 1
+                    ? JsonResponse("""{ "id": "73d4357d-cad2-4338-a60d-ec6f2044f721", "status": "processing", "audio_duration_ms": 660000 }""")
+                    : JsonResponse("""{ "id": "73d4357d-cad2-4338-a60d-ec6f2044f721", "status": "completed", "audio_duration_ms": 660000 }""");
+            }
+
+            if (request.Method == HttpMethod.Get && request.RequestUri?.AbsolutePath == "/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721/transcript")
+            {
+                return JsonResponse("""
+                    {
+                      "id": "73d4357d-cad2-4338-a60d-ec6f2044f721",
+                      "text": "Hallo Welt",
+                      "tokens": [
+                        { "text": "Hallo", "start_ms": 0, "end_ms": 500LANG },
+                        { "text": " ", "start_ms": 500, "end_ms": 520LANG },
+                        { "text": "Welt", "start_ms": 520, "end_ms": 1100LANG }
+                      ]
+                    }
+                    """.Replace("LANG", tokensCarryLanguage ? ", \"language\": \"de\"" : string.Empty));
+            }
+
+            return request.Method == HttpMethod.Delete ? NoContentResponse()
+                : throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}");
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 3);
+        await sut.ActivateAsync(host);
+
+        var result = await transcribe(sut, [" de ", "en", "DE", ""]);
+        await sut.LastCleanupTask;
+
+        Assert.Equal("Hallo Welt", result.Text);
+        Assert.Equal(expectedDetectedLanguage, result.DetectedLanguage);
+        Assert.Equal(660.0, result.DurationSeconds);
+        Assert.Equal(["Hallo Welt"], result.Segments.Select(s => s.Text).ToArray());
+        Assert.Contains("DELETE https://api.soniox.com/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721", seen);
+        Assert.DoesNotContain("DELETE https://api.soniox.com/v1/files/84c32fc6-4fb5-4e7a-b656-b5ec70493753", seen);
     }
 
     [Fact]

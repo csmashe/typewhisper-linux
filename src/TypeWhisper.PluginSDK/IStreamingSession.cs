@@ -5,7 +5,7 @@ namespace TypeWhisper.PluginSDK;
 
 /// <summary>
 ///     Represents an active real-time streaming transcription session (e.g. WebSocket connection).
-///     Created by <see cref="ITranscriptionEnginePlugin.StartStreamingAsync" /> and fed audio by the host.
+///     Created by <see cref="ITranscriptionEngineRole.StartStreamingAsync" /> and fed audio by the host.
 ///     The host always calls <c>DisposeAsync</c>, even on cancellation or error paths — plugins must
 ///     tolerate disposal before <see cref="FinalizeAsync" /> completes.
 /// </summary>

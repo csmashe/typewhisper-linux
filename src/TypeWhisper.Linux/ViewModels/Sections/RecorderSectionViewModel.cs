@@ -406,9 +406,12 @@ public partial class RecorderSectionViewModel : ObservableObject
         );
         try
         {
+            var languageHints = settings.Current.GetLanguageHints();
+            var languageSelection = LanguageSelectionResolver.ResolvePrimary(languageHints);
             var result = await lease.Plugin.TranscribeAsync(
                 wav,
-                LanguageSelectionResolver.Resolve(settings.Current.Language),
+                languageSelection,
+                languageHints,
                 false,
                 null,
                 cancellationToken

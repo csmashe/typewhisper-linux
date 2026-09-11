@@ -36,6 +36,14 @@ public record AppSettings
     public string CopyLastTranscriptionHotkey { get; init; } = "";
     public string TransformSelectionHotkey { get; init; } = "";
     public string Language { get; init; } = "auto";
+    /// <summary>Ordered spoken-language hints; the first entry mirrors Language, empty means unrestricted auto-detection.</summary>
+    public IReadOnlyList<string> LanguageHints
+    {
+        get;
+        // JsonSerializer passes null for a null JSON value; the reconcile path compares the lists.
+        // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract
+        init => field = value ?? [];
+    } = [];
     public bool AutoPaste { get; init; } = true;
 
     public Dictionary<string, TextInsertionStrategy> AppInsertionStrategies
@@ -193,6 +201,34 @@ public record AppSettings
     // When true (default), uses the evdev backend for global hotkeys on Wayland
     // (reads /dev/input/event*). Disable to fall back to focused-only SharpHook.
     public bool WaylandEvdevHotkeysEnabled { get; init; } = true;
+
+    /// <summary>Effective ordered hints: the stored list, else the legacy single language, else empty for auto.</summary>
+    public IReadOnlyList<string> GetLanguageHints()
+    {
+        return NormalizeLanguageHints(LanguageHints is { Count: > 0 }
+            ? LanguageHints
+            : string.IsNullOrWhiteSpace(Language) || Language.Equals("auto", StringComparison.OrdinalIgnoreCase)
+                ? []
+                : [Language]);
+    }
+
+    /// <summary>Trims, drops blank and "auto" entries, and de-duplicates case-insensitively while keeping order.</summary>
+    public static IReadOnlyList<string> NormalizeLanguageHints(IEnumerable<string?>? values)
+    {
+        return values?.Select(static value => value?.Trim())
+            .Where(static value => !string.IsNullOrEmpty(value)
+                && !string.Equals(value, "auto", StringComparison.OrdinalIgnoreCase))
+            .Select(static value => value!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList() ?? [];
+    }
+
+    /// <summary>The one way to change hints: stores the normalized list and mirrors its first entry into Language.</summary>
+    public AppSettings WithLanguageHints(IEnumerable<string?>? hints)
+    {
+        var normalized = NormalizeLanguageHints(hints);
+        return this with { LanguageHints = normalized, Language = normalized.Count > 0 ? normalized[0] : "auto" };
+    }
 
     public static AppSettings Default => new();
 

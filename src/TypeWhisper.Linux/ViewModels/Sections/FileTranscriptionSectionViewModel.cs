@@ -445,11 +445,14 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
                 ? TranscriptionTask.Translate
                 : TranscriptionTask.Transcribe;
 
+        // The global ordered hints, not just the primary language, so a queued file gets the
+        // same engine hints as dictation.
         return new FileTranscriptionProcessOptions(
             CleanSettingValue(FileTranscriptionEngineOverride),
             CleanSettingValue(FileTranscriptionModelOverride),
-            s.Language,
-            task
+            Language: null,
+            task,
+            s.GetLanguageHints()
         );
     }
 

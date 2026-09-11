@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -28,29 +29,97 @@ internal static class TranscriptionLanguageSelectionInvoker
             ct
         );
 
+    // The hints overloads below hand a plugin every usable hint when there is more than one and
+    // otherwise make exactly the single-language call the plugin has always received.
+    public static Task<PluginTranscriptionResult> TranscribeAsync(
+        this ITranscriptionEngineRole role,
+        byte[] wavAudio,
+        LanguageSelection languageSelection,
+        IReadOnlyList<string> languageHints,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
+    )
+    {
+        var hints = role.ToLanguageHints(languageSelection, languageHints);
+        return UseSingleLanguageCall(languageSelection, hints)
+            ? role.TranscribeAsync(wavAudio, hints.Count == 0 ? null : hints[0], translate, prompt, ct)
+            : role.TranscribeWithLanguageHintsAsync(wavAudio, hints, translate, prompt, ct);
+    }
+
     public static Task<PluginTranscriptionResult> TranscribeStreamingAsync(
         this ITranscriptionEngineRole role,
         byte[] wavAudio,
         LanguageSelection languageSelection,
+        IReadOnlyList<string> languageHints,
         bool translate,
         string? prompt,
         Func<string, bool> onProgress,
         CancellationToken ct
-    ) =>
-        role.TranscribeStreamingAsync(
-            wavAudio,
-            role.ToLegacyLanguage(languageSelection),
-            translate,
-            prompt,
-            onProgress,
-            ct
-        );
+    )
+    {
+        var hints = role.ToLanguageHints(languageSelection, languageHints);
+        return UseSingleLanguageCall(languageSelection, hints)
+            ? role.TranscribeStreamingAsync(
+                wavAudio,
+                hints.Count == 0 ? null : hints[0],
+                translate,
+                prompt,
+                onProgress,
+                ct
+            )
+            : role.TranscribeStreamingWithLanguageHintsAsync(wavAudio, hints, translate, prompt, onProgress, ct);
+    }
 
     public static Task<IStreamingSession> StartStreamingAsync(
         this ITranscriptionEngineRole role,
         LanguageSelection languageSelection,
+        IReadOnlyList<string> languageHints,
         CancellationToken ct
-    ) => role.StartStreamingAsync(role.ToLegacyLanguage(languageSelection), ct);
+    )
+    {
+        var hints = role.ToLanguageHints(languageSelection, languageHints);
+        return UseSingleLanguageCall(languageSelection, hints)
+            ? role.StartStreamingAsync(hints.Count == 0 ? null : hints[0], ct)
+            : role.StartStreamingWithLanguageHintsAsync(hints, ct);
+    }
+
+    // An advisory hint under automatic detection must reach the engine as a hint, never as the
+    // single-language argument, which would force it.
+    private static bool UseSingleLanguageCall(LanguageSelection languageSelection, List<string> hints) =>
+        hints.Count == 0 || (hints.Count == 1 && !languageSelection.IsAutomatic);
+
+    // ReSharper disable once ConvertToExtensionBlock -- see the note on the first method above.
+    private static List<string> ToLanguageHints(
+        this ITranscriptionEngineRole role,
+        LanguageSelection languageSelection,
+        IReadOnlyList<string> languageHints
+    )
+    {
+        var primary = role.ToLegacyLanguage(languageSelection);
+        // Advisory hints under automatic detection only go to engines that take them as hints.
+        if (primary is null && !role.SupportsLanguageHints)
+        {
+            return [];
+        }
+
+        var hints = primary is null ? [] : new List<string> { primary };
+        // Only the primary is a hard requirement (validated above); extras are best-effort, so an
+        // unparsable, duplicate or unsupported extra is dropped rather than failing the run.
+        foreach (var hint in languageHints)
+        {
+            if (LanguageSelection.TryParse(hint, out var selection)
+                && !selection.IsAutomatic
+                && !hints.Contains(selection.LanguageTag!, StringComparer.OrdinalIgnoreCase)
+                && (role.SupportedLanguages.Count == 0
+                    || role.SupportedLanguages.Contains(selection.LanguageTag!, StringComparer.OrdinalIgnoreCase)))
+            {
+                hints.Add(selection.LanguageTag!);
+            }
+        }
+
+        return hints;
+    }
 
     internal static string? ToLegacyLanguage(
         this ITranscriptionEngineRole role,
@@ -133,6 +202,14 @@ internal sealed class TranscriptionLanguageNotSupportedException : NotSupportedE
 
 internal static class LanguageSelectionResolver
 {
+    /// <summary>Ordered hints for a run: the profile's view of the global hints, or the global hints alone.</summary>
+    public static IReadOnlyList<string> ResolveHints(Profile? profile, AppSettings settings) =>
+        profile?.GetLanguageHints(settings.GetLanguageHints()) ?? settings.GetLanguageHints();
+
+    /// <summary>The primary selection for an ordered hint list: its first entry, or automatic when empty.</summary>
+    public static LanguageSelection ResolvePrimary(IReadOnlyList<string> languageHints) =>
+        Resolve(languageHints.Count == 0 ? null : languageHints[0]);
+
     /// <summary>
     ///     Resolves raw values in precedence order. Blank values mean "no override";
     ///     if every value is blank, automatic selection is used.
