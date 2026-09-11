@@ -24,6 +24,7 @@
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Deepgram\TypeWhisper.Plugin.Deepgram.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.ElevenLabs\TypeWhisper.Plugin.ElevenLabs.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.FileMemory\TypeWhisper.Plugin.FileMemory.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.FillerWords\TypeWhisper.Plugin.FillerWords.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Fireworks\TypeWhisper.Plugin.Fireworks.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Gemini\TypeWhisper.Plugin.Gemini.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.GemmaLocal\TypeWhisper.Plugin.GemmaLocal.csproj"/>
