@@ -21,6 +21,7 @@
         <Project Path="plugins/TypeWhisper.Plugin.Cohere/TypeWhisper.Plugin.Cohere.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Deepgram/TypeWhisper.Plugin.Deepgram.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.ElevenLabs/TypeWhisper.Plugin.ElevenLabs.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.FillerWords/TypeWhisper.Plugin.FillerWords.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.FileMemory/TypeWhisper.Plugin.FileMemory.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Fireworks/TypeWhisper.Plugin.Fireworks.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Gemini/TypeWhisper.Plugin.Gemini.csproj"/>

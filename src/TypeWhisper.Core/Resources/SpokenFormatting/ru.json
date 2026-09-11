@@ -1,0 +1,26 @@
+{
+  "language": "ru",
+  "rules": [
+    {"phrase": "новый абзац", "replacement": "\n\n", "category": "Structural"},
+    {"phrase": "новая строка", "replacement": "\n", "category": "Structural"},
+    {"phrase": "табуляция", "replacement": "\t", "category": "Structural"},
+    {"phrase": "вопросительный знак", "replacement": "?", "category": "Punctuation"},
+    {"phrase": "восклицательный знак", "replacement": "!", "category": "Punctuation"},
+    {"phrase": "двоеточие", "replacement": ":", "category": "Punctuation"},
+    {"phrase": "точка с запятой", "replacement": ";", "category": "Punctuation"},
+    {"phrase": "открыть скобку", "replacement": "(", "category": "Brackets"},
+    {"phrase": "закрыть скобку", "replacement": ")", "category": "Brackets"},
+    {"phrase": "открыть кавычки", "replacement": "«", "category": "Quotes"},
+    {"phrase": "закрыть кавычки", "replacement": "»", "category": "Quotes"},
+    {"phrase": "запятая", "replacement": ",", "category": "Punctuation"},
+    {"phrase": "точка", "replacement": ".", "category": "Punctuation"}
+  ],
+  "verificationScenarios": [
+    {"spoken": "привет запятая мир", "expected": "привет, мир"},
+    {"spoken": "как дела вопросительный знак", "expected": "как дела?"},
+    {"spoken": "привет новая строка мир", "expected": "привет\nмир"},
+    {"spoken": "первый абзац новый абзац второй абзац", "expected": "первый абзац\n\nвторой абзац"},
+    {"spoken": "имя табуляция значение", "expected": "имя\tзначение"},
+    {"spoken": "она сказала открыть кавычки привет закрыть кавычки", "expected": "она сказала «привет»"}
+  ]
+}

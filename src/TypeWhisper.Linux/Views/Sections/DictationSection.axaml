@@ -285,7 +285,7 @@
             <TextBlock Text="{loc:Str Dictation.Language}"
                        Classes="group-title" />
             <Border Classes="settings-panel">
-                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,240"
@@ -454,6 +454,52 @@
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
                         </Grid>
+                    </Border>
+
+                    <Border Grid.Row="9" Background="#18FFFFFF" />
+                    <Border Grid.Row="10" Classes="row">
+                        <Grid ColumnDefinitions="*,240">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="{loc:Str Dictation.SpokenFormatting}" Classes="row-label" />
+                                <TextBlock Text="{loc:Str Dictation.SpokenFormattingHint}" FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding SpokenFormattingStrategyOptions}"
+                                      SelectedItem="{Binding SelectedSpokenFormattingStrategyOption}" HorizontalAlignment="Stretch">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:SpokenFormattingStrategyOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+                    <Border Grid.Row="11" Background="#18FFFFFF" IsVisible="{Binding IsSpokenFormattingVerificationVisible}" />
+                    <Border Grid.Row="12" Classes="row" IsVisible="{Binding IsSpokenFormattingVerificationVisible}">
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="{loc:Str Dictation.SpokenFormattingVerify}" Classes="row-label" />
+                            <TextBlock Text="{loc:Str Dictation.SpokenFormattingVerifyHint}" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding SpokenFormattingProfileStatus}" />
+                            <TextBlock Text="{Binding SpokenFormattingProfileContext}" />
+                            <TextBlock Text="{loc:Str Dictation.SpokenFormattingVerifyNativeFirst}" TextWrapping="Wrap"
+                                       IsVisible="{Binding IsSpokenFormattingVerifyNativeFirstVisible}" />
+                            <ItemsControl ItemsSource="{Binding SpokenFormattingScenarios}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:SpokenFormattingScenarioRow">
+                                        <StackPanel Margin="0,4">
+                                            <TextBlock Text="{Binding Spoken}" TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding Expected}" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <WrapPanel>
+                                <Button Content="{loc:Str Dictation.SpokenFormattingNativeWorks}" Command="{Binding SpokenFormattingNativeWorksCommand}" Margin="0,0,8,4" />
+                                <Button Content="{loc:Str Dictation.SpokenFormattingUseFallback}" Command="{Binding SpokenFormattingUseFallbackCommand}" Margin="0,0,8,4" />
+                                <Button Content="{loc:Str Dictation.SpokenFormattingResetOverride}" Command="{Binding SpokenFormattingResetOverrideCommand}"
+                                        IsVisible="{Binding HasSpokenFormattingOverride}" Margin="0,0,0,4" />
+                            </WrapPanel>
+                        </StackPanel>
                     </Border>
                 </Grid>
             </Border>

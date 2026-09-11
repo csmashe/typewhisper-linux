@@ -63,7 +63,9 @@ public sealed class PluginMetadataConsumerParityTests
         {
             var wizardRow = Assert.Single(wizard.ExtensionPlugins);
             var settingsViewModel = new PluginsSectionViewModel(pluginManager);
-            var settingsGroup = Assert.Single(settingsViewModel.PluginGroups);
+            var settingsGroup = Assert.Single(
+                settingsViewModel.EnabledGroups.Concat(settingsViewModel.DisabledGroups)
+            );
             var settingsRow = Assert.Single(settingsGroup.Plugins);
 
             Assert.Equal("Text-to-Speech", settingsGroup.Title);
