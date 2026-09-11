@@ -4,6 +4,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.OpenAi;
 using TypeWhisper.PluginSDK;
@@ -18,8 +19,1374 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
-public class OpenAiPluginTests
+public partial class OpenAiPluginTests
 {
+    [System.Text.RegularExpressions.GeneratedRegex(@"\{\d+\}")]
+    private static partial System.Text.RegularExpressions.Regex PlaceholderRegex();
+
+    [Theory]
+    [InlineData("apiKey", "gpt-5.5")]
+    [InlineData("chatgpt", "legacy-model")]
+    public async Task ActivateAsync_MigratesLegacySelectionOnlyForSavedChatGptMode(string initialMode, string expectedChatModel)
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", initialMode);
+        host.SetSetting("selectedLLMModel", "legacy-model");
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal(initialMode == "chatgpt" ? "legacy-model" : null,
+            host.GetSetting<string>("selectedChatGPTModel"));
+        sut.SetAuthMode(OpenAiAuthMode.ChatGpt);
+        Assert.Equal(expectedChatModel, sut.SelectedLlmModelId);
+        sut.SetAuthMode(OpenAiAuthMode.ApiKey);
+        Assert.Equal("legacy-model", sut.SelectedLlmModelId);
+        Assert.Equal("legacy-model", host.GetSetting<string>("selectedLLMModel"));
+        await sut.ActivateAsync(host);
+        sut.SetAuthMode(OpenAiAuthMode.ChatGpt);
+        Assert.Equal(expectedChatModel, sut.SelectedLlmModelId);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AuthMode_RestoresEachSelectionAcrossSwitchesAndReactivation(bool cached)
+    {
+        var host = new TestPluginHostServices();
+        if (cached)
+        {
+            host.SetSetting("fetchedLLMModels", new List<OpenAiFetchedModel> { new("api-only", null) });
+            host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel> { new("chat-only", "Chat only", "list", 1, null) });
+        }
+        using (var sut = new OpenAiPlugin())
+        {
+            await sut.ActivateAsync(host);
+            var apiModel = cached ? "api-only" : "gpt-4o";
+            sut.SelectLlmModel(apiModel);
+            sut.SetAuthMode(OpenAiAuthMode.ChatGpt);
+            var chatModel = cached ? "chat-only" : "gpt-5.5";
+            await sut.SetSettingValueAsync("selectedLLMModel", chatModel);
+            sut.SetAuthMode(OpenAiAuthMode.ApiKey);
+            Assert.Equal(apiModel, sut.SelectedLlmModelId);
+            sut.SetAuthMode(OpenAiAuthMode.ChatGpt);
+            Assert.Equal(chatModel, sut.SelectedLlmModelId);
+            Assert.Equal(chatModel, await sut.GetSettingValueAsync("selectedLLMModel"));
+            Assert.Equal(apiModel, host.GetSetting<string>("selectedLLMModel"));
+            Assert.Equal(chatModel, host.GetSetting<string>("selectedChatGPTModel"));
+        }
+        using var reactivated = new OpenAiPlugin();
+        await reactivated.ActivateAsync(host);
+        Assert.Equal(cached ? "chat-only" : "gpt-5.5", reactivated.SelectedLlmModelId);
+        reactivated.SetAuthMode(OpenAiAuthMode.ApiKey);
+        Assert.Equal(cached ? "api-only" : "gpt-4o", reactivated.SelectedLlmModelId);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task AuthMode_NormalizesSelectionsOnlyAgainstTheirOwnCatalog(bool apiCached, bool chatCached)
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("selectedLLMModel", "unknown-api");
+        host.SetSetting("selectedChatGPTModel", "unknown-chat");
+        if (apiCached)
+            host.SetSetting("fetchedLLMModels", new List<OpenAiFetchedModel> { new("api-only", null) });
+        if (chatCached)
+            host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel> { new("chat-only", "Chat only", "list", 1, null) });
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+        Assert.Equal(apiCached ? "api-only" : "unknown-api", sut.SelectedLlmModelId);
+        sut.SetAuthMode(OpenAiAuthMode.ChatGpt);
+        Assert.Equal(chatCached ? "chat-only" : "unknown-chat", sut.SelectedLlmModelId);
+        sut.SetAuthMode(OpenAiAuthMode.ApiKey);
+        Assert.Equal(apiCached ? "api-only" : "unknown-api", sut.SelectedLlmModelId);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public async Task RefreshModelCatalogAsync_CredentialChangeDiscardsPendingCatalog(bool chatGpt, bool switchMode)
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var response = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var client = new HttpClient(new CapturingHandler((request, _) =>
+        {
+            Assert.Equal(chatGpt ? "/backend-api/codex/models" : "/v1/models", request.RequestUri!.AbsolutePath);
+            started.SetResult();
+            return response.Task;
+        }));
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-old",
+                ["oauth-access-token"] = "access",
+            },
+        };
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+        host.SetSetting("authMode", chatGpt ? "chatgpt" : "apiKey");
+        using var sut = new OpenAiPlugin(client);
+        await sut.ActivateAsync(host);
+
+        var refresh = sut.RefreshModelCatalogAsync();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            if (switchMode)
+                sut.SetAuthMode(chatGpt ? OpenAiAuthMode.ApiKey : OpenAiAuthMode.ChatGpt);
+            else if (chatGpt)
+                await sut.ClearChatGptLoginAsync();
+            else
+                await sut.SetApiKeyAsync("sk-new");
+            var llmSelection = sut.SelectedLlmModelId;
+            var transcriptionSelection = sut.SelectedModelId;
+            var notifications = host.NotifyCapabilitiesChangedCount;
+            host.SettingWrites.Clear();
+            response.SetResult(JsonResponse(chatGpt
+                ? """{"models":[{"slug":"gpt-future","display_name":"Future","visibility":"list"}]}"""
+                : """{"data":[{"id":"gpt-future"},{"id":"gpt-transcribe-snapshot"}]}"""));
+            await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+
+            if (switchMode)
+            {
+                Assert.Null(host.GetSetting<List<OpenAiChatGptModel>>("fetchedChatGPTModels"));
+                Assert.Null(host.GetSetting<List<OpenAiFetchedModel>>("fetchedLLMModels"));
+                Assert.Null(host.GetSetting<List<OpenAiFetchedModel>>("fetchedTranscriptionModels"));
+            }
+            else if (chatGpt)
+                Assert.Empty(host.GetSetting<List<OpenAiChatGptModel>>("fetchedChatGPTModels")!);
+            else
+            {
+                Assert.Empty(host.GetSetting<List<OpenAiFetchedModel>>("fetchedLLMModels")!);
+                Assert.Empty(host.GetSetting<List<OpenAiFetchedModel>>("fetchedTranscriptionModels")!);
+            }
+            Assert.DoesNotContain(sut.SupportedModels, model => model.Id == "gpt-future");
+            Assert.DoesNotContain(sut.TranscriptionModels, model => model.Id == "gpt-transcribe-snapshot");
+            Assert.Equal(llmSelection, sut.SelectedLlmModelId);
+            Assert.Equal(transcriptionSelection, sut.SelectedModelId);
+            Assert.Empty(host.SettingWrites);
+            Assert.Equal(notifications, host.NotifyCapabilitiesChangedCount);
+        }
+        finally
+        {
+            response.TrySetResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+            await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    public async Task StartStreamingAsync_MissingApiKeyUsesLocalizedError()
+    {
+        using var sut = new OpenAiPlugin();
+        var localization = new PluginLocalization(
+            Path.GetFullPath(
+                Path.Join("..", "..", "..", "..", "..", "plugins", "TypeWhisper.Plugin.OpenAi"),
+                AppContext.BaseDirectory),
+            "de");
+        sut.SetLocalization(localization);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.StartStreamingAsync("en", CancellationToken.None));
+        Assert.Equal(localization.GetString("Settings.ApiKeyNotConfigured"), error.Message);
+        Assert.NotEqual("API key not configured", error.Message);
+    }
+
+    [Theory]
+    [InlineData("whisper-1", "fetchedTranscriptionModels", "selectedModel")]
+    [InlineData("gpt-4.1", "fetchedLLMModels", "selectedLLMModel")]
+    [InlineData("unrelated-model", null, null)]
+    public async Task RefreshModelCatalogAsync_SparseCategoriesPreserveOtherCacheAndSelection(
+        string fetchedId, string? changedCache, string? changedSelection)
+    {
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-test",
+            },
+        };
+        host.SetSetting("fetchedLLMModels", new List<OpenAiFetchedModel> { new("gpt-4.1-mini", null) });
+        host.SetSetting("fetchedTranscriptionModels", new List<OpenAiFetchedModel> { new("gpt-4o-transcribe", null) });
+        host.SetSetting("selectedLLMModel", "gpt-4.1-mini");
+        host.SetSetting("selectedModel", "gpt-4o-transcribe");
+        using var client = new HttpClient(new CapturingHandler((_, _) => Task.FromResult(
+            JsonResponse(JsonSerializer.Serialize(new { data = new[] { new { id = fetchedId } } })))));
+        using var sut = new OpenAiPlugin(client);
+        await sut.ActivateAsync(host);
+        host.SettingWrites.Clear();
+        var notifications = host.NotifyCapabilitiesChangedCount;
+
+        await sut.RefreshModelCatalogAsync();
+
+        Assert.Equal(changedCache == "fetchedLLMModels" ? fetchedId : "gpt-4.1-mini", Assert.Single(sut.SupportedModels).Id);
+        Assert.Equal(changedCache == "fetchedTranscriptionModels" ? fetchedId : "gpt-4o-transcribe", Assert.Single(sut.TranscriptionModels).Id);
+        Assert.Equal(changedSelection == "selectedLLMModel" ? fetchedId : "gpt-4.1-mini", sut.SelectedLlmModelId);
+        Assert.Equal(changedSelection == "selectedModel" ? fetchedId : "gpt-4o-transcribe", sut.SelectedModelId);
+        Assert.Equal(changedCache is null ? Array.Empty<string>() : [changedCache, changedSelection!], host.SettingWrites);
+        Assert.Equal(notifications + (changedCache is null ? 0 : 1), host.NotifyCapabilitiesChangedCount);
+        host.SettingWrites.Clear();
+        notifications = host.NotifyCapabilitiesChangedCount;
+        await sut.RefreshModelCatalogAsync();
+        Assert.Empty(host.SettingWrites);
+        Assert.Equal(notifications, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Fact]
+    public async Task TranscribeStreamingWithLanguageHintsAsync_SendsAllPluralHints()
+    {
+        var languages = new List<string>();
+        using var client = new HttpClient(new CapturingHandler(async (request, _) =>
+        {
+            foreach (var part in Assert.IsType<MultipartFormDataContent>(request.Content))
+                if (part.Headers.ContentDisposition!.Name!.Trim('"') == "languages[]")
+                    languages.Add(await part.ReadAsStringAsync());
+            return JsonResponse("""{"text":"hello"}""");
+        }));
+        using var sut = new OpenAiPlugin(client);
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-test",
+            },
+        };
+        await sut.ActivateAsync(host);
+        sut.SelectModel("gpt-transcribe");
+        ITranscriptionEngineRole role = sut;
+        var result = await role.TranscribeStreamingWithLanguageHintsAsync(
+            [0], ["de", "en"], false, null, _ => throw new InvalidOperationException("Unexpected progress"), CancellationToken.None);
+        Assert.Equal(["de", "en"], languages);
+        Assert.Equal("hello", result.Text);
+    }
+
+    [Fact]
+    public async Task FailedChatGptCatalogAfterTokenRefresh_PreservesUncachedSelection()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("selectedChatGPTModel", "gpt-future");
+        host.Secrets["oauth-access-token"] = "expired";
+        host.Secrets["oauth-refresh-token"] = "refresh";
+        using var client = new HttpClient(new CapturingHandler((request, _) => Task.FromResult(
+            request.RequestUri!.Host == "auth.openai.com"
+                ? JsonResponse("""{"access_token":"fresh","expires_in":3600}""")
+                : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable))));
+        using var sut = new OpenAiPlugin(client);
+        await sut.ActivateAsync(host);
+        await sut.RefreshModelCatalogAsync();
+        Assert.Equal("fresh", host.Secrets["oauth-access-token"]);
+        Assert.Equal("gpt-future", sut.SelectedLlmModelId);
+        Assert.Equal("gpt-future", host.GetSetting<string>("selectedChatGPTModel"));
+    }
+
+
+    [Fact]
+    public async Task ClearChatGptLogin_ClearsAccountCatalog()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel> { new("gpt-future", "Future", "list", 1, null) });
+        host.Secrets["oauth-access-token"] = "access";
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+        Assert.Equal("gpt-future", sut.SupportedModels[0].Id);
+        await sut.ClearChatGptLoginAsync();
+        Assert.Empty(host.GetSetting<List<OpenAiChatGptModel>>("fetchedChatGPTModels")!);
+        Assert.Equal("gpt-5.5", sut.SupportedModels[0].Id);
+        Assert.False(sut.HasChatGptCredentials);
+    }
+
+    [Theory]
+    [InlineData("gpt-5.6-sol", "pro")]
+    [InlineData("gpt-5.5", "unknown-plan")]
+    public async Task ChatGptCatalog_PlanFilteringRetainsVisibleFallback(string expected, string plan)
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("oauthPlanType", plan);
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+        host.Secrets["oauth-access-token"] = "access";
+        using var client = new HttpClient(new CapturingHandler((_, _) => Task.FromResult(JsonResponse("""
+            {"models":[
+                {"slug":"gpt-5.5","priority":1,"available_in_plans":["plus"]},
+                {"slug":"gpt-5.6-sol","priority":2,"available_in_plans":["pro"]},
+                {"slug":"hidden","visibility":"hide","priority":0}
+            ]}
+            """))));
+        using var sut = new OpenAiPlugin(client);
+        await sut.ActivateAsync(host);
+        await sut.RefreshModelCatalogAsync();
+        Assert.Equal(expected, sut.SupportedModels[0].Id);
+        Assert.DoesNotContain(sut.SupportedModels, model => model.Id == "hidden");
+    }
+
+
+    [Theory]
+    [InlineData("OpenAi")]
+    [InlineData("OpenAiCompatible")]
+    public void Localization_AllFourLocalesHaveMatchingKeysAndPlaceholders(string plugin)
+    {
+        var directory = Path.GetFullPath(Path.Join("..", "..", "..", "..", "..", "plugins", $"TypeWhisper.Plugin.{plugin}", "Localization"), AppContext.BaseDirectory);
+        var english = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(Path.Join(directory, "en.json")))!;
+        foreach (var language in new[] { "de", "es", "ru" })
+        {
+            var translated = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(Path.Join(directory, $"{language}.json")))!;
+            Assert.Equal(english.Keys.Order(), translated.Keys.Order());
+            foreach (var (key, value) in english)
+            {
+                Assert.False(string.IsNullOrWhiteSpace(translated[key]));
+                Assert.Equal(
+                    PlaceholderRegex().Matches(value).Select(match => match.Value).Order(),
+                    PlaceholderRegex().Matches(translated[key]).Select(match => match.Value).Order());
+            }
+        }
+    }
+
+    [Fact]
+    public void RealtimeLivePayload_ForwardsPromptAndServerVad()
+    {
+        using var doc = JsonDocument.Parse(OpenAiRealtimeStreamingSession.CreateSessionUpdatePayload(
+            OpenAiRealtimeStreamingSession.LiveModelId, ["de", "en"], "dictionary terms", useServerVad: true));
+        var input = doc.RootElement.GetProperty("session").GetProperty("audio").GetProperty("input");
+        Assert.Equal("dictionary terms", input.GetProperty("transcription").GetProperty("prompt").GetString());
+        Assert.Equal("server_vad", input.GetProperty("turn_detection").GetProperty("type").GetString());
+    }
+
+
+    [Theory]
+    [InlineData("gpt-transcribe", true)]
+    [InlineData("gpt-live-transcribe", true)]
+    [InlineData("whisper-1", false)]
+    [InlineData("gpt-4o-transcribe", false)]
+    [InlineData("gpt-4o-mini-transcribe", false)]
+    [InlineData("gpt-realtime-whisper", false)]
+    public async Task SupportsLanguageHints_FollowsSelectedModel(string model, bool expected)
+    {
+        using var sut = new OpenAiPlugin();
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-test",
+            },
+        };
+        await sut.ActivateAsync(host);
+        sut.SelectModel(model);
+        Assert.Equal(expected, sut.SupportsLanguageHints);
+        Assert.Equal(new DictionaryTermsBudget(MaxTotalChars: 600), sut.DictionaryTermsBudget);
+    }
+
+    [Theory]
+    [InlineData("whisper-1", "verbose_json", true)]
+    [InlineData("gpt-4o-transcribe", "json", false)]
+    [InlineData("gpt-4o-mini-transcribe", "json", false)]
+    public async Task SingularTranscriptionModels_SendOnlyFirstHint(string model, string format, bool translation)
+    {
+        var fields = new List<(string Name, string Value)>();
+        using var client = new HttpClient(new CapturingHandler(async (request, _) =>
+        {
+            Assert.Equal(translation ? "/v1/audio/translations" : "/v1/audio/transcriptions", request.RequestUri!.AbsolutePath);
+            foreach (var part in Assert.IsType<MultipartFormDataContent>(request.Content))
+                fields.Add((part.Headers.ContentDisposition!.Name!.Trim('"'), await part.ReadAsStringAsync()));
+            return JsonResponse("""{"text":"hello","language":"en"}""");
+        }));
+        using var sut = new OpenAiPlugin(client);
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-test",
+            },
+        };
+        await sut.ActivateAsync(host);
+        sut.SelectModel(model);
+        await sut.TranscribeWithLanguageHintsAsync([0], [" de ", "en"], translation, "terms", CancellationToken.None);
+        Assert.Equal(format, fields.Single(field => field.Name == "response_format").Value);
+        Assert.DoesNotContain(fields, field => field.Name == "languages[]");
+        if (!translation)
+            Assert.Equal("de", fields.Single(field => field.Name == "language").Value);
+        Assert.Equal("terms", fields.Single(field => field.Name == "prompt").Value);
+    }
+
+    [Theory]
+    [InlineData("gpt-transcribe")]
+    [InlineData("gpt-4o-transcribe")]
+    [InlineData("gpt-4o-mini-transcribe")]
+    [InlineData("gpt-live-transcribe")]
+    [InlineData("gpt-realtime-whisper")]
+    public async Task Translation_RejectsEveryUnsupportedModel(string model)
+    {
+        var requests = new List<HttpRequestMessage>();
+        using var client = new HttpClient(new CapturingHandler((request, _) =>
+        {
+            requests.Add(request);
+            return Task.FromResult(JsonResponse("""{"text":"hello","language":"en"}"""));
+        }));
+        using var sut = new OpenAiPlugin(client);
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-test",
+            },
+        };
+        await sut.ActivateAsync(host);
+        sut.SelectModel(model);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.TranscribeWithLanguageHintsAsync([0], ["de", "en"], true, null, CancellationToken.None));
+
+        var displayName = sut.TranscriptionModels.Single(entry => entry.Id == model).DisplayName;
+        Assert.Equal(host.Localization.GetString("Settings.TranslationUnsupported", displayName), error.Message);
+        Assert.Equal($"{displayName} does not support translation.", error.Message);
+        Assert.Empty(requests);
+    }
+
+    [Theory]
+    [InlineData("en", "GPT Transcribe does not support translation.")]
+    [InlineData("de", "GPT Transcribe unterstützt keine Übersetzung.")]
+    [InlineData("es", "GPT Transcribe no admite traducción.")]
+    [InlineData("ru", "GPT Transcribe не поддерживает перевод.")]
+    public async Task Translation_UsesLocalizedModelRejection(string language, string expected)
+    {
+        var requests = new List<HttpRequestMessage>();
+        using var client = new HttpClient(new CapturingHandler((request, _) =>
+        {
+            requests.Add(request);
+            return Task.FromResult(JsonResponse("""{"text":"hello"}"""));
+        }));
+        var host = new TestPluginHostServices
+        {
+            Localization = new PluginLocalization(
+                Path.GetFullPath(
+                    Path.Join("..", "..", "..", "..", "..", "plugins", "TypeWhisper.Plugin.OpenAi"),
+                    AppContext.BaseDirectory),
+                language),
+            Secrets = { ["api-key"] = "sk-test" },
+        };
+        using var sut = new OpenAiPlugin(client);
+        await sut.ActivateAsync(host);
+        sut.SelectModel("gpt-transcribe");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.TranscribeWithLanguageHintsAsync([0], ["de"], true, null, CancellationToken.None));
+
+        Assert.Equal(expected, error.Message);
+        Assert.Empty(requests);
+    }
+
+    [Theory]
+    [InlineData("apiKey")]
+    [InlineData("chatgpt")]
+    public async Task RefreshModelCatalogAsync_FailurePreservesCachedSelection(string authMode)
+    {
+        using var client = new HttpClient(new CapturingHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable))));
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", authMode);
+        var selectionKey = authMode == "chatgpt" ? "selectedChatGPTModel" : "selectedLLMModel";
+        host.SetSetting(selectionKey, "gpt-future");
+        host.SetSetting("selectedModel", "whisper-1");
+        host.SetSetting("fetchedTranscriptionModels", new List<OpenAiFetchedModel> { new("whisper-1", "openai") });
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+        host.Secrets["api-key"] = "sk-test";
+        host.Secrets["oauth-access-token"] = "access";
+        using var sut = new OpenAiPlugin(client);
+        await sut.ActivateAsync(host);
+        Assert.Equal("gpt-future", sut.SelectedLlmModelId);
+        await sut.RefreshModelCatalogAsync();
+        Assert.Equal("gpt-future", sut.SelectedLlmModelId);
+        Assert.Equal("gpt-future", host.GetSetting<string>(selectionKey));
+        Assert.Equal("whisper-1", sut.SelectedModelId);
+        Assert.Equal(["whisper-1"], sut.TranscriptionModels.Select(model => model.Id));
+        Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Fact]
+    public async Task ApiKeyChange_ClearsBothCatalogCaches()
+    {
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-old",
+            },
+        };
+        host.SetSetting("fetchedLLMModels", new List<OpenAiFetchedModel> { new("gpt-future", "openai") });
+        host.SetSetting("fetchedTranscriptionModels", new List<OpenAiFetchedModel> { new("gpt-transcribe-snapshot", "openai") });
+        host.SetSetting("selectedModel", "gpt-transcribe-snapshot");
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+        await sut.SetApiKeyAsync("sk-new");
+        Assert.Empty(host.GetSetting<List<OpenAiFetchedModel>>("fetchedLLMModels")!);
+        Assert.Empty(host.GetSetting<List<OpenAiFetchedModel>>("fetchedTranscriptionModels")!);
+        Assert.Equal("gpt-transcribe", sut.SelectedModelId);
+    }
+
+    [Theory]
+    [InlineData("gpt-transcribe-snapshot", true)]
+    [InlineData("whisper-1-snapshot", true)]
+    [InlineData("gpt-4o-transcribe-snapshot", true)]
+    [InlineData("gpt-4o-mini-transcribe-snapshot", true)]
+    [InlineData("gpt-live-transcribe-snapshot", true)]
+    [InlineData("gpt-realtime-whisper-snapshot", true)]
+    [InlineData("gpt-transcriber", false)]
+    [InlineData("gpt-4o-transcribe-diarize", false)]
+    [InlineData("gpt-audio", false)]
+    public async Task DiscoveredModels_MatchOnlySupportedFamilies(string model, bool supported)
+    {
+        using var client = new HttpClient(new CapturingHandler((_, _) =>
+            Task.FromResult(JsonResponse(JsonSerializer.Serialize(new { data = new[] { new { id = model } } })))));
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-test",
+            },
+        };
+        using var sut = new OpenAiPlugin(client);
+        await sut.ActivateAsync(host);
+        await sut.RefreshModelCatalogAsync();
+        Assert.Equal(supported, sut.TranscriptionModels.Any(entry => entry.Id == model));
+    }
+
+
+    [Fact]
+    public async Task RefreshAvailableLlmModels_RefreshesExpiredChatGptTokenBeforeCatalogRequest()
+    {
+        var requestedUris = new List<string>();
+        var handler = new CapturingHandler((request, body) =>
+        {
+            requestedUris.Add(request.RequestUri!.ToString());
+            if (request.RequestUri!.Host == "auth.openai.com")
+            {
+                Assert.Contains("grant_type=refresh_token", body);
+                Assert.Contains("refresh_token=old-refresh-token", body);
+                return Task.FromResult(JsonResponse("""
+                {
+                  "access_token": "new-access-token",
+                  "refresh_token": "new-refresh-token",
+                  "expires_in": 3600
+                }
+                """));
+            }
+
+            Assert.Equal("Bearer new-access-token", request.Headers.Authorization?.ToString());
+            return Task.FromResult(JsonResponse("""
+            {
+              "models": [
+                {
+                  "slug": "gpt-5.6-sol",
+                  "display_name": "GPT-5.6-Sol",
+                  "visibility": "list",
+                  "priority": 1
+                }
+              ]
+            }
+            """));
+        });
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("oauthAccountID", "acct_123");
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddMinutes(-1));
+        host.Secrets["oauth-access-token"] = "expired-access-token";
+        host.Secrets["oauth-refresh-token"] = "old-refresh-token";
+
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var models = await sut.RefreshAvailableLlmModelsAsync();
+
+        Assert.Equal(
+            [
+                "https://auth.openai.com/oauth/token",
+                "https://chatgpt.com/backend-api/codex/models?client_version=1.2.2",
+            ],
+            requestedUris);
+        Assert.Equal(1, models.LlmCount);
+        Assert.Equal(["gpt-5.6-sol"], sut.SupportedModels.Select(model => model.Id).ToArray());
+        Assert.Equal("new-access-token", host.Secrets["oauth-access-token"]);
+        Assert.Equal("new-refresh-token", host.Secrets["oauth-refresh-token"]);
+    }
+
+    [Fact]
+    public async Task RefreshAvailableLlmModels_QueriesAccountSpecificChatGptCatalog()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new CapturingHandler((request, _) =>
+        {
+            capturedRequest = request;
+            return Task.FromResult(JsonResponse("""
+            {
+              "models": [
+                null,
+                {
+                  "slug": "gpt-5.6-sol",
+                  "display_name": "GPT-5.6-Sol",
+                  "visibility": "list",
+                  "priority": 1,
+                  "available_in_plans": ["plus", "pro"]
+                },
+                {
+                  "slug": "gpt-5.6-luna",
+                  "display_name": "GPT-5.6-Luna",
+                  "visibility": "list",
+                  "priority": 2,
+                  "available_in_plans": ["pro"]
+                },
+                {
+                  "slug": "gpt-5.5",
+                  "display_name": "GPT-5.5",
+                  "visibility": "list",
+                  "priority": 7,
+                  "available_in_plans": []
+                },
+                {
+                  "slug": "codex-auto-review",
+                  "display_name": "Codex Auto Review",
+                  "visibility": "hide",
+                  "priority": 40
+                }
+              ]
+            }
+            """));
+        });
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("selectedChatGPTModel", "stale-model");
+        host.SetSetting("oauthAccountID", "acct_123");
+        host.SetSetting("oauthPlanType", "plus");
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+        host.Secrets["oauth-access-token"] = "access-token";
+        host.Secrets["oauth-refresh-token"] = "refresh-token";
+
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var models = await sut.RefreshAvailableLlmModelsAsync(CancellationToken.None);
+
+        Assert.Equal(2, models.LlmCount);
+        Assert.Equal(["gpt-5.6-sol", "gpt-5.5"], sut.SupportedModels.Select(model => model.Id).ToArray());
+        Assert.Equal("GPT-5.6-Sol", sut.SupportedModels[0].DisplayName);
+        Assert.Equal("gpt-5.6-sol", sut.SelectedLlmModelId);
+        Assert.Equal("gpt-5.6-sol", host.GetSetting<string>("selectedChatGPTModel"));
+        Assert.Equal(
+            "https://chatgpt.com/backend-api/codex/models?client_version=1.2.2",
+            capturedRequest?.RequestUri?.ToString());
+        Assert.Equal("Bearer access-token", capturedRequest?.Headers.Authorization?.ToString());
+        Assert.Equal("application/json", capturedRequest?.Headers.Accept.Single().MediaType);
+        Assert.Equal($"TypeWhisper-OpenAI-Plugin/{sut.PluginVersion}", capturedRequest?.Headers.UserAgent.ToString());
+        Assert.Equal(
+            "acct_123",
+            capturedRequest?.Headers.GetValues("ChatGPT-Account-Id").Single());
+        Assert.Equal("typewhisper", capturedRequest?.Headers.GetValues("originator").Single());
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+
+        var cachedModels =
+            host.GetSetting<List<OpenAiChatGptModel>>("fetchedChatGPTModels");
+        Assert.NotNull(cachedModels);
+        Assert.Equal(["gpt-5.6-sol", "gpt-5.5"], cachedModels.Select(model => model.Slug).ToArray());
+    }
+
+    [Fact]
+    public async Task RefreshAvailableLlmModels_KeepsCachedCatalogsWhenApiRequestFails()
+    {
+        var handler = new CapturingHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)));
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-live",
+            },
+        };
+        host.SetSetting(
+            "fetchedLLMModels",
+            new List<OpenAiFetchedModel> { new("gpt-4.1-mini", "openai") });
+        host.SetSetting(
+            "fetchedTranscriptionModels",
+            new List<OpenAiFetchedModel> { new("whisper-1", "openai") });
+        host.SetSetting("selectedModel", "whisper-1");
+
+        using var httpClient = new HttpClient(handler);
+        var sut = new OpenAiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var models = await sut.RefreshAvailableLlmModelsAsync();
+
+        Assert.False(models.Fetched);
+        Assert.Equal(["gpt-4.1-mini"], sut.SupportedModels.Select(model => model.Id).ToArray());
+        Assert.Equal(["whisper-1"], sut.TranscriptionModels.Select(model => model.Id).ToArray());
+        Assert.Equal("whisper-1", sut.SelectedModelId);
+        Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Fact]
+    public async Task GPTTranscribe_RejectsTranslationBeforeSendingRequest()
+    {
+        var requests = 0;
+        var handler = new CapturingHandler((_, _) =>
+        {
+            requests++;
+            return Task.FromResult(JsonResponse("{}"));
+        });
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-test",
+            },
+        };
+        var sut = new OpenAiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.TranscribeAsync(
+                [0, 1, 2, 3],
+                "de",
+                translate: true,
+                prompt: null,
+                CancellationToken.None));
+
+        Assert.Contains("does not support translation", exception.Message);
+        Assert.Equal(0, requests);
+    }
+
+    [Fact]
+    public void GPTTranscribeResponseParser_AcceptsNewAndLegacyLanguageShapes()
+    {
+        var current = OpenAiTranscriptionClient.ParseTranscriptionResponse(
+            """{"text":"Bonjour","languages":[{"code":"fr"}]}""");
+        var legacy = OpenAiTranscriptionClient.ParseTranscriptionResponse(
+            """{"text":"Hello","language":"en"}""");
+
+        Assert.Equal("fr", current.DetectedLanguage);
+        Assert.Equal("en", legacy.DetectedLanguage);
+    }
+
+    [Fact]
+    public void GPTTranscribeResponseParser_PreservesSegmentNoSpeechProbability()
+    {
+        var result = OpenAiTranscriptionClient.ParseTranscriptionResponse("""
+            {
+                "text": "Please send the updated draft. See you tomorrow. Thank you.",
+                "language": "en",
+                "duration": 8.0,
+                "segments": [
+                    { "text": " Please send the updated draft.", "start": 0.0, "end": 3.0, "no_speech_prob": 0.02 },
+                    { "text": " See you tomorrow.", "start": 3.0, "end": 5.0 },
+                    { "text": " Thank you.", "start": 5.0, "end": 8.0, "no_speech_prob": 0.95 }
+                ]
+            }
+            """);
+
+        Assert.Equal(3, result.Segments.Count);
+        Assert.Equal(0.02f, result.Segments[0].NoSpeechProbability);
+        Assert.Null(result.Segments[1].NoSpeechProbability);
+        Assert.Equal(0.95f, result.Segments[2].NoSpeechProbability);
+        Assert.Equal(0.02f, result.NoSpeechProbability);
+        Assert.Equal(0.0, result.Segments[0].Start);
+        Assert.Equal(3.0, result.Segments[0].End);
+        Assert.Equal(3.0, result.Segments[1].Start);
+        Assert.Equal(5.0, result.Segments[1].End);
+        Assert.Equal(5.0, result.Segments[2].Start);
+        Assert.Equal(8.0, result.Segments[2].End);
+    }
+
+    [Fact]
+    public void GPTTranscribeResponseParser_TerminalSilenceSegmentIsTrimmedByHost()
+    {
+        var result = OpenAiTranscriptionClient.ParseTranscriptionResponse("""
+            {
+                "text": "Please send the updated draft. Thank you.",
+                "language": "en",
+                "duration": 8.0,
+                "segments": [
+                    { "text": " Please send the updated draft.", "start": 0.0, "end": 5.0, "no_speech_prob": 0.02 },
+                    { "text": " Thank you.", "start": 5.0, "end": 8.0, "no_speech_prob": 0.95 }
+                ]
+            }
+            """);
+
+        var trimmed = TerminalHallucinationTrimmer.Trim(result);
+
+        Assert.Equal("Please send the updated draft.", trimmed.Text);
+        Assert.Single(trimmed.Segments);
+    }
+
+    [Fact]
+    public async Task DiscoveredGPTTranscribeSnapshot_UsesPluralRequestShape()
+    {
+        const string snapshotModel = "gpt-transcribe-2026-07-28";
+        var fields = new List<(string Name, string Value)>();
+        var handler = new CapturingHandler(async (request, _) =>
+        {
+            if (request.Method == HttpMethod.Get)
+            {
+                return JsonResponse($$"""
+                {
+                  "data": [
+                    { "id": "{{snapshotModel}}", "owned_by": "openai" }
+                  ]
+                }
+                """);
+            }
+
+            var multipart = Assert.IsType<MultipartFormDataContent>(request.Content);
+            foreach (var part in multipart)
+            {
+                var name = part.Headers.ContentDisposition?.Name?.Trim('"') ?? "";
+                fields.Add((name, await part.ReadAsStringAsync()));
+            }
+
+            return JsonResponse("""{"text":"Hallo","languages":[{"code":"de"}]}""");
+        });
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-test",
+            },
+        };
+        var sut = new OpenAiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await sut.RefreshAvailableLlmModelsAsync();
+        var result = await sut.TranscribeWithLanguageHintsAsync(
+            [0, 1, 2, 3],
+            ["de", "en"],
+            translate: false,
+            prompt: "TypeWhisper",
+            CancellationToken.None);
+
+        Assert.Equal([snapshotModel], sut.TranscriptionModels.Select(model => model.Id).ToArray());
+        Assert.Equal(snapshotModel, sut.SelectedModelId);
+        Assert.Equal("Hallo", result.Text);
+        Assert.Equal(snapshotModel, fields.Single(field => field.Name == "model").Value);
+        Assert.Equal(
+            ["de", "en"],
+            fields.Where(field => field.Name == "languages[]").Select(field => field.Value).ToArray());
+        Assert.DoesNotContain(fields, field => field.Name == "language");
+    }
+
+    [Fact]
+    public async Task GPTTranscribeRequest_UsesOrderedPluralLanguagesAndDictionaryPrompt()
+    {
+        var fields = new List<(string Name, string Value)>();
+        var handler = new CapturingHandler(async (request, _) =>
+        {
+            Assert.Equal("https://api.openai.com/v1/audio/transcriptions", request.RequestUri?.ToString());
+            Assert.Equal("Bearer sk-test", request.Headers.Authorization?.ToString());
+
+            var multipart = Assert.IsType<MultipartFormDataContent>(request.Content);
+            foreach (var part in multipart)
+            {
+                var name = part.Headers.ContentDisposition?.Name?.Trim('"') ?? "";
+                fields.Add((name, await part.ReadAsStringAsync()));
+            }
+
+            return JsonResponse("""
+            {
+              "text": "  Hallo world  ",
+              "languages": [{ "code": "de" }],
+              "duration": 2.5
+            }
+            """);
+        });
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-test",
+            },
+        };
+        var sut = new OpenAiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.TranscribeWithLanguageHintsAsync(
+            [0, 1, 2, 3],
+            [" de ", "auto", "en", "DE"],
+            translate: false,
+            "TypeWhisper, OpenAI",
+            CancellationToken.None);
+
+        Assert.Equal("Hallo world", result.Text);
+        Assert.Equal("de", result.DetectedLanguage);
+        Assert.Equal(2.5, result.DurationSeconds);
+        Assert.Equal("gpt-transcribe", fields.Single(field => field.Name == "model").Value);
+        Assert.DoesNotContain(fields, field => field.Name == "response_format");
+        Assert.Equal(
+            ["de", "en"],
+            fields.Where(field => field.Name == "languages[]").Select(field => field.Value).ToArray());
+        Assert.DoesNotContain(fields, field => field.Name == "language");
+        Assert.Equal("TypeWhisper, OpenAI", fields.Single(field => field.Name == "prompt").Value);
+    }
+
+    [Fact]
+    public void RealtimeLiveSnapshotSessionUpdatePayload_UsesLiveModelShape()
+    {
+        const string snapshotModel = "gpt-live-transcribe-2026-07-28";
+        var json = OpenAiRealtimeStreamingSession.CreateSessionUpdatePayload(
+            snapshotModel,
+            ["de", "en"],
+            prompt: null, useServerVad: false);
+
+        using var doc = JsonDocument.Parse(json);
+        var transcription = doc.RootElement
+            .GetProperty("session")
+            .GetProperty("audio")
+            .GetProperty("input")
+            .GetProperty("transcription");
+
+        Assert.Equal(snapshotModel, transcription.GetProperty("model").GetString());
+        Assert.Equal(["de", "en"], transcription.GetProperty("languages")
+            .EnumerateArray()
+            .Select(language => language.GetString()!)
+            .ToArray());
+        Assert.Equal("low", transcription.GetProperty("delay").GetString());
+        Assert.False(transcription.TryGetProperty("language", out _));
+    }
+
+    [Fact]
+    public void RealtimeLiveSessionUpdatePayload_UsesLanguagesAndLowDelay()
+    {
+        var json = OpenAiRealtimeStreamingSession.CreateSessionUpdatePayload(
+            OpenAiRealtimeStreamingSession.LiveModelId,
+            ["de", "en"],
+            prompt: null, useServerVad: false);
+
+        using var doc = JsonDocument.Parse(json);
+        var transcription = doc.RootElement
+            .GetProperty("session")
+            .GetProperty("audio")
+            .GetProperty("input")
+            .GetProperty("transcription");
+
+        Assert.Equal(OpenAiRealtimeStreamingSession.LiveModelId, transcription.GetProperty("model").GetString());
+        Assert.Equal(["de", "en"], transcription.GetProperty("languages")
+            .EnumerateArray()
+            .Select(language => language.GetString()!)
+            .ToArray());
+        Assert.Equal("low", transcription.GetProperty("delay").GetString());
+        Assert.False(transcription.TryGetProperty("language", out _));
+        Assert.False(transcription.TryGetProperty("prompt", out _));
+    }
+
+    [Fact]
+    public void RealtimeLegacySessionUpdatePayload_PreservesSingularLanguageShape()
+    {
+        var json = OpenAiRealtimeStreamingSession.CreateSessionUpdatePayload(
+            OpenAiRealtimeStreamingSession.LegacyModelId,
+            ["de", "en"],
+            "TypeWhisper, OpenAI", useServerVad: false);
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var session = root.GetProperty("session");
+        var input = session.GetProperty("audio").GetProperty("input");
+        var transcription = input.GetProperty("transcription");
+
+        Assert.Equal("session.update", root.GetProperty("type").GetString());
+        Assert.Equal("transcription", session.GetProperty("type").GetString());
+        Assert.Equal("audio/pcm", input.GetProperty("format").GetProperty("type").GetString());
+        Assert.Equal(24000, input.GetProperty("format").GetProperty("rate").GetInt32());
+        Assert.Equal(OpenAiRealtimeStreamingSession.LegacyModelId, transcription.GetProperty("model").GetString());
+        Assert.Equal("de", transcription.GetProperty("language").GetString());
+        Assert.False(transcription.TryGetProperty("languages", out _));
+        Assert.Equal("TypeWhisper, OpenAI", transcription.GetProperty("prompt").GetString());
+        Assert.False(transcription.TryGetProperty("delay", out _));
+        Assert.Equal(JsonValueKind.Null, input.GetProperty("turn_detection").ValueKind);
+    }
+
+    [Fact]
+    public async Task Activate_DropsInvalidCachedChatGptModels()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("selectedChatGPTModel", "hidden-model");
+        host.SetSetting(
+            "fetchedChatGPTModels",
+            new List<OpenAiChatGptModel>
+            {
+                null!,
+                new(null!, "Null slug", "list", 1, null),
+                new("   ", "Blank slug", "list", 1, null),
+                new("hidden-model", "Hidden model", "hide", 1, null),
+                new("gpt-5.5", "GPT-5.5", "list", 1, null),
+                new("GPT-5.5", "Duplicate", "list", 1, null),
+            });
+        host.Secrets["oauth-access-token"] = "access-token";
+        host.Secrets["oauth-refresh-token"] = "refresh-token";
+        host.SettingWrites.Clear();
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal(["gpt-5.5"], sut.SupportedModels.Select(model => model.Id).ToArray());
+        Assert.Equal("gpt-5.5", sut.SelectedLlmModelId);
+        Assert.Empty(host.SettingWrites);
+    }
+
+    [Fact]
+    public async Task Activate_AllInvalidChatGptCache_DoesNotKeepRejectedSelection()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("selectedChatGPTModel", "hidden-model");
+        host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel> { new("hidden-model", "Hidden model", "hide", 1, null) });
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal(
+            ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2", "gpt-5.2-codex", "gpt-5.1-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini"],
+            sut.SupportedModels.Select(model => model.Id).ToArray());
+        Assert.Equal(sut.SupportedModels[0].Id, sut.SelectedLlmModelId);
+    }
+
+    [Fact]
+    public async Task Activate_BlankApiSelection_FallsBackToFirstModel()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "apiKey");
+        host.SetSetting("selectedLLMModel", "   ");
+        host.SetSetting("fetchedLLMModels", new List<OpenAiFetchedModel> { new("   ", null) });
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("gpt-5.5", sut.SupportedModels[0].Id);
+        Assert.Equal(sut.SupportedModels[0].Id, sut.SelectedLlmModelId);
+    }
+
+    [Fact]
+    public async Task Activate_MigratesChatGptSelectionOnlyAfterSanitizing()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("selectedLLMModel", "hidden-model");
+        host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel>
+        {
+            new("hidden-model", "Hidden model", "hide", 1, null),
+            new("gpt-5.5", "GPT-5.5", "list", 1, null),
+        });
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("gpt-5.5", host.GetSetting<string>("selectedChatGPTModel"));
+        Assert.Equal("gpt-5.5", sut.SelectedLlmModelId);
+    }
+
+    [Fact]
+    public async Task Activate_DropsInvalidCachedApiModels()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "apiKey");
+        host.SetSetting(
+            "fetchedLLMModels",
+            new List<OpenAiFetchedModel>
+            {
+                null!,
+                new("   ", null),
+                new("gpt-4.1-mini", null),
+            });
+        host.SetSetting(
+            "fetchedTranscriptionModels",
+            new List<OpenAiFetchedModel>
+            {
+                null!,
+                new("whisper-1", null),
+            });
+        host.Secrets["api-key"] = "sk-test";
+        host.SettingWrites.Clear();
+
+        using var sut = new OpenAiPlugin();
+        var exception = await Record.ExceptionAsync(() => sut.ActivateAsync(host));
+
+        Assert.Null(exception);
+        Assert.Equal(["gpt-4.1-mini"], sut.SupportedModels.Select(model => model.Id).ToArray());
+        Assert.Contains(sut.TranscriptionModels, model => model.Id == "whisper-1");
+        Assert.Empty(host.SettingWrites);
+    }
+
+    [Fact]
+    public async Task Activate_TrimsCachedApiModelIds()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "apiKey");
+        host.SetSetting("selectedLLMModel", "gpt-4.1-mini");
+        host.SetSetting("fetchedLLMModels", new List<OpenAiFetchedModel>
+        {
+            new(" gpt-4.1-mini ", null),
+            new("gpt-4.1-mini", null),
+        });
+        host.SetSetting("fetchedTranscriptionModels", new List<OpenAiFetchedModel> { new(" whisper-1 ", null) });
+        host.Secrets["api-key"] = "sk-test";
+        host.SettingWrites.Clear();
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.All(sut.SupportedModels, model => Assert.Equal(model.Id.Trim(), model.Id));
+        Assert.All(sut.TranscriptionModels, model => Assert.Equal(model.Id.Trim(), model.Id));
+        Assert.Contains(sut.TranscriptionModels, model => model.Id == "whisper-1");
+        Assert.Equal("gpt-4.1-mini", sut.SelectedLlmModelId);
+        Assert.Empty(host.SettingWrites);
+    }
+
+    [Fact]
+    public async Task Activate_KeepsPaddedSelectionOfPaddedCacheEntry()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "apiKey");
+        host.SetSetting("selectedLLMModel", " gpt-4.1-mini ");
+        host.SetSetting("fetchedLLMModels", new List<OpenAiFetchedModel>
+        {
+            new("gpt-4.1", null),
+            new(" gpt-4.1-mini ", null),
+        });
+        host.Secrets["api-key"] = "sk-test";
+        host.SettingWrites.Clear();
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("gpt-4.1-mini", sut.SelectedLlmModelId);
+        Assert.Empty(host.SettingWrites);
+    }
+
+    [Fact]
+    public async Task Activate_MigratesPaddedChatGptSelectionTrimmed()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("selectedLLMModel", " gpt-5 ");
+        host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel>
+        {
+            new("gpt-5.5", "GPT-5.5", "list", 1, null),
+            new(" gpt-5 ", "GPT-5", "list", 1, null),
+        });
+        host.Secrets["oauth-access-token"] = "access-token";
+        host.Secrets["oauth-refresh-token"] = "refresh-token";
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("gpt-5", host.GetSetting<string>("selectedChatGPTModel"));
+        Assert.Equal("gpt-5", sut.SelectedLlmModelId);
+    }
+
+    [Fact]
+    public async Task Activate_TrimsAndDeduplicatesCachedChatGptSlugs()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel>
+        {
+            new(" gpt-5 ", "GPT-5", "list", 1, null),
+            new("gpt-5", "Duplicate", "list", 1, null),
+        });
+        host.Secrets["oauth-access-token"] = "access-token";
+        host.Secrets["oauth-refresh-token"] = "refresh-token";
+        host.SettingWrites.Clear();
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("gpt-5", Assert.Single(sut.SupportedModels).Id);
+        Assert.Empty(host.SettingWrites);
+    }
+
+    [Fact]
+    public async Task Activate_BlankChatGptSelection_DoesNotMigrate()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("selectedChatGPTModel", "   ");
+        host.SetSetting("selectedLLMModel", "gpt-5");
+        host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel>
+        {
+            new("gpt-5.5", "GPT-5.5", "list", 1, null),
+            new("gpt-5", "GPT-5", "list", 1, null),
+        });
+        host.Secrets["oauth-access-token"] = "access-token";
+        host.Secrets["oauth-refresh-token"] = "refresh-token";
+        host.SettingWrites.Clear();
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Empty(host.SettingWrites);
+        Assert.Equal("   ", host.GetSetting<string>("selectedChatGPTModel"));
+        Assert.Equal("gpt-5.5", sut.SelectedLlmModelId);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Activate_BlankLegacySelection_StillMigratesFallback(string legacy)
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("selectedLLMModel", legacy);
+        host.SetSetting("fetchedChatGPTModels", new List<OpenAiChatGptModel>
+        {
+            new("gpt-5.5", "GPT-5.5", "list", 1, null),
+            new("gpt-5", "GPT-5", "list", 1, null),
+        });
+        host.Secrets["oauth-access-token"] = "access-token";
+        host.Secrets["oauth-refresh-token"] = "refresh-token";
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("gpt-5.5", host.GetSetting<string>("selectedChatGPTModel"));
+        Assert.Equal("gpt-5.5", sut.SelectedLlmModelId);
+    }
+
+    [Fact]
+    public async Task SelectLlmModel_TrimsPaddedIdAgainstTrimmedCatalog()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "apiKey");
+        host.SetSetting("fetchedLLMModels", new List<OpenAiFetchedModel>
+        {
+            new("gpt-4.1", null),
+            new(" gpt-4.1-mini ", null),
+        });
+        host.Secrets["api-key"] = "sk-test";
+
+        using var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+        await sut.SetSettingValueAsync("selectedLLMModel", " gpt-4.1-mini ");
+
+        Assert.Equal("gpt-4.1-mini", sut.SelectedLlmModelId);
+        Assert.Equal("gpt-4.1-mini", host.GetSetting<string>("selectedLLMModel"));
+    }
+
+    [Fact]
+    public async Task ActivateAsync_UsesCachedAccountSpecificChatGptModels()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting(
+            "fetchedChatGPTModels",
+            new List<OpenAiChatGptModel>
+            {
+                new("gpt-5.6-sol", "GPT-5.6-Sol", "list", 1, ["plus"]),
+                new("gpt-5.5", "GPT-5.5", "list", 7, ["plus"]),
+            });
+        host.Secrets["oauth-access-token"] = "access-token";
+        host.Secrets["oauth-refresh-token"] = "refresh-token";
+
+        var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal(
+            ["gpt-5.6-sol", "gpt-5.5"],
+            sut.SupportedModels.Select(model => model.Id).ToArray());
+        Assert.Equal("gpt-5.6-sol", sut.SelectedLlmModelId);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_UsesCachedAvailableTranscriptionModelsAndPreservesSelection()
+    {
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-test",
+            },
+        };
+        host.SetSetting(
+            "fetchedTranscriptionModels",
+            new List<OpenAiFetchedModel>
+            {
+                new("gpt-live-transcribe-2026-07-28", "openai"),
+                new("whisper-1", "openai"),
+            });
+        host.SetSetting("selectedModel", "gpt-live-transcribe-2026-07-28");
+
+        var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal(
+            ["whisper-1", "gpt-live-transcribe-2026-07-28"],
+            sut.TranscriptionModels.Select(model => model.Id).ToArray());
+        Assert.Equal("gpt-live-transcribe-2026-07-28", sut.SelectedModelId);
+        Assert.True(sut.SupportsStreaming);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_InvalidTranscriptionModelFallsBackToGPTTranscribe()
+    {
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-test",
+            },
+        };
+        host.SetSetting("selectedModel", "retired-model");
+
+        var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("gpt-transcribe", sut.SelectedModelId);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_PreservesPersistedLegacyTranscriptionModel()
+    {
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-test",
+            },
+        };
+        host.SetSetting("selectedModel", "whisper-1");
+
+        var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("whisper-1", sut.SelectedModelId);
+        Assert.True(sut.SupportsTranslation);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_DefaultsToGPT55AndGPTTranscribe()
+    {
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-test",
+            },
+        };
+
+        var sut = new OpenAiPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.IsType<ITtsProviderPlugin>(sut, exactMatch: false);
+        Assert.Equal("gpt-5.5", sut.SupportedModels[0].Id);
+        Assert.Equal("gpt-transcribe", sut.SelectedModelId);
+        Assert.Equal("gpt-transcribe", sut.TranscriptionModels[0].Id);
+        Assert.Contains(sut.TranscriptionModels, model => model.Id == OpenAiRealtimeStreamingSession.LiveModelId);
+        Assert.Contains(sut.TranscriptionModels, model => model.Id == OpenAiRealtimeStreamingSession.LegacyModelId);
+
+        sut.SelectModel(OpenAiRealtimeStreamingSession.LiveModelId);
+
+        Assert.True(sut.SupportsStreaming);
+        Assert.False(sut.SupportsTranslation);
+    }
+
     [Fact]
     public void ResponsesParser_RejectsIncompleteTokenLimitedOutput()
     {
@@ -70,6 +1437,7 @@ public class OpenAiPluginTests
         var manifest = LoadManifest();
 
         Assert.Equal("com.typewhisper.openai", manifest.GetProperty("id").GetString());
+        Assert.True(manifest.GetProperty("requiresApiKey").GetBoolean());
         Assert.Equal("OpenAI / ChatGPT", manifest.GetProperty("name").GetString());
         Assert.Equal(["transcription", "llm", "tts"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
         Assert.Equal(
@@ -94,13 +1462,8 @@ public class OpenAiPluginTests
         Assert.True(sut.IsConfigured);
         Assert.True(sut.IsAvailable);
         Assert.Equal("gpt-5.5", sut.SupportedModels[0].Id);
-        Assert.Equal("whisper-1", sut.SelectedModelId);
+        Assert.Equal("gpt-transcribe", sut.SelectedModelId);
         Assert.Equal("marin", sut.SelectedVoiceId);
-        // Default model is whisper-1 (non-streaming), so SupportsStreaming
-        // is false even though the realtime model is now wired up
-        // (C5 Phase 7). The flag flips true only when the user selects
-        // gpt-realtime-whisper — see
-        // SupportsStreaming_RequiresRealtimeModelAndApiKeyMode.
         Assert.False(sut.SupportsStreaming);
     }
 
@@ -313,10 +1676,15 @@ public class OpenAiPluginTests
             return Task.FromResult(JsonResponse("""
             {
               "data": [
+                null,
                 { "id": "whisper-1", "owned_by": "openai" },
-                { "id": "gpt-4o-mini-transcribe", "owned_by": "openai" },
+                { "id": "gpt-transcribe", "owned_by": "openai" },
                 { "id": "gpt-4o-mini-transcribe-2025-03-20", "owned_by": "openai" },
+                { "id": "gpt-4o-mini-transcribe", "owned_by": "openai" },
                 { "id": "gpt-4o-transcribe-diarize", "owned_by": "openai" },
+                { "id": "gpt-live-transcribe-2026-07-28", "owned_by": "openai" },
+                { "id": "gpt-live-transcribe", "owned_by": "openai" },
+                { "id": "gpt-realtime-whisper", "owned_by": "openai" },
                 { "id": "gpt-4o-realtime-preview-2024-12-17", "owned_by": "openai" },
                 { "id": "gpt-4o-search-preview", "owned_by": "openai" },
                 { "id": "gpt-audio-2025-08-28", "owned_by": "openai" },
@@ -330,14 +1698,39 @@ public class OpenAiPluginTests
         });
 
         using var httpClient = new HttpClient(handler);
-        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-live" } };
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-live",
+            },
+        };
+        host.SetSetting("selectedLLMModel", "stale-model");
+        host.SetSetting("selectedModel", "whisper-1");
         var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var models = await sut.RefreshAvailableLlmModelsAsync(CancellationToken.None);
 
-        Assert.Equal(["gpt-4.1-mini", "o4-mini"], models.Select(m => m.Id).ToArray());
+        Assert.Equal(2, models.LlmCount);
         Assert.Equal(["gpt-4.1-mini", "o4-mini"], sut.SupportedModels.Select(m => m.Id).ToArray());
+        Assert.Equal("gpt-4.1-mini", sut.SelectedLlmModelId);
+        Assert.Equal("gpt-4.1-mini", host.GetSetting<string>("selectedLLMModel"));
+        Assert.Equal("whisper-1", sut.SelectedModelId);
+        Assert.Equal(
+            [
+                "gpt-transcribe",
+                "whisper-1",
+                "gpt-4o-mini-transcribe",
+                "gpt-4o-mini-transcribe-2025-03-20",
+                "gpt-live-transcribe",
+                "gpt-live-transcribe-2026-07-28",
+                "gpt-realtime-whisper",
+            ],
+            sut.TranscriptionModels.Select(model => model.Id).ToArray());
+        Assert.DoesNotContain(
+            sut.TranscriptionModels,
+            model => model.Id.Contains("diarize", StringComparison.OrdinalIgnoreCase));
         Assert.Equal("https://api.openai.com/v1/models", capturedRequest?.RequestUri?.ToString());
         Assert.Equal("Bearer", capturedRequest?.Headers.Authorization?.Scheme);
         Assert.Equal("sk-live", capturedRequest?.Headers.Authorization?.Parameter);
@@ -346,6 +1739,11 @@ public class OpenAiPluginTests
         var cachedModels = host.GetSetting<List<OpenAiFetchedModel>>("fetchedLLMModels");
         Assert.NotNull(cachedModels);
         Assert.Equal(["gpt-4.1-mini", "o4-mini"], cachedModels.Select(m => m.Id).ToArray());
+
+        var cachedTranscriptionModels =
+            host.GetSetting<List<OpenAiFetchedModel>>("fetchedTranscriptionModels");
+        Assert.NotNull(cachedTranscriptionModels);
+        Assert.Equal(7, cachedTranscriptionModels.Count);
     }
 
     [Fact]
@@ -414,6 +1812,13 @@ public class OpenAiPluginTests
         Assert.Equal(OpenAiAuthMode.ChatGpt, sut.AuthMode);
         Assert.False(sut.IsConfigured);
         Assert.True(sut.IsAvailable);
+        Assert.False(sut.SupportsStreaming);
+        var transcriptionError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.TranscribeAsync([0, 1], "de", false, null, CancellationToken.None));
+        var ttsError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.SpeakAsync(new TtsSpeakRequest("Hallo", "de"), CancellationToken.None));
+        Assert.Contains("API key", transcriptionError.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("API key", ttsError.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("gpt-5.5", sut.SupportedModels[0].Id);
     }
 
@@ -817,7 +2222,14 @@ public class OpenAiPluginTests
         }
         """);
         var host = new TestPluginHostServices();
-        var sut = new OpenAiPlugin(new HttpClient(new CapturingHandler((_, _) => Task.FromResult(JsonResponse("{}")))));
+        var requestedUris = new List<string>();
+        var sut = new OpenAiPlugin(new HttpClient(new CapturingHandler((request, _) =>
+        {
+            requestedUris.Add(request.RequestUri!.AbsolutePath);
+            return Task.FromResult(JsonResponse(request.RequestUri.Host == "auth.openai.com"
+                ? """{"access_token":"access-token","expires_in":3600}"""
+                : """{"models":[{"slug":"gpt-5.6-sol","visibility":"list"}]}"""));
+        })));
         await sut.ActivateAsync(host);
 
         try
@@ -828,6 +2240,8 @@ public class OpenAiPluginTests
             Assert.Equal("refresh-token", host.Secrets["oauth-refresh-token"]);
             Assert.Equal("acct_from_file", host.GetSetting<string>("oauthAccountID"));
             Assert.True(sut.HasChatGptCredentials);
+            Assert.Contains("/backend-api/codex/models", requestedUris);
+            Assert.Equal("gpt-5.6-sol", sut.SelectedLlmModelId);
         }
         finally
         {
@@ -883,6 +2297,62 @@ public class OpenAiPluginTests
         Assert.Equal("nova", sut.SelectedVoiceId);
         Assert.Equal("Speak calmly.", await sut.GetSettingValueAsync("ttsInstructions"));
         Assert.Equal("true", await sut.GetSettingValueAsync("forgetChatGptLogin"));
+    }
+
+    [Theory]
+    [InlineData("[]", false)]
+    [InlineData("[]", true)]
+    [InlineData("[{\"id\":\"unrelated-model\"}]", false)]
+    [InlineData("[{\"id\":\"unrelated-model\"}]", true)]
+    [InlineData("[{\"id\":\"whisper-1\"}]", true)]
+    [InlineData("[{\"id\":\"gpt-4.1\"}]", true)]
+    [InlineData("[{\"id\":\"gpt-4.1\"},{\"id\":\"whisper-1\"}]", true)]
+    public async Task ValidateAsync_ApiKeyMode_ReportsOnlyFetchedCategories(string data, bool cached)
+    {
+        var host = new TestPluginHostServices
+        {
+            Secrets =
+            {
+                ["api-key"] = "sk-test",
+            },
+        };
+        if (cached)
+        {
+            host.SetSetting("fetchedLLMModels", new List<OpenAiFetchedModel> { new("gpt-4.1-mini", null) });
+            host.SetSetting("fetchedTranscriptionModels", new List<OpenAiFetchedModel> { new("gpt-4o-transcribe", null) });
+        }
+        using var client = new HttpClient(new CapturingHandler((_, _) => Task.FromResult(
+            JsonResponse("{\"data\":" + data + "}"))));
+        using var sut = new OpenAiPlugin(client);
+        await sut.ActivateAsync(host);
+        var llms = sut.SupportedModels.ToArray();
+        var audio = sut.TranscriptionModels.ToArray();
+        var llmSelection = sut.SelectedLlmModelId;
+        var audioSelection = sut.SelectedModelId;
+        host.SettingWrites.Clear();
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.True(result.IsSuccess);
+        var hasLlm = data.Contains("gpt-4.1", StringComparison.Ordinal);
+        var hasAudio = data.Contains("whisper-1", StringComparison.Ordinal);
+        var key = hasLlm && hasAudio ? "Settings.ApiKeyValidFetched"
+            : hasLlm ? "Settings.ApiKeyValidLanguageModelsOnly"
+            : hasAudio ? "Settings.ApiKeyValidAudioModels" : "Settings.ApiKeyValidNoModels";
+        Assert.Equal(host.Localization.GetString(key, 1), result.Message);
+        if (!hasLlm)
+        {
+            Assert.Equal(llms, sut.SupportedModels);
+            Assert.Equal(llmSelection, sut.SelectedLlmModelId);
+        }
+        if (!hasAudio)
+        {
+            Assert.Equal(audio, sut.TranscriptionModels);
+            Assert.Equal(audioSelection, sut.SelectedModelId);
+        }
+        if (!hasLlm && !hasAudio)
+            Assert.Empty(host.SettingWrites);
     }
 
     [Fact]
@@ -1130,35 +2600,7 @@ public class OpenAiPluginTests
         Assert.Equal(2.0, sut.TemperatureValue);
     }
 
-    [Fact]
-    public async Task RefreshAvailableLlmModels_ChatGptMode_ReturnsStaticCatalogWithoutHttp()
-    {
-        // ChatGPT-login mode has no /v1/models endpoint to query — the catalog
-        // is the static ChatGptModels list. RefreshAvailableLlmModelsAsync must
-        // short-circuit, otherwise it would call /v1/models with an OAuth
-        // bearer token and 401.
-        var requestCount = 0;
-        var handler = new CapturingHandler((_, _) =>
-        {
-            requestCount++;
-            return Task.FromResult(JsonResponse("{}"));
-        });
 
-        using var httpClient = new HttpClient(handler);
-        var host = new TestPluginHostServices();
-        host.SetSetting("authMode", "chatgpt");
-        host.Secrets["oauth-access-token"] = "access-token";
-        host.Secrets["oauth-refresh-token"] = "refresh-token";
-        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
-        var sut = new OpenAiPlugin(httpClient);
-        await sut.ActivateAsync(host);
-
-        var models = await sut.RefreshAvailableLlmModelsAsync(CancellationToken.None);
-
-        Assert.Equal(0, requestCount);
-        Assert.NotEmpty(models);
-        Assert.Equal("gpt-5.5", models[0].Id);
-    }
 
     // C5 Phase 7 — realtime streaming session
     // ----------------------------------------
@@ -1186,7 +2628,8 @@ public class OpenAiPluginTests
         // at end. turn_detection must be null so the server doesn't auto-commit
         // on internal silences and return early before all audio is processed.
         var json = OpenAiRealtimeStreamingSession.CreateSessionUpdatePayload(
-            "de", "TypeWhisper, OpenAI", useServerVad: false);
+            OpenAiRealtimeStreamingSession.LegacyModelId,
+            ["de"], "TypeWhisper, OpenAI", useServerVad: false);
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -1215,7 +2658,7 @@ public class OpenAiPluginTests
         // prompt: null), the field is omitted entirely rather than sent
         // as null or empty — keeps the session.update minimal.
         var json = OpenAiRealtimeStreamingSession.CreateSessionUpdatePayload(
-            "en", prompt: null, useServerVad: true);
+            OpenAiRealtimeStreamingSession.LegacyModelId, ["en"], prompt: null, useServerVad: true);
 
         using var doc = JsonDocument.Parse(json);
         var transcription = doc.RootElement
@@ -1236,7 +2679,7 @@ public class OpenAiPluginTests
         // live coordinator would receive zero partials/finals during a
         // multi-second dictation.
         var json = OpenAiRealtimeStreamingSession.CreateSessionUpdatePayload(
-            "en", prompt: null, useServerVad: true);
+            OpenAiRealtimeStreamingSession.LegacyModelId, ["en"], prompt: null, useServerVad: true);
 
         using var doc = JsonDocument.Parse(json);
         var input = doc.RootElement.GetProperty("session").GetProperty("audio").GetProperty("input");
@@ -1624,8 +3067,7 @@ public class OpenAiPluginTests
         var sut = new OpenAiPlugin();
         await sut.ActivateAsync(host);
 
-        // Default model is whisper-1 — non-streaming.
-        Assert.Equal("whisper-1", sut.SelectedModelId);
+        Assert.Equal("gpt-transcribe", sut.SelectedModelId);
         Assert.False(sut.SupportsStreaming);
 
         sut.SelectModel("gpt-realtime-whisper");
@@ -1639,18 +3081,29 @@ public class OpenAiPluginTests
         Assert.False(sut.SupportsStreaming);
     }
 
-    [Fact]
-    public async Task StartStreamingAsync_ThrowsWhenModelOrAuthModeIsWrong()
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
+    public async Task StartStreamingAsync_ThrowsWhenModelOrAuthModeIsWrong(string language)
     {
-        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
-        var sut = new OpenAiPlugin();
+        var localization = new PluginLocalization(
+            Path.GetFullPath(
+                Path.Join("..", "..", "..", "..", "..", "plugins", "TypeWhisper.Plugin.OpenAi"),
+                AppContext.BaseDirectory), language);
+        var host = new TestPluginHostServices
+        {
+            Secrets = { ["api-key"] = "sk-test" },
+            Localization = localization,
+        };
+        using var sut = new OpenAiPlugin();
         await sut.ActivateAsync(host);
 
-        // Non-realtime model selected → NotSupportedException with the
-        // actionable "select GPT Realtime Whisper" message.
         var modelEx = await Assert.ThrowsAsync<NotSupportedException>(
             () => sut.StartStreamingAsync("en", CancellationToken.None));
-        Assert.Contains("GPT Realtime Whisper", modelEx.Message);
+        Assert.Equal(localization.GetString("Settings.StreamingRequiresRealtimeModel"), modelEx.Message);
+        Assert.NotEqual("Settings.StreamingRequiresRealtimeModel", modelEx.Message);
 
         // ChatGPT-OAuth mode → InvalidOperationException with the API-key
         // requirement, even if the realtime model is selected.
@@ -1658,7 +3111,8 @@ public class OpenAiPluginTests
         await sut.SetSettingValueAsync("authMode", "chatgpt");
         var authEx = await Assert.ThrowsAsync<InvalidOperationException>(
             () => sut.StartStreamingAsync("en", CancellationToken.None));
-        Assert.Contains("API key", authEx.Message);
+        Assert.Equal(localization.GetString("Settings.StreamingRequiresApiKeyMode"), authEx.Message);
+        Assert.NotEqual("Settings.StreamingRequiresApiKeyMode", authEx.Message);
     }
 
     private static async Task WaitForTranscriptAsync(
@@ -1960,8 +3414,12 @@ public class OpenAiPluginTests
                 ? value.Deserialize<T>(s_jsonOptions)
                 : default;
 
-        public void SetSetting<T>(string key, T value) =>
+        public List<string> SettingWrites { get; } = [];
+        public void SetSetting<T>(string key, T value)
+        {
+            SettingWrites.Add(key);
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
+        }
 
         public string PluginDataDirectory => Path.GetTempPath();
         public IPluginPcmPlaybackService PcmPlayback { get; init; } =
@@ -1972,7 +3430,7 @@ public class OpenAiPluginTests
         public IReadOnlyList<string> AvailableProfileNames => [];
         public void Log(PluginLogLevel level, string message) { }
         public void NotifyCapabilitiesChanged() => NotifyCapabilitiesChangedCount++;
-        public IPluginLocalization Localization { get; } = new TestPluginLocalization();
+        public IPluginLocalization Localization { get; init; } = new TestPluginLocalization();
     }
 
     // Resolve from the plugin's real en.json (source tree) so validation

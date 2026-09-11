@@ -50,7 +50,8 @@ public sealed class StreamingProviderAdapterConformanceTests
             "ElevenLabs" => new ElevenLabsWebSocketAdapter(
                 "key",
                 "scribe_v2_realtime",
-                "en"
+                "en",
+                noVerbatim: true
             ),
             "Smallest AI" => new SmallestAiWebSocketAdapter("key", "en"),
             "Reson8" => new Reson8WebSocketAdapter(
@@ -98,7 +99,8 @@ public sealed class StreamingProviderAdapterConformanceTests
         var eleven = await new ElevenLabsWebSocketAdapter(
                 "eleven-key",
                 "scribe_v2_realtime",
-                "de"
+                "de",
+                noVerbatim: true
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
         var smallest = await new SmallestAiWebSocketAdapter("smallest-key", "de")
@@ -122,7 +124,7 @@ public sealed class StreamingProviderAdapterConformanceTests
                 "de"
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
-        var soniox = await new SonioxWebSocketAdapter("soniox-key", ["de"])
+        var soniox = await new SonioxWebSocketAdapter("soniox-key", new Uri(SonioxPlugin.AvailableRegions[0].RealtimeUrl), ["de"])
             .GetConnectionOptionsAsync(CancellationToken.None);
         var speechmatics = await new SpeechmaticsWebSocketAdapter(
                 "speechmatics-key",
@@ -133,7 +135,8 @@ public sealed class StreamingProviderAdapterConformanceTests
             .GetConnectionOptionsAsync(CancellationToken.None);
         var openAi = await new OpenAiRealtimeWebSocketAdapter(
                 "openai-key",
-                "de",
+                OpenAiRealtimeStreamingSession.LegacyModelId,
+                ["de"],
                 null,
                 useServerVad: true,
                 sendSessionUpdate: true
@@ -235,7 +238,7 @@ public sealed class StreamingProviderAdapterConformanceTests
     {
         var transport = new ScriptedWebSocketTransport();
         await using var pump = await StartAsync(
-            new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null),
+            new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null, noVerbatim: true),
             transport
         );
         var events = new ConcurrentQueue<StreamingTranscriptEvent>();
@@ -292,7 +295,7 @@ public sealed class StreamingProviderAdapterConformanceTests
                 """{"type":"Error","description":"rejected"}"""
             ),
             "ElevenLabs" => (
-                new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null),
+                new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null, noVerbatim: true),
                 """{"message_type":"auth_error","message":"rejected"}"""
             ),
             "SmallestAI" => (
@@ -597,7 +600,7 @@ public sealed class StreamingProviderAdapterConformanceTests
     {
         IWebSocketSessionAdapter adapter = provider switch
         {
-            "Soniox" => new SonioxWebSocketAdapter("key", []),
+            "Soniox" => new SonioxWebSocketAdapter("key", new Uri(SonioxPlugin.AvailableRegions[0].RealtimeUrl), []),
             // Speechmatics rejects a null language at StartRecognition; passing null made
             // every Speechmatics case fault during start and tear the transport down, which
             // surfaced as "the channel has been closed" from the first NextSentAsync.
@@ -606,7 +609,8 @@ public sealed class StreamingProviderAdapterConformanceTests
             "xAI" => new XaiWebSocketAdapter("key", null),
             _ => new OpenAiRealtimeWebSocketAdapter(
                 "key",
-                null,
+                OpenAiRealtimeStreamingSession.LegacyModelId,
+                [],
                 null,
                 useServerVad: true,
                 sendSessionUpdate: false

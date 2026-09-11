@@ -12,6 +12,15 @@ public sealed record DictionaryEntry
     public required DictionaryEntryType EntryType { get; init; }
     public required string Original { get; init; }
     public string? Replacement { get; init; }
+    /// <summary>
+    /// Replacement escapes (\s, \n, \r, \t, \\) are expanded at apply time.
+    /// False keeps stored text literal for legacy entries, imports, API upserts, and learned corrections.
+    /// </summary>
+    public bool ExpandEscapes { get; init; }
+
+    /// <summary>Original is a .NET regular expression instead of a literal phrase</summary>
+    public bool IsRegex { get; init; }
+
     public bool CaseSensitive { get; init; }
     public bool IsEnabled { get; init; } = true;
     public bool IsStarred { get; init; }

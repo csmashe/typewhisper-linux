@@ -3,6 +3,7 @@ using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Core.Services.SpokenFormatting;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Hotkey;
@@ -67,6 +68,7 @@ internal static class ServiceRegistrations
                     Loc.Instance.GetString("Common.OperationFailed", operation, reason)
             )
         );
+        RegisterUsageStatistics(services, dataPath);
         services.AddSingleton<IHistoryService>(
             new HistoryService(
                 Path.Join(dataPath, "history.json"),
@@ -98,6 +100,10 @@ internal static class ServiceRegistrations
         services.AddSingleton<IHistoryInsightsService, HistoryInsightsService>();
         services.AddSingleton<IdeFileReferenceService>();
         services.AddSingleton<IPostProcessingPipeline, PostProcessingPipeline>();
+        services.AddSingleton<SpokenFormattingRulesLoader>();
+        services.AddSingleton<SpokenFormattingProfileStore>();
+        services.AddSingleton<SpokenFormattingStrategyResolver>();
+        services.AddSingleton<SpokenFormattingService>();
         services.AddSingleton<ITranslationService, TranslationService>();
 
         // Plugin subsystem
@@ -178,12 +184,15 @@ internal static class ServiceRegistrations
         services.AddSingleton(sp =>
         {
             var audioRecording = sp.GetRequiredService<AudioRecordingService>();
+            var settings = sp.GetRequiredService<ISettingsService>();
             return new TextInsertionService(
                 sp.GetRequiredService<IErrorLogService>(),
                 sp.GetRequiredService<SystemCommandAvailabilityService>(),
                 sp.GetRequiredService<IPasteConfirmationSource>(),
                 sp.GetRequiredService<IProcessRunner>(),
-                isAnotherSessionRecording: () => audioRecording.IsRecording
+                isAnotherSessionRecording: () => audioRecording.IsRecording,
+                atSpiClient: sp.GetRequiredService<IAtSpiEventClient>(),
+                learningConsent: () => settings.Current.TargetAppCorrectionLearningEnabled
             );
         });
         services.AddSingleton<YdotoolSetupHelper>();
@@ -266,4 +275,30 @@ internal static class ServiceRegistrations
         services.AddTransient<RecentTranscriptionsPaletteWindow>();
         services.AddTransient<WelcomeWizard>();
     }
+
+    internal static void RegisterUsageStatistics(IServiceCollection services, string dataPath)
+    {
+        services.AddSingleton<IUsageStatisticsService>(provider =>
+            CreateUsageStatisticsService(dataPath, provider.GetRequiredService<IHistoryService>()));
+    }
+
+    private static UsageStatisticsService CreateUsageStatisticsService(string dataPath, IHistoryService history)
+    {
+        var statistics = new UsageStatisticsService(
+            Path.Join(dataPath, "usage-statistics.json"),
+            historyBackfillSource: () => ReadHistoryForBackfill(history));
+        if (ReadHistoryForBackfill(history) is { } records)
+        {
+            statistics.BackfillFromHistoryIfNeeded(records);
+        }
+        return statistics;
+    }
+
+    // Records first, then the flag: HistoryService decides RecordsAvailable while reading Records.
+    private static IReadOnlyList<TranscriptionRecord>? ReadHistoryForBackfill(IHistoryService history)
+    {
+        var records = history.Records;
+        return history.RecordsAvailable ? records : null;
+    }
+
 }

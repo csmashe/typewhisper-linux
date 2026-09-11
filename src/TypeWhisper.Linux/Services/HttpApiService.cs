@@ -1677,7 +1677,9 @@ public sealed partial class HttpApiService : IDisposable
                 !plugin.SupportsLanguageHints && unexpressedHints > 0
                     ? BuildLanguageHintsPrompt(languageHints)
                     : null,
-                _dictionary.GetTermsForPrompt()
+                PluginDictionaryTerms.CreatePrompt(
+                    _dictionary.GetEnabledTerms(),
+                    plugin.DictionaryTermsBudget ?? DictionaryTermsBudget.Default)
             );
             result = await plugin.TranscribeAsync(
                 wav,
@@ -2145,6 +2147,7 @@ public sealed partial class HttpApiService : IDisposable
                     corrections = corrections.Select(c => new
                     {
                         original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive,
+                        isRegex = c.IsRegex,
                     }),
                     count = corrections.Count,
                 }
@@ -2205,6 +2208,7 @@ public sealed partial class HttpApiService : IDisposable
                     corrections = corrections.Select(c => new
                     {
                         original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive,
+                        isRegex = c.IsRegex,
                     }),
                     count = corrections.Count,
                 }
@@ -2256,6 +2260,7 @@ public sealed partial class HttpApiService : IDisposable
                     corrections = corrections.Select(c => new
                     {
                         original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive,
+                        isRegex = c.IsRegex,
                     }),
                     count = corrections.Count,
                 }

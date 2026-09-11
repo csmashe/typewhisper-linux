@@ -1121,6 +1121,8 @@ public class App : Application
                 {
                     var historyRetention =
                         services.GetRequiredService<HistoryRetentionCoordinator>();
+                    // Backfill statistics before retention removes existing history.
+                    _ = services.GetRequiredService<IUsageStatisticsService>();
                     historyRetention.Initialize();
                     return Task.CompletedTask;
                 },
