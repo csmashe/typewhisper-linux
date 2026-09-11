@@ -173,7 +173,8 @@ public partial class OpenAiPluginTests
         }
         finally
         {
-            response.TrySetResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+            using var fallbackResponse = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+            response.TrySetResult(fallbackResponse);
             await refresh.WaitAsync(TimeSpan.FromSeconds(5));
         }
     }
@@ -270,10 +271,11 @@ public partial class OpenAiPluginTests
         host.SetSetting("selectedChatGPTModel", "gpt-future");
         host.Secrets["oauth-access-token"] = "expired";
         host.Secrets["oauth-refresh-token"] = "refresh";
+        using var unavailableResponse = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
         using var client = new HttpClient(new CapturingHandler((request, _) => Task.FromResult(
             request.RequestUri!.Host == "auth.openai.com"
                 ? JsonResponse("""{"access_token":"fresh","expires_in":3600}""")
-                : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable))));
+                : unavailableResponse)));
         using var sut = new OpenAiPlugin(client);
         await sut.ActivateAsync(host);
         await sut.RefreshModelCatalogAsync();
@@ -483,8 +485,9 @@ public partial class OpenAiPluginTests
     [InlineData("chatgpt")]
     public async Task RefreshModelCatalogAsync_FailurePreservesCachedSelection(string authMode)
     {
+        using var unavailableResponse = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
         using var client = new HttpClient(new CapturingHandler((_, _) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable))));
+            Task.FromResult(unavailableResponse)));
         var host = new TestPluginHostServices();
         host.SetSetting("authMode", authMode);
         var selectionKey = authMode == "chatgpt" ? "selectedChatGPTModel" : "selectedLLMModel";
@@ -696,8 +699,9 @@ public partial class OpenAiPluginTests
     [Fact]
     public async Task RefreshAvailableLlmModels_KeepsCachedCatalogsWhenApiRequestFails()
     {
+        using var unavailableResponse = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
         var handler = new CapturingHandler((_, _) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)));
+            Task.FromResult(unavailableResponse));
         var host = new TestPluginHostServices
         {
             Secrets =
