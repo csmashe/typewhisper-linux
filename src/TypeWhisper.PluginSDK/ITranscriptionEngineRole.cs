@@ -56,6 +56,9 @@ public interface ITranscriptionEngineRole
     /// <summary>Whether this engine supports real-time streaming transcription via <see cref="IStreamingSession" />.</summary>
     bool SupportsStreaming => false;
 
+    /// <summary>Limits for dictionary terms added by the host; null uses the SDK default budget.</summary>
+    DictionaryTermsBudget? DictionaryTermsBudget => null;
+
     /// <summary>Whether the engine consumes every ordered language hint natively; otherwise the host sends the first hint only.</summary>
     // ReSharper disable once UnusedMember.Global
     bool SupportsLanguageHints => false;

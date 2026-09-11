@@ -10,6 +10,8 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.PluginSDK.Processes;
+using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Models;
 using TypeWhisper.Tests;
 using Xunit;
 
@@ -17,6 +19,56 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class HttpApiUnixSocketTests
 {
+    [Fact]
+    public async Task LocalFileEndpointClipsDictionaryPromptToEngineBudget()
+    {
+        var engine = new BudgetTranscriptionEngine();
+        var dictionary = new Mock<IDictionaryService>();
+        dictionary.Setup(service => service.GetEnabledTerms())
+            .Returns(["too many words", "Alpha", "Beta", "Gamma"]);
+        var pipeline = new Mock<IPostProcessingPipeline>();
+        pipeline.Setup(service => service.ProcessAsync(It.IsAny<string>(), It.IsAny<PipelineOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PostProcessingResult { Text = "transcribed" });
+        using var fixture = new ApiFixture(
+            transcriptionEngine: engine,
+            dictionary: dictionary.Object,
+            pipeline: pipeline.Object,
+            audioProbeResult: new ProcessRunOutcome(ProcessRunStatus.Exited, 0, [0, 1, 2, 3], [], ProcessOutputStatus.Complete, null));
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        var path = fixture.CreateSupportedAudioFile();
+        using var content = new StringContent(
+            $$"""{"path":{{JsonSerializer.Serialize(path)}},"language":"en"}""",
+            Encoding.UTF8, "application/json");
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("Alpha, Beta", engine.LastPrompt);
+        dictionary.Verify(service => service.GetEnabledTerms(), Times.Once);
+    }
+
+    private sealed class BudgetTranscriptionEngine : ITranscriptionEngineRole
+    {
+        public string PluginId => "test-budget";
+        public string ProviderId => "test-budget";
+        public string ProviderDisplayName => "Test budget";
+        public bool IsConfigured => true;
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels => [new("test", "Test")];
+        public string SelectedModelId => "test";
+        public bool SupportsTranslation => false;
+        // ReSharper disable once ReturnTypeCanBeNotNullable -- matches the nullable interface contract.
+        public DictionaryTermsBudget? DictionaryTermsBudget => new(MaxTerms: 2, MaxCharsPerTerm: 5, MaxWordsPerTerm: 1, MaxTotalChars: 11);
+        public string? LastPrompt { get; private set; }
+        public void SelectModel(string modelId) { }
+        public Task<PluginTranscriptionResult> TranscribeAsync(
+            byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        {
+            LastPrompt = prompt;
+            return Task.FromResult(new PluginTranscriptionResult("transcribed", "en", 1));
+        }
+    }
+
     private const string Token =
         "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
 
@@ -701,7 +753,10 @@ public sealed class HttpApiUnixSocketTests
             Func<Socket, bool>? validateUnixPeer = null,
             Mock<IHistoryService>? history = null,
             ProcessRunOutcome? audioProbeResult = null,
-            bool ffmpegAvailable = true
+            bool ffmpegAvailable = true,
+            ITranscriptionEngineRole? transcriptionEngine = null,
+            IDictionaryService? dictionary = null,
+            IPostProcessingPipeline? pipeline = null
         )
         {
             Port = GetFreeTcpPort();
@@ -719,6 +774,7 @@ public sealed class HttpApiUnixSocketTests
 
             _current = new AppSettings
             {
+                SelectedModelId = transcriptionEngine is null ? null : ModelManagerService.GetPluginModelId(transcriptionEngine.PluginId, "test"),
                 ApiServerEnabled = true,
                 ApiServerPort = Port,
                 ApiServerBearerToken = Token,
@@ -734,7 +790,7 @@ public sealed class HttpApiUnixSocketTests
                 });
 
             _models = new ModelManagerService(
-                TestPluginManagerFactory.Create(),
+                TestPluginManagerFactory.Create(transcriptionEngines: transcriptionEngine is null ? null : [transcriptionEngine]),
                 Settings.Object
             );
             var historyService = history ?? new Mock<IHistoryService>();
@@ -764,9 +820,9 @@ public sealed class HttpApiUnixSocketTests
                 Profiles,
                 PromptActions,
                 _hotkeys,
+                dictionary!,
                 null!,
-                null!,
-                null!,
+                pipeline!,
                 null!,
                 null!,
                 _sessionResults,

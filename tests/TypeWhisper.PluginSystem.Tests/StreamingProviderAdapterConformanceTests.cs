@@ -135,7 +135,8 @@ public sealed class StreamingProviderAdapterConformanceTests
             .GetConnectionOptionsAsync(CancellationToken.None);
         var openAi = await new OpenAiRealtimeWebSocketAdapter(
                 "openai-key",
-                "de",
+                OpenAiRealtimeStreamingSession.LegacyModelId,
+                ["de"],
                 null,
                 useServerVad: true,
                 sendSessionUpdate: true
@@ -608,7 +609,8 @@ public sealed class StreamingProviderAdapterConformanceTests
             "xAI" => new XaiWebSocketAdapter("key", null),
             _ => new OpenAiRealtimeWebSocketAdapter(
                 "key",
-                null,
+                OpenAiRealtimeStreamingSession.LegacyModelId,
+                [],
                 null,
                 useServerVad: true,
                 sendSessionUpdate: false

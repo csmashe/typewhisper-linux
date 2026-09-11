@@ -16,6 +16,7 @@ internal static class TestPluginManagerFactory
         IReadOnlyList<IActionPlugin>? actionPlugins = null,
         IReadOnlyList<ITtsProviderPlugin>? ttsProviders = null,
         IReadOnlyList<LoadedPlugin>? loadedPlugins = null,
+        IReadOnlyList<ITranscriptionEngineRole>? transcriptionEngines = null,
         IEnumerable<string>? activatedPluginIds = null
     )
     {
@@ -32,6 +33,9 @@ internal static class TestPluginManagerFactory
             settings.Object,
             []
         );
+
+        if (transcriptionEngines is not null)
+            SetPrivateField(pluginManager, "_transcriptionEngines", transcriptionEngines.ToList());
 
         if (llmProviders is not null)
         {
