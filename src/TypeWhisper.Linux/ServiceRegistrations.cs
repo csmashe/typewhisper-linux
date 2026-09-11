@@ -3,6 +3,7 @@ using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Core.Services.SpokenFormatting;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Hotkey;
@@ -98,6 +99,10 @@ internal static class ServiceRegistrations
         services.AddSingleton<IHistoryInsightsService, HistoryInsightsService>();
         services.AddSingleton<IdeFileReferenceService>();
         services.AddSingleton<IPostProcessingPipeline, PostProcessingPipeline>();
+        services.AddSingleton<SpokenFormattingRulesLoader>();
+        services.AddSingleton<SpokenFormattingProfileStore>();
+        services.AddSingleton<SpokenFormattingStrategyResolver>();
+        services.AddSingleton<SpokenFormattingService>();
         services.AddSingleton<ITranslationService, TranslationService>();
 
         // Plugin subsystem

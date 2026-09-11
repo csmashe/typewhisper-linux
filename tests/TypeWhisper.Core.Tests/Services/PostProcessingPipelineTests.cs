@@ -10,6 +10,24 @@ public class PostProcessingPipelineTests
     private readonly PostProcessingPipeline _sut = new();
 
     [Fact]
+    public async Task SpokenFormatter_ReplacesLegacyPassesAtPriority50()
+    {
+        var pipeline = new PostProcessingPipeline();
+        var result = await pipeline.ProcessAsync("hello comma world", new PipelineOptions
+        {
+            NormalizeSpokenLineBreaks = true,
+            NormalizeSpokenPunctuation = true,
+            SpokenFormatter = text => text.Replace(" comma", ","),
+            PluginPostProcessors = [
+                new PluginPostProcessor(49, (text, _) => Task.FromResult(text)),
+                new PluginPostProcessor(51, (text, _) => Task.FromResult(text))],
+        });
+        Assert.Equal("hello, world", result.Text);
+        Assert.Equal(["Plugin(49)", "SpokenFormatting", "Plugin(51)"], result.Steps.Take(3).Select(step => step.Name));
+        Assert.DoesNotContain(result.Steps, step => step.Name is "SpokenCommands" or "SpokenPunctuation");
+    }
+
+    [Fact]
     public async Task ProcessAsync_SwissGermanOutput_RunsBeforeDictionaryCorrections()
     {
         var result = await _sut.ProcessAsync("Eine große Straße", new PipelineOptions

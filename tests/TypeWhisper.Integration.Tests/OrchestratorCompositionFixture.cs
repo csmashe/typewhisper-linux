@@ -37,7 +37,8 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
     // null (no snapshot, as on a headless box) unless the test depends on the resolved target.
     internal OrchestratorCompositionFixture(
         bool soundFeedbackEnabled = false,
-        (string Process, string Title)? focusedApp = null
+        (string Process, string Title)? focusedApp = null,
+        IPostProcessingPipeline? pipeline = null
     )
     {
         IntegrationEnvironment.ResetApplicationState();
@@ -45,6 +46,8 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
 
         var services = new ServiceCollection();
         ServiceRegistrations.Register(services);
+        if (pipeline is not null)
+            services.Replace(ServiceDescriptor.Singleton(pipeline));
 
         Settings = (SettingsService)(services
             .Single(descriptor => descriptor.ServiceType == typeof(ISettingsService))

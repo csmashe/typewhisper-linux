@@ -25,6 +25,7 @@ public sealed class DictationSectionViewModelLocalizationTests
                     CleanupLevel = CleanupLevel.High,
                     EnglishOutputVariant = EnglishOutputVariant.UnitedKingdom,
                     GermanOutputVariant = GermanOutputVariant.Switzerland,
+                    SpokenFormattingStrategy = SpokenFormattingStrategy.FallbackOnly,
                     LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu,
                     AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>
                     {
@@ -77,11 +78,18 @@ public sealed class DictationSectionViewModelLocalizationTests
             var cleanupBefore = sut.SelectedCleanupLevelOption!;
             var englishBefore = sut.SelectedEnglishOutputVariantOption!;
             var germanBefore = sut.SelectedGermanOutputVariantOption!;
+            var spokenBefore = sut.SelectedSpokenFormattingStrategyOption!;
             var insertionBefore = sut.SelectedNewInsertionStrategyOption!;
             var appStrategyRow = Assert.Single(sut.AppInsertionStrategies);
             var appInsertionBefore = appStrategyRow.SelectedStrategyOption!;
             HashSet<string?> expectedPropertyChanges =
             [
+                nameof(DictationSectionViewModel.SelectedSpokenFormattingStrategyOption),
+                nameof(DictationSectionViewModel.IsSpokenFormattingVerificationVisible),
+                nameof(DictationSectionViewModel.HasSpokenFormattingOverride),
+                nameof(DictationSectionViewModel.SpokenFormattingProfileStatus),
+                nameof(DictationSectionViewModel.SpokenFormattingProfileContext),
+                nameof(DictationSectionViewModel.SpokenFormattingScenarios),
                 nameof(DictationSectionViewModel.IsAdditionalLanguagesVisible),
                 nameof(DictationSectionViewModel.HasAdditionalLanguages),
                 nameof(DictationSectionViewModel.SelectedAdditionalLanguage),
@@ -144,6 +152,9 @@ public sealed class DictationSectionViewModelLocalizationTests
             Assert.Equal(CleanupLevel.High, sut.SelectedCleanupLevelOption?.Value);
             Assert.NotSame(englishBefore, sut.SelectedEnglishOutputVariantOption);
             Assert.NotSame(germanBefore, sut.SelectedGermanOutputVariantOption);
+            Assert.NotSame(spokenBefore, sut.SelectedSpokenFormattingStrategyOption);
+            Assert.NotEqual(spokenBefore.DisplayName, sut.SelectedSpokenFormattingStrategyOption?.DisplayName);
+            Assert.Equal(SpokenFormattingStrategy.FallbackOnly, sut.SelectedSpokenFormattingStrategyOption?.Value);
             Assert.NotEqual(englishBefore.DisplayName, sut.SelectedEnglishOutputVariantOption?.DisplayName);
             Assert.NotEqual(germanBefore.DisplayName, sut.SelectedGermanOutputVariantOption?.DisplayName);
             Assert.Equal(EnglishOutputVariant.UnitedKingdom, sut.SelectedEnglishOutputVariantOption?.Value);

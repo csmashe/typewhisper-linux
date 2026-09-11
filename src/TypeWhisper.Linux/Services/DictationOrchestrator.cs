@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services.SpokenFormatting;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Models;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
@@ -85,6 +86,8 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly Lock _overlayStateLock = new();
     private readonly StreamingTranscriptState _partialTranscriptState = new();
     private readonly IPostProcessingPipeline _pipeline;
+    private readonly SpokenFormattingStrategyResolver _spokenFormattingResolver;
+    private readonly SpokenFormattingService _spokenFormatting;
     private readonly IProfileService _profiles;
     private readonly IPromptActionService _promptActions;
     private readonly PromptProcessingService _promptProcessing;
@@ -193,7 +196,9 @@ public sealed class DictationOrchestrator : IDisposable
         IErrorLogService errorLog,
         ISessionActivityMonitor sessionActivityMonitor,
         ActionPluginExecutionHost actionPluginExecutionHost,
-        OverlayCoordinator overlayCoordinator
+        OverlayCoordinator overlayCoordinator,
+        SpokenFormattingStrategyResolver? spokenFormattingResolver = null,
+        SpokenFormattingService? spokenFormatting = null
     )
     {
         _hotkey = hotkey;
@@ -215,6 +220,10 @@ public sealed class DictationOrchestrator : IDisposable
         _vocabularyBoosting = vocabularyBoosting;
         _cleanup = cleanup;
         _pipeline = pipeline;
+        var rulesLoader = new SpokenFormattingRulesLoader();
+        _spokenFormattingResolver = spokenFormattingResolver
+            ?? new SpokenFormattingStrategyResolver(new SpokenFormattingProfileStore(settings), rulesLoader);
+        _spokenFormatting = spokenFormatting ?? new SpokenFormattingService(rulesLoader);
         _translation = translation;
         _promptProcessing = promptProcessing;
         _memory = memory;
@@ -255,6 +264,12 @@ public sealed class DictationOrchestrator : IDisposable
             return MapOverlayStatusToStateLabel(snapshot.StatusText);
         }
     }
+
+    internal static Func<string, string>? CreateSpokenFormatter(
+        SpokenFormattingService service, ResolvedSpokenFormattingStrategy? strategy) =>
+        strategy is { Strategy: SpokenFormattingStrategy.FallbackOnly, RulesAvailable: true, LanguageCode: { } language }
+            ? text => service.Normalize(text, language)
+            : null;
 
     public void Dispose()
     {
@@ -1880,6 +1895,21 @@ public sealed class DictationOrchestrator : IDisposable
         return engineTranslatedToEnglish ? "en" : detectedLanguage ?? configuredLanguage;
     }
 
+    internal static ResolvedSpokenFormattingStrategy ResolveSpokenFormattingStrategy(
+        SpokenFormattingStrategyResolver resolver,
+        string? engineId,
+        string? modelId,
+        IReadOnlyList<string> languageHints,
+        string? postProcessingLanguage,
+        bool engineTranslated,
+        SpokenFormattingStrategy globalDefault)
+    {
+        // Engine translation makes the transcript language authoritative over source-language hints.
+        return resolver.Resolve(engineId, modelId,
+            engineTranslated && postProcessingLanguage is not null ? [postProcessingLanguage] : languageHints,
+            postProcessingLanguage, globalDefault);
+    }
+
     /// <summary>
     ///     True when a prompt action explicitly names a target action plugin but
     ///     no loaded plugin matches (disabled, removed, or renamed) — unlike "no
@@ -2285,12 +2315,17 @@ public sealed class DictationOrchestrator : IDisposable
                 ))
                 .ToList();
 
+            var spokenStrategy = ResolveSpokenFormattingStrategy(
+                _spokenFormattingResolver, engineProviderId, engineModelId, languageHints, postProcessingLanguage,
+                translate && engineSupportsTranslation,
+                _settings.Current.SpokenFormattingStrategy);
             var pipelineResult = await _pipeline.ProcessAsync(
                 rawText,
                 new PipelineOptions
                 {
-                    NormalizeSpokenLineBreaks = true,
-                    NormalizeSpokenPunctuation = true,
+                    NormalizeSpokenLineBreaks = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
+                    NormalizeSpokenPunctuation = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
+                    SpokenFormatter = CreateSpokenFormatter(_spokenFormatting, spokenStrategy),
                     AppFormatter = AppFormatterService.Format,
                     TargetProcessName = context.AppProcess,
                     DictionaryCorrector = SelectFinalDictionaryCorrector(
