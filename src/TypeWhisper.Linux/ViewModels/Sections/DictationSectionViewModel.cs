@@ -103,6 +103,13 @@ public partial class DictationSectionViewModel : ObservableObject
     private bool _autoPaste;
 
     [ObservableProperty]
+    private bool _lockPasteToFocusedField;
+
+    private readonly IAtSpiEventClient? _atSpiClient;
+
+    public bool IsLockPasteToFocusedFieldAvailable => TargetAppCorrectionLearningEnabled && _atSpiClient?.IsRunning == true;
+
+    [ObservableProperty]
     private CleanupLevel _cleanupLevel = CleanupLevel.None;
 
     [ObservableProperty]
@@ -247,7 +254,8 @@ public partial class DictationSectionViewModel : ObservableObject
         CudaLibraryPathSetupService cudaLibraryPathSetup,
         // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym mirroring org.a11y.Bus; ReSharper's camelCase splitter mis-reads "11y".
         IAccessibilityBusActivation a11yBus,
-        IErrorLogService? errorLog = null
+        IErrorLogService? errorLog = null,
+        IAtSpiEventClient? atSpiClient = null
     )
         : this(
             dictation,
@@ -259,7 +267,8 @@ public partial class DictationSectionViewModel : ObservableObject
             cudaLibraryPathSetup,
             a11yBus,
             AudioRecordingService.GetInputDevices,
-            errorLog
+            errorLog,
+            atSpiClient
         )
     {
     }
@@ -275,9 +284,20 @@ public partial class DictationSectionViewModel : ObservableObject
         // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym mirroring org.a11y.Bus; ReSharper's camelCase splitter mis-reads "11y".
         IAccessibilityBusActivation a11yBus,
         Func<IReadOnlyList<AudioInputDevice>> getInputDevices,
-        IErrorLogService? errorLog = null
+        IErrorLogService? errorLog = null,
+        IAtSpiEventClient? atSpiClient = null,
+        Action<Action>? dispatchNotification = null
     )
     {
+        _atSpiClient = atSpiClient;
+        if (_atSpiClient is not null)
+        {
+            dispatchNotification ??= action => Dispatcher.UIThread.Post(action);
+            _atSpiClient.RunningChanged += () => dispatchNotification(
+                () => OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable))
+            );
+        }
+
         _dictation = dictation;
         _models = models;
         _audio = audio;
@@ -984,6 +1004,8 @@ public partial class DictationSectionViewModel : ObservableObject
         IsUsingCustomModelStorage =
             AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is not null;
         AutoPaste = settings.AutoPaste;
+        LockPasteToFocusedField = settings.LockPasteToFocusedField;
+        OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable));
         AutoAddDictionaryCorrections = settings.AutoAddDictionaryCorrections;
         TargetAppCorrectionLearningEnabled = settings.TargetAppCorrectionLearningEnabled;
         LiveTranscriptionEnabled = settings.LiveTranscriptionEnabled;
@@ -1992,6 +2014,11 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedGermanOutputVariantOption));
     }
 
+    partial void OnLockPasteToFocusedFieldChanged(bool value)
+    {
+        _settings.Update(current => current with { LockPasteToFocusedField = value });
+    }
+
     partial void OnAutoPasteChanged(bool value)
     {
         _settings.Update(current => current with { AutoPaste = value });
@@ -2005,6 +2032,7 @@ public partial class DictationSectionViewModel : ObservableObject
     partial void OnTargetAppCorrectionLearningEnabledChanged(bool value)
     {
         _settings.Update(current => current with { TargetAppCorrectionLearningEnabled = value });
+        OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable));
         OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
         // Re-read the live flag when the feature is switched on so the enable button appears
         // if the bridge isn't active yet.
@@ -2016,6 +2044,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnAccessibilityBridgeActivatedChanged(bool value)
     {
+        OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable));
         OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
         OnPropertyChanged(nameof(ShowAccessibilityBridgeRemove));
     }

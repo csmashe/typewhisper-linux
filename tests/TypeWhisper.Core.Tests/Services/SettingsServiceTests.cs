@@ -352,6 +352,7 @@ public sealed class SettingsServiceTests : IDisposable
             SelectedIndustryPresetId = "real-estate",
             LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda,
             LiveTranscriptionStreamingEnabled = true,
+            LockPasteToFocusedField = true,
             AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>
             {
                 ["kitty"] = TextInsertionStrategy.DirectTyping,
@@ -380,6 +381,7 @@ public sealed class SettingsServiceTests : IDisposable
             sut2.Current.LocalModelAcceleration
         );
         Assert.True(sut2.Current.LiveTranscriptionStreamingEnabled);
+        Assert.True(sut2.Current.LockPasteToFocusedField);
         Assert.Equal(
             TextInsertionStrategy.DirectTyping,
             sut2.Current.AppInsertionStrategies["kitty"]

@@ -37,8 +37,11 @@ internal sealed class RecordingSystemAudio : IAudioDuckingService, IMediaPauseSe
         IsDucked = false;
     }
 
+    public Action? OnPauseMedia { get; set; }
+
     public void PauseMedia()
     {
+        OnPauseMedia?.Invoke();
         PauseCount++;
         IsPaused = true;
     }
@@ -218,8 +221,8 @@ internal sealed class HeadlessAtSpiClient : IAtSpiEventClient
         public void Dispose() { }
     }
 
-    public AtSpiElementRef? CurrentFocusedElement => null;
-    public bool IsRunning => false;
+    public AtSpiElementRef? CurrentFocusedElement { get; set; }
+    public bool IsRunning { get; set; }
     public int StartRequestCount { get; private set; }
 
     public event Action<AtSpiElementRef>? FocusChanged;
@@ -251,9 +254,46 @@ internal sealed class HeadlessAtSpiClient : IAtSpiEventClient
         return Task.FromResult<string?>(null);
     }
 
+    public event Action? RunningChanged
+    {
+        add { }
+        remove { }
+    }
+
+    public bool? FocusedResult { get; set; } = true;
+    public bool? EditableResult { get; set; } = true;
+    public bool GrabFocusResult { get; set; } = true;
+    public int FocusReadCount { get; private set; }
+    public int GrabFocusCount { get; private set; }
+    public Action? OnGrabFocus { get; set; }
+
+    public Task<bool?> IsElementFocusedAsync(AtSpiElementRef element)
+    {
+        LastFocusReadElement = element;
+        FocusReadCount++;
+        return Task.FromResult(FocusedResult);
+    }
+
+    public Task<bool?>? EditableTask { get; set; }
+
+    public Task<bool?> IsElementEditableAsync(AtSpiElementRef element)
+    {
+        return EditableTask ?? Task.FromResult(EditableResult);
+    }
+
+    public Task<bool> TryGrabFocusAsync(AtSpiElementRef element)
+    {
+        GrabFocusCount++;
+        OnGrabFocus?.Invoke();
+        return Task.FromResult(GrabFocusResult);
+    }
+
+    public bool? PasswordResult { get; set; } = false;
+    public AtSpiElementRef? LastFocusReadElement { get; private set; }
+
     public Task<bool?> IsPasswordFieldAsync(AtSpiElementRef element)
     {
-        return Task.FromResult<bool?>(null);
+        return Task.FromResult(PasswordResult);
     }
 
     public Task<AtSpiScreenRect?> TryGetScreenExtentsAsync(AtSpiElementRef element)
@@ -266,9 +306,13 @@ internal sealed class HeadlessAtSpiClient : IAtSpiEventClient
         return Task.CompletedTask;
     }
 
+    public Task<AtSpiElementRef?> BootstrapFocusTask { get; set; } = Task.FromResult<AtSpiElementRef?>(null);
+    public int BootstrapFocusCount { get; private set; }
+
     public Task<AtSpiElementRef?> TryBootstrapFocusAsync()
     {
-        return Task.FromResult<AtSpiElementRef?>(null);
+        BootstrapFocusCount++;
+        return BootstrapFocusTask;
     }
 }
 #pragma warning restore CS0067

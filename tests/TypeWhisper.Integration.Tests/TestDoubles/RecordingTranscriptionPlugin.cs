@@ -35,6 +35,11 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
     public int LoadCount { get; private set; }
     public int UnloadCount { get; private set; }
 
+    internal void EnqueueResult(Func<CancellationToken, Task<PluginTranscriptionResult>> result)
+    {
+        _results.Enqueue(result);
+    }
+
     internal void EnqueueText(string text, string? language = "en")
     {
         _results.Enqueue(

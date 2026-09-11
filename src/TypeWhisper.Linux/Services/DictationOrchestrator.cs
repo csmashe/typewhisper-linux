@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Core.Services.SpokenFormatting;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Models;
@@ -36,6 +37,8 @@ internal sealed record RecordingContext(
     CancellationToken CancelToken
 )
 {
+    public LockedFocusTarget? LockedFocusField { get; init; }
+
     public OverlayPresentationToken? OverlayToken { get; init; }
 
     /// <summary>
@@ -163,6 +166,9 @@ public sealed class DictationOrchestrator : IDisposable
     private string? _streamingProviderId;
     private CancellationTokenSource? _streamingStartupCts;
 
+    private readonly IAtSpiEventClient? _atSpiClient;
+    private LockedFocusTarget? _recordingLockedField;
+
     private EventHandler? _toggleHandler;
     private int _toggleGateCloseOutcome;
 
@@ -198,11 +204,13 @@ public sealed class DictationOrchestrator : IDisposable
         ISessionActivityMonitor sessionActivityMonitor,
         ActionPluginExecutionHost actionPluginExecutionHost,
         OverlayCoordinator overlayCoordinator,
+        IAtSpiEventClient? atSpiClient = null,
         IUsageStatisticsService? usageStatistics = null,
         SpokenFormattingStrategyResolver? spokenFormattingResolver = null,
         SpokenFormattingService? spokenFormatting = null
     )
     {
+        _atSpiClient = atSpiClient;
         _hotkey = hotkey;
         _audio = audio;
         _sessionAudioFiles = sessionAudioFiles;
@@ -799,6 +807,16 @@ public sealed class DictationOrchestrator : IDisposable
             _lastSpeechDetectedAtUtc = _recordingStart;
             _silenceStopRequested = false;
 
+            var captureLockedField = startupSettings is { AutoPaste: true, LockPasteToFocusedField: true, TargetAppCorrectionLearningEnabled: true }
+                && _atSpiClient?.IsRunning == true;
+            AtSpiElementRef? initialFocusedElement;
+            lock (_recordingSessionLock)
+            {
+                _recordingWindowId = _activeWindow.GetActiveWindowId();
+                initialFocusedElement = captureLockedField ? _atSpiClient!.CurrentFocusedElement : null;
+                _recordingLockedField = captureLockedField ? new LockedFocusTarget(null) : null;
+            }
+
             // Set overlay to "Recording…" after the stream is confirmed open but
             // before slow startup work (playerctl). On Wayland the earlier
             // ordering made the stale feedback bubble linger until after PauseMedia.
@@ -939,7 +957,6 @@ public sealed class DictationOrchestrator : IDisposable
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
                 _recordingAppUrl = null;
-                _recordingWindowId = _activeWindow.GetActiveWindowId();
                 _recordingProfile = null;
             }
 
@@ -961,15 +978,21 @@ public sealed class DictationOrchestrator : IDisposable
                     matchedProfile = startupForcedMatch.Profile;
                 }
 
+                using var initialCts = new CancellationTokenSource(
+                    TimeSpan.FromMilliseconds(500)
+                );
+                var lockedFieldTask = CaptureLockedFieldAsync(
+                    captureLockedField,
+                    initialFocusedElement,
+                    initialCts.Token
+                );
+
                 try
                 {
                     // 50ms was too tight: xdotool's chain (window-id + title +
                     // pid → ProcessName) is three sequential subprocesses that
                     // can exceed 500ms. Runs in the background so it doesn't
                     // add user-visible latency.
-                    using var initialCts = new CancellationTokenSource(
-                        TimeSpan.FromMilliseconds(500)
-                    );
                     initialSnap = await _activeWindow
                         .GetActiveWindowSnapshotAsync(initialCts.Token)
                         .ConfigureAwait(false);
@@ -1007,12 +1030,15 @@ public sealed class DictationOrchestrator : IDisposable
                     );
                 }
 
+                var lockedField = await lockedFieldTask.ConfigureAwait(false);
+
                 bool committed;
                 lock (_recordingSessionLock)
                 {
                     committed = _recordingSession == sessionId;
                     if (committed)
                     {
+                        _recordingLockedField = lockedField;
                         _recordingAppProcess = appProcess;
                         _recordingAppTitle = appTitle;
                         _recordingAppUrl = appUrl;
@@ -1436,6 +1462,7 @@ public sealed class DictationOrchestrator : IDisposable
             StreamingTranscriptionCoordinator? stoppedStreamingCoordinator;
             CancellationTokenSource? stoppedStreamingStartupCts;
             RecordingContext recordingContext;
+            var learningConsent = _settings.Current.TargetAppCorrectionLearningEnabled;
             lock (_recordingSessionLock)
             {
                 var stoppedSessionId = _recordingSession;
@@ -1477,12 +1504,16 @@ public sealed class DictationOrchestrator : IDisposable
                     // feedback gate takes (a real deadlock). The toggle gate's fences
                     // already order this read against the acquire.
                     OverlayToken = _overlayToken,
+                    // Consent withdrawn mid-recording means the captured element must not be touched again.
+                    // TextInsertionService re-checks consent right before it touches the element.
+                    LockedFocusField = learningConsent ? _recordingLockedField : null,
                 };
 
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
                 _recordingAppUrl = null;
                 _recordingWindowId = null;
+                _recordingLockedField = null;
                 _recordingProfile = null;
                 _recordingStart = default;
             }
@@ -2547,7 +2578,8 @@ public sealed class DictationOrchestrator : IDisposable
                             context.AppProcess,
                             context.AppTitle,
                             commandResult.AutoEnter,
-                            ResolveInsertionStrategy(context.AppProcess)
+                            ResolveInsertionStrategy(context.AppProcess),
+                            context.LockedFocusField
                         )
                     );
                 }
@@ -3002,9 +3034,10 @@ public sealed class DictationOrchestrator : IDisposable
             // can introduce a newline; the one-shot insertion can then safely paste multiline text
             // with Ctrl+Shift+V while preserving direct typing for a single-line result. Everything
             // else (copy-only, or an Auto GUI/unknown target the one-shot would paste) also routes
-            // through that one-shot insert.
+            // through that one-shot insert. Locked fields also need its exact-focus gate.
             var strategy = ResolveInsertionStrategy(context.AppProcess);
             var canStreamDirectly = _settings.Current.AutoPaste
+                && context.LockedFocusField is null
                 && !TextInsertionService.IsTerminalApp(context.AppProcess)
                 && (strategy is TextInsertionStrategy.DirectTyping
                     || (strategy is TextInsertionStrategy.Auto
@@ -3408,7 +3441,8 @@ public sealed class DictationOrchestrator : IDisposable
                 context.AppProcess,
                 context.AppTitle,
                 false,
-                ResolveInsertionStrategy(context.AppProcess)
+                ResolveInsertionStrategy(context.AppProcess),
+                context.LockedFocusField
             )
         );
 
@@ -3558,6 +3592,53 @@ public sealed class DictationOrchestrator : IDisposable
             : "Text insertion failed. Install xclip to enable clipboard insertion.";
     }
 
+    private async Task<LockedFocusTarget?> CaptureLockedFieldAsync(
+        bool enabled,
+        AtSpiElementRef? initialElement,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!enabled)
+        {
+            return null;
+        }
+
+        // Consent withdrawn is feature unavailable (lock off); a stopped client still fails closed.
+        if (!_settings.Current.TargetAppCorrectionLearningEnabled)
+        {
+            Trace.WriteLine("[Dictation] Focus lock skipped: target-app correction learning is off.");
+            return null;
+        }
+
+        if (_atSpiClient?.IsRunning != true)
+        {
+            Trace.WriteLine("[Dictation] Focus lock capture unavailable: accessibility client stopped.");
+            return new LockedFocusTarget(null);
+        }
+
+        try
+        {
+            if (initialElement is null)
+            {
+                Trace.WriteLine("[Dictation] Focus lock capture unavailable: no focused element.");
+                return new LockedFocusTarget(null);
+            }
+
+            if (await _atSpiClient.IsLockableFieldAsync(initialElement.Value, cancellationToken))
+            {
+                return new LockedFocusTarget(initialElement);
+            }
+
+            Trace.WriteLine("[Dictation] Focus lock rejected: field is password, read-only, or unreadable.");
+            return new LockedFocusTarget(null);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Focus lock capture failed: {ex.Message}");
+            return new LockedFocusTarget(null);
+        }
+    }
+
     /// <summary>
     ///     Reason-aware fallback notification for the
     ///     <see cref="InsertionResult.CopiedToClipboard" /> branch. The detail
@@ -3593,6 +3674,8 @@ public sealed class DictationOrchestrator : IDisposable
                 "Copied to clipboard. ydotool socket not reachable — open Settings → Text insertion to check daemon status.",
             InsertionFailureReason.NoWaylandTypingTool =>
                 $"Copied to clipboard. {_commands.GetSnapshot().PasteToolInstallHint}",
+            InsertionFailureReason.LockedFieldUnavailable =>
+                Localization.Loc.Instance["Dictation.LockedFieldGone"],
             InsertionFailureReason.FocusFailed =>
                 "Copied to clipboard. Target window could not be focused for auto-paste — paste with Ctrl+V.",
             _ => "Copied to clipboard (paste with Ctrl+V).",

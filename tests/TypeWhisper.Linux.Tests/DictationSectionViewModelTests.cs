@@ -17,6 +17,75 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class DictationSectionViewModelTests
 {
     [Fact]
+    public void LockPasteToFocusedField_LoadsFromSettings()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { LockPasteToFocusedField = true },
+            new FakeAudioDeviceEnumerator()
+        );
+        Assert.True(context.Sut.LockPasteToFocusedField);
+    }
+
+    [Fact]
+    public void LockPasteToFocusedField_Change_PersistsToSettings()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default, new FakeAudioDeviceEnumerator()
+        );
+        context.Sut.LockPasteToFocusedField = true;
+        context.Settings.Verify(
+            service => service.Update(It.Is<Func<AppSettings, AppSettings>>(
+                mutation => mutation(AppSettings.Default).LockPasteToFocusedField)),
+            Times.Once
+        );
+    }
+
+    [Fact]
+    public void LockPasteAvailability_FollowsRunningClient()
+    {
+        var client = new Mock<IAtSpiEventClient>();
+        var pendingNotifications = new Queue<Action>();
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { TargetAppCorrectionLearningEnabled = true },
+            new FakeAudioDeviceEnumerator(), atSpiClient: client.Object,
+            dispatchNotification: pendingNotifications.Enqueue
+        );
+        Assert.False(context.Sut.IsLockPasteToFocusedFieldAvailable);
+        var notifications = new List<string?>();
+        context.Sut.PropertyChanged += (_, args) => notifications.Add(args.PropertyName);
+        foreach (var running in new[] { true, false })
+        {
+            notifications.Clear();
+            client.SetupGet(value => value.IsRunning).Returns(running);
+            client.Raise(value => value.RunningChanged += null);
+            Assert.Empty(notifications);
+            Assert.Single(pendingNotifications);
+            pendingNotifications.Dequeue()();
+            Assert.Contains(nameof(context.Sut.IsLockPasteToFocusedFieldAvailable), notifications);
+            Assert.Equal(running, context.Sut.IsLockPasteToFocusedFieldAvailable);
+        }
+    }
+
+    [Fact]
+    public void LockPasteAvailability_RequiresLearningConsent()
+    {
+        var client = new Mock<IAtSpiEventClient>();
+        client.SetupGet(value => value.IsRunning).Returns(true);
+        using var context = new ViewModelTestContext(
+            AppSettings.Default, new FakeAudioDeviceEnumerator(), atSpiClient: client.Object
+        );
+        var notifications = new List<string?>();
+        context.Sut.PropertyChanged += (_, args) => notifications.Add(args.PropertyName);
+
+        Assert.False(context.Sut.IsLockPasteToFocusedFieldAvailable);
+        context.Sut.TargetAppCorrectionLearningEnabled = true;
+        Assert.Contains(nameof(context.Sut.IsLockPasteToFocusedFieldAvailable), notifications);
+        Assert.True(context.Sut.IsLockPasteToFocusedFieldAvailable);
+        context.Sut.TargetAppCorrectionLearningEnabled = false;
+        Assert.False(context.Sut.IsLockPasteToFocusedFieldAvailable);
+    }
+
+    [Fact]
     public void SpokenFormattingStrategy_HydratesAndPersistsSelection()
     {
         using var context = new ViewModelTestContext(
@@ -525,7 +594,9 @@ public sealed class DictationSectionViewModelTests
         public ViewModelTestContext(
             AppSettings initialSettings,
             FakeAudioDeviceEnumerator devices,
-            IReadOnlyList<ITranscriptionEngineRole>? engines = null
+            IReadOnlyList<ITranscriptionEngineRole>? engines = null,
+            IAtSpiEventClient? atSpiClient = null,
+            Action<Action>? dispatchNotification = null
         )
         {
             Settings = TestPluginManagerFactory.CreateSettings(initialSettings);
@@ -561,7 +632,9 @@ public sealed class DictationSectionViewModelTests
                 commands,
                 new CudaLibraryPathSetupService(),
                 a11yBus.Object,
-                devices.GetDevices
+                devices.GetDevices,
+                atSpiClient: atSpiClient,
+                dispatchNotification: dispatchNotification
             );
             Settings.Invocations.Clear();
         }
