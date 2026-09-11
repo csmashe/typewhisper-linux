@@ -8,5 +8,9 @@
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
   "Settings.ApiKeyNotConfigured": "API-Schlüssel nicht konfiguriert",
   "Manifest.Name": "Google Gemini",
-  "Manifest.Description": "Google-Gemini-LLM-Anbieter für Prompt-Aktionen und Übersetzung"
+  "Manifest.Description": "Google-Gemini- und Gemma-LLM-Anbieter mit dynamischer Modellerkennung",
+  "Settings.ApiKeyValidFetched": "API-Schlüssel gültig! Kompatible Gemini- und Gemma-Modelle geladen: {0}.",
+  "Settings.LlmModelDescriptionFetched": "Kompatible Gemini- und Gemma-Modelle aus der API geladen: {0}.",
+  "Settings.LlmModelDescriptionDefault": "Die integrierten Gemini-Aliasse werden verwendet. Validieren Sie den API-Schlüssel, um die dafür verfügbaren Gemini- und Gemma-Chatmodelle zu laden.",
+  "Settings.LlmModel": "LLM-Modell"
 }

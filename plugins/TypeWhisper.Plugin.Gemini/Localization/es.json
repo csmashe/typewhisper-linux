@@ -8,5 +8,9 @@
   "Settings.ApiKeyInvalid": "La clave de API no es válida.",
   "Settings.ApiKeyNotConfigured": "Clave de API no configurada",
   "Manifest.Name": "Google Gemini",
-  "Manifest.Description": "Proveedor de LLM Google Gemini para acciones de prompt y traducción"
+  "Manifest.Description": "Proveedor de LLM Google Gemini y Gemma con descubrimiento dinámico de modelos",
+  "Settings.ApiKeyValidFetched": "¡Clave de API válida! Modelos compatibles de Gemini y Gemma obtenidos: {0}.",
+  "Settings.LlmModelDescriptionFetched": "Modelos compatibles de Gemini y Gemma cargados desde la API: {0}.",
+  "Settings.LlmModelDescriptionDefault": "Se usan los alias de Gemini integrados. Valida la clave de API para cargar los modelos de chat de Gemini y Gemma disponibles para ella.",
+  "Settings.LlmModel": "Modelo de LLM"
 }
