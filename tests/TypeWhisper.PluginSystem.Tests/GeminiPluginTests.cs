@@ -1,3 +1,9 @@
+using Moq;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Tests;
 using System.Net;
 using System.Reflection;
 using System.Text;
@@ -678,6 +684,70 @@ public sealed class GeminiPluginTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SupportedModels_SelectionControlsHostDefaultAcrossRefresh(bool fetchedCatalog)
+    {
+        var requestedModels = new List<string>();
+        using var client = new HttpClient(new CapturingHandler((request, body) =>
+        {
+            if (request.Method == HttpMethod.Get)
+                return JsonResponse("""{"data":[{"id":"gemini-2.5-pro"},{"id":"gemini-3.7-flash-lite"}]}""");
+            using var json = JsonDocument.Parse(body!);
+            requestedModels.Add(json.RootElement.GetProperty("model").GetString()!);
+            return JsonResponse("""{"choices":[{"message":{"content":"Hallo"}}]}""");
+        }));
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "gemini-key" } };
+        using var sut = new GeminiPlugin(client);
+        await sut.ActivateAsync(host);
+        if (fetchedCatalog)
+            await sut.RefreshModelCatalogAsync();
+        await sut.SetSettingValueAsync("selectedLLMModel", "gemini-2.5-pro");
+
+        var tempDir = TestPaths.CreateTempDirectory("TypeWhisper.GeminiTranslationTests");
+        try
+        {
+            var profiles = new Mock<IProfileService>();
+            profiles.SetupGet(service => service.Profiles).Returns([]);
+            var settings = new Mock<ISettingsService>();
+            settings.SetupGet(service => service.Current).Returns(new AppSettings());
+            using var manager = new PluginManager(
+                new PluginLoader(Path.Join(tempDir, "PluginData")),
+                new PluginEventBus(),
+                Mock.Of<IActiveWindowService>(), profiles.Object, settings.Object, []);
+            var providersField = typeof(PluginManager).GetField(
+                "_llmProviders", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(providersField);
+            providersField.SetValue(manager, new List<ILlmProviderRole> { sut });
+            using var translation = new TranslationService(manager);
+
+            AssertSelectedDefault();
+            Assert.Equal("Hallo", await translation.TranslateAsync("Hello", "en", "de"));
+            await sut.RefreshModelCatalogAsync();
+            AssertSelectedDefault();
+            Assert.Equal("Hallo", await translation.TranslateAsync("Hello", "en", "de"));
+            await sut.ProcessAsync("system", "user", "gemini-3.7-flash-lite", CancellationToken.None);
+            Assert.Equal(["gemini-2.5-pro", "gemini-2.5-pro", "gemini-3.7-flash-lite"], requestedModels);
+
+            await sut.SetSettingValueAsync("selectedLLMModel", null);
+            Assert.Equal("gemini-3.7-flash-lite", sut.SupportedModels[0].Id);
+            Assert.Equal(sut.SupportedModels[0], Assert.Single(sut.SupportedModels, model => model.IsRecommended));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(tempDir);
+        }
+
+        return;
+
+        void AssertSelectedDefault()
+        {
+            Assert.Equal("gemini-2.5-pro", sut.SupportedModels[0].Id);
+            Assert.Equal(sut.SupportedModels[0], Assert.Single(sut.SupportedModels, model => model.IsRecommended));
+        }
+    }
+
+    [Theory]
     [InlineData("{}")]
     [InlineData("not-json")]
     [InlineData("{\"data\":[]}")]
@@ -695,7 +765,7 @@ public sealed class GeminiPluginTests
         await sut.SetSettingValueAsync("selectedLLMModel", "gemma-3-27b-it");
         host.ResetTracking();
         await sut.RefreshModelCatalogAsync();
-        Assert.Equal(["gemini-2.5-pro", "gemma-3-27b-it"], sut.SupportedModels.Select(model => model.Id));
+        Assert.Equal(["gemma-3-27b-it", "gemini-2.5-pro"], sut.SupportedModels.Select(model => model.Id));
         Assert.Equal("gemma-3-27b-it", await sut.GetSettingValueAsync("selectedLLMModel"));
         Assert.Equal("gemma-3-27b-it", host.GetSetting<string>("selectedLLMModel"));
         Assert.Equal(0, host.SetSettingCount);

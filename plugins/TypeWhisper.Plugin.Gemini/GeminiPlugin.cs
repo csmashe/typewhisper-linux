@@ -301,9 +301,22 @@ public sealed class GeminiPlugin
         {
             var models = _fetchedLlmModels;
             if (models.Count == 0)
-                return s_fallbackLlmModels;
+            {
+                var fallbackDefaultId = s_fallbackLlmModels.FirstOrDefault(model => string.Equals(
+                    model.Id, _selectedLlmModel, StringComparison.OrdinalIgnoreCase))?.Id ?? DefaultModel;
+                return s_fallbackLlmModels
+                    .OrderByDescending(model => string.Equals(
+                        model.Id, fallbackDefaultId, StringComparison.OrdinalIgnoreCase))
+                    .Select(model => model with
+                    {
+                        IsRecommended = string.Equals(model.Id, fallbackDefaultId, StringComparison.OrdinalIgnoreCase),
+                    })
+                    .ToList();
+            }
 
-            var defaultModelId = ResolveDefaultModelId(models);
+            // Host services use the first model as their implicit default.
+            var defaultModelId = models.FirstOrDefault(model => string.Equals(
+                model.Id, _selectedLlmModel, StringComparison.OrdinalIgnoreCase))?.Id ?? ResolveDefaultModelId(models);
             return models
                 .OrderByDescending(model => string.Equals(
                     model.Id,
