@@ -10,7 +10,7 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.ElevenLabs;
 
-internal sealed class ElevenLabsStreamingSession : IStreamingSession
+internal sealed class ElevenLabsStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
     internal const int MinimumBufferedChunkBytes = 3200;
 
@@ -32,6 +32,8 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
         );
         return new ElevenLabsStreamingSession(pump);
     }
+
+    public Exception? Fault => _pump.Fault;
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived
     {

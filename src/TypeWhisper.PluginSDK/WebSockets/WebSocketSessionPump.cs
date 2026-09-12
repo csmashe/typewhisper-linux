@@ -4,7 +4,7 @@ using System.Runtime.ExceptionServices;
 
 namespace TypeWhisper.PluginSDK.WebSockets;
 
-public sealed class WebSocketSessionPump : IStreamingSession
+public sealed class WebSocketSessionPump : IStreamingSession, IStreamingSessionHealth
 {
     private readonly IWebSocketSessionAdapter _adapter;
     private readonly IWebSocketTransport _transport;
@@ -44,6 +44,8 @@ public sealed class WebSocketSessionPump : IStreamingSession
     // in-tree callers happen to be internal to this file.
     public WebSocketSessionState State =>
         (WebSocketSessionState)Volatile.Read(ref _state);
+
+    public Exception? Fault => Volatile.Read(ref _sessionFault);
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived;
 
@@ -587,6 +589,10 @@ public sealed class WebSocketSessionPump : IStreamingSession
         var state = State;
         if (state == required)
             return;
+        // The receive loop can publish a fault after the caller checked it.
+        // Preserve that provider error when the observed state is already faulted.
+        if (state == WebSocketSessionState.Faulted)
+            ThrowIfFaulted();
         ObjectDisposedException.ThrowIf(
             state is WebSocketSessionState.Disposing or WebSocketSessionState.Disposed,
             this

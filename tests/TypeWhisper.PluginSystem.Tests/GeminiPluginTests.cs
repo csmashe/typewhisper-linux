@@ -59,6 +59,8 @@ public sealed class GeminiPluginTests
     [InlineData("gemini-embedding-2", false)]
     [InlineData("gemini-3.1-flash-tts-preview", false)]
     [InlineData("gemini-3.1-flash-live-preview", false)]
+    [InlineData("gemini-3.5-transcribe", false)]
+    [InlineData("gemini-3.5-transcribe-live", false)]
     [InlineData("gemini-omni-flash", false)]
     [InlineData("gemini-omni-flash-preview", false)]
     [InlineData("gemini-robotics-er-2-preview", false)]
@@ -601,12 +603,12 @@ public sealed class GeminiPluginTests
     }
 
     [Fact]
-    public void HttpClient_Uses120SecondTimeout()
+    public void HttpClient_UsesFiveMinuteTimeout()
     {
         using var sut = new GeminiPlugin();
         var field = typeof(GeminiPlugin).GetField("_httpClient", BindingFlags.NonPublic | BindingFlags.Instance);
         var client = Assert.IsType<HttpClient>(field!.GetValue(sut));
-        Assert.Equal(TimeSpan.FromSeconds(120), client.Timeout);
+        Assert.Equal(TimeSpan.FromMinutes(5), client.Timeout);
     }
 
     [Theory]
@@ -821,17 +823,25 @@ public sealed class GeminiPluginTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task ValidateAsync_FetchesCatalogAndReportsAvailability(bool catalogAvailable)
+    public async Task ValidateAsync_FetchesBothCatalogsAndReportsAvailability(bool catalogAvailable)
     {
         List<string> paths = [];
         using var client = new HttpClient(new CapturingHandler((request, _) =>
         {
-            paths.Add(request.RequestUri!.AbsolutePath);
-            if (paths.Count == 1)
-                return JsonResponse("{}");
-            return catalogAvailable
-                ? JsonResponse("""{"data":[{"id":"gemini-3.7-flash"},{"id":"gemma-3-27b-it"},{"id":"veo-3"}]}""")
-                : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+            var path = request.RequestUri!.AbsolutePath;
+            paths.Add(path);
+            if (!catalogAvailable && paths.Count > 1)
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+
+            return path switch
+            {
+                // The first compat call is the key probe, the second the chat catalog.
+                "/v1beta/openai/models" when paths.Count == 1 => JsonResponse("{}"),
+                "/v1beta/openai/models" => JsonResponse(
+                    """{"data":[{"id":"gemini-3.7-flash"},{"id":"gemma-3-27b-it"},{"id":"veo-3"}]}"""),
+                _ => JsonResponse(
+                    """{"models":[{"name":"models/gemini-3.5-transcribe"},{"name":"models/gemini-3.5-transcribe-live"}]}"""),
+            };
         }));
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "gemini-key" } };
         using var sut = new GeminiPlugin(client);
@@ -839,9 +849,14 @@ public sealed class GeminiPluginTests
         var result = await sut.ValidateAsync();
         Assert.NotNull(result);
         Assert.True(result.IsSuccess);
-        Assert.Equal(catalogAvailable ? "Settings.ApiKeyValidFetched: 2" : "Settings.ApiKeyValid", result.Message);
-        Assert.Equal(["/v1beta/openai/models", "/v1beta/openai/models"], paths);
+        Assert.Equal(
+            catalogAvailable ? "Settings.ApiKeyValidFetched: 2, 1" : "Settings.ApiKeyValid",
+            result.Message);
+        Assert.Equal(
+            ["/v1beta/openai/models", "/v1beta/openai/models", "/v1beta/models"],
+            paths);
         Assert.Equal(catalogAvailable ? 2 : 0, sut.FetchedLlmModels.Count);
+        Assert.Equal(catalogAvailable ? 1 : 0, sut.FetchedTranscriptionModels.Count);
     }
 
     [Theory]
@@ -907,16 +922,25 @@ public sealed class GeminiPluginTests
             [
                 "Settings.ApiKeyValidFetched", "Settings.LlmModelDescriptionFetched",
                 "Settings.LlmModelDescriptionDefault", "Manifest.Description", "Settings.LlmModel",
+                "Settings.TranscriptionModel", "Settings.TranscriptionModelsFetched",
+                "Settings.TranscriptionModelFallback", "Settings.TranscriptionMode",
+                "Settings.TranscriptionModeHint", "Settings.ModeVerbatim",
             ];
             foreach (var key in translatedKeys)
             {
                 Assert.False(string.IsNullOrWhiteSpace(locale[key]));
                 Assert.NotEqual(english[key], locale[key]);
-                Assert.Equal(english[key].Contains("{0}", StringComparison.Ordinal),
-                    locale[key].Contains("{0}", StringComparison.Ordinal));
+                // Every placeholder English uses must survive the translation, not just {0}.
+                foreach (var placeholder in Placeholders(english[key]))
+                    Assert.Contains(placeholder, locale[key], StringComparison.Ordinal);
             }
         }
     }
+
+    private static IEnumerable<string> Placeholders(string text) =>
+        Enumerable.Range(0, 10)
+            .Select(index => $"{{{index}}}")
+            .Where(placeholder => text.Contains(placeholder, StringComparison.Ordinal));
 
     private static HttpResponseMessage JsonResponse(string json) =>
         new(HttpStatusCode.OK)

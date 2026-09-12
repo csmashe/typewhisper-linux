@@ -7,7 +7,7 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.Meta;
 
-internal sealed class MetaRealtimeStreamingSession(WebSocketSessionPump pump) : IStreamingSession
+internal sealed class MetaRealtimeStreamingSession(WebSocketSessionPump pump) : IStreamingSession, IStreamingSessionHealth
 {
     internal static string CreateHandshakeJson(
         string apiKey,
@@ -35,6 +35,8 @@ internal sealed class MetaRealtimeStreamingSession(WebSocketSessionPump pump) : 
 
         return JsonSerializer.Serialize(body);
     }
+
+    public Exception? Fault => pump.Fault;
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived
     {

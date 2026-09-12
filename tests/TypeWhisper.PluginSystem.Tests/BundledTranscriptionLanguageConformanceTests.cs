@@ -6,6 +6,7 @@ using TypeWhisper.Plugin.AssemblyAi;
 using TypeWhisper.Plugin.CloudflareAsr;
 using TypeWhisper.Plugin.Deepgram;
 using TypeWhisper.Plugin.ElevenLabs;
+using TypeWhisper.Plugin.Gemini;
 using TypeWhisper.Plugin.Gladia;
 using TypeWhisper.Plugin.GoogleCloudStt;
 using TypeWhisper.Plugin.Groq;
@@ -41,10 +42,10 @@ public sealed class BundledTranscriptionLanguageConformanceTests
         var roles = CreateBundledRoles();
         try
         {
-            Assert.Equal(19, roles.Count);
-            Assert.Equal(19, roles.Select(role => role.ProviderId).Distinct().Count());
+            Assert.Equal(20, roles.Count);
+            Assert.Equal(20, roles.Select(role => role.ProviderId).Distinct().Count());
 
-            // Role-independent, so assert once rather than 19 times inside the loop below.
+            // Role-independent, so assert once rather than 20 times inside the loop below.
             Assert.False(LanguageSelection.TryParse("", out _));
             Assert.False(LanguageSelection.TryParse("   ", out _));
             foreach (var raw in s_invalidInputs)
@@ -201,6 +202,7 @@ public sealed class BundledTranscriptionLanguageConformanceTests
             new CloudflareAsrPlugin(),
             new DeepgramPlugin(),
             new ElevenLabsPlugin(),
+            new GeminiPlugin(),
             new GladiaPlugin(),
             new GoogleCloudSttPlugin(),
             new GroqPlugin(),

@@ -10,7 +10,7 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.Soniox;
 
-internal sealed class SonioxStreamingSession : IStreamingSession
+internal sealed class SonioxStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
     internal const string RealtimeModel = "stt-rt-v4";
 
@@ -20,6 +20,8 @@ internal sealed class SonioxStreamingSession : IStreamingSession
     {
         _pump = pump;
     }
+
+    public Exception? Fault => _pump.Fault;
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived
     {
