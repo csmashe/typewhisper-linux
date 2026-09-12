@@ -8,6 +8,26 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class AtSpiEventClientFocusTests
 {
     [Fact]
+    public void Dispose_ThrowingRunningChangedSubscriber_DoesNotAbort()
+    {
+        // Explicit disposal below is under test; the scope also cleans up if setup throws.
+        using var client = CreateClient();
+        typeof(AtSpiEventClient).GetProperty(nameof(AtSpiEventClient.IsRunning))!
+            .SetValue(client, true);
+        var notificationCount = 0;
+        client.RunningChanged += () =>
+        {
+            notificationCount++;
+            throw new InvalidOperationException("Subscriber failed.");
+        };
+
+        client.Dispose();
+
+        Assert.False(client.IsRunning);
+        Assert.Equal(1, notificationCount);
+    }
+
+    [Fact]
     public void FocusLoss_ClearsCurrentFocus()
     {
         using var client = CreateClient();

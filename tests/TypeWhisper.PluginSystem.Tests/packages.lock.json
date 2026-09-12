@@ -406,6 +406,11 @@
           "org.k2fsa.portaudio.runtime.win-x64": "1.0.1"
         }
       },
+      "Sentry": {
+        "type": "Transitive",
+        "resolved": "6.11.0",
+        "contentHash": "TsT5Gj77PTh3lHQGS+8dLxucTmiZEfLxkqRygIHwYQXRXmMC4fFDbf1AoQe8LXOOFDYhPM2SNf8TTfexvkP0nQ=="
+      },
       "SharpCompress": {
         "type": "Transitive",
         "resolved": "0.48.0",
@@ -522,10 +527,11 @@
           "FluentIcons.Avalonia": "[2.1.323, )",
           "Microsoft.ML.OnnxRuntime": "[1.24.1, )",
           "PortAudioSharp2": "[1.0.1, )",
+          "Sentry": "[6.11.0, )",
           "SharpHook": "[5.3.9, )",
           "Tmds.DBus.Protocol": "[0.92.0, )",
-          "TypeWhisper.Core": "[0.13.2, )",
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.Core": "[0.14.1, )",
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.core": {
@@ -534,61 +540,67 @@
       "typewhisper.plugin.assemblyai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.cerebras": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.claude": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.cloudflareasr": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.cohere": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.deepgram": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.elevenlabs": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.filememory": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
+        }
+      },
+      "typewhisper.plugin.fillerwords": {
+        "type": "Project",
+        "dependencies": {
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.fireworks": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.gemini": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.gemmalocal": {
@@ -596,136 +608,136 @@
         "dependencies": {
           "LLamaSharp": "[0.26.0, )",
           "LLamaSharp.Backend.Cpu": "[0.26.0, )",
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.gladia": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.googlecloudstt": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.groq": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.linear": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.microsoftai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.obsidian": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.openai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.openaicompatible": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.openaivectormemory": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.openrouter": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.qwen3stt": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.reson8": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.script": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.sherpaonnx": {
         "type": "Project",
         "dependencies": {
           "SharpCompress": "[0.48.0, )",
-          "TypeWhisper.PluginSDK": "[0.13.2, )",
+          "TypeWhisper.PluginSDK": "[0.14.1, )",
           "org.k2fsa.sherpa.onnx": "[1.12.23, )"
         }
       },
       "typewhisper.plugin.smallestai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.soniox": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.speechmatics": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.supertonictts": {
         "type": "Project",
         "dependencies": {
           "Microsoft.ML.OnnxRuntime": "[1.24.1, )",
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.voxtral": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.webhook": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.plugin.whispercpp": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )",
+          "TypeWhisper.PluginSDK": "[0.14.1, )",
           "Whisper.net": "[1.8.1, )",
           "Whisper.net.Runtime": "[1.8.1, )"
         }
@@ -733,7 +745,7 @@
       "typewhisper.plugin.xai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.pluginsdk": {

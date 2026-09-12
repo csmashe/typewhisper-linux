@@ -325,6 +325,11 @@
           "org.k2fsa.portaudio.runtime.win-x64": "1.0.1"
         }
       },
+      "Sentry": {
+        "type": "Transitive",
+        "resolved": "6.11.0",
+        "contentHash": "TsT5Gj77PTh3lHQGS+8dLxucTmiZEfLxkqRygIHwYQXRXmMC4fFDbf1AoQe8LXOOFDYhPM2SNf8TTfexvkP0nQ=="
+      },
       "SharpHook": {
         "type": "Transitive",
         "resolved": "5.3.9",
@@ -426,10 +431,11 @@
           "FluentIcons.Avalonia": "[2.1.323, )",
           "Microsoft.ML.OnnxRuntime": "[1.24.1, )",
           "PortAudioSharp2": "[1.0.1, )",
+          "Sentry": "[6.11.0, )",
           "SharpHook": "[5.3.9, )",
           "Tmds.DBus.Protocol": "[0.92.0, )",
-          "TypeWhisper.Core": "[0.13.0, )",
-          "TypeWhisper.PluginSDK": "[0.13.0, )"
+          "TypeWhisper.Core": "[0.14.1, )",
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.core": {
@@ -438,7 +444,7 @@
       "typewhisper.plugin.webhook": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.0, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.pluginsdk": {

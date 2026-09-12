@@ -1,6 +1,7 @@
 using System.Text.Json;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Core.Services.SpokenFormatting;
 
 namespace TypeWhisper.Core.Tests.Services;
 
@@ -76,6 +77,94 @@ public sealed class SettingsServiceTests : IDisposable
         {
             // best effort
         }
+    }
+
+    [Fact]
+    public void CrashReporting_DefaultsOff_AndRoundTripsOptIn()
+    {
+        var settings = new SettingsService(_filePath);
+        Assert.False(AppSettings.Default.CrashReportingEnabled);
+        Assert.False(settings.Current.CrashReportingEnabled);
+        settings.Save(AppSettings.Default with { CrashReportingEnabled = true });
+        Assert.True(new SettingsService(_filePath).Current.CrashReportingEnabled);
+        Assert.Contains("\"crashReportingEnabled\": true", File.ReadAllText(_filePath));
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    public void Load_NullSpokenFormattingProfiles_IsEmpty(string profiles)
+    {
+        File.WriteAllText(_filePath, "{\"spokenFormattingProfiles\":" + profiles + "}");
+        Assert.Empty(new SettingsService(_filePath).Current.SpokenFormattingProfiles);
+    }
+
+    [Fact]
+    public void Load_NormalizesSpokenFormattingProfiles()
+    {
+        File.WriteAllText(_filePath, """
+            {"spokenFormattingProfiles":[
+                {"engineId":" engine ","modelId":" model ","languageCode":"en-US","strategyOverrideRaw":"AUTOMATIC"},
+                {"engineId":"engine","modelId":"model","languageCode":"en","strategyOverrideRaw":"future","verificationStateRaw":"futureState"}
+            ]}
+            """);
+        var profile = Assert.Single(new SettingsService(_filePath).Current.SpokenFormattingProfiles);
+        Assert.Equal("en", profile.LanguageCode);
+        Assert.Equal("future", profile.StrategyOverrideRaw);
+        Assert.Equal("futureState", profile.VerificationStateRaw);
+    }
+
+    [Fact]
+    public void Save_NormalizesSpokenFormattingProfiles()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with
+        {
+            SpokenFormattingProfiles = [new DictationSpokenFormattingProfile
+            {
+                EngineId = " engine ", ModelId = " model ", LanguageCode = "en-US", StrategyOverrideRaw = "AUTOMATIC",
+            }],
+        });
+
+        var profile = Assert.Single(sut.Current.SpokenFormattingProfiles);
+        Assert.Equal("engine", profile.EngineId);
+        Assert.Equal("model", profile.ModelId);
+        Assert.Equal("en", profile.LanguageCode);
+        Assert.Equal("automatic", profile.StrategyOverrideRaw);
+        Assert.Equal(profile, new SpokenFormattingProfileStore(sut).Profile("engine", "model", "en-GB"));
+    }
+
+    [Fact]
+    public void Update_NormalizesSpokenFormattingProfiles()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Update(current => current with
+        {
+            SpokenFormattingProfiles = [new DictationSpokenFormattingProfile
+            {
+                EngineId = " engine ", ModelId = " model ", LanguageCode = "en-US", StrategyOverrideRaw = "AUTOMATIC",
+            }],
+        });
+
+        var profile = Assert.Single(sut.Current.SpokenFormattingProfiles);
+        Assert.Equal("engine", profile.EngineId);
+        Assert.Equal("model", profile.ModelId);
+        Assert.Equal("en", profile.LanguageCode);
+        Assert.Equal("automatic", profile.StrategyOverrideRaw);
+        Assert.Equal(profile, new SpokenFormattingProfileStore(sut).Profile("engine", "model", "en-GB"));
+    }
+
+    [Fact]
+    public void Load_NullVerificationStateRaw_IsUnknown()
+    {
+        File.WriteAllText(_filePath, """
+            {"spokenFormattingProfiles":[
+                {"engineId":"engine","modelId":"model","languageCode":"en","verificationStateRaw":null}
+            ]}
+            """);
+
+        var profile = Assert.Single(new SettingsService(_filePath).Current.SpokenFormattingProfiles);
+        Assert.Equal("unknown", profile.VerificationStateRaw);
     }
 
     [Fact]
@@ -274,6 +363,7 @@ public sealed class SettingsServiceTests : IDisposable
             SelectedIndustryPresetId = "real-estate",
             LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda,
             LiveTranscriptionStreamingEnabled = true,
+            LockPasteToFocusedField = true,
             AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>
             {
                 ["kitty"] = TextInsertionStrategy.DirectTyping,
@@ -302,6 +392,7 @@ public sealed class SettingsServiceTests : IDisposable
             sut2.Current.LocalModelAcceleration
         );
         Assert.True(sut2.Current.LiveTranscriptionStreamingEnabled);
+        Assert.True(sut2.Current.LockPasteToFocusedField);
         Assert.Equal(
             TextInsertionStrategy.DirectTyping,
             sut2.Current.AppInsertionStrategies["kitty"]

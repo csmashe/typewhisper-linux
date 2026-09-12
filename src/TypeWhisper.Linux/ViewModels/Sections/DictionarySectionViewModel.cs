@@ -2,6 +2,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Localization;
@@ -24,6 +25,14 @@ public partial class DictionarySectionViewModel : ObservableObject
 
     [ObservableProperty]
     private string _newOriginal = "";
+
+    [ObservableProperty]
+    private bool _newIsRegex;
+
+    [ObservableProperty]
+    private string _regexValidationError = "";
+
+    public bool HasRegexValidationError => !string.IsNullOrWhiteSpace(RegexValidationError);
 
     [ObservableProperty]
     private int _newPriority;
@@ -195,10 +204,31 @@ public partial class DictionarySectionViewModel : ObservableObject
         _settings.Update(current => current with { VocabularyBoostingEnabled = value });
     }
 
+    partial void OnRegexValidationErrorChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasRegexValidationError));
+    }
+
+    partial void OnNewOriginalChanged(string value)
+    {
+        RegexValidationError = "";
+    }
+
+    partial void OnNewIsRegexChanged(bool value)
+    {
+        RegexValidationError = "";
+    }
+
     partial void OnNewEntryTypeChanged(DictionaryEntryType value)
     {
         OnPropertyChanged(nameof(IsNewTypeCorrection));
         OnPropertyChanged(nameof(IsNewTypeTerm));
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
+        if (value != DictionaryEntryType.Correction)
+        {
+            NewIsRegex = false;
+            RegexValidationError = "";
+        }
     }
 
     [RelayCommand]
@@ -228,12 +258,23 @@ public partial class DictionarySectionViewModel : ObservableObject
             return;
         }
 
+        var isRegex = NewEntryType == DictionaryEntryType.Correction && NewIsRegex;
+        // Leading and trailing whitespace is significant in a pattern.
+        var original = isRegex ? NewOriginal : NewOriginal.Trim();
+        if (isRegex && !TryValidateRegex(original, out var error))
+        {
+            RegexValidationError = error;
+            return;
+        }
+
         _dict.AddEntry(
             new DictionaryEntry
             {
                 Id = Guid.NewGuid().ToString(),
                 EntryType = NewEntryType,
-                Original = NewOriginal.Trim(),
+                ExpandEscapes = NewEntryType == DictionaryEntryType.Correction,
+                IsRegex = isRegex,
+                Original = original,
                 Replacement = string.IsNullOrWhiteSpace(NewReplacement)
                     ? null
                     : NewReplacement.Trim(),
@@ -243,10 +284,26 @@ public partial class DictionarySectionViewModel : ObservableObject
             }
         );
 
+        NewIsRegex = false;
         NewOriginal = "";
         NewReplacement = "";
         CaseSensitive = false;
         NewPriority = 0;
+    }
+
+    private static bool TryValidateRegex(string pattern, out string error)
+    {
+        try
+        {
+            _ = new Regex(pattern, RegexOptions.CultureInvariant);
+            error = "";
+            return true;
+        }
+        catch (ArgumentException ex)
+        {
+            error = Loc.Instance.GetString("Dictionary.InvalidRegexFormat", ex.Message);
+            return false;
+        }
     }
 
     [RelayCommand]

@@ -8,5 +8,9 @@
   "Settings.ApiKeyInvalid": "API-ключ недействителен.",
   "Settings.ApiKeyNotConfigured": "API-ключ не настроен",
   "Manifest.Name": "Google Gemini",
-  "Manifest.Description": "LLM-провайдер Google Gemini для действий промптов и перевода"
+  "Manifest.Description": "Провайдер LLM Google Gemini и Gemma с динамическим обнаружением моделей",
+  "Settings.ApiKeyValidFetched": "API-ключ действителен! Получено совместимых моделей Gemini и Gemma: {0}.",
+  "Settings.LlmModelDescriptionFetched": "Совместимых моделей Gemini и Gemma загружено из API: {0}.",
+  "Settings.LlmModelDescriptionDefault": "Используются встроенные псевдонимы Gemini. Проверьте API-ключ, чтобы загрузить доступные для него чат-модели Gemini и Gemma.",
+  "Settings.LlmModel": "Модель LLM"
 }

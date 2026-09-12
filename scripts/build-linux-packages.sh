@@ -150,6 +150,8 @@ STAGE_ROOT="$(mktemp -d)"
 trap 'rm -rf "$STAGE_ROOT"' EXIT
 
 echo "==> Publishing TypeWhisper.Linux ($CONFIG, $RID, version $VERSION)"
+# Ship portable PDBs for file and line numbers in anonymous Sentry crash reports;
+# ContinuousIntegrationBuild maps source paths to /_/ so no checkout path lands in them.
 dotnet publish "$PROJECT" \
   -c "$CONFIG" \
   -r "$RID" \
@@ -158,8 +160,9 @@ dotnet publish "$PROJECT" \
   -p:PublishSingleFile=false \
   -p:PublishReadyToRun=true \
   -p:DeployBundledLinuxPlugins=false \
-  -p:DebugType=None \
-  -p:DebugSymbols=false \
+  -p:DebugType=portable \
+  -p:DebugSymbols=true \
+  -p:ContinuousIntegrationBuild=true \
   --nologo
 
 echo "==> Publishing TypeWhisper.Cli ($CONFIG, $RID, version $VERSION)"

@@ -10,6 +10,24 @@ public class PostProcessingPipelineTests
     private readonly PostProcessingPipeline _sut = new();
 
     [Fact]
+    public async Task SpokenFormatter_ReplacesLegacyPassesAtPriority50()
+    {
+        var pipeline = new PostProcessingPipeline();
+        var result = await pipeline.ProcessAsync("hello comma world", new PipelineOptions
+        {
+            NormalizeSpokenLineBreaks = true,
+            NormalizeSpokenPunctuation = true,
+            SpokenFormatter = text => text.Replace(" comma", ","),
+            PluginPostProcessors = [
+                new PluginPostProcessor(49, (text, _) => Task.FromResult(text)),
+                new PluginPostProcessor(51, (text, _) => Task.FromResult(text))],
+        });
+        Assert.Equal("hello, world", result.Text);
+        Assert.Equal(["Plugin(49)", "SpokenFormatting", "Plugin(51)"], result.Steps.Take(3).Select(step => step.Name));
+        Assert.DoesNotContain(result.Steps, step => step.Name is "SpokenCommands" or "SpokenPunctuation");
+    }
+
+    [Fact]
     public async Task ProcessAsync_SwissGermanOutput_RunsBeforeDictionaryCorrections()
     {
         var result = await _sut.ProcessAsync("Eine große Straße", new PipelineOptions
@@ -1071,5 +1089,37 @@ public class PostProcessingPipelineTests
         Assert.Equal("- one\n- two", result.Text);
         Assert.DoesNotContain("<", result.Text);
         Assert.DoesNotContain(">", result.Text);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ReportsStepCompletedForEveryStepWithOutcome()
+    {
+        var completed = new List<(string Name, TimeSpan Elapsed, bool Succeeded)>();
+        var result = await _sut.ProcessAsync("hello", new PipelineOptions
+        {
+            PluginPostProcessors = [
+                new PluginPostProcessor(10, (text, _) => Task.FromResult(text + "!")),
+                new PluginPostProcessor(20, (_, _) => throw new InvalidOperationException("boom"))],
+            StepCompleted = (name, elapsed, succeeded) => completed.Add((name, elapsed, succeeded)),
+        });
+
+        Assert.Equal(result.Steps.Select(step => step.Name), completed.Select(step => step.Name));
+        Assert.Equal(result.Steps.Select(step => step.Succeeded), completed.Select(step => step.Succeeded));
+        Assert.Contains(completed, step => step is { Name: "Plugin(20)", Succeeded: false });
+        Assert.All(completed, step => Assert.True(step.Elapsed >= TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ThrowingStepCompletedObserverDoesNotDuplicateOrFailSteps()
+    {
+        var result = await _sut.ProcessAsync("hello", new PipelineOptions
+        {
+            PluginPostProcessors = [new PluginPostProcessor(10, (text, _) => Task.FromResult(text + "!"))],
+            StepCompleted = (_, _, _) => throw new InvalidOperationException("observer"),
+        });
+
+        Assert.Equal("hello!", result.Text);
+        var step = Assert.Single(result.Steps, s => s.Name == "Plugin(10)");
+        Assert.True(step.Succeeded);
     }
 }
