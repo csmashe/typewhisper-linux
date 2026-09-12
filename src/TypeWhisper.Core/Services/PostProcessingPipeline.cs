@@ -70,7 +70,7 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
                         !string.Equals(before, text, StringComparison.Ordinal)
                     )
                 );
-                options.StepCompleted?.Invoke(name, stepStopwatch.Elapsed, true);
+                ReportStepCompleted(options, name, stepStopwatch.Elapsed, true);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -89,7 +89,7 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
                         ex.Message
                     )
                 );
-                options.StepCompleted?.Invoke(name, stepStopwatch.Elapsed, false);
+                ReportStepCompleted(options, name, stepStopwatch.Elapsed, false);
                 if ((name == PostProcessingStepNames.Llm && options.RequireLlmSuccess)
                     || (name == PostProcessingStepNames.Translation && options.RequireTranslationSuccess))
                 {
@@ -100,6 +100,19 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
         }
 
         return new PostProcessingResult { Text = text, Steps = stepResults };
+    }
+
+    // A throwing observer must not be mistaken for a failed step (which would record the step twice).
+    private static void ReportStepCompleted(PipelineOptions options, string name, TimeSpan elapsed, bool succeeded)
+    {
+        try
+        {
+            options.StepCompleted?.Invoke(name, elapsed, succeeded);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"PostProcessingPipeline: StepCompleted observer failed for '{name}': {ex.Message}");
+        }
     }
 
     /// <summary>

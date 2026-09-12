@@ -41,8 +41,8 @@ public sealed class DictationTelemetryTrackerTests
         Assert.Equal("dictation", session.Operation);
         tracker.Tag(42, "mode", "Hybrid");
         tracker.Measure(42, "audio.duration_s", 2, "second");
-        var child = tracker.Child(42, "post_process");
-        var step = child!.StartChild("post_process.step", "Llm");
+        using var child = tracker.Child(42, "post_process");
+        using var step = child!.StartChild("post_process.step", "Llm");
         tracker.EndCapture(42);
         tracker.EndCapture(42);
         tracker.Finish(42, status);

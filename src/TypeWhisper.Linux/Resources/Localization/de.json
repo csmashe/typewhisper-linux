@@ -52,7 +52,7 @@
   "Advanced.CaptureProvenance": "LLM-Prompt-Herkunft erfassen",
   "Advanced.CaptureProvenanceHint": "Speichert den genauen Prompt, den Anbieter und den eingefügten Kontext, die für jeden Eintrag an das LLM gesendet wurden, damit du sie später im Verlauf einsehen kannst. Erfordert das Speichern des Verlaufs.",
   "Advanced.CrashReporting": "Anonyme Absturz- und Leistungsberichte senden",
-  "Advanced.CrashReportingHint": "Standardmäßig aus. Wenn aktiviert, sendet TypeWhisper Absturzberichte und Zeitmessungen (Dauer von Aufnahme, Transkription, Bereinigung und Einfügen) an Sentry. Die Berichte enthalten App-Version, Betriebssystem- und Hardwaretyp, Engine- und Modellnamen sowie Fehlertypen und Stacktraces (nie den Text der Fehlermeldung). Audio, Transkripte, Prompts, Fenstertitel, API-Schlüssel und IP-Adressen werden nie gesendet. Wirkt sofort.",
+  "Advanced.CrashReportingHint": "Standardmäßig aus. Wenn aktiviert, sendet TypeWhisper Absturzberichte und Zeitmessungen (Dauer von Aufnahme, Transkription, Bereinigung und Einfügen) an Sentry. Die Berichte enthalten App-Version, Betriebssystem- und Hardwaretyp, Engine- und Modellnamen sowie Fehlertypen und Stacktraces (nie den Text der Fehlermeldung). Audio, Transkripte, Prompts, Fenstertitel, API-Schlüssel und IP-Adressen sind nie Teil der Berichte. Wirkt sofort.",
   "Advanced.Data": "Daten",
   "Advanced.EnableMemory": "Speicher aktivieren",
   "Advanced.HistoryDisabledHint": "Wenn der Verlauf deaktiviert ist, werden Transkriptionen weiterhin eingefügt, aber nicht gespeichert.",

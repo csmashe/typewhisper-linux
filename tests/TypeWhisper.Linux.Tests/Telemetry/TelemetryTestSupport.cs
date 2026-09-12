@@ -167,7 +167,13 @@ internal sealed class QueueUntilShutdownLogger : IDiagnosticLogger, IDisposable
 
     public bool TimedOut { get; private set; }
 
-    public void Reset() => _shutdown.Reset();
+    public bool Queued { get; private set; }
+
+    public void Reset()
+    {
+        Queued = false;
+        _shutdown.Reset();
+    }
 
     public bool IsEnabled(SentryLevel level) => true;
 
@@ -176,6 +182,7 @@ internal sealed class QueueUntilShutdownLogger : IDiagnosticLogger, IDisposable
         switch (message)
         {
             case "BackgroundWorker Started.":
+                Queued = true;
                 TimedOut = !_shutdown.Wait(TimeSpan.FromSeconds(10));
                 break;
             case "Disposing the Hub.":

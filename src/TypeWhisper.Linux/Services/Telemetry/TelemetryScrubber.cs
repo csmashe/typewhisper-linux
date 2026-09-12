@@ -42,6 +42,7 @@ public static partial class TelemetryScrubber
         value = EmailRegex().Replace(value, "<email>");
         value = ReplaceWord(value, machineName, "<host>");
         value = ReplaceWord(value, userName, "<user>");
+        value = IPv6Regex().Replace(value, "<ip>");
         value = IPv4Regex().Replace(value, "<ip>");
         value = AuthorizationSchemeRegex().Replace(value, "$1 <redacted>");
         value = UrlQueryRegex().Replace(value, "$1?<redacted>");
@@ -60,6 +61,16 @@ public static partial class TelemetryScrubber
 
     [GeneratedRegex(@"\b(?:\d{1,3}\.){3}\d{1,3}\b")]
     private static partial Regex IPv4Regex();
+
+    // Full, compressed (::) and IPv4-mapped literals; the digit lookahead keeps Namespace::Type and
+    // hex-only identifiers out, the missing :: keeps hh:mm:ss timestamps out.
+    [GeneratedRegex(
+        @"(?<![\w:])(?=[0-9a-f:.]*\d)(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}"
+        + @"|(?:[0-9a-f]{1,4}:){1,7}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?"
+        + @"|::(?:ffff:)?(?:\d{1,3}\.){3}\d{1,3}"
+        + @"|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})(?![\w:])",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex IPv6Regex();
 
     [GeneratedRegex("""\b(Bearer|Basic)\s+[^\s'"]+""", RegexOptions.IgnoreCase)]
     private static partial Regex AuthorizationSchemeRegex();

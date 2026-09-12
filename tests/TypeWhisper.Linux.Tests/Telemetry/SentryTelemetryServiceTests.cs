@@ -19,7 +19,7 @@ public sealed class SentryTelemetryServiceTests
         });
         using var handler = new RecordingHttpHandler();
         using var logger = new QueueUntilShutdownLogger();
-        var service = CreateHttpService(settings, handler, logger);
+        using var service = CreateHttpService(settings, handler, logger);
         try
         {
             service.Start();
@@ -36,6 +36,7 @@ public sealed class SentryTelemetryServiceTests
             }
 
             Assert.True(gate.IsOpen);
+            Assert.True(logger.Queued);
             Assert.False(logger.TimedOut);
             Assert.Contains(handler.Requests, r => r.Method == HttpMethod.Post && r.Body.Contains("kept"));
             Assert.Contains(handler.Requests,
@@ -76,6 +77,7 @@ public sealed class SentryTelemetryServiceTests
             });
             Assert.False(service.IsEnabled);
             Assert.False(gate.IsOpen);
+            Assert.True(logger.Queued);
             Assert.False(logger.TimedOut);
             Assert.Empty(handler.Requests);
         }
@@ -114,6 +116,7 @@ public sealed class SentryTelemetryServiceTests
             Assert.True(secondGate.IsOpen);
             service.CaptureException(new IOException("second-event"), "second-event");
             service.Shutdown();
+            Assert.True(logger.Queued);
             Assert.False(logger.TimedOut);
             var request = Assert.Single(handler.Requests);
             Assert.Equal(HttpMethod.Post, request.Method);

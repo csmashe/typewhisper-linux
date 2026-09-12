@@ -52,7 +52,7 @@
   "Advanced.CaptureProvenance": "Capture LLM prompt provenance",
   "Advanced.CaptureProvenanceHint": "Stores the exact prompt, provider, and injected context sent to the LLM for each entry so you can inspect it later in History. Requires history saving.",
   "Advanced.CrashReporting": "Send anonymous crash and performance reports",
-  "Advanced.CrashReportingHint": "Off by default. When on, TypeWhisper sends crash reports and timing data (how long recording, transcription, cleanup and insertion take) to Sentry. Reports contain the app version, OS and hardware type, engine and model names, and error types and stack traces (never the error message text). Audio, transcripts, prompts, window titles, API keys and IP addresses are never sent. Takes effect immediately.",
+  "Advanced.CrashReportingHint": "Off by default. When on, TypeWhisper sends crash reports and timing data (how long recording, transcription, cleanup and insertion take) to Sentry. Reports contain the app version, OS and hardware type, engine and model names, and error types and stack traces (never the error message text). Audio, transcripts, prompts, window titles, API keys and IP addresses are never included in reports. Takes effect immediately.",
   "Advanced.Data": "Data",
   "Advanced.EnableMemory": "Enable memory",
   "Advanced.HistoryDisabledHint": "When history is disabled, transcriptions are still inserted but not stored.",
