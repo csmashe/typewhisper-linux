@@ -8,5 +8,9 @@
   "Settings.ApiKeyInvalid": "API key is invalid.",
   "Settings.ApiKeyNotConfigured": "API key not configured",
   "Manifest.Name": "Google Gemini",
-  "Manifest.Description": "Google Gemini LLM provider for prompt actions and translation"
+  "Manifest.Description": "Google Gemini and Gemma LLM provider with dynamic model discovery",
+  "Settings.ApiKeyValidFetched": "API key valid! Compatible Gemini and Gemma models fetched: {0}.",
+  "Settings.LlmModelDescriptionFetched": "Compatible Gemini and Gemma models loaded from the API: {0}.",
+  "Settings.LlmModelDescriptionDefault": "Using the built-in Gemini aliases. Validate the API key to load the Gemini and Gemma chat models available to it.",
+  "Settings.LlmModel": "LLM model"
 }

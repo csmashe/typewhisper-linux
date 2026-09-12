@@ -147,11 +147,107 @@ public sealed class MatchProfileCascadeTests : IDisposable
         Assert.Equal(forced.Id, result.Profile?.Id);
     }
 
+    [Fact]
+    public void AnyModeProfileMatchesWebsiteOnlyContext()
+    {
+        var anyProfile = NewProfile("any", ["chrome"], ["github.com"], 0, ProfileContextMatchMode.Any);
+        _sut.AddProfile(anyProfile);
+
+        var result = _sut.MatchProfile("firefox", "https://github.com/typewhisper");
+
+        Assert.Equal(MatchKind.Website, result.Kind);
+        Assert.Equal(anyProfile.Id, result.Profile?.Id);
+        Assert.Equal("github.com", result.MatchedDomain);
+    }
+
+    [Fact]
+    public void AnyModeProfileMatchesAppOnlyContext()
+    {
+        var anyProfile = NewProfile("any", ["antigravity"], ["perplexity.ai"], 0, ProfileContextMatchMode.Any);
+        _sut.AddProfile(anyProfile);
+
+        var result = _sut.MatchProfile("antigravity", null);
+
+        Assert.Equal(MatchKind.App, result.Kind);
+        Assert.Equal(anyProfile.Id, result.Profile?.Id);
+        Assert.Null(result.MatchedDomain);
+    }
+
+    [Fact]
+    public void AnyModeProfileWithBothHitsIsAppAndWebsite()
+    {
+        var anyProfile = NewProfile("any", ["chrome"], ["github.com"], 0, ProfileContextMatchMode.Any);
+        _sut.AddProfile(anyProfile);
+
+        var result = _sut.MatchProfile("chrome", "https://github.com/x");
+
+        Assert.Equal(MatchKind.AppAndWebsite, result.Kind);
+        Assert.Equal(anyProfile.Id, result.Profile?.Id);
+        Assert.Equal("github.com", result.MatchedDomain);
+    }
+
+    [Fact]
+    public void AnyModePartialHitRanksBelowFullHit()
+    {
+        var anyProfile = NewProfile("any", ["firefox"], ["github.com"], 100, ProfileContextMatchMode.Any);
+        _sut.AddProfile(anyProfile);
+        var allProfile = NewProfile("all", ["chrome"], ["github.com"], 1);
+        _sut.AddProfile(allProfile);
+
+        var result = _sut.MatchProfile("chrome", "https://github.com/x");
+
+        Assert.Equal(MatchKind.AppAndWebsite, result.Kind);
+        Assert.Equal(allProfile.Id, result.Profile?.Id);
+        Assert.Equal("github.com", result.MatchedDomain);
+    }
+
+    [Fact]
+    public void AnyModeWebsiteHitBeatsAppOnlyProfile()
+    {
+        var anyProfile = NewProfile("any", ["chrome"], ["github.com"], 1, ProfileContextMatchMode.Any);
+        _sut.AddProfile(anyProfile);
+        var appProfile = NewProfile("app", ["firefox"], [], 100);
+        _sut.AddProfile(appProfile);
+
+        var result = _sut.MatchProfile("firefox", "https://github.com/x");
+
+        Assert.Equal(MatchKind.Website, result.Kind);
+        Assert.Equal(anyProfile.Id, result.Profile?.Id);
+        Assert.Equal("github.com", result.MatchedDomain);
+    }
+
+    [Fact]
+    public void AnyModeAppHitCompetesOnPriorityInAppTier()
+    {
+        var anyProfile = NewProfile("any", ["firefox"], ["github.com"], 1, ProfileContextMatchMode.Any);
+        _sut.AddProfile(anyProfile);
+        var appProfile = NewProfile("app", ["firefox"], [], 5);
+        _sut.AddProfile(appProfile);
+
+        var result = _sut.MatchProfile("firefox", null);
+
+        Assert.Equal(MatchKind.App, result.Kind);
+        Assert.Equal(appProfile.Id, result.Profile?.Id);
+        Assert.Null(result.MatchedDomain);
+        Assert.True(result.WonByPriority);
+    }
+
+    [Fact]
+    public void AllModeProfileStillRequiresBothContexts()
+    {
+        _sut.AddProfile(NewProfile("website", ["chrome"], ["github.com"], 0));
+        _sut.AddProfile(NewProfile("app", ["antigravity"], ["perplexity.ai"], 0));
+
+        Assert.Equal(MatchKind.NoMatch, _sut.MatchProfile("firefox", "https://github.com/typewhisper").Kind);
+        Assert.Equal(MatchKind.NoMatch, _sut.MatchProfile("antigravity", null).Kind);
+    }
+
     private static Profile NewProfile(
         string name,
         IReadOnlyList<string> processNames,
         IReadOnlyList<string> urlPatterns,
-        int priority
+        int priority,
+        ProfileContextMatchMode contextMatchMode = ProfileContextMatchMode.All
     )
     {
         return new Profile
@@ -162,6 +258,7 @@ public sealed class MatchProfileCascadeTests : IDisposable
             Priority = priority,
             ProcessNames = processNames,
             UrlPatterns = urlPatterns,
+            ContextMatchMode = contextMatchMode,
         };
     }
 }

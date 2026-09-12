@@ -9,7 +9,7 @@ namespace TypeWhisper.Core.Services;
 /// <summary>
 ///     Priority-based post-processing pipeline. Steps run in ascending priority order:
 ///     ShortUtterancePunctuation=40 (only when disabled),
-///     SpokenCommands=50, SpokenPunctuation=60, NumberNormalization=100, Formatting=150,
+///     SpokenFormatting=50 (fallback) or SpokenCommands=50, SpokenPunctuation=60, NumberNormalization=100, Formatting=150,
 ///     Cleanup=250, LLM=300, Snippets=500, VocabularyBoosting=550, OutputVariant=575,
 ///     Dictionary=600, Translation=900, TranslatedOutputVariant=950.
 ///     Plugin post-processors insert at their own declared priority.
@@ -59,6 +59,7 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
         foreach (var (_, name, executor) in steps)
         {
             ct.ThrowIfCancellationRequested();
+            var stepStopwatch = Stopwatch.StartNew();
             try
             {
                 var before = text;
@@ -69,6 +70,7 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
                         !string.Equals(before, text, StringComparison.Ordinal)
                     )
                 );
+                ReportStepCompleted(options, name, stepStopwatch.Elapsed, true);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -87,6 +89,7 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
                         ex.Message
                     )
                 );
+                ReportStepCompleted(options, name, stepStopwatch.Elapsed, false);
                 if ((name == PostProcessingStepNames.Llm && options.RequireLlmSuccess)
                     || (name == PostProcessingStepNames.Translation && options.RequireTranslationSuccess))
                 {
@@ -97,6 +100,19 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
         }
 
         return new PostProcessingResult { Text = text, Steps = stepResults };
+    }
+
+    // A throwing observer must not be mistaken for a failed step (which would record the step twice).
+    private static void ReportStepCompleted(PipelineOptions options, string name, TimeSpan elapsed, bool succeeded)
+    {
+        try
+        {
+            options.StepCompleted?.Invoke(name, elapsed, succeeded);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"PostProcessingPipeline: StepCompleted observer failed for '{name}': {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -157,8 +173,15 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
             );
         }
 
+        // FallbackOnly replaces both legacy passes.
+        if (options.SpokenFormatter is { } spokenFormatter)
+        {
+            steps.Add((SpokenCommandsPriority, PostProcessingStepNames.SpokenFormatting,
+                (text, _) => Task.FromResult(spokenFormatter(text))));
+        }
+
         // Spoken line-break commands run first so the LLM sees real breaks, not the words.
-        if (options.NormalizeSpokenLineBreaks)
+        if (options.SpokenFormatter is null && options.NormalizeSpokenLineBreaks)
         {
             steps.Add(
                 (
@@ -170,7 +193,7 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
         }
 
         // Spoken punctuation runs right after line breaks so symbols reach the LLM, not words.
-        if (options.NormalizeSpokenPunctuation)
+        if (options.SpokenFormatter is null && options.NormalizeSpokenPunctuation)
         {
             steps.Add(
                 (

@@ -10,6 +10,9 @@ public interface IHistoryService
 {
     IReadOnlyList<TranscriptionRecord> Records { get; }
 
+    /// <summary>Whether the last history read succeeded.</summary>
+    bool RecordsAvailable => true;
+
     int TotalRecords { get; }
     int TotalWords { get; }
 

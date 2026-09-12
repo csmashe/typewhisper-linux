@@ -14,6 +14,37 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class AdvancedSectionViewModelTests
 {
     [Fact]
+    public async Task CrashReporting_HydratesWithoutSaving()
+    {
+        using var harness = await TestHarness.CreateAsync(crashReportingEnabled: true);
+        Assert.True(harness.ViewModel.CrashReportingEnabled);
+        harness.Settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CrashReporting_UserChangePersistsOnce()
+    {
+        using var harness = await TestHarness.CreateAsync();
+        harness.ViewModel.CrashReportingEnabled = true;
+        Assert.True(harness.Settings.Object.Current.CrashReportingEnabled);
+        harness.Settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CrashReporting_PostedSettingsRefreshDoesNotSave()
+    {
+        using var harness = await TestHarness.CreateAsync();
+        var changed = harness.Settings.Object.Current with { CrashReportingEnabled = true };
+        harness.Settings.SetupGet(service => service.Current).Returns(changed);
+        // ReSharper disable once MethodHasAsyncOverload -- SettingsChanged is a synchronous Action event; RaiseAsync only serves Task-returning handlers.
+        harness.Settings.Raise(service => service.SettingsChanged += null, changed);
+        Assert.False(harness.ViewModel.CrashReportingEnabled);
+        harness.ApplyPostedActions();
+        Assert.True(harness.ViewModel.CrashReportingEnabled);
+        harness.Settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+    }
+
+    [Fact]
     public async Task CapabilityEvent_OnWorkerThread_DefersCompleteBoundStateRefresh()
     {
         using var harness = await TestHarness.CreateAsync();
@@ -526,12 +557,14 @@ public sealed class AdvancedSectionViewModelTests
         public List<Action> PostedActions { get; }
 
         public static async Task<TestHarness> CreateAsync(
-            bool enablePluginBeforeViewModel = true
+            bool enablePluginBeforeViewModel = true,
+            bool crashReportingEnabled = false
         )
         {
             var settings = TestPluginManagerFactory.CreateSettings(
                 new AppSettings
                 {
+                    CrashReportingEnabled = crashReportingEnabled,
                     SpokenFeedbackProviderId = MutableTtsPlugin.ProviderId,
                     SpokenFeedbackVoiceId = "before-voice",
                 }

@@ -96,7 +96,7 @@
       "typewhisper-cli": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.0, )"
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
       "typewhisper.pluginsdk": {
