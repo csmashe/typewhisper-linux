@@ -3,6 +3,7 @@ using System.Diagnostics;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Telemetry;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -23,6 +24,7 @@ public sealed class PluginManager : IDisposable
 
     private readonly List<LoadedPlugin> _allPlugins = [];
     private readonly Dictionary<string, PluginHostServices> _hostServices = [];
+    private readonly IDiagnosticsReporter? _diagnostics;
     private readonly PluginLoader _loader;
     private readonly Lock _lock = new();
     private readonly IProfileService _profiles;
@@ -50,7 +52,8 @@ public sealed class PluginManager : IDisposable
         IProfileService profiles,
         ISettingsService settings,
         IErrorLogService? errorLog = null,
-        IProcessRunner? processRunner = null
+        IProcessRunner? processRunner = null,
+        IDiagnosticsReporter? diagnostics = null
     )
         : this(
             loader,
@@ -60,7 +63,8 @@ public sealed class PluginManager : IDisposable
             settings,
             [TypeWhisperEnvironment.PluginsPath],
             errorLog,
-            processRunner: processRunner
+            processRunner: processRunner,
+            diagnostics: diagnostics
         )
     {
     }
@@ -75,9 +79,11 @@ public sealed class PluginManager : IDisposable
         IErrorLogService? errorLog = null,
         TimeSpan? pluginShutdownTimeout = null,
         string? secretProtectionKeyFilePath = null,
-        IProcessRunner? processRunner = null
+        IProcessRunner? processRunner = null,
+        IDiagnosticsReporter? diagnostics = null
     )
     {
+        _diagnostics = diagnostics;
         _loader = loader;
         EventBus = eventBus;
         _activeWindow = activeWindow;
@@ -784,6 +790,18 @@ public sealed class PluginManager : IDisposable
             // The local scope, not hostServices.ProcessScope: this also covers a
             // PluginHostServices constructor that threw before it was assigned.
             processScope?.Retire();
+            if (ex is not OperationCanceledException)
+            {
+                try
+                {
+                    _diagnostics?.CaptureException(ex, "plugin.activate",
+                        new Dictionary<string, string> { ["plugin.id"] = plugin.Manifest.Id });
+                }
+                catch (Exception diagnosticError)
+                {
+                    Trace.WriteLine($"[Telemetry] Plugin capture failed: {diagnosticError.Message}");
+                }
+            }
             Trace.WriteLine(
                 $"[PluginManager] Failed to activate plugin {plugin.Manifest.Id}: {ex.Message}"
             );

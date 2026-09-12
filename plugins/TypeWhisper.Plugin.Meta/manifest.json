@@ -1,0 +1,15 @@
+{
+  "id": "com.typewhisper.meta",
+  "name": "Meta",
+  "version": "1.0.0",
+  "author": "TypeWhisper",
+  "description": "Meta Muse transcription, realtime dictation and Muse Spark language models",
+  "networkAccess": "network",
+  "categories": [
+    "transcription",
+    "llm"
+  ],
+  "requiresApiKey": true,
+  "assemblyName": "TypeWhisper.Plugin.Meta.dll",
+  "pluginClass": "TypeWhisper.Plugin.Meta.MetaPlugin"
+}

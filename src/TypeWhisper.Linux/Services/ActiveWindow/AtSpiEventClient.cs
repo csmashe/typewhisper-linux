@@ -75,6 +75,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     // toolkit's currently activated top-level window; FOCUSED the widget holding keyboard
     // focus. FOCUSED is 12 — 11 is FOCUSABLE, a classic off-by-one when reading the enum.
     private const int StateActiveBit = 1;
+    private const int StateEditableBit = 7;
     private const int StateFocusedBit = 12;
 
     // Bounds for the cold-start focus bootstrap (TryBootstrapFocusAsync): how many top-level
@@ -103,6 +104,9 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     // those per-call timeouts into minutes and stall the arm long after the correction happened.
     // When it trips, the arm proceeds without focus and the next dictation retries.
     private static readonly TimeSpan s_bootstrapDeadline = TimeSpan.FromSeconds(5);
+
+    private static readonly MessageValueReader<bool> s_readBoolean =
+        static (message, _) => message.GetBodyReader().ReadBool();
 
     private static readonly MessageValueReader<string> s_readString =
         static (m, _) => m.GetBodyReader().ReadString();
@@ -377,7 +381,31 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
     }
 
-    public bool IsRunning { get; private set; }
+    public event Action? RunningChanged;
+
+    public bool IsRunning
+    {
+        get;
+        private set
+        {
+            if (field == value)
+            {
+                return;
+            }
+
+            field = value;
+            // Mirrors the FocusChanged/TextChanged boundaries: a throwing subscriber must not abort the
+            // Dispose/StopAsync teardown that flips this flag.
+            try
+            {
+                RunningChanged?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[AtSpiEventClient] RunningChanged subscriber threw: {ex.Message}");
+            }
+        }
+    }
 
     public async Task<bool> EnsureStartedAsync()
     {
@@ -728,6 +756,68 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             // Role read failed (denied / transient / toolkit without a reliable role). Return
             // indeterminate so the caller skips rather than risk reading a password field.
             return null;
+        }
+    }
+
+    public Task<bool?> IsElementFocusedAsync(AtSpiElementRef element)
+    {
+        return ReadStateAsync(element, StateFocusedBit);
+    }
+
+    public Task<bool?> IsElementEditableAsync(AtSpiElementRef element)
+    {
+        return ReadStateAsync(element, StateEditableBit);
+    }
+
+    private async Task<bool?> ReadStateAsync(AtSpiElementRef element, int bit)
+    {
+        var conn = _connection;
+        if (conn is null || !element.IsValid)
+        {
+            return null;
+        }
+
+        try
+        {
+            return HasState(await GetStateWord0Async(conn, element).ConfigureAwait(false), bit);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[AtSpiEventClient] GetState failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    public async Task<bool> TryGrabFocusAsync(AtSpiElementRef element)
+    {
+        var conn = _connection;
+        if (conn is null || !element.IsValid)
+        {
+            return false;
+        }
+
+        try
+        {
+            MessageBuffer message;
+            using (var writer = conn.GetMessageWriter())
+            {
+                writer.WriteMethodCallHeader(
+                    destination: element.BusName,
+                    path: element.ObjectPath,
+                    @interface: ComponentInterface,
+                    member: "GrabFocus"
+                );
+                message = writer.CreateMessage();
+            }
+
+            return await conn.CallMethodAsync(message, s_readBoolean)
+                .WaitAsync(s_callTimeout)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[AtSpiEventClient] GrabFocus failed: {ex.Message}");
+            return false;
         }
     }
 

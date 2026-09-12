@@ -56,6 +56,9 @@ public interface ITranscriptionEngineRole
     /// <summary>Whether this engine supports real-time streaming transcription via <see cref="IStreamingSession" />.</summary>
     bool SupportsStreaming => false;
 
+    /// <summary>Limits for dictionary terms added by the host; null uses the SDK default budget.</summary>
+    DictionaryTermsBudget? DictionaryTermsBudget => null;
+
     /// <summary>Whether the engine consumes every ordered language hint natively; otherwise the host sends the first hint only.</summary>
     // ReSharper disable once UnusedMember.Global
     bool SupportsLanguageHints => false;
@@ -232,6 +235,17 @@ public interface ITranscriptionEngineRole
     Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
         IReadOnlyList<string> languageHints, CancellationToken ct) =>
         StartStreamingAsync(FirstLanguageHint(languageHints), ct);
+
+    /// <summary>
+    /// Opens a real-time streaming session with ordered language hints and provider-specific
+    /// prompt context. The default implementation preserves compatibility with plugins whose
+    /// streaming transport does not consume prompt context.
+    /// </summary>
+    Task<IStreamingSession> StartStreamingWithLanguageHintsAndPromptAsync(
+        IReadOnlyList<string> languageHints,
+        string? prompt,
+        CancellationToken ct) =>
+        StartStreamingWithLanguageHintsAsync(languageHints, ct);
 
     /// <summary>Unloads the currently loaded model from memory to free resources.</summary>
     Task UnloadModelAsync()

@@ -589,6 +589,10 @@ public sealed class WebSocketSessionPump : IStreamingSession, IStreamingSessionH
         var state = State;
         if (state == required)
             return;
+        // The receive loop can publish a fault after the caller checked it.
+        // Preserve that provider error when the observed state is already faulted.
+        if (state == WebSocketSessionState.Faulted)
+            ThrowIfFaulted();
         ObjectDisposedException.ThrowIf(
             state is WebSocketSessionState.Disposing or WebSocketSessionState.Disposed,
             this

@@ -24,6 +24,8 @@ internal sealed class ScriptedLlmProvider : ILlmProviderRole
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
         [new(ModelId, "Scripted LLM model")];
 
+    internal Action? BeforeBatchResponse { get; set; }
+
     internal int BatchCalls => Volatile.Read(ref _batchCalls);
 
     internal void EnqueueStream(params string[] deltas)
@@ -40,6 +42,7 @@ internal sealed class ScriptedLlmProvider : ILlmProviderRole
     {
         ct.ThrowIfCancellationRequested();
         Interlocked.Increment(ref _batchCalls);
+        BeforeBatchResponse?.Invoke();
         return Task.FromResult(
             _streams.TryDequeue(out var deltas) ? string.Concat(deltas) : string.Empty
         );

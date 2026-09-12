@@ -34,6 +34,27 @@ public sealed class HistoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void RecordsAvailable_IsFalseAfterUnreadableFileAndTrueAfterSuccessfulRetry()
+    {
+        Directory.CreateDirectory(_filePath);
+
+        Assert.Empty(_sut.Records);
+        Assert.False(_sut.RecordsAvailable);
+
+        Directory.Delete(_filePath);
+        File.WriteAllText(_filePath, "[]");
+        Assert.Empty(_sut.Records);
+        Assert.True(_sut.RecordsAvailable);
+    }
+
+    [Fact]
+    public void RecordsAvailable_IsTrueForMissingHistory()
+    {
+        Assert.Empty(_sut.Records);
+        Assert.True(_sut.RecordsAvailable);
+    }
+
+    [Fact]
     public void ModelUsed_PersistsCorrectly()
     {
         var record = new TranscriptionRecord

@@ -13,7 +13,12 @@ namespace TypeWhisper.Plugin.OpenAi;
 
 internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
-    internal const string ModelId = "gpt-realtime-whisper";
+    internal const string LegacyModelId = "gpt-realtime-whisper";
+    internal const string LiveModelId = "gpt-live-transcribe";
+
+    internal static bool IsLiveModel(string modelId) =>
+        modelId.Equals(LiveModelId, StringComparison.OrdinalIgnoreCase)
+        || modelId.StartsWith($"{LiveModelId}-", StringComparison.OrdinalIgnoreCase);
     internal const int SourceSampleRate = 16_000;
     internal const int TargetSampleRate = 24_000;
 
@@ -39,7 +44,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
 
     public static async Task<OpenAiRealtimeStreamingSession> ConnectAsync(
         string apiKey,
-        string? language,
+        string modelId,
+        IReadOnlyList<string> languageHints,
         string? prompt,
         bool useServerVad,
         CancellationToken ct
@@ -47,7 +53,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
     {
         var adapter = new OpenAiRealtimeWebSocketAdapter(
             apiKey,
-            language,
+            modelId,
+            languageHints,
             prompt,
             useServerVad,
             sendSessionUpdate: true
@@ -65,7 +72,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
 
         var adapter = new OpenAiRealtimeWebSocketAdapter(
             "",
-            null,
+            LegacyModelId,
+            [],
             null,
             useServerVad: true,
             sendSessionUpdate: false
@@ -80,15 +88,17 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
 
     public static async Task<PluginTranscriptionResult> TranscribeWavAsync(
         string apiKey,
+        string modelId,
         byte[] wavAudio,
-        string? language,
+        IReadOnlyList<string> languageHints,
         string? prompt,
         CancellationToken ct
     )
     {
         await using var session = await ConnectAsync(
             apiKey,
-            language,
+            modelId,
+            languageHints,
             prompt,
             useServerVad: false,
             ct
@@ -108,7 +118,7 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
         );
         return new PluginTranscriptionResult(
             session._adapter.Collector.CurrentText,
-            language,
+            IsLiveModel(modelId) ? null : languageHints.Count > 0 ? languageHints[0] : null,
             0,
             NoSpeechProbability: null
         );
@@ -126,17 +136,24 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
         };
 
     internal static string CreateSessionUpdatePayload(
-        string? language,
+        string modelId,
+        IReadOnlyList<string> languageHints,
         string? prompt,
         bool useServerVad
     )
     {
         var transcription = new Dictionary<string, object?>
         {
-            ["model"] = ModelId,
+            ["model"] = modelId,
         };
 
-        if (!string.IsNullOrWhiteSpace(language))
+        if (IsLiveModel(modelId))
+        {
+            if (languageHints.Count > 0)
+                transcription["languages"] = languageHints;
+            transcription["delay"] = "low";
+        }
+        else if ((languageHints.Count > 0 ? languageHints[0] : null) is { } language)
             transcription["language"] = language;
         if (!string.IsNullOrWhiteSpace(prompt))
             transcription["prompt"] = prompt;
@@ -297,7 +314,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
 
 internal sealed class OpenAiRealtimeWebSocketAdapter(
     string apiKey,
-    string? language,
+    string modelId,
+    IReadOnlyList<string> languageHints,
     string? prompt,
     bool useServerVad,
     bool sendSessionUpdate
@@ -342,7 +360,8 @@ internal sealed class OpenAiRealtimeWebSocketAdapter(
                 ? [
                     TextMessage(
                         OpenAiRealtimeStreamingSession.CreateSessionUpdatePayload(
-                            language,
+                            modelId,
+                            languageHints,
                             prompt,
                             useServerVad
                         )

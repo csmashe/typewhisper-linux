@@ -21,6 +21,7 @@
         <Project Path="plugins/TypeWhisper.Plugin.Cohere/TypeWhisper.Plugin.Cohere.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Deepgram/TypeWhisper.Plugin.Deepgram.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.ElevenLabs/TypeWhisper.Plugin.ElevenLabs.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.FillerWords/TypeWhisper.Plugin.FillerWords.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.FileMemory/TypeWhisper.Plugin.FileMemory.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Fireworks/TypeWhisper.Plugin.Fireworks.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Gemini/TypeWhisper.Plugin.Gemini.csproj"/>
@@ -29,6 +30,8 @@
         <Project Path="plugins/TypeWhisper.Plugin.GoogleCloudStt/TypeWhisper.Plugin.GoogleCloudStt.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Groq/TypeWhisper.Plugin.Groq.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Linear/TypeWhisper.Plugin.Linear.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.Meta/TypeWhisper.Plugin.Meta.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.MicrosoftAi/TypeWhisper.Plugin.MicrosoftAi.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Obsidian/TypeWhisper.Plugin.Obsidian.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.OpenAi/TypeWhisper.Plugin.OpenAi.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.OpenAiCompatible/TypeWhisper.Plugin.OpenAiCompatible.csproj"/>
