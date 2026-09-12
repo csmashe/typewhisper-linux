@@ -1090,4 +1090,36 @@ public class PostProcessingPipelineTests
         Assert.DoesNotContain("<", result.Text);
         Assert.DoesNotContain(">", result.Text);
     }
+
+    [Fact]
+    public async Task ProcessAsync_ReportsStepCompletedForEveryStepWithOutcome()
+    {
+        var completed = new List<(string Name, TimeSpan Elapsed, bool Succeeded)>();
+        var result = await _sut.ProcessAsync("hello", new PipelineOptions
+        {
+            PluginPostProcessors = [
+                new PluginPostProcessor(10, (text, _) => Task.FromResult(text + "!")),
+                new PluginPostProcessor(20, (_, _) => throw new InvalidOperationException("boom"))],
+            StepCompleted = (name, elapsed, succeeded) => completed.Add((name, elapsed, succeeded)),
+        });
+
+        Assert.Equal(result.Steps.Select(step => step.Name), completed.Select(step => step.Name));
+        Assert.Equal(result.Steps.Select(step => step.Succeeded), completed.Select(step => step.Succeeded));
+        Assert.Contains(completed, step => step is { Name: "Plugin(20)", Succeeded: false });
+        Assert.All(completed, step => Assert.True(step.Elapsed >= TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ThrowingStepCompletedObserverDoesNotDuplicateOrFailSteps()
+    {
+        var result = await _sut.ProcessAsync("hello", new PipelineOptions
+        {
+            PluginPostProcessors = [new PluginPostProcessor(10, (text, _) => Task.FromResult(text + "!"))],
+            StepCompleted = (_, _, _) => throw new InvalidOperationException("observer"),
+        });
+
+        Assert.Equal("hello!", result.Text);
+        var step = Assert.Single(result.Steps, s => s.Name == "Plugin(10)");
+        Assert.True(step.Succeeded);
+    }
 }

@@ -113,6 +113,9 @@ public sealed record PipelineOptions
 
     /// <summary>Callback to report status updates (e.g. "AI Processing...", "Translating...").</summary>
     public Func<string, Task>? StatusCallback { get; init; }
+
+    /// <summary>Invoked after each step with its name, wall-clock duration, and whether it succeeded.</summary>
+    public Action<string, TimeSpan, bool>? StepCompleted { get; init; }
 }
 
 /// <summary>A plugin post-processor with its priority; context is captured in the delegate closure.</summary>

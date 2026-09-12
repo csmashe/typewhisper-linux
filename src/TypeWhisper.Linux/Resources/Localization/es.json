@@ -51,6 +51,8 @@
   "Advanced.AutoUnloadNever": "Nunca",
   "Advanced.CaptureProvenance": "Capturar procedencia del prompt del LLM",
   "Advanced.CaptureProvenanceHint": "Guarda el prompt exacto, el proveedor y el contexto inyectado que se enviaron al LLM en cada entrada para poder inspeccionarlos después en el Historial. Requiere guardar el historial.",
+  "Advanced.CrashReporting": "Enviar informes anónimos de fallos y rendimiento",
+  "Advanced.CrashReportingHint": "Desactivado de forma predeterminada. Si se activa, TypeWhisper envía informes de fallos y datos de tiempos (cuánto tardan la grabación, la transcripción, la limpieza y la inserción) a Sentry. Los informes incluyen la versión de la app, el tipo de sistema operativo y hardware, los nombres del motor y del modelo, y tipos de error y trazas de pila (nunca el texto del mensaje de error). Nunca se envían audio, transcripciones, prompts, títulos de ventana, claves de API ni direcciones IP en los informes. Se aplica de inmediato.",
   "Advanced.Data": "Datos",
   "Advanced.EnableMemory": "Activar memoria",
   "Advanced.HistoryDisabledHint": "Cuando el historial está desactivado, las transcripciones se siguen insertando pero no se guardan.",

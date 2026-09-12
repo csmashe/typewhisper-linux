@@ -14,6 +14,7 @@ using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Services.Setup;
+using TypeWhisper.Linux.Services.Telemetry;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Linux.Views;
@@ -212,6 +213,8 @@ internal static class ServiceRegistrations
         services.AddSingleton<ISetupTask, FfmpegSetupTask>();
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<OverlayCoordinator>();
+        services.AddSingleton<SentryTelemetryService>();
+        services.AddSingleton<IDiagnosticsReporter>(p => p.GetRequiredService<SentryTelemetryService>());
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
         services.AddSingleton<LlmCleanupService>();

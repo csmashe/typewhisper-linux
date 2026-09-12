@@ -15,6 +15,7 @@ using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services.Telemetry;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Linux.Views;
@@ -63,6 +64,15 @@ public class App : Application
             var settings = services.GetRequiredService<ISettingsService>();
             settings.Load();
             BootTrace.Stage("settings.Load");
+            try
+            {
+                services.GetRequiredService<SentryTelemetryService>().Start();
+                BootTrace.Stage("telemetry.Start");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Telemetry] Startup failed: {ex.Message}");
+            }
 
             // Interface language: snapshot the real OS locale BEFORE any
             // override (so "Auto (System)" can restore it), load the JSON
@@ -104,6 +114,15 @@ public class App : Application
             Dispatcher.UIThread.UnhandledException += (sender, args) =>
             {
                 args.Handled = true;
+                try
+                {
+                    services.GetRequiredService<IDiagnosticsReporter>()
+                        .CaptureException(args.Exception, "ui-dispatcher");
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Telemetry] Dispatcher capture failed: {ex.Message}");
+                }
                 _ = uiOperations.ReportDispatcherFailureAsync(args.Exception, "TypeWhisper");
             };
 
@@ -164,7 +183,18 @@ public class App : Application
                 };
             }
 
-            main.Opened += (_, _) => BootTrace.Stage("MainWindow.Opened fired");
+            main.Opened += (_, _) =>
+            {
+                BootTrace.Stage("MainWindow.Opened fired");
+                try
+                {
+                    services.GetRequiredService<SentryTelemetryService>().MarkStartupWindowShown();
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Telemetry] Startup timing failed: {ex.Message}");
+                }
+            };
             // We're up and on screen — end the desktop's "launching" busy
             // cursor. Avalonia never completes the startup-notification
             // sequence itself, so without this it spins until Mutter's timeout.
@@ -742,6 +772,15 @@ public class App : Application
     /// </summary>
     internal static async Task TearDownAsync(IServiceProvider services)
     {
+        try
+        {
+            services.GetRequiredService<SentryTelemetryService>().Shutdown();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Telemetry] Shutdown failed: {ex.Message}");
+        }
+
         try
         {
             services.GetService<SessionAudioFileService>()?.DeleteSessionCaptures();
