@@ -635,6 +635,12 @@
           "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
+      "typewhisper.plugin.microsoftai": {
+        "type": "Project",
+        "dependencies": {
+          "TypeWhisper.PluginSDK": "[0.14.1, )"
+        }
+      },
       "typewhisper.plugin.obsidian": {
         "type": "Project",
         "dependencies": {

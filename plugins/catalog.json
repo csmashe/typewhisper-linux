@@ -131,6 +131,14 @@
       "sdkAbi": "net10.0"
     },
     {
+      "id": "com.typewhisper.microsoft-ai",
+      "projectPath": "plugins/TypeWhisper.Plugin.MicrosoftAi/TypeWhisper.Plugin.MicrosoftAi.csproj",
+      "releaseSlug": "microsoft-ai",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
       "id": "com.typewhisper.obsidian",
       "projectPath": "plugins/TypeWhisper.Plugin.Obsidian/TypeWhisper.Plugin.Obsidian.csproj",
       "releaseSlug": "obsidian",

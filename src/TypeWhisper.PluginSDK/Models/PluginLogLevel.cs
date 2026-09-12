@@ -8,6 +8,8 @@ namespace TypeWhisper.PluginSDK.Models;
 public enum PluginLogLevel
 {
     // ReSharper disable once UnusedMember.Global
+    Trace = -1,
+    // ReSharper disable once UnusedMember.Global
     Debug,
     // ReSharper disable once UnusedMember.Global
     Info,
