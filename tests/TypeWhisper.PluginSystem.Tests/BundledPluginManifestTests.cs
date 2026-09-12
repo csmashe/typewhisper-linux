@@ -22,7 +22,7 @@ public sealed class BundledPluginManifestTests
     {
         var pluginDirectories = BundledPluginDirectories();
 
-        Assert.Equal(34, pluginDirectories.Length);
+        Assert.Equal(35, pluginDirectories.Length);
         foreach (var directory in pluginDirectories)
         {
             var manifestPath = Path.Join(directory, PluginManifest.FileName);
@@ -35,7 +35,7 @@ public sealed class BundledPluginManifestTests
     {
         var manifestPaths = ManifestPaths();
 
-        Assert.Equal(34, manifestPaths.Length);
+        Assert.Equal(35, manifestPaths.Length);
         foreach (var path in manifestPaths)
         {
             var json = File.ReadAllText(path);
