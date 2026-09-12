@@ -294,8 +294,11 @@ public sealed class SelectedProviderRefusalTests : IDisposable
     private static async IAsyncEnumerable<string> FaultingStream(Exception failure)
     {
         await Task.Yield();
-        yield return "partial";
-        throw failure;
+        // A server rejecting streaming has not produced a token. Once output has
+        // started, recovery intentionally refuses to restart the request as batch.
+        if (failure is not null)
+            throw failure;
+        yield break;
     }
 
     [Fact]
