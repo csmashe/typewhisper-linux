@@ -184,7 +184,7 @@ public sealed class SentryTelemetryServiceTests
     {
         var settings = new FakeSettingsService();
         var transport = new RecordingTransport();
-        var service = new SentryTelemetryService(settings, o => o.Transport = transport);
+        using var service = new SentryTelemetryService(settings, o => o.Transport = transport);
         try
         {
             service.Start();
