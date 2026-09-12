@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -743,6 +744,43 @@ public sealed partial class DictationOrchestrator : IDisposable
                 goto StartupComplete;
             }
 
+            // A profile hotkey forces a specific profile; resolve it synchronously (exactly once —
+            // matching twice could let the startup decisions and the recorded match disagree if the
+            // profile set changes mid-start) so the guard below and the streaming/language
+            // decisions don't use the stale _recordingProfile from the previous session. The
+            // background snapshot task still runs for the context-match path.
+            MatchResult? startupForcedMatch = null;
+            var startupProfile = _recordingProfile;
+            if (forcedProfileId is not null)
+            {
+                var forcedMatch = _profiles.MatchProfile(null, null, forcedProfileId);
+                if (forcedMatch.Kind == MatchKind.ManualOverride)
+                {
+                    startupForcedMatch = forcedMatch;
+                    startupProfile = forcedMatch.Profile;
+                }
+            }
+
+            // Forced-profile (profile hotkey) starts only: an ordinary start matches its profile in
+            // the background snapshot, after the microphone is already open, so startupProfile is
+            // null here and this guard is a no-op. Where the profile IS known up front, a prompt
+            // action is required post-processing (RequireLlmSuccess) and a provider that cannot
+            // serve it costs the whole dictation, so refuse before the microphone runs. A provider
+            // problem found after a context match still surfaces the same specific message (see
+            // RunPromptActionAsync and the transcription-failure handler) and, once the recovery
+            // branch merges, is kept as a failed dictation holding its raw text.
+            var promptActionProblem = DescribeProfilePromptActionProviderProblem(
+                startupProfile,
+                _promptActions.EnabledActions,
+                _promptProcessing
+            );
+            if (promptActionProblem is not null)
+            {
+                ReportStatus(promptActionProblem);
+                ShowFeedback(promptActionProblem, true);
+                goto StartupComplete;
+            }
+
             // One immutable view controls cue arbitration and the initial capture
             // mode even if settings change while the bounded cue is playing.
             var startupSettings = _settings.Current;
@@ -867,11 +905,6 @@ public sealed partial class DictationOrchestrator : IDisposable
                 }
             );
 
-            // Declared out here because the snapshot task that reuses it starts after this try
-            // block. Matching twice could let the startup decisions and the recorded match
-            // disagree if the profile set changes mid-start.
-            MatchResult? startupForcedMatch = null;
-
             try
             {
                 if (startupSettings.AudioDuckingEnabled)
@@ -889,21 +922,6 @@ public sealed partial class DictationOrchestrator : IDisposable
                 // and the streaming coordinator share this version. Bumping twice
                 // would immediately invalidate the streaming session.
                 var sessionVersion = _partialTranscriptState.StartSession();
-
-                // A profile hotkey forces a specific profile; resolve it
-                // synchronously here so streaming/language decisions don't use the
-                // stale _recordingProfile from the previous session. The background
-                // snapshot task still runs for the context-match path.
-                var startupProfile = _recordingProfile;
-                if (forcedProfileId is not null)
-                {
-                    var forcedMatch = _profiles.MatchProfile(null, null, forcedProfileId);
-                    if (forcedMatch.Kind == MatchKind.ManualOverride)
-                    {
-                        startupForcedMatch = forcedMatch;
-                        startupProfile = forcedMatch.Profile;
-                    }
-                }
 
                 var languageHints = LanguageSelectionResolver.ResolveHints(startupProfile, startupSettings);
                 var startupLanguageSelection = LanguageSelectionResolver.ResolvePrimary(languageHints);
@@ -1894,6 +1912,22 @@ public sealed partial class DictationOrchestrator : IDisposable
         return enabledActions.FirstOrDefault(action =>
             action.Id == promptActionId && !action.IsManualOnly
         );
+    }
+
+    /// <summary>
+    ///     The localized reason the profile's prompt action cannot run, or null when it can (or when
+    ///     the profile binds no prompt action). Exposed internally for unit testing.
+    /// </summary>
+    internal static string? DescribeProfilePromptActionProviderProblem(
+        Profile? profile,
+        IReadOnlyList<PromptAction> enabledActions,
+        PromptProcessingService promptProcessing
+    )
+    {
+        var action = ResolveAutoPromptAction(profile?.PromptActionId, enabledActions);
+        return action is null
+            ? null
+            : promptProcessing.TryDescribeSelectedProviderProblem(action.ProviderOverride);
     }
 
     /// <summary>
@@ -2965,9 +2999,11 @@ public sealed partial class DictationOrchestrator : IDisposable
     {
         var pump = new LlmStreamPump(onAccumulated);
         var streamed = await pump.RunAsync(source, token);
+        pump.ThrowIfNonRetryableFault();
 
-        if (pump.Failure is { } failure
-            && (pump.ReceivedAnyChunk || failure is PluginRequestException { IsTransient: false }))
+        // Once output has started, restarting as batch could duplicate work. Before the
+        // first token, allow the compatibility fallback for stream-specific failures.
+        if (pump.Failure is { } failure && pump.ReceivedAnyChunk)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
 
         var result = pump.Faulted || !pump.ReceivedAnyChunk
@@ -3039,7 +3075,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 return null;
             }
 
-            if (!_promptProcessing.IsAnyProviderAvailable)
+            if (_promptProcessing.HasNoProviderForRequest(_settings.Current.SpokenCommandLlmProvider))
             {
                 var noProvider = Localization.Loc.Instance["Command.NoProvider"];
                 ReportStatus(context, noProvider);
@@ -3060,6 +3096,22 @@ public sealed partial class DictationOrchestrator : IDisposable
             var wantsSelection =
                 (matchedAction is not null && !SpokenCommandIntent.OpensWithCreationVerb(command))
                 || SpokenCommandIntent.RefersToSelection(command);
+
+            // The guard above ran before the match, on the spoken-command selection; a matched
+            // saved action brings its own override. Re-check with the selection that will actually
+            // serve the request, before the clipboard probe and the provider call.
+            var commandProviderProblem = _promptProcessing.TryDescribeSelectedProviderProblem(
+                wantsSelection && matchedAction is not null
+                    ? matchedAction.ProviderOverride
+                    : _settings.Current.SpokenCommandLlmProvider
+            );
+            if (commandProviderProblem is not null)
+            {
+                ReportStatus(context, commandProviderProblem);
+                ShowFeedback(context, commandProviderProblem, true);
+                PublishSessionTerminal(context.SessionId, "failed", commandProviderProblem);
+                return null;
+            }
 
             PromptAction action;
             string input;
@@ -3270,7 +3322,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             var safeMessage = SanitizeForDisplay(ex.Message, command, failureInput, failureOutput, failurePrompt);
             Trace.WriteLine($"[Command] Spoken command failed: {ex.GetType().Name}: {safeMessage}\n{ex.StackTrace}");
             ReportStatus(context, $"Command failed: {safeMessage}");
-            ShowFeedback(context, Localization.Loc.Instance["Command.Failed"], true);
+            ShowFeedback(context, DescribeSpokenCommandFailure(ex, safeMessage), true);
             PublishSessionTerminal(context.SessionId, "failed", safeMessage);
         }
         finally
@@ -3296,6 +3348,11 @@ public sealed partial class DictationOrchestrator : IDisposable
         // Reached only via a catch (cancel/fail) — no savable result was produced.
         return null;
     }
+
+    internal static string DescribeSpokenCommandFailure(Exception ex, string? safeMessage = null) =>
+        ex is PluginRequestException { FailureKind: PluginRequestFailureKind.Configuration }
+            ? safeMessage ?? ex.Message
+            : Localization.Loc.Instance["Command.Failed"];
 
     // Result of a completed spoken command, for the history entry. SourceText is what the LLM
     // operated on — the selected text for an edit/transform, or the command itself for a create —
@@ -3514,6 +3571,15 @@ public sealed partial class DictationOrchestrator : IDisposable
         // never start a duplicate batch request.
         commandToken.ThrowIfCancellationRequested();
         Trace.WriteLine($"[Command] Streaming insertion faulted: {exception.Message}");
+
+        // A configuration fault (signed-out or uninstalled provider) resolves the same selection
+        // again in the batch path and fails identically; surface it instead of retrying. Other
+        // kinds keep the fallback, which exists for stream-specific failures.
+        if (exception is PluginRequestException { FailureKind: PluginRequestFailureKind.Configuration })
+        {
+            ExceptionDispatchInfo.Capture(exception).Throw();
+        }
+
         return typedAnything || !await tryBatchFallback();
     }
 

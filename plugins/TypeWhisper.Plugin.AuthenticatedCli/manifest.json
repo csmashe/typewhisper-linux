@@ -1,0 +1,11 @@
+{
+  "id": "com.typewhisper.authenticated-cli",
+  "name": "Authenticated CLIs",
+  "version": "1.0.0",
+  "author": "TypeWhisper",
+  "description": "Use your signed-in Codex, Claude Code and OpenCode CLIs as LLM providers",
+  "networkAccess": "userControlled",
+  "categories": ["llm"],
+  "assemblyName": "TypeWhisper.Plugin.AuthenticatedCli.dll",
+  "pluginClass": "TypeWhisper.Plugin.AuthenticatedCli.AuthenticatedCliPlugin"
+}

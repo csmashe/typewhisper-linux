@@ -22,6 +22,9 @@ public sealed class PromptPaletteService
     private readonly IServiceProvider _services;
     private readonly TextInsertionService _textInsertion;
 
+    internal static string NoProviderMessage =>
+        Loc.Instance["Prompts.NoProviderConfigure"];
+
     private bool _opening;
 
     public PromptPaletteService(
@@ -137,12 +140,12 @@ public sealed class PromptPaletteService
         string? targetWindowId
     )
     {
-        if (!_processing.IsAnyProviderAvailable)
+        if (_processing.HasNoProviderForRequest(action.ProviderOverride))
         {
             await CloseWindowAsync(window);
             await ShowWarningAsync(
                 "TypeWhisper",
-                "No LLM provider available. Please configure an API key in Plugins."
+                NoProviderMessage
             );
             return;
         }
@@ -352,6 +355,8 @@ public sealed class PromptPaletteService
             // Streaming timed out (no user cancel) — fall back to batch.
             return await BatchAsync(action, capturedText, userToken);
         }
+
+        pump.ThrowIfNonRetryableFault();
 
         // Fall back to batch when the pump faulted or yielded nothing. A single
         // empty chunk (bulk-yield path) still sets ReceivedAnyChunk so it is not re-run.

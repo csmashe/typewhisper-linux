@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Text;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -29,6 +31,21 @@ internal sealed class LlmStreamPump
 
     public bool Faulted { get; private set; }
     public Exception? Failure { get; private set; }
+
+    /// <summary>
+    ///     Rethrows a configuration fault — a signed-out or uninstalled selected provider — because
+    ///     the batch path resolves that same selection and fails identically. Every other fault
+    ///     keeps the caller's streaming&#8594;batch fallback, including non-transient ones that can be
+    ///     specific to the streaming request (a gateway rejecting <c>stream=true</c>, a stream-parse
+    ///     error reported as <see cref="PluginRequestFailureKind.Unknown" />).
+    /// </summary>
+    public void ThrowIfNonRetryableFault()
+    {
+        if (Failure is PluginRequestException { FailureKind: PluginRequestFailureKind.Configuration })
+        {
+            ExceptionDispatchInfo.Capture(Failure).Throw();
+        }
+    }
 
     /// <summary>
     ///     True once the source yielded at least one item (even ""). Distinguishes

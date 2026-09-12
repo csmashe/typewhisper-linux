@@ -10,6 +10,14 @@
       "sdkAbi": "net10.0"
     },
     {
+      "id": "com.typewhisper.authenticated-cli",
+      "projectPath": "plugins/TypeWhisper.Plugin.AuthenticatedCli/TypeWhisper.Plugin.AuthenticatedCli.csproj",
+      "releaseSlug": "authenticated-cli",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
       "id": "com.typewhisper.cerebras",
       "projectPath": "plugins/TypeWhisper.Plugin.Cerebras/TypeWhisper.Plugin.Cerebras.csproj",
       "releaseSlug": "cerebras",

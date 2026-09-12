@@ -35,21 +35,46 @@ public sealed record ProcessOneShotOptions(
     ProcessCaptureMode StandardError = ProcessCaptureMode.Utf8Text,
     ProcessPostExitPipePolicy PostExitPipePolicy = ProcessPostExitPipePolicy.RequireEof,
     TimeSpan? PostExitDrainGrace = null
-);
+)
+{
+    /// <summary>
+    /// Ceiling on captured stdout bytes, or null for unbounded. Must not be negative. Once a
+    /// stream passes its ceiling the supervisor terminates the child and reports
+    /// <see cref="ProcessRunStatus.OutputLimitExceeded" /> with truncated captured output.
+    /// </summary>
+    public int? MaximumStandardOutputBytes { get; init; }
+
+    /// <summary>The same ceiling for stderr.</summary>
+    public int? MaximumStandardErrorBytes { get; init; }
+
+    /// <summary>
+    /// Start with an empty environment so only <see cref="ProcessCommand.Environment" />
+    /// reaches the child. Defaults to false to preserve inherited environment behavior.
+    /// </summary>
+    public bool ClearInheritedEnvironment { get; init; }
+}
 
 public enum ProcessRunStatus
 {
     Exited,
     TimedOut,
     StartFailed,
+    OutputLimitExceeded,
 }
 
 public enum ProcessOutputStatus
 {
     Complete,
     AbandonedAfterExit,
+
+    /// <summary>The pumps were abandoned at a byte ceiling, so the capture stops mid-stream.</summary>
+    Truncated,
 }
 
+/// <param name="ExitCode">
+///     The child's exit code, or null when it never exited on its own — including a
+///     <see cref="ProcessRunStatus.OutputLimitExceeded" /> run that had to terminate it.
+/// </param>
 public sealed record ProcessRunOutcome(
     ProcessRunStatus Status,
     int? ExitCode,

@@ -17,6 +17,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.AssemblyAi\TypeWhisper.Plugin.AssemblyAi.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.AuthenticatedCli\TypeWhisper.Plugin.AuthenticatedCli.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Cerebras\TypeWhisper.Plugin.Cerebras.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Claude\TypeWhisper.Plugin.Claude.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.CloudflareAsr\TypeWhisper.Plugin.CloudflareAsr.csproj"/>
@@ -63,6 +64,7 @@
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Xai\TypeWhisper.Plugin.Xai.csproj"/>
         <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj"/>
         <ProjectReference Include="..\..\src\TypeWhisper.Linux\TypeWhisper.Linux.csproj"/>
+        <ProjectReference Include="..\TypeWhisper.FakeProviderCli\TypeWhisper.FakeProviderCli.csproj"/>
         <ProjectReference Include="..\TypeWhisper.ProcessTestChild\TypeWhisper.ProcessTestChild.csproj"/>
     </ItemGroup>
 

@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -181,6 +182,206 @@ public sealed class PromptProcessingServiceTests : IDisposable
             $"processed:First Provider:model-z:{PromptProcessingService.FormatPromptActionInput("hello")}",
             result
         );
+    }
+
+    [Fact]
+    public void HasNoProviderForRequest_IsFalseWhenAnExplicitSelectionExists()
+    {
+        using var pluginManager = CreatePluginManager([], []);
+        var settings = CreateSettings(
+            new AppSettings { DefaultLlmProvider = "plugin:com.test.signed-out:model-s" }
+        );
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        // A selection resolves to its own specific failure, so callers must not pre-empt it.
+        Assert.False(sut.HasNoProviderForRequest());
+        Assert.False(sut.HasNoProviderForRequest("plugin:com.test.other:model-o"));
+    }
+
+    [Fact]
+    public void HasNoProviderForRequest_IsTrueWhenNothingIsSelectedOrAvailable()
+    {
+        using var pluginManager = CreatePluginManager([], []);
+        var settings = CreateSettings(new AppSettings());
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        Assert.True(sut.HasNoProviderForRequest());
+    }
+
+    [Fact]
+    public async Task ProcessAsync_SkipsUnavailableProvider_WhenFallingBackWithNoSelection()
+    {
+        var unavailable = new FakeLlmProviderPlugin("com.test.signed-out", "Signed Out", "model-s")
+        {
+            IsAvailable = false,
+        };
+        var available = new FakeLlmProviderPlugin("com.test.ready", "Ready Provider", "model-r");
+        using var pluginManager = CreatePluginManager(
+            [unavailable, available],
+            [
+                CreateLoadedPlugin(unavailable.PluginId, unavailable),
+                CreateLoadedPlugin(available.PluginId, available),
+            ]
+        );
+        var settings = CreateSettings(new AppSettings());
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        var result = await sut.ProcessAsync(
+            new PromptAction
+            {
+                Id = "prompt",
+                Name = "Rewrite",
+                SystemPrompt = "Rewrite this",
+            },
+            "hello",
+            ct: CancellationToken.None
+        );
+
+        Assert.Equal(
+            $"processed:Ready Provider:model-r:{PromptProcessingService.FormatPromptActionInput("hello")}",
+            result
+        );
+        Assert.Equal(0, unavailable.CallCount);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_MissingProviderOverride_FailsInsteadOfUsingAnotherProvider()
+    {
+        var fallback = new FakeLlmProviderPlugin("com.test.fallback", "Fallback Provider", "model-f");
+        using var pluginManager = CreatePluginManager(
+            [fallback],
+            [CreateLoadedPlugin(fallback.PluginId, fallback)]
+        );
+        var settings = CreateSettings(new AppSettings());
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        var error = await Assert.ThrowsAsync<PluginRequestException>(() => sut.ProcessAsync(
+            new PromptAction
+            {
+                Id = "prompt",
+                Name = "Rewrite",
+                SystemPrompt = "Rewrite this",
+                ProviderOverride = "plugin:com.test.missing:model-m",
+            },
+            "hello",
+            ct: CancellationToken.None
+        ));
+
+        Assert.Equal(PluginRequestFailureKind.Configuration, error.FailureKind);
+        Assert.False(error.IsTransient);
+        Assert.Equal(
+            Loc.Instance.GetString(
+                "Prompts.SelectedProviderMissing",
+                "com.test.missing · model-m"
+            ),
+            error.Message
+        );
+        Assert.Equal(0, fallback.CallCount);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_UnavailableProviderOverride_FailsInsteadOfUsingAnotherProvider()
+    {
+        var unavailable = new FakeLlmProviderPlugin("com.test.signed-out", "Signed Out", "model-s")
+        {
+            IsAvailable = false,
+        };
+        var fallback = new FakeLlmProviderPlugin("com.test.fallback", "Fallback Provider", "model-f");
+        using var pluginManager = CreatePluginManager(
+            [unavailable, fallback],
+            [
+                CreateLoadedPlugin(unavailable.PluginId, unavailable),
+                CreateLoadedPlugin(fallback.PluginId, fallback),
+            ]
+        );
+        var settings = CreateSettings(new AppSettings());
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        var error = await Assert.ThrowsAsync<PluginRequestException>(() => sut.ProcessAsync(
+            new PromptAction
+            {
+                Id = "prompt",
+                Name = "Rewrite",
+                SystemPrompt = "Rewrite this",
+                ProviderOverride = "plugin:com.test.signed-out:model-s",
+            },
+            "hello",
+            ct: CancellationToken.None
+        ));
+
+        Assert.Equal(PluginRequestFailureKind.Configuration, error.FailureKind);
+        Assert.False(error.IsTransient);
+        Assert.Equal(
+            Loc.Instance.GetString("Prompts.SelectedProviderUnavailable", "Signed Out"),
+            error.Message
+        );
+        Assert.Equal(0, unavailable.CallCount);
+        Assert.Equal(0, fallback.CallCount);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_UnavailableDefaultProvider_FailsInsteadOfUsingAnotherProvider()
+    {
+        var unavailable = new FakeLlmProviderPlugin("com.test.signed-out", "Signed Out", "model-s")
+        {
+            IsAvailable = false,
+        };
+        var fallback = new FakeLlmProviderPlugin("com.test.fallback", "Fallback Provider", "model-f");
+        using var pluginManager = CreatePluginManager(
+            [unavailable, fallback],
+            [
+                CreateLoadedPlugin(unavailable.PluginId, unavailable),
+                CreateLoadedPlugin(fallback.PluginId, fallback),
+            ]
+        );
+        var settings = CreateSettings(
+            new AppSettings { DefaultLlmProvider = "plugin:com.test.signed-out:model-s" }
+        );
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        var error = await Assert.ThrowsAsync<PluginRequestException>(() => sut.ProcessSystemPromptAsync(
+            "Clean this up",
+            "hello",
+            ct: CancellationToken.None
+        ));
+
+        Assert.Equal(PluginRequestFailureKind.Configuration, error.FailureKind);
+        Assert.Equal(
+            Loc.Instance.GetString("Prompts.SelectedProviderUnavailable", "Signed Out"),
+            error.Message
+        );
+        Assert.Equal(0, unavailable.CallCount);
+        Assert.Equal(0, fallback.CallCount);
     }
 
     [Fact]
@@ -612,8 +813,11 @@ public sealed class PromptProcessingServiceTests : IDisposable
         public string PluginName => ProviderName;
         public string PluginVersion => "1.0.0";
         public string ProviderName { get; }
-        public bool IsAvailable => true;
+        public bool IsAvailable { get; init; } = true;
         public IReadOnlyList<PluginModelInfo> SupportedModels { get; }
+
+        // Lets a test prove no other provider was reached after a selected one failed.
+        public int CallCount { get; private set; }
 
         public Task ActivateAsync(IPluginHostServices host)
         {
@@ -632,6 +836,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
             CancellationToken ct
         )
         {
+            CallCount++;
             return Task.FromResult($"processed:{ProviderName}:{model}:{userText}");
         }
 

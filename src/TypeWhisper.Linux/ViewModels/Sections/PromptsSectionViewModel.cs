@@ -71,6 +71,10 @@ public partial class PromptsSectionViewModel : ObservableObject
     // the setter fires when the ComboBox re-selects the current value.
     private bool _isRefreshingProviders;
 
+    // Placeholder added for the editor's current unresolvable override, so it can be dropped again
+    // when the editor moves on. Null while the list is whatever RefreshPluginOptions last built.
+    private ProviderOption? _synthesizedProviderOption;
+
     [ObservableProperty]
     private PromptAction? _selectedAction;
 
@@ -125,7 +129,8 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     public bool HasError => !string.IsNullOrEmpty(ErrorText);
 
-    public bool ShowProviderWarning => AvailableProviders.Count <= 1;
+    public bool ShowProviderWarning =>
+        !AvailableProviders.Any(option => option.Value is not null && !option.IsUnavailable);
     // ReSharper disable once MemberCanBeMadeStatic.Global
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string ProviderWarningText => Loc.Instance["Prompts.ProviderWarning"];
@@ -295,6 +300,36 @@ public partial class PromptsSectionViewModel : ObservableObject
     partial void OnEditHotkeyKeyChanged(string? value)
     {
         HotkeyValidationMessage = null;
+    }
+
+    // Hydrating an action whose override no longer resolves (uninstalled plugin, signed-out CLI)
+    // must not leave the picker showing "Use default provider": the action still carries the
+    // override and would fail on it. The option list only rebuilds on plugin state changes, so
+    // add the placeholder here too — and drop the one synthesized for the previous action, which
+    // otherwise stays listed and selectable for every action visited since the last refresh.
+    partial void OnEditProviderOverrideChanged(string? value)
+    {
+        if (_isRefreshingProviders)
+        {
+            return;
+        }
+
+        if (_synthesizedProviderOption is not null
+            && !string.Equals(_synthesizedProviderOption.Value, value, StringComparison.Ordinal))
+        {
+            AvailableProviders.Remove(_synthesizedProviderOption);
+            _synthesizedProviderOption = null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(value)
+            && AvailableProviders.All(option =>
+                !string.Equals(option.Value, value, StringComparison.Ordinal)))
+        {
+            _synthesizedProviderOption = MissingSelectionOption(value);
+            AvailableProviders.Add(_synthesizedProviderOption);
+        }
+
+        OnPropertyChanged(nameof(SelectedEditProvider));
     }
 
     [RelayCommand]
@@ -618,10 +653,8 @@ public partial class PromptsSectionViewModel : ObservableObject
             // Build the resolved list first to determine whether the "Use default
             // provider" placeholder needs a fallback suffix.
             var resolvedOptions = new List<ProviderOption>();
-            // ReSharper disable once LoopCanBeConvertedToQuery
-            foreach (
-                var provider in _pluginManager.LlmProviders.Where(provider => provider.IsAvailable)
-            )
+            ProviderOption? firstAvailableOption = null;
+            foreach (var provider in _pluginManager.LlmProviders)
             {
                 // Use the provider's selection ID rather than mapping back to a loaded
                 // plugin by reference — additional provider roles (e.g. OpenAI-compatible
@@ -629,30 +662,46 @@ public partial class PromptsSectionViewModel : ObservableObject
                 // lookup would skip them. For normal plugins the selection ID is the
                 // plugin/manifest ID, so existing selections are unchanged.
                 var selectionId = provider.GetLlmSelectionId();
-                // ReSharper disable once LoopCanBeConvertedToQuery
                 foreach (var model in provider.SupportedModels)
                 {
-                    resolvedOptions.Add(
-                        new ProviderOption(
-                            $"plugin:{selectionId}:{model.Id}",
-                            $"{provider.ProviderName} / {model.DisplayName}"
-                        )
+                    // A provider that is installed but not ready (signed out, no key) stays
+                    // listed and labelled — dropping it would silently reset a selection the
+                    // user made, and PromptProcessingService now reports it by name instead
+                    // of falling through to another provider.
+                    var label = $"{provider.ProviderName} / {model.DisplayName}";
+                    var option = new ProviderOption(
+                        $"plugin:{selectionId}:{model.Id}",
+                        provider.IsAvailable
+                            ? label
+                            : Loc.Instance.GetString("Prompts.ProviderUnavailableFormat", label),
+                        !provider.IsAvailable
                     );
+                    resolvedOptions.Add(option);
+                    if (provider.IsAvailable)
+                    {
+                        firstAvailableOption ??= option;
+                    }
                 }
             }
 
+            AddMissingSelectionOption(resolvedOptions, _settings.Current.DefaultLlmProvider);
+            AddMissingSelectionOption(resolvedOptions, selectedProvider);
+            AddMissingSelectionOption(resolvedOptions, _settings.Current.SpokenCommandLlmProvider);
+
+            // The rebuilt list carries every saved selection again, so nothing synthesized before it
+            // is still owned by the editor.
+            _synthesizedProviderOption = null;
             AvailableProviders.Clear();
-            AvailableProviders.Add(new ProviderOption(null, DefaultProviderPlaceholderLabel(resolvedOptions)));
+            AvailableProviders.Add(
+                new ProviderOption(
+                    null,
+                    DefaultProviderPlaceholderLabel(resolvedOptions, firstAvailableOption)
+                )
+            );
             foreach (var option in resolvedOptions)
             {
                 AvailableProviders.Add(option);
             }
-
-            EditProviderOverride = AvailableProviders.Any(option =>
-                option.Value == selectedProvider
-            )
-                ? selectedProvider
-                : null;
         }
         finally
         {
@@ -682,30 +731,63 @@ public partial class PromptsSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowProviderWarning));
     }
 
-    private string DefaultProviderPlaceholderLabel(IReadOnlyList<ProviderOption> resolvedOptions)
+    // Keeps a saved selection selectable after the provider behind it disappears, so a refresh
+    // never silently rewrites the user's choice.
+    private static void AddMissingSelectionOption(List<ProviderOption> options, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)
+            || options.Any(option => string.Equals(option.Value, value, StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        options.Add(MissingSelectionOption(value));
+    }
+
+    private static ProviderOption MissingSelectionOption(string value)
+    {
+        return new ProviderOption(
+            value,
+            Loc.Instance.GetString(
+                "Prompts.ProviderUnavailableFormat",
+                PromptProcessingService.DescribeSelection(value)
+            ),
+            true
+        );
+    }
+
+    private string DefaultProviderPlaceholderLabel(
+        IReadOnlyList<ProviderOption> resolvedOptions,
+        ProviderOption? firstAvailableOption
+    )
     {
         var baseLabel = Loc.Instance["Prompts.UseDefaultProvider"];
         var configured = _settings.Current.DefaultLlmProvider;
-        var configuredResolves = !string.IsNullOrWhiteSpace(configured)
-                                 && resolvedOptions.Any(option =>
-                                     string.Equals(option.Value, configured, StringComparison.Ordinal));
-        if (configuredResolves)
+        var configuredOption = string.IsNullOrWhiteSpace(configured)
+            ? null
+            : resolvedOptions.FirstOrDefault(option =>
+                string.Equals(option.Value, configured, StringComparison.Ordinal));
+        if (configuredOption is not null)
         {
-            return baseLabel;
+            // A configured default that can't serve the request is named, not hidden — the
+            // placeholder is the only place the default provider is shown.
+            return configuredOption.IsUnavailable
+                ? Loc.Instance.GetString(
+                    "Prompts.UseDefaultProviderFallback",
+                    baseLabel,
+                    configuredOption.Label
+                )
+                : baseLabel;
         }
 
         // Mirrors PromptProcessingService.ResolveProvider: first available LLM provider.
-        var fallback = _pluginManager.LlmProviders.FirstOrDefault(provider => provider.IsAvailable);
-        if (fallback is null)
-        {
-            return baseLabel;
-        }
-
-        var fallbackModel = fallback.SupportedModels.Count > 0 ? fallback.SupportedModels[0] : null;
-        var fallbackLabel = fallbackModel is null
-            ? fallback.ProviderName
-            : $"{fallback.ProviderName} / {fallbackModel.DisplayName}";
-        return Loc.Instance.GetString("Prompts.UseDefaultProviderFallback", baseLabel, fallbackLabel);
+        return firstAvailableOption is null
+            ? baseLabel
+            : Loc.Instance.GetString(
+                "Prompts.UseDefaultProviderFallback",
+                baseLabel,
+                firstAvailableOption.Label
+            );
     }
 
     private void SelectById(string id)
@@ -748,6 +830,10 @@ public partial class PromptsSectionViewModel : ObservableObject
     }
 }
 
-public sealed record ProviderOption(string? Value, string Label);
+/// <summary>
+///     One entry of the provider dropdown. IsUnavailable marks a provider that is listed but
+///     cannot serve a request (signed out, missing key, no longer installed).
+/// </summary>
+public sealed record ProviderOption(string? Value, string Label, bool IsUnavailable = false);
 
 public sealed record ActionPluginOption(string? Value, string Label);

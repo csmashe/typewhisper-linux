@@ -3,6 +3,7 @@ using Moq;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -12,6 +13,12 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class PromptPaletteServiceTests
 {
+    [Fact]
+    public void No_provider_warning_is_localized()
+    {
+        Assert.Equal(Loc.Instance["Prompts.NoProviderConfigure"], PromptPaletteService.NoProviderMessage);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

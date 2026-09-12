@@ -3,6 +3,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -17,6 +18,10 @@ public sealed class LlmCleanupService
     private readonly CleanupService _cleanup;
     private readonly PromptProcessingService _promptProcessing;
     private readonly IErrorLogService? _errorLog;
+
+    // Last cleanup failure written to the error log. A broken provider fails on every dictation,
+    // so only a change of message is worth a new entry.
+    private string? _lastLoggedFailure;
 
     public LlmCleanupService(
         CleanupService cleanup,
@@ -48,7 +53,7 @@ public sealed class LlmCleanupService
         }
 
         var lightText = _cleanup.Clean(text, CleanupLevel.Light);
-        if (!_promptProcessing.IsAnyProviderAvailable)
+        if (_promptProcessing.HasNoProviderForRequest())
         {
             await NotifyStatusAsync(
                 statusCallback,
@@ -71,6 +76,8 @@ public sealed class LlmCleanupService
                 capture,
                 ct
             );
+            // Cleanup works again, so the same failure recurring later is worth logging afresh.
+            _lastLoggedFailure = null;
             return string.IsNullOrWhiteSpace(cleaned) ? lightText : cleaned.Trim();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -89,10 +96,18 @@ public sealed class LlmCleanupService
             Trace.WriteLine($"[LlmCleanupService] Cleanup failed: {safeMessage}");
             // User-actionable: the requested Medium/High cleanup silently degraded to
             // Light because the LLM call failed (key, network, provider outage).
-            _errorLog?.AddEntry(
-                $"AI cleanup failed and fell back to Light cleanup: {safeMessage}",
-                ErrorCategory.Prompt
-            );
+            var failure = $"AI cleanup failed and fell back to Light cleanup: {safeMessage}";
+            // A configuration failure is already one entry from PromptProcessingService; wrapping it
+            // here would describe the same event twice.
+            var alreadyLogged =
+                ex is PluginRequestException { FailureKind: PluginRequestFailureKind.Configuration };
+            if (!alreadyLogged
+                && !string.Equals(failure, _lastLoggedFailure, StringComparison.Ordinal))
+            {
+                _lastLoggedFailure = failure;
+                _errorLog?.AddEntry(failure, ErrorCategory.Prompt);
+            }
+
             await NotifyStatusAsync(statusCallback, "Cleanup failed. Using Light cleanup.");
             return lightText;
         }
