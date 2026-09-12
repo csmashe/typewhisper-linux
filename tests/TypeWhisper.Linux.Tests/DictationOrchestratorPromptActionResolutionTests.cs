@@ -12,6 +12,17 @@ namespace TypeWhisper.Linux.Tests;
 /// </summary>
 public sealed class DictationOrchestratorPromptActionResolutionTests
 {
+    [Theory]
+    [InlineData(null, false, false)]
+    [InlineData("", false, false)]
+    [InlineData("   ", false, false)]
+    [InlineData("prompt", true, false)]
+    [InlineData("prompt", false, true)]
+    public void ExplicitPromptAction_RequiresResolution(string? id, bool resolved, bool unavailable)
+    {
+        Assert.Equal(unavailable, DictationOrchestrator.IsPromptActionUnavailable(id, resolved));
+    }
+
     [Fact]
     public void ResolveAutoPromptAction_ReturnsActionWhenNotManualOnly()
     {

@@ -6,6 +6,7 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.SmallestAi;
@@ -100,20 +101,16 @@ public sealed class SmallestAiPlugin
             throw new InvalidOperationException("Smallest AI Pulse does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, BuildPulseUri(language, includeWordTimestamps: true));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
         request.Content = CreateWavContent(wavAudio);
 
-        using var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => $"Smallest AI Pulse API error {(int)errorResponse.StatusCode}: {ExtractApiError(errorBody)}");
         var json = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new HttpRequestException(
-                $"Smallest AI Pulse API error {(int)response.StatusCode}: {ExtractApiError(json)}");
-        }
 
         return ParseTranscriptionResponse(json, NormalizeLanguage(language));
     }
@@ -121,7 +118,7 @@ public sealed class SmallestAiPlugin
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         return await SmallestAiStreamingSession.ConnectAsync(ApiKey!, NormalizeLanguage(language), ct);
     }

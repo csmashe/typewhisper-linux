@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text;
 
@@ -51,8 +52,29 @@ public static class SseEventDecoder
         var eventType = "";
         var lastEventId = "";
 
-        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        while (true)
         {
+            // Awaited directly rather than through ReadBodyWithErrorHandlingAsync: this runs once
+            // per SSE line, and the callback form would allocate a closure and a Task per line.
+            string? line;
+            try
+            {
+                line = await reader.ReadLineAsync(cancellationToken);
+            }
+            catch (Exception ex) when (ex is IOException or HttpRequestException or SocketException)
+            {
+                throw OpenAiApiHelper.MapBodyReadFailure(ex, cancellationToken);
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw OpenAiApiHelper.MapBodyReadFailure(ex, cancellationToken);
+            }
+
+            if (line is null)
+            {
+                break;
+            }
+
             if (line.Length == 0)
             {
                 if (data.Length == 0)

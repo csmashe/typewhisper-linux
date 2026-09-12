@@ -11,6 +11,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class GoogleCloudSttPluginTests
 {
+    [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<GoogleCloudSttPlugin>();
+
+
     private const int SampleRateHertz = 16000;
     private const int BytesPerSample = sizeof(short);
     private const int BytesPerSecond = SampleRateHertz * BytesPerSample;
@@ -124,7 +129,7 @@ public class GoogleCloudSttPluginTests
         using var sut = await CreateConfiguredPluginAsync(handler);
         var wavAudio = BuildFfmpegStyleWav(61 * BytesPerSecond);
 
-        var exception = await Assert.ThrowsAsync<HttpRequestException>(
+        var exception = await Assert.ThrowsAsync<PluginRequestException>(
             () => sut.TranscribeAsync(
                 wavAudio,
                 "en",
@@ -134,7 +139,8 @@ public class GoogleCloudSttPluginTests
             )
         );
 
-        Assert.Equal(HttpStatusCode.BadGateway, exception.StatusCode);
+        Assert.Equal((int)HttpStatusCode.BadGateway, exception.HttpStatusCode);
+        Assert.Equal(PluginRequestFailureKind.ServerError, exception.FailureKind);
         Assert.Equal(2, handler.Requests.Count);
     }
 

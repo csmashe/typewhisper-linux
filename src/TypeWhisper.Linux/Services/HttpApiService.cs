@@ -1677,7 +1677,9 @@ public sealed partial class HttpApiService : IDisposable
                 !plugin.SupportsLanguageHints && unexpressedHints > 0
                     ? BuildLanguageHintsPrompt(languageHints)
                     : null,
-                _dictionary.GetTermsForPrompt()
+                PluginDictionaryTerms.CreatePrompt(
+                    _dictionary.GetEnabledTerms(),
+                    plugin.DictionaryTermsBudget ?? DictionaryTermsBudget.Default)
             );
             result = await plugin.TranscribeAsync(
                 wav,
@@ -1824,7 +1826,11 @@ public sealed partial class HttpApiService : IDisposable
             ? parsedOffset
             : 0;
 
-        var records = string.IsNullOrWhiteSpace(query) ? _history.Records : _history.Search(query);
+        // Failed records exist so the History UI can offer a retry; they carry no usable text, so
+        // the API sees only successes — the same rule the exports and TotalRecords follow.
+        var records = (string.IsNullOrWhiteSpace(query) ? _history.Records : _history.Search(query))
+            .Where(record => record.Status == TranscriptionRecordStatus.Succeeded)
+            .ToArray();
 
         var paged = records
             .Skip(offset)
@@ -1847,7 +1853,7 @@ public sealed partial class HttpApiService : IDisposable
         return (
             200,
             Serialize(
-                new { total = records.Count, offset, limit, records = paged }
+                new { total = records.Length, offset, limit, records = paged }
             )
         );
     }
@@ -2145,6 +2151,7 @@ public sealed partial class HttpApiService : IDisposable
                     corrections = corrections.Select(c => new
                     {
                         original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive,
+                        isRegex = c.IsRegex,
                     }),
                     count = corrections.Count,
                 }
@@ -2205,6 +2212,7 @@ public sealed partial class HttpApiService : IDisposable
                     corrections = corrections.Select(c => new
                     {
                         original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive,
+                        isRegex = c.IsRegex,
                     }),
                     count = corrections.Count,
                 }
@@ -2256,6 +2264,7 @@ public sealed partial class HttpApiService : IDisposable
                     corrections = corrections.Select(c => new
                     {
                         original = c.Original, replacement = c.Replacement, caseSensitive = c.CaseSensitive,
+                        isRegex = c.IsRegex,
                     }),
                     count = corrections.Count,
                 }

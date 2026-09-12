@@ -15,6 +15,7 @@ using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services.Telemetry;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Linux.Views;
@@ -63,6 +64,15 @@ public class App : Application
             var settings = services.GetRequiredService<ISettingsService>();
             settings.Load();
             BootTrace.Stage("settings.Load");
+            try
+            {
+                services.GetRequiredService<SentryTelemetryService>().Start();
+                BootTrace.Stage("telemetry.Start");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Telemetry] Startup failed: {ex.Message}");
+            }
 
             // Interface language: snapshot the real OS locale BEFORE any
             // override (so "Auto (System)" can restore it), load the JSON
@@ -104,6 +114,15 @@ public class App : Application
             Dispatcher.UIThread.UnhandledException += (sender, args) =>
             {
                 args.Handled = true;
+                try
+                {
+                    services.GetRequiredService<IDiagnosticsReporter>()
+                        .CaptureException(args.Exception, "ui-dispatcher");
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Telemetry] Dispatcher capture failed: {ex.Message}");
+                }
                 _ = uiOperations.ReportDispatcherFailureAsync(args.Exception, "TypeWhisper");
             };
 
@@ -164,7 +183,18 @@ public class App : Application
                 };
             }
 
-            main.Opened += (_, _) => BootTrace.Stage("MainWindow.Opened fired");
+            main.Opened += (_, _) =>
+            {
+                BootTrace.Stage("MainWindow.Opened fired");
+                try
+                {
+                    services.GetRequiredService<SentryTelemetryService>().MarkStartupWindowShown();
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Telemetry] Startup timing failed: {ex.Message}");
+                }
+            };
             // We're up and on screen — end the desktop's "launching" busy
             // cursor. Avalonia never completes the startup-notification
             // sequence itself, so without this it spins until Mutter's timeout.
@@ -744,12 +774,13 @@ public class App : Application
     {
         try
         {
-            services.GetService<SessionAudioFileService>()?.DeleteSessionCaptures();
+            services.GetRequiredService<SentryTelemetryService>().Shutdown();
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[App] Session audio cleanup failed: {ex.Message}");
+            Trace.WriteLine($"[Telemetry] Shutdown failed: {ex.Message}");
         }
+
 
         try
         {
@@ -901,10 +932,26 @@ public class App : Application
             Debug.WriteLine($"[App] Dictation toggle-gate close failed: {ex.Message}");
         }
 
+        var recoveryDrained = dictation is null || await dictation.CancelRecoveryAndDrainAsync().ConfigureAwait(false);
+        if (!ApplyRecoveryDrainResult(recoveryDrained))
+        {
+            Debug.WriteLine("[App] Recovery is still running; skipping dictation, audio, model and provider disposal.");
+            return;
+        }
+
         DisposeDictationBeforeAudio(
             dictation,
             services.GetService<AudioRecordingService>()
         );
+
+        try
+        {
+            services.GetService<SessionAudioFileService>()?.ApplyRetention(services.GetRequiredService<ISettingsService>().Current.DictationRecoveryRetentionDays);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Session audio cleanup failed: {ex.Message}");
+        }
 
         try
         {
@@ -941,6 +988,15 @@ public class App : Application
 
     internal static bool SkipProviderDisposal =>
         Volatile.Read(ref s_skipProviderDisposal) != 0;
+
+    internal static bool ApplyRecoveryDrainResult(bool recoveryDrained)
+    {
+        if (recoveryDrained)
+            return true;
+
+        Volatile.Write(ref s_skipProviderDisposal, 1);
+        return false;
+    }
 
     internal static ShutdownDisposalDecision ApplyHttpApiDrainResult(
         bool httpApiDrained,
@@ -1049,7 +1105,7 @@ public class App : Application
                 {
                     services
                         .GetRequiredService<SessionAudioFileService>()
-                        .DeleteSessionCaptures();
+                        .ApplyRetention(services.GetRequiredService<ISettingsService>().Current.DictationRecoveryRetentionDays);
                     return Task.CompletedTask;
                 },
                 Required: false
@@ -1121,6 +1177,8 @@ public class App : Application
                 {
                     var historyRetention =
                         services.GetRequiredService<HistoryRetentionCoordinator>();
+                    // Backfill statistics before retention removes existing history.
+                    _ = services.GetRequiredService<IUsageStatisticsService>();
                     historyRetention.Initialize();
                     return Task.CompletedTask;
                 },

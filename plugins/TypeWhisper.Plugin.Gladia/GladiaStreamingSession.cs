@@ -1,3 +1,4 @@
+using TypeWhisper.PluginSDK.Helpers;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -6,7 +7,7 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.Gladia;
 
-internal sealed class GladiaStreamingSession : IStreamingSession
+internal sealed class GladiaStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
     internal const string InitUrl = "https://api.gladia.io/v2/live";
 
@@ -16,6 +17,8 @@ internal sealed class GladiaStreamingSession : IStreamingSession
     {
         _pump = pump;
     }
+
+    public Exception? Fault => _pump.Fault;
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived
     {
@@ -169,14 +172,10 @@ internal sealed class GladiaWebSocketAdapter(
             "application/json"
         );
 
-        using var response = await httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => $"Gladia live init failed {(int)errorResponse.StatusCode}: {errorBody}");
         var json = await response.Content.ReadAsStringAsync(ct);
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new InvalidOperationException(
-                $"Gladia live init failed {(int)response.StatusCode}: {json}"
-            );
-        }
 
         var url =
             GladiaStreamingSession.ParseSessionUrl(json)

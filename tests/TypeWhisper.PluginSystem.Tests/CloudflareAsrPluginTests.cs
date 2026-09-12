@@ -10,6 +10,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class CloudflareAsrPluginTests
 {
     [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<CloudflareAsrPlugin>();
+
+
+    [Fact]
     public async Task ActivateAsync_RestoresNormalizedCredentialsAndSelectedModel()
     {
         var host = new TestPluginHostServices
@@ -156,7 +161,7 @@ public class CloudflareAsrPluginTests
         );
         using var sut = await CreateConfiguredPluginAsync(handler);
 
-        var exception = await Assert.ThrowsAsync<HttpRequestException>(
+        var exception = await Assert.ThrowsAsync<PluginRequestException>(
             () =>
                 sut.TranscribeAsync(
                     [1],
@@ -297,7 +302,7 @@ public class CloudflareAsrPluginTests
         using var sut = new CloudflareAsrPlugin(new HttpClient(handler));
         sut.SetLocalization(new TestPluginLocalization());
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Assert.ThrowsAsync<PluginRequestException>(
             () =>
                 sut.TranscribeAsync(
                     [1],

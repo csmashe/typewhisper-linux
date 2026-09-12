@@ -2,6 +2,7 @@ using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.Services;
@@ -89,10 +90,13 @@ public sealed class LlmCleanupService
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[LlmCleanupService] Cleanup failed: {ex.Message}");
+            var safeMessage =
+                FailureMessageSanitizer.Sanitize(ex.Message, text, lightText, CleanupService.GetLlmSystemPrompt(level))
+                ?? Loc.Instance["Common.UnknownError"];
+            Trace.WriteLine($"[LlmCleanupService] Cleanup failed: {safeMessage}");
             // User-actionable: the requested Medium/High cleanup silently degraded to
             // Light because the LLM call failed (key, network, provider outage).
-            var failure = $"AI cleanup failed and fell back to Light cleanup: {ex.Message}";
+            var failure = $"AI cleanup failed and fell back to Light cleanup: {safeMessage}";
             // A configuration failure is already one entry from PromptProcessingService; wrapping it
             // here would describe the same event twice.
             var alreadyLogged =

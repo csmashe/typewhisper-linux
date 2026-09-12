@@ -10,7 +10,7 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.ElevenLabs;
 
-internal sealed class ElevenLabsStreamingSession : IStreamingSession
+internal sealed class ElevenLabsStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
     internal const int MinimumBufferedChunkBytes = 3200;
 
@@ -26,12 +26,14 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
     )
     {
         var pump = await WebSocketSessionPump.StartConnectedAsync(
-            new ElevenLabsWebSocketAdapter("", "scribe_v2_realtime", null),
+            new ElevenLabsWebSocketAdapter("", "scribe_v2_realtime", null, noVerbatim: true),
             new ClientWebSocketTransport(ws),
             CancellationToken.None
         );
         return new ElevenLabsStreamingSession(pump);
     }
+
+    public Exception? Fault => _pump.Fault;
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived
     {
@@ -43,11 +45,12 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
         string apiKey,
         string realtimeModelId,
         string? language,
+        bool noVerbatim,
         CancellationToken ct
     )
     {
         var pump = await WebSocketSessionPump.ConnectAsync(
-            new ElevenLabsWebSocketAdapter(apiKey, realtimeModelId, language),
+            new ElevenLabsWebSocketAdapter(apiKey, realtimeModelId, language, noVerbatim),
             ct
         );
         return new ElevenLabsStreamingSession(pump);
@@ -60,7 +63,7 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
 
     public ValueTask DisposeAsync() => _pump.DisposeAsync();
 
-    internal static Uri BuildRealtimeUri(string realtimeModelId, string? language)
+    internal static Uri BuildRealtimeUri(string realtimeModelId, string? language, bool noVerbatim)
     {
         var query = new List<string>
         {
@@ -69,6 +72,7 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
             "commit_strategy=vad",
             "include_timestamps=true",
             "include_language_detection=true",
+            $"no_verbatim={(noVerbatim ? "true" : "false")}",
         };
 
         if (!string.IsNullOrWhiteSpace(language))
@@ -261,7 +265,8 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession
 internal sealed class ElevenLabsWebSocketAdapter(
     string apiKey,
     string realtimeModelId,
-    string? language
+    string? language,
+    bool noVerbatim
 ) : IWebSocketSessionAdapter
 {
     private readonly MemoryStream _audioBuffer = new();
@@ -289,7 +294,8 @@ internal sealed class ElevenLabsWebSocketAdapter(
             new WebSocketConnectionOptions(
                 ElevenLabsStreamingSession.BuildRealtimeUri(
                     realtimeModelId,
-                    language
+                    language,
+                    noVerbatim
                 ),
                 headers
             )

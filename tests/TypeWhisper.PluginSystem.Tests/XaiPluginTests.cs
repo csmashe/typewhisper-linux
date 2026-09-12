@@ -20,6 +20,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class XaiPluginTests
 {
     [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<XaiPlugin>();
+
+
+    [Fact]
     public async Task ProcessAsync_OmitsOutputCapAndRejectsIncompleteTokenLimitedOutput()
     {
         var input = string.Concat(Enumerable.Repeat("dictated input ", 1000));
@@ -861,7 +866,7 @@ public class XaiPluginTests
         var sut = new XaiPlugin();
         await sut.ActivateAsync(host);
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() =>
             sut.StartStreamingAsync(language: null, CancellationToken.None));
 
         Assert.Contains("Settings.NotConfiguredApiKeyRequired", ex.Message);

@@ -1,6 +1,6 @@
 {
   "Settings.ApiKey": "API-Schlüssel",
-  "Settings.ApiKeyDescription": "Erforderlich für Gemini-LLM-Anfragen.",
+  "Settings.ApiKeyDescription": "Erforderlich für Gemini-Transkription und LLM-Anfragen.",
   "Settings.StreamResponses": "Antworten streamen",
   "Settings.StreamResponsesDescription": "Prompt-Aktions-Ausgabe Token für Token während der Generierung anzeigen, statt auf die vollständige Antwort zu warten.",
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
@@ -8,5 +8,16 @@
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
   "Settings.ApiKeyNotConfigured": "API-Schlüssel nicht konfiguriert",
   "Manifest.Name": "Google Gemini",
-  "Manifest.Description": "Google-Gemini-LLM-Anbieter für Prompt-Aktionen und Übersetzung"
+  "Manifest.Description": "Google-Gemini-Transkription, Live-Diktat und Gemini-/Gemma-LLM-Anbieter mit dynamischer Modellerkennung",
+  "Settings.ApiKeyValidFetched": "API-Schlüssel gültig! Modelle geladen: {0} Chat, {1} Transkription.",
+  "Settings.LlmModelDescriptionFetched": "Kompatible Gemini- und Gemma-Modelle aus der API geladen: {0}.",
+  "Settings.LlmModelDescriptionDefault": "Die integrierten Gemini-Aliasse werden verwendet. Validieren Sie den API-Schlüssel, um die dafür verfügbaren Gemini- und Gemma-Chatmodelle zu laden.",
+  "Settings.LlmModel": "LLM-Modell",
+  "Settings.TranscriptionModel": "Transkriptionsmodell",
+  "Settings.TranscriptionModelsFetched": "Transkriptionsmodelle aus der API geladen: {0}.",
+  "Settings.TranscriptionModelFallback": "Das integrierte Gemini-Transkriptionsmodell wird verwendet. Validieren Sie den API-Schlüssel, um die dafür verfügbaren Transkriptionsmodelle zu laden.",
+  "Settings.TranscriptionMode": "Transkriptionsstil",
+  "Settings.TranscriptionModeHint": "Smart entfernt Füllwörter, übernimmt gesprochene Korrekturen und formatiert diktierten Text. Wortgetreu erhält die gesprochenen Wörter.",
+  "Settings.ModeSmart": "Smart",
+  "Settings.ModeVerbatim": "Wortgetreu"
 }

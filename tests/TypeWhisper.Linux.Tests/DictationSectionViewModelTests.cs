@@ -16,6 +16,195 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class DictationSectionViewModelTests
 {
+    [Theory]
+    [InlineData("-1", -1, "-1")]
+    [InlineData("0", 1, "1")]
+    [InlineData("900", 365, "365")]
+    [InlineData("7", 7, "7")]
+    // Unparseable text is left in the box so the user can keep typing.
+    [InlineData("invalid", 30, "invalid")]
+    public void RecoveryRetention_ParsesAndClamps(string input, int expected, string expectedText)
+    {
+        using var context = new ViewModelTestContext(AppSettings.Default,
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+        Assert.Equal("30", context.Sut.DictationRecoveryRetentionDays);
+        context.Sut.DictationRecoveryRetentionDays = input;
+        Assert.Equal(expected, context.Settings.Object.Current.DictationRecoveryRetentionDays);
+        Assert.Equal(expectedText, context.Sut.DictationRecoveryRetentionDays);
+    }
+
+    [Fact]
+    public void LockPasteToFocusedField_LoadsFromSettings()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { LockPasteToFocusedField = true },
+            new FakeAudioDeviceEnumerator()
+        );
+        Assert.True(context.Sut.LockPasteToFocusedField);
+    }
+
+    [Fact]
+    public void LockPasteToFocusedField_Change_PersistsToSettings()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default, new FakeAudioDeviceEnumerator()
+        );
+        context.Sut.LockPasteToFocusedField = true;
+        context.Settings.Verify(
+            service => service.Update(It.Is<Func<AppSettings, AppSettings>>(
+                mutation => mutation(AppSettings.Default).LockPasteToFocusedField)),
+            Times.Once
+        );
+    }
+
+    [Fact]
+    public void LockPasteAvailability_FollowsRunningClient()
+    {
+        var client = new Mock<IAtSpiEventClient>();
+        var pendingNotifications = new Queue<Action>();
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { TargetAppCorrectionLearningEnabled = true },
+            new FakeAudioDeviceEnumerator(), atSpiClient: client.Object,
+            dispatchNotification: pendingNotifications.Enqueue
+        );
+        Assert.False(context.Sut.IsLockPasteToFocusedFieldAvailable);
+        var notifications = new List<string?>();
+        context.Sut.PropertyChanged += (_, args) => notifications.Add(args.PropertyName);
+        foreach (var running in new[] { true, false })
+        {
+            notifications.Clear();
+            client.SetupGet(value => value.IsRunning).Returns(running);
+            client.Raise(value => value.RunningChanged += null);
+            Assert.Empty(notifications);
+            Assert.Single(pendingNotifications);
+            pendingNotifications.Dequeue()();
+            Assert.Contains(nameof(context.Sut.IsLockPasteToFocusedFieldAvailable), notifications);
+            Assert.Equal(running, context.Sut.IsLockPasteToFocusedFieldAvailable);
+        }
+    }
+
+    [Fact]
+    public void LockPasteAvailability_RequiresLearningConsent()
+    {
+        var client = new Mock<IAtSpiEventClient>();
+        client.SetupGet(value => value.IsRunning).Returns(true);
+        using var context = new ViewModelTestContext(
+            AppSettings.Default, new FakeAudioDeviceEnumerator(), atSpiClient: client.Object
+        );
+        var notifications = new List<string?>();
+        context.Sut.PropertyChanged += (_, args) => notifications.Add(args.PropertyName);
+
+        Assert.False(context.Sut.IsLockPasteToFocusedFieldAvailable);
+        context.Sut.TargetAppCorrectionLearningEnabled = true;
+        Assert.Contains(nameof(context.Sut.IsLockPasteToFocusedFieldAvailable), notifications);
+        Assert.True(context.Sut.IsLockPasteToFocusedFieldAvailable);
+        context.Sut.TargetAppCorrectionLearningEnabled = false;
+        Assert.False(context.Sut.IsLockPasteToFocusedFieldAvailable);
+    }
+
+    [Fact]
+    public void SpokenFormattingStrategy_HydratesAndPersistsSelection()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { SpokenFormattingStrategy = SpokenFormattingStrategy.FallbackOnly },
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)));
+        Assert.Equal(SpokenFormattingStrategy.FallbackOnly, context.Sut.SelectedSpokenFormattingStrategyOption?.Value);
+        context.Sut.SelectedSpokenFormattingStrategyOption = context.Sut.SpokenFormattingStrategyOptions
+            .Single(option => option.Value == SpokenFormattingStrategy.NativeOnly);
+        Assert.Equal(SpokenFormattingStrategy.NativeOnly, context.Settings.Object.Current.SpokenFormattingStrategy);
+        Assert.False(context.Sut.IsSpokenFormattingVerificationVisible);
+    }
+
+    [Fact]
+    public void SpokenFormattingVerification_UsesSelectedIdentityAndSavesAndClearsOverrides()
+    {
+        var plugin = new ModelDependentLanguagePlugin();
+        using var context = new ViewModelTestContext(
+            AppSettings.Default.WithLanguageHints(["de"]) with { SelectedModelId = plugin.FirstFullModelId },
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)), [plugin]);
+        Assert.True(context.Sut.IsSpokenFormattingVerificationVisible);
+        Assert.False(context.Sut.HasSpokenFormattingOverride);
+        Assert.NotEmpty(context.Sut.SpokenFormattingScenarios);
+        Assert.Contains("multilingual", context.Sut.SpokenFormattingProfileContext);
+        Assert.Contains("de", context.Sut.SpokenFormattingProfileContext);
+        Assert.Contains(context.Sut.SpokenFormattingScenarios, row => row.Expected.Contains('⏎'));
+        Assert.Contains(context.Sut.SpokenFormattingScenarios, row => row.Expected.Contains('⇥'));
+
+        context.Sut.SpokenFormattingNativeWorksCommand.Execute(null);
+        var profile = Assert.Single(context.Settings.Object.Current.SpokenFormattingProfiles);
+        Assert.Equal(plugin.ProviderId, profile.EngineId);
+        Assert.Equal("multilingual", profile.ModelId);
+        Assert.Equal("de", profile.LanguageCode);
+        Assert.Equal(SpokenFormattingStrategy.NativeOnly, profile.StrategyOverride);
+        Assert.Equal(SpokenFormattingVerificationState.UserVerifiedGood, profile.VerificationState);
+        Assert.True(context.Sut.HasSpokenFormattingOverride);
+        Assert.NotNull(profile.LastVerifiedAt);
+
+        context.Sut.SpokenFormattingUseFallbackCommand.Execute(null);
+        profile = Assert.Single(context.Settings.Object.Current.SpokenFormattingProfiles);
+        Assert.Equal(SpokenFormattingStrategy.FallbackOnly, profile.StrategyOverride);
+        Assert.Equal(SpokenFormattingVerificationState.UserVerifiedBad, profile.VerificationState);
+        context.Sut.SpokenFormattingResetOverrideCommand.Execute(null);
+        Assert.Empty(context.Settings.Object.Current.SpokenFormattingProfiles);
+        Assert.False(context.Sut.HasSpokenFormattingOverride);
+        Assert.Equal(SpokenFormattingStrategy.Automatic, context.Settings.Object.Current.SpokenFormattingStrategy);
+
+        context.Sut.Language = "fr";
+        Assert.False(context.Sut.IsSpokenFormattingVerificationVisible);
+        context.Sut.Language = "auto";
+        Assert.True(context.Sut.IsSpokenFormattingVerificationVisible);
+        Assert.Contains("en", context.Sut.SpokenFormattingProfileContext);
+        context.Sut.SelectedModel = null;
+        Assert.False(context.Sut.IsSpokenFormattingVerificationVisible);
+    }
+
+    [Theory]
+    [InlineData(true, "en")]
+    [InlineData(false, "de")]
+    public void SpokenFormattingVerification_TranslationUsesOutputLanguageAndRefreshes(bool supportsTranslation, string expectedLanguage)
+    {
+        var plugin = new ModelDependentLanguagePlugin { SupportsTranslation = supportsTranslation };
+        using var context = new ViewModelTestContext(
+            AppSettings.Default.WithLanguageHints(["de"]) with { SelectedModelId = plugin.FirstFullModelId },
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)), [plugin]);
+        Assert.EndsWith(" · de", context.Sut.SpokenFormattingProfileContext);
+        var notifications = new List<string?>();
+        context.Sut.PropertyChanged += (_, args) => notifications.Add(args.PropertyName);
+
+        var updated = context.Settings.Object.Update(current => current with { TranscriptionTask = "translate" });
+        typeof(DictationSectionViewModel).GetMethod("RefreshFromSettings", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(context.Sut, [updated]);
+
+        Assert.Contains(nameof(DictationSectionViewModel.SpokenFormattingProfileContext), notifications);
+        Assert.Contains(nameof(DictationSectionViewModel.SpokenFormattingScenarios), notifications);
+        Assert.EndsWith($" · {expectedLanguage}", context.Sut.SpokenFormattingProfileContext);
+        context.Sut.SpokenFormattingNativeWorksCommand.Execute(null);
+        Assert.Equal(expectedLanguage, Assert.Single(context.Settings.Object.Current.SpokenFormattingProfiles).LanguageCode);
+    }
+
+    [Fact]
+    public void SpokenFormattingVerification_NativeFirstCaptionFollowsEffectiveStrategy()
+    {
+        var plugin = new ModelDependentLanguagePlugin();
+        using var context = new ViewModelTestContext(
+            AppSettings.Default.WithLanguageHints(["de"]) with { SelectedModelId = plugin.FirstFullModelId },
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "Default Mic", 1, isDefault: true)), [plugin]);
+        var notifications = new List<string?>();
+        context.Sut.PropertyChanged += (_, args) => notifications.Add(args.PropertyName);
+        Assert.True(context.Sut.IsSpokenFormattingVerifyNativeFirstVisible);
+        context.Sut.SpokenFormattingStrategy = SpokenFormattingStrategy.NativeOnly;
+        Assert.False(context.Sut.IsSpokenFormattingVerifyNativeFirstVisible);
+        context.Sut.SpokenFormattingUseFallbackCommand.Execute(null);
+        Assert.True(context.Sut.IsSpokenFormattingVerifyNativeFirstVisible);
+        context.Sut.SpokenFormattingResetOverrideCommand.Execute(null);
+        Assert.False(context.Sut.IsSpokenFormattingVerifyNativeFirstVisible);
+        context.Sut.SpokenFormattingStrategy = SpokenFormattingStrategy.FallbackOnly;
+        Assert.True(context.Sut.IsSpokenFormattingVerifyNativeFirstVisible);
+        context.Sut.SpokenFormattingNativeWorksCommand.Execute(null);
+        Assert.False(context.Sut.IsSpokenFormattingVerifyNativeFirstVisible);
+        Assert.Contains(nameof(DictationSectionViewModel.IsSpokenFormattingVerifyNativeFirstVisible), notifications);
+    }
+
     [Fact]
     public void AdditionalLanguages_LoadFromSettingsHintsTail()
     {
@@ -422,7 +611,9 @@ public sealed class DictationSectionViewModelTests
         public ViewModelTestContext(
             AppSettings initialSettings,
             FakeAudioDeviceEnumerator devices,
-            IReadOnlyList<ITranscriptionEngineRole>? engines = null
+            IReadOnlyList<ITranscriptionEngineRole>? engines = null,
+            IAtSpiEventClient? atSpiClient = null,
+            Action<Action>? dispatchNotification = null
         )
         {
             Settings = TestPluginManagerFactory.CreateSettings(initialSettings);
@@ -458,7 +649,9 @@ public sealed class DictationSectionViewModelTests
                 commands,
                 new CudaLibraryPathSetupService(),
                 a11yBus.Object,
-                devices.GetDevices
+                devices.GetDevices,
+                atSpiClient: atSpiClient,
+                dispatchNotification: dispatchNotification
             );
             Settings.Invocations.Clear();
         }
@@ -539,7 +732,7 @@ public sealed class DictationSectionViewModelTests
             new(ThirdModelId, "Auto only"),
         ];
         public string? SelectedModelId { get; private set; }
-        public bool SupportsTranslation => false;
+        public bool SupportsTranslation { get; init; }
         public LanguageSelectionSupport AutomaticDetectionSupport =>
             SelectedModelId == SecondModelId
                 ? LanguageSelectionSupport.Unsupported

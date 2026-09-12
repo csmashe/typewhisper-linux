@@ -16,6 +16,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class GroqPluginTests
 {
+    [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<GroqPlugin>();
+
+
     private static readonly JsonSerializerOptions s_manifestJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,

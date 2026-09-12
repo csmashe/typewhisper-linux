@@ -112,6 +112,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             {
                 EditStylePreset = ProfileStylePreset.Developer,
                 EditHotkeyBehavior = ProfileHotkeyBehavior.ProcessSelectedText,
+                EditContextMatchMode = ProfileContextMatchMode.All,
                 EditCleanupLevelOverride = CleanupLevel.High,
                 EditWhisperModeOverride = true,
                 EditDeveloperFormattingOverride = false,
@@ -119,12 +120,15 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
 
             var styleBefore = sut.SelectedStylePresetOption!;
             var hotkeyBefore = sut.SelectedHotkeyBehaviorOption!;
+            var contextMatchBefore = sut.SelectedContextMatchModeOption!;
             var cleanupBefore = sut.SelectedCleanupOverrideOption!;
             var whisperBefore = sut.SelectedWhisperModeOption!;
             var modelDefaultBefore = sut.ModelOptions[0];
             var promptDefaultBefore = sut.PromptActionOptions[0];
             HashSet<string?> expectedPropertyChanges =
             [
+                nameof(ProfilesSectionViewModel.SelectedContextMatchModeOption),
+                nameof(ProfilesSectionViewModel.SelectedContextMatchModeHint),
                 nameof(ProfilesSectionViewModel.Summary),
                 nameof(ProfilesSectionViewModel.SelectedProfileSummary),
                 nameof(ProfilesSectionViewModel.SelectedProfileDisplayName),
@@ -137,6 +141,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
                 sut.SelectedStylePresetOption = null;
             sut.HotkeyBehaviorOptions.CollectionChanged += (_, _) =>
                 sut.SelectedHotkeyBehaviorOption = null;
+            sut.ContextMatchModeOptions.CollectionChanged += (_, _) =>
+                sut.SelectedContextMatchModeOption = null;
             sut.CleanupOverrideOptions.CollectionChanged += (_, _) =>
                 sut.SelectedCleanupOverrideOption = null;
             sut.PropertyChanged += (_, args) =>
@@ -160,6 +166,10 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             Assert.NotEqual(hotkeyBefore.Label, sut.SelectedHotkeyBehaviorOption?.Label);
             Assert.NotSame(hotkeyBefore, sut.SelectedHotkeyBehaviorOption);
             Assert.Equal(ProfileHotkeyBehavior.ProcessSelectedText, sut.EditHotkeyBehavior);
+            Assert.Equal(ProfileContextMatchMode.All, sut.SelectedContextMatchModeOption!.Value);
+            Assert.NotSame(contextMatchBefore, sut.SelectedContextMatchModeOption);
+            Assert.Contains(sut.ContextMatchModeOptions, option => ReferenceEquals(option, sut.SelectedContextMatchModeOption));
+            Assert.Equal("App und Website", sut.SelectedContextMatchModeOption.Label);
             Assert.NotEqual(cleanupBefore.Label, sut.SelectedCleanupOverrideOption?.Label);
             Assert.NotSame(cleanupBefore, sut.SelectedCleanupOverrideOption);
             Assert.Equal(CleanupLevel.High, sut.EditCleanupLevelOverride);
@@ -366,6 +376,151 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         Assert.Equal(committed, sut.SelectedProfile);
         Assert.Equal(committed.Name, sut.EditName);
         Assert.Equal(["Add failed: disk full"], presented);
+    }
+
+    [Fact]
+    public void ContextMatchModeSelector_IsVisibleOnlyWhenBothRuleTypesPresent()
+    {
+        var service = CreateProfileService();
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+
+        var sut = new ProfilesSectionViewModel(
+            service,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
+        );
+        sut.AddProfileCommand.Execute(null);
+        Assert.False(sut.IsContextMatchModeVisible);
+        var visibilityChanges = 0;
+        sut.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ProfilesSectionViewModel.IsContextMatchModeVisible))
+            {
+                // ReSharper disable once AccessToModifiedClosure -- the counter is reset between phases on purpose; the handler reads the live value.
+                visibilityChanges++;
+            }
+        };
+        sut.ProcessNameInput = "chrome";
+        sut.AddProcessNameChipCommand.Execute(null);
+        Assert.False(sut.IsContextMatchModeVisible);
+        Assert.True(visibilityChanges > 0);
+        visibilityChanges = 0;
+        sut.UrlPatternInput = "github.com";
+        sut.AddUrlPatternChipCommand.Execute(null);
+        Assert.True(sut.IsContextMatchModeVisible);
+        Assert.True(visibilityChanges > 0);
+        sut.RemoveProcessNameChipCommand.Execute("chrome");
+        Assert.False(sut.IsContextMatchModeVisible);
+    }
+
+    [Fact]
+    public void AddProfile_DefaultsContextMatchModeToAny()
+    {
+        var service = CreateProfileService();
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+
+        var sut = new ProfilesSectionViewModel(
+            service,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
+        );
+        sut.AddProfileCommand.Execute(null);
+
+        Assert.Equal(ProfileContextMatchMode.Any, sut.EditContextMatchMode);
+        Assert.Equal(ProfileContextMatchMode.Any, Assert.Single(service.Profiles).ContextMatchMode);
+    }
+
+    [Fact]
+    public void SelectingLegacyProfile_LoadsAllContextMatchMode()
+    {
+        var service = CreateProfileService();
+        var legacy = new Profile
+        {
+            Id = "legacy",
+            Name = "Legacy",
+            ProcessNames = ["chrome"],
+            UrlPatterns = ["github.com"],
+        };
+        service.AddProfile(legacy);
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+
+        var sut = new ProfilesSectionViewModel(
+            service,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
+        );
+        sut.AddProfileCommand.Execute(null);
+        sut.SelectedProfile = legacy;
+
+        Assert.Equal(ProfileContextMatchMode.All, sut.EditContextMatchMode);
+    }
+
+    [Fact]
+    public void SaveProfile_PersistsContextMatchMode()
+    {
+        var service = CreateProfileService();
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+
+        var sut = new ProfilesSectionViewModel(
+            service,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
+        );
+        sut.AddProfileCommand.Execute(null);
+        sut.ProcessNameInput = "chrome";
+        sut.AddProcessNameChipCommand.Execute(null);
+        sut.UrlPatternInput = "github.com";
+        sut.AddUrlPatternChipCommand.Execute(null);
+        sut.EditContextMatchMode = ProfileContextMatchMode.All;
+        sut.SaveProfileCommand.Execute(null);
+
+        Assert.Equal(ProfileContextMatchMode.All, Assert.Single(service.Profiles).ContextMatchMode);
+
+        var legacy = new Profile
+        {
+            Id = "legacy",
+            Name = "Legacy",
+            ProcessNames = ["chrome"],
+            UrlPatterns = ["github.com"],
+        };
+        service.AddProfile(legacy);
+        sut.SelectedProfile = legacy;
+        sut.EditContextMatchMode = ProfileContextMatchMode.Any;
+        sut.SaveProfileCommand.Execute(null);
+
+        Assert.Equal(ProfileContextMatchMode.Any, service.Profiles.Single(profile => profile.Id == legacy.Id).ContextMatchMode);
     }
 
     [Fact]

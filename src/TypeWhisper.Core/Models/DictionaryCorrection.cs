@@ -6,4 +6,4 @@ namespace TypeWhisper.Core.Models;
 ///     must match casing. Flattened from a <see cref="DictionaryEntry" /> for use
 ///     by the correction pass.
 /// </summary>
-public sealed record DictionaryCorrection(string Original, string Replacement, bool CaseSensitive);
+public sealed record DictionaryCorrection(string Original, string Replacement, bool CaseSensitive, bool IsRegex = false);

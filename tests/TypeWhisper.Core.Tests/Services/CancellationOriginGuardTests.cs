@@ -102,11 +102,6 @@ public partial class CancellationOriginGuardTests
             2,
             "One provider OCE is deliberately recorded as a finalize fault; one locally-owned grace-delay OCE only ends the grace wait."
         ),
-        new(
-            "DictationOrchestrator.RunPromptActionAsync",
-            1,
-            "This catch is transparent and rethrows; LlmStreamPump owns the origin classification and fallback signal."
-        ),
     ];
 
     [Fact]

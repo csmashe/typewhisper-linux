@@ -5,6 +5,23 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class AppShutdownOrderTests
 {
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void RecoveryDrainResult_ControlsDisposal(bool drained)
+    {
+        try
+        {
+            App.ResetShutdownDisposalDecisionForTests();
+            Assert.Equal(drained, App.ApplyRecoveryDrainResult(drained));
+            Assert.Equal(!drained, App.SkipProviderDisposal);
+        }
+        finally
+        {
+            App.ResetShutdownDisposalDecisionForTests();
+        }
+    }
+
+    [Theory]
     [InlineData(true, true, true, false)]
     [InlineData(true, false, false, true)]
     [InlineData(false, true, false, true)]

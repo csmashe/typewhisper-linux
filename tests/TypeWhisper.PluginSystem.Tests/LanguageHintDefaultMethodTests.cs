@@ -6,6 +6,19 @@ namespace TypeWhisper.PluginSystem.Tests;
 public sealed class LanguageHintDefaultMethodTests
 {
     [Fact]
+    public async Task StartStreamingWithLanguageHintsAndPrompt_DefaultsToLanguageHints()
+    {
+        var fake = new MultiHintRole();
+        IReadOnlyList<string> hints = ["", " de ", "en"];
+        using var cancellation = new CancellationTokenSource();
+        await using var session = await ((ITranscriptionEngineRole)fake)
+            .StartStreamingWithLanguageHintsAndPromptAsync(hints, "TypeWhisper", cancellation.Token);
+        Assert.Equal(hints, fake.LastLanguageHints);
+        Assert.Equal(cancellation.Token, fake.LastCancellationToken);
+        Assert.Null(fake.LastLanguage);
+    }
+
+    [Fact]
     public async Task TranscribeWithLanguageHints_DefaultsToFirstHint()
     {
         var fake = new FakeRole();
@@ -40,7 +53,7 @@ public sealed class LanguageHintDefaultMethodTests
         Assert.Equal("de", fake.LastLanguage);
     }
 
-    private sealed class FakeRole : ITranscriptionEngineRole
+    private class FakeRole : ITranscriptionEngineRole
     {
         public string PluginId => "test";
         public string ProviderId => "test";
@@ -62,6 +75,20 @@ public sealed class LanguageHintDefaultMethodTests
         public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
         {
             LastLanguage = language;
+            return Task.FromResult<IStreamingSession>(new StubSession());
+        }
+    }
+
+    private sealed class MultiHintRole : FakeRole, ITranscriptionEngineRole
+    {
+        public IReadOnlyList<string>? LastLanguageHints { get; private set; }
+        public CancellationToken LastCancellationToken { get; private set; }
+
+        public Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
+            IReadOnlyList<string> languageHints, CancellationToken ct)
+        {
+            LastLanguageHints = languageHints;
+            LastCancellationToken = ct;
             return Task.FromResult<IStreamingSession>(new StubSession());
         }
     }

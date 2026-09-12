@@ -28,6 +28,9 @@ public sealed class OpenAiCompatiblePlugin
     // role wrapper below. The default endpoint keeps using the original flat settings
     // keys (baseUrl/api-key/selectedModel/...) so existing single-endpoint setups are
     // unchanged.
+    private const string LlmRequestTimeoutSettingKey = "llmRequestTimeoutSeconds";
+    private int _llmRequestTimeoutSeconds = 300;
+
     private const string ThinkingModeSettingKey = "thinkingMode";
     private ThinkingMode _thinkingMode;
 
@@ -36,6 +39,7 @@ public sealed class OpenAiCompatiblePlugin
     private const string ProfileIdPrefix = "openai-compatible-";
 
     private readonly HttpClient _httpClient;
+    private readonly TimeSpan _nonLlmTimeout;
     private IPluginHostServices? _host;
     private List<FetchedModel> _fetchedModels = [];
     private bool _streamResponses = true;
@@ -56,13 +60,14 @@ public sealed class OpenAiCompatiblePlugin
     private readonly Lock _profileRolesLock = new();
 
     public OpenAiCompatiblePlugin()
-        : this(new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
+        : this(new HttpClient { Timeout = Timeout.InfiniteTimeSpan })
     {
     }
 
-    internal OpenAiCompatiblePlugin(HttpClient httpClient)
+    internal OpenAiCompatiblePlugin(HttpClient httpClient, TimeSpan? nonLlmTimeout = null)
     {
         _httpClient = httpClient;
+        _nonLlmTimeout = nonLlmTimeout ?? TimeSpan.FromMinutes(5);
     }
 
     public string PluginId => "com.typewhisper.openai-compatible";
@@ -72,6 +77,7 @@ public sealed class OpenAiCompatiblePlugin
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
+        _llmRequestTimeoutSeconds = Math.Clamp(host.GetSetting<int?>(LlmRequestTimeoutSettingKey) ?? 300, 5, 3600);
         _thinkingMode = ParseThinkingMode(host.GetSetting<string>(ThinkingModeSettingKey));
         ApiKey = await host.LoadSecretAsync("api-key");
         BaseUrl = host.GetSetting<string>("baseUrl");
@@ -147,11 +153,11 @@ public sealed class OpenAiCompatiblePlugin
     )
     {
         if (string.IsNullOrEmpty(BaseUrl))
-            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ServerUrlNotConfigured"), PluginRequestFailureKind.Configuration);
         if (string.IsNullOrEmpty(SelectedModelId))
-            throw new InvalidOperationException(Loc.L("Settings.NoTranscriptionModelSelected"));
+            throw new PluginRequestException(Loc.L("Settings.NoTranscriptionModelSelected"), PluginRequestFailureKind.Configuration);
 
-        return await OpenAiTranscriptionHelper.TranscribeAsync(
+        return await RunNonLlmRequestAsync(token => OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
             BaseUrl!,
             ApiKey ?? "",
@@ -160,9 +166,9 @@ public sealed class OpenAiCompatiblePlugin
             language,
             translate,
             "verbose_json",
-            ct,
+            token,
             prompt
-        );
+        ), ct);
     }
 
     public string ProviderName => "OpenAI Compatible";
@@ -190,22 +196,30 @@ public sealed class OpenAiCompatiblePlugin
     )
     {
         if (string.IsNullOrEmpty(BaseUrl))
-            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ServerUrlNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var modelId = !string.IsNullOrEmpty(model) ? model : SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
+            throw new PluginRequestException(Loc.L("Settings.NoLlmModelSelected"), PluginRequestFailureKind.Configuration);
 
-        return await OpenAiChatHelper.SendChatCompletionAsync(
-            _httpClient,
-            BaseUrl!,
-            ApiKey ?? "",
-            modelId,
-            systemPrompt,
-            userText,
-            BuildRequestOptions(BaseUrl!, _thinkingMode),
-            ct
-        );
+        using var timeout = CreateLlmTimeout(_llmRequestTimeoutSeconds, ct);
+        try
+        {
+            return await OpenAiChatHelper.SendChatCompletionAsync(
+                _httpClient,
+                BaseUrl!,
+                ApiKey ?? "",
+                modelId,
+                systemPrompt,
+                userText,
+                BuildRequestOptions(BaseUrl!, _thinkingMode),
+                timeout.Token
+            );
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException(Loc.L("Settings.LlmRequestTimedOut"), ex);
+        }
     }
 
     public async IAsyncEnumerable<string> ProcessStreamingAsync(
@@ -222,12 +236,13 @@ public sealed class OpenAiCompatiblePlugin
         }
 
         if (string.IsNullOrEmpty(BaseUrl))
-            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ServerUrlNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var modelId = !string.IsNullOrEmpty(model) ? model : SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
+            throw new PluginRequestException(Loc.L("Settings.NoLlmModelSelected"), PluginRequestFailureKind.Configuration);
 
+        using var timeout = CreateLlmTimeout(_llmRequestTimeoutSeconds, ct);
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
             BaseUrl!,
@@ -236,11 +251,25 @@ public sealed class OpenAiCompatiblePlugin
             systemPrompt,
             userText,
             BuildRequestOptions(BaseUrl!, _thinkingMode),
-            ct
+            timeout.Token
         );
 
-        await foreach (var delta in source)
-            yield return delta;
+        await using var enumerator = source.GetAsyncEnumerator(timeout.Token);
+        while (true)
+        {
+            bool hasNext;
+            try
+            {
+                hasNext = await enumerator.MoveNextAsync();
+            }
+            catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeout.IsCancellationRequested)
+            {
+                throw new TimeoutException(Loc.L("Settings.LlmRequestTimedOut"), ex);
+            }
+            if (!hasNext)
+                yield break;
+            yield return enumerator.Current;
+        }
     }
 
     internal string? BaseUrl { get; private set; }
@@ -367,13 +396,15 @@ public sealed class OpenAiCompatiblePlugin
         if (string.IsNullOrEmpty(BaseUrl))
             return false;
 
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(_nonLlmTimeout);
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
             if (!string.IsNullOrEmpty(ApiKey))
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
 
-            using var response = await _httpClient.SendAsync(request, ct);
+            using var response = await _httpClient.SendAsync(request, timeout.Token);
             return response.IsSuccessStatusCode;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -383,6 +414,10 @@ public sealed class OpenAiCompatiblePlugin
         catch (Exception) when (ct.IsCancellationRequested)
         {
             throw new OperationCanceledException(ct);
+        }
+        catch (OperationCanceledException ex) when (timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException(Loc.L("Settings.RequestTimedOut"), ex);
         }
         catch
         {
@@ -430,6 +465,7 @@ public sealed class OpenAiCompatiblePlugin
                 Description: Loc.L("Settings.StreamResponsesDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
+            BuildLlmRequestTimeoutDefinition(),
             BuildThinkingModeDefinition(),
         ];
 
@@ -437,6 +473,7 @@ public sealed class OpenAiCompatiblePlugin
         Task.FromResult(
             key switch
             {
+                LlmRequestTimeoutSettingKey => _llmRequestTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ThinkingModeSettingKey => FormatThinkingMode(_thinkingMode),
                 "baseUrl" => BaseUrl,
                 "api-key" => ApiKey,
@@ -456,6 +493,12 @@ public sealed class OpenAiCompatiblePlugin
     {
         switch (key)
         {
+            case LlmRequestTimeoutSettingKey:
+                if (!int.TryParse(value, out var seconds))
+                    throw new ArgumentException(Loc.L("Settings.LlmRequestTimeoutInvalid", 5, 3600));
+                _llmRequestTimeoutSeconds = Math.Clamp(seconds, 5, 3600);
+                _host?.SetSetting(LlmRequestTimeoutSettingKey, _llmRequestTimeoutSeconds);
+                break;
             case ThinkingModeSettingKey:
                 _thinkingMode = ParseThinkingMode(value);
                 _host?.SetSetting(ThinkingModeSettingKey, FormatThinkingMode(_thinkingMode));
@@ -500,6 +543,34 @@ public sealed class OpenAiCompatiblePlugin
         ThinkingMode.On => "on",
         _ => "default",
     };
+
+    private async Task<T> RunNonLlmRequestAsync<T>(Func<CancellationToken, Task<T>> request, CancellationToken ct)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(_nonLlmTimeout);
+        try
+        {
+            return await request(timeout.Token);
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException(Loc.L("Settings.RequestTimedOut"), ex);
+        }
+    }
+
+    private static CancellationTokenSource CreateLlmTimeout(int seconds, CancellationToken ct)
+    {
+        var source = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        source.CancelAfter(TimeSpan.FromSeconds(seconds));
+        return source;
+    }
+
+    private PluginSettingDefinition BuildLlmRequestTimeoutDefinition() => new(
+        Key: LlmRequestTimeoutSettingKey,
+        Label: Loc.L("Settings.LlmRequestTimeout"),
+        Description: Loc.L("Settings.LlmRequestTimeoutHelp", 5, 3600, 300),
+        Placeholder: "300",
+        Kind: PluginSettingKind.Text);
 
     private PluginSettingDefinition BuildThinkingModeDefinition() => new(
         Key: ThinkingModeSettingKey,
@@ -577,13 +648,13 @@ public sealed class OpenAiCompatiblePlugin
     // failure leaves all three untouched.
     public async Task RefreshModelCatalogAsync(CancellationToken ct = default)
     {
+        var changed = false;
         var connection = CaptureDefaultConnection();
         if (!string.IsNullOrEmpty(connection.BaseUrl))
         {
-            var models = await FetchModelsForAsync(connection.BaseUrl, connection.ApiKey, ct);
+            var models = await FetchModelsBestEffortAsync(connection.BaseUrl, connection.ApiKey, ct);
             TryApplyDefaultCatalog(connection, models, onlyIfChanged: true, out var applied);
-            if (applied)
-                _host?.NotifyCapabilitiesChanged();
+            changed = applied;
         }
 
         // Refresh additional profiles on the same dropdown-open path so their
@@ -592,7 +663,7 @@ public sealed class OpenAiCompatiblePlugin
         var changedProfileIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var profile in _additionalProfiles.Where(p => !string.IsNullOrEmpty(p.BaseUrl)))
         {
-            var models = await FetchModelsForAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
+            var models = await FetchModelsBestEffortAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
             if (models is null || !ProfileCatalogStateChanged(profile, models))
                 continue;
 
@@ -609,8 +680,11 @@ public sealed class OpenAiCompatiblePlugin
                     _profileRoles.Remove(id);
             }
 
-            _host?.NotifyCapabilitiesChanged();
+            changed = true;
         }
+
+        if (changed)
+            _host?.NotifyCapabilitiesChanged();
     }
 
     private static bool CatalogChanged(List<FetchedModel> fetched, List<FetchedModel> current) =>
@@ -762,6 +836,7 @@ public sealed class OpenAiCompatiblePlugin
                         "selectedLlmModel", Loc.L("Settings.LlmModel"),
                         Description: Loc.L("Settings.ProfileLlmModelDescription"),
                         Kind: PluginSettingKind.Text),
+                    BuildLlmRequestTimeoutDefinition(),
                     BuildThinkingModeDefinition(),
                     new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text),
                 ],
@@ -788,6 +863,7 @@ public sealed class OpenAiCompatiblePlugin
                     ["api-key"] = null,
                     ["selectedModel"] = p.SelectedModelId,
                     ["selectedLlmModel"] = p.SelectedLlmModelId,
+                    [LlmRequestTimeoutSettingKey] = p.LlmRequestTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     [ThinkingModeSettingKey] = FormatThinkingMode(ParseThinkingMode(p.ThinkingMode)),
                     ["__id"] = p.Id,
                 }
@@ -866,6 +942,11 @@ public sealed class OpenAiCompatiblePlugin
                 ? null
                 : NullIfWhiteSpace(Get(item, "selectedLlmModel"));
 
+            var timeoutValue = Get(item, LlmRequestTimeoutSettingKey);
+            var timeoutSeconds = prev?.LlmRequestTimeoutSeconds ?? 300;
+            if (!string.IsNullOrWhiteSpace(timeoutValue) && !int.TryParse(timeoutValue, out timeoutSeconds))
+                return new PluginSettingsValidationResult(false, Loc.L("Settings.LlmRequestTimeoutInvalid", 5, 3600));
+
             newProfiles.Add(new OpenAiCompatibleProfile
             {
                 Id = id,
@@ -873,6 +954,7 @@ public sealed class OpenAiCompatiblePlugin
                 BaseUrl = baseUrl,
                 SelectedModelId = selectedModelId,
                 SelectedLlmModelId = selectedLlmModelId,
+                LlmRequestTimeoutSeconds = timeoutSeconds,
                 ThinkingMode = FormatThinkingMode(ParseThinkingMode(Get(item, ThinkingModeSettingKey))),
                 FetchedModels = preserveCatalog ? prev!.FetchedModels : [],
             });
@@ -940,7 +1022,7 @@ public sealed class OpenAiCompatiblePlugin
         // existing catalog and is skipped.
         foreach (var profile in _additionalProfiles.Where(p => p.FetchedModels.Count == 0))
         {
-            var models = await FetchModelsForAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
+            var models = await FetchModelsBestEffortAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
             if (models is not null)
                 ApplyProfileCatalog(profile, models);
         }
@@ -1059,11 +1141,11 @@ public sealed class OpenAiCompatiblePlugin
     {
         var profile = RequireAdditional(id);
         if (string.IsNullOrEmpty(profile.BaseUrl))
-            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ServerUrlNotConfigured"), PluginRequestFailureKind.Configuration);
         if (string.IsNullOrEmpty(profile.SelectedModelId))
-            throw new InvalidOperationException(Loc.L("Settings.NoTranscriptionModelSelected"));
+            throw new PluginRequestException(Loc.L("Settings.NoTranscriptionModelSelected"), PluginRequestFailureKind.Configuration);
 
-        return await OpenAiTranscriptionHelper.TranscribeAsync(
+        return await RunNonLlmRequestAsync(token => OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
             profile.BaseUrl,
             GetProfileApiKey(id) ?? "",
@@ -1072,9 +1154,9 @@ public sealed class OpenAiCompatiblePlugin
             language,
             translate,
             "verbose_json",
-            ct,
+            token,
             prompt
-        );
+        ), ct);
     }
 
     internal async Task<string> ProcessForProfileAsync(
@@ -1087,22 +1169,30 @@ public sealed class OpenAiCompatiblePlugin
     {
         var profile = RequireAdditional(id);
         if (string.IsNullOrEmpty(profile.BaseUrl))
-            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ServerUrlNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var modelId = !string.IsNullOrEmpty(model) ? model : profile.SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
+            throw new PluginRequestException(Loc.L("Settings.NoLlmModelSelected"), PluginRequestFailureKind.Configuration);
 
-        return await OpenAiChatHelper.SendChatCompletionAsync(
-            _httpClient,
-            profile.BaseUrl,
-            GetProfileApiKey(id) ?? "",
-            modelId,
-            systemPrompt,
-            userText,
-            BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode)),
-            ct
-        );
+        using var timeout = CreateLlmTimeout(profile.LlmRequestTimeoutSeconds, ct);
+        try
+        {
+            return await OpenAiChatHelper.SendChatCompletionAsync(
+                _httpClient,
+                profile.BaseUrl,
+                GetProfileApiKey(id) ?? "",
+                modelId,
+                systemPrompt,
+                userText,
+                BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode)),
+                timeout.Token
+            );
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException(Loc.L("Settings.LlmRequestTimedOut"), ex);
+        }
     }
 
     // Mirrors the default endpoint's streaming behavior for an additional profile:
@@ -1125,12 +1215,13 @@ public sealed class OpenAiCompatiblePlugin
 
         var profile = RequireAdditional(id);
         if (string.IsNullOrEmpty(profile.BaseUrl))
-            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ServerUrlNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var modelId = !string.IsNullOrEmpty(model) ? model : profile.SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
+            throw new PluginRequestException(Loc.L("Settings.NoLlmModelSelected"), PluginRequestFailureKind.Configuration);
 
+        using var timeout = CreateLlmTimeout(profile.LlmRequestTimeoutSeconds, ct);
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
             profile.BaseUrl,
@@ -1139,11 +1230,25 @@ public sealed class OpenAiCompatiblePlugin
             systemPrompt,
             userText,
             BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode)),
-            ct
+            timeout.Token
         );
 
-        await foreach (var delta in source)
-            yield return delta;
+        await using var enumerator = source.GetAsyncEnumerator(timeout.Token);
+        while (true)
+        {
+            bool hasNext;
+            try
+            {
+                hasNext = await enumerator.MoveNextAsync();
+            }
+            catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeout.IsCancellationRequested)
+            {
+                throw new TimeoutException(Loc.L("Settings.LlmRequestTimedOut"), ex);
+            }
+            if (!hasNext)
+                yield break;
+            yield return enumerator.Current;
+        }
     }
 
     private async Task LoadAdditionalProfilesAsync(IPluginHostServices host)
@@ -1307,6 +1412,21 @@ public sealed class OpenAiCompatiblePlugin
             _host?.NotifyCapabilitiesChanged();
     }
 
+    private async Task<List<FetchedModel>?> FetchModelsBestEffortAsync(
+        string? baseUrl, string? apiKey, CancellationToken ct)
+    {
+        try
+        {
+            return await FetchModelsForAsync(baseUrl, apiKey, ct);
+        }
+        catch (TimeoutException ex)
+        {
+            ct.ThrowIfCancellationRequested();
+            _host?.Log(PluginLogLevel.Warning, $"Model catalog refresh timed out: {ex.Message}");
+            return null;
+        }
+    }
+
     private async Task<List<FetchedModel>?> FetchModelsForAsync(
         string? baseUrl,
         string? apiKey,
@@ -1316,17 +1436,19 @@ public sealed class OpenAiCompatiblePlugin
         if (string.IsNullOrEmpty(baseUrl))
             return null;
 
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(_nonLlmTimeout);
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/v1/models");
             if (!string.IsNullOrEmpty(apiKey))
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
-            using var response = await _httpClient.SendAsync(request, ct);
+            using var response = await _httpClient.SendAsync(request, timeout.Token);
             if (!response.IsSuccessStatusCode)
                 return null;
 
-            var json = await response.Content.ReadAsStringAsync(ct);
+            var json = await response.Content.ReadAsStringAsync(timeout.Token);
             using var doc = JsonDocument.Parse(json);
 
             if (!doc.RootElement.TryGetProperty("data", out var data))
@@ -1348,6 +1470,10 @@ public sealed class OpenAiCompatiblePlugin
         catch (Exception) when (ct.IsCancellationRequested)
         {
             throw new OperationCanceledException(ct);
+        }
+        catch (OperationCanceledException ex) when (timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException(Loc.L("Settings.RequestTimedOut"), ex);
         }
         catch
         {
@@ -1416,6 +1542,7 @@ public sealed class OpenAiCompatiblePlugin
                 right.SelectedLlmModelId,
                 StringComparison.Ordinal
             )
+            && left.LlmRequestTimeoutSeconds == right.LlmRequestTimeoutSeconds
             && ParseThinkingMode(left.ThinkingMode) == ParseThinkingMode(right.ThinkingMode)
             && left.FetchedModels.SequenceEqual(right.FetchedModels);
     }
@@ -1548,6 +1675,13 @@ public sealed class OpenAiCompatibleProfile
 
     /// <summary>Optional default LLM model ID.</summary>
     public string? SelectedLlmModelId { get; set; }
+
+    /// <summary>LLM request timeout in seconds; defaults to 300 and is clamped to 5–3600.</summary>
+    public int LlmRequestTimeoutSeconds
+    {
+        get;
+        set => field = Math.Clamp(value, 5, 3600);
+    } = 300;
 
     /// <summary>Thinking mode for this profile ("default", "off", "on"); null means provider default.</summary>
     public string? ThinkingMode { get; init; }

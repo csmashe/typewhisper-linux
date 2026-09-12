@@ -60,6 +60,7 @@ public sealed class DictationOrchestratorCompositionTests
             Assert.Equal(["hello? "], fixture.InsertionPlatform.Typed);
 
             var history = Assert.Single(fixture.History.Records);
+            Assert.Same(history, Assert.Single(fixture.Statistics.Records));
             Assert.Equal("hello question mark", history.RawText);
             Assert.Equal("hello?", history.FinalText);
             Assert.True(File.Exists(Path.Join(TypeWhisperEnvironment.DataPath, "history.json")));
@@ -91,6 +92,33 @@ public sealed class DictationOrchestratorCompositionTests
                     )
                     .ToArray()
             );
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task HistorySavingDisabled_RecordsStatisticsWithoutHistoryEntry()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture();
+            fixture.Settings.Save(fixture.Settings.Current with { SaveToHistoryEnabled = false });
+            fixture.Plugin.EnqueueText("hello question mark");
+
+            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+            fixture.FeedNonSilentAudio();
+            var resultTask = fixture.WaitForResultAsync(sessionId);
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+            var result = await BoundedTest.WaitAsync(resultTask);
+
+            Assert.Equal("ready", result.Status);
+            Assert.Equal("hello?", result.Text);
+            Assert.Empty(fixture.History.Records);
+            var stats = Assert.Single(fixture.Statistics.Records);
+            Assert.Equal("hello question mark", stats.RawText);
+            Assert.Equal("hello?", stats.FinalText);
+            Assert.False(stats.IsSpokenCommand);
+            Assert.Equal("idle", fixture.Orchestrator.CurrentStateLabel);
         });
     }
 
@@ -167,7 +195,8 @@ public sealed class DictationOrchestratorCompositionTests
             Assert.Equal("second session?", secondResult.Text);
             Assert.Equal(2, fixture.Plugin.TranscriptionCount);
             Assert.Equal(["second session? "], fixture.InsertionPlatform.Typed);
-            Assert.Single(fixture.History.Records);
+            Assert.Equal(2, fixture.History.Records.Count);
+            Assert.Single(fixture.History.Records, record => record.Status == TranscriptionRecordStatus.TranscriptionFailed);
 
             // Detects leaked model leases, insertion reservations, toggle ownership,
             // and in-flight session entries after a real plugin exception.
@@ -324,7 +353,10 @@ public sealed class DictationOrchestratorCompositionTests
                 overlay.PresentedState.FeedbackText
             );
             Assert.Empty(fixture.InsertionPlatform.Typed);
-            Assert.Empty(fixture.History.Records);
+            var failed = Assert.Single(fixture.History.Records);
+            Assert.Equal(TranscriptionRecordStatus.TranscriptionFailed, failed.Status);
+            Assert.Equal(expected, failed.FailureMessage);
+            Assert.Equal("de", failed.Language);
         });
     }
 

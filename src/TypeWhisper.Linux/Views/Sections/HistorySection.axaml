@@ -205,6 +205,9 @@
                                                                            HorizontalAlignment="Right"
                                                                            VerticalAlignment="Top"
                                                                            Margin="8,0,0,0">
+                                                                    <Border Classes="badge" IsVisible="{Binding HasFailure}">
+                                                                        <TextBlock Text="{Binding StatusBadge}" Foreground="#FF9C9C" FontSize="11" />
+                                                                    </Border>
                                                                     <Border Classes="badge"
                                                                             IsVisible="{Binding IsSpokenCommand}">
                                                                         <TextBlock Text="{loc:Str History.CommandBadge}"
@@ -232,6 +235,14 @@
                                                                 </WrapPanel>
                                                             </Grid>
                                                         </Button>
+                                                        <StackPanel Margin="12,0,12,8" Spacing="6"
+                                                                    IsVisible="{Binding ShowRetryPanel}">
+                                                            <TextBlock Text="{Binding FailureMessage}" IsVisible="{Binding HasFailure}" TextWrapping="Wrap" />
+                                                            <Button Content="{loc:Str History.Retry}" Command="{Binding RetryCommand}"
+                                                                    IsVisible="{Binding ShowRetry}" HorizontalAlignment="Left" />
+                                                            <TextBlock Text="{loc:Str History.Retrying}" IsVisible="{Binding IsRetrying}" />
+                                                            <TextBlock Text="{Binding RetryResult}" IsVisible="{Binding HasRetryResult}" TextWrapping="Wrap" />
+                                                        </StackPanel>
 
                                                         <StackPanel IsVisible="{Binding IsExpanded}">
                                                             <Border Height="1"

@@ -5,7 +5,7 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.AssemblyAi;
 
-internal sealed class AssemblyAiStreamingSession : IStreamingSession
+internal sealed class AssemblyAiStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
     private readonly WebSocketSessionPump _pump;
 
@@ -25,6 +25,8 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession
         );
         return new AssemblyAiStreamingSession(pump);
     }
+
+    public Exception? Fault => _pump.Fault;
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived
     {

@@ -25,6 +25,7 @@
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Deepgram\TypeWhisper.Plugin.Deepgram.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.ElevenLabs\TypeWhisper.Plugin.ElevenLabs.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.FileMemory\TypeWhisper.Plugin.FileMemory.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.FillerWords\TypeWhisper.Plugin.FillerWords.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Fireworks\TypeWhisper.Plugin.Fireworks.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Gemini\TypeWhisper.Plugin.Gemini.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.GemmaLocal\TypeWhisper.Plugin.GemmaLocal.csproj"/>
@@ -32,6 +33,8 @@
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.GoogleCloudStt\TypeWhisper.Plugin.GoogleCloudStt.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Groq\TypeWhisper.Plugin.Groq.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Linear\TypeWhisper.Plugin.Linear.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Meta\TypeWhisper.Plugin.Meta.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.MicrosoftAi\TypeWhisper.Plugin.MicrosoftAi.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenAi\TypeWhisper.Plugin.OpenAi.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenAiCompatible\TypeWhisper.Plugin.OpenAiCompatible.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenAiVectorMemory\TypeWhisper.Plugin.OpenAiVectorMemory.csproj"/>

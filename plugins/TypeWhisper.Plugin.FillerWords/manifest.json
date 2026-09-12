@@ -1,0 +1,11 @@
+{
+  "id": "com.typewhisper.filler-words",
+  "name": "Filler Words",
+  "version": "1.0.0",
+  "author": "TypeWhisper",
+  "description": "Remove filler words such as um and uh from transcriptions",
+  "networkAccess": "local",
+  "categories": ["postProcessing"],
+  "assemblyName": "TypeWhisper.Plugin.FillerWords.dll",
+  "pluginClass": "TypeWhisper.Plugin.FillerWords.FillerWordsPlugin"
+}

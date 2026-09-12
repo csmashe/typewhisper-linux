@@ -12,7 +12,7 @@ public sealed class PluginCatalogTests
     {
         var catalog = PluginCatalogTestData.Catalog;
         Assert.Equal(1, catalog.SchemaVersion);
-        Assert.Equal(33, catalog.Plugins.Length);
+        Assert.Equal(36, catalog.Plugins.Length);
 
         var catalogProjectPaths = new HashSet<string>(StringComparer.Ordinal);
         foreach (var entry in catalog.Plugins)

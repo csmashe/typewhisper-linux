@@ -175,15 +175,17 @@ public sealed class ProfileService : IProfileService
                 );
             }
 
+            // Any lets a combined profile compete in the partial tiers once a full hit is ruled out.
+            var matchesAny = profile.ContextMatchMode == ProfileContextMatchMode.Any;
             if (processMatches && urlMatchPattern is not null)
             {
                 appAndWebsite.Add((profile, urlMatchPattern));
             }
-            else if (urlMatchPattern is not null && profile.ProcessNames.Count == 0)
+            else if (urlMatchPattern is not null && (profile.ProcessNames.Count == 0 || matchesAny))
             {
                 websiteOnly.Add((profile, urlMatchPattern));
             }
-            else if (processMatches && profile.UrlPatterns.Count == 0)
+            else if (processMatches && (profile.UrlPatterns.Count == 0 || matchesAny))
             {
                 appOnly.Add(profile);
             }

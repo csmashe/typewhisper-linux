@@ -8,7 +8,7 @@
              x:DataType="vm:DashboardSectionViewModel">
     <ScrollViewer VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled">
-        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
             <StackPanel MaxWidth="860"
                         Margin="28"
                         Spacing="0">
@@ -30,7 +30,7 @@
                     BorderThickness="1"
                     CornerRadius="8"
                     Padding="18">
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="16">
                     <StackPanel Spacing="4">
                         <TextBlock Text="{loc:Str Dashboard.Statistics}"
                                    FontSize="16"
@@ -40,7 +40,7 @@
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                     </StackPanel>
 
-                    <StackPanel Grid.Column="1"
+                    <StackPanel Grid.Row="0" Grid.Column="1"
                                 Orientation="Horizontal"
                                 Spacing="6"
                                 VerticalAlignment="Center">
@@ -60,6 +60,10 @@
                                                           Converter={x:Static local:EnumBoolConverter.Instance}}"
                                       Command="{Binding ShowAllTimeCommand}" />
                     </StackPanel>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                               Text="{loc:Str Dashboard.StatisticsRetentionHint}"
+                               FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                 </Grid>
             </Border>
 
@@ -89,6 +93,7 @@
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    HorizontalAlignment="Center"
                                    Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding WordsTrendLabel}" FontSize="11" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Border>
 
@@ -113,6 +118,7 @@
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    HorizontalAlignment="Center"
                                    Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding WpmTrendLabel}" FontSize="11" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Border>
 
@@ -164,7 +170,38 @@
                 </Border>
             </UniformGrid>
 
-            <Border Grid.Row="3"
+            <UniformGrid Grid.Row="3" MaxWidth="860" Margin="28,0,28,24" Rows="1" Columns="4">
+                <Border Background="#1A2430" BorderBrush="#2A3950" BorderThickness="1"
+                        CornerRadius="8" Padding="16,20" Margin="0,0,8,0">
+                    <StackPanel HorizontalAlignment="Center">
+                        <TextBlock Text="{Binding DaysActive}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
+                        <TextBlock Text="{loc:Str Dashboard.DaysActive}" FontSize="12" HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+                <Border Background="#1A2430" BorderBrush="#2A3950" BorderThickness="1"
+                        CornerRadius="8" Padding="16,20" Margin="0,0,8,0">
+                    <StackPanel HorizontalAlignment="Center">
+                        <TextBlock Text="{Binding CurrentStreakLabel}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
+                        <TextBlock Text="{loc:Str Dashboard.CurrentStreak}" FontSize="12" HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+                <Border Background="#1A2430" BorderBrush="#2A3950" BorderThickness="1"
+                        CornerRadius="8" Padding="16,20" Margin="0,0,8,0">
+                    <StackPanel HorizontalAlignment="Center">
+                        <TextBlock Text="{Binding LongestStreakLabel}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
+                        <TextBlock Text="{loc:Str Dashboard.LongestStreak}" FontSize="12" HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+                <Border Background="#1A2430" BorderBrush="#2A3950" BorderThickness="1"
+                        CornerRadius="8" Padding="16,20" Margin="0,0,8,0">
+                    <StackPanel HorizontalAlignment="Center">
+                        <TextBlock Text="{Binding TranscriptionCount}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
+                        <TextBlock Text="{loc:Str Dashboard.Dictations}" FontSize="12" HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+
+            <Border Grid.Row="4"
                     MaxWidth="860"
                     Margin="28,0,28,24"
                     Background="#141B24"
@@ -402,14 +439,102 @@
                 </Grid>
             </Border>
 
-            <TextBlock Grid.Row="4"
+            <Border Grid.Row="5" MaxWidth="860" Margin="28,0,28,24" Background="#141B24"
+                    BorderBrush="#283644" BorderThickness="1" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="{loc:Str Dashboard.Activity}" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Text="{loc:Str Dashboard.NoActivity}" IsVisible="{Binding !HasActivity}"
+                               FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    <ItemsControl ItemsSource="{Binding ActivityDays}" IsVisible="{Binding HasActivity}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DashboardActivityDayRow">
+                                <Grid ColumnDefinitions="*,240,Auto" ColumnSpacing="12" Margin="0,0,0,6">
+                                    <TextBlock Text="{Binding DateLabel}" />
+                                    <Border Grid.Column="1" Width="240" Height="8" Background="#283644">
+                                        <Border Width="{Binding BarWidth}" HorizontalAlignment="Left" Background="#1593F5" />
+                                    </Border>
+                                    <TextBlock Grid.Column="2" Text="{Binding Label}" FontSize="11" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="6" MaxWidth="860" Margin="28,0,28,24" Background="#141B24"
+                    BorderBrush="#283644" BorderThickness="1" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="{loc:Str Dashboard.Languages}" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Text="{loc:Str Dashboard.NoLanguageData}" IsVisible="{Binding !HasLanguages}"
+                               FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    <ItemsControl ItemsSource="{Binding Languages}" IsVisible="{Binding HasLanguages}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DashboardBreakdownRow">
+                                <Grid ColumnDefinitions="*,240,Auto" ColumnSpacing="12" Margin="0,0,0,6">
+                                    <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+                                    <Border Grid.Column="1" Width="240" Height="8" Background="#283644">
+                                        <Border Width="{Binding BarWidth}" HorizontalAlignment="Left" Background="#1593F5" />
+                                    </Border>
+                                    <TextBlock Grid.Column="2" Text="{Binding Count}" FontSize="11" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="7" MaxWidth="860" Margin="28,0,28,24" Background="#141B24"
+                    BorderBrush="#283644" BorderThickness="1" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="{loc:Str Dashboard.Models}" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Text="{loc:Str Dashboard.NoModelData}" IsVisible="{Binding !HasModels}"
+                               FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    <ItemsControl ItemsSource="{Binding Models}" IsVisible="{Binding HasModels}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DashboardBreakdownRow">
+                                <Grid ColumnDefinitions="*,240,Auto" ColumnSpacing="12" Margin="0,0,0,6">
+                                    <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+                                    <Border Grid.Column="1" Width="240" Height="8" Background="#283644">
+                                        <Border Width="{Binding BarWidth}" HorizontalAlignment="Left" Background="#1593F5" />
+                                    </Border>
+                                    <TextBlock Grid.Column="2" Text="{Binding Count}" FontSize="11" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="8" MaxWidth="860" Margin="28,0,28,24" Background="#141B24"
+                    BorderBrush="#283644" BorderThickness="1" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="{loc:Str Dashboard.UsageByTime}" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Text="{loc:Str Dashboard.NoActivity}" IsVisible="{Binding !HasActivity}" FontSize="12" />
+                    <ItemsControl ItemsSource="{Binding Hours}" IsVisible="{Binding HasActivity}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><UniformGrid Rows="1" Columns="24" /></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DashboardHourRow">
+                                <StackPanel Spacing="4" Margin="1,0">
+                                    <Border Height="24" Background="#1593F5" Opacity="{Binding Intensity}"
+                                            ToolTip.Tip="{Binding Count}" />
+                                    <TextBlock Text="{Binding Label}" FontSize="10" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <TextBlock Grid.Row="9"
                        Text="{loc:Str Dashboard.Activity}"
                        MaxWidth="860"
                        Margin="28,0,28,12"
                        FontSize="16"
                        FontWeight="SemiBold" />
 
-            <Border Grid.Row="5"
+            <Border Grid.Row="10"
                     MaxWidth="860"
                     Margin="28,0,28,24"
                     Background="#141B24"
@@ -419,7 +544,7 @@
                     Padding="16"
                     MinHeight="220">
                 <Grid>
-                    <TextBlock Text="{loc:Str Dashboard.NoActivity}"
+                    <TextBlock Text="{loc:Str Dashboard.NoRecentActivity}"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"
                                FontSize="14"
@@ -454,7 +579,7 @@
                 </Grid>
             </Border>
 
-            <Border Grid.Row="6"
+            <Border Grid.Row="11"
                     MaxWidth="860"
                     Margin="28,0,28,28"
                     Background="#111822"

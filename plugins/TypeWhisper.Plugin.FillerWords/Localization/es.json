@@ -1,0 +1,7 @@
+{
+  "Settings.Title": "Muletillas",
+  "Settings.Hint": "Una palabra por línea; las comas y los puntos y comas también separan palabras. Si una línea empieza con un código de idioma y dos puntos (de: äh, ähm), solo se aplica a ese idioma hablado; las demás líneas se aplican a todos los idiomas.",
+  "Settings.WordCount": "Palabras en la lista: {0}",
+  "Manifest.Name": "Muletillas",
+  "Manifest.Description": "Elimina muletillas como «em» y «eh» de las transcripciones"
+}

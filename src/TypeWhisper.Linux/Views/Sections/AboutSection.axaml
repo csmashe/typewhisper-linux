@@ -70,6 +70,66 @@
 
             <Border Classes="panel"
                     Padding="16">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="{loc:Str About.ProjectInformation}"
+                               FontWeight="SemiBold" />
+                    <WrapPanel ItemSpacing="8"
+                               LineSpacing="8">
+                        <Button Content="{loc:Str About.Project}"
+                                Command="{Binding OpenProjectCommand}" />
+                        <Button Content="{loc:Str About.Documentation}"
+                                Command="{Binding OpenDocsCommand}" />
+                        <Button Content="{loc:Str About.ReportIssue}"
+                                Command="{Binding OpenIssuesCommand}" />
+                        <Button Content="{loc:Str About.ViewLicense}"
+                                Command="{Binding OpenLicenseCommand}" />
+                        <Button Content="{loc:Str About.UpstreamProject}"
+                                Command="{Binding OpenUpstreamCommand}" />
+                    </WrapPanel>
+                    <Grid ColumnDefinitions="140,*"
+                          RowDefinitions="Auto,Auto"
+                          ColumnSpacing="10"
+                          RowSpacing="8">
+                        <TextBlock Text="{loc:Str About.InstallLocation}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap"
+                                   VerticalAlignment="Center" />
+                        <Border Grid.Row="0"
+                                Grid.Column="1"
+                                Background="#0E1620"
+                                BorderBrush="#1AFFFFFF"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="10,6">
+                            <SelectableTextBlock Text="{Binding InstallLocation}"
+                                                 FontFamily="Cascadia Mono, JetBrains Mono, monospace"
+                                                 FontSize="12" />
+                        </Border>
+                        <TextBlock Grid.Row="1"
+                                   Grid.Column="0"
+                                   Text="{loc:Str About.DataLocation}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap"
+                                   VerticalAlignment="Center" />
+                        <Border Grid.Row="1"
+                                Grid.Column="1"
+                                Background="#0E1620"
+                                BorderBrush="#1AFFFFFF"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="10,6">
+                            <SelectableTextBlock Text="{Binding DataLocation}"
+                                                 FontFamily="Cascadia Mono, JetBrains Mono, monospace"
+                                                 FontSize="12" />
+                        </Border>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border Classes="panel"
+                    Padding="16">
                 <Grid ColumnDefinitions="*,Auto,Auto"
                       ColumnSpacing="10">
                     <StackPanel Spacing="4">

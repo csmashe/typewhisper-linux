@@ -3,6 +3,7 @@
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
+using TypeWhisper.PluginSDK.Helpers;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -143,10 +144,10 @@ internal static class OpenAiOAuthClient
         HttpRequestMessage request,
         CancellationToken ct)
     {
-        using var response = await httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => $"OpenAI token request failed with status {(int)errorResponse.StatusCode}: {errorBody}");
         var json = await response.Content.ReadAsStringAsync(ct);
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException($"OpenAI token request failed with status {(int)response.StatusCode}: {json}");
 
         return JsonSerializer.Deserialize<OpenAiOAuthTokenResponse>(json, s_jsonReadOptions)
             ?? throw new InvalidOperationException("OpenAI token response could not be parsed.");

@@ -7,6 +7,7 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Deepgram;
@@ -65,8 +66,8 @@ public sealed class DeepgramPlugin
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured || SelectedModelId is null)
-            throw new InvalidOperationException(
-                "Plugin not configured. API key and model required."
+            throw new PluginRequestException(
+                "Plugin not configured. API key and model required.", PluginRequestFailureKind.Configuration
             );
         return await DeepgramStreamingSession.ConnectAsync(
             ApiKey!,
@@ -93,8 +94,8 @@ public sealed class DeepgramPlugin
     )
     {
         if (!IsConfigured || SelectedModelId is null)
-            throw new InvalidOperationException(
-                "Plugin not configured. API key and model required."
+            throw new PluginRequestException(
+                "Plugin not configured. API key and model required.", PluginRequestFailureKind.Configuration
             );
 
         var langParam =
@@ -109,13 +110,10 @@ public sealed class DeepgramPlugin
         request.Content = new ByteArrayContent(wavAudio);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
 
-        var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => $"Deepgram API error {(int)errorResponse.StatusCode}: {errorBody}");
         var json = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException(
-                $"Deepgram API error {(int)response.StatusCode}: {json}"
-            );
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;

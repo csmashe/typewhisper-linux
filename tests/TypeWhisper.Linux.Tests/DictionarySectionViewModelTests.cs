@@ -34,6 +34,75 @@ public sealed class DictionarySectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void AddEntry_InvalidRegex_SetsErrorAndDoesNotAdd()
+    {
+        var dictionary = CreateDictionaryService();
+        var sut = CreateViewModel(dictionary);
+        sut.NewOriginal = "[unclosed";
+        sut.NewReplacement = "x";
+        sut.NewIsRegex = true;
+        var notifications = new List<string?>();
+        sut.PropertyChanged += (_, e) => notifications.Add(e.PropertyName);
+
+        sut.AddEntryCommand.Execute(null);
+
+        Assert.Empty(dictionary.Entries);
+        Assert.True(sut.HasRegexValidationError);
+        Assert.NotEmpty(sut.RegexValidationError);
+        Assert.Contains(nameof(sut.HasRegexValidationError), notifications);
+    }
+
+    [Fact]
+    public void AddEntry_ValidRegex_PersistsIsRegex()
+    {
+        var dictionary = CreateDictionaryService();
+        var sut = CreateViewModel(dictionary);
+        sut.NewOriginal = "colou?r";
+        sut.NewReplacement = "color";
+        sut.NewIsRegex = true;
+
+        sut.AddEntryCommand.Execute(null);
+
+        Assert.True(Assert.Single(CreateDictionaryService().Entries).IsRegex);
+        Assert.False(sut.NewIsRegex);
+        Assert.False(sut.HasRegexValidationError);
+    }
+
+    [Fact]
+    public void NewOriginalChange_ClearsRegexError()
+    {
+        var sut = CreateViewModel(CreateDictionaryService());
+        sut.NewOriginal = "[unclosed";
+        sut.NewIsRegex = true;
+        sut.AddEntryCommand.Execute(null);
+        Assert.True(sut.HasRegexValidationError);
+
+        sut.NewOriginal = "colou?r";
+
+        Assert.Empty(sut.RegexValidationError);
+        Assert.False(sut.HasRegexValidationError);
+    }
+
+    [Fact]
+    public void SwitchingToTerm_ClearsNewIsRegex()
+    {
+        var dictionary = CreateDictionaryService();
+        var sut = CreateViewModel(dictionary);
+        sut.NewOriginal = "[unclosed";
+        sut.NewIsRegex = true;
+        sut.AddEntryCommand.Execute(null);
+        Assert.True(sut.HasRegexValidationError);
+
+        sut.NewEntryType = DictionaryEntryType.Term;
+
+        Assert.False(sut.NewIsRegex);
+        Assert.Empty(sut.RegexValidationError);
+        Assert.False(sut.HasRegexValidationError);
+        sut.AddEntryCommand.Execute(null);
+        Assert.False(Assert.Single(dictionary.Entries).IsRegex);
+    }
+
+    [Fact]
     public void AddEntry_PersistsPriority()
     {
         var dictionary = CreateDictionaryService();
@@ -47,6 +116,33 @@ public sealed class DictionarySectionViewModelTests : IDisposable
         var entry = Assert.Single(dictionary.Entries);
         Assert.Equal(4, entry.Priority);
         Assert.Equal(0, sut.NewPriority);
+    }
+
+    [Fact]
+    public void AddEntry_Correction_EnablesEscapeExpansion()
+    {
+        var dictionary = CreateDictionaryService();
+        var sut = CreateViewModel(dictionary);
+        sut.NewEntryType = DictionaryEntryType.Correction;
+        sut.NewOriginal = "new paragraph";
+        sut.NewReplacement = @"\n";
+
+        sut.AddEntryCommand.Execute(null);
+
+        Assert.True(Assert.Single(dictionary.Entries).ExpandEscapes);
+    }
+
+    [Fact]
+    public void AddEntry_Term_DoesNotEnableEscapeExpansion()
+    {
+        var dictionary = CreateDictionaryService();
+        var sut = CreateViewModel(dictionary);
+        sut.NewEntryType = DictionaryEntryType.Term;
+        sut.NewOriginal = "TypeWhisper";
+
+        sut.AddEntryCommand.Execute(null);
+
+        Assert.False(Assert.Single(dictionary.Entries).ExpandEscapes);
     }
 
     [Fact]
@@ -162,6 +258,22 @@ public sealed class DictionarySectionViewModelTests : IDisposable
 
         Assert.False(realEstatePack.IsEnabled);
         Assert.Empty(dictionary.Entries);
+    }
+
+    [Fact]
+    public void AddEntry_Regex_KeepsSurroundingWhitespace()
+    {
+        var dictionary = CreateDictionaryService();
+        var sut = CreateViewModel(dictionary);
+
+        sut.NewOriginal = "foo ";
+        sut.NewReplacement = "bar";
+        sut.NewIsRegex = true;
+        sut.AddEntryCommand.Execute(null);
+
+        var entry = Assert.Single(dictionary.Entries);
+        Assert.True(entry.IsRegex);
+        Assert.Equal("foo ", entry.Original);
     }
 
     private DictionaryService CreateDictionaryService()

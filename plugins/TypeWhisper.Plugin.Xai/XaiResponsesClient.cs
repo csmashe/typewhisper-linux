@@ -71,25 +71,11 @@ internal sealed class XaiResponsesClient
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
         request.Content = XaiJson.CreateJsonContent(body);
 
-        // ResponseHeadersRead so deltas surface as they arrive instead of
-        // buffering the whole SSE body (the batch path's SendWithErrorHandlingAsync
-        // buffers, so we send + check the status line ourselves here).
-        using var response = await _httpClient.SendAsync(
-            request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseHeadersRead, ct);
 
-        if (!response.IsSuccessStatusCode)
-        {
-            var errorBody = await response.Content.ReadAsStringAsync(ct);
-            var message = (int)response.StatusCode switch
-            {
-                401 => "Invalid API key",
-                429 => "Rate limit reached, please wait",
-                _ => $"API error {(int)response.StatusCode}: {OpenAiApiHelper.ExtractErrorMessage(errorBody)}",
-            };
-            throw new InvalidOperationException(message);
-        }
-
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        await using var stream = await OpenAiApiHelper.ReadBodyWithErrorHandlingAsync(
+            () => response.Content.ReadAsStreamAsync(ct), ct);
         using var reader = new StreamReader(stream);
 
         await foreach (var delta in SseEventDecoder.ReadValidatedAsync(reader, s_streamPolicy, ct))

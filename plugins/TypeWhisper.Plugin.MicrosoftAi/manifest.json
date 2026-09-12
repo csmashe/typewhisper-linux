@@ -1,0 +1,14 @@
+{
+  "id": "com.typewhisper.microsoft-ai",
+  "name": "Microsoft AI",
+  "version": "1.0.0",
+  "author": "TypeWhisper",
+  "description": "Microsoft MAI Transcribe through the Azure Speech fast transcription API",
+  "networkAccess": "network",
+  "categories": [
+    "transcription"
+  ],
+  "requiresApiKey": true,
+  "assemblyName": "TypeWhisper.Plugin.MicrosoftAi.dll",
+  "pluginClass": "TypeWhisper.Plugin.MicrosoftAi.MicrosoftAiPlugin"
+}

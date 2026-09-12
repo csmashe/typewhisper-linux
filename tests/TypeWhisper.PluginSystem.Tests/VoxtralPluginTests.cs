@@ -9,6 +9,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class VoxtralPluginTests
 {
     [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<VoxtralPlugin>();
+
+
+    [Fact]
     public async Task ActivateAsync_UsesVoxtralMiniAndDisablesTranslation()
     {
         var host = CreateHostMock();
@@ -261,7 +266,7 @@ public class VoxtralPluginTests
         );
         using var sut = await CreateConfiguredPluginAsync(handler);
 
-        var exception = await Assert.ThrowsAsync<HttpRequestException>(
+        var exception = await Assert.ThrowsAsync<PluginRequestException>(
             () => sut.TranscribeAsync(
                 [1, 2, 3],
                 null,
@@ -273,7 +278,8 @@ public class VoxtralPluginTests
 
         Assert.Contains("Mistral API error 422", exception.Message);
         Assert.Contains("Unsupported audio format", exception.Message);
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, exception.StatusCode);
+        Assert.Equal((int)HttpStatusCode.UnprocessableEntity, exception.HttpStatusCode);
+        Assert.Equal(PluginRequestFailureKind.InvalidRequest, exception.FailureKind);
     }
 
     [Fact]

@@ -30,10 +30,7 @@ internal sealed class LlmStreamPump
     }
 
     public bool Faulted { get; private set; }
-
-    // The fault that set Faulted, so ThrowIfNonRetryableFault can tell a retryable stream
-    // failure from one a batch retry would hit identically (a signed-out provider).
-    private Exception? Fault { get; set; }
+    public Exception? Failure { get; private set; }
 
     /// <summary>
     ///     Rethrows a configuration fault — a signed-out or uninstalled selected provider — because
@@ -44,9 +41,9 @@ internal sealed class LlmStreamPump
     /// </summary>
     public void ThrowIfNonRetryableFault()
     {
-        if (Fault is PluginRequestException { FailureKind: PluginRequestFailureKind.Configuration })
+        if (Failure is PluginRequestException { FailureKind: PluginRequestFailureKind.Configuration })
         {
-            ExceptionDispatchInfo.Capture(Fault).Throw();
+            ExceptionDispatchInfo.Capture(Failure).Throw();
         }
     }
 
@@ -111,9 +108,9 @@ internal sealed class LlmStreamPump
             // Plugin enumerators can throw arbitrary types, including an OCE while
             // the caller token is still live. Treat every dependency fault as
             // recoverable: keep the partial and let the caller fall back.
-            Trace.WriteLine($"[LlmStreamPump] Fault: {ex.GetType().Name}: {ex.Message}");
+            Trace.WriteLine($"[LlmStreamPump] Fault: {ex.GetType().Name}");
             Faulted = true;
-            Fault = ex;
+            Failure = ex;
             EmitFinal();
             return _sb.ToString();
         }

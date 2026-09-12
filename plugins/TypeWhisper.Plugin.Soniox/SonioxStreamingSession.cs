@@ -10,10 +10,8 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.Soniox;
 
-internal sealed class SonioxStreamingSession : IStreamingSession
+internal sealed class SonioxStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
-    private const string EndpointUrl =
-        "wss://stt-rt.soniox.com/transcribe-websocket";
     internal const string RealtimeModel = "stt-rt-v4";
 
     private readonly WebSocketSessionPump _pump;
@@ -23,6 +21,8 @@ internal sealed class SonioxStreamingSession : IStreamingSession
         _pump = pump;
     }
 
+    public Exception? Fault => _pump.Fault;
+
     public event Action<StreamingTranscriptEvent>? TranscriptReceived
     {
         add => _pump.TranscriptReceived += value;
@@ -31,12 +31,13 @@ internal sealed class SonioxStreamingSession : IStreamingSession
 
     public static async Task<SonioxStreamingSession> ConnectAsync(
         string apiKey,
+        Uri realtimeUri,
         IReadOnlyList<string> languageHints,
         CancellationToken ct
     )
     {
         var pump = await WebSocketSessionPump.ConnectAsync(
-            new SonioxWebSocketAdapter(apiKey, languageHints),
+            new SonioxWebSocketAdapter(apiKey, realtimeUri, languageHints),
             ct
         );
         return new SonioxStreamingSession(pump);
@@ -144,12 +145,11 @@ internal sealed class SonioxStreamingSession : IStreamingSession
             return new SonioxMessage([], false, null);
         }
     }
-
-    internal static Uri RealtimeUri => new(EndpointUrl);
 }
 
 internal sealed class SonioxWebSocketAdapter(
     string apiKey,
+    Uri realtimeUri,
     IReadOnlyList<string> languageHints
 ) : IWebSocketSessionAdapter
 {
@@ -166,7 +166,7 @@ internal sealed class SonioxWebSocketAdapter(
         CancellationToken ct
     ) =>
         ValueTask.FromResult(
-            new WebSocketConnectionOptions(SonioxStreamingSession.RealtimeUri)
+            new WebSocketConnectionOptions(realtimeUri)
         );
 
     public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> OnConnectedAsync(

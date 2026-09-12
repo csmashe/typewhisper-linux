@@ -17,6 +17,7 @@ internal sealed class ScriptedLlmProvider : ILlmProviderRole
 
     private readonly ConcurrentQueue<string[]> _streams = new();
     private int _batchCalls;
+    private int _streamCalls;
 
     public string PluginId => Id;
     public string ProviderName => "Scripted integration LLM";
@@ -24,7 +25,11 @@ internal sealed class ScriptedLlmProvider : ILlmProviderRole
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
         [new(ModelId, "Scripted LLM model")];
 
+    internal Action? BeforeBatchResponse { get; set; }
+
+    internal int StreamCalls => Volatile.Read(ref _streamCalls);
     internal int BatchCalls => Volatile.Read(ref _batchCalls);
+    internal Exception? Failure { get; set; }
 
     internal void EnqueueStream(params string[] deltas)
     {
@@ -40,6 +45,9 @@ internal sealed class ScriptedLlmProvider : ILlmProviderRole
     {
         ct.ThrowIfCancellationRequested();
         Interlocked.Increment(ref _batchCalls);
+        BeforeBatchResponse?.Invoke();
+        if (Failure is { } failure)
+            throw failure;
         return Task.FromResult(
             _streams.TryDequeue(out var deltas) ? string.Concat(deltas) : string.Empty
         );
@@ -53,6 +61,9 @@ internal sealed class ScriptedLlmProvider : ILlmProviderRole
         CancellationToken ct
     )
     {
+        Interlocked.Increment(ref _streamCalls);
+        if (Failure is { } failure)
+            throw failure;
         if (!_streams.TryDequeue(out var deltas))
         {
             throw new InvalidOperationException("No scripted LLM stream remains.");
