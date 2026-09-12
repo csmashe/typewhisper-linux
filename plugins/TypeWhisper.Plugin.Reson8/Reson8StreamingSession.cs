@@ -6,7 +6,7 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.Reson8;
 
-internal sealed class Reson8StreamingSession : IStreamingSession
+internal sealed class Reson8StreamingSession : IStreamingSession, IStreamingSessionHealth
 {
     private readonly WebSocketSessionPump _pump;
 
@@ -14,6 +14,8 @@ internal sealed class Reson8StreamingSession : IStreamingSession
     {
         _pump = pump;
     }
+
+    public Exception? Fault => _pump.Fault;
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived
     {

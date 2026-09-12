@@ -30,5 +30,10 @@
   "Settings.NoTranscriptionModelSelected": "No transcription model selected.",
   "Settings.NoLlmModelSelected": "No LLM model selected.",
   "Manifest.Name": "OpenAI Compatible",
-  "Manifest.Description": "Connect to any OpenAI-compatible server (Ollama, LM Studio, vLLM, etc.)"
+  "Manifest.Description": "Connect to any OpenAI-compatible server (Ollama, LM Studio, vLLM, etc.)",
+  "Settings.LlmRequestTimeout": "LLM Request Timeout",
+  "Settings.LlmRequestTimeoutHelp": "How long to wait for each LLM response. Enter a whole number from {0} to {1}. Default: {2} seconds.",
+  "Settings.LlmRequestTimeoutInvalid": "Enter a whole number between {0} and {1} seconds.",
+  "Settings.LlmRequestTimedOut": "The language model request timed out.",
+  "Settings.RequestTimedOut": "The request timed out."
 }

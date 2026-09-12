@@ -69,6 +69,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private bool? _editDeveloperFormattingOverride;
 
     [ObservableProperty]
+    private ProfileContextMatchMode _editContextMatchMode = ProfileContextMatchMode.All;
+
+    [ObservableProperty]
     private ProfileHotkeyBehavior _editHotkeyBehavior = ProfileHotkeyBehavior.StartDictation;
 
     [ObservableProperty]
@@ -162,10 +165,14 @@ public partial class ProfilesSectionViewModel : ObservableObject
         UrlPatternChips.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(IsUrlPatternsSectionVisible));
+            OnPropertyChanged(nameof(IsContextMatchModeVisible));
             OnPropertyChanged(nameof(IsGlobalFallbackProfile));
         };
         ProcessNameChips.CollectionChanged += (_, _) =>
+        {
             OnPropertyChanged(nameof(IsGlobalFallbackProfile));
+            OnPropertyChanged(nameof(IsContextMatchModeVisible));
+        };
         _failureTracker.OnFailure += (_, e) =>
         {
             if (!e.ShouldShowPersistentBanner)
@@ -205,6 +212,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     public ObservableCollection<ProfileStylePresetOption> StylePresetOptions { get; } =
         new(CreateStylePresetOptions());
+
+    public ObservableCollection<ProfileContextMatchModeOption> ContextMatchModeOptions { get; } =
+        new(CreateContextMatchModeOptions());
 
     public ObservableCollection<ProfileHotkeyBehaviorOption> HotkeyBehaviorOptions { get; } =
         new(CreateHotkeyBehaviorOptions());
@@ -387,6 +397,28 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
     }
 
+    public ProfileContextMatchModeOption? SelectedContextMatchModeOption
+    {
+        get => ContextMatchModeOptions.FirstOrDefault(o => o.Value == EditContextMatchMode);
+        set
+        {
+            var selected = value?.Value ?? ProfileContextMatchMode.All;
+            if (selected == EditContextMatchMode)
+            {
+                return;
+            }
+
+            EditContextMatchMode = selected;
+        }
+    }
+
+    public string SelectedContextMatchModeHint =>
+        EditContextMatchMode == ProfileContextMatchMode.Any
+            ? Loc.Instance["Profiles.ContextMatchAnyHint"]
+            : Loc.Instance["Profiles.ContextMatchAllHint"];
+
+    public bool IsContextMatchModeVisible => ProcessNameChips.Count > 0 && UrlPatternChips.Count > 0;
+
     public ProfileHotkeyBehaviorOption? SelectedHotkeyBehaviorOption
     {
         get => HotkeyBehaviorOptions.FirstOrDefault(o => o.Value == EditHotkeyBehavior);
@@ -481,6 +513,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             EditPromptActionId = null;
             EditHotkeyData = null;
             EditHotkeyBehavior = ProfileHotkeyBehavior.StartDictation;
+            EditContextMatchMode = ProfileContextMatchMode.All;
             EditStylePreset = ProfileStylePreset.Raw;
             EditCleanupLevelOverride = null;
             EditDeveloperFormattingOverride = null;
@@ -499,6 +532,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         EditPromptActionId = value.PromptActionId;
         EditHotkeyData = value.HotkeyData;
         EditHotkeyBehavior = value.HotkeyBehavior;
+        EditContextMatchMode = value.ContextMatchMode;
         EditStylePreset = value.StylePreset;
         EditCleanupLevelOverride = value.CleanupLevelOverride;
         EditDeveloperFormattingOverride = value.DeveloperFormattingOverride;
@@ -538,6 +572,12 @@ public partial class ProfilesSectionViewModel : ObservableObject
     partial void OnEditStylePresetChanged(ProfileStylePreset value)
     {
         OnPropertyChanged(nameof(SelectedStylePresetOption));
+    }
+
+    partial void OnEditContextMatchModeChanged(ProfileContextMatchMode value)
+    {
+        OnPropertyChanged(nameof(SelectedContextMatchModeOption));
+        OnPropertyChanged(nameof(SelectedContextMatchModeHint));
     }
 
     partial void OnEditHotkeyBehaviorChanged(ProfileHotkeyBehavior value)
@@ -591,6 +631,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
                     Priority = 0,
                     ProcessNames = [],
                     UrlPatterns = [],
+                    ContextMatchMode = ProfileContextMatchMode.Any,
                 };
 
                 _profiles.AddProfile(profile);
@@ -657,6 +698,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             PromptActionId = promptActionId,
             HotkeyData = hotkeyData,
             HotkeyBehavior = EditHotkeyBehavior,
+            ContextMatchMode = EditContextMatchMode,
             StylePreset = EditStylePreset,
             CleanupLevelOverride = EditCleanupLevelOverride,
             DeveloperFormattingOverride = EditDeveloperFormattingOverride,
@@ -1016,6 +1058,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var promptActionId = EditPromptActionId;
         var stylePreset = EditStylePreset;
         var hotkeyBehavior = EditHotkeyBehavior;
+        var contextMatchMode = EditContextMatchMode;
         var cleanupLevelOverride = EditCleanupLevelOverride;
         var whisperModeOverride = EditWhisperModeOverride;
         var developerFormattingOverride = EditDeveloperFormattingOverride;
@@ -1024,6 +1067,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         RefreshPromptActionOptions();
         ReplaceCollection(StylePresetOptions, CreateStylePresetOptions());
         ReplaceCollection(HotkeyBehaviorOptions, CreateHotkeyBehaviorOptions());
+        ReplaceCollection(ContextMatchModeOptions, CreateContextMatchModeOptions());
         ReplaceCollection(CleanupOverrideOptions, CreateCleanupOverrideOptions());
         WhisperModeOptions = CreateNullableBooleanOptions();
         OnPropertyChanged(nameof(WhisperModeOptions));
@@ -1032,6 +1076,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         EditPromptActionId = promptActionId;
         EditStylePreset = stylePreset;
         EditHotkeyBehavior = hotkeyBehavior;
+        EditContextMatchMode = contextMatchMode;
         EditCleanupLevelOverride = cleanupLevelOverride;
         EditWhisperModeOverride = whisperModeOverride;
         EditDeveloperFormattingOverride = developerFormattingOverride;
@@ -1040,6 +1085,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedPromptActionOption));
         OnPropertyChanged(nameof(SelectedStylePresetOption));
         OnPropertyChanged(nameof(SelectedHotkeyBehaviorOption));
+        OnPropertyChanged(nameof(SelectedContextMatchModeOption));
+        OnPropertyChanged(nameof(SelectedContextMatchModeHint));
         OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
         OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
@@ -1062,6 +1109,15 @@ public partial class ProfilesSectionViewModel : ObservableObject
             new(ProfileStylePreset.Developer, Loc.Instance["Profiles.StylePresetDeveloper"]),
             new(ProfileStylePreset.TerminalSafe, Loc.Instance["Profiles.StylePresetTerminalSafe"]),
             new(ProfileStylePreset.MeetingNotes, Loc.Instance["Profiles.StylePresetMeetingNotes"]),
+        ];
+    }
+
+    private static IReadOnlyList<ProfileContextMatchModeOption> CreateContextMatchModeOptions()
+    {
+        return
+        [
+            new(ProfileContextMatchMode.Any, Loc.Instance["Profiles.ContextMatchAny"]),
+            new(ProfileContextMatchMode.All, Loc.Instance["Profiles.ContextMatchAll"]),
         ];
     }
 
@@ -1408,6 +1464,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     private void NotifyStateChanged()
     {
+        OnPropertyChanged(nameof(SelectedContextMatchModeOption));
+        OnPropertyChanged(nameof(SelectedContextMatchModeHint));
+        OnPropertyChanged(nameof(IsContextMatchModeVisible));
         OnPropertyChanged(nameof(HasSelectedProfile));
         OnPropertyChanged(nameof(ProfileCount));
         OnPropertyChanged(nameof(EnabledProfileCount));
@@ -1455,6 +1514,8 @@ public sealed record ProfileModelOption(string? Value, string Label);
 public sealed record PromptActionOption(string? Value, string Label);
 
 public sealed record ProfileStylePresetOption(ProfileStylePreset Value, string Label);
+
+public sealed record ProfileContextMatchModeOption(ProfileContextMatchMode Value, string Label);
 
 public sealed record ProfileHotkeyBehaviorOption(ProfileHotkeyBehavior Value, string Label);
 

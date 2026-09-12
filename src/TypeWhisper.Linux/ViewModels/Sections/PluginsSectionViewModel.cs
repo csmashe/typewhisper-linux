@@ -29,6 +29,10 @@ public partial class PluginsSectionViewModel : ObservableObject
     [ObservableProperty]
     private string _headerSummary = "";
 
+    // 0 = Enabled, 1 = Disabled. Drives which plugin list the section shows.
+    [ObservableProperty]
+    private int _selectedTab;
+
     [ObservableProperty]
     private string _summary = "";
 
@@ -68,9 +72,28 @@ public partial class PluginsSectionViewModel : ObservableObject
         RebuildPluginRows(PluginListRefreshKind.Initial);
     }
 
-    public ObservableCollection<PluginCategoryGroup> PluginGroups { get; } = [];
+    public ObservableCollection<PluginCategoryGroup> EnabledGroups { get; } = [];
+    public ObservableCollection<PluginCategoryGroup> DisabledGroups { get; } = [];
     public ObservableCollection<PluginFailureRow> LoadFailures { get; } = [];
     public bool HasLoadFailures => LoadFailures.Count > 0;
+
+    public bool IsEnabledTabSelected => SelectedTab == 0;
+    public bool IsDisabledTabSelected => SelectedTab == 1;
+
+    public int EnabledCount => DistinctRows(EnabledGroups).Count();
+    public int DisabledCount => DistinctRows(DisabledGroups).Count();
+    public bool HasEnabledPlugins => EnabledCount > 0;
+    public bool HasDisabledPlugins => DisabledCount > 0;
+
+    public string EnabledTabLabel => Loc.Instance.GetString("Plugins.TabEnabled", EnabledCount);
+    public string DisabledTabLabel => Loc.Instance.GetString("Plugins.TabDisabled", DisabledCount);
+
+    // Rows live in whichever partition their IsEnabled state lands them in; several
+    // operations (expand preservation, single-expand enforcement) need to see both.
+    private IEnumerable<PluginRow> AllRows => DistinctRows(EnabledGroups.Concat(DisabledGroups));
+
+    private static IEnumerable<PluginRow> DistinctRows(IEnumerable<PluginCategoryGroup> groups) =>
+        groups.SelectMany(group => group.Plugins).DistinctBy(plugin => plugin.Id);
 
     /// <summary>
     ///     Re-polls providers so newly pulled models appear when a model dropdown opens, without
@@ -89,13 +112,11 @@ public partial class PluginsSectionViewModel : ObservableObject
     private void RebuildPluginRows(PluginListRefreshKind refreshKind)
     {
         // Preserve expanded state across rebuilds so the user doesn't lose their open settings panel.
-        var existingRows = PluginGroups
-            .SelectMany(group => group.Plugins)
-            .DistinctBy(plugin => plugin.Id)
-            .ToDictionary(plugin => plugin.Id, StringComparer.Ordinal);
+        var existingRows = AllRows.ToDictionary(plugin => plugin.Id, StringComparer.Ordinal);
         var expandedPluginId = existingRows.Values.FirstOrDefault(plugin => plugin.IsExpanded)?.Id;
 
-        PluginGroups.Clear();
+        EnabledGroups.Clear();
+        DisabledGroups.Clear();
         _pluginById.Clear();
 
         var plugins = new List<PluginRow>();
@@ -204,25 +225,11 @@ public partial class PluginsSectionViewModel : ObservableObject
             .ThenBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var categoryMemberships = plugins
-            .SelectMany(plugin =>
-                plugin.Categories.Select(category =>
-                    new
-                    {
-                        Plugin = plugin,
-                        Category = PluginCategories.Resolve(category),
-                    }
-                )
-            )
-            .OrderBy(item => item.Category.SortOrder)
-            .ThenBy(item => item.Plugin.Name, StringComparer.OrdinalIgnoreCase);
-
-        foreach (var group in categoryMemberships.GroupBy(item => item.Category.Key))
-        {
-            var categoryPlugins = group.Select(item => item.Plugin).ToList();
-            var categoryLabel = group.First().Category.DisplayName;
-            PluginGroups.Add(new PluginCategoryGroup(categoryLabel, categoryPlugins));
-        }
+        // Partition by enabled state so each tab shows only what belongs there. The
+        // list is already ordered by category sort order, so GroupBy yields categories
+        // in that order within each partition.
+        BuildGroups(EnabledGroups, plugins.Where(p => p.IsEnabled));
+        BuildGroups(DisabledGroups, plugins.Where(p => !p.IsEnabled));
 
         LoadFailures.Clear();
         foreach (var failure in _pluginManager.LoadFailures)
@@ -243,14 +250,19 @@ public partial class PluginsSectionViewModel : ObservableObject
         var enabledCount = plugins.Count(p => p.IsEnabled);
         HeaderSummary = Loc.Instance.GetString("Plugins.HeaderSummary", plugins.Count, enabledCount);
 
+        OnPropertyChanged(nameof(EnabledCount));
+        OnPropertyChanged(nameof(DisabledCount));
+        OnPropertyChanged(nameof(HasEnabledPlugins));
+        OnPropertyChanged(nameof(HasDisabledPlugins));
+        OnPropertyChanged(nameof(EnabledTabLabel));
+        OnPropertyChanged(nameof(DisabledTabLabel));
+
         if (expandedPluginId is null)
         {
             return;
         }
 
-        var expandedPlugin = PluginGroups
-            .SelectMany(group => group.Plugins)
-            .FirstOrDefault(plugin => plugin.Id == expandedPluginId);
+        var expandedPlugin = AllRows.FirstOrDefault(plugin => plugin.Id == expandedPluginId);
         if (expandedPlugin is null)
         {
             return;
@@ -263,6 +275,53 @@ public partial class PluginsSectionViewModel : ObservableObject
                 ? SettingsReloadKind.PreserveDraft
                 : SettingsReloadKind.ResetBaseline
         );
+    }
+
+    // A plugin appears under every category it declares, so the same row instance can sit
+    // in several groups of one partition.
+    private static void BuildGroups(
+        ObservableCollection<PluginCategoryGroup> target,
+        IEnumerable<PluginRow> rows
+    )
+    {
+        var categoryMemberships = rows
+            .SelectMany(plugin =>
+                plugin.Categories.Select(category =>
+                    new
+                    {
+                        Plugin = plugin,
+                        Category = PluginCategories.Resolve(category),
+                    }
+                )
+            )
+            .OrderBy(item => item.Category.SortOrder)
+            .ThenBy(item => item.Plugin.Name, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var group in categoryMemberships.GroupBy(item => item.Category.Key))
+        {
+            var categoryPlugins = group.Select(item => item.Plugin).ToList();
+            var categoryLabel = group.First().Category.DisplayName;
+            target.Add(new PluginCategoryGroup(categoryLabel, categoryPlugins));
+        }
+    }
+
+    [RelayCommand]
+    private void SetTab(object? tab)
+    {
+        SelectedTab = tab switch
+        {
+            int intValue => intValue,
+            string stringValue when int.TryParse(stringValue, out var parsed) => parsed,
+            // Leave the current tab unchanged for any other value; the
+            // [ObservableProperty] setter's equality guard makes this a no-op.
+            _ => SelectedTab,
+        };
+    }
+
+    partial void OnSelectedTabChanged(int value)
+    {
+        OnPropertyChanged(nameof(IsEnabledTabSelected));
+        OnPropertyChanged(nameof(IsDisabledTabSelected));
     }
 
     [RelayCommand]
@@ -287,7 +346,7 @@ public partial class PluginsSectionViewModel : ObservableObject
             return;
         }
 
-        foreach (var other in PluginGroups.SelectMany(group => group.Plugins).Where(p => p != row))
+        foreach (var other in AllRows.Where(p => p != row))
         {
             other.IsExpanded = false;
         }
@@ -448,9 +507,7 @@ public partial class PluginsSectionViewModel : ObservableObject
             return;
         }
 
-        var currentRow = PluginGroups
-            .SelectMany(group => group.Plugins)
-            .FirstOrDefault(row => ReferenceEquals(row.LoadedPlugin, loaded));
+        var currentRow = AllRows.FirstOrDefault(row => ReferenceEquals(row.LoadedPlugin, loaded));
         if (currentRow is null)
         {
             return;

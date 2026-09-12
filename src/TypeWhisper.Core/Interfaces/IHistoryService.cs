@@ -10,6 +10,9 @@ public interface IHistoryService
 {
     IReadOnlyList<TranscriptionRecord> Records { get; }
 
+    /// <summary>Whether the last history read succeeded.</summary>
+    bool RecordsAvailable => true;
+
     /// <summary>
     ///     Reads the records and reports in the same operation whether that read succeeded, so callers
     ///     that must distinguish "no records" from "could not read" never see the two answers disagree.

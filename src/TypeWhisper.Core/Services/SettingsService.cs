@@ -163,6 +163,13 @@ public sealed class SettingsService : ISettingsService
         }
     }
 
+    // One place for the invariants every committed snapshot must satisfy, whichever path wrote it.
+    private static AppSettings NormalizeSettings(AppSettings settings) =>
+        NormalizeRetention(NormalizeSpokenFormattingProfiles(NormalizeLanguageHints(settings)));
+
+    private static AppSettings NormalizeSpokenFormattingProfiles(AppSettings settings) =>
+        settings with { SpokenFormattingProfiles = SpokenFormatting.SpokenFormattingProfileStore.NormalizeProfiles(settings.SpokenFormattingProfiles) };
+
     private static AppSettings Deserialize(string json)
     {
         var settings =
@@ -170,14 +177,8 @@ public sealed class SettingsService : ISettingsService
             ?? throw new JsonException("Settings JSON deserialized to null.");
         settings = ApplyHistoryRetentionMigration(settings, json);
         settings = ApplyAccelerationMigration(settings, json);
-        // A file that predates hints carries only Language; normalizing mirrors it into the list.
         return NormalizeSettings(settings);
     }
-
-    // Every path that admits settings from outside — a reloaded file, a wholesale Save, an Update —
-    // runs them through here, so each per-setting normalizer has one place to be registered.
-    private static AppSettings NormalizeSettings(AppSettings settings) =>
-        NormalizeRetention(NormalizeLanguageHints(settings));
 
     // A stored list wins; an empty or null list beside an explicit Language keeps that language.
     private static AppSettings NormalizeLanguageHints(AppSettings settings) =>

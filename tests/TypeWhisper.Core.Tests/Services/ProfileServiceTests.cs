@@ -33,6 +33,38 @@ public sealed class ProfileServiceTests : IDisposable
     }
 
     [Fact]
+    public void AddProfile_ContextMatchMode_PersistsAsStringAndReloads()
+    {
+        _sut.AddProfile(new Profile
+        {
+            Id = "any",
+            Name = "Any",
+            ContextMatchMode = ProfileContextMatchMode.Any,
+        });
+
+        Assert.Contains("\"ContextMatchMode\": \"Any\"", File.ReadAllText(_filePath));
+        Assert.Equal(ProfileContextMatchMode.Any, Assert.Single(new ProfileService(_filePath).Profiles).ContextMatchMode);
+    }
+
+    [Fact]
+    public void Profile_ContextMatchModeDefaultsToAll()
+    {
+        var profile = new Profile { Id = "default", Name = "Default" };
+
+        Assert.Equal(ProfileContextMatchMode.All, profile.ContextMatchMode);
+    }
+
+    [Fact]
+    public void LegacyProfileWithoutContextMatchMode_LoadsAsAll()
+    {
+        File.WriteAllText(_filePath, """
+            [{"Id":"legacy","Name":"Legacy","IsEnabled":true,"ProcessNames":["chrome"],"UrlPatterns":["github.com"]}]
+            """);
+
+        Assert.Equal(ProfileContextMatchMode.All, Assert.Single(new ProfileService(_filePath).Profiles).ContextMatchMode);
+    }
+
+    [Fact]
     public void ToggleProfileEnabled_MissingId_DoesNotWriteOrNotify()
     {
         var original = new Profile

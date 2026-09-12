@@ -6,8 +6,10 @@ using System.Threading.Channels;
 using TypeWhisper.Plugin.AssemblyAi;
 using TypeWhisper.Plugin.Deepgram;
 using TypeWhisper.Plugin.ElevenLabs;
+using TypeWhisper.Plugin.Gemini;
 using TypeWhisper.Plugin.Gladia;
 using TypeWhisper.Plugin.OpenAi;
+using TypeWhisper.Plugin.Meta;
 using TypeWhisper.Plugin.Reson8;
 using TypeWhisper.Plugin.SmallestAi;
 using TypeWhisper.Plugin.Soniox;
@@ -26,6 +28,7 @@ public sealed class StreamingProviderAdapterConformanceTests
     // test runner from enumerating the rows individually.
     public static TheoryData<string> MigratedAdapters =>
         [
+            "Meta",
             "AssemblyAI",
             "Deepgram",
             "ElevenLabs",
@@ -40,17 +43,20 @@ public sealed class StreamingProviderAdapterConformanceTests
             "Gladia",
             "xAI",
             "OpenAI",
+            "Gemini",
         ];
 
     private static IWebSocketSessionAdapter CreateMigratedAdapter(string provider) =>
         provider switch
         {
+            "Meta" => new MetaWebSocketAdapter(new MetaRealtimeConnectionOptions("key", MetaPlugin.DefaultTranscriptionModelId, "PUSH_TO_TALK", [], [])),
             "AssemblyAI" => new AssemblyAiWebSocketAdapter("key", "en"),
             "Deepgram" => new DeepgramWebSocketAdapter("key", "nova-3", "en"),
             "ElevenLabs" => new ElevenLabsWebSocketAdapter(
                 "key",
                 "scribe_v2_realtime",
-                "en"
+                "en",
+                noVerbatim: true
             ),
             "Smallest AI" => new SmallestAiWebSocketAdapter("key", "en"),
             "Reson8" => new Reson8WebSocketAdapter(
@@ -98,7 +104,8 @@ public sealed class StreamingProviderAdapterConformanceTests
         var eleven = await new ElevenLabsWebSocketAdapter(
                 "eleven-key",
                 "scribe_v2_realtime",
-                "de"
+                "de",
+                noVerbatim: true
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
         var smallest = await new SmallestAiWebSocketAdapter("smallest-key", "de")
@@ -122,7 +129,7 @@ public sealed class StreamingProviderAdapterConformanceTests
                 "de"
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
-        var soniox = await new SonioxWebSocketAdapter("soniox-key", ["de"])
+        var soniox = await new SonioxWebSocketAdapter("soniox-key", new Uri(SonioxPlugin.AvailableRegions[0].RealtimeUrl), ["de"])
             .GetConnectionOptionsAsync(CancellationToken.None);
         var speechmatics = await new SpeechmaticsWebSocketAdapter(
                 "speechmatics-key",
@@ -133,7 +140,8 @@ public sealed class StreamingProviderAdapterConformanceTests
             .GetConnectionOptionsAsync(CancellationToken.None);
         var openAi = await new OpenAiRealtimeWebSocketAdapter(
                 "openai-key",
-                "de",
+                OpenAiRealtimeStreamingSession.LegacyModelId,
+                ["de"],
                 null,
                 useServerVad: true,
                 sendSessionUpdate: true
@@ -235,7 +243,7 @@ public sealed class StreamingProviderAdapterConformanceTests
     {
         var transport = new ScriptedWebSocketTransport();
         await using var pump = await StartAsync(
-            new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null),
+            new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null, noVerbatim: true),
             transport
         );
         var events = new ConcurrentQueue<StreamingTranscriptEvent>();
@@ -292,7 +300,7 @@ public sealed class StreamingProviderAdapterConformanceTests
                 """{"type":"Error","description":"rejected"}"""
             ),
             "ElevenLabs" => (
-                new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null),
+                new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null, noVerbatim: true),
                 """{"message_type":"auth_error","message":"rejected"}"""
             ),
             "SmallestAI" => (
@@ -327,6 +335,11 @@ public sealed class StreamingProviderAdapterConformanceTests
         string provider
     )
     {
+        // Skipped for Gemini: it documents no signal after audioStreamEnd, so a clean close
+        // before one is the normal end of its session rather than a fault.
+        if (!CreateAdditionalProviderAdapter(provider).Terminal.Required)
+            return;
+
         var transport = new ScriptedWebSocketTransport();
         await using var pump = await StartAdditionalProviderAsync(
             provider,
@@ -357,11 +370,15 @@ public sealed class StreamingProviderAdapterConformanceTests
             "Soniox" => """{"error_message":"rejected"}""",
             "Speechmatics" => """{"message":"Error","reason":"rejected"}""",
             "Gladia" => """{"type":"error","message":"rejected"}""",
+            "Gemini" => """{"error":{"message":"rejected"}}""",
             // xAI and OpenAI both nest the message under "error".
             _ => """{"type":"error","error":{"message":"rejected"}}""",
         };
 
         transport.EnqueueText(error);
+        // An adapter that does not wait for a terminal signal at finalize would otherwise
+        // race the receive loop, so let the fault land first.
+        await WaitForFaultAsync(pump);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => pump.FinalizeAsync(CancellationToken.None).WaitAsync(s_timeout)
@@ -452,6 +469,23 @@ public sealed class StreamingProviderAdapterConformanceTests
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => finalize.WaitAsync(s_timeout)
         );
+    }
+
+    [Fact]
+    public async Task Gemini_FinalizeCompletesWithoutDocumentedTerminalSignal()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        await using var pump = await StartAdditionalProviderAsync("Gemini", transport);
+
+        var finalize = pump.FinalizeAsync(CancellationToken.None);
+        var frame = await transport.NextSentAsync();
+
+        Assert.Contains(
+            "audioStreamEnd",
+            Encoding.UTF8.GetString(frame.Payload.Span),
+            StringComparison.Ordinal
+        );
+        await finalize.WaitAsync(s_timeout);
     }
 
     [Fact]
@@ -563,13 +597,43 @@ public sealed class StreamingProviderAdapterConformanceTests
         await finalize.WaitAsync(s_timeout);
     }
 
-    private static Task<WebSocketSessionPump> StartAsync(
+    [Fact]
+    public async Task Meta_StartFailureBeforeFirstSend_SurfacesOriginalException()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        // Like Speechmatics with a null language, a null language bias faults during
+        // startup message construction, before the transport sends anything.
+        var adapter = new MetaWebSocketAdapter(
+            new MetaRealtimeConnectionOptions(
+                "key",
+                MetaPlugin.DefaultTranscriptionModelId,
+                "PUSH_TO_TALK",
+                null!,
+                []
+            )
+        );
+
+        var exception = await Assert.ThrowsAsync<NullReferenceException>(
+            () => StartAsync(adapter, transport)
+        );
+        Assert.Equal("Object reference not set to an instance of an object.", exception.Message);
+        Assert.Empty(transport.DrainSent());
+        Assert.Equal(1, transport.DisposeCount);
+    }
+
+    private static async Task<WebSocketSessionPump> StartAsync(
         IWebSocketSessionAdapter adapter,
-        ScriptedWebSocketTransport transport
-    ) =>
-        WebSocketSessionPump
-            .StartConnectedAsync(adapter, transport, CancellationToken.None)
-            .WaitAsync(s_timeout);
+        ScriptedWebSocketTransport transport)
+    {
+        var starting = WebSocketSessionPump.StartConnectedAsync(adapter, transport, CancellationToken.None);
+        // ReSharper disable once InvertIf -- inverting would duplicate the awaited start into both branches.
+        if (adapter is MetaWebSocketAdapter)
+        {
+            await FirstSentOrStartFailureAsync(starting, transport);
+            transport.EnqueueText("""{"sessionId":"meta-session"}""");
+        }
+        return await starting.WaitAsync(s_timeout);
+    }
 
     // A start that faults disposes the transport, and disposal completes its sent channel — so
     // awaiting the first send reports "the channel has been closed" and buries the reason the
@@ -590,14 +654,24 @@ public sealed class StreamingProviderAdapterConformanceTests
         }
     }
 
-    private static async Task<WebSocketSessionPump> StartAdditionalProviderAsync(
-        string provider,
-        ScriptedWebSocketTransport transport
-    )
+    private static async Task WaitForFaultAsync(WebSocketSessionPump pump)
     {
-        IWebSocketSessionAdapter adapter = provider switch
+        var deadline = DateTime.UtcNow + s_timeout;
+        while (pump.State != WebSocketSessionState.Faulted && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+    }
+
+    private static IWebSocketSessionAdapter CreateAdditionalProviderAdapter(string provider) =>
+        provider switch
         {
-            "Soniox" => new SonioxWebSocketAdapter("key", []),
+            "Soniox" => new SonioxWebSocketAdapter("key", new Uri(SonioxPlugin.AvailableRegions[0].RealtimeUrl), []),
+            "Gemini" => new GeminiWebSocketAdapter(
+                "key",
+                "gemini-3.5-transcribe-live",
+                [],
+                [],
+                GeminiTranscriptionMode.Smart
+            ),
             // Speechmatics rejects a null language at StartRecognition; passing null made
             // every Speechmatics case fault during start and tear the transport down, which
             // surfaced as "the channel has been closed" from the first NextSentAsync.
@@ -606,12 +680,20 @@ public sealed class StreamingProviderAdapterConformanceTests
             "xAI" => new XaiWebSocketAdapter("key", null),
             _ => new OpenAiRealtimeWebSocketAdapter(
                 "key",
-                null,
+                OpenAiRealtimeStreamingSession.LegacyModelId,
+                [],
                 null,
                 useServerVad: true,
                 sendSessionUpdate: false
             ),
         };
+
+    private static async Task<WebSocketSessionPump> StartAdditionalProviderAsync(
+        string provider,
+        ScriptedWebSocketTransport transport
+    )
+    {
+        var adapter = CreateAdditionalProviderAdapter(provider);
 
         // Speechmatics and xAI gate readiness on a provider signal, so they need it
         // scripted while start is still in flight -- the shared StartAsync can't do that.
@@ -636,6 +718,17 @@ public sealed class StreamingProviderAdapterConformanceTests
                     CancellationToken.None
                 );
                 transport.EnqueueText("""{"type":"transcript.created"}""");
+                return await starting.WaitAsync(s_timeout);
+            }
+            case "Gemini":
+            {
+                var starting = WebSocketSessionPump.StartConnectedAsync(
+                    adapter,
+                    transport,
+                    CancellationToken.None
+                );
+                await FirstSentOrStartFailureAsync(starting, transport);
+                transport.EnqueueText("""{"setupComplete":{}}""");
                 return await starting.WaitAsync(s_timeout);
             }
         }

@@ -19,7 +19,7 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
     private int _transcriptionCount;
     private readonly ConcurrentQueue<bool> _receivedTranslate = new();
 
-    internal IReadOnlyList<bool> ReceivedTranslate => [.. _receivedTranslate];
+    internal IReadOnlyList<bool> ReceivedTranslations => [.. _receivedTranslate];
 
     internal IReadOnlyList<string?> ReceivedLanguages => [.. _receivedLanguages];
 
@@ -32,7 +32,8 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
         [new(ModelId, "Scripted model")];
     public string? SelectedModelId { get; private set; } = ModelId;
-    public bool SupportsTranslation => false;
+    public bool SupportsTranslation { get; set; }
+    internal bool? ReceivedTranslate { get; private set; }
     public int TranscriptionCount => Volatile.Read(ref _transcriptionCount);
     public int LoadCount { get; private set; }
     public int UnloadCount { get; private set; }
@@ -96,6 +97,7 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
     {
         ct.ThrowIfCancellationRequested();
         _receivedLanguages.Enqueue(language);
+        ReceivedTranslate = translate;
         _receivedTranslate.Enqueue(translate);
         Interlocked.Increment(ref _transcriptionCount);
         if (!_results.TryDequeue(out var result))

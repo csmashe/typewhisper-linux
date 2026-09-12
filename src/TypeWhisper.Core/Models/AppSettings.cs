@@ -45,6 +45,7 @@ public record AppSettings
         init => field = value ?? [];
     } = [];
     public bool AutoPaste { get; init; } = true;
+    public bool LockPasteToFocusedField { get; init; }
 
     public Dictionary<string, TextInsertionStrategy> AppInsertionStrategies
     {
@@ -97,6 +98,15 @@ public record AppSettings
     public bool TranscriptionNumberNormalizationEnabled { get; init; } = true;
     public EnglishOutputVariant EnglishOutputVariant { get; init; } = EnglishOutputVariant.AsTranscribed;
     public GermanOutputVariant GermanOutputVariant { get; init; } = GermanOutputVariant.AsTranscribed;
+    public SpokenFormattingStrategy SpokenFormattingStrategy { get; init; } = SpokenFormattingStrategy.Automatic;
+    public IReadOnlyList<DictationSpokenFormattingProfile> SpokenFormattingProfiles
+    {
+        get;
+        // JsonSerializer passes null for a null JSON value; SettingsService normalizes the list on
+        // load, Save, and Update.
+        // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract
+        init => field = value ?? [];
+    } = [];
     public bool ShortUtterancePunctuationEnabled { get; init; } = true;
 
     // Live transcription (streaming preview while recording)
@@ -150,6 +160,9 @@ public record AppSettings
     // (and persists via gsettings on GNOME), so removal is only ever offered for a state
     // this app created — never for one a screen reader or other tool may rely on.
     public bool AccessibilityBridgeEnabledByApp { get; init; }
+
+    // Opt-in Sentry crash + performance reporting; default off (see docs/PRIVACY.md).
+    public bool CrashReportingEnabled { get; init; }
 
     // Onboarding
     public bool HasCompletedOnboarding { get; init; }

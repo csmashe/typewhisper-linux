@@ -66,6 +66,14 @@
       "sdkAbi": "net10.0"
     },
     {
+      "id": "com.typewhisper.filler-words",
+      "projectPath": "plugins/TypeWhisper.Plugin.FillerWords/TypeWhisper.Plugin.FillerWords.csproj",
+      "releaseSlug": "filler-words",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
       "id": "com.typewhisper.fireworks",
       "projectPath": "plugins/TypeWhisper.Plugin.Fireworks/TypeWhisper.Plugin.Fireworks.csproj",
       "releaseSlug": "fireworks",
@@ -118,6 +126,22 @@
       "id": "com.typewhisper.linear",
       "projectPath": "plugins/TypeWhisper.Plugin.Linear/TypeWhisper.Plugin.Linear.csproj",
       "releaseSlug": "linear",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.meta",
+      "projectPath": "plugins/TypeWhisper.Plugin.Meta/TypeWhisper.Plugin.Meta.csproj",
+      "releaseSlug": "meta",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
+      "id": "com.typewhisper.microsoft-ai",
+      "projectPath": "plugins/TypeWhisper.Plugin.MicrosoftAi/TypeWhisper.Plugin.MicrosoftAi.csproj",
+      "releaseSlug": "microsoft-ai",
       "platforms": ["linux"],
       "rids": ["linux-x64"],
       "sdkAbi": "net10.0"

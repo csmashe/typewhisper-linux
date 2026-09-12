@@ -137,7 +137,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
 
         InvokeRefresh(vm);
 
-        var visibleRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        var visibleRow = AllGroups(vm).SelectMany(group => group.Plugins).Single();
         Assert.Same(row, visibleRow);
         Assert.Same(
             secret,
@@ -170,7 +170,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         );
         var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded]);
         var vm = new PluginsSectionViewModel(manager);
-        var row = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        var row = AllGroups(vm).SelectMany(group => group.Plugins).Single();
         await vm.ToggleExpandedCommand.ExecuteAsync(row);
 
         var field = row.SettingFields.Single(candidate => candidate.Key == "model");
@@ -237,9 +237,9 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
 
         Assert.Equal(
             ["Text-to-Speech", "Integrations"],
-            vm.PluginGroups.Select(group => group.Title).ToArray()
+            AllGroups(vm).Select(group => group.Title).ToArray()
         );
-        var rows = vm.PluginGroups.SelectMany(group => group.Plugins).ToArray();
+        var rows = AllGroups(vm).SelectMany(group => group.Plugins).ToArray();
         Assert.Equal(2, rows.Length);
         Assert.Same(rows[0], rows[1]);
         Assert.Equal(PluginNetworkAccess.Mixed, rows[0].NetworkAccess);
@@ -267,7 +267,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
 
         var vm = new PluginsSectionViewModel(manager);
 
-        var group = Assert.Single(vm.PluginGroups);
+        var group = Assert.Single(AllGroups(vm));
         Assert.Equal("Text-to-Speech", group.Title);
         var row = Assert.Single(group.Plugins);
         Assert.Equal("tts", row.CategoryKey);
@@ -291,7 +291,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             errorLog
         );
 
-        var rows = vm.PluginGroups.SelectMany(group => group.Plugins).ToList();
+        var rows = AllGroups(vm).SelectMany(group => group.Plugins).ToList();
         var throwingRow = Assert.Single(rows, row => row.Id == throwing.PluginId);
         var healthyRow = Assert.Single(rows, row => row.Id == healthy.PluginId);
         Assert.Equal("Unable to load plugin settings.", throwingRow.Status);
@@ -347,7 +347,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             stopwatch.Elapsed < TimeSpan.FromMilliseconds(500),
             $"Refresh took {stopwatch.Elapsed.TotalMilliseconds:0} ms."
         );
-        var rows = vm.PluginGroups.SelectMany(group => group.Plugins).ToList();
+        var rows = AllGroups(vm).SelectMany(group => group.Plugins).ToList();
         var hungRow = Assert.Single(rows, row => row.Id == hung.PluginId);
         var healthyRow = Assert.Single(rows, row => row.Id == healthy.PluginId);
         Assert.Equal("Unable to load plugin settings.", hungRow.Status);
@@ -375,7 +375,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             TimeSpan.FromMilliseconds(40),
             errorLog
         );
-        var row = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        var row = AllGroups(vm).SelectMany(group => group.Plugins).Single();
         await vm.ToggleExpandedCommand.ExecuteAsync(row);
         plugin.ThrowOnSetValue = true;
         plugin.ThrowOnGetValue = true;
@@ -411,13 +411,13 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             TimeSpan.FromMilliseconds(40),
             errorLog
         );
-        var originalRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        var originalRow = AllGroups(vm).SelectMany(group => group.Plugins).Single();
         await vm.ToggleExpandedCommand.ExecuteAsync(originalRow);
         plugin.ThrowOnGetValue = true;
 
         InvokeRefresh(vm);
 
-        var restoredRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        var restoredRow = AllGroups(vm).SelectMany(group => group.Plugins).Single();
         Assert.True(restoredRow.IsExpanded);
         await WaitForAsync(
             () => restoredRow.Status == "Unable to load plugin settings.",
@@ -449,7 +449,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             errorLog,
             TimeSpan.FromSeconds(5)
         );
-        var row = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        var row = AllGroups(vm).SelectMany(group => group.Plugins).Single();
         await vm.ToggleExpandedCommand.ExecuteAsync(row);
 
         await vm.ValidateSettingsCommand.ExecuteAsync(row);
@@ -478,10 +478,10 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             loadedPlugins: [loadedPlugin, loadedSibling]
         );
         var vm = new PluginsSectionViewModel(manager);
-        var row = vm.PluginGroups
+        var row = AllGroups(vm)
             .SelectMany(group => group.Plugins)
             .Single(candidate => candidate.Id == plugin.PluginId);
-        var siblingRow = vm.PluginGroups
+        var siblingRow = AllGroups(vm)
             .SelectMany(group => group.Plugins)
             .Single(candidate => candidate.Id == sibling.PluginId);
         await vm.ToggleExpandedCommand.ExecuteAsync(row);
@@ -495,7 +495,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
 
         InvokeRefresh(vm);
 
-        var visibleRows = vm.PluginGroups.SelectMany(group => group.Plugins).ToList();
+        var visibleRows = AllGroups(vm).SelectMany(group => group.Plugins).ToList();
         var visibleRow = visibleRows.Single(candidate => candidate.Id == plugin.PluginId);
         var visibleSibling = visibleRows.Single(candidate => candidate.Id == sibling.PluginId);
         Assert.Same(row, visibleRow);
@@ -521,13 +521,13 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         );
         var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded]);
         var vm = new PluginsSectionViewModel(manager);
-        var row = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        var row = AllGroups(vm).SelectMany(group => group.Plugins).Single();
         await vm.ToggleExpandedCommand.ExecuteAsync(row);
         row.SettingFields.Single(field => field.Key == "notes").Value = "draft notes";
 
         InvokeRefresh(vm);
 
-        var visibleRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        var visibleRow = AllGroups(vm).SelectMany(group => group.Plugins).Single();
         Assert.Same(row, visibleRow);
         var dropdown = visibleRow.SettingFields.Single(field => field.Key == "model");
         var sentinel = Assert.IsType<PluginSettingOption>(dropdown.SelectedOption);
@@ -555,7 +555,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         );
         var manager = TestPluginManagerFactory.Create(loadedPlugins: [originalLoaded]);
         var vm = new PluginsSectionViewModel(manager);
-        var originalRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        var originalRow = AllGroups(vm).SelectMany(group => group.Plugins).Single();
         await vm.ToggleExpandedCommand.ExecuteAsync(originalRow);
         originalRow.SettingFields.Single().Value = "draft";
 
@@ -572,7 +572,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
 
         InvokeRefresh(vm);
 
-        var replacementRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        var replacementRow = AllGroups(vm).SelectMany(group => group.Plugins).Single();
         Assert.NotSame(originalRow, replacementRow);
         await WaitForAsync(
             () => replacementRow.SettingFields.Count == 1,
@@ -593,7 +593,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         );
         var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded]);
         var vm = new PluginsSectionViewModel(manager);
-        var row = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        var row = AllGroups(vm).SelectMany(group => group.Plugins).Single();
         await vm.ToggleExpandedCommand.ExecuteAsync(row);
         row.SettingFields.Single().Value = "saved flat";
         row.Collections
@@ -617,7 +617,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
 
         InvokeRefresh(vm);
 
-        var refreshedRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        var refreshedRow = AllGroups(vm).SelectMany(group => group.Plugins).Single();
         Assert.NotSame(row, refreshedRow);
         await WaitForAsync(
             () => refreshedRow.SettingFields.Count == 1 && refreshedRow.Collections.Count == 1,
@@ -654,14 +654,14 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         );
         var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded]);
         var vm = new PluginsSectionViewModel(manager);
-        var commandRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        var commandRow = AllGroups(vm).SelectMany(group => group.Plugins).Single();
         await vm.ToggleExpandedCommand.ExecuteAsync(commandRow);
 
         var saveTask = vm.SaveSettingsCommand.ExecuteAsync(commandRow);
         await plugin.SetSettingStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         InvokeRefresh(vm);
 
-        var visibleRow = vm.PluginGroups.SelectMany(group => group.Plugins).Single();
+        var visibleRow = AllGroups(vm).SelectMany(group => group.Plugins).Single();
         Assert.NotSame(commandRow, visibleRow);
         await WaitForAsync(
             () => visibleRow.SettingFields.Count == 1,
@@ -674,7 +674,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
 
         Assert.Same(
             visibleRow,
-            vm.PluginGroups.SelectMany(group => group.Plugins).Single()
+            AllGroups(vm).SelectMany(group => group.Plugins).Single()
         );
         Assert.Equal("initial-saved", visibleRow.SettingFields.Single().Value);
         Assert.True(plugin.GetSettingValueCallCount >= 3);
@@ -1085,7 +1085,9 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         var loaded = TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, plugin.PluginId, plugin);
         var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded]);
         var vm = new PluginsSectionViewModel(manager);
-        var row = vm.PluginGroups.SelectMany(g => g.Plugins).Single(p => p.Id == plugin.PluginId);
+        var row = vm.EnabledGroups.Concat(vm.DisabledGroups)
+            .SelectMany(g => g.Plugins)
+            .Single(p => p.Id == plugin.PluginId);
         return (vm, row, plugin);
     }
 
@@ -1113,6 +1115,9 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             pluginValidationTimeout
         );
     }
+
+    private static IEnumerable<PluginCategoryGroup> AllGroups(PluginsSectionViewModel vm) =>
+        vm.EnabledGroups.Concat(vm.DisabledGroups);
 
     private static void InvokeRefresh(PluginsSectionViewModel vm)
     {

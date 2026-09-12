@@ -13,6 +13,10 @@ public class AppSettingsTests
     };
 
     [Fact]
+    public void DefaultLockPasteToFocusedField_IsFalse() =>
+        Assert.False(AppSettings.Default.LockPasteToFocusedField);
+
+    [Fact]
     public void GetLanguageHints_AutoLanguage_IsEmpty() => Assert.Empty(AppSettings.Default.GetLanguageHints());
 
     [Fact]

@@ -3,6 +3,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.Plugin.OpenAiCompatible;
+using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -10,6 +11,231 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public sealed class OpenAiCompatiblePluginTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RefreshModelCatalogAsync_DeadlineRetainsCacheAndContinuesToNextProfile(bool defaultTimesOut)
+    {
+        var host = CachedProfileHost();
+        var profiles = host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!;
+        profiles.Add(new OpenAiCompatibleProfile
+        {
+            Id = "next-profile", Name = "Next", BaseUrl = "http://localhost:8888",
+            SelectedModelId = "old", SelectedLlmModelId = "old",
+            FetchedModels = [new FetchedModel("old", null)],
+        });
+        host.SetSetting("additionalProfiles", profiles);
+        if (defaultTimesOut)
+        {
+            host.SetSetting("baseUrl", "http://localhost:7777");
+            host.SetSetting("fetchedModels", JsonSerializer.Serialize(new List<FetchedModel> { new("default-old", null) }));
+        }
+        using var client = new HttpClient(new AsyncHandler(async (request, ct) =>
+        {
+            if (request.RequestUri!.Port == (defaultTimesOut ? 7777 : 9999))
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"data":[{"id":"new"}]}"""),
+            };
+        }));
+        client.Timeout = Timeout.InfiniteTimeSpan;
+        using var sut = new OpenAiCompatiblePlugin(client, TimeSpan.FromMilliseconds(100));
+        await sut.ActivateAsync(host);
+        var notifications = host.CapabilitiesChangedCount;
+
+        await sut.RefreshModelCatalogAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+        var saved = host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!;
+        Assert.Equal(defaultTimesOut ? "new" : "m1", saved[0].SelectedModelId);
+        Assert.Equal(defaultTimesOut ? "new" : "m1", Assert.Single(saved[0].FetchedModels).Id);
+        Assert.Equal("new", saved[1].SelectedModelId);
+        if (defaultTimesOut)
+            Assert.Equal("default-old", Assert.Single(sut.FetchedModels).Id);
+        Assert.Equal(notifications + 1, host.CapabilitiesChangedCount);
+    }
+
+    [Fact]
+    public async Task SetItemsAsync_CatalogDeadlineStillNotifiesAndRefreshesNextProfile()
+    {
+        var host = new TestPluginHostServices();
+        using var client = new HttpClient(new AsyncHandler(async (request, ct) =>
+        {
+            if (request.RequestUri!.Port == 9999)
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"data":[{"id":"new"}]}"""),
+            };
+        }));
+        client.Timeout = Timeout.InfiniteTimeSpan;
+        using var sut = new OpenAiCompatiblePlugin(client, TimeSpan.FromMilliseconds(100));
+        await sut.ActivateAsync(host);
+        var notifications = host.CapabilitiesChangedCount;
+
+        var result = await sut.SetItemsAsync("profiles",
+            [ProfileItem("Timeout", "http://localhost:9999"), ProfileItem("Next", "http://localhost:8888")])
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(result.IsSuccess);
+        var saved = host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!;
+        Assert.Empty(saved[0].FetchedModels);
+        Assert.Equal("new", Assert.Single(saved[1].FetchedModels).Id);
+        Assert.Equal(notifications + 1, host.CapabilitiesChangedCount);
+    }
+
+    private static PluginLocalization TimeoutLocalization() => new(
+        Path.GetFullPath(Path.Join("..", "..", "..", "..", "..", "plugins", "TypeWhisper.Plugin.OpenAiCompatible"),
+            AppContext.BaseDirectory), "de");
+
+    [Theory]
+    [InlineData("transcription", false)]
+    [InlineData("profile", false)]
+    [InlineData("validation", false)]
+    [InlineData("catalog", false)]
+    [InlineData("transcription", true)]
+    [InlineData("profile", true)]
+    [InlineData("validation", true)]
+    [InlineData("catalog", true)]
+    public async Task NonLlmTimeout_DeadlineAndCallerCancellationHaveDistinctExceptions(string operation, bool cancelCaller)
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var client = new HttpClient(new AsyncHandler(async (_, ct) =>
+        {
+            entered.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }));
+        client.Timeout = Timeout.InfiniteTimeSpan;
+        using var sut = new OpenAiCompatiblePlugin(client,
+            cancelCaller ? TimeSpan.FromSeconds(30) : TimeSpan.FromMilliseconds(100));
+        var host = operation == "profile" ? CachedProfileHost() : CachedDefaultHost();
+        host.Localization = TimeoutLocalization();
+        await sut.ActivateAsync(host);
+        using var caller = new CancellationTokenSource();
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        Task request = operation switch
+        {
+            "profile" => sut.AdditionalTranscriptionEngines[0].TranscribeAsync([0], "en", false, null, caller.Token),
+            "validation" => sut.ValidateConnectionAsync(caller.Token),
+            "catalog" => sut.FetchModelsAsync(caller.Token),
+            _ => sut.TranscribeAsync([0], "en", false, null, caller.Token),
+        };
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), guard.Token);
+        if (cancelCaller)
+        {
+            await caller.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request).WaitAsync(TimeSpan.FromSeconds(10), guard.Token);
+        }
+        else
+        {
+            var error = await Assert.ThrowsAsync<TimeoutException>(() => request).WaitAsync(TimeSpan.FromSeconds(10), guard.Token);
+            Assert.Equal(host.Localization.GetString("Settings.RequestTimedOut"), error.Message);
+        }
+    }
+
+    [Theory]
+    [InlineData(1, 5)]
+    [InlineData(7200, 3600)]
+    [InlineData(120, 120)]
+    public async Task LlmTimeout_ClampsAndPersistsProfileSetting(int input, int expected)
+    {
+        using var client = new HttpClient(new CapturingHandler((_, _) =>
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"data\":[]}") }));
+        var host = new TestPluginHostServices();
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        var item = ProfileItem("P", "http://localhost:11434", llmModel: "m1");
+        var values = item.Values.ToDictionary(pair => pair.Key, pair => pair.Value);
+        values["llmRequestTimeoutSeconds"] = input.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var result = await sut.SetItemsAsync("profiles", [new PluginCollectionItem(values)]);
+        Assert.True(result.IsSuccess);
+        var saved = Assert.Single(host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!);
+        Assert.Equal(expected, saved.LlmRequestTimeoutSeconds);
+        using var restored = new OpenAiCompatiblePlugin(client);
+        await restored.ActivateAsync(host);
+        Assert.Equal(expected.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Assert.Single(await restored.GetItemsAsync("profiles")).Values["llmRequestTimeoutSeconds"]);
+    }
+
+    [Fact]
+    public void LlmTimeout_DefaultsToFiveMinutes()
+    {
+        Assert.Equal(300, new OpenAiCompatibleProfile().LlmRequestTimeoutSeconds);
+        Assert.Equal(5, JsonSerializer.Deserialize<OpenAiCompatibleProfile>("{\"LlmRequestTimeoutSeconds\":-1}")!.LlmRequestTimeoutSeconds);
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public async Task LlmTimeout_DeadlineAndCallerCancellationHaveDistinctExceptions(bool streaming, bool cancelCaller, bool useDefault)
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var body = new StalledSseStream("data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n");
+        var chunks = new List<string>();
+        using var client = new HttpClient(new AsyncHandler(async (_, ct) =>
+        {
+            if (streaming)
+            {
+                // ReSharper disable once AccessToDisposedClosure -- the handler completes before the stream is disposed at test exit.
+                var content = new StreamContent(body);
+                content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/event-stream");
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+            }
+
+            entered.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }));
+        client.Timeout = Timeout.InfiniteTimeSpan;
+        var host = CachedProfileHost();
+        host.Localization = TimeoutLocalization();
+        var profiles = host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!;
+        profiles[0].LlmRequestTimeoutSeconds = 5;
+        host.SetSetting("additionalProfiles", profiles);
+        host.SetSetting("baseUrl", "http://localhost:11434");
+        host.SetSetting("selectedLlmModel", "m1");
+        host.SetSetting("llmRequestTimeoutSeconds", 5);
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        using var caller = new CancellationTokenSource();
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var role = useDefault ? sut : sut.AdditionalLlmProviders[0];
+        var request = RequestAsync(caller.Token);
+        await (streaming ? body.Stalled.Task : entered.Task).WaitAsync(TimeSpan.FromSeconds(10), guard.Token);
+        if (streaming)
+            Assert.Equal(["Hel"], chunks);
+        if (cancelCaller)
+        {
+            await caller.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request).WaitAsync(TimeSpan.FromSeconds(15), guard.Token);
+        }
+        else
+        {
+            var error = await Assert.ThrowsAsync<TimeoutException>(() => request).WaitAsync(TimeSpan.FromSeconds(15), guard.Token);
+            Assert.Equal(host.Localization.GetString("Settings.LlmRequestTimedOut"), error.Message);
+        }
+        return;
+
+        async Task RequestAsync(CancellationToken ct)
+        {
+            if (streaming)
+            {
+                await foreach (var chunk in role.ProcessStreamingAsync("system", "text", "m1", ct))
+                    chunks.Add(chunk);
+            }
+            else
+                await role.ProcessAsync("system", "text", "m1", ct);
+        }
+    }
+
+
     [Fact]
     public Task RequestFailures_AreClassified() =>
         ProviderFailureAssertions.VerifyAsync<OpenAiCompatiblePlugin>();
@@ -2231,6 +2457,8 @@ public sealed class OpenAiCompatiblePluginTests
     /// <summary>Serves one SSE frame, then stalls like a server still generating tokens.</summary>
     private sealed class StalledSseStream(string firstFrame) : Stream
     {
+        public TaskCompletionSource Stalled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         private readonly byte[] _frame = Encoding.UTF8.GetBytes(firstFrame);
         private int _offset;
 
@@ -2245,6 +2473,7 @@ public sealed class OpenAiCompatiblePluginTests
                 return count;
             }
 
+            Stalled.TrySetResult();
             await Task.Delay(Timeout.Infinite, cancellationToken);
             return 0;
         }
@@ -2425,7 +2654,7 @@ public sealed class OpenAiCompatiblePluginTests
         {
             CapabilitiesChangedCount++;
         }
-        public IPluginLocalization Localization { get; } = new TestPluginLocalization();
+        public IPluginLocalization Localization { get; set; } = new TestPluginLocalization();
     }
 
     private sealed class TestPluginLocalization : IPluginLocalization

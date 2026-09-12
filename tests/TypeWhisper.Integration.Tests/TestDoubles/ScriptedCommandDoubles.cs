@@ -25,6 +25,8 @@ internal sealed class ScriptedLlmProvider : ILlmProviderRole
     public IReadOnlyList<PluginModelInfo> SupportedModels { get; } =
         [new(ModelId, "Scripted LLM model")];
 
+    internal Action? BeforeBatchResponse { get; set; }
+
     internal int StreamCalls => Volatile.Read(ref _streamCalls);
     internal int BatchCalls => Volatile.Read(ref _batchCalls);
     internal Exception? Failure { get; set; }
@@ -43,6 +45,7 @@ internal sealed class ScriptedLlmProvider : ILlmProviderRole
     {
         ct.ThrowIfCancellationRequested();
         Interlocked.Increment(ref _batchCalls);
+        BeforeBatchResponse?.Invoke();
         if (Failure is { } failure)
             throw failure;
         return Task.FromResult(

@@ -6,7 +6,7 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.Speechmatics;
 
-internal sealed class SpeechmaticsStreamingSession : IStreamingSession
+internal sealed class SpeechmaticsStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
     private const string EndpointUrl = "wss://eu.rt.speechmatics.com/v2";
 
@@ -16,6 +16,8 @@ internal sealed class SpeechmaticsStreamingSession : IStreamingSession
     {
         _pump = pump;
     }
+
+    public Exception? Fault => _pump.Fault;
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived
     {

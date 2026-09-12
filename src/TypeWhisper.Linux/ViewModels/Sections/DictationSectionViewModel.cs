@@ -7,6 +7,7 @@ using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Core.Services.SpokenFormatting;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Localization;
@@ -31,6 +32,9 @@ public partial class DictationSectionViewModel : ObservableObject
     private readonly ModelManagerService _models;
     private readonly PluginManager _pluginManager;
     private readonly ISettingsService _settings;
+    private readonly SpokenFormattingRulesLoader _spokenFormattingRules = new();
+    private readonly SpokenFormattingProfileStore _spokenFormattingProfiles;
+    private readonly SpokenFormattingStrategyResolver _spokenFormattingResolver;
     private readonly LocalModelStorageService _modelStorage;
 
     // Cached snapshot of the selected engine's CUDA-provisioned state; CanUseCuda reads this
@@ -99,7 +103,17 @@ public partial class DictationSectionViewModel : ObservableObject
     private bool _autoPaste;
 
     [ObservableProperty]
+    private bool _lockPasteToFocusedField;
+
+    private readonly IAtSpiEventClient? _atSpiClient;
+
+    public bool IsLockPasteToFocusedFieldAvailable => TargetAppCorrectionLearningEnabled && _atSpiClient?.IsRunning == true;
+
+    [ObservableProperty]
     private CleanupLevel _cleanupLevel = CleanupLevel.None;
+
+    [ObservableProperty]
+    private SpokenFormattingStrategy _spokenFormattingStrategy = SpokenFormattingStrategy.Automatic;
 
     [ObservableProperty]
     private EnglishOutputVariant _englishOutputVariant = EnglishOutputVariant.AsTranscribed;
@@ -240,7 +254,8 @@ public partial class DictationSectionViewModel : ObservableObject
         CudaLibraryPathSetupService cudaLibraryPathSetup,
         // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym mirroring org.a11y.Bus; ReSharper's camelCase splitter mis-reads "11y".
         IAccessibilityBusActivation a11yBus,
-        IErrorLogService? errorLog = null
+        IErrorLogService? errorLog = null,
+        IAtSpiEventClient? atSpiClient = null
     )
         : this(
             dictation,
@@ -252,7 +267,8 @@ public partial class DictationSectionViewModel : ObservableObject
             cudaLibraryPathSetup,
             a11yBus,
             AudioRecordingService.GetInputDevices,
-            errorLog
+            errorLog,
+            atSpiClient
         )
     {
     }
@@ -268,15 +284,28 @@ public partial class DictationSectionViewModel : ObservableObject
         // ReSharper disable once InconsistentNaming -- "a11y" is the standard accessibility numeronym mirroring org.a11y.Bus; ReSharper's camelCase splitter mis-reads "11y".
         IAccessibilityBusActivation a11yBus,
         Func<IReadOnlyList<AudioInputDevice>> getInputDevices,
-        IErrorLogService? errorLog = null
+        IErrorLogService? errorLog = null,
+        IAtSpiEventClient? atSpiClient = null,
+        Action<Action>? dispatchNotification = null
     )
     {
+        _atSpiClient = atSpiClient;
+        if (_atSpiClient is not null)
+        {
+            dispatchNotification ??= action => Dispatcher.UIThread.Post(action);
+            _atSpiClient.RunningChanged += () => dispatchNotification(
+                () => OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable))
+            );
+        }
+
         _dictation = dictation;
         _models = models;
         _audio = audio;
         _errorLog = errorLog;
         _getInputDevices = getInputDevices;
         _settings = settings;
+        _spokenFormattingProfiles = new SpokenFormattingProfileStore(settings);
+        _spokenFormattingResolver = new SpokenFormattingStrategyResolver(_spokenFormattingProfiles, _spokenFormattingRules);
         _pluginManager = pluginManager;
         _commands = commands;
         _cudaLibraryPathSetup = cudaLibraryPathSetup;
@@ -357,6 +386,9 @@ public partial class DictationSectionViewModel : ObservableObject
 
     public ObservableCollection<EnglishOutputVariantOption> EnglishOutputVariantOptions { get; } =
         new(CreateEnglishOutputVariantOptions());
+
+    public ObservableCollection<SpokenFormattingStrategyOption> SpokenFormattingStrategyOptions { get; } =
+        new(CreateSpokenFormattingStrategyOptions());
 
     public ObservableCollection<GermanOutputVariantOption> GermanOutputVariantOptions { get; } =
         new(CreateGermanOutputVariantOptions());
@@ -621,6 +653,118 @@ public partial class DictationSectionViewModel : ObservableObject
         }
     }
 
+    public SpokenFormattingStrategyOption? SelectedSpokenFormattingStrategyOption
+    {
+        get => SpokenFormattingStrategyOptions.FirstOrDefault(option => option.Value == SpokenFormattingStrategy);
+        set
+        {
+            if (value is not null)
+                SpokenFormattingStrategy = value.Value;
+        }
+    }
+
+    partial void OnSpokenFormattingStrategyChanged(SpokenFormattingStrategy value)
+    {
+        if (_isLocalizedOptionRefresh)
+            return;
+
+        _settings.Update(current => current with { SpokenFormattingStrategy = value });
+        OnPropertyChanged(nameof(SelectedSpokenFormattingStrategyOption));
+        RefreshSpokenFormattingVerification();
+    }
+
+    private static IReadOnlyList<SpokenFormattingStrategyOption> CreateSpokenFormattingStrategyOptions() =>
+    [
+        new(SpokenFormattingStrategy.NativeOnly, Loc.Instance["Dictation.SpokenFormattingNative"]),
+        new(SpokenFormattingStrategy.Automatic, Loc.Instance["Dictation.SpokenFormattingAutomatic"]),
+        new(SpokenFormattingStrategy.FallbackOnly, Loc.Instance["Dictation.SpokenFormattingFallback"]),
+    ];
+
+    private ResolvedSpokenFormattingStrategy? ResolveSpokenFormattingVerification()
+    {
+        var identity = _models.ResolveTranscriptionIdentity(SelectedModel?.ModelId);
+        if (identity is null)
+            return null;
+
+        var language = string.Equals(Language, "auto", StringComparison.OrdinalIgnoreCase) ? "en" : Language;
+        var translateRequested = string.Equals(_settings.Current.TranscriptionTask, "translate", StringComparison.OrdinalIgnoreCase);
+        var supportsTranslation = _models.GetTranscriptionPlugin(SelectedModel?.ModelId)?.SupportsTranslation == true;
+        var outputLanguage = DictationOrchestrator.ResolvePostProcessingSourceLanguage(
+            null, language, translateRequested, supportsTranslation);
+        return DictationOrchestrator.ResolveSpokenFormattingStrategy(
+            _spokenFormattingResolver, identity.Value.EngineId, identity.Value.ModelId, [language],
+            outputLanguage, translateRequested && supportsTranslation, SpokenFormattingStrategy);
+    }
+
+    public bool IsSpokenFormattingVerificationVisible =>
+        ResolveSpokenFormattingVerification() is { RulesAvailable: true, Profile: not null };
+
+    public bool IsSpokenFormattingVerifyNativeFirstVisible =>
+        ResolveSpokenFormattingVerification() is { Strategy: not SpokenFormattingStrategy.NativeOnly };
+
+    public bool HasSpokenFormattingOverride =>
+        ResolveSpokenFormattingVerification()?.Profile is { } profile
+        && _spokenFormattingProfiles.Profile(profile.EngineId, profile.ModelId, profile.LanguageCode) is not null;
+
+    public string SpokenFormattingProfileStatus => Loc.Instance[
+        ResolveSpokenFormattingVerification()?.Profile?.VerificationState switch
+        {
+            SpokenFormattingVerificationState.VendorHint => "Dictation.SpokenFormattingStatusVendorHint",
+            SpokenFormattingVerificationState.UserVerifiedGood => "Dictation.SpokenFormattingStatusVerifiedGood",
+            SpokenFormattingVerificationState.UserVerifiedBad => "Dictation.SpokenFormattingStatusVerifiedBad",
+            _ => "Dictation.SpokenFormattingStatusUnknown",
+        }];
+
+    public string SpokenFormattingProfileContext => ResolveSpokenFormattingVerification()?.Profile is { } profile
+        ? Loc.Instance.GetString("Dictation.SpokenFormattingProfileContext",
+            SelectedModel?.EngineName ?? profile.EngineId, profile.ModelId ?? "", profile.LanguageCode)
+        : "";
+
+    public IReadOnlyList<SpokenFormattingScenarioRow> SpokenFormattingScenarios =>
+        _spokenFormattingRules.RuleSetFor(ResolveSpokenFormattingVerification()?.LanguageCode) is { } rules
+            ? [.. rules.VerificationScenarios.Select(scenario => new SpokenFormattingScenarioRow(
+                $"{Loc.Instance["Dictation.SpokenFormattingSay"]}: {scenario.Spoken}",
+                $"{Loc.Instance["Dictation.SpokenFormattingExpected"]}: {scenario.Expected.Replace("\n", "⏎").Replace("\t", "⇥")}"))]
+            : [];
+
+    private void RefreshSpokenFormattingVerification()
+    {
+        OnPropertyChanged(nameof(IsSpokenFormattingVerificationVisible));
+        OnPropertyChanged(nameof(IsSpokenFormattingVerifyNativeFirstVisible));
+        OnPropertyChanged(nameof(HasSpokenFormattingOverride));
+        OnPropertyChanged(nameof(SpokenFormattingProfileStatus));
+        OnPropertyChanged(nameof(SpokenFormattingProfileContext));
+        OnPropertyChanged(nameof(SpokenFormattingScenarios));
+    }
+
+    [RelayCommand]
+    private void SpokenFormattingNativeWorks() => SaveSpokenFormattingVerification(
+        SpokenFormattingStrategy.NativeOnly, SpokenFormattingVerificationState.UserVerifiedGood);
+
+    [RelayCommand]
+    private void SpokenFormattingUseFallback() => SaveSpokenFormattingVerification(
+        SpokenFormattingStrategy.FallbackOnly, SpokenFormattingVerificationState.UserVerifiedBad);
+
+    private void SaveSpokenFormattingVerification(SpokenFormattingStrategy strategy, SpokenFormattingVerificationState state)
+    {
+        if (ResolveSpokenFormattingVerification() is not { RulesAvailable: true, Profile: { } profile })
+            return;
+
+        _spokenFormattingProfiles.SaveUserOverride(
+            profile.EngineId, profile.ModelId, profile.LanguageCode, strategy, state, updateVerificationDate: true);
+        RefreshSpokenFormattingVerification();
+    }
+
+    [RelayCommand]
+    private void SpokenFormattingResetOverride()
+    {
+        if (ResolveSpokenFormattingVerification()?.Profile is not { } profile)
+            return;
+
+        _spokenFormattingProfiles.ClearUserOverride(profile.EngineId, profile.ModelId, profile.LanguageCode);
+        RefreshSpokenFormattingVerification();
+    }
+
     public GermanOutputVariantOption? SelectedGermanOutputVariantOption
     {
         get => GermanOutputVariantOptions.FirstOrDefault(option => option.Value == GermanOutputVariant);
@@ -844,6 +988,7 @@ public partial class DictationSectionViewModel : ObservableObject
         CleanupLevel = settings.CleanupLevel;
         EnglishOutputVariant = settings.EnglishOutputVariant;
         GermanOutputVariant = settings.GermanOutputVariant;
+        SpokenFormattingStrategy = settings.SpokenFormattingStrategy;
         // Hydrate the saved acceleration WITHOUT running the change guard: at startup no
         // model is loaded yet, so ActiveTranscriptionPlugin is null and CanUseCuda would
         // read false even when the runtime is fully provisioned — the guard would then
@@ -859,6 +1004,8 @@ public partial class DictationSectionViewModel : ObservableObject
         IsUsingCustomModelStorage =
             AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is not null;
         AutoPaste = settings.AutoPaste;
+        LockPasteToFocusedField = settings.LockPasteToFocusedField;
+        OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable));
         DictationRecoveryRetentionDays = settings.DictationRecoveryRetentionDays.ToString(System.Globalization.CultureInfo.InvariantCulture);
         AutoAddDictionaryCorrections = settings.AutoAddDictionaryCorrections;
         TargetAppCorrectionLearningEnabled = settings.TargetAppCorrectionLearningEnabled;
@@ -890,6 +1037,8 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedCleanupLevelOption));
         OnPropertyChanged(nameof(SelectedEnglishOutputVariantOption));
         OnPropertyChanged(nameof(SelectedGermanOutputVariantOption));
+        OnPropertyChanged(nameof(SelectedSpokenFormattingStrategyOption));
+        RefreshSpokenFormattingVerification();
         OnPropertyChanged(nameof(IsEnglishOutputVariantVisible));
         OnPropertyChanged(nameof(IsGermanOutputVariantVisible));
         OnPropertyChanged(nameof(SelectedNewInsertionStrategyOption));
@@ -909,6 +1058,7 @@ public partial class DictationSectionViewModel : ObservableObject
         var cleanupLevel = CleanupLevel;
         var englishOutputVariant = EnglishOutputVariant;
         var germanOutputVariant = GermanOutputVariant;
+        var spokenFormattingStrategy = SpokenFormattingStrategy;
         var newInsertionStrategy = NewInsertionStrategy;
         var appInsertionStrategies = AppInsertionStrategies
             .Select(row => (Row: row, row.Strategy))
@@ -922,6 +1072,7 @@ public partial class DictationSectionViewModel : ObservableObject
             ReplaceCollection(CleanupLevelOptions, CreateCleanupLevelOptions());
             ReplaceCollection(EnglishOutputVariantOptions, CreateEnglishOutputVariantOptions());
             ReplaceCollection(GermanOutputVariantOptions, CreateGermanOutputVariantOptions());
+            ReplaceCollection(SpokenFormattingStrategyOptions, CreateSpokenFormattingStrategyOptions());
             ReplaceCollection(InsertionStrategyOptions, CreateInsertionStrategyOptions());
 
             LocalModelAcceleration = acceleration;
@@ -933,6 +1084,7 @@ public partial class DictationSectionViewModel : ObservableObject
             CleanupLevel = cleanupLevel;
             EnglishOutputVariant = englishOutputVariant;
             GermanOutputVariant = germanOutputVariant;
+            SpokenFormattingStrategy = spokenFormattingStrategy;
             NewInsertionStrategy = newInsertionStrategy;
             foreach (var (row, strategy) in appInsertionStrategies)
             {
@@ -945,6 +1097,8 @@ public partial class DictationSectionViewModel : ObservableObject
             OnPropertyChanged(nameof(SelectedCleanupLevelOption));
             OnPropertyChanged(nameof(SelectedEnglishOutputVariantOption));
             OnPropertyChanged(nameof(SelectedGermanOutputVariantOption));
+            OnPropertyChanged(nameof(SelectedSpokenFormattingStrategyOption));
+            RefreshSpokenFormattingVerification();
             OnPropertyChanged(nameof(IsEnglishOutputVariantVisible));
             OnPropertyChanged(nameof(IsGermanOutputVariantVisible));
             OnPropertyChanged(nameof(SelectedNewInsertionStrategyOption));
@@ -972,7 +1126,7 @@ public partial class DictationSectionViewModel : ObservableObject
         ];
     }
 
-    private static IReadOnlyList<SpokenLanguageOption> CreateLanguageChoices()
+    internal static IReadOnlyList<SpokenLanguageOption> CreateLanguageChoices()
     {
         return
         [
@@ -1266,6 +1420,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private void RefreshModelState()
     {
+        RefreshSpokenFormattingVerification();
         var active = _models.ActiveModelId;
         ActiveModelLabel = string.IsNullOrEmpty(active)
             ? Loc.Instance["Dictation.NoModelLoaded"]
@@ -1785,6 +1940,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnLanguageChanged(string value)
     {
+        RefreshSpokenFormattingVerification();
         OnPropertyChanged(nameof(IsAdditionalLanguagesVisible));
         RefreshAvailableAdditionalLanguages();
         OnPropertyChanged(nameof(IsEnglishOutputVariantVisible));
@@ -1859,6 +2015,11 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedGermanOutputVariantOption));
     }
 
+    partial void OnLockPasteToFocusedFieldChanged(bool value)
+    {
+        _settings.Update(current => current with { LockPasteToFocusedField = value });
+    }
+
     [ObservableProperty]
     private string _dictationRecoveryRetentionDays = "30";
 
@@ -1886,6 +2047,7 @@ public partial class DictationSectionViewModel : ObservableObject
     partial void OnTargetAppCorrectionLearningEnabledChanged(bool value)
     {
         _settings.Update(current => current with { TargetAppCorrectionLearningEnabled = value });
+        OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable));
         OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
         // Re-read the live flag when the feature is switched on so the enable button appears
         // if the bridge isn't active yet.
@@ -1897,6 +2059,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnAccessibilityBridgeActivatedChanged(bool value)
     {
+        OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable));
         OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
         OnPropertyChanged(nameof(ShowAccessibilityBridgeRemove));
     }
@@ -2304,3 +2467,7 @@ public sealed class AppInsertionStrategyRow : ObservableObject
         OnPropertyChanged(nameof(SelectedStrategyOption));
     }
 }
+
+public sealed record SpokenFormattingStrategyOption(SpokenFormattingStrategy Value, string DisplayName);
+
+public sealed record SpokenFormattingScenarioRow(string Spoken, string Expected);

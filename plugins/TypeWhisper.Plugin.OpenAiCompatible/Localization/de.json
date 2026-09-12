@@ -30,5 +30,10 @@
   "Settings.NoTranscriptionModelSelected": "Kein Transkriptionsmodell ausgewählt.",
   "Settings.NoLlmModelSelected": "Kein LLM-Modell ausgewählt.",
   "Manifest.Name": "OpenAI-kompatibel",
-  "Manifest.Description": "Mit einem beliebigen OpenAI-kompatiblen Server verbinden (Ollama, LM Studio, vLLM usw.)"
+  "Manifest.Description": "Mit einem beliebigen OpenAI-kompatiblen Server verbinden (Ollama, LM Studio, vLLM usw.)",
+  "Settings.LlmRequestTimeout": "Zeitlimit für LLM-Anfragen",
+  "Settings.LlmRequestTimeoutHelp": "So lange wird auf jede LLM-Antwort gewartet. Gib eine ganze Zahl von {0} bis {1} ein. Standard: {2} Sekunden.",
+  "Settings.LlmRequestTimeoutInvalid": "Gib eine ganze Zahl zwischen {0} und {1} Sekunden ein.",
+  "Settings.LlmRequestTimedOut": "Die Zeitüberschreitung für die Sprachmodellanfrage wurde erreicht.",
+  "Settings.RequestTimedOut": "Die Zeitüberschreitung für die Anfrage wurde erreicht."
 }

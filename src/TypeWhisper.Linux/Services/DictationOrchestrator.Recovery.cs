@@ -2,6 +2,7 @@ using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Core.Services.SpokenFormatting;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -22,7 +23,10 @@ public sealed partial class DictationOrchestrator
         IReadOnlyList<string> languageHints,
         bool translate,
         bool engineSupportsTranslation,
-        bool usedPreviewFallback
+        bool usedPreviewFallback,
+        string engineProviderId,
+        string? engineModelId,
+        List<(string Name, TimeSpan Elapsed)>? stepTimings = null
     )
     {
         var pipelineContext = new PostProcessingContext
@@ -56,10 +60,15 @@ public sealed partial class DictationOrchestrator
             ))
             .ToList();
 
+        var spokenStrategy = ResolveSpokenFormattingStrategy(
+            _spokenFormattingResolver, engineProviderId, engineModelId, languageHints, postProcessingLanguage,
+            translate && engineSupportsTranslation, _settings.Current.SpokenFormattingStrategy);
+
         return new PipelineOptions
         {
-            NormalizeSpokenLineBreaks = true,
-            NormalizeSpokenPunctuation = true,
+            NormalizeSpokenLineBreaks = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
+            NormalizeSpokenPunctuation = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
+            SpokenFormatter = CreateSpokenFormatter(_spokenFormatting, spokenStrategy),
             AppFormatter = AppFormatterService.Format,
             TargetProcessName = context.AppProcess,
             DictionaryCorrector = SelectFinalDictionaryCorrector(
@@ -115,6 +124,7 @@ public sealed partial class DictationOrchestrator
             GermanOutputVariant = _settings.Current.GermanOutputVariant,
             ShortUtterancePunctuationEnabled = _settings.Current.ShortUtterancePunctuationEnabled,
             PluginPostProcessors = pluginProcessors,
+            StepCompleted = (name, elapsed, _) => { stepTimings?.Add((name, elapsed)); },
             StatusCallback = status =>
             {
                 ReportStatus(
@@ -263,7 +273,7 @@ public sealed partial class DictationOrchestrator
                     throw new InvalidOperationException(Loc.Instance["History.RetryPromptActionUnavailable"]);
                 var processed = await _pipeline.ProcessAsync(rawText,
                     BuildPipelineOptions(context, duration, language, selection.LanguageTag,
-                        languageHints, translate, supportsTranslation, false), ct);
+                        languageHints, translate, supportsTranslation, false, record.EngineUsed, record.ModelUsed), ct);
                 finalText = ApplyProfileStyleFormatting(context, VoiceCommandParser.Parse(processed.Text).Text);
                 if (string.IsNullOrWhiteSpace(finalText))
                     throw new InvalidOperationException(Loc.Instance["History.RetryEmpty"]);

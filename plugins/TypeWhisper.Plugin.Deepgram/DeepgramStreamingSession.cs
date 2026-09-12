@@ -5,7 +5,7 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.Deepgram;
 
-internal sealed class DeepgramStreamingSession : IStreamingSession
+internal sealed class DeepgramStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
     private readonly WebSocketSessionPump _pump;
 
@@ -25,6 +25,8 @@ internal sealed class DeepgramStreamingSession : IStreamingSession
         );
         return new DeepgramStreamingSession(pump);
     }
+
+    public Exception? Fault => _pump.Fault;
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived
     {

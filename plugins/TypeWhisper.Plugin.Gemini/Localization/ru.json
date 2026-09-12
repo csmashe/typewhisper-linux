@@ -1,6 +1,6 @@
 {
   "Settings.ApiKey": "API-ключ",
-  "Settings.ApiKeyDescription": "Требуется для запросов LLM Gemini.",
+  "Settings.ApiKeyDescription": "Требуется для транскрипции Gemini и запросов LLM.",
   "Settings.StreamResponses": "Потоковая передача ответов",
   "Settings.StreamResponsesDescription": "Отображать вывод действия промпта по токенам по мере генерации, не дожидаясь полного ответа.",
   "Settings.EnterApiKey": "Сначала введите API-ключ.",
@@ -8,5 +8,16 @@
   "Settings.ApiKeyInvalid": "API-ключ недействителен.",
   "Settings.ApiKeyNotConfigured": "API-ключ не настроен",
   "Manifest.Name": "Google Gemini",
-  "Manifest.Description": "LLM-провайдер Google Gemini для действий промптов и перевода"
+  "Manifest.Description": "Транскрипция Google Gemini, живое диктование и LLM-провайдер Gemini/Gemma с динамическим обнаружением моделей",
+  "Settings.ApiKeyValidFetched": "API-ключ действителен! Загружено моделей: {0} для чата, {1} для транскрипции.",
+  "Settings.LlmModelDescriptionFetched": "Совместимых моделей Gemini и Gemma загружено из API: {0}.",
+  "Settings.LlmModelDescriptionDefault": "Используются встроенные псевдонимы Gemini. Проверьте API-ключ, чтобы загрузить доступные для него чат-модели Gemini и Gemma.",
+  "Settings.LlmModel": "Модель LLM",
+  "Settings.TranscriptionModel": "Модель транскрипции",
+  "Settings.TranscriptionModelsFetched": "Моделей транскрипции загружено из API: {0}.",
+  "Settings.TranscriptionModelFallback": "Используется встроенная модель транскрипции Gemini. Проверьте API-ключ, чтобы загрузить доступные для него модели транскрипции.",
+  "Settings.TranscriptionMode": "Стиль транскрипции",
+  "Settings.TranscriptionModeHint": "«Умный» убирает слова-паразиты, применяет произнесённые исправления и форматирует продиктованный текст. «Дословный» сохраняет слова так, как они произнесены.",
+  "Settings.ModeSmart": "Умный",
+  "Settings.ModeVerbatim": "Дословный"
 }

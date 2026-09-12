@@ -185,7 +185,7 @@ public class ElevenLabsPluginTests
     public void BuildRealtimeUri_UsesScribeRealtimeAndVad()
     {
         var uri = ElevenLabsStreamingSession
-            .BuildRealtimeUri("scribe_v2_realtime", "de")
+            .BuildRealtimeUri("scribe_v2_realtime", "de", noVerbatim: true)
             .AbsoluteUri;
 
         Assert.StartsWith("wss://api.elevenlabs.io/v1/speech-to-text/realtime?", uri);
@@ -194,6 +194,7 @@ public class ElevenLabsPluginTests
         Assert.Contains("commit_strategy=vad", uri);
         Assert.Contains("include_timestamps=true", uri);
         Assert.Contains("include_language_detection=true", uri);
+        Assert.Contains("no_verbatim=true", uri);
         Assert.Contains("language_code=de", uri);
     }
 
@@ -242,6 +243,174 @@ public class ElevenLabsPluginTests
         Assert.False(parsedError);
         Assert.Null(errorEvent);
         Assert.Equal("Invalid API key", error);
+    }
+
+
+    [Fact]
+    public async Task TranscriptionSettings_PersistAndNotifyCapabilityChanges()
+    {
+        var host = new TestPluginHostServices();
+        using var sut = new ElevenLabsPlugin();
+        await sut.ActivateAsync(host);
+
+        await sut.SetSettingValueAsync("transcriptionMode", "restOnly");
+        await sut.SetSettingValueAsync("tagAudioEvents", "true");
+        await sut.SetSettingValueAsync("noVerbatim", "false");
+        await sut.SetSettingValueAsync("numSpeakers", "33");
+
+        Assert.Equal("restOnly", host.GetSetting<string>("transcriptionMode"));
+        Assert.True(host.GetSetting<bool>("tagAudioEvents"));
+        Assert.False(host.GetSetting<bool>("noVerbatim"));
+        Assert.Equal(32, host.GetSetting<int>("numSpeakers"));
+        Assert.False(sut.SupportsStreaming);
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+        await sut.SetSettingValueAsync("transcriptionMode", "restOnly");
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+
+        using var reloaded = new ElevenLabsPlugin();
+        await reloaded.ActivateAsync(host);
+        Assert.Equal(ElevenLabsTranscriptionMode.RestOnly, reloaded.TranscriptionMode);
+        Assert.True(reloaded.TagAudioEvents);
+        Assert.False(reloaded.NoVerbatim);
+        Assert.Equal(32, reloaded.SpeakerCount);
+
+        await sut.SetSettingValueAsync("transcriptionMode", "unknown");
+        await sut.SetSettingValueAsync("numSpeakers", "invalid");
+        Assert.Equal("restOnly", await sut.GetSettingValueAsync("transcriptionMode"));
+        Assert.Equal("32", await sut.GetSettingValueAsync("numSpeakers"));
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+        await sut.SetSettingValueAsync("numSpeakers", "-1");
+        Assert.Equal(0, host.GetSetting<int>("numSpeakers"));
+        await sut.SetSettingValueAsync("transcriptionMode", "automatic");
+        Assert.True(sut.SupportsStreaming);
+        Assert.Equal(2, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Fact]
+    public async Task GetSettingValueAsync_ReportsDefaultsExplicitly()
+    {
+        using var sut = new ElevenLabsPlugin();
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        Assert.Equal("automatic", await sut.GetSettingValueAsync("transcriptionMode"));
+        Assert.Equal("true", await sut.GetSettingValueAsync("noVerbatim"));
+        Assert.Equal("false", await sut.GetSettingValueAsync("tagAudioEvents"));
+        Assert.Equal("1", await sut.GetSettingValueAsync("numSpeakers"));
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_AppliesCustomOptionsAndOmitsAutomaticSpeakerCount()
+    {
+        var bodies = new List<string>();
+        using var httpClient = new HttpClient(new CapturingHandler((_, body) =>
+        {
+            Assert.NotNull(body);
+            bodies.Add(body);
+            return JsonResponse("""{"text":"Hello"}""");
+        }));
+        using var sut = new ElevenLabsPlugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "eleven-key" } });
+        await sut.SetSettingValueAsync("tagAudioEvents", "true");
+        await sut.SetSettingValueAsync("noVerbatim", "false");
+        await sut.SetSettingValueAsync("numSpeakers", "0");
+
+        await sut.TranscribeAsync([1, 2, 3], null, false, null, CancellationToken.None);
+        var automaticBody = Assert.Single(bodies);
+        AssertMultipartPart(automaticBody, "tag_audio_events", "true");
+        AssertMultipartPart(automaticBody, "no_verbatim", "false");
+        Assert.DoesNotContain("num_speakers", automaticBody);
+
+        await sut.SetSettingValueAsync("numSpeakers", "3");
+        await sut.TranscribeAsync([1, 2, 3], null, false, null, CancellationToken.None);
+        Assert.Equal(2, bodies.Count);
+        AssertMultipartPart(bodies[1], "num_speakers", "3");
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_DefaultsCleanUpTranscriptAndSkipAudioEvents()
+    {
+        using var httpClient = new HttpClient(new CapturingHandler((_, body) =>
+        {
+            Assert.NotNull(body);
+            AssertMultipartPart(body, "no_verbatim", "true");
+            AssertMultipartPart(body, "tag_audio_events", "false");
+            AssertMultipartPart(body, "num_speakers", "1");
+            return JsonResponse("""{"text":"Hello"}""");
+        }));
+        using var sut = new ElevenLabsPlugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "eleven-key" } });
+
+        await sut.TranscribeAsync([1, 2, 3], null, false, null, CancellationToken.None);
+    }
+
+    [Fact]
+    public void BuildRealtimeUri_CarriesNoVerbatimFalse()
+    {
+        var uri = ElevenLabsStreamingSession.BuildRealtimeUri("scribe_v2_realtime", null, noVerbatim: false);
+        Assert.Contains("no_verbatim=false", uri.AbsoluteUri);
+        Assert.DoesNotContain("language_code=", uri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void ExtractKeyterms_SplitsOnNewlinesAndCountsAnyWhitespace()
+    {
+        Assert.Equal(
+            ["Alpha", "Beta Gamma", "Delta", "Eps\tZeta"],
+            ElevenLabsPlugin.ExtractKeyterms("Alpha\r\nBeta Gamma\nDelta,Eps\tZeta")
+        );
+        Assert.Empty(ElevenLabsPlugin.ExtractKeyterms("one two three four five six"));
+        Assert.Empty(ElevenLabsPlugin.ExtractKeyterms("one\ttwo\tthree\tfour\tfive\tsix"));
+    }
+
+    [Fact]
+    public void ExtractKeyterms_LimitsRequestToOneThousandTerms()
+    {
+        var terms = ElevenLabsPlugin.ExtractKeyterms(
+            string.Join(",", Enumerable.Range(0, 1005).Select(i => $"term{i}"))
+        );
+        Assert.Equal(1000, terms.Count);
+        Assert.Equal("term0", terms[0]);
+        Assert.Equal("term999", terms[^1]);
+    }
+
+    [Fact]
+    public void SettingsLocalization_AllLocalesExposeTheSameKeys()
+    {
+        var english = LoadLocalization("en");
+        var keys = english.EnumerateObject().Select(p => p.Name).Order().ToArray();
+        using var sut = new ElevenLabsPlugin();
+        foreach (var definition in sut.GetSettingDefinitions())
+        {
+            Assert.Contains(definition.Label, keys);
+            if (definition.Description is { } description)
+                Assert.Contains(description, keys);
+            foreach (var option in definition.Options ?? [])
+                if (option.Label.StartsWith("Settings.", StringComparison.Ordinal))
+                    Assert.Contains(option.Label, keys);
+        }
+        foreach (var locale in new[] { "de", "es", "ru" })
+        {
+            var localized = LoadLocalization(locale);
+            Assert.Equal(keys, localized.EnumerateObject().Select(p => p.Name).Order().ToArray());
+            Assert.NotEqual(
+                english.GetProperty("Settings.TranscriptionMode").GetString(),
+                localized.GetProperty("Settings.TranscriptionMode").GetString()
+            );
+        }
+    }
+
+    private static void AssertMultipartPart(string body, string name, string value) =>
+        Assert.Contains($"Content-Disposition: form-data; name={name}\r\n\r\n{value}\r\n", body);
+
+    private static JsonElement LoadLocalization(string language)
+    {
+        var basePath = Path.GetFullPath(AppContext.BaseDirectory);
+        var relativeLocalizationPath = Path.Join(
+            "..", "..", "..", "..", "..",
+            "plugins", "TypeWhisper.Plugin.ElevenLabs", "Localization", $"{language}.json");
+        var localizationPath = Path.GetFullPath(relativeLocalizationPath, basePath);
+        using var doc = JsonDocument.Parse(File.ReadAllText(localizationPath));
+        return doc.RootElement.Clone();
     }
 
     private static HttpResponseMessage JsonResponse(string json)

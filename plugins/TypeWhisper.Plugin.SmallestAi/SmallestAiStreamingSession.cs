@@ -5,7 +5,7 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.SmallestAi;
 
-internal sealed class SmallestAiStreamingSession : IStreamingSession
+internal sealed class SmallestAiStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
     private readonly WebSocketSessionPump _pump;
 
@@ -13,6 +13,8 @@ internal sealed class SmallestAiStreamingSession : IStreamingSession
     {
         _pump = pump;
     }
+
+    public Exception? Fault => _pump.Fault;
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived
     {

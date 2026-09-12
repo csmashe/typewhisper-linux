@@ -504,6 +504,9 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             throw sessionFinalizeTimeout;
         }
 
+        if (session is IStreamingSessionHealth health)
+            sessionFinalizeFault ??= health.Fault;
+
         if (sessionFinalizeFault is not null)
         {
             throw new InvalidOperationException(

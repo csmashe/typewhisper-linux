@@ -176,7 +176,7 @@ public sealed class DictationRecoveryTests
         fixture.Plugin.EnqueueText("recovered question mark");
         var recovered = await fixture.Orchestrator.RetryFromHistoryAsync(failed.Id);
         Assert.Equal(failed.Id, recovered.Id);
-        Assert.True(fixture.Plugin.ReceivedTranslate[^1]);
+        Assert.True(fixture.Plugin.ReceivedTranslations[^1]);
         Assert.Equal("translate", recovered.TranscriptionTaskUsed);
         Assert.Equal(fixture.Plugin.ProviderId, recovered.EngineUsed);
         Assert.Equal(fixture.Plugin.SelectedModelId, recovered.ModelUsed);
