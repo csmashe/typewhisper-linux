@@ -466,7 +466,7 @@ EOF
 
 Name:           typewhisper
 Version:        $RPM_VERSION_CLEAN
-Release:        1%{?dist}
+Release:        1
 Summary:        Speech-to-text dictation for Linux desktop
 License:        GPL-3.0-or-later
 URL:            https://github.com/csmashe/typewhisper-linux
