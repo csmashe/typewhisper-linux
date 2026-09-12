@@ -314,7 +314,7 @@ public partial class PluginsSectionViewModel : ObservableObject
             string stringValue when int.TryParse(stringValue, out var parsed) => parsed,
             // Leave the current tab unchanged for any other value; the
             // [ObservableProperty] setter's equality guard makes this a no-op.
-            _ => SelectedTab
+            _ => SelectedTab,
         };
     }
 

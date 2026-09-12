@@ -79,6 +79,17 @@ public sealed class SettingsServiceTests : IDisposable
         }
     }
 
+    [Fact]
+    public void CrashReporting_DefaultsOff_AndRoundTripsOptIn()
+    {
+        var settings = new SettingsService(_filePath);
+        Assert.False(AppSettings.Default.CrashReportingEnabled);
+        Assert.False(settings.Current.CrashReportingEnabled);
+        settings.Save(AppSettings.Default with { CrashReportingEnabled = true });
+        Assert.True(new SettingsService(_filePath).Current.CrashReportingEnabled);
+        Assert.Contains("\"crashReportingEnabled\": true", File.ReadAllText(_filePath));
+    }
+
     [Theory]
     [InlineData("null")]
     [InlineData("[]")]

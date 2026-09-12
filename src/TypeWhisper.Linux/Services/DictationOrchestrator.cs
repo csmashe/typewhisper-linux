@@ -9,6 +9,7 @@ using TypeWhisper.Linux.Models;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
 using TypeWhisper.Linux.Services.SpokenCommand;
+using TypeWhisper.Linux.Services.Telemetry;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -79,6 +80,8 @@ public sealed class DictationOrchestrator : IDisposable
     private readonly IDetectionFailureTracker _failureTracker;
     private readonly IHistoryService _history;
     private readonly IUsageStatisticsService? _usageStatistics;
+    private readonly IDiagnosticsReporter? _diagnostics;
+    private readonly DictationTelemetryTracker _telemetry;
     private readonly HotkeyService _hotkey;
     private readonly IdeFileReferenceService _ideFileReferences;
     private readonly DictationInFlightSessionTracker _inFlightTracker = new();
@@ -207,9 +210,12 @@ public sealed class DictationOrchestrator : IDisposable
         IAtSpiEventClient? atSpiClient = null,
         IUsageStatisticsService? usageStatistics = null,
         SpokenFormattingStrategyResolver? spokenFormattingResolver = null,
-        SpokenFormattingService? spokenFormatting = null
+        SpokenFormattingService? spokenFormatting = null,
+        IDiagnosticsReporter? diagnostics = null
     )
     {
+        _diagnostics = diagnostics;
+        _telemetry = new DictationTelemetryTracker(diagnostics);
         _atSpiClient = atSpiClient;
         _hotkey = hotkey;
         _audio = audio;
@@ -703,6 +709,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
 
         var startedSessionId = 0;
+        var telemetryStartedSessionId = 0;
         DictationDeferredStop pendingStop;
         try
         {
@@ -804,6 +811,11 @@ public sealed class DictationOrchestrator : IDisposable
 
             _audioCaptureSession = captureSession;
             _recordingStart = DateTime.UtcNow;
+            telemetryStartedSessionId = sessionId;
+            _telemetry.Begin(sessionId);
+            _telemetry.Tag(sessionId, "mode", startupSettings.Mode.ToString());
+            _telemetry.Tag(sessionId, "cleanup.level", startupSettings.CleanupLevel.ToString());
+            _telemetry.Tag(sessionId, "profile.used", "false");
             _lastSpeechDetectedAtUtc = _recordingStart;
             _silenceStopRequested = false;
 
@@ -1237,12 +1249,18 @@ public sealed class DictationOrchestrator : IDisposable
                 _hotkey.IsCancelShortcutEnabled = false;
                 _activeDictationCts?.Dispose();
                 _activeDictationCts = null;
+                _telemetry.Finish(startedSessionId, "canceled");
                 ClearSessionInFlight(startedSessionId);
                 startedSessionId = 0;
             }
 
             // ReSharper disable once BadControlBracesIndent -- the `goto StartupComplete` label is deliberately deindented; the brace-indent nit is a byproduct of that layout.
         StartupComplete:;
+        }
+        catch
+        {
+            _telemetry.Finish(telemetryStartedSessionId, "failed");
+            throw;
         }
         finally
         {
@@ -1409,6 +1427,7 @@ public sealed class DictationOrchestrator : IDisposable
         var gateReleased = false;
         CancellationTokenSource? snapshotCts = null;
         int? insertionOrderSessionId = null;
+        int? telemetrySessionId = null;
         try
         {
             var captureSession = _audioCaptureSession;
@@ -1418,6 +1437,7 @@ public sealed class DictationOrchestrator : IDisposable
             }
 
             wasRecording = true;
+            telemetrySessionId = _recordingSession;
 
             // Snapshot and clear the cancel flag now that we own the gate.
             var canceledThisStop = _cancelRequested;
@@ -1433,6 +1453,13 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 Interlocked.CompareExchange(ref _audioCaptureSession, null, captureSession);
             }
+
+            // Capture ends with the microphone; streaming finalization below is measured on its own.
+            if (telemetrySessionId is { } capturedSessionId)
+            {
+                _telemetry.EndCapture(capturedSessionId);
+            }
+
             var recoveredPartialPreview = await StopPartialTranscriptionSessionAsync();
             await AwaitRecordingSnapshotAsync();
             _audioDucking.RestoreAudio();
@@ -1518,6 +1545,9 @@ public sealed class DictationOrchestrator : IDisposable
                 _recordingStart = default;
             }
 
+            _telemetry.Tag(recordingContext.SessionId, "profile.used",
+                recordingContext.Profile is not null ? "true" : "false");
+
             // Release the gate now that capture is torn down and context is
             // snapshotted. A new StartAsync can record while transcription runs.
             // Reserve this session's insertion-order slot before releasing the
@@ -1599,6 +1629,7 @@ public sealed class DictationOrchestrator : IDisposable
                         }
                     );
                     var duration = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav);
+                    _telemetry.Measure(recordingContext.SessionId, "audio.duration_s", duration, "second");
                     _models.PluginManager.EventBus.Publish(
                         new RecordingStoppedEvent { DurationSeconds = duration }
                     );
@@ -1656,6 +1687,8 @@ public sealed class DictationOrchestrator : IDisposable
                     if (stoppedStreamingCoordinator is not null)
                     {
                         var streamingCancelToken = snapshotCts?.Token ?? CancellationToken.None;
+                        var streamingFinalizeOperation =
+                            _telemetry.Child(recordingContext.SessionId, "streaming.finalize");
                         var (streamingFinalText, streamingFaulted) =
                             await TeardownStreamingSessionAsync(
                                 stoppedStreamingCoordinator,
@@ -1663,6 +1696,9 @@ public sealed class DictationOrchestrator : IDisposable
                                 true,
                                 streamingCancelToken
                             );
+                        streamingFinalizeOperation?.Finish(
+                            streamingFaulted ? DiagnosticsOutcome.Failed : DiagnosticsOutcome.Ok
+                        );
                         recordingContext = recordingContext with
                         {
                             StreamingFinalText = streamingFinalText,
@@ -1707,6 +1743,8 @@ public sealed class DictationOrchestrator : IDisposable
                 // persistence, the RecordingCaptured event), or a rethrow from
                 // its `await using` lease disposal. Either way the session must
                 // not stay "in_progress" forever (audit §2 H1).
+                CaptureDiagnostic(ex, "dictation.post-stop",
+                    recordingContext.StreamingProviderId, recordingContext.StreamingModelId);
                 Trace.WriteLine($"[Dictation] Post-stop pipeline failed before completion: {ex}");
                 // Publish the terminal result FIRST: RunAsync's finally has
                 // already dropped the id from the in-flight set, so a throw from
@@ -1731,6 +1769,11 @@ public sealed class DictationOrchestrator : IDisposable
         }
         finally
         {
+            if (telemetrySessionId is { } terminalSessionId)
+            {
+                _telemetry.Finish(terminalSessionId, DiagnosticsOutcome.Aborted);
+            }
+
             // Safety net: every early-discard branch above and every early return
             // in TranscribeAndInsertAsync that never reaches the insertion call
             // must still release this session's insertion-order slot, or a
@@ -1970,6 +2013,13 @@ public sealed class DictationOrchestrator : IDisposable
         return viaActionPlugin ? InsertionResult.ActionFailed : InsertionResult.Failed;
     }
 
+    internal static bool IsInsertionFailure(InsertionResult insertion, bool threw)
+    {
+        return threw || insertion is InsertionResult.Failed or InsertionResult.ActionFailed
+            or InsertionResult.ActionUnavailable or InsertionResult.MissingClipboardTool
+            or InsertionResult.MissingPasteTool;
+    }
+
     public event EventHandler<string>? RecordingCaptured; // arg = WAV file path
     public event EventHandler<bool>? RecordingStateChanged;
     public event EventHandler<string>? TranscriptionCompleted;
@@ -2009,12 +2059,15 @@ public sealed class DictationOrchestrator : IDisposable
         // dictation cannot swap the plugin's native model mid-flight. Held for
         // the whole method; `await using` releases on every early return.
         ModelManagerService.TranscriptionLease lease;
+        _telemetry.Tag(context.SessionId, "engine.model", TelemetryNames.SanitizeModelId(effectiveModelId));
+        var modelLoadOperation = _telemetry.Child(context.SessionId, "model.load");
         try
         {
             lease = await _models.AcquireTranscriptionAsync(
                 effectiveModelId,
                 cancellationToken: cancelToken
             );
+            modelLoadOperation?.Finish(DiagnosticsOutcome.Ok);
         }
         catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
         {
@@ -2026,6 +2079,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
+            CaptureDiagnostic(ex, "dictation.model-load", modelId: effectiveModelId);
             Trace.WriteLine(
                 $"[Dictation] Failed to load effective model '{effectiveModelId}': {ex}"
             );
@@ -2047,6 +2101,8 @@ public sealed class DictationOrchestrator : IDisposable
         // race a concurrent dictation's model swap.
         var engineProviderId = plugin.ProviderId;
         var engineModelId = plugin.SelectedModelId;
+        _telemetry.Tag(context.SessionId, "engine.provider", engineProviderId);
+        _telemetry.Tag(context.SessionId, "engine.model", TelemetryNames.SanitizeModelId(engineModelId));
         var engineSupportsTranslation = plugin.SupportsTranslation;
 
         ReportStatus(context, $"Transcribing via {plugin.ProviderDisplayName}…");
@@ -2067,6 +2123,7 @@ public sealed class DictationOrchestrator : IDisposable
             );
 
             PluginTranscriptionResult? result;
+            var transcribeOperation = _telemetry.Child(context.SessionId, "transcribe");
             try
             {
                 // Reject streaming if the engine or language changed mid-session
@@ -2148,6 +2205,7 @@ public sealed class DictationOrchestrator : IDisposable
             }
             catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
             {
+                transcribeOperation?.Finish(DiagnosticsOutcome.Cancelled);
                 Trace.WriteLine("[Dictation] Transcription canceled by user.");
                 ReportStatus(context, "Canceled");
                 ShowFeedback(context, "Canceled", false, true);
@@ -2156,6 +2214,8 @@ public sealed class DictationOrchestrator : IDisposable
             }
             catch (Exception ex)
             {
+                transcribeOperation?.Finish(DiagnosticsOutcome.Failed);
+                CaptureDiagnostic(ex, "dictation.transcribe", engineProviderId, engineModelId);
                 var userMessage = LanguageSelectionUiMessage.From(ex);
                 Trace.WriteLine($"[Dictation] Transcription failed: {ex}");
                 _errorLog.AddEntry(
@@ -2180,11 +2240,18 @@ public sealed class DictationOrchestrator : IDisposable
             }
             finally
             {
+                transcribeOperation?.Finish(DiagnosticsOutcome.Ok);
                 // Release the model lock now so a concurrent dictation isn't
                 // blocked by post-processing, insertion, and history below.
                 // ReSharper disable once DisposeOnUsingVariable -- intentional early dispose to release the lock; the using re-dispose at scope end is idempotent.
                 await leaseScope.DisposeAsync();
             }
+
+            // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- result comes from a plugin transcription call whose non-null annotation may not hold.
+            _telemetry.Tag(context.SessionId, "language", result?.DetectedLanguage
+                ?? LanguageSelectionResolver.ResolveOrAutomatic(
+                    context.Profile?.InputLanguage, _settings.Current.Language).LanguageTag
+                ?? "auto");
 
             // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- result comes from a plugin transcription call whose non-null annotation may not hold.
             var rawText = SelectRawTextWithPreviewFallback(
@@ -2291,6 +2358,14 @@ public sealed class DictationOrchestrator : IDisposable
                         engineModelId,
                         outcome.InsertionStatus
                     );
+                    _telemetry.Measure(context.SessionId, "transcript.chars", outcome.Result.Length, "none");
+                    _telemetry.Finish(context.SessionId, "ok");
+                }
+                else
+                {
+                    // A null outcome is a delivery failure; command failures already published a
+                    // terminal state, which makes this a no-op for them.
+                    _telemetry.Finish(context.SessionId, "insertion_failed");
                 }
 
                 return;
@@ -2354,6 +2429,9 @@ public sealed class DictationOrchestrator : IDisposable
                 _spokenFormattingResolver, engineProviderId, engineModelId, languageHints, postProcessingLanguage,
                 translate && engineSupportsTranslation,
                 _settings.Current.SpokenFormattingStrategy);
+            _telemetry.Tag(context.SessionId, "cleanup.level", cleanupLevel.ToString());
+            var postProcessOperation = _telemetry.Child(context.SessionId, "post_process");
+            var stepTimings = new List<(string Name, TimeSpan Elapsed)>();
             var pipelineResult = await _pipeline.ProcessAsync(
                 rawText,
                 new PipelineOptions
@@ -2416,6 +2494,7 @@ public sealed class DictationOrchestrator : IDisposable
                     GermanOutputVariant = _settings.Current.GermanOutputVariant,
                     ShortUtterancePunctuationEnabled = _settings.Current.ShortUtterancePunctuationEnabled,
                     PluginPostProcessors = pluginProcessors,
+                    StepCompleted = (name, elapsed, _) => stepTimings.Add((name, elapsed)),
                     StatusCallback = status =>
                     {
                         ReportStatus(
@@ -2428,8 +2507,19 @@ public sealed class DictationOrchestrator : IDisposable
                 cancelToken
             );
 
+            postProcessOperation?.Finish(DiagnosticsOutcome.Ok);
+            foreach (var (stepName, elapsed) in stepTimings)
+            {
+                _telemetry.Measure(
+                    context.SessionId,
+                    $"post_process.{TelemetryNames.MeasurementSegment(stepName)}_ms",
+                    elapsed.TotalMilliseconds,
+                    "millisecond"
+                );
+            }
             var commandResult = VoiceCommandParser.Parse(pipelineResult.Text);
             var finalText = ApplyProfileStyleFormatting(context, commandResult.Text);
+            _telemetry.Measure(context.SessionId, "transcript.chars", finalText.Length, "none");
 
             TranscriptionCompleted?.Invoke(this, finalText);
             // The orchestrator has the effective language entering post-processing,
@@ -2526,6 +2616,9 @@ public sealed class DictationOrchestrator : IDisposable
             // unpadded finalText.
             var insertionText = DictationInsertionTextFormatter.TextForInsertion(finalText);
 
+            var insertionOperation = _telemetry.Child(context.SessionId, "insert");
+            var insertionStrategy = ResolveInsertionStrategy(context.AppProcess);
+            insertionOperation?.SetTag("insertion.strategy", insertionStrategy.ToString());
             InsertionResult insertion;
             ActionPluginExecutionResult? actionExecutionResult = null;
             var insertionThrew = false;
@@ -2540,6 +2633,7 @@ public sealed class DictationOrchestrator : IDisposable
                 // check keeps synthesized paste/type off the lock screen.
                 if (!_sessionActivityMonitor.IsInputAllowed)
                 {
+                    _telemetry.Finish(context.SessionId, "canceled");
                     Trace.WriteLine("[Dictation] Insertion suppressed: session locked or inactive.");
                     ReportStatus(context, "Canceled");
                     ShowFeedback(context, "Canceled", false, true);
@@ -2556,6 +2650,7 @@ public sealed class DictationOrchestrator : IDisposable
                 }
                 else if (actionPlugin is not null)
                 {
+                    insertionOperation?.SetTag("insertion.kind", "action");
                     actionExecutionResult = await ExecuteActionPluginAsync(
                         actionPlugin,
                         context,
@@ -2578,7 +2673,7 @@ public sealed class DictationOrchestrator : IDisposable
                             context.AppProcess,
                             context.AppTitle,
                             commandResult.AutoEnter,
-                            ResolveInsertionStrategy(context.AppProcess),
+                            insertionStrategy,
                             context.LockedFocusField
                         )
                     );
@@ -2586,6 +2681,7 @@ public sealed class DictationOrchestrator : IDisposable
             }
             catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
             {
+                _telemetry.Finish(context.SessionId, "canceled");
                 Trace.WriteLine(
                     $"[Dictation] Action canceled by user "
                     + $"(action='{actionPlugin?.ActionId ?? "<none>"}')."
@@ -2596,6 +2692,7 @@ public sealed class DictationOrchestrator : IDisposable
             }
             catch (Exception ex)
             {
+                CaptureDiagnostic(ex, "dictation.insert", engineProviderId, engineModelId);
                 // Insertion/action failures must NOT republish the dictation
                 // as a transcription failure — TranscriptionCompletedEvent has
                 // already fired. Surface a separate insertion-failure status.
@@ -2612,6 +2709,10 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 _insertionOrder.Release(context.SessionId);
             }
+
+            insertionOperation?.SetTag("insertion.result", insertion.ToString());
+            var insertionFailed = IsInsertionFailure(insertion, insertionThrew);
+            insertionOperation?.Finish(insertionFailed ? DiagnosticsOutcome.Failed : DiagnosticsOutcome.Ok);
 
             if (!insertionThrew)
             {
@@ -2737,9 +2838,11 @@ public sealed class DictationOrchestrator : IDisposable
                 engineProviderId,
                 engineModelId
             );
+            _telemetry.Finish(context.SessionId, insertionFailed ? "insertion_failed" : "ok");
         }
         catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
         {
+            _telemetry.Finish(context.SessionId, "canceled");
             // User pressed Escape while the post-processing pipeline (LLM
             // cleanup, translation, plugin processors) was running. Surface
             // "Canceled" rather than a transcription failure regardless of
@@ -2754,6 +2857,8 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex) when (!transcriptionCompletedPublished)
         {
+            CaptureDiagnostic(ex, "dictation.post-process", engineProviderId, engineModelId);
+            _telemetry.Finish(context.SessionId, "failed");
             // Failures before TranscriptionCompletedEvent fires (post-processing,
             // voice-command parsing) surface as transcription failures.
             Trace.WriteLine($"[Dictation] Post-transcription processing failed: {ex}");
@@ -2774,10 +2879,38 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
+            CaptureDiagnostic(ex, "dictation.bookkeeping", engineProviderId, engineModelId);
+            _telemetry.Finish(context.SessionId, "failed");
             // Something after TranscriptionCompletedEvent threw (e.g. history
             // persistence). Don't republish a Failed event for an already-announced
             // dictation.
             Trace.WriteLine($"[Dictation] Post-completion bookkeeping failed: {ex}");
+        }
+    }
+
+    private void CaptureDiagnostic(
+        Exception exception, string operation, string? providerId = null, string? modelId = null)
+    {
+        if (exception is OperationCanceledException)
+        {
+            return;
+        }
+        var tags = new Dictionary<string, string>();
+        if (providerId is not null)
+        {
+            tags["engine.provider"] = providerId;
+        }
+        if (modelId is not null)
+        {
+            tags["engine.model"] = TelemetryNames.SanitizeModelId(modelId);
+        }
+        try
+        {
+            _diagnostics?.CaptureException(exception, operation, tags);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Telemetry] Error capture failed: {ex.Message}");
         }
     }
 
@@ -4634,7 +4767,10 @@ public sealed class DictationOrchestrator : IDisposable
         // anyway, so the startup CTS gets implicitly cancelled too.
         if (startupCts is not null && !finalize)
         {
-            try { await startupCts.CancelAsync(); }
+            try
+            {
+                await startupCts.CancelAsync();
+            }
             catch
             {
                 /* ignore */
@@ -4946,6 +5082,7 @@ public sealed class DictationOrchestrator : IDisposable
 
     private void PublishSessionTerminal(int sessionId, string status, string? message)
     {
+        _telemetry.Finish(sessionId, status);
         PublishSessionResult(
             new DictationSessionResult(
                 sessionId,

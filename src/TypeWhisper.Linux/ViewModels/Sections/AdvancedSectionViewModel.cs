@@ -31,6 +31,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
     private bool _captureLlmProvenance;
 
     [ObservableProperty]
+    private bool _crashReportingEnabled;
+
+    [ObservableProperty]
     private bool _memoryEnabled;
 
     [ObservableProperty]
@@ -219,6 +222,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
             SpokenFeedbackEnabled = _configuredSpokenFeedbackEnabled && CanUseSpokenFeedback;
             SaveToHistoryEnabled = settings.SaveToHistoryEnabled;
             CaptureLlmProvenance = settings.CaptureLlmProvenance;
+            CrashReportingEnabled = settings.CrashReportingEnabled;
             ApplyEffectiveSpokenFeedbackPreference();
             SelectedAutoUnloadOption =
                 AutoUnloadOptions.FirstOrDefault(option =>
@@ -351,6 +355,15 @@ public partial class AdvancedSectionViewModel : ObservableObject
         }
 
         _settings.Update(current => current with { SaveToHistoryEnabled = value });
+    }
+
+    partial void OnCrashReportingEnabledChanged(bool value)
+    {
+        if (_isProgrammaticRefresh || _settings.Current.CrashReportingEnabled == value)
+        {
+            return;
+        }
+        _settings.Update(current => current with { CrashReportingEnabled = value });
     }
 
     partial void OnCaptureLlmProvenanceChanged(bool value)

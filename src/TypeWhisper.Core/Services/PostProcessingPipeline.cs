@@ -59,6 +59,7 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
         foreach (var (_, name, executor) in steps)
         {
             ct.ThrowIfCancellationRequested();
+            var stepStopwatch = Stopwatch.StartNew();
             try
             {
                 var before = text;
@@ -69,6 +70,7 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
                         !string.Equals(before, text, StringComparison.Ordinal)
                     )
                 );
+                options.StepCompleted?.Invoke(name, stepStopwatch.Elapsed, true);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -87,6 +89,7 @@ public sealed partial class PostProcessingPipeline : IPostProcessingPipeline
                         ex.Message
                     )
                 );
+                options.StepCompleted?.Invoke(name, stepStopwatch.Elapsed, false);
                 if ((name == PostProcessingStepNames.Llm && options.RequireLlmSuccess)
                     || (name == PostProcessingStepNames.Translation && options.RequireTranslationSuccess))
                 {

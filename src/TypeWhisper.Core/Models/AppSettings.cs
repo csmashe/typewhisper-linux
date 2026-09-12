@@ -160,6 +160,9 @@ public record AppSettings
     // this app created — never for one a screen reader or other tool may rely on.
     public bool AccessibilityBridgeEnabledByApp { get; init; }
 
+    // Opt-in Sentry crash + performance reporting; default off (see docs/PRIVACY.md).
+    public bool CrashReportingEnabled { get; init; }
+
     // Onboarding
     public bool HasCompletedOnboarding { get; init; }
     public string SelectedIndustryPresetId { get; init; } = "general";
