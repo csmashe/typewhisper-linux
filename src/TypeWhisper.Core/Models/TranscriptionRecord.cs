@@ -1,10 +1,11 @@
 using System.Globalization;
+using System.Text.Json.Serialization;
 
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 namespace TypeWhisper.Core.Models;
 
 /// <summary>
-///     A persisted history entry for one completed dictation: the raw and final
+///     A persisted history entry for one dictation attempt: the raw and final
 ///     text, the app/URL/profile context it ran in, which engine and model
 ///     produced it, which processing steps were applied, and how the text was
 ///     inserted.
@@ -24,6 +25,9 @@ public sealed record TranscriptionRecord
     public string EngineUsed { get; init; } = "whisper";
     public string? ModelUsed { get; init; }
     public string? AudioFileName { get; init; }
+    public TranscriptionRecordStatus Status { get; init; } = TranscriptionRecordStatus.Succeeded;
+    public string? FailureMessage { get; init; }
+    public string TranscriptionTaskUsed { get; init; } = "transcribe";
     public TextInsertionStatus InsertionStatus { get; init; } = TextInsertionStatus.Unknown;
     public string? InsertionFailureReason { get; init; }
     public CleanupLevel CleanupLevelUsed { get; init; } = CleanupLevel.None;
@@ -50,9 +54,11 @@ public sealed record TranscriptionRecord
 
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 
+    [JsonIgnore]
     public int WordCount =>
         FinalText.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 
+    [JsonIgnore]
     public string Preview
     {
         get

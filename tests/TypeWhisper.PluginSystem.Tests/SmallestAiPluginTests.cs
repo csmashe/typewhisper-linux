@@ -17,6 +17,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class SmallestAiPluginTests
 {
     [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<SmallestAiPlugin>();
+
+
+    [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {
         var manifest = LoadManifest();

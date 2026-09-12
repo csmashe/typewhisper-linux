@@ -1,3 +1,4 @@
+using TypeWhisper.PluginSDK.Helpers;
 // ReSharper disable MemberCanBePrivate.Global
 // ReSharper disable UnusedMember.Global
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
@@ -109,7 +110,7 @@ public sealed class GoogleCloudSttPlugin
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         // Google's LINEAR16 encoding wants raw PCM, not a WAV container. ffmpeg's
         // pipe output carries an extra LIST chunk (78-byte header, not 44), so
@@ -193,8 +194,7 @@ public sealed class GoogleCloudSttPlugin
         // Default ResponseContentRead keeps HttpClient.Timeout covering the response-body read;
         // ResponseHeadersRead would end the timeout at the headers and let a stalled body hang
         // when the caller passes CancellationToken.None.
-        using var response = await _httpClient.SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, request, ct);
 
         var responseJson = await response.Content.ReadAsStringAsync(ct);
         return ParseResponse(responseJson);

@@ -13,14 +13,34 @@ public interface IHistoryService
     /// <summary>Whether the last history read succeeded.</summary>
     bool RecordsAvailable => true;
 
+    /// <summary>
+    ///     Reads the records and reports in the same operation whether that read succeeded, so callers
+    ///     that must distinguish "no records" from "could not read" never see the two answers disagree.
+    /// </summary>
+    /// <param name="records">The records read, or an empty list when the read failed.</param>
+    /// <returns><c>true</c> when the records are trustworthy.</returns>
+    bool TryGetRecords(out IReadOnlyList<TranscriptionRecord> records)
+    {
+        records = Records;
+        return true;
+    }
+
+    // ReSharper disable once UnusedMemberInSuper.Global -- part of the running-totals trio this interface documents; today's callers reach it through HistoryService, but the contract stays complete.
     int TotalRecords { get; }
     int TotalWords { get; }
 
     /// <summary>Total recorded audio duration across all records, in seconds.</summary>
     // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedMemberInSuper.Global -- part of the running-totals trio this interface documents; today's callers reach it through HistoryService, but the contract stays complete.
     double TotalDuration { get; }
 
     void AddRecord(TranscriptionRecord record);
+
+    /// <summary>
+    ///     Replaces the record carrying the same id with <paramref name="record" />, in place. Never
+    ///     inserts: a record whose id is absent leaves the history untouched and returns <c>false</c>.
+    /// </summary>
+    bool TryReplaceRecord(TranscriptionRecord record) => false;
 
     /// <summary>Replaces the final text of a record (e.g. after the user edits it inline).</summary>
     void UpdateRecord(string id, string finalText);

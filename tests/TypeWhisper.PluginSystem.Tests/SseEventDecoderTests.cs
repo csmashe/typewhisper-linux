@@ -1,9 +1,55 @@
 using TypeWhisper.PluginSDK.Helpers;
+using TypeWhisper.PluginSDK;
+using System.Net.Sockets;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
 public sealed class SseEventDecoderTests
 {
+    [Theory]
+    [InlineData("io", PluginRequestFailureKind.Network)]
+    [InlineData("http", PluginRequestFailureKind.Network)]
+    [InlineData("socket", PluginRequestFailureKind.Network)]
+    [InlineData("timeout", PluginRequestFailureKind.Timeout)]
+    public async Task DecodeAsync_ClassifiesBodyReadFailures(string failure, PluginRequestFailureKind expected)
+    {
+        Exception cause = failure switch
+        {
+            "io" => new IOException("reset"),
+            "http" => new HttpRequestException("reset"),
+            "socket" => new SocketException((int)SocketError.ConnectionReset),
+            _ => new OperationCanceledException("deadline"),
+        };
+        using var reader = new FaultingReader(cause);
+        var error = await Assert.ThrowsAsync<PluginRequestException>(async () =>
+        {
+            await foreach (var _ in SseEventDecoder.DecodeAsync(reader)) { }
+        });
+        Assert.Equal(expected, error.FailureKind);
+        Assert.Same(cause, error.InnerException);
+    }
+
+    [Fact]
+    public async Task DecodeAsync_PreservesCallerCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        // ReSharper disable once MethodHasAsyncOverload -- pre-cancelling the caller token is setup, not teardown; CancelAsync() adds nothing.
+        cts.Cancel();
+        var cause = new OperationCanceledException(cts.Token);
+        using var reader = new FaultingReader(cause);
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in SseEventDecoder.DecodeAsync(reader, cts.Token)) { }
+        });
+        Assert.Same(cause, error);
+    }
+
+    private sealed class FaultingReader(Exception error) : StringReader("")
+    {
+        public override ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken) =>
+            ValueTask.FromException<string?>(error);
+    }
+
     [Theory]
     [InlineData("\n")]
     [InlineData("\r")]

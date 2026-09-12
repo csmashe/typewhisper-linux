@@ -25,6 +25,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class Reson8PluginTests
 {
     [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<Reson8Plugin>();
+
+
+    [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {
         var manifest = LoadManifest();
@@ -278,31 +283,28 @@ public class Reson8PluginTests
         Assert.Equal("Hello", result.Text);
     }
 
-    [Fact]
-    public async Task TranscribeAsync_ThrowsActionableMessagesForKnownHttpErrors()
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, PluginRequestFailureKind.Authentication, "Settings.InvalidApiKey")]
+    [InlineData(HttpStatusCode.NotFound, PluginRequestFailureKind.InvalidRequest, "Reson8 custom model not found")]
+    [InlineData(HttpStatusCode.RequestEntityTooLarge, PluginRequestFailureKind.RequestTooLarge, "Reson8 file too large")]
+    [InlineData(HttpStatusCode.TooManyRequests, PluginRequestFailureKind.RateLimit, "Reson8 rate limit exceeded")]
+    [InlineData(HttpStatusCode.InternalServerError, PluginRequestFailureKind.ServerError, "Reson8 server error")]
+    public async Task TranscribeAsync_ThrowsActionableMessagesForKnownHttpErrors(
+        HttpStatusCode status, PluginRequestFailureKind failureKind, string message)
     {
-        var statuses = new Queue<HttpStatusCode>([
-            HttpStatusCode.Unauthorized,
-            HttpStatusCode.NotFound,
-            HttpStatusCode.RequestEntityTooLarge,
-            HttpStatusCode.TooManyRequests,
-            HttpStatusCode.InternalServerError,
-        ]);
         var handler = new CapturingHandler((_, _) =>
-            JsonResponse("""{ "code": "ERR", "message": "details" }""", statuses.Dequeue()));
+            JsonResponse("""{ "code": "ERR", "message": "details" }""", status));
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "reson-key" } };
         using var httpClient = new HttpClient(handler);
         var sut = new Reson8Plugin(httpClient);
         await sut.ActivateAsync(host);
 
         var wav = BuildPcm16Wav([0x00, 0x00]);
-
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => sut.TranscribeAsync(wav, null, false, null, CancellationToken.None));
-        await Assert.ThrowsAsync<KeyNotFoundException>(() => sut.TranscribeAsync(wav, null, false, null, CancellationToken.None));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.TranscribeAsync(wav, null, false, null, CancellationToken.None));
-        await Assert.ThrowsAsync<HttpRequestException>(() => sut.TranscribeAsync(wav, null, false, null, CancellationToken.None));
-        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => sut.TranscribeAsync(wav, null, false, null, CancellationToken.None));
-        Assert.Contains("Reson8 server error", ex.Message);
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => sut.TranscribeAsync(wav, null, false, null, CancellationToken.None));
+        Assert.Equal(failureKind, ex.FailureKind);
+        Assert.Equal((int)status, ex.HttpStatusCode);
+        Assert.False(string.IsNullOrWhiteSpace(ex.Message));
+        Assert.Contains(message, ex.Message);
     }
 
     [Fact]

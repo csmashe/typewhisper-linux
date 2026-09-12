@@ -8,6 +8,7 @@ using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.ElevenLabs;
@@ -214,8 +215,8 @@ public sealed class ElevenLabsPlugin
     )
     {
         if (!IsConfigured || SelectedModelId is null)
-            throw new InvalidOperationException(
-                "Plugin not configured. API key and model required."
+            throw new PluginRequestException(
+                "Plugin not configured. API key and model required.", PluginRequestFailureKind.Configuration
             );
 
         var entry = ResolveModelEntry(SelectedModelId);
@@ -241,13 +242,10 @@ public sealed class ElevenLabsPlugin
 
         request.Content = form;
 
-        using var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => $"ElevenLabs API error {(int)errorResponse.StatusCode}: {errorBody}");
         var json = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException(
-                $"ElevenLabs API error {(int)response.StatusCode}: {json}"
-            );
 
         return ParseRestResponse(json, NormalizeLanguage(language));
     }
@@ -255,8 +253,8 @@ public sealed class ElevenLabsPlugin
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
         if (!IsConfigured || SelectedModelId is null)
-            throw new InvalidOperationException(
-                "Plugin not configured. API key and model required."
+            throw new PluginRequestException(
+                "Plugin not configured. API key and model required.", PluginRequestFailureKind.Configuration
             );
 
         var entry = ResolveModelEntry(SelectedModelId);

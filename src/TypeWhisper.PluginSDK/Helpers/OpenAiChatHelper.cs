@@ -144,7 +144,7 @@ public static class OpenAiChatHelper
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
 
-        var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(httpClient, request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(httpClient, request, ct);
         var json = await response.Content.ReadAsStringAsync(ct);
         return ParseChatCompletionResponse(json, options.ProviderName ?? "The provider");
     }
@@ -207,24 +207,11 @@ public static class OpenAiChatHelper
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
         request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
 
-        // ResponseHeadersRead: start reading the body as it streams rather than buffering.
-        // The batch path uses SendWithErrorHandlingAsync (which buffers), so here we send and
-        // check the status line ourselves.
-        using var response = await SendStreamingRequestAsync(httpClient, request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            httpClient, request, HttpCompletionOption.ResponseHeadersRead, ct);
 
-        if (!response.IsSuccessStatusCode)
-        {
-            var errorBody = await response.Content.ReadAsStringAsync(ct);
-            var message = (int)response.StatusCode switch
-            {
-                401 => "Invalid API key",
-                429 => "Rate limit reached, please wait",
-                _ => $"API error {(int)response.StatusCode}: {OpenAiApiHelper.ExtractErrorMessage(errorBody)}",
-            };
-            throw new InvalidOperationException(message);
-        }
-
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        await using var stream = await OpenAiApiHelper.ReadBodyWithErrorHandlingAsync(
+            () => response.Content.ReadAsStreamAsync(ct), ct);
         using var reader = new StreamReader(stream);
 
         var filter = new ThinkingBlockStreamFilter();
@@ -247,26 +234,6 @@ public static class OpenAiChatHelper
 
         if (!producedVisibleText && filter.SawThinkBlock)
             throw new InvalidOperationException(ReasoningOnlyResponseMessage);
-    }
-
-    private static async Task<HttpResponseMessage> SendStreamingRequestAsync(
-        HttpClient httpClient,
-        HttpRequestMessage request,
-        CancellationToken ct
-    )
-    {
-        try
-        {
-            return await httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                ct
-            );
-        }
-        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
-        {
-            throw new TimeoutException("API request timed out.", ex);
-        }
     }
 
     /// <summary>

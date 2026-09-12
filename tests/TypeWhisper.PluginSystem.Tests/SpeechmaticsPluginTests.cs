@@ -8,6 +8,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class SpeechmaticsPluginTests
 {
+    [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<SpeechmaticsPlugin>();
+
+
     private static readonly JsonSerializerOptions s_manifestJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -60,7 +65,7 @@ public class SpeechmaticsPluginTests
         var sut = new SpeechmaticsPlugin();
         await sut.ActivateAsync(new TestHost());
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        await Assert.ThrowsAsync<PluginRequestException>(
             () => sut.StartStreamingAsync(null, CancellationToken.None)
         );
     }

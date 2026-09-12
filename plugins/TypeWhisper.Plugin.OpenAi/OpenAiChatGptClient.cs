@@ -40,10 +40,10 @@ internal sealed class OpenAiChatGptClient
         request.Content = OpenAiJson.CreateJsonContent(
             CreateRequestBody(model, systemPrompt, userText, reasoningEffort));
 
-        using var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => ParseErrorMessage(errorBody, (int)errorResponse.StatusCode));
         var body = await response.Content.ReadAsStringAsync(ct);
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException(ParseErrorMessage(body, (int)response.StatusCode));
 
         return await ParseResponseTextAsync(body, ct)
             ?? throw new InvalidOperationException("The ChatGPT response could not be parsed.");

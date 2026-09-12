@@ -195,7 +195,8 @@ public sealed class DictationOrchestratorCompositionTests
             Assert.Equal("second session?", secondResult.Text);
             Assert.Equal(2, fixture.Plugin.TranscriptionCount);
             Assert.Equal(["second session? "], fixture.InsertionPlatform.Typed);
-            Assert.Single(fixture.History.Records);
+            Assert.Equal(2, fixture.History.Records.Count);
+            Assert.Single(fixture.History.Records, record => record.Status == TranscriptionRecordStatus.TranscriptionFailed);
 
             // Detects leaked model leases, insertion reservations, toggle ownership,
             // and in-flight session entries after a real plugin exception.
@@ -352,7 +353,10 @@ public sealed class DictationOrchestratorCompositionTests
                 overlay.PresentedState.FeedbackText
             );
             Assert.Empty(fixture.InsertionPlatform.Typed);
-            Assert.Empty(fixture.History.Records);
+            var failed = Assert.Single(fixture.History.Records);
+            Assert.Equal(TranscriptionRecordStatus.TranscriptionFailed, failed.Status);
+            Assert.Equal(expected, failed.FailureMessage);
+            Assert.Equal("de", failed.Language);
         });
     }
 

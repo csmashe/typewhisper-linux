@@ -91,6 +91,27 @@ public sealed class DictationCancellationOriginTests
     }
 
     [Fact]
+    public async Task PromptAction_FaultAfterToken_DoesNotRunBatch()
+    {
+        var batchCalls = 0;
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            DictationOrchestrator.RunPromptActionStreamWithFallbackAsync(
+                PartialFailure(), () =>
+                {
+                    batchCalls++;
+                    return Task.FromResult("batch");
+                }, _ => { }, CancellationToken.None));
+        Assert.Equal(0, batchCalls);
+    }
+
+    private static async IAsyncEnumerable<string> PartialFailure()
+    {
+        yield return "partial";
+        await Task.Yield();
+        throw new TimeoutException("stream failed");
+    }
+
+    [Fact]
     public async Task SpokenCommand_ProviderCancellationBeforeFirstTypedChunk_RetriesBatch()
     {
         var batchCalls = 0;
@@ -232,9 +253,10 @@ public sealed class DictationCancellationOriginTests
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        yield return "partial";
         await Task.Yield();
-        throw exception;
+        if (exception is not null)
+            throw exception;
+        yield break;
     }
 
     private static async IAsyncEnumerable<string> CancelingStream(

@@ -339,7 +339,7 @@ public sealed class GeminiPlugin
     )
     {
         if (!IsAvailable)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         model = ResolveRequestModel(model);
         try
@@ -378,7 +378,7 @@ public sealed class GeminiPlugin
         }
 
         if (!IsAvailable)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         model = ResolveRequestModel(model);
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(

@@ -6,6 +6,7 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.CloudflareAsr;
@@ -106,7 +107,7 @@ public sealed class CloudflareAsrPlugin
             );
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.EnterAccountIdAndApiToken"));
+            throw new PluginRequestException(Loc.L("Settings.EnterAccountIdAndApiToken"), PluginRequestFailureKind.Configuration);
 
         var url =
             $"https://api.cloudflare.com/client/v4/accounts/{_accountId}/ai/run/@cf/openai/whisper";
@@ -116,23 +117,18 @@ public sealed class CloudflareAsrPlugin
         request.Content = new ByteArrayContent(wavAudio);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
-        var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            // Status + reason only: the body can echo request fragments or token-bearing identifiers.
+            (errorResponse, _) =>
+            {
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    $"Cloudflare API error {(int)errorResponse.StatusCode} ({errorResponse.ReasonPhrase})"
+                );
+                return $"Cloudflare API error {(int)errorResponse.StatusCode}: {errorResponse.ReasonPhrase}";
+            });
         var json = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            // Keep only the stable HTTP status + reason in both the plugin log
-            // and the thrown exception; the raw response body may echo request
-            // fragments or token-bearing identifiers that we don't want in any
-            // diagnostic surface.
-            _host?.Log(
-                PluginLogLevel.Warning,
-                $"Cloudflare API error {(int)response.StatusCode} ({response.ReasonPhrase})"
-            );
-            throw new HttpRequestException(
-                $"Cloudflare API error {(int)response.StatusCode}: {response.ReasonPhrase}"
-            );
-        }
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;

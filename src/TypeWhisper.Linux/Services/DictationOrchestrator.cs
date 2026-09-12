@@ -41,6 +41,7 @@ internal sealed record RecordingContext(
     public LockedFocusTarget? LockedFocusField { get; init; }
 
     public OverlayPresentationToken? OverlayToken { get; init; }
+    public string? TranscriptionTaskUsed { get; init; }
 
     /// <summary>
     ///     Per-run sink for LLM prompt provenance. Null when capture is disabled
@@ -57,7 +58,7 @@ internal enum ToggleGateCloseOutcome
     TimedOut,
 }
 
-public sealed class DictationOrchestrator : IDisposable
+public sealed partial class DictationOrchestrator : IDisposable
 {
     // Treat a second toggle within this gap as spurious, not intentional: covers
     // (1) key autorepeat and (2) in-app hook + desktop gsettings shortcut both
@@ -386,7 +387,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] Streaming teardown on dispose failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] Streaming teardown on dispose failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
 
         try
@@ -395,7 +396,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] Snapshot shutdown failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] Snapshot shutdown failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
 
         // The gate's Dispose is self-guarding (idempotent, no-ops while busy), so calling it
@@ -458,7 +459,7 @@ public sealed class DictationOrchestrator : IDisposable
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[Dictation] StopRecording during dispose failed: {ex.Message}");
+                Trace.WriteLine($"[Dictation] StopRecording during dispose failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
             }
         }
 
@@ -468,7 +469,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] RestoreAudio during dispose failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] RestoreAudio during dispose failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
 
         try
@@ -477,7 +478,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] ResumeMedia during dispose failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] ResumeMedia during dispose failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
     }
 
@@ -657,7 +658,7 @@ public sealed class DictationOrchestrator : IDisposable
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[Dictation] Could not finish prior speech before capture: {ex.Message}");
+                Trace.WriteLine($"[Dictation] Could not finish prior speech before capture: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
             }
 
             try
@@ -675,7 +676,7 @@ public sealed class DictationOrchestrator : IDisposable
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[Dictation] Optional recording-start feedback failed: {ex.Message}");
+                Trace.WriteLine($"[Dictation] Optional recording-start feedback failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
             }
 
             // The cue adds bounded work while the startup gate is held. Revalidate
@@ -708,11 +709,24 @@ public sealed class DictationOrchestrator : IDisposable
             return 0;
         }
 
+        var startupReserved = false;
         var startedSessionId = 0;
         var telemetryStartedSessionId = 0;
         DictationDeferredStop pendingStop;
         try
         {
+            startupReserved = _inFlightTracker.TryBeginStartup();
+            if (!startupReserved)
+            {
+                // A history retry can hold the tracker for many seconds; say so instead of
+                // dropping the hotkey press on the floor.
+                Trace.WriteLine("[Dictation] Start rejected: another dictation or retry is in flight.");
+                var busyMessage = Localization.Loc.Instance["History.RetryBusy"];
+                ReportStatus(busyMessage);
+                ShowFeedback(busyMessage, true);
+                goto StartupComplete;
+            }
+
             if (IsRecording)
             {
                 goto StartupComplete;
@@ -771,7 +785,7 @@ public sealed class DictationOrchestrator : IDisposable
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[Dictation] Failed to start recording: {ex}");
+                Trace.WriteLine($"[Dictation] Failed to start recording: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}\n{ex.StackTrace}");
                 var message = BuildRecordingStartFailureMessage(ex);
                 ReportStatus(message);
                 ShowFeedback(message, true);
@@ -929,7 +943,7 @@ public sealed class DictationOrchestrator : IDisposable
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[Dictation] Post-start setup failed: {ex}");
+                Trace.WriteLine($"[Dictation] Post-start setup failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}\n{ex.StackTrace}");
                 RollBackStartedRecording(captureSession);
                 _ = await StopPartialTranscriptionSessionAsync();
                 var faultedCoordinator = _streamingCoordinator;
@@ -1038,7 +1052,7 @@ public sealed class DictationOrchestrator : IDisposable
                 catch (Exception ex)
                 {
                     Trace.WriteLine(
-                        $"[Dictation] Initial active-window snapshot failed: {ex.Message}"
+                        $"[Dictation] Initial active-window snapshot failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
                     );
                 }
 
@@ -1178,7 +1192,7 @@ public sealed class DictationOrchestrator : IDisposable
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine($"[Dictation] Deferred URL re-match failed: {ex.Message}");
+                    Trace.WriteLine($"[Dictation] Deferred URL re-match failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
                 }
             });
             _recordingSnapshotTask = recordingSnapshotTask;
@@ -1201,7 +1215,7 @@ public sealed class DictationOrchestrator : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine($"[Dictation] Recording rollback on lock failed: {ex.Message}");
+                    Trace.WriteLine($"[Dictation] Recording rollback on lock failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
                 }
 
                 try
@@ -1210,7 +1224,7 @@ public sealed class DictationOrchestrator : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine($"[Dictation] Partial-loop stop on lock failed: {ex.Message}");
+                    Trace.WriteLine($"[Dictation] Partial-loop stop on lock failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
                 }
 
                 StreamingTranscriptionCoordinator? rolledBackCoordinator;
@@ -1243,7 +1257,7 @@ public sealed class DictationOrchestrator : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine($"[Dictation] Streaming teardown on lock failed: {ex.Message}");
+                    Trace.WriteLine($"[Dictation] Streaming teardown on lock failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
                 }
 
                 _hotkey.IsCancelShortcutEnabled = false;
@@ -1264,6 +1278,8 @@ public sealed class DictationOrchestrator : IDisposable
         }
         finally
         {
+            if (startupReserved)
+                _inFlightTracker.EndStartup();
             pendingStop = _toggleGate.CompleteStartupAndRelease();
         }
 
@@ -1329,6 +1345,9 @@ public sealed class DictationOrchestrator : IDisposable
     // cancelAllCommands widens the scope from the newest command (Escape/IPC cancel) to all of them.
     private async Task CancelInFlightWorkAsync(bool cancelAllCommands = false)
     {
+        if (!await CancelRecoveryAndDrainAsync().ConfigureAwait(false))
+            Trace.WriteLine("[Dictation] Recovery did not drain; continuing cancellation of in-flight work.");
+
         CancellationTokenSource[] commandSources;
         if (cancelAllCommands)
         {
@@ -1745,15 +1764,16 @@ public sealed class DictationOrchestrator : IDisposable
                 // not stay "in_progress" forever (audit §2 H1).
                 CaptureDiagnostic(ex, "dictation.post-stop",
                     recordingContext.StreamingProviderId, recordingContext.StreamingModelId);
-                Trace.WriteLine($"[Dictation] Post-stop pipeline failed before completion: {ex}");
+                var safeMessage = SanitizeForDisplay(ex.Message, recordingContext.StreamingFinalText, recordingContext.RecoveredPartialPreview);
+                Trace.WriteLine($"[Dictation] Post-stop pipeline failed before completion: {ex.GetType().Name}: {safeMessage}\n{ex.StackTrace}");
                 // Publish the terminal result FIRST: RunAsync's finally has
                 // already dropped the id from the in-flight set, so a throw from
                 // any log/UI callback below must not stop the "failed" result
                 // from being recorded — otherwise the session would poll as
                 // not_found forever, defeating audit §2 H1.
-                PublishSessionTerminal(recordingContext.SessionId, "failed", ex.Message);
+                PublishSessionTerminal(recordingContext.SessionId, "failed", safeMessage);
                 _errorLog.AddEntry(
-                    $"Dictation capture could not be saved or transcribed ({ex.Message}).",
+                    $"Dictation capture could not be saved or transcribed ({safeMessage}).",
                     ErrorCategory.Recording
                 );
                 ReportStatus(
@@ -1804,7 +1824,7 @@ public sealed class DictationOrchestrator : IDisposable
                 catch (Exception ex)
                 {
                     Trace.WriteLine(
-                        $"[Dictation] Active dictation CTS dispose failed: {ex.Message}"
+                        $"[Dictation] Active dictation CTS dispose failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
                     );
                 }
             }
@@ -2004,6 +2024,17 @@ public sealed class DictationOrchestrator : IDisposable
     }
 
     /// <summary>
+    ///     True when a profile explicitly names a prompt action but no automatic action
+    ///     resolves (disabled, removed, or manual-only). An unavailable action must fail
+    ///     with a routing error rather than silently insert unprocessed text.
+    ///     Exposed internally for unit testing.
+    /// </summary>
+    internal static bool IsPromptActionUnavailable(string? promptActionId, bool promptActionResolved)
+    {
+        return !string.IsNullOrWhiteSpace(promptActionId) && !promptActionResolved;
+    }
+
+    /// <summary>
     ///     Classifies a thrown insertion/action exception into the InsertionResult that
     ///     should be recorded in Recents/History instead of silently dropping the
     ///     transcription (audit §2 M6). Exposed internally for unit testing.
@@ -2042,7 +2073,11 @@ public sealed class DictationOrchestrator : IDisposable
         RecordingContext context
     )
     {
+        context = context with { TranscriptionTaskUsed = ResolveTranscriptionTask(context) };
         var cancelToken = context.CancelToken;
+        string? rawText = null;
+        string? finalText = null;
+        string? failurePrompt = null;
 
         // Attach an LLM-provenance sink only when it will actually be persisted:
         // capture piggybacks history storage, so both toggles must be on. Left
@@ -2080,16 +2115,20 @@ public sealed class DictationOrchestrator : IDisposable
         catch (Exception ex)
         {
             CaptureDiagnostic(ex, "dictation.model-load", modelId: effectiveModelId);
+            AddFailedHistoryRecord(context, wavPath, duration, "", TranscriptionRecordStatus.TranscriptionFailed,
+                ex.Message, _models.ActiveTranscriptionPlugin?.ProviderId ?? "unknown", effectiveModelId);
+            var safeMessage = SanitizeForDisplay(ex.Message, rawText, finalText, failurePrompt,
+                context.StreamingFinalText, context.RecoveredPartialPreview);
             Trace.WriteLine(
-                $"[Dictation] Failed to load effective model '{effectiveModelId}': {ex}"
+                $"[Dictation] Failed to load effective model '{effectiveModelId}': {ex.GetType().Name}: {safeMessage}\n{ex.StackTrace}"
             );
             _errorLog.AddEntry(
-                $"Transcription model '{effectiveModelId}' failed to load: {ex.Message}",
+                $"Transcription model '{effectiveModelId}' failed to load: {safeMessage}",
                 ErrorCategory.Transcription
             );
-            ReportStatus(context, $"Failed to load configured model: {ex.Message}");
+            ReportStatus(context, $"Failed to load configured model: {safeMessage}");
             ShowFeedback(context, "Model load failed.", true);
-            PublishSessionTerminal(context.SessionId, "failed", ex.Message);
+            PublishSessionTerminal(context.SessionId, "failed", safeMessage);
             return;
         }
 
@@ -2117,7 +2156,7 @@ public sealed class DictationOrchestrator : IDisposable
             var languageSelection = LanguageSelectionResolver.ResolvePrimary(languageHints);
             var configuredLanguage = languageSelection.LanguageTag;
             var translate = string.Equals(
-                context.Profile?.SelectedTask ?? _settings.Current.TranscriptionTask,
+                ResolveTranscriptionTask(context),
                 "translate",
                 StringComparison.OrdinalIgnoreCase
             );
@@ -2216,16 +2255,18 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 transcribeOperation?.Finish(DiagnosticsOutcome.Failed);
                 CaptureDiagnostic(ex, "dictation.transcribe", engineProviderId, engineModelId);
-                var userMessage = LanguageSelectionUiMessage.From(ex);
-                Trace.WriteLine($"[Dictation] Transcription failed: {ex}");
+                AddFailedHistoryRecord(context, wavPath, duration, "", TranscriptionRecordStatus.TranscriptionFailed,
+                    LanguageSelectionUiMessage.From(ex), engineProviderId, engineModelId);
+                var userMessage = SanitizeForDisplay(LanguageSelectionUiMessage.From(ex), rawText, finalText, failurePrompt, context.StreamingFinalText, context.RecoveredPartialPreview);
+                var diagnosticMessage = TraceTranscriptionFailure(ex, context, rawText, finalText, failurePrompt);
                 _errorLog.AddEntry(
-                    $"Transcription failed via {plugin.ProviderDisplayName} ({engineModelId}): {ex.Message}",
+                    $"Transcription failed via {plugin.ProviderDisplayName} ({engineModelId}): {diagnosticMessage}",
                     ErrorCategory.Transcription
                 );
                 _models.PluginManager.EventBus.Publish(
                     new TranscriptionFailedEvent
                     {
-                        ErrorMessage = ex.Message, ModelId = engineModelId, AppName = context.AppTitle,
+                        ErrorMessage = diagnosticMessage, ModelId = engineModelId, AppName = context.AppTitle,
                     }
                 );
                 var failureMessage = $"Transcription failed: {userMessage}";
@@ -2254,7 +2295,7 @@ public sealed class DictationOrchestrator : IDisposable
                 ?? "auto");
 
             // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- result comes from a plugin transcription call whose non-null annotation may not hold.
-            var rawText = SelectRawTextWithPreviewFallback(
+            rawText = SelectRawTextWithPreviewFallback(
                 result?.Text,
                 context.RecoveredPartialPreview,
                 out var usedPreviewFallback
@@ -2378,132 +2419,25 @@ public sealed class DictationOrchestrator : IDisposable
                 engineSupportsTranslation
             );
 
-            var pipelineContext = new PostProcessingContext
-            {
-                SourceLanguage = postProcessingLanguage,
-                ActiveAppName = context.AppTitle,
-                ActiveAppProcessName = context.AppProcess,
-                ProfileName = context.Profile?.Name,
-                AudioDurationSeconds = duration,
-            };
-
             var promptAction = ResolvePromptAction(context);
-            if (context.Profile is not null)
+            var promptActionUnavailable = IsPromptActionUnavailable(context.Profile?.PromptActionId, promptAction is not null);
+            if (promptActionUnavailable)
             {
                 Trace.WriteLine(
-                    $"[Dictation] Matched profile '{context.Profile.Name}' "
-                    + $"(process='{context.AppProcess ?? "<unknown>"}', "
-                    + $"url='{context.AppUrl ?? "<unknown>"}', "
-                    + $"promptAction='{promptAction?.Name ?? "<none>"}')."
+                    $"[Dictation] Configured prompt action '{context.Profile?.PromptActionId}' is unavailable "
+                    + "(disabled, removed, or manual-only) — routing as a failure instead of falling back to ordinary text insertion."
                 );
-
-                if (
-                    !string.IsNullOrWhiteSpace(context.Profile.PromptActionId)
-                    && promptAction is null
-                )
-                {
-                    // Fail early before building the pipeline — no point running
-                    // lower-priority steps on a transcript we'll reject anyway.
-                    var message =
-                        $"Prompt action for profile '{context.Profile.Name}' is disabled or missing.";
-                    Trace.WriteLine(
-                        $"[Dictation] {message} actionId='{context.Profile.PromptActionId}'."
-                    );
-                    ReportStatus(context, message);
-                    throw new InvalidOperationException(message);
-                }
             }
-
-            var translationTarget =
-                context.Profile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
+            failurePrompt = promptAction?.SystemPrompt;
+            var translationTarget = context.Profile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
             var cleanupLevel = ResolveCleanupLevel(context, promptAction);
-
-            var pluginProcessors = _models
-                .PluginManager.PostProcessors.Select(processor => new PluginPostProcessor(
-                    processor.Priority,
-                    (text, token) => processor.ProcessAsync(text, pipelineContext, token)
-                ))
-                .ToList();
-
-            var spokenStrategy = ResolveSpokenFormattingStrategy(
-                _spokenFormattingResolver, engineProviderId, engineModelId, languageHints, postProcessingLanguage,
-                translate && engineSupportsTranslation,
-                _settings.Current.SpokenFormattingStrategy);
             _telemetry.Tag(context.SessionId, "cleanup.level", cleanupLevel.ToString());
             var postProcessOperation = _telemetry.Child(context.SessionId, "post_process");
             var stepTimings = new List<(string Name, TimeSpan Elapsed)>();
             var pipelineResult = await _pipeline.ProcessAsync(
                 rawText,
-                new PipelineOptions
-                {
-                    NormalizeSpokenLineBreaks = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
-                    NormalizeSpokenPunctuation = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
-                    SpokenFormatter = CreateSpokenFormatter(_spokenFormatting, spokenStrategy),
-                    AppFormatter = AppFormatterService.Format,
-                    TargetProcessName = context.AppProcess,
-                    DictionaryCorrector = SelectFinalDictionaryCorrector(
-                        usedPreviewFallback,
-                        _dictionary.ApplyCorrections
-                    ),
-                    VocabularyBooster = _settings.Current.VocabularyBoostingEnabled
-                        ? _vocabularyBoosting.Apply
-                        : null,
-                    CleanupHandler =
-                        cleanupLevel == CleanupLevel.None
-                            ? null
-                            : (text, token) =>
-                                _cleanup.CleanAsync(
-                                    text,
-                                    cleanupLevel,
-                                    message =>
-                                    {
-                                        ReportStatus(context, message);
-                                        return Task.CompletedTask;
-                                    },
-                                    context.Capture,
-                                    token
-                                ),
-                    SnippetExpander = text =>
-                        _snippets.ApplySnippets(text, profileId: context.Profile?.Id),
-                    LlmHandler = promptAction is not null
-                        ? (text, token) => RunPromptActionAsync(context, promptAction, text, token)
-                        : null,
-                    RequireLlmSuccess = promptAction is not null,
-                    TranslationHandler = !string.IsNullOrWhiteSpace(translationTarget)
-                        ? (text, source, target, token) =>
-                            _translation.TranslateAsync(text, source, target, context.Capture, token)
-                        : null,
-                    TranslationTarget = string.IsNullOrWhiteSpace(translationTarget)
-                        ? null
-                        : translationTarget,
-                    RequireTranslationSuccess = !string.IsNullOrWhiteSpace(translationTarget),
-                    EffectiveSourceLanguage = postProcessingLanguage,
-                    DetectedLanguage = postProcessingLanguage,
-                    // Same rule as postProcessingLanguage above: an engine that ignores the
-                    // translate task returns source-language text, and reporting Translate
-                    // would make number normalization treat it as English.
-                    TranscriptionTask =
-                        translate && engineSupportsTranslation
-                            ? TranscriptionTask.Translate
-                            : TranscriptionTask.Transcribe,
-                    ConfiguredLanguage = configuredLanguage,
-                    ConfiguredLanguageCandidates = languageHints,
-                    TranscriptionNumberNormalizationEnabled =
-                        _settings.Current.TranscriptionNumberNormalizationEnabled,
-                    EnglishOutputVariant = _settings.Current.EnglishOutputVariant,
-                    GermanOutputVariant = _settings.Current.GermanOutputVariant,
-                    ShortUtterancePunctuationEnabled = _settings.Current.ShortUtterancePunctuationEnabled,
-                    PluginPostProcessors = pluginProcessors,
-                    StepCompleted = (name, elapsed, _) => stepTimings.Add((name, elapsed)),
-                    StatusCallback = status =>
-                    {
-                        ReportStatus(
-                            context,
-                            status == "AI" ? "Processing prompt action…" : $"Processing {status}…"
-                        );
-                        return Task.CompletedTask;
-                    },
-                },
+                BuildPipelineOptions(context, duration, postProcessingLanguage, configuredLanguage,
+                    languageHints, translate, engineSupportsTranslation, usedPreviewFallback, engineProviderId, engineModelId, stepTimings),
                 cancelToken
             );
 
@@ -2518,7 +2452,7 @@ public sealed class DictationOrchestrator : IDisposable
                 );
             }
             var commandResult = VoiceCommandParser.Parse(pipelineResult.Text);
-            var finalText = ApplyProfileStyleFormatting(context, commandResult.Text);
+            finalText = ApplyProfileStyleFormatting(context, commandResult.Text);
             _telemetry.Measure(context.SessionId, "transcript.chars", finalText.Length, "none");
 
             TranscriptionCompleted?.Invoke(this, finalText);
@@ -2601,6 +2535,7 @@ public sealed class DictationOrchestrator : IDisposable
             if (
                 actionPlugin is null
                 && !actionPluginUnavailable
+                && !promptActionUnavailable
                 && !commandResult.CancelInsertion
             )
             {
@@ -2644,7 +2579,7 @@ public sealed class DictationOrchestrator : IDisposable
                 {
                     insertion = InsertionResult.NoText;
                 }
-                else if (actionPluginUnavailable)
+                else if (actionPluginUnavailable || promptActionUnavailable)
                 {
                     insertion = InsertionResult.ActionUnavailable;
                 }
@@ -2696,11 +2631,13 @@ public sealed class DictationOrchestrator : IDisposable
                 // Insertion/action failures must NOT republish the dictation
                 // as a transcription failure — TranscriptionCompletedEvent has
                 // already fired. Surface a separate insertion-failure status.
+                var safeMessage = SanitizeForDisplay(ex.Message, rawText, finalText, failurePrompt,
+                    context.StreamingFinalText, context.RecoveredPartialPreview);
                 Trace.WriteLine(
                     $"[Dictation] Text insertion/action failed (target='{context.AppProcess}', "
-                    + $"action='{actionPlugin?.ActionId ?? "<none>"}'): {ex}"
+                    + $"action='{actionPlugin?.ActionId ?? "<none>"}'): {ex.GetType().Name}: {safeMessage}\n{ex.StackTrace}"
                 );
-                ReportStatus(context, $"Insertion failed: {ex.Message}");
+                ReportStatus(context, $"Insertion failed: {safeMessage}");
                 ShowFeedback(context, "Insertion failed.", true);
                 insertion = ClassifyThrownInsertionFailure(actionPlugin is not null);
                 insertionThrew = true;
@@ -2726,7 +2663,8 @@ public sealed class DictationOrchestrator : IDisposable
                         ClipboardFallbackMessage(context.AppProcess),
                     InsertionResult.ActionHandled => "Action completed.",
                     InsertionResult.ActionFailed => "Action failed.",
-                    InsertionResult.ActionUnavailable => "Action destination unavailable.",
+                    InsertionResult.ActionUnavailable => promptActionUnavailable
+                        ? "Configured prompt action is unavailable." : "Action destination unavailable.",
                     InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
                     InsertionResult.MissingPasteTool =>
                         $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
@@ -2810,7 +2748,7 @@ public sealed class DictationOrchestrator : IDisposable
                     catch (Exception ex)
                     {
                         // Extraction is best-effort; never let it fail the dictation.
-                        Trace.WriteLine($"[Dictation] memory extraction failed: {ex.Message}");
+                        Trace.WriteLine($"[Dictation] memory extraction failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message, rawText, finalText, failurePrompt, context.StreamingFinalText, context.RecoveredPartialPreview)}");
                     }
                 }
                 else
@@ -2836,7 +2774,8 @@ public sealed class DictationOrchestrator : IDisposable
                 pipelineResult,
                 cleanupLevel,
                 engineProviderId,
-                engineModelId
+                engineModelId,
+                promptActionUnavailable
             );
             _telemetry.Finish(context.SessionId, insertionFailed ? "insertion_failed" : "ok");
         }
@@ -2859,23 +2798,27 @@ public sealed class DictationOrchestrator : IDisposable
         {
             CaptureDiagnostic(ex, "dictation.post-process", engineProviderId, engineModelId);
             _telemetry.Finish(context.SessionId, "failed");
+            AddFailedHistoryRecord(context, wavPath, duration, rawText ?? "", TranscriptionRecordStatus.ProcessingFailed,
+                ex.Message, engineProviderId, engineModelId, failurePrompt);
             // Failures before TranscriptionCompletedEvent fires (post-processing,
             // voice-command parsing) surface as transcription failures.
-            Trace.WriteLine($"[Dictation] Post-transcription processing failed: {ex}");
+            var safeMessage = SanitizeForDisplay(ex.Message, rawText, finalText, failurePrompt,
+                context.StreamingFinalText, context.RecoveredPartialPreview);
+            Trace.WriteLine($"[Dictation] Post-transcription processing failed: {ex.GetType().Name}: {safeMessage}\n{ex.StackTrace}");
             _models.PluginManager.EventBus.Publish(
                 new TranscriptionFailedEvent
                 {
-                    ErrorMessage = ex.Message, ModelId = engineModelId, AppName = context.AppTitle,
+                    ErrorMessage = safeMessage, ModelId = engineModelId, AppName = context.AppTitle,
                 }
             );
-            ReportStatus(context, $"Transcription failed: {ex.Message}");
+            ReportStatus(context, $"Transcription failed: {safeMessage}");
             TryPublishSessionSpeechFeedback(
                 context,
-                () => _speechFeedback.BeginAnnounceError(ex.Message)
+                () => _speechFeedback.BeginAnnounceError(safeMessage)
             );
-            var feedbackText = ex is InvalidOperationException ? ex.Message : "Transcription failed.";
+            var feedbackText = ex is InvalidOperationException ? safeMessage : "Transcription failed.";
             ShowFeedback(context, feedbackText, true);
-            PublishSessionTerminal(context.SessionId, "failed", ex.Message);
+            PublishSessionTerminal(context.SessionId, "failed", safeMessage);
         }
         catch (Exception ex)
         {
@@ -2884,7 +2827,7 @@ public sealed class DictationOrchestrator : IDisposable
             // Something after TranscriptionCompletedEvent threw (e.g. history
             // persistence). Don't republish a Failed event for an already-announced
             // dictation.
-            Trace.WriteLine($"[Dictation] Post-completion bookkeeping failed: {ex}");
+            Trace.WriteLine($"[Dictation] Post-completion bookkeeping failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message, rawText, finalText, failurePrompt)}\n{ex.StackTrace}");
         }
     }
 
@@ -2914,6 +2857,15 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
+    internal static string TraceTranscriptionFailure(
+        Exception exception, RecordingContext context, string? rawText, string? finalText, string? prompt)
+    {
+        var message = SanitizeForDisplay(exception.Message,
+            rawText, finalText, prompt, context.StreamingFinalText, context.RecoveredPartialPreview);
+        Trace.WriteLine($"[Dictation] Transcription failed: {exception.GetType().Name}: {message}\n{exception.StackTrace}");
+        return message;
+    }
+
     internal static string ClassifyPostStopTerminal(
         Exception _,
         CancellationToken callerToken
@@ -2940,13 +2892,16 @@ public sealed class DictationOrchestrator : IDisposable
             Trace.WriteLine($"[Dictation] {message}");
             ReportStatus(context, message);
 
+            var retryBudget = new LlmRequestRetryBudget();
             var (result, streamFaulted) = await RunPromptActionStreamWithFallbackAsync(
-                _promptProcessing.ProcessStreamingAsync(promptAction, text, context.Capture, token),
+                _promptProcessing.ProcessStreamingAsync(promptAction, text, context.Capture, token,
+                    retryBudget: retryBudget),
                 () => _promptProcessing.ProcessAsync(
                     promptAction,
                     text,
                     context.Capture,
-                    token
+                    token,
+                    retryBudget: retryBudget
                 ),
                 accumulated =>
                 {
@@ -2984,16 +2939,20 @@ public sealed class DictationOrchestrator : IDisposable
 
             return result;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             throw;
         }
         catch (Exception ex)
         {
-            var message = $"Prompt action '{promptAction.Name}' failed: {ex.Message}";
-            Trace.WriteLine($"[Dictation] {message}");
+            var sanitized = SanitizeForDisplay(ex.Message, text, promptAction.SystemPrompt);
+            var message = $"Prompt action '{promptAction.Name}' failed: {sanitized}";
+            Trace.WriteLine($"[Dictation] {ex.GetType().Name}: {message}");
             ReportStatus(context, message);
-            throw;
+            throw ex is PluginRequestException failure
+                ? new PluginRequestException(sanitized,
+                    failure.FailureKind, failure.HttpStatusCode, failure.RetryAfter, failure.IsTransient)
+                : new InvalidOperationException(sanitized);
         }
     }
 
@@ -3007,13 +2966,10 @@ public sealed class DictationOrchestrator : IDisposable
         var pump = new LlmStreamPump(onAccumulated);
         var streamed = await pump.RunAsync(source, token);
 
-        // Streaming→batch fallback: retry with the batch path when the pump
-        // faulted OR yielded nothing (proxy EOF, empty 200). ReceivedAnyChunk
-        // distinguishes a legitimately empty single-chunk result from a silent
-        // empty stream — the single chunk is already a completed ProcessAsync call.
-        // The caller passes the capture on the fallback: the batch retry is a
-        // distinct call whose response is the text actually used, so it must be
-        // recorded too — otherwise saved provenance shows only the failed stream.
+        if (pump.Failure is { } failure
+            && (pump.ReceivedAnyChunk || failure is PluginRequestException { IsTransient: false }))
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+
         var result = pump.Faulted || !pump.ReceivedAnyChunk
             ? await runBatch()
             : streamed;
@@ -3064,6 +3020,9 @@ public sealed class DictationOrchestrator : IDisposable
         _activeCommandCts = commandCts;
         _hotkey.IsCancelShortcutEnabled = true;
         var commandToken = commandCts.Token;
+        string? failureInput = null;
+        string? failureOutput = null;
+        string? failurePrompt = null;
 
         try
         {
@@ -3168,6 +3127,8 @@ public sealed class DictationOrchestrator : IDisposable
             // with Ctrl+Shift+V while preserving direct typing for a single-line result. Everything
             // else (copy-only, or an Auto GUI/unknown target the one-shot would paste) also routes
             // through that one-shot insert. Locked fields also need its exact-focus gate.
+            failureInput = input;
+            failurePrompt = action.SystemPrompt;
             var strategy = ResolveInsertionStrategy(context.AppProcess);
             var canStreamDirectly = _settings.Current.AutoPaste
                 && context.LockedFocusField is null
@@ -3181,6 +3142,7 @@ public sealed class DictationOrchestrator : IDisposable
                 var oneShot = await _promptProcessing
                     .ProcessAsync(action, input, context.Capture, commandToken, wrapInput)
                     .ConfigureAwait(false);
+                failureOutput = oneShot;
                 if (string.IsNullOrWhiteSpace(oneShot) || IsTrivialCommandResult(oneShot))
                 {
                     var empty = Localization.Loc.Instance["Command.NoResult"];
@@ -3229,6 +3191,7 @@ public sealed class DictationOrchestrator : IDisposable
             );
 
             var result = stream.Text;
+            failureOutput = result;
             if (string.IsNullOrWhiteSpace(result) || IsTrivialCommandResult(result))
             {
                 var empty = Localization.Loc.Instance["Command.NoResult"];
@@ -3304,10 +3267,11 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Command] Spoken command failed: {ex}");
-            ReportStatus(context, $"Command failed: {ex.Message}");
+            var safeMessage = SanitizeForDisplay(ex.Message, command, failureInput, failureOutput, failurePrompt);
+            Trace.WriteLine($"[Command] Spoken command failed: {ex.GetType().Name}: {safeMessage}\n{ex.StackTrace}");
+            ReportStatus(context, $"Command failed: {safeMessage}");
             ShowFeedback(context, Localization.Loc.Instance["Command.Failed"], true);
-            PublishSessionTerminal(context.SessionId, "failed", ex.Message);
+            PublishSessionTerminal(context.SessionId, "failed", safeMessage);
         }
         finally
         {
@@ -3890,7 +3854,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] {label} threw synchronously: {ex.Message}");
+            Trace.WriteLine($"[Dictation] {label} threw synchronously: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
             return;
         }
 
@@ -3990,6 +3954,7 @@ public sealed class DictationOrchestrator : IDisposable
             EngineUsed = engine,
             ModelUsed = modelUsed,
             AudioFileName = Path.GetFileName(wavPath),
+            TranscriptionTaskUsed = ResolveTranscriptionTask(context),
         };
     }
 
@@ -4054,7 +4019,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Command] AddSpokenCommandHistoryRecord failed: {ex.Message}");
+            Trace.WriteLine($"[Command] AddSpokenCommandHistoryRecord failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
     }
 
@@ -4073,7 +4038,8 @@ public sealed class DictationOrchestrator : IDisposable
         PostProcessingResult pipelineResult,
         CleanupLevel cleanupLevel,
         string engineUsed,
-        string? modelUsed
+        string? modelUsed,
+        bool promptActionUnavailable
     )
     {
         try
@@ -4093,7 +4059,7 @@ public sealed class DictationOrchestrator : IDisposable
                 ) with
                 {
                     InsertionStatus = ToTextInsertionStatus(insertion),
-                    InsertionFailureReason = InsertionFailureReasonFor(insertion),
+                    InsertionFailureReason = InsertionFailureReasonFor(insertion, promptActionUnavailable),
                     CleanupLevelUsed = cleanupLevel,
                     CleanupApplied = WasPipelineStepChanged(
                         pipelineResult,
@@ -4134,7 +4100,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] AddHistoryRecord failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] AddHistoryRecord failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
     }
 
@@ -4170,13 +4136,14 @@ public sealed class DictationOrchestrator : IDisposable
         );
     }
 
-    private static string? InsertionFailureReasonFor(InsertionResult insertion)
+    private static string? InsertionFailureReasonFor(InsertionResult insertion, bool promptActionUnavailable)
     {
         return insertion switch
         {
             InsertionResult.ActionFailed => "Action plugin failed.",
             InsertionResult.ActionUnavailable =>
-                "Configured action plugin destination is unavailable.",
+                promptActionUnavailable ? "Configured prompt action is unavailable."
+                    : "Configured action plugin destination is unavailable.",
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             InsertionResult.MissingPasteTool => "Automatic paste tool is unavailable.",
             InsertionResult.Failed => "Text insertion failed.",
@@ -4543,7 +4510,7 @@ public sealed class DictationOrchestrator : IDisposable
         catch (Exception ex)
         {
             Trace.WriteLine(
-                $"[Dictation] Failed to stop recording during start rollback: {ex.Message}"
+                $"[Dictation] Failed to stop recording during start rollback: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
             );
         }
         finally
@@ -4558,7 +4525,7 @@ public sealed class DictationOrchestrator : IDisposable
         catch (Exception ex)
         {
             Trace.WriteLine(
-                $"[Dictation] Failed to restore audio during start rollback: {ex.Message}"
+                $"[Dictation] Failed to restore audio during start rollback: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
             );
         }
 
@@ -4569,7 +4536,7 @@ public sealed class DictationOrchestrator : IDisposable
         catch (Exception ex)
         {
             Trace.WriteLine(
-                $"[Dictation] Failed to resume media during start rollback: {ex.Message}"
+                $"[Dictation] Failed to resume media during start rollback: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
             );
         }
 
@@ -4690,7 +4657,7 @@ public sealed class DictationOrchestrator : IDisposable
                 // races (rapid stop/start) where a shared field could be
                 // reset by a new dictation before the previous teardown reads it.
                 Trace.WriteLine(
-                    $"[Dictation] Streaming fault: {ex.GetType().Name}: {ex.Message}"
+                    $"[Dictation] Streaming fault: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
                 );
             }
         );
@@ -4745,7 +4712,7 @@ public sealed class DictationOrchestrator : IDisposable
             catch (Exception ex)
             {
                 Trace.WriteLine(
-                    $"[Dictation] Unexpected streaming start error: {ex.Message}"
+                    $"[Dictation] Unexpected streaming start error: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
                 );
             }
         });
@@ -4795,13 +4762,13 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 Trace.WriteLine(
                     $"[Dictation] Streaming finalize deadline exhausted; "
-                    + $"using complete-WAV batch fallback: {ex.Message}"
+                    + $"using complete-WAV batch fallback: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
                 );
                 finalizeThrew = true;
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[Dictation] Streaming finalize error: {ex.Message}");
+                Trace.WriteLine($"[Dictation] Streaming finalize error: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
                 finalizeThrew = true;
             }
         }
@@ -4838,7 +4805,7 @@ public sealed class DictationOrchestrator : IDisposable
         catch (TimeoutException) { }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] Partial transcription shutdown failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] Partial transcription shutdown failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
 
         return _partialTranscriptState.StopSession();
@@ -4881,7 +4848,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] Active-window snapshot wait failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] Active-window snapshot wait failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
     }
 
@@ -4907,7 +4874,7 @@ public sealed class DictationOrchestrator : IDisposable
             catch (Exception ex)
             {
                 Trace.WriteLine(
-                    $"[Dictation] Partial transcription dispose wait failed: {ex.Message}"
+                    $"[Dictation] Partial transcription dispose wait failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
                 );
             }
         }
@@ -4998,7 +4965,7 @@ public sealed class DictationOrchestrator : IDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] Partial transcription loop failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] Partial transcription loop failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
     }
 
@@ -5058,7 +5025,7 @@ public sealed class DictationOrchestrator : IDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] Partial transcription polling failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] Partial transcription polling failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
     }
 
@@ -5076,7 +5043,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] SessionCompleted handler threw: {ex}");
+            Trace.WriteLine($"[Dictation] SessionCompleted handler threw: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}\n{ex.StackTrace}");
         }
     }
 

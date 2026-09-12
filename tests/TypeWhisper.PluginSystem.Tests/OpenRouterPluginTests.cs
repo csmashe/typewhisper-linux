@@ -18,6 +18,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class OpenRouterPluginTests
 {
     [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<OpenRouterPlugin>();
+
+
+    [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {
         var manifest = LoadManifest();

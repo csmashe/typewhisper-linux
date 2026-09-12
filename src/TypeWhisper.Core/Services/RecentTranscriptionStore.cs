@@ -80,7 +80,10 @@ public sealed class RecentTranscriptionStore
         }
 
         var historyEntries = historyRecords
-            .Where(record => !string.IsNullOrWhiteSpace(record.FinalText))
+            .Where(record =>
+                record.Status == TranscriptionRecordStatus.Succeeded
+                && !string.IsNullOrWhiteSpace(record.FinalText)
+            )
             .Select(record => new RecentTranscriptionEntry(
                 record.Id,
                 record.FinalText.Trim(),

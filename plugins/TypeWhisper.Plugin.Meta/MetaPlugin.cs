@@ -833,14 +833,14 @@ public sealed class MetaPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
         {
             await ValidateApiKeyAsync(ApiKey, ct);
         }
-        catch (InvalidOperationException ex) when (ex.Message == "Invalid API key")
+        catch (PluginRequestException ex) when (ex.FailureKind == PluginRequestFailureKind.Authentication)
         {
-            // This branch's shared HTTP helper maps HTTP 401 to this exception.
+            // Use the failure kind: sanitization may redact words from the message.
             return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
         }
         catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or HttpRequestException or IOException)
         {
-            _host?.Log(PluginLogLevel.Warning, $"Could not verify the Meta API key: {ex.Message}");
+            _host?.Log(PluginLogLevel.Warning, $"Could not verify the Meta API key: {ex.GetType().Name}");
             return new PluginSettingsValidationResult(false, Loc.L("Settings.ValidationFailed"));
         }
 
@@ -852,7 +852,7 @@ public sealed class MetaPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
 
     private MetaModelCatalog? ModelRefreshFailed(Exception ex)
     {
-        _host?.Log(PluginLogLevel.Warning, $"Could not refresh Meta model catalog: {ex.Message}");
+        _host?.Log(PluginLogLevel.Warning, $"Could not refresh Meta model catalog: {ex.GetType().Name}");
         return null;
     }
 }

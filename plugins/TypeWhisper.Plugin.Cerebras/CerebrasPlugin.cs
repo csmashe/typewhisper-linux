@@ -60,7 +60,7 @@ public sealed class CerebrasPlugin : ILlmProviderPlugin, IPluginSettingsProvider
     )
     {
         if (!IsAvailable)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient,
@@ -87,7 +87,7 @@ public sealed class CerebrasPlugin : ILlmProviderPlugin, IPluginSettingsProvider
         }
 
         if (!IsAvailable)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,

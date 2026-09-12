@@ -11,6 +11,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class GladiaPluginTests
 {
+    [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<GladiaPlugin>();
+
+
     private static readonly JsonSerializerOptions s_manifestJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -164,7 +169,7 @@ public class GladiaPluginTests
         var sut = new GladiaPlugin();
         await sut.ActivateAsync(new TestHost());
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        await Assert.ThrowsAsync<PluginRequestException>(
             () => sut.StartStreamingAsync(null, CancellationToken.None)
         );
     }
@@ -579,7 +584,7 @@ public class GladiaPluginTests
 
         using var sut = await CreateConfiguredPluginAsync(handler);
 
-        var exception = await Assert.ThrowsAsync<HttpRequestException>(
+        var exception = await Assert.ThrowsAsync<PluginRequestException>(
             () => sut.TranscribeAsync(
                 [1, 2, 3],
                 "en",
@@ -627,7 +632,7 @@ public class GladiaPluginTests
 
         using var sut = await CreateConfiguredPluginAsync(handler);
 
-        var exception = await Assert.ThrowsAsync<HttpRequestException>(
+        var exception = await Assert.ThrowsAsync<PluginRequestException>(
             () => sut.TranscribeAsync(
                 [1, 2, 3],
                 "en",
@@ -903,7 +908,7 @@ public class GladiaPluginTests
         );
         await sut.ActivateAsync(new TestHost());
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        await Assert.ThrowsAsync<PluginRequestException>(
             () => sut.TranscribeAsync(
                 [1, 2, 3],
                 "en",

@@ -18,6 +18,11 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class SonioxPluginTests
 {
     [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<SonioxPlugin>();
+
+
+    [Fact]
     public void SupportsLanguageHints_IsTrue()
     {
         Assert.True(new SonioxPlugin().SupportsLanguageHints);
@@ -90,7 +95,7 @@ public class SonioxPluginTests
         var sut = new SonioxPlugin();
         await sut.ActivateAsync(new TestPluginHostServices());
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        await Assert.ThrowsAsync<PluginRequestException>(
             () => sut.StartStreamingAsync(null, CancellationToken.None)
         );
     }
@@ -1112,7 +1117,7 @@ public class SonioxPluginTests
         var sut = new SonioxPlugin(httpClient);
         await sut.ActivateAsync(host);
 
-        var ex = await Assert.ThrowsAsync<HttpRequestException>(() =>
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() =>
             sut.TranscribeAsync([1, 2, 3], "en", translate: false, prompt: null, CancellationToken.None));
 
         Assert.Contains("unauthenticated", ex.Message);
@@ -1318,7 +1323,7 @@ public class SonioxPluginTests
         var sut = new SonioxPlugin(httpClient);
         await sut.ActivateAsync(host);
 
-        var ex = await Assert.ThrowsAsync<HttpRequestException>(() =>
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() =>
             sut.TranscribeAsync([1, 2, 3], "en", translate: false, prompt: null, CancellationToken.None));
 
         Assert.Contains("Creation failed", ex.Message);

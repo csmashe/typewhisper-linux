@@ -239,7 +239,7 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
             _ => DateTime.MinValue,
         };
 
-        var records = _history.Records.Where(r => r.Timestamp >= cutoff).ToList();
+        var records = _history.Records.Where(r => r.Timestamp >= cutoff && r.Status == TranscriptionRecordStatus.Succeeded).ToList();
         RefreshStatistics(DateOnly.FromDateTime(PresentationDateTime.ToLocal(now, _timeZone)));
         var insights = _insights.Build(records);
         AverageWordsPerDictationLabel = insights.AverageWordsPerDictation.ToString("0.#");

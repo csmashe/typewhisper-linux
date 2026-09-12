@@ -189,7 +189,7 @@ public partial class OpenAiPluginTests
                 AppContext.BaseDirectory),
             "de");
         sut.SetLocalization(localization);
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+        var error = await Assert.ThrowsAsync<PluginRequestException>(
             () => sut.StartStreamingAsync("en", CancellationToken.None));
         Assert.Equal(localization.GetString("Settings.ApiKeyNotConfigured"), error.Message);
         Assert.NotEqual("API key not configured", error.Message);
@@ -1392,6 +1392,11 @@ public partial class OpenAiPluginTests
     }
 
     [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<OpenAiPlugin>();
+
+
+    [Fact]
     public void ResponsesParser_RejectsIncompleteTokenLimitedOutput()
     {
         var ex = Assert.Throws<PluginRequestException>(() => OpenAiResponsesClient.ParseResponse(
@@ -1817,9 +1822,9 @@ public partial class OpenAiPluginTests
         Assert.False(sut.IsConfigured);
         Assert.True(sut.IsAvailable);
         Assert.False(sut.SupportsStreaming);
-        var transcriptionError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var transcriptionError = await Assert.ThrowsAsync<PluginRequestException>(() =>
             sut.TranscribeAsync([0, 1], "de", false, null, CancellationToken.None));
-        var ttsError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var ttsError = await Assert.ThrowsAsync<PluginRequestException>(() =>
             sut.SpeakAsync(new TtsSpeakRequest("Hallo", "de"), CancellationToken.None));
         Assert.Contains("API key", transcriptionError.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("API key", ttsError.Message, StringComparison.OrdinalIgnoreCase);
@@ -2129,7 +2134,7 @@ public partial class OpenAiPluginTests
             Assert.Equal(1, Volatile.Read(ref tokenPostCount));
 
             releaseFirstRefresh.TrySetResult(true);
-            await Assert.ThrowsAsync<InvalidOperationException>(() => failingRequest);
+            await Assert.ThrowsAsync<PluginRequestException>(() => failingRequest);
             Assert.Equal("OK", await waitingRequest.WaitAsync(timeoutCts.Token));
             Assert.Equal(2, Volatile.Read(ref tokenPostCount));
             Assert.Equal("recovered-access-token", host.Secrets["oauth-access-token"]);

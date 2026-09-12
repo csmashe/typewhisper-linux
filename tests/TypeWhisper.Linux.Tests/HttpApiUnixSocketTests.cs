@@ -738,6 +738,38 @@ public sealed class HttpApiUnixSocketTests
         }
     }
 
+    [Fact]
+    public async Task HistoryListing_SkipsRecordsThatDidNotSucceed()
+    {
+        var history = new Mock<IHistoryService>();
+        history
+            .SetupGet(service => service.Records)
+            .Returns(
+            [
+                new TranscriptionRecord
+                {
+                    Id = "ok", Timestamp = DateTime.UtcNow, RawText = "raw", FinalText = "kept final",
+                },
+                new TranscriptionRecord
+                {
+                    Id = "failed", Timestamp = DateTime.UtcNow, RawText = "", FinalText = "",
+                    Status = TranscriptionRecordStatus.TranscriptionFailed, FailureMessage = "dropped failure",
+                },
+            ]);
+
+        using var fixture = new ApiFixture(history: history);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+
+        using var response = await client.GetAsync("/v1/history");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(1, json.RootElement.GetProperty("total").GetInt32());
+        var record = Assert.Single(json.RootElement.GetProperty("records").EnumerateArray().ToList());
+        Assert.Equal("ok", record.GetProperty("id").GetString());
+    }
+
     private sealed class ApiFixture : IDisposable
     {
         private readonly string? _originalConfigHome =

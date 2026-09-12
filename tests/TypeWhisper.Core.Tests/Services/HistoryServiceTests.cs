@@ -55,6 +55,17 @@ public sealed class HistoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void RecordsChanged_ContinuesAfterThrowingSubscriber()
+    {
+        var called = false;
+        _sut.RecordsChanged += () => throw new InvalidOperationException("listener failed");
+        _sut.RecordsChanged += () => called = true;
+        _sut.AddRecord(CreateRecord("record", DateTime.UtcNow));
+        Assert.True(called);
+        Assert.Single(_sut.Records);
+    }
+
+    [Fact]
     public void ModelUsed_PersistsCorrectly()
     {
         var record = new TranscriptionRecord
@@ -212,6 +223,47 @@ public sealed class HistoryServiceTests : IDisposable
         Assert.Contains("\"insertion_status\": \"Pasted\"", result);
         Assert.StartsWith("[", result.Trim());
         Assert.EndsWith("]", result.Trim());
+    }
+
+    [Fact]
+    public void Exports_SkipRecordsThatDidNotSucceed()
+    {
+        var records = new List<TranscriptionRecord>
+        {
+            new()
+            {
+                Id = "ok",
+                Timestamp = new DateTime(2026, 3, 15, 10, 30, 0, DateTimeKind.Utc),
+                RawText = "kept raw",
+                FinalText = "kept final",
+                AppProcessName = "notepad",
+                DurationSeconds = 2.5,
+                Language = "en",
+            },
+            new()
+            {
+                Id = "failed",
+                Timestamp = new DateTime(2026, 3, 15, 10, 35, 0, DateTimeKind.Utc),
+                RawText = "",
+                FinalText = "",
+                AppProcessName = "dropped-app",
+                Status = TranscriptionRecordStatus.TranscriptionFailed,
+                FailureMessage = "dropped failure",
+            },
+        };
+
+        foreach (var export in new[]
+                 {
+                     _sut.ExportToText(records), _sut.ExportToCsv(records),
+                     _sut.ExportToMarkdown(records), _sut.ExportToJson(records),
+                 })
+        {
+            Assert.Contains("kept final", export);
+            Assert.DoesNotContain("dropped-app", export);
+            Assert.DoesNotContain("dropped failure", export);
+        }
+
+        Assert.Contains("1", _sut.ExportToText(records).Split('\n')[2]);
     }
 
     [Fact]

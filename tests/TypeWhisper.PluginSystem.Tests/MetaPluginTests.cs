@@ -87,10 +87,11 @@ public sealed class MetaPluginTests
         using var client = new HttpClient(handler);
         using var sut = new MetaPlugin(client);
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var error = await Assert.ThrowsAsync<PluginRequestException>(() =>
             sut.ValidateApiKeyAsync("invalid"));
 
-        Assert.Equal("Invalid API key", error.Message);
+        Assert.Equal(PluginRequestFailureKind.Authentication, error.FailureKind);
+        Assert.Equal(401, error.HttpStatusCode);
     }
 
     [Fact]

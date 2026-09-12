@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK;
@@ -12,6 +13,34 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class DictationOrchestratorDiscardFeedbackTests
 {
+    [Fact]
+    public void TranscriptionFailure_RedactsPreviewAndOtherTextBeforeTrace()
+    {
+        var context = NewRecordingContext() with
+        {
+            RecoveredPartialPreview = "private recovered preview",
+            StreamingFinalText = "private streaming final",
+        };
+        using var output = new StringWriter();
+        using var listener = new TextWriterTraceListener(output);
+        Trace.Listeners.Add(listener);
+        try
+        {
+            var diagnostic = DictationOrchestrator.TraceTranscriptionFailure(
+                new IOException("batch failed: private recovered preview; private streaming final; raw secret; final secret; prompt secret"),
+                context, "raw secret", "final secret", "prompt secret");
+            listener.Flush();
+            Assert.Equal("batch failed: [redacted]; [redacted]; [redacted]; [redacted]; [redacted]", diagnostic);
+            Assert.Contains($"[Dictation] Transcription failed: {nameof(IOException)}: {diagnostic}", output.ToString());
+            Assert.DoesNotContain(context.RecoveredPartialPreview, output.ToString());
+            Assert.DoesNotContain(context.StreamingFinalText, output.ToString());
+        }
+        finally
+        {
+            Trace.Listeners.Remove(listener);
+        }
+    }
+
     [Theory]
     [InlineData((int)LinuxShortSpeechDecision.DiscardTooShort, "Overlay.TooShort")]
     [InlineData((int)LinuxShortSpeechDecision.DiscardNoSpeech, "Overlay.NoSpeech")]

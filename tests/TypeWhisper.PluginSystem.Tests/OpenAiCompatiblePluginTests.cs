@@ -237,6 +237,11 @@ public sealed class OpenAiCompatiblePluginTests
 
 
     [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<OpenAiCompatiblePlugin>();
+
+
+    [Fact]
     public async Task ProcessAsync_LongInput_KeepsFixedOutputCap()
     {
         var longInput = string.Concat(Enumerable.Repeat("dictated input ", 1_000));

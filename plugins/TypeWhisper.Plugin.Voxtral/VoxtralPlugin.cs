@@ -6,6 +6,7 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Voxtral;
@@ -106,7 +107,7 @@ public sealed class VoxtralPlugin
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredMistralApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredMistralApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         using var content = new MultipartFormDataContent();
         using var fileContent = new ByteArrayContent(wavAudio);
@@ -133,16 +134,10 @@ public sealed class VoxtralPlugin
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
         request.Content = content;
 
-        using var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => $"Mistral API error {(int)errorResponse.StatusCode}: {errorBody}");
         var responseBody = await response.Content.ReadAsStringAsync(ct);
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new HttpRequestException(
-                $"Mistral API error {(int)response.StatusCode}: {responseBody}",
-                inner: null,
-                statusCode: response.StatusCode
-            );
-        }
 
         return ParseTranscriptionResponse(responseBody);
     }

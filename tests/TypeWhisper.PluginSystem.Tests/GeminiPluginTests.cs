@@ -1091,4 +1091,8 @@ public sealed class GeminiPluginTests
 
         throw new DirectoryNotFoundException("TypeWhisper repository root not found.");
     }
+    [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<GeminiPlugin>();
+
 }

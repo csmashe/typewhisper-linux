@@ -371,8 +371,6 @@ internal static class GeminiTranscriptionClient
                 retryAfter = untilRetry > TimeSpan.Zero ? untilRetry : TimeSpan.Zero;
             }
 
-            var errorBody = await response.Content.ReadAsStringAsync(ct);
-
             var failureKind = statusCode switch
             {
                 401 => PluginRequestFailureKind.Authentication,
@@ -388,7 +386,7 @@ internal static class GeminiTranscriptionClient
             {
                 401 => "Invalid Gemini API key",
                 429 => "Gemini rate limit reached, please wait",
-                _ => $"Gemini API error {statusCode}: {OpenAiApiHelper.ExtractErrorMessage(errorBody)}",
+                _ => $"Gemini API error {statusCode}",
             };
             throw new PluginRequestException(message, failureKind, statusCode, retryAfter);
         }

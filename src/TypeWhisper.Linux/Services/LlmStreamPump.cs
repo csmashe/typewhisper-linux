@@ -28,6 +28,7 @@ internal sealed class LlmStreamPump
     }
 
     public bool Faulted { get; private set; }
+    public Exception? Failure { get; private set; }
 
     /// <summary>
     ///     True once the source yielded at least one item (even ""). Distinguishes
@@ -90,8 +91,9 @@ internal sealed class LlmStreamPump
             // Plugin enumerators can throw arbitrary types, including an OCE while
             // the caller token is still live. Treat every dependency fault as
             // recoverable: keep the partial and let the caller fall back.
-            Trace.WriteLine($"[LlmStreamPump] Fault: {ex.GetType().Name}: {ex.Message}");
+            Trace.WriteLine($"[LlmStreamPump] Fault: {ex.GetType().Name}");
             Faulted = true;
+            Failure = ex;
             EmitFinal();
             return _sb.ToString();
         }

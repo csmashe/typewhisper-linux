@@ -781,14 +781,6 @@ public class App : Application
             Trace.WriteLine($"[Telemetry] Shutdown failed: {ex.Message}");
         }
 
-        try
-        {
-            services.GetService<SessionAudioFileService>()?.DeleteSessionCaptures();
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[App] Session audio cleanup failed: {ex.Message}");
-        }
 
         try
         {
@@ -940,10 +932,26 @@ public class App : Application
             Debug.WriteLine($"[App] Dictation toggle-gate close failed: {ex.Message}");
         }
 
+        var recoveryDrained = dictation is null || await dictation.CancelRecoveryAndDrainAsync().ConfigureAwait(false);
+        if (!ApplyRecoveryDrainResult(recoveryDrained))
+        {
+            Debug.WriteLine("[App] Recovery is still running; skipping dictation, audio, model and provider disposal.");
+            return;
+        }
+
         DisposeDictationBeforeAudio(
             dictation,
             services.GetService<AudioRecordingService>()
         );
+
+        try
+        {
+            services.GetService<SessionAudioFileService>()?.ApplyRetention(services.GetRequiredService<ISettingsService>().Current.DictationRecoveryRetentionDays);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Session audio cleanup failed: {ex.Message}");
+        }
 
         try
         {
@@ -980,6 +988,15 @@ public class App : Application
 
     internal static bool SkipProviderDisposal =>
         Volatile.Read(ref s_skipProviderDisposal) != 0;
+
+    internal static bool ApplyRecoveryDrainResult(bool recoveryDrained)
+    {
+        if (recoveryDrained)
+            return true;
+
+        Volatile.Write(ref s_skipProviderDisposal, 1);
+        return false;
+    }
 
     internal static ShutdownDisposalDecision ApplyHttpApiDrainResult(
         bool httpApiDrained,
@@ -1088,7 +1105,7 @@ public class App : Application
                 {
                     services
                         .GetRequiredService<SessionAudioFileService>()
-                        .DeleteSessionCaptures();
+                        .ApplyRetention(services.GetRequiredService<ISettingsService>().Current.DictationRecoveryRetentionDays);
                     return Task.CompletedTask;
                 },
                 Required: false

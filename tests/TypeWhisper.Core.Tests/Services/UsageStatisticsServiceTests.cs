@@ -10,6 +10,22 @@ public sealed class UsageStatisticsServiceTests : IDisposable
         "TypeWhisper-UsageStatisticsTests",
         Guid.NewGuid().ToString("N"));
 
+    [Theory]
+    [InlineData(TranscriptionRecordStatus.TranscriptionFailed)]
+    [InlineData(TranscriptionRecordStatus.ProcessingFailed)]
+    public void FailedRecoveryRecords_AreExcludedFromBackfillAndLiveStatistics(TranscriptionRecordStatus status)
+    {
+        var service = new UsageStatisticsService(Path.Join(_directory, "recovery.json"));
+        var record = CreateRecord("failed", DateTime.UtcNow, "retained raw text") with { Status = status };
+        service.BackfillFromHistoryIfNeeded([record]);
+        service.RecordTranscription(record);
+        Assert.Empty(service.Days);
+        Assert.False(service.HasAnyStatistics);
+
+        service.RecordTranscription(record with { Status = TranscriptionRecordStatus.Succeeded });
+        Assert.Equal(1, Assert.Single(service.Days).TranscriptionCount);
+    }
+
     [Fact]
     public void RecordTranscription_WaitsForBackfillThenAggregatesImmediately()
     {

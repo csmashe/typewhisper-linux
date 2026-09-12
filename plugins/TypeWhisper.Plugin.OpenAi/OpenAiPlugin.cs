@@ -275,7 +275,7 @@ public sealed class OpenAiPlugin
         CancellationToken ct)
     {
         if (!IsConfigured || _selectedApiModelName is null || SelectedModelEntry is not { } entry)
-            throw new InvalidOperationException("Plugin not configured. API key and model required.");
+            throw new PluginRequestException("Plugin not configured. API key and model required.", PluginRequestFailureKind.Configuration);
 
         if (translate && !entry.SupportsTranslation)
             throw new InvalidOperationException(Loc.L("Settings.TranslationUnsupported", entry.DisplayName));
@@ -331,7 +331,7 @@ public sealed class OpenAiPlugin
         if (AuthMode == OpenAiAuthMode.ChatGpt)
             throw new InvalidOperationException(Loc.L("Settings.StreamingRequiresApiKeyMode"));
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
         if (SelectedModelEntry is not { Transport: TranscriptionTransport.Realtime } entry)
             throw new NotSupportedException(Loc.L("Settings.StreamingRequiresRealtimeModel"));
 
@@ -392,7 +392,7 @@ public sealed class OpenAiPlugin
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (UsesResponsesApi(modelId))
@@ -449,7 +449,7 @@ public sealed class OpenAiPlugin
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
@@ -500,7 +500,7 @@ public sealed class OpenAiPlugin
     public async Task<ITtsPlaybackSession> SpeakAsync(TtsSpeakRequest request, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var text = request.Text.Trim();
         if (string.IsNullOrWhiteSpace(text))
@@ -1217,7 +1217,7 @@ public sealed class OpenAiPlugin
                 return credentials;
 
             if (string.IsNullOrWhiteSpace(credentials.RefreshToken))
-                throw new InvalidOperationException(Loc.L("Settings.ChatGptLoginNotConfigured"));
+                throw new PluginRequestException(Loc.L("Settings.ChatGptLoginNotConfigured"), PluginRequestFailureKind.Configuration);
 
             var refreshed = await OpenAiOAuthClient.RefreshTokenAsync(
                 _httpClient,

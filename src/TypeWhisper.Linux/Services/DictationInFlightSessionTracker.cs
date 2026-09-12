@@ -13,6 +13,43 @@ internal sealed class DictationInFlightSessionTracker
     private readonly Lock _lock = new();
     private readonly HashSet<int> _sessions = [];
 
+    private bool _starting;
+    private bool _recovering;
+
+    internal bool TryBeginStartup()
+    {
+        lock (_lock)
+        {
+            if (_recovering)
+                return false;
+            _starting = true;
+            return true;
+        }
+    }
+
+    internal void EndStartup()
+    {
+        lock (_lock)
+            _starting = false;
+    }
+
+    internal bool TryBeginRecovery()
+    {
+        lock (_lock)
+        {
+            if (_starting || _recovering || _sessions.Count > 0)
+                return false;
+            _recovering = true;
+            return true;
+        }
+    }
+
+    internal void EndRecovery()
+    {
+        lock (_lock)
+            _recovering = false;
+    }
+
     internal void Begin(int sessionId)
     {
         lock (_lock)

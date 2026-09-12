@@ -30,6 +30,43 @@ public sealed class PromptProcessingServiceTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProcessAsync_TransientFailureThenSuccess(bool streaming)
+    {
+        var provider = new RetryProvider(false);
+        using var manager = CreatePluginManager([provider], []);
+        var sut = new PromptProcessingService(manager, CreateSettings(new AppSettings()).Object, new MemoryService(manager));
+        var action = new PromptAction { Id = "retry", Name = "Retry", SystemPrompt = "system" };
+        var result = "";
+        if (streaming)
+        {
+            await foreach (var token in sut.ProcessStreamingAsync(action, "input"))
+                result += token;
+        }
+        else
+            result = await sut.ProcessAsync(action, "input");
+        Assert.Equal("result", result);
+        Assert.Equal(2, provider.Attempts);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_DoesNotRetryAfterFirstToken()
+    {
+        var provider = new RetryProvider(true);
+        using var manager = CreatePluginManager([provider], []);
+        var sut = new PromptProcessingService(manager, CreateSettings(new AppSettings()).Object, new MemoryService(manager));
+        var chunks = new List<string>();
+        await Assert.ThrowsAsync<PluginRequestException>(async () =>
+        {
+            await foreach (var token in sut.ProcessStreamingAsync(new PromptAction { Id = "retry", Name = "Retry", SystemPrompt = "system" }, "input"))
+                chunks.Add(token);
+        });
+        Assert.Equal(["partial"], chunks);
+        Assert.Equal(1, provider.Attempts);
+    }
+
     [Fact]
     public async Task ProcessAsync_UsesDefaultProvider_WhenNoOverrideIsSet()
     {
@@ -532,6 +569,34 @@ public sealed class PromptProcessingServiceTests : IDisposable
             target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingFieldException(target.GetType().FullName, fieldName);
         field.SetValue(target, value);
+    }
+
+    private sealed class RetryProvider(bool failAfterToken) : ILlmProviderPlugin
+    {
+        public int Attempts { get; private set; }
+        public string PluginId => "retry";
+        public string PluginName => "Retry";
+        public string PluginVersion => "1.0";
+        public string ProviderName => "Retry";
+        public bool IsAvailable => true;
+        public IReadOnlyList<PluginModelInfo> SupportedModels => [new("model", "Model")];
+        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
+        public Task DeactivateAsync() => Task.CompletedTask;
+        public void Dispose() { }
+        public Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct) =>
+            ++Attempts == 1
+                ? throw new PluginRequestException("network", PluginRequestFailureKind.Network, retryAfter: TimeSpan.Zero)
+                : Task.FromResult("result");
+        public async IAsyncEnumerable<string> ProcessStreamingAsync(string systemPrompt, string userText, string model, [EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.CompletedTask;
+            Attempts++;
+            if (failAfterToken)
+                yield return "partial";
+            if (failAfterToken || Attempts == 1)
+                throw new PluginRequestException("network", PluginRequestFailureKind.Network, retryAfter: TimeSpan.Zero);
+            yield return "result";
+        }
     }
 
     private sealed class FakeLlmProviderPlugin : ILlmProviderPlugin

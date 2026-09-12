@@ -37,6 +37,8 @@ public partial class HistorySectionViewModel : ObservableObject
     private readonly IDictionaryService _dictionary;
     private readonly List<TranscriptionRecord> _filtered = [];
     private readonly IHistoryService _history;
+    private readonly Func<string, CancellationToken, Task<TranscriptionRecord>>? _retry;
+    private readonly Dictionary<string, HistoryRecordRow> _rows = [];
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly ISettingsService _settings;
     private readonly TimeZoneInfo _timeZone;
@@ -65,7 +67,8 @@ public partial class HistorySectionViewModel : ObservableObject
         IDictionaryService dictionary,
         ISettingsService settings,
         SessionAudioFileService sessionAudioFiles,
-        AudioPlaybackService audioPlayback
+        AudioPlaybackService audioPlayback,
+        DictationOrchestrator? recovery = null
     )
         : this(
             history,
@@ -74,7 +77,8 @@ public partial class HistorySectionViewModel : ObservableObject
             sessionAudioFiles,
             audioPlayback,
             TimeZoneInfo.Local,
-            () => DateTime.UtcNow
+            () => DateTime.UtcNow,
+            recovery is null ? null : recovery.RetryFromHistoryAsync
         ) { }
 
     internal HistorySectionViewModel(
@@ -84,10 +88,12 @@ public partial class HistorySectionViewModel : ObservableObject
         SessionAudioFileService sessionAudioFiles,
         AudioPlaybackService audioPlayback,
         TimeZoneInfo timeZone,
-        Func<DateTime> utcNow
+        Func<DateTime> utcNow,
+        Func<string, CancellationToken, Task<TranscriptionRecord>>? retry = null
     )
     {
         _history = history;
+        _retry = retry;
         _dictionary = dictionary;
         _settings = settings;
         _sessionAudioFiles = sessionAudioFiles;
@@ -179,11 +185,7 @@ public partial class HistorySectionViewModel : ObservableObject
                 }
             }
 
-            Summary = Loc.Instance.GetString(
-                "History.Summary",
-                _history.TotalRecords,
-                _history.TotalWords
-            );
+            UpdateSummary();
         }
         finally
         {
@@ -276,6 +278,15 @@ public partial class HistorySectionViewModel : ObservableObject
             entry.IsExpanded = false;
         }
     }
+
+    // False when no orchestrator was injected (design-time, tests); rows then hide the button
+    // rather than offering a retry that cannot run.
+    internal bool CanRetry => _retry is not null;
+
+    internal Task<TranscriptionRecord> RetryAsync(string id) =>
+        _retry is null
+            ? throw new InvalidOperationException("No recovery service is available.")
+            : _retry(id, CancellationToken.None);
 
     internal bool HasSessionAudio(TranscriptionRecord record)
     {
@@ -393,20 +404,32 @@ public partial class HistorySectionViewModel : ObservableObject
 
         _filtered.Clear();
         _filtered.AddRange(GetVisibleRecords());
+        var ids = _history.Records.Select(record => record.Id).ToHashSet();
+        foreach (var id in _rows.Keys.Where(id => !ids.Contains(id)).ToList())
+            _rows.Remove(id);
         _shownCount = 0;
 
         Groups.Clear();
         AppendNextPage();
 
-        Summary = Loc.Instance.GetString(
-            "History.Summary",
-            _history.TotalRecords,
-            _history.TotalWords
-        );
+        UpdateSummary();
         OnPropertyChanged(nameof(HasVisibleRecords));
         OnPropertyChanged(nameof(ShowTimeline));
         OnPropertyChanged(nameof(ShowEmptyState));
         OnPropertyChanged(nameof(HasMore));
+    }
+
+    /// <summary>
+    ///     The timeline deliberately lists failed records so they can be retried, so the entry
+    ///     count covers every record; words stay the succeeded-only total.
+    /// </summary>
+    private void UpdateSummary()
+    {
+        Summary = Loc.Instance.GetString(
+            "History.Summary",
+            _history.Records.Count,
+            _history.TotalWords
+        );
     }
 
     private void AppendNextPage()
@@ -416,7 +439,15 @@ public partial class HistorySectionViewModel : ObservableObject
         for (var i = _shownCount; i < end; i++)
         {
             var record = _filtered[i];
-            var row = new HistoryRecordRow(record, this);
+            if (!_rows.TryGetValue(record.Id, out var row))
+            {
+                row = new HistoryRecordRow(record, this);
+                _rows.Add(record.Id, row);
+            }
+            else
+            {
+                row.Record = record;
+            }
             var groupName = ComputeDateGroup(row.LocalTimestamp, today);
 
             // Records are newest-first; each record either extends the last group or starts a new one.
@@ -522,6 +553,73 @@ public partial class HistoryRecordRow : ObservableObject
         SetCorrectionSuggestions(record.PendingCorrectionSuggestions);
     }
 
+    [ObservableProperty]
+    private bool _isRetrying;
+
+    [ObservableProperty]
+    private string _retryResult = "";
+
+    public bool HasRetryResult => !string.IsNullOrEmpty(RetryResult);
+    public bool HasFailure => Record.Status != TranscriptionRecordStatus.Succeeded;
+
+    /// <summary>True while the row has anything to show below the entry; keeps the panel — and its
+    /// margin — out of the layout of every ordinary row.</summary>
+    public bool ShowRetryPanel => HasFailure || ShowRetry || IsRetrying || HasRetryResult;
+
+    public string? FailureMessage => HasFailure
+        ? FailureMessageSanitizer.Sanitize(Record.FailureMessage, Record.RawText, Record.FinalText)
+          ?? Loc.Instance["Common.UnknownError"]
+        : null;
+    public string StatusBadge => Record.Status switch
+    {
+        TranscriptionRecordStatus.TranscriptionFailed => Loc.Instance["History.StatusTranscriptionFailed"],
+        TranscriptionRecordStatus.ProcessingFailed => Loc.Instance["History.StatusProcessingFailed"],
+        _ => "",
+    };
+    public bool ShowRetry => _owner.CanRetry && HasSessionAudio && (HasFailure || Record.InsertionStatus is
+        TextInsertionStatus.Failed or TextInsertionStatus.ActionFailed or TextInsertionStatus.ActionUnavailable
+        or TextInsertionStatus.MissingClipboardTool or TextInsertionStatus.MissingPasteTool);
+
+    partial void OnRetryResultChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasRetryResult));
+        OnPropertyChanged(nameof(ShowRetryPanel));
+    }
+
+    partial void OnIsRetryingChanged(bool value) => OnPropertyChanged(nameof(ShowRetryPanel));
+
+    [RelayCommand]
+    private async Task RetryAsync()
+    {
+        IsRetrying = true;
+        RetryResult = "";
+        try
+        {
+            Record = await _owner.RetryAsync(Record.Id);
+            RetryResult = Loc.Instance["History.RetryCopied"];
+        }
+        catch (FileNotFoundException)
+        {
+            RetryResult = Loc.Instance["History.RetryAudioMissing"];
+        }
+        catch (OperationCanceledException)
+        {
+            RetryResult = Loc.Instance["History.RetryCanceled"];
+        }
+        catch (Exception ex)
+        {
+            RetryResult = Loc.Instance.GetString("History.RetryFailed",
+                FailureMessageSanitizer.Sanitize(ex.Message, Record.RawText, Record.FinalText)
+                ?? Loc.Instance["Common.UnknownError"]);
+        }
+        finally
+        {
+            IsRetrying = false;
+            OnPropertyChanged(nameof(ShowRetry));
+            OnPropertyChanged(nameof(ShowRetryPanel));
+        }
+    }
+
     public ObservableCollection<CorrectionSuggestionRow> CorrectionSuggestions { get; } = [];
 
     public DateTime LocalTimestamp { get; private set; }
@@ -575,6 +673,12 @@ public partial class HistoryRecordRow : ObservableObject
 
     partial void OnRecordChanged(TranscriptionRecord value)
     {
+        OnPropertyChanged(nameof(HasFailure));
+        OnPropertyChanged(nameof(FailureMessage));
+        OnPropertyChanged(nameof(StatusBadge));
+        OnPropertyChanged(nameof(ShowRetry));
+        OnPropertyChanged(nameof(ShowRetryPanel));
+        OnPropertyChanged(nameof(DurationLabel));
         LocalTimestamp = _owner.ToLocalPresentationTime(value.Timestamp);
         _rawVsFinalDiffCache = null;
         _inspectorCallsCache = null;
