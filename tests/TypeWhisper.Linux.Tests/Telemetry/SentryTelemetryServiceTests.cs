@@ -28,6 +28,7 @@ public sealed class SentryTelemetryServiceTests
             Assert.Empty(handler.Requests);
             if (dispose)
             {
+                // ReSharper disable once DisposeOnUsingVariable -- disposal-triggered flush is the behaviour under test.
                 service.Dispose();
             }
             else
@@ -44,14 +45,7 @@ public sealed class SentryTelemetryServiceTests
         }
         finally
         {
-            try
-            {
-                SentrySdk.Close();
-            }
-            finally
-            {
-                service.Dispose();
-            }
+            SentrySdk.Close();
         }
     }
 
@@ -210,6 +204,7 @@ public sealed class SentryTelemetryServiceTests
             service.Shutdown();
             service.Shutdown();
             Assert.False(service.IsEnabled);
+            // ReSharper disable once DisposeOnUsingVariable -- the asserts below check that a disposed service ignores consent changes.
             service.Dispose();
             settings.Change(settings.Current with
             {
@@ -220,14 +215,7 @@ public sealed class SentryTelemetryServiceTests
         }
         finally
         {
-            try
-            {
-                SentrySdk.Close();
-            }
-            finally
-            {
-                service.Dispose();
-            }
+            SentrySdk.Close();
         }
     }
 

@@ -146,8 +146,8 @@ public sealed class UsageStatisticsService : IUsageStatisticsService
     }
 
     private static bool IsValid(TranscriptionRecord record) =>
-        record.Status == TranscriptionRecordStatus.Succeeded &&
-        record.WordCount > 0 && double.IsFinite(record.DurationSeconds) && record.DurationSeconds >= 0;
+        record is { Status: TranscriptionRecordStatus.Succeeded, WordCount: > 0, DurationSeconds: >= 0 } &&
+        double.IsFinite(record.DurationSeconds);
 
     /// <summary>
     /// Builds a stable model aggregation key.

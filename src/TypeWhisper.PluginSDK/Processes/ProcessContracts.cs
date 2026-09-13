@@ -71,6 +71,7 @@ public enum ProcessOutputStatus
     Truncated,
 }
 
+/// <summary>The result of a one-shot process run: how it ended, its exit code and captured output.</summary>
 /// <param name="ExitCode">
 ///     The child's exit code, or null when it never exited on its own — including a
 ///     <see cref="ProcessRunStatus.OutputLimitExceeded" /> run that had to terminate it.

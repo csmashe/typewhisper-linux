@@ -66,7 +66,7 @@ public static partial class TelemetryScrubber
     // hex-only identifiers out, the missing :: keeps hh:mm:ss timestamps out.
     [GeneratedRegex(
         @"(?<![\w:])(?=[0-9a-f:.]*\d)(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}"
-        + @"|(?:[0-9a-f]{1,4}:){1,7}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?"
+        + "|(?:[0-9a-f]{1,4}:){1,7}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?"
         + @"|::(?:ffff:)?(?:\d{1,3}\.){3}\d{1,3}"
         + @"|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})(?![\w:])",
         RegexOptions.IgnoreCase)]

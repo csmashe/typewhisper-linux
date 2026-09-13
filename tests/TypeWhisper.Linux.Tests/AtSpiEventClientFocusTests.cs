@@ -21,6 +21,7 @@ public sealed class AtSpiEventClientFocusTests
             throw new InvalidOperationException("Subscriber failed.");
         };
 
+        // ReSharper disable once DisposeOnUsingVariable -- explicit disposal is under test; see the comment above.
         client.Dispose();
 
         Assert.False(client.IsRunning);

@@ -2,7 +2,6 @@ using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
-using TypeWhisper.Core.Services.SpokenFormatting;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;

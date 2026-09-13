@@ -61,6 +61,7 @@ internal static class ProviderFailureAssertions
                 await foreach (var _ in streamingLlm.ProcessStreamingAsync(
                     "system", "user", streamingLlm.SupportedModels.Count > 0 ? streamingLlm.SupportedModels[0].Id : "model", CancellationToken.None))
                 {
+                    // Drain; the failure surfaces as the thrown exception.
                 }
             });
             Assert.Equal(ex.FailureKind, streamFailure.FailureKind);

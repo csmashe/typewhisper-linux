@@ -2454,11 +2454,12 @@ public sealed partial class DictationOrchestrator : IDisposable
             );
 
             var promptAction = ResolvePromptAction(context);
-            var promptActionUnavailable = IsPromptActionUnavailable(context.Profile?.PromptActionId, promptAction is not null);
+            var promptActionId = context.Profile?.PromptActionId;
+            var promptActionUnavailable = IsPromptActionUnavailable(promptActionId, promptAction is not null);
             if (promptActionUnavailable)
             {
                 Trace.WriteLine(
-                    $"[Dictation] Configured prompt action '{context.Profile?.PromptActionId}' is unavailable "
+                    $"[Dictation] Configured prompt action '{promptActionId}' is unavailable "
                     + "(disabled, removed, or manual-only) — routing as a failure instead of falling back to ordinary text insertion."
                 );
             }
@@ -3011,7 +3012,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 IsTransient: false,
                 FailureKind: not (PluginRequestFailureKind.InvalidRequest or PluginRequestFailureKind.Unknown),
             }))
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+            ExceptionDispatchInfo.Capture(failure).Throw();
 
         var result = pump.Faulted || !pump.ReceivedAnyChunk
             ? await runBatch()

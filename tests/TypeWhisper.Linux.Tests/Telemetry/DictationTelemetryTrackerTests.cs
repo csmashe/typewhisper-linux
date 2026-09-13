@@ -47,7 +47,9 @@ public sealed class DictationTelemetryTrackerTests
         tracker.EndCapture(42);
         tracker.Finish(42, status);
         tracker.Finish(42, status);
+        // ReSharper disable once DisposeOnUsingVariable -- must finish before the asserts read its finishes; the using only guards a throwing assert.
         step!.Dispose();
+        // ReSharper disable once DisposeOnUsingVariable -- same reason.
         child.Dispose();
         Assert.Equal("Hybrid", session.Value.Tags["mode"]);
         Assert.Equal(status, session.Value.Tags["outcome"]);

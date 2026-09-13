@@ -31,6 +31,7 @@ public interface IDictionaryService
     string PreviewCorrections(string text);
 
     /// <summary>Comma-separated enabled terms for seeding an STT/LLM prompt, or <c>null</c> when there are none.</summary>
+    // ReSharper disable once UnusedMemberInSuper.Global -- callers hold the concrete service today; kept so every implementer honors the prompt-seeding contract.
     string? GetTermsForPrompt();
 
     /// <summary>Original strings of all enabled term entries (corrections excluded).</summary>

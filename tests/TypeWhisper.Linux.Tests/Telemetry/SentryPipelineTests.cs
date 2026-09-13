@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Telemetry;
 using Xunit;
@@ -6,7 +7,7 @@ using Xunit;
 namespace TypeWhisper.Linux.Tests.Telemetry;
 
 [Collection("SentrySdk")]
-public sealed class SentryPipelineTests
+public sealed partial class SentryPipelineTests
 {
     [Fact]
     public async Task Real_sdk_envelopes_are_anonymous()
@@ -40,7 +41,7 @@ public sealed class SentryPipelineTests
             {
                 // The modules map lists loaded assembly names (e.g. xunit.runner.*), which can contain a
                 // CI user name such as "runner" without being identity data.
-                var envelope = System.Text.RegularExpressions.Regex.Replace(raw, "\"modules\":\\{[^}]*\\}", "\"modules\":{}");
+                var envelope = ModulesMapRegex().Replace(raw, "\"modules\":{}");
                 Assert.DoesNotContain("the quick brown fox", envelope);
                 Assert.DoesNotContain("secret-canary-123", envelope);
                 Assert.DoesNotContain("Could not find file", envelope);
@@ -131,4 +132,7 @@ public sealed class SentryPipelineTests
             SentrySdk.Close();
         }
     }
+
+    [GeneratedRegex("\"modules\":\\{[^}]*\\}")]
+    private static partial Regex ModulesMapRegex();
 }

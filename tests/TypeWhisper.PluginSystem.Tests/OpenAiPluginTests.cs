@@ -272,6 +272,7 @@ public partial class OpenAiPluginTests
         host.Secrets["oauth-access-token"] = "expired";
         host.Secrets["oauth-refresh-token"] = "refresh";
         using var unavailableResponse = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+        // ReSharper disable once AccessToDisposedClosure -- the handler only runs while sut lives, and sut is disposed before unavailableResponse.
         using var client = new HttpClient(new CapturingHandler((request, _) => Task.FromResult(
             request.RequestUri!.Host == "auth.openai.com"
                 ? JsonResponse("""{"access_token":"fresh","expires_in":3600}""")
@@ -486,6 +487,7 @@ public partial class OpenAiPluginTests
     public async Task RefreshModelCatalogAsync_FailurePreservesCachedSelection(string authMode)
     {
         using var unavailableResponse = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+        // ReSharper disable once AccessToDisposedClosure -- the handler only runs while sut lives, and sut is disposed before unavailableResponse.
         using var client = new HttpClient(new CapturingHandler((_, _) =>
             Task.FromResult(unavailableResponse)));
         var host = new TestPluginHostServices();
@@ -700,6 +702,7 @@ public partial class OpenAiPluginTests
     public async Task RefreshAvailableLlmModels_KeepsCachedCatalogsWhenApiRequestFails()
     {
         using var unavailableResponse = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+        // ReSharper disable once AccessToDisposedClosure -- the handler only runs while sut lives, and sut is disposed before unavailableResponse.
         var handler = new CapturingHandler((_, _) =>
             Task.FromResult(unavailableResponse));
         var host = new TestPluginHostServices
