@@ -10,6 +10,10 @@ If the TypeWhisper project releases an official Linux version, or if this port i
 
 Press a key, talk, and have clean, punctuated text land in whatever app you're in — tuned to feel as close to [Wispr Flow](https://wisprflow.ai/) as possible on Linux. TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary, snippet, and spoken-number post-processing, and run prompt-based AI text actions through plugins.
 
+## New in 0.15.1
+
+This release adds **dictation recovery from History**, **Microsoft AI and Meta providers**, **Gemini transcription and live dictation**, and an **Authenticated CLIs** plugin for using signed-in provider tools for AI text processing. It also adds **optional Sentry crash and performance reporting, off by default**. See the [0.15.1 release notes](docs/releases/v0.15.1.md) for the full changes and upgrade notes.
+
 ## Documentation
 
 **The full, step-by-step documentation lives in the [Wiki](https://github.com/csmashe/typewhisper-linux/wiki).** This README is a short overview — the wiki has the how-to detail, per-distro setup, and troubleshooting.
@@ -34,6 +38,8 @@ Press a key, talk, and have clean, punctuated text land in whatever app you're i
 - **Learns from your corrections** in the Wispr-Flow style — when you type over a dictated word in the target app to fix it, TypeWhisper silently learns the correction (via AT-SPI) and auto-applies it to future dictations. A brief toast shows what was learned and offers **Undo**. Off by default (it reads the focused field); enable it under [Dictation](https://github.com/csmashe/typewhisper-linux/wiki/Dictation) settings, and review or remove learned entries in the [Dictionary](https://github.com/csmashe/typewhisper-linux/wiki/Dictionary).
 - **A localized interface** — English, German, Spanish, or Russian, switched live (or Auto, to follow your system locale). See [General Settings](https://github.com/csmashe/typewhisper-linux/wiki/General-Settings).
 - **Automation** — a local, authenticated [HTTP API](https://github.com/csmashe/typewhisper-linux/wiki/HTTP-API) and a `typewhisper-cli` [CLI](https://github.com/csmashe/typewhisper-linux/wiki/CLI) bundled in every package.
+- **Authenticated provider CLIs** — use installed, signed-in Codex, Claude Code, or OpenCode tools for LLM text processing through the Authenticated CLIs plugin. These are separate from `typewhisper-cli`; their providers may process your text remotely. See [LLM Providers](https://github.com/csmashe/typewhisper-linux/wiki/LLM-Providers).
+- **Dictation recovery** — retry a failed dictation from History while its recording is available. The recovered result is copied to the clipboard. Recovery audio is kept locally for **30 days by default**; change **Dictation → Recovery → Keep dictation recordings for recovery (days)**, or use `-1` to delete captures when the app closes. History saving must be enabled. See [History](https://github.com/csmashe/typewhisper-linux/wiki/History).
 - **Desktop integration** — tray icon, XDG autostart, single-instance handoff, and a user-level installer. See [Desktop Integration](https://github.com/csmashe/typewhisper-linux/wiki/Desktop-Integration).
 
 Everything here is Linux-specific work adapted from the upstream macOS/Windows project: Wayland/X11 global hotkeys, compositor-native window and URL detection, session audio handling, and Linux packaging. The deep how-and-why for each lives in the wiki — start with [Wayland Notes](https://github.com/csmashe/typewhisper-linux/wiki/Wayland-Notes) if you're on Wayland.
@@ -49,7 +55,7 @@ The stack I actually use day to day:
 - **Insertion** — auto-paste is on, and on GNOME Wayland the text is delivered through `ydotool`.
 - **Hotkeys** — I run in **Hybrid** activation mode: a quick tap toggles recording, and holding acts as push-to-talk.
 
-I keep the rest deliberately minimal for latency and predictability — audio ducking, media pause, sound feedback, live/streaming transcription, and silence auto-stop are all off. The cleanup LLM is the only network hop, and it lives on a separate box on my own LAN, so nothing leaves the machines I control.
+I keep the rest deliberately minimal for latency and predictability — audio ducking, media pause, sound feedback, live/streaming transcription, and silence auto-stop are all off. In this setup, the cleanup LLM is the only network hop for audio and text, and it lives on a separate box on my own LAN. Optional Sentry diagnostic reporting is described below.
 
 **Where this is going:** the cleanup model I run now is an early, not-yet-released build of a model we're putting together purpose-built for dictation cleanup, so the behavior lives in the weights instead of being carried by a long system prompt (see [`docs/prompts/`](docs/prompts/) for the prompt-driven approach `mistral-small:24b` still uses). The goal is cleanup that's faster, more consistent, and far less sensitive to prompt wording than leaning on a general model. Until it ships, `mistral-small:24b` is the one to use — and if you find a model that works better, let me know and I will update the documentation.
 
@@ -103,6 +109,14 @@ typewhisper-linux/
 ├── docs/                        # Release notes and prompts
 └── tests/                       # Automated tests
 ```
+
+## Optional crash and performance reporting
+
+**Sending reports to Sentry is off by default.** We would appreciate you turning it on, especially if you are having crashes, errors, or slow dictation: these reports help us find and fix problems across Linux setups.
+
+Enable **Advanced → Data → Send anonymous crash and performance reports**. When enabled, TypeWhisper sends diagnostic data to the Excel on the Web Sentry project: app version, OS and hardware details, engine and model names, error types and stack traces, and startup/dictation timings. Reports also include audio duration and transcript character count, but **never audio, transcript or prompt text, clipboard contents, window titles, or API keys**. Exception message text and persistent user/install identifiers are excluded.
+
+You can turn reporting off at any time; it stops immediately, and queued reports are discarded. This feature does not keep an offline report cache. See the [Privacy Policy](docs/PRIVACY.md) for the full details. Cloud transcription and LLM providers have their own data flows, independent of this switch.
 
 ## Contributing & Support
 
