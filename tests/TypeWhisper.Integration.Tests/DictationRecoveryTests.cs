@@ -358,6 +358,9 @@ public sealed class DictationRecoveryTests
     [Theory]
     [InlineData(PluginRequestFailureKind.ServerError, true, 3, 1)]
     [InlineData(PluginRequestFailureKind.Authentication, false, 1, 0)]
+    [InlineData(PluginRequestFailureKind.Permission, false, 1, 0)]
+    [InlineData(PluginRequestFailureKind.InvalidRequest, false, 1, 1)]
+    [InlineData(PluginRequestFailureKind.Unknown, false, 1, 1)]
     [InlineData(PluginRequestFailureKind.ServerError, false, 1, 0)]
     public Task PromptFailure_BoundsTotalCallsAndSanitizesProcessedInput(
         PluginRequestFailureKind kind, bool transient, int streamCalls, int batchCalls) => BoundedTest.RunAsync(async () =>

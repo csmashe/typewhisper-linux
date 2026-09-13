@@ -3002,8 +3002,15 @@ public sealed partial class DictationOrchestrator : IDisposable
         pump.ThrowIfNonRetryableFault();
 
         // Once output has started, restarting as batch could duplicate work. Before the
-        // first token, allow the compatibility fallback for stream-specific failures.
-        if (pump.Failure is { } failure && pump.ReceivedAnyChunk)
+        // first token, only request-shape or unclassified failures may use compatibility
+        // fallback despite being non-transient; authentication and explicit no-retry
+        // failures must retain the provider's decision.
+        if (pump.Failure is { } failure
+            && (pump.ReceivedAnyChunk || failure is PluginRequestException
+            {
+                IsTransient: false,
+                FailureKind: not (PluginRequestFailureKind.InvalidRequest or PluginRequestFailureKind.Unknown),
+            }))
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
 
         var result = pump.Faulted || !pump.ReceivedAnyChunk

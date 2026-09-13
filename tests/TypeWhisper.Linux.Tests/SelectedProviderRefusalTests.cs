@@ -223,8 +223,10 @@ public sealed class SelectedProviderRefusalTests : IDisposable
         Assert.IsType<InvalidOperationException>(error, exactMatch: false);
     }
 
-    [Fact]
-    public async Task StreamingInvalidRequestFailure_StillFallsBackToBatch()
+    [Theory]
+    [InlineData(PluginRequestFailureKind.InvalidRequest)]
+    [InlineData(PluginRequestFailureKind.Unknown)]
+    public async Task StreamingCompatibilityFailure_StillFallsBackToBatch(PluginRequestFailureKind kind)
     {
         var batchRuns = 0;
 
@@ -232,7 +234,7 @@ public sealed class SelectedProviderRefusalTests : IDisposable
             FaultingStream(
                 new PluginRequestException(
                     "streaming is not supported here",
-                    PluginRequestFailureKind.InvalidRequest,
+                    kind,
                     isTransient: false
                 )
             ),
@@ -245,8 +247,8 @@ public sealed class SelectedProviderRefusalTests : IDisposable
             CancellationToken.None
         );
 
-        // Non-transient but specific to the streaming request (a gateway rejecting stream=true):
-        // only a configuration failure fails the batch retry identically.
+        // A gateway can reject stream=true or fail to parse its stream response while
+        // still supporting a batch request, provided no output has started.
         Assert.Equal("batch", outcome.Text);
         Assert.True(outcome.StreamFaulted);
         Assert.Equal(1, batchRuns);
