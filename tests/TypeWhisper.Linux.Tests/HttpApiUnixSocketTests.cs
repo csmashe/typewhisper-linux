@@ -19,6 +19,166 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class HttpApiUnixSocketTests
 {
+    private static readonly string[] s_helloWorld = ["Hello", "World"];
+
+    [Fact]
+    public async Task VerboseTranslationPreservesSegmentTimingsAndReportsTargetLanguage()
+    {
+        var translation = CreateTranslationMock();
+        using var fixture = CreateSegmentFixture(translation.Object);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "verbose_json", "de");
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("Hallo Welt", json.RootElement.GetProperty("text").GetString());
+        Assert.Equal("de", json.RootElement.GetProperty("language").GetString());
+        AssertSegments(json.RootElement, "Hallo", "Welt");
+        translation.Verify(service => service.TranslateSegmentsAsync(
+            It.Is<IReadOnlyList<string>>(texts => texts.SequenceEqual(s_helloWorld)),
+            "en", "de", null, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task SegmentTranslationMismatchReturnsBadGateway()
+    {
+        var translation = CreateTranslationMock();
+        translation.Setup(service => service.TranslateSegmentsAsync(
+                It.IsAny<IReadOnlyList<string>>(), "en", "de", null, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new SegmentTranslationMismatchException());
+        using var fixture = CreateSegmentFixture(translation.Object);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "verbose_json", "de");
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Single(json.RootElement.EnumerateObject());
+        Assert.Equal(
+            "Translation did not preserve the subtitle segments. Retry with another LLM model.",
+            json.RootElement.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task JsonTranslationDoesNotTranslateSegments()
+    {
+        var translation = CreateTranslationMock();
+        using var fixture = CreateSegmentFixture(translation.Object);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "json", "de");
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("Hallo Welt", json.RootElement.GetProperty("text").GetString());
+        Assert.Equal("de", json.RootElement.GetProperty("language").GetString());
+        translation.Verify(service => service.TranslateSegmentsAsync(
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<LlmCallCapture?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task WithoutTargetLanguageSegmentsAndDetectedLanguageAreUntouched()
+    {
+        var translation = new Mock<ITranslationService>(MockBehavior.Strict);
+        using var fixture = CreateSegmentFixture(translation.Object);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "verbose_json", null);
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("Hello World", json.RootElement.GetProperty("text").GetString());
+        Assert.Equal("en", json.RootElement.GetProperty("language").GetString());
+        AssertSegments(json.RootElement, "Hello", "World");
+        translation.VerifyNoOtherCalls();
+    }
+
+    private static Mock<ITranslationService> CreateTranslationMock()
+    {
+        var translation = new Mock<ITranslationService>(MockBehavior.Strict);
+        translation.Setup(service => service.TranslateAsync(
+                "Hello World", "en", "de", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Hallo Welt");
+        translation.Setup(service => service.TranslateSegmentsAsync(
+                It.IsAny<IReadOnlyList<string>>(), "en", "de", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(["Hallo", "Welt"]);
+        return translation;
+    }
+
+    private static ApiFixture CreateSegmentFixture(ITranslationService translation)
+    {
+        var dictionary = new Mock<IDictionaryService>();
+        dictionary.Setup(service => service.GetEnabledTerms()).Returns([]);
+        var pipeline = new Mock<IPostProcessingPipeline>();
+        pipeline.Setup(service => service.ProcessAsync(
+                "Hello World", It.IsAny<PipelineOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PostProcessingResult { Text = "Hello World" });
+        return new ApiFixture(
+            transcriptionEngine: new SegmentedTranscriptionEngine(),
+            dictionary: dictionary.Object,
+            pipeline: pipeline.Object,
+            translation: translation,
+            audioProbeResult: new ProcessRunOutcome(
+                ProcessRunStatus.Exited, 0, [0, 1, 2, 3], [], ProcessOutputStatus.Complete, null));
+    }
+
+    private static StringContent CreateSegmentRequest(ApiFixture fixture, string format, string? target)
+    {
+        var path = fixture.CreateSupportedAudioFile();
+        return new StringContent(
+            JsonSerializer.Serialize(new { path, response_format = format, target_language = target }),
+            Encoding.UTF8,
+            "application/json");
+    }
+
+    private static void AssertSegments(JsonElement response, string firstText, string secondText)
+    {
+        var segments = response.GetProperty("segments").EnumerateArray().ToList();
+        Assert.Equal(2, segments.Count);
+        Assert.Equal(firstText, segments[0].GetProperty("text").GetString());
+        Assert.Equal(0.2, segments[0].GetProperty("start").GetDouble());
+        Assert.Equal(1.3, segments[0].GetProperty("end").GetDouble());
+        Assert.Equal(0.1f, segments[0].GetProperty("no_speech_probability").GetSingle());
+        Assert.Equal(secondText, segments[1].GetProperty("text").GetString());
+        Assert.Equal(2.1, segments[1].GetProperty("start").GetDouble());
+        Assert.Equal(3.8, segments[1].GetProperty("end").GetDouble());
+        Assert.Equal(0.2f, segments[1].GetProperty("no_speech_probability").GetSingle());
+    }
+
+    private sealed class SegmentedTranscriptionEngine : ITranscriptionEngineRole
+    {
+        public string PluginId => "test-segments";
+        public string ProviderId => "test-segments";
+        public string ProviderDisplayName => "Test segments";
+        public bool IsConfigured => true;
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels => [new("test", "Test")];
+        public string SelectedModelId => "test";
+        public bool SupportsTranslation => false;
+        public void SelectModel(string modelId) { }
+        public Task<PluginTranscriptionResult> TranscribeAsync(
+            byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        {
+            return Task.FromResult(new PluginTranscriptionResult("Hello World", "en", 4)
+            {
+                Segments =
+                [
+                    new PluginTranscriptionSegment("Hello", 0.2, 1.3) { NoSpeechProbability = 0.1f },
+                    new PluginTranscriptionSegment("World", 2.1, 3.8) { NoSpeechProbability = 0.2f },
+                ],
+            });
+        }
+    }
+
     [Fact]
     public async Task LocalFileEndpointClipsDictionaryPromptToEngineBudget()
     {
@@ -788,7 +948,8 @@ public sealed class HttpApiUnixSocketTests
             bool ffmpegAvailable = true,
             ITranscriptionEngineRole? transcriptionEngine = null,
             IDictionaryService? dictionary = null,
-            IPostProcessingPipeline? pipeline = null
+            IPostProcessingPipeline? pipeline = null,
+            ITranslationService? translation = null
         )
         {
             Port = GetFreeTcpPort();
@@ -855,7 +1016,7 @@ public sealed class HttpApiUnixSocketTests
                 dictionary!,
                 null!,
                 pipeline!,
-                null!,
+                translation!,
                 null!,
                 _sessionResults,
                 new ApiDiscoveryFile(),

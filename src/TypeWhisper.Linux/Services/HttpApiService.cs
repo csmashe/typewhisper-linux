@@ -1728,11 +1728,16 @@ public sealed partial class HttpApiService : IDisposable
         );
 
         var finalText = processed.Text;
+        var sourceLanguage = result.DetectedLanguage ?? configuredLanguage ?? "en";
+        var outputLanguage = !string.IsNullOrWhiteSpace(opts.TargetLanguage)
+            && sourceLanguage != opts.TargetLanguage
+                ? opts.TargetLanguage
+                : result.DetectedLanguage;
+        var responseSegments = result.Segments;
         if (!string.IsNullOrWhiteSpace(opts.TargetLanguage))
         {
             try
             {
-                var sourceLanguage = result.DetectedLanguage ?? configuredLanguage ?? "en";
                 finalText = await _translation.TranslateAsync(
                     finalText,
                     sourceLanguage,
@@ -1763,11 +1768,48 @@ public sealed partial class HttpApiService : IDisposable
                         opts.LanguageHints,
                         opts.TargetLanguage
                     );
+
+                    if (opts.ResponseFormat.Equals("verbose_json", StringComparison.OrdinalIgnoreCase)
+                        && result.Segments.Count > 0)
+                    {
+                        var translated = await _translation.TranslateSegmentsAsync(
+                            result.Segments.Select(s => s.Text).ToList(),
+                            sourceLanguage,
+                            opts.TargetLanguage,
+                            ct: ct
+                        );
+                        responseSegments = result.Segments.Select((segment, index) =>
+                        {
+                            var text = EnglishOutputNormalizationService.NormalizeText(
+                                translated[index],
+                                settings.EnglishOutputVariant,
+                                effectiveTask,
+                                result.DetectedLanguage,
+                                configuredLanguage,
+                                opts.LanguageHints,
+                                translationTarget: opts.TargetLanguage
+                            );
+                            text = GermanOutputNormalizationService.NormalizeText(
+                                text,
+                                settings.GermanOutputVariant,
+                                effectiveTask,
+                                result.DetectedLanguage,
+                                configuredLanguage,
+                                opts.LanguageHints,
+                                translationTarget: opts.TargetLanguage
+                            );
+                            return segment with { Text = text };
+                        }).ToList();
+                    }
                 }
             }
             catch (NotSupportedException ex)
             {
                 return (501, Serialize(new { error = ex.Message }));
+            }
+            catch (SegmentTranslationMismatchException ex)
+            {
+                return (502, Serialize(new { error = ex.Message }));
             }
             catch (InvalidOperationException ex)
             {
@@ -1783,12 +1825,12 @@ public sealed partial class HttpApiService : IDisposable
                     new
                     {
                         text = finalText,
-                        language = result.DetectedLanguage,
+                        language = outputLanguage,
                         duration = result.DurationSeconds,
                         noSpeechProbability = result.NoSpeechProbability,
                         engine = engineProviderId,
                         model = selectedModelId,
-                        segments = result.Segments.Select(segment => new
+                        segments = responseSegments.Select(segment => new
                         {
                             text = segment.Text,
                             start = segment.Start,
@@ -1806,7 +1848,7 @@ public sealed partial class HttpApiService : IDisposable
                 new
                 {
                     text = finalText,
-                    language = result.DetectedLanguage,
+                    language = outputLanguage,
                     duration = result.DurationSeconds,
                     noSpeechProbability = result.NoSpeechProbability,
                     engine = engineProviderId,
