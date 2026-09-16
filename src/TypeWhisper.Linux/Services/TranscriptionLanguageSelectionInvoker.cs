@@ -252,6 +252,8 @@ internal sealed class InvalidLanguageSelectionException(string rawValue)
 
 internal static class LanguageSelectionUiMessage
 {
+    private const int MaxListedLanguages = 12;
+
     public static string From(Exception exception) =>
         exception switch
         {
@@ -275,8 +277,14 @@ internal static class LanguageSelectionUiMessage
                     "LanguageSelection.LanguageNotSupported",
                     unsupported.ProviderId,
                     unsupported.Selection.LanguageTag ?? string.Empty,
-                    string.Join(", ", unsupported.SupportedLanguages)
+                    FormatSupportedLanguages(unsupported.SupportedLanguages)
                 ),
             _ => exception.Message,
         };
+
+    private static string FormatSupportedLanguages(IReadOnlyList<string> languages)
+    {
+        var listed = string.Join(", ", languages.Take(MaxListedLanguages));
+        return languages.Count > MaxListedLanguages ? listed + ", …" : listed;
+    }
 }

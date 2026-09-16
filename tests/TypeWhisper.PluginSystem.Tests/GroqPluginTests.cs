@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Plugin.Groq;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -61,6 +62,31 @@ public class GroqPluginTests
         var ids = sut.TranscriptionModels.Select(m => m.Id).ToArray();
 
         Assert.Equal(["whisper-large-v3", "whisper-large-v3-turbo"], ids);
+    }
+
+    [Fact]
+    public void SupportedLanguages_AreWhisperLanguageCodes()
+    {
+        using var groq = new GroqPlugin();
+
+        Assert.Contains("en", groq.SupportedLanguages);
+        Assert.Contains("de", groq.SupportedLanguages);
+        Assert.Contains("yue", groq.SupportedLanguages);
+        Assert.Contains("haw", groq.SupportedLanguages);
+        Assert.DoesNotContain("de-DE", groq.SupportedLanguages);
+        Assert.All(groq.TranscriptionModels, model =>
+            Assert.Equal(groq.SupportedLanguages.Count, model.LanguageCount));
+    }
+
+    [Fact]
+    public void ExplicitRegionalTag_IsRejectedBeforeUpload()
+    {
+        using var groq = new GroqPlugin();
+
+        Assert.Throws<TranscriptionLanguageNotSupportedException>(() =>
+            groq.ToLegacyLanguage(LanguageSelection.Explicit("de-DE")));
+        Assert.Equal("de", groq.ToLegacyLanguage(LanguageSelection.Explicit("de")));
+        Assert.Null(groq.ToLegacyLanguage(LanguageSelection.Automatic));
     }
 
     [Theory]

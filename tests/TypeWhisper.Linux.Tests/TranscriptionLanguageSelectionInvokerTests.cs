@@ -7,6 +7,32 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class TranscriptionLanguageSelectionInvokerTests
 {
+    [Theory]
+    [InlineData(30)]
+    [InlineData(12)]
+    [InlineData(3)]
+    public void LanguageNotSupportedMessage_ListsAtMostTwelveLanguages(int languageCount)
+    {
+        var codes = Enumerable.Range(1, languageCount).Select(i => $"en-x-{i:00}").ToArray();
+        var exception = new TranscriptionLanguageNotSupportedException(
+            "test", "test", LanguageSelection.Explicit("xx"), codes);
+
+        var message = LanguageSelectionUiMessage.From(exception);
+
+        Assert.Contains(string.Join(", ", codes.Take(12)), message);
+        if (languageCount > 12)
+        {
+            Assert.Contains(", …", message);
+            Assert.DoesNotContain(codes[12], message);
+        }
+        else
+        {
+            Assert.DoesNotContain("…", message);
+        }
+
+        Assert.Contains(string.Join(", ", codes), exception.Message);
+    }
+
     [Fact]
     public async Task TranscribeAsync_MultipleHints_CallsHintsOverloadWithCanonicalDistinctList()
     {

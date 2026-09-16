@@ -4,6 +4,7 @@
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
+using System.Collections.ObjectModel;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -25,6 +26,11 @@ public sealed class GroqPlugin
     private string? _selectedApiModelName;
     private List<FetchedLlmModel> _fetchedLlmModels = [];
     private bool _streamResponses = true;
+
+    // Whisper language tokens (openai/whisper tokenizer.py LANGUAGES); both Groq models are Whisper Large V3 builds.
+    private static readonly ReadOnlyCollection<string> s_transcriptionLanguages = Array.AsReadOnly(
+        "en zh de es ru ko fr ja pt tr pl ca nl ar sv it id hi fi vi he uk el ms cs ro da hu ta no th ur hr bg lt la mi ml cy sk te fa lv bn sr az sl kn et mk br eu is hy ne mn bs kk sq sw gl mr pa si km sn yo so af oc ka be tg sd gu am yi lo uz fo ht ps tk nn mt sa lb my bo tl mg as tt haw ln ha ba jw su yue".Split(' ')
+    );
 
     private static readonly IReadOnlyList<TranscriptionModelEntry> s_transcriptionModelEntries =
     [
@@ -91,7 +97,12 @@ public sealed class GroqPlugin
     public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-        s_transcriptionModelEntries.Select(m => new PluginModelInfo(m.Id, m.DisplayName)).ToList();
+        s_transcriptionModelEntries.Select(m => new PluginModelInfo(m.Id, m.DisplayName)
+        {
+            LanguageCount = s_transcriptionLanguages.Count,
+        }).ToList();
+
+    public IReadOnlyList<string> SupportedLanguages => s_transcriptionLanguages;
 
     public string? SelectedModelId { get; private set; }
 
