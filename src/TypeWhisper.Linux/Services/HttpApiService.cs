@@ -1239,6 +1239,9 @@ public sealed partial class HttpApiService : IDisposable
                 ("/v1/status", "GET") => HandleStatus(),
                 ("/v1/capabilities", "GET") => HandleCapabilities(),
                 ("/v1/models", "GET") => HandleModels(),
+                ("/v1/models/load", "POST") => await HandleModelLoadAsync(context, ct),
+                ("/v1/models/unload", "POST") => await HandleModelUnloadAsync(context, ct),
+                ("/v1/models", "DELETE") => await HandleModelDeleteAsync(request, ct),
                 ("/v1/transcribe", "POST") => await HandleTranscribeAsync(context, ct),
                 ("/v1/transcribe/local-file", "POST") =>
                     await HandleTranscribeLocalFileAsync(context, ct),
@@ -1417,6 +1420,175 @@ public sealed partial class HttpApiService : IDisposable
         );
 
         return (200, Serialize(new { models }));
+    }
+
+    private const string ModelOperationBusy = "A transcription or model operation is in progress";
+
+    private static async Task<(string? Engine, string? Model)> ReadModelRequestAsync(
+        HttpContext context, bool requireEngine, CancellationToken ct)
+    {
+        var request = await HttpApiRequestParser.FromHttpContextAsync(context, MaxJsonRequestBytes, ct);
+        if (!requireEngine && request.Body.IsEmpty)
+        {
+            return (null, null);
+        }
+
+        const string expectedJson = "Expected JSON with 'engine' and optional 'model'.";
+        string? engine = null;
+        string? model = null;
+        try
+        {
+            using var document = JsonDocument.Parse(request.Body);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                throw new HttpApiRequestException(400, expectedJson);
+            }
+
+            var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (!keys.Add(property.Name))
+                {
+                    throw new HttpApiRequestException(400, expectedJson);
+                }
+
+                if (property.Name.Equals("engine", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (property.Value.ValueKind != JsonValueKind.String)
+                    {
+                        throw new HttpApiRequestException(400, expectedJson);
+                    }
+
+                    engine = property.Value.GetString()?.Trim();
+                    if (string.IsNullOrWhiteSpace(engine))
+                    {
+                        throw new HttpApiRequestException(400, "'engine' is required.");
+                    }
+                }
+                else if (property.Name.Equals("model", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (property.Value.ValueKind != JsonValueKind.String)
+                    {
+                        throw new HttpApiRequestException(400, expectedJson);
+                    }
+
+                    model = property.Value.GetString()?.Trim();
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            throw new HttpApiRequestException(400, expectedJson);
+        }
+
+        if (requireEngine && string.IsNullOrWhiteSpace(engine))
+        {
+            throw new HttpApiRequestException(400, "'engine' is required.");
+        }
+
+        return (engine, model);
+    }
+
+    private async Task<HttpApiResponse> HandleModelLoadAsync(HttpContext context, CancellationToken ct)
+    {
+        var (engine, model) = await ReadModelRequestAsync(context, requireEngine: true, ct);
+        var awaitDownload = HttpApiRequestParser.ParseBooleanOption(
+            context.Request.Query["await_download"].FirstOrDefault(), "await_download") ?? false;
+        var id = ResolveRequestedModelId(engine, model)!;
+        var plugin = _models.GetTranscriptionPlugin(id)
+            ?? throw new HttpApiRequestException(404, $"Unknown model: {id}");
+        var downloaded = _models.IsDownloaded(id);
+        if (!downloaded && !awaitDownload)
+        {
+            return (409, Serialize(new { error = "Model is not downloaded" }));
+        }
+
+        // Download under the model lock with status tracking, like the transcribe route's await_download.
+        var loaded = downloaded
+            ? await _models.TryLoadModelAsync(id, ct)
+            : await _models.TryDownloadAndLoadModelAsync(id, ct);
+        if (!loaded)
+        {
+            return (409, Serialize(new { error = ModelOperationBusy }));
+        }
+
+        return (200, Serialize(new Dictionary<string, object?>
+        {
+            ["engine"] = plugin.ProviderId,
+            ["model"] = ModelManagerService.ParsePluginModelId(id).ModelId,
+            ["fullId"] = id,
+            ["status"] = "ready",
+        }));
+    }
+
+    private async Task<HttpApiResponse> HandleModelUnloadAsync(HttpContext context, CancellationToken ct)
+    {
+        var (engine, _) = await ReadModelRequestAsync(context, requireEngine: false, ct);
+        var requestedPlugin = engine is null ? null : _models.PluginManager.TranscriptionEngines.FirstOrDefault(
+            candidate => string.Equals(candidate.ProviderId, engine, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(candidate.PluginId, engine, StringComparison.OrdinalIgnoreCase));
+        if (engine is not null && requestedPlugin is null)
+        {
+            return (404, Serialize(new { error = $"Unknown engine: {engine}" }));
+        }
+
+        var (outcome, id) = await _models.TryUnloadModelAsync(requestedPlugin);
+        return outcome switch
+        {
+            ModelUnloadOutcome.Busy => (409, Serialize(new { error = ModelOperationBusy })),
+            ModelUnloadOutcome.NothingLoaded => (200, Serialize(
+                new { engine = requestedPlugin?.ProviderId, model = (string?)null, status = "unloaded" })),
+            ModelUnloadOutcome.OtherEngine => (409, Serialize(new { error = "That engine has no loaded model" })),
+            ModelUnloadOutcome.Failed => (409, Serialize(new { error = "This engine cannot unload the model" })),
+            _ => (200, Serialize(new
+            {
+                engine = _models.GetTranscriptionPlugin(id)?.ProviderId,
+                model = ModelManagerService.ParsePluginModelId(id!).ModelId,
+                status = "unloaded",
+            })),
+        };
+    }
+
+    private async Task<HttpApiResponse> HandleModelDeleteAsync(HttpRequest request, CancellationToken ct)
+    {
+        var engine = request.Query["engine"].FirstOrDefault()?.Trim();
+        var model = request.Query["model"].FirstOrDefault()?.Trim();
+        if (string.IsNullOrWhiteSpace(engine) || string.IsNullOrWhiteSpace(model))
+        {
+            return (400, Serialize(new { error = "Both 'engine' and 'model' are required." }));
+        }
+
+        var id = ResolveRequestedModelId(engine, model)!;
+        if (_settings.Current.SelectedModelId == id)
+        {
+            return (409, Serialize(new { error = "The selected model cannot be deleted" }));
+        }
+
+        var plugin = _models.GetTranscriptionPlugin(id)
+            ?? throw new HttpApiRequestException(404, $"Unknown model: {id}");
+        if (!plugin.SupportsModelDownload)
+        {
+            return (409, Serialize(new { error = "This engine does not support deleting model files" }));
+        }
+
+        if (!_models.IsDownloaded(id))
+        {
+            return (404, Serialize(new { error = "Downloaded model not found" }));
+        }
+
+        var outcome = await _models.TryDeleteModelAsync(id, ct);
+        return outcome switch
+        {
+            ModelDeleteOutcome.Busy => (409, Serialize(new { error = ModelOperationBusy })),
+            ModelDeleteOutcome.Loaded => (409, Serialize(new { error = "Unload the model first" })),
+            ModelDeleteOutcome.Failed => (500, Serialize(new { error = "Model files could not be deleted" })),
+            _ => (200, Serialize(new
+            {
+                engine = plugin.ProviderId,
+                model = ModelManagerService.ParsePluginModelId(id).ModelId,
+                status = "deleted",
+            })),
+        };
     }
 
     private async Task<HttpApiResponse> HandleTranscribeAsync(

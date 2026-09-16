@@ -486,7 +486,7 @@ internal static class HttpApiRequestParser
         return string.IsNullOrWhiteSpace(cleaned) ? null : cleaned;
     }
 
-    private static bool? ParseBooleanOption(string? value, string name)
+    internal static bool? ParseBooleanOption(string? value, string name)
     {
         return value?.Trim().ToLowerInvariant() switch
         {

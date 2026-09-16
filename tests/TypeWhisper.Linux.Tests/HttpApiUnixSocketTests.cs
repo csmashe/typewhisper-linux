@@ -22,6 +22,303 @@ public sealed class HttpApiUnixSocketTests
     private static readonly string[] s_helloWorld = ["Hello", "World"];
 
     [Fact]
+    public async Task ModelLoadActivatesWithoutChangingSelection()
+    {
+        var engine = new DownloadableTranscriptionEngine();
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent("""{"engine":"DOWNLOADABLE","model":"other"}""", Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/models/load", content);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var fullId = ModelManagerService.GetPluginModelId(engine.PluginId, "other");
+        Assert.Equal("ready", json.RootElement.GetProperty("status").GetString());
+        Assert.Equal(engine.ProviderId, json.RootElement.GetProperty("engine").GetString());
+        Assert.Equal("other", json.RootElement.GetProperty("model").GetString());
+        Assert.Equal(fullId, json.RootElement.GetProperty("fullId").GetString());
+        Assert.Equal(1, engine.LoadCount);
+        using var statusResponse = await client.GetAsync("/v1/status");
+        using var status = JsonDocument.Parse(await statusResponse.Content.ReadAsStringAsync());
+        Assert.Equal(fullId, status.RootElement.GetProperty("active_model").GetString());
+        using var modelsResponse = await client.GetAsync("/v1/models");
+        using var models = JsonDocument.Parse(await modelsResponse.Content.ReadAsStringAsync());
+        Assert.Equal("test", Assert.Single(models.RootElement.GetProperty("models").EnumerateArray(),
+            model => model.GetProperty("selected").GetBoolean()).GetProperty("id").GetString());
+    }
+
+    [Theory]
+    [InlineData("", HttpStatusCode.BadRequest)]
+    [InlineData("{", HttpStatusCode.BadRequest)]
+    [InlineData("{}", HttpStatusCode.BadRequest)]
+    [InlineData("{\"engine\":\"\"}", HttpStatusCode.BadRequest)]
+    [InlineData("[]", HttpStatusCode.BadRequest)]
+    [InlineData("null", HttpStatusCode.BadRequest)]
+    [InlineData("{\"engine\":123}", HttpStatusCode.BadRequest)]
+    [InlineData("{\"engine\":\"downloadable\",\"model\":false}", HttpStatusCode.BadRequest)]
+    [InlineData("{\"engine\":\"downloadable\",\"engine\":\"downloadable\"}", HttpStatusCode.BadRequest)]
+    [InlineData("{\"engine\":\"missing\"}", HttpStatusCode.NotFound)]
+    [InlineData("{\"engine\":\"downloadable\",\"model\":\"missing\"}", HttpStatusCode.NotFound)]
+    public async Task ModelLoadRejectsInvalidRequests(string body, HttpStatusCode expected)
+    {
+        var engine = new DownloadableTranscriptionEngine();
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/models/load", content);
+        Assert.Equal(expected, response.StatusCode);
+        Assert.Equal(0, engine.LoadCount);
+    }
+
+    [Theory]
+    [InlineData("", HttpStatusCode.Conflict, 0)]
+    [InlineData("?await_download=YES", HttpStatusCode.OK, 1)]
+    [InlineData("?await_download=invalid", HttpStatusCode.BadRequest, 0)]
+    public async Task ModelLoadOnlyDownloadsWhenRequested(string query, HttpStatusCode expected, int downloads)
+    {
+        var engine = new DownloadableTranscriptionEngine { Downloaded = false };
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent("""{"engine":"downloadable"}""", Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/models/load" + query, content);
+        Assert.Equal(expected, response.StatusCode);
+        Assert.Equal(downloads, engine.DownloadCount);
+        Assert.Equal(downloads, engine.LoadCount);
+        if (expected == HttpStatusCode.Conflict)
+        {
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("Model is not downloaded", json.RootElement.GetProperty("error").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task ModelUnloadThenDeleteRemovesOnlyUnloadedFiles()
+    {
+        var engine = new DownloadableTranscriptionEngine();
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent("""{"engine":"downloadable","model":"other"}""", Encoding.UTF8, "application/json");
+        using var load = await client.PostAsync("/v1/models/load", content);
+        Assert.Equal(HttpStatusCode.OK, load.StatusCode);
+        using var loadedDelete = await client.DeleteAsync("/v1/models?engine=downloadable&model=other");
+        Assert.Equal(HttpStatusCode.Conflict, loadedDelete.StatusCode);
+        using var error = JsonDocument.Parse(await loadedDelete.Content.ReadAsStringAsync());
+        Assert.Equal("Unload the model first", error.RootElement.GetProperty("error").GetString());
+        Assert.Equal(0, engine.UnloadCount);
+        Assert.Equal(0, engine.DeleteCount);
+        using var unload = await client.PostAsync("/v1/models/unload", null);
+        Assert.Equal(HttpStatusCode.OK, unload.StatusCode);
+        using var unloaded = JsonDocument.Parse(await unload.Content.ReadAsStringAsync());
+        Assert.Equal("unloaded", unloaded.RootElement.GetProperty("status").GetString());
+        Assert.Equal("other", unloaded.RootElement.GetProperty("model").GetString());
+        Assert.Equal(engine.ProviderId, unloaded.RootElement.GetProperty("engine").GetString());
+        Assert.Equal(1, engine.UnloadCount);
+        Assert.Null(fixture.Models.ActiveModelId);
+        using var delete = await client.DeleteAsync("/v1/models?engine=downloadable&model=other");
+        Assert.Equal(HttpStatusCode.OK, delete.StatusCode);
+        using var deleted = JsonDocument.Parse(await delete.Content.ReadAsStringAsync());
+        Assert.Equal("deleted", deleted.RootElement.GetProperty("status").GetString());
+        Assert.Equal("other", deleted.RootElement.GetProperty("model").GetString());
+        Assert.Equal(engine.ProviderId, deleted.RootElement.GetProperty("engine").GetString());
+        Assert.Equal(1, engine.DeleteCount);
+    }
+
+    [Theory]
+    [InlineData("", HttpStatusCode.OK)]
+    [InlineData("{}", HttpStatusCode.OK)]
+    [InlineData("{\"engine\":\"downloadable\"}", HttpStatusCode.OK)]
+    [InlineData("{\"engine\":\"missing\"}", HttpStatusCode.NotFound)]
+    [InlineData("[]", HttpStatusCode.BadRequest)]
+    [InlineData("{\"engine\":\"downloadable\",\"engine\":\"downloadable\"}", HttpStatusCode.BadRequest)]
+    public async Task ModelUnloadWhenNothingLoaded(string body, HttpStatusCode expected)
+    {
+        using var fixture = new ApiFixture(transcriptionEngine: new DownloadableTranscriptionEngine());
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/models/unload", content);
+        Assert.Equal(expected, response.StatusCode);
+        if (expected == HttpStatusCode.OK)
+        {
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("model").ValueKind);
+            Assert.Equal("unloaded", json.RootElement.GetProperty("status").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task ModelUnloadRejectsDifferentEngine()
+    {
+        var engine = new DownloadableTranscriptionEngine();
+        var other = new SegmentedTranscriptionEngine();
+        using var fixture = new ApiFixture(transcriptionEngines: [engine, other]);
+        await fixture.Models.LoadModelAsync(ModelManagerService.GetPluginModelId(engine.PluginId, "test"));
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent(JsonSerializer.Serialize(new { engine = other.ProviderId }), Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/models/unload", content);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("That engine has no loaded model", json.RootElement.GetProperty("error").GetString());
+        Assert.Equal(0, engine.UnloadCount);
+    }
+
+    [Theory]
+    [InlineData("?engine=downloadable&model=test", true, HttpStatusCode.Conflict, "The selected model cannot be deleted")]
+    [InlineData("?engine=downloadable&model=other", false, HttpStatusCode.NotFound, "Downloaded model not found")]
+    [InlineData("?engine=downloadable", true, HttpStatusCode.BadRequest, "Both 'engine' and 'model' are required.")]
+    [InlineData("?model=other", true, HttpStatusCode.BadRequest, "Both 'engine' and 'model' are required.")]
+    [InlineData("?engine=missing&model=other", true, HttpStatusCode.NotFound, "Unknown engine: missing")]
+    [InlineData("?engine=downloadable&model=missing", true, HttpStatusCode.NotFound, "Unknown model for engine downloadable: missing")]
+    public async Task ModelDeleteRejectsProtectedOrMissingModels(string query, bool downloaded, HttpStatusCode expected, string message)
+    {
+        var engine = new DownloadableTranscriptionEngine { Downloaded = downloaded };
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var response = await client.DeleteAsync("/v1/models" + query);
+        Assert.Equal(expected, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(message, json.RootElement.GetProperty("error").GetString());
+        Assert.Equal(0, engine.DeleteCount);
+    }
+
+    [Theory]
+    [InlineData("POST", "/v1/models/load")]
+    [InlineData("POST", "/v1/models/unload")]
+    [InlineData("DELETE", "/v1/models?engine=downloadable&model=other")]
+    public async Task ModelOperationsReturnBusyWhileTranscriptionLeaseIsHeld(string method, string path)
+    {
+        var engine = new DownloadableTranscriptionEngine();
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        await using (await fixture.Models.AcquireTranscriptionAsync())
+        {
+            using var request = new HttpRequestMessage(new HttpMethod(method), path);
+            request.Content = new StringContent("""{"engine":"downloadable"}""", Encoding.UTF8, "application/json");
+            using var response = await client.SendAsync(request).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("A transcription or model operation is in progress", json.RootElement.GetProperty("error").GetString());
+        }
+        Assert.Equal(1, engine.LoadCount);
+        Assert.Equal(0, engine.UnloadCount);
+        Assert.Equal(0, engine.DeleteCount);
+    }
+
+    [Fact]
+    public async Task ModelUnloadReportsFailedTeardownAndKeepsModelActive()
+    {
+        var engine = new DownloadableTranscriptionEngine { UnloadFails = true };
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        var fullId = ModelManagerService.GetPluginModelId(engine.PluginId, "other");
+        await fixture.Models.LoadModelAsync(fullId);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var response = await client.PostAsync("/v1/models/unload", null);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("This engine cannot unload the model", json.RootElement.GetProperty("error").GetString());
+        Assert.Equal(1, engine.UnloadCount);
+        Assert.Equal(fullId, fixture.Models.ActiveModelId);
+    }
+
+    [Fact]
+    public async Task ModelDeleteReportsFilesLeftBehind()
+    {
+        var engine = new DownloadableTranscriptionEngine { DeleteFails = true };
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var response = await client.DeleteAsync("/v1/models?engine=downloadable&model=other");
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("Model files could not be deleted", json.RootElement.GetProperty("error").GetString());
+        Assert.Equal(1, engine.DeleteCount);
+        Assert.True(fixture.Models.IsDownloaded(ModelManagerService.GetPluginModelId(engine.PluginId, "other")));
+    }
+
+    [Fact]
+    public async Task ModelDeleteRejectsEngineWithoutFileManagement()
+    {
+        var engine = new SegmentedTranscriptionEngine();
+        using var fixture = new ApiFixture(transcriptionEngines: [engine]);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var response = await client.DeleteAsync($"/v1/models?engine={engine.ProviderId}&model=test");
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("This engine does not support deleting model files", json.RootElement.GetProperty("error").GetString());
+    }
+
+    [Theory]
+    [InlineData("/v1/models/load")]
+    [InlineData("/v1/models/unload")]
+    public async Task ModelRequestsRespectJsonBodyLimit(string path)
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent(new string(' ', (int)HttpApiService.MaxJsonRequestBytes + 1), Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync(path, content);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+    }
+
+    private sealed class DownloadableTranscriptionEngine : ITranscriptionEngineRole
+    {
+        public string PluginId => "test.downloadable";
+        public string ProviderId => "downloadable";
+        public string ProviderDisplayName => "Downloadable";
+        public bool IsConfigured => true;
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels => [new("test", "Test"), new("other", "Other")];
+        public string SelectedModelId => "test";
+        public bool SupportsTranslation => false;
+        public bool SupportsModelDownload => true;
+        public bool Downloaded { get; set; } = true;
+        public bool UnloadFails { get; init; }
+        public bool DeleteFails { get; init; }
+        public int LoadCount { get; private set; }
+        public int UnloadCount { get; private set; }
+        public int DeleteCount { get; private set; }
+        public int DownloadCount { get; private set; }
+        public void SelectModel(string modelId) { }
+        public bool IsModelDownloaded(string modelId) => Downloaded;
+        public Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
+        {
+            DownloadCount++;
+            Downloaded = true;
+            return Task.CompletedTask;
+        }
+        public Task LoadModelAsync(string modelId, CancellationToken ct)
+        {
+            LoadCount++;
+            return Task.CompletedTask;
+        }
+        public Task UnloadModelAsync()
+        {
+            UnloadCount++;
+            return UnloadFails ? Task.FromException(new InvalidOperationException("teardown failed")) : Task.CompletedTask;
+        }
+        public Task DeleteModelAsync(string modelId, CancellationToken ct)
+        {
+            DeleteCount++;
+            // DeleteFails mirrors plugins that swallow filesystem errors and leave the file behind.
+            if (!DeleteFails)
+            {
+                Downloaded = false;
+            }
+            return Task.CompletedTask;
+        }
+        public Task<PluginTranscriptionResult> TranscribeAsync(
+            byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct) =>
+            Task.FromResult(new PluginTranscriptionResult("test", "en", 1));
+    }
+
+    [Fact]
     public async Task VerboseTranslationPreservesSegmentTimingsAndReportsTargetLanguage()
     {
         var translation = CreateTranslationMock();
@@ -160,6 +457,11 @@ public sealed class HttpApiUnixSocketTests
             root.GetProperty("response_formats").EnumerateArray().Select(value => value.GetString()));
         Assert.Equal(HttpApiService.MaxTranscribeRequestBytes, root.GetProperty("max_upload_bytes").GetInt64());
         Assert.Equal("request-scoped engine/model overrides; await_download supported", root.GetProperty("model_selection").GetString());
+        foreach (var route in new[] { ("POST", "/v1/models/load"), ("POST", "/v1/models/unload"), ("DELETE", "/v1/models") })
+        {
+            Assert.Contains(root.GetProperty("routes").EnumerateArray(), value =>
+                value.GetProperty("method").GetString() == route.Item1 && value.GetProperty("path").GetString() == route.Item2);
+        }
         Assert.True(root.GetProperty("supports_dictation_control").GetBoolean());
         Assert.True(root.GetProperty("requires_authentication").GetBoolean());
     }
@@ -1209,7 +1511,7 @@ public sealed class HttpApiUnixSocketTests
         private readonly string _tempDirectory =
             TestPaths.CreateTempDirectory("TypeWhisper.HttpApiUnixSocketTests");
         private readonly HotkeyService _hotkeys = TestShortcutBackend.CreateHotkeyService();
-        private readonly ModelManagerService _models;
+        
         private readonly DictationSessionResultStore _sessionResults = new();
         private AppSettings _current;
 
@@ -1221,7 +1523,8 @@ public sealed class HttpApiUnixSocketTests
             ITranscriptionEngineRole? transcriptionEngine = null,
             IDictionaryService? dictionary = null,
             IPostProcessingPipeline? pipeline = null,
-            ITranslationService? translation = null
+            ITranslationService? translation = null,
+            IReadOnlyList<ITranscriptionEngineRole>? transcriptionEngines = null
         )
         {
             Port = GetFreeTcpPort();
@@ -1254,8 +1557,8 @@ public sealed class HttpApiUnixSocketTests
                     return _current;
                 });
 
-            _models = new ModelManagerService(
-                TestPluginManagerFactory.Create(transcriptionEngines: transcriptionEngine is null ? null : [transcriptionEngine]),
+            Models = new ModelManagerService(
+                TestPluginManagerFactory.Create(transcriptionEngines: transcriptionEngines ?? (transcriptionEngine is null ? null : [transcriptionEngine])),
                 Settings.Object
             );
             var historyService = history ?? new Mock<IHistoryService>();
@@ -1278,7 +1581,7 @@ public sealed class HttpApiUnixSocketTests
             ProcessRunner.SupervisorInvocations.Clear();
             var audioFiles = new AudioFileService(commands, ProcessRunner);
             Service = new HttpApiService(
-                _models,
+                Models,
                 Settings.Object,
                 audioFiles,
                 historyService.Object,
@@ -1297,6 +1600,8 @@ public sealed class HttpApiUnixSocketTests
                 validateUnixPeer
             );
         }
+
+        internal ModelManagerService Models { get; }
 
         internal int Port { get; }
 
@@ -1411,7 +1716,7 @@ public sealed class HttpApiUnixSocketTests
         {
             Service.Dispose();
             _sessionResults.Dispose();
-            _models.Dispose();
+            Models.Dispose();
             _hotkeys.Dispose();
             Environment.SetEnvironmentVariable(
                 "XDG_CONFIG_HOME",
