@@ -346,6 +346,79 @@ public sealed class DictionaryServiceTests : IDisposable
         Assert.Equal("I deployed to Kubernetes", result);
     }
 
+    [Theory]
+    [InlineData("Hello, new line.", @"\n", "Hello, \n")]
+    [InlineData("Hello new line.  ", @"\r\n", "Hello \r\n")]
+    [InlineData("new line.", @"\n\n", "\n\n")]
+    [InlineData("new line", @"\n", "\n")]
+    [InlineData("new line Hello.", @"\n", "\n Hello.")]
+    [InlineData("Hello new line. Next sentence.", @"\n", "Hello \n. Next sentence.")]
+    [InlineData("Hello new line.", "replacement", "Hello replacement.")]
+    [InlineData("Hello new line.", @"\nItem", "Hello \nItem.")]
+    [InlineData("Hello new line.", @"\\n", @"Hello \n.")]
+    [InlineData("Hello new line.\r\n", @"\n", "Hello \n\r\n")]
+    [InlineData("Hello new line.\n\n", @"\n", "Hello \n\n\n")]
+    [InlineData("Hello new line.\nNext", @"\n", "Hello \n.\nNext")]
+    public void ApplyCorrections_RemovesOnlyTrailingCommandPeriodForStructuralNewline(string input, string replacement, string expected)
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "layout",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "new line",
+            Replacement = replacement,
+            CaseSensitive = false,
+            ExpandEscapes = true,
+        });
+
+        Assert.Equal(expected, _sut.ApplyCorrections(input));
+        Assert.Equal(expected, _sut.PreviewCorrections(input));
+    }
+
+    [Fact]
+    public void ApplyCorrections_RegexLayoutCommandKeepsExplicitMatchSemantics()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "layout",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "new line",
+            Replacement = @"\n",
+            IsRegex = true,
+            ExpandEscapes = true,
+        });
+
+        Assert.Equal("Hello \n.", _sut.ApplyCorrections("Hello new line."));
+    }
+
+    [Fact]
+    public void ApplyCorrections_LiteralNewlineReplacementKeepsTrailingPeriod()
+    {
+        _sut.UpsertCorrection("new line", @"\n", caseSensitive: false);
+
+        Assert.Equal(@"Hello \n.", _sut.ApplyCorrections("Hello new line."));
+    }
+
+    [Fact]
+    public void ApplyCorrections_TrailingPeriodPatternIsNotSharedAcrossReplacements()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "layout",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "new line",
+            Replacement = @"\n",
+            CaseSensitive = false,
+            ExpandEscapes = true,
+        });
+
+        Assert.Equal("Hello \n", _sut.ApplyCorrections("Hello new line."));
+
+        _sut.UpdateEntry(Assert.Single(_sut.Entries) with { Replacement = "X" });
+
+        Assert.Equal("Hello X.", _sut.ApplyCorrections("Hello new line."));
+    }
+
     [Fact]
     public void PreviewCorrections_ReplacesText()
     {
