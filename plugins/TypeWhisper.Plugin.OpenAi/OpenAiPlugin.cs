@@ -587,11 +587,12 @@ public sealed class OpenAiPlugin
         // shape (temperature/max_tokens, no reasoning payload). Route them to
         // /v1/responses instead — upstream only matched gpt-5* here, so
         // o-series fallbacks like o4-mini silently failed at runtime.
-        var lowered = modelId.ToLowerInvariant();
+        var lowered = BaseModelId(modelId.ToLowerInvariant());
         return lowered.StartsWith("gpt-5", StringComparison.Ordinal)
-            || lowered.StartsWith("o1", StringComparison.Ordinal)
-            || lowered.StartsWith("o3", StringComparison.Ordinal)
-            || lowered.StartsWith("o4", StringComparison.Ordinal);
+            || MatchesModelFamily(lowered, "gpt-6-astra")
+            || MatchesModelFamily(lowered, "o1")
+            || MatchesModelFamily(lowered, "o3")
+            || MatchesModelFamily(lowered, "o4");
     }
 
     internal static string? MapApiReasoningEffort(string? effort) =>
@@ -603,11 +604,12 @@ public sealed class OpenAiPlugin
 
     internal static bool SupportsReasoningEffort(string modelId)
     {
-        var lowered = modelId.ToLowerInvariant();
+        var lowered = BaseModelId(modelId.ToLowerInvariant());
         return lowered.StartsWith("gpt-5", StringComparison.Ordinal)
-            || lowered.StartsWith("o1", StringComparison.Ordinal)
-            || lowered.StartsWith("o3", StringComparison.Ordinal)
-            || lowered.StartsWith("o4", StringComparison.Ordinal)
+            || MatchesModelFamily(lowered, "gpt-6-astra")
+            || MatchesModelFamily(lowered, "o1")
+            || MatchesModelFamily(lowered, "o3")
+            || MatchesModelFamily(lowered, "o4")
             || lowered.Contains("codex", StringComparison.Ordinal);
     }
 
@@ -619,11 +621,12 @@ public sealed class OpenAiPlugin
     /// </summary>
     internal static string OutputTokenParameter(string modelId)
     {
-        var lowered = modelId.ToLowerInvariant();
+        var lowered = BaseModelId(modelId.ToLowerInvariant());
         if (lowered.StartsWith("gpt-5", StringComparison.Ordinal)
-            || lowered.StartsWith("o1", StringComparison.Ordinal)
-            || lowered.StartsWith("o3", StringComparison.Ordinal)
-            || lowered.StartsWith("o4", StringComparison.Ordinal))
+            || MatchesModelFamily(lowered, "gpt-6-astra")
+            || MatchesModelFamily(lowered, "o1")
+            || MatchesModelFamily(lowered, "o3")
+            || MatchesModelFamily(lowered, "o4"))
         {
             return "max_completion_tokens";
         }
@@ -633,22 +636,23 @@ public sealed class OpenAiPlugin
 
     /// <summary>
     ///     Whether the model accepts a user-supplied <c>temperature</c> parameter
-    ///     in chat-completion mode. GPT-5 with reasoning_effort set does not.
+    ///     in chat-completion mode. Astra and GPT-5 with reasoning_effort set do not.
     /// </summary>
     internal static bool SupportsCustomTemperature(string modelId, string? reasoningEffort) =>
         ChatCompletionTemperature(modelId, reasoningEffort) is not null;
 
     /// <summary>
     ///     Provider-default chat-completion temperature for the given model.
-    ///     Returns <c>null</c> for GPT-5 with reasoning_effort set (the model
+    ///     Returns <c>null</c> for Astra or GPT-5 with reasoning_effort set (the model
     ///     rejects the field outright in that mode); otherwise 0.3 — the value
     ///     upstream picked when surfacing the setting to users.
     /// </summary>
     internal static double? ChatCompletionTemperature(string modelId, string? reasoningEffort)
     {
-        var lowered = modelId.ToLowerInvariant();
-        if (lowered.StartsWith("gpt-5", StringComparison.Ordinal)
-            && !string.IsNullOrWhiteSpace(reasoningEffort))
+        var lowered = BaseModelId(modelId.ToLowerInvariant());
+        if (MatchesModelFamily(lowered, "gpt-6-astra")
+            || (lowered.StartsWith("gpt-5", StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(reasoningEffort)))
         {
             return null;
         }
@@ -853,14 +857,22 @@ public sealed class OpenAiPlugin
     internal static bool IsChatModel(string id)
     {
         var lowered = id.ToLowerInvariant();
-        // OpenAI ships bare o-series GA model IDs (`o1`, `o3`) alongside the
-        // dashed variants. Upstream's verbatim filter required the trailing
-        // hyphen and dropped the bare IDs from the fetched catalog even
-        // though UsesResponsesApi already routes them correctly.
+        if (lowered.StartsWith("ft:", StringComparison.Ordinal))
+        {
+            var parts = lowered.Split(':', 3);
+            if (parts.Length != 3 || string.IsNullOrWhiteSpace(parts[2])
+                || string.IsNullOrWhiteSpace(parts[2][(parts[2].LastIndexOf(':') + 1)..]))
+            {
+                return false;
+            }
+
+            lowered = parts[1];
+        }
+
         var hasChatPrefix = lowered.StartsWith("gpt-", StringComparison.Ordinal)
-            || lowered.StartsWith("o1", StringComparison.Ordinal)
-            || lowered.StartsWith("o3", StringComparison.Ordinal)
-            || lowered.StartsWith("o4", StringComparison.Ordinal)
+            || MatchesModelFamily(lowered, "o1")
+            || MatchesModelFamily(lowered, "o3")
+            || MatchesModelFamily(lowered, "o4")
             || lowered.StartsWith("chatgpt-", StringComparison.Ordinal);
         if (!hasChatPrefix)
             return false;
@@ -876,6 +888,8 @@ public sealed class OpenAiPlugin
             "audio",
             "realtime",
             "gpt-image",
+            "gpt-live",
+            "-instruct",
             "-search",
         ];
         return !excludeSuffixes.Any(suffix => lowered.EndsWith(suffix, StringComparison.Ordinal))
@@ -1173,6 +1187,18 @@ public sealed class OpenAiPlugin
             };
     }
 
+    /// <summary>
+    ///     Strips the <c>ft:base:org:suffix:id</c> fine-tune wrapper so capability
+    ///     checks see the base model; the full id is still what gets sent.
+    /// </summary>
+    private static string BaseModelId(string lowered)
+    {
+        if (!lowered.StartsWith("ft:", StringComparison.Ordinal))
+            return lowered;
+        var parts = lowered.Split(':', 3);
+        return parts.Length == 3 ? parts[1] : lowered;
+    }
+
     private static bool MatchesModelFamily(string modelId, string baseModelId) =>
         string.Equals(modelId, baseModelId, StringComparison.OrdinalIgnoreCase)
         || modelId.StartsWith($"{baseModelId}-", StringComparison.OrdinalIgnoreCase);
@@ -1226,7 +1252,8 @@ public sealed class OpenAiPlugin
             var refreshedCredentials = CreateOAuthCredentialSnapshot(
                 refreshed,
                 credentials.AccountId,
-                credentials.RefreshToken);
+                credentials.RefreshToken,
+                credentials.PlanType);
             await CommitOAuthCredentialSnapshotUnderGateAsync(refreshedCredentials);
             return refreshedCredentials;
         }
@@ -1260,9 +1287,10 @@ public sealed class OpenAiPlugin
     private static OAuthCredentialSnapshot CreateOAuthCredentialSnapshot(
         OpenAiOAuthTokenResponse tokens,
         string? preferredAccountId,
-        string? existingRefreshToken)
+        string? existingRefreshToken,
+        string? fallbackPlanType = null)
     {
-        var metadata = OpenAiOAuthClient.ExtractMetadata(tokens, preferredAccountId);
+        var metadata = OpenAiOAuthClient.ExtractMetadata(tokens, preferredAccountId, fallbackPlanType);
         // RFC 6749 §6: a refresh response MAY omit `refresh_token`, meaning
         // "keep using the previously issued one". Unconditionally assigning
         // tokens.RefreshToken here would null out the only usable refresh

@@ -4,6 +4,7 @@
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
 using TypeWhisper.PluginSDK.Helpers;
+using TypeWhisper.PluginSDK;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -120,18 +121,25 @@ internal static class OpenAiOAuthClient
         return await SendTokenRequestAsync(httpClient, request, ct);
     }
 
-    public static OpenAiOAuthMetadata ExtractMetadata(OpenAiOAuthTokenResponse tokens, string? preferredAccountId = null)
+    public static OpenAiOAuthMetadata ExtractMetadata(
+        OpenAiOAuthTokenResponse tokens,
+        string? preferredAccountId = null,
+        string? fallbackPlanType = null)
     {
         var idClaims = ParseJwtPayload(tokens.IdToken);
         var accessClaims = ParseJwtPayload(tokens.AccessToken);
-        var claims = idClaims ?? accessClaims;
-
         var accountId = preferredAccountId
-            ?? GetString(claims, "chatgpt_account_id")
-            ?? GetNestedString(claims, "https://api.openai.com/auth", "chatgpt_account_id")
-            ?? GetFirstOrganizationId(claims);
-        var planType = GetString(claims, "chatgpt_plan_type")
-            ?? GetNestedString(claims, "https://api.openai.com/auth", "chatgpt_plan_type");
+            ?? GetString(idClaims, "chatgpt_account_id")
+            ?? GetNestedString(idClaims, "https://api.openai.com/auth", "chatgpt_account_id")
+            ?? GetFirstOrganizationId(idClaims)
+            ?? GetString(accessClaims, "chatgpt_account_id")
+            ?? GetNestedString(accessClaims, "https://api.openai.com/auth", "chatgpt_account_id")
+            ?? GetFirstOrganizationId(accessClaims);
+        var planType = GetString(idClaims, "chatgpt_plan_type")
+            ?? GetNestedString(idClaims, "https://api.openai.com/auth", "chatgpt_plan_type")
+            ?? GetString(accessClaims, "chatgpt_plan_type")
+            ?? GetNestedString(accessClaims, "https://api.openai.com/auth", "chatgpt_plan_type")
+            ?? fallbackPlanType;
         var expiresAt = GetDouble(accessClaims, "exp") is { } exp
             ? DateTimeOffset.FromUnixTimeSeconds((long)exp)
             : DateTimeOffset.UtcNow.AddSeconds(tokens.ExpiresIn ?? 3600);
@@ -374,10 +382,10 @@ internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
                 pair => Uri.UnescapeDataString(pair[0]),
                 pair => pair.Length > 1 ? Uri.UnescapeDataString(pair[1].Replace("+", " ")) : "");
 
-        if (query.TryGetValue("error", out var error) && !string.IsNullOrWhiteSpace(error))
-            throw new InvalidOperationException("The OAuth callback returned an error.");
         if (!query.TryGetValue("state", out var state) || state != expectedState)
             throw new InvalidOperationException("The OAuth callback state did not match.");
+        if (query.TryGetValue("error", out var error) && !string.IsNullOrWhiteSpace(error))
+            throw new PluginRequestException("ChatGPT sign-in was declined or cancelled.", PluginRequestFailureKind.Authentication);
         if (!query.TryGetValue("code", out var code) || string.IsNullOrWhiteSpace(code))
             throw new InvalidOperationException("The OAuth callback did not include an authorization code.");
 
