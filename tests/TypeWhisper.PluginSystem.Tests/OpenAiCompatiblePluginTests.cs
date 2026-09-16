@@ -12,6 +12,260 @@ namespace TypeWhisper.PluginSystem.Tests;
 public sealed class OpenAiCompatiblePluginTests
 {
     [Theory]
+    [InlineData("responses", "high", "custom", 0.7, null, false)]
+    [InlineData("responses", "", "custom", 0.7, 0.7, false)]
+    [InlineData("responses", "", "provider-default", 0.7, null, false)]
+    [InlineData("responses", "high", "custom", 0.7, null, true)]
+    [InlineData("responses", "", "custom", 0.7, 0.7, true)]
+    [InlineData("chat-completions", "", "provider-default", 0.3, null, false)]
+    [InlineData("chat-completions", "high", "custom", 1.5, 1.5, false)]
+    [InlineData("chat-completions", "", "provider-default", 0.3, null, true)]
+    [InlineData("chat-completions", "", "custom", 1.5, 1.5, true)]
+    public async Task DefaultEndpoint_TextOptionsShapeRequests(
+        string api, string effort, string temperatureMode, double temperature, double? expectedTemperature, bool streaming)
+    {
+        var requests = new List<(string Path, JsonElement Body)>();
+        using var client = TextOptionsClient(requests);
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "https://example.test");
+        host.Secrets["api-key"] = "key";
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        await sut.SetSettingValueAsync("textApi", api);
+        await sut.SetSettingValueAsync("reasoningEffort", effort);
+        await sut.SetSettingValueAsync("temperatureMode", temperatureMode);
+        await sut.SetSettingValueAsync("temperature", temperature.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var chunks = await ProcessTextOptionsAsync(sut, streaming);
+        Assert.Equal([api == "responses" ? "response" : "chat"], chunks);
+        var request = Assert.Single(requests);
+        Assert.Equal(api == "responses" ? "/v1/responses" : "/v1/chat/completions", request.Path);
+        Assert.Equal(expectedTemperature.HasValue, request.Body.TryGetProperty("temperature", out var value));
+        if (expectedTemperature.HasValue)
+            Assert.Equal(expectedTemperature.Value, value.GetDouble());
+        if (api == "responses")
+        {
+            Assert.Equal("message", request.Body.GetProperty("input")[0].GetProperty("type").GetString());
+            Assert.Equal(effort.Length > 0, request.Body.TryGetProperty("reasoning", out var reasoning));
+            if (effort.Length > 0)
+                Assert.Equal(effort, reasoning.GetProperty("effort").GetString());
+        }
+        else
+            Assert.False(request.Body.TryGetProperty("reasoning_effort", out _));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AdditionalProfile_TextOptionsRoundTripAndUseResponses(bool streaming)
+    {
+        var requests = new List<(string Path, JsonElement Body)>();
+        using var client = TextOptionsClient(requests);
+        var host = new TestPluginHostServices();
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        var result = await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://example.test", apiKey: "key",
+            llmModel: "m1", textApi: "responses", reasoningEffort: "high", temperatureMode: "custom", temperature: "0.7")]);
+        Assert.True(result.IsSuccess);
+        var reloaded = new OpenAiCompatiblePlugin(client);
+        await reloaded.ActivateAsync(host);
+        var item = Assert.Single(await reloaded.GetItemsAsync("profiles"));
+        Assert.Equal("responses", item.Values["textApi"]);
+        Assert.Equal("high", item.Values["reasoningEffort"]);
+        Assert.Equal("custom", item.Values["temperatureMode"]);
+        Assert.Equal("0.7", item.Values["temperature"]);
+        Assert.Equal(["response"], await ProcessTextOptionsAsync(Assert.Single(reloaded.AdditionalLlmProviders), streaming));
+        var request = Assert.Single(requests);
+        Assert.Equal("/v1/responses", request.Path);
+        Assert.Equal("high", request.Body.GetProperty("reasoning").GetProperty("effort").GetString());
+        Assert.False(request.Body.TryGetProperty("temperature", out _));
+    }
+
+    [Fact]
+    public async Task AdditionalProfile_ChangingOnlyTextApiInvalidatesRoleAndChangesRequest()
+    {
+        var requests = new List<(string Path, JsonElement Body)>();
+        using var client = TextOptionsClient(requests);
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices());
+        await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://example.test", apiKey: "key", llmModel: "m1")]);
+        var originalRole = Assert.Single(sut.AdditionalLlmProviders);
+        Assert.Equal(["chat"], await ProcessTextOptionsAsync(originalRole, false));
+        var item = Assert.Single(await sut.GetItemsAsync("profiles"));
+        var values = item.Values.ToDictionary(pair => pair.Key, pair => pair.Value);
+        values["textApi"] = "responses";
+        Assert.True((await sut.SetItemsAsync("profiles", [new PluginCollectionItem(values)])).IsSuccess);
+        var newRole = Assert.Single(sut.AdditionalLlmProviders);
+        Assert.NotSame(originalRole, newRole);
+        Assert.Equal(["response"], await ProcessTextOptionsAsync(newRole, false));
+        Assert.Equal(["/v1/chat/completions", "/v1/responses"], requests.Select(r => r.Path));
+    }
+
+    [Theory]
+    [InlineData("abc")]
+    [InlineData("2.5")]
+    [InlineData("-0.1")]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    [InlineData("0,7")]
+    public async Task Temperature_RejectsInvalidValuesForDefaultAndProfiles(string value)
+    {
+        using var client = ModelsClient();
+        var host = new TestPluginHostServices { Localization = TimeoutLocalization() };
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => sut.SetSettingValueAsync("temperature", value));
+        var expected = host.Localization.GetString("Settings.TemperatureInvalid");
+        Assert.Equal(expected, ex.Message);
+        Assert.Equal("0.3", await sut.GetSettingValueAsync("temperature"));
+        var result = await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://example.test", temperature: value)]);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(expected, result.Message);
+        Assert.Empty(await sut.GetItemsAsync("profiles"));
+    }
+
+    [Theory]
+    [InlineData(false, "<think>plan</think> answer ", "answer")]
+    [InlineData(true, "<think>plan</think> answer ", "answer")]
+    [InlineData(false, "<think>plan</think>", null)]
+    [InlineData(true, "<think>plan</think>", null)]
+    public async Task ResponsesEndpoint_StripsThinkBlocks(bool useProfile, string outputText, string? expected)
+    {
+        using var client = new HttpClient(new CapturingHandler((request, _) => request.Method == HttpMethod.Get
+            ? ModelCatalogResponse("m1")
+            : new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new { output_text = outputText })),
+            }));
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "https://example.test");
+        host.SetSetting("textApi", "responses");
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        ILlmProviderRole role = sut;
+        if (useProfile)
+        {
+            Assert.True((await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://example.test", llmModel: "m1", textApi: "responses")])).IsSuccess);
+            role = Assert.Single(sut.AdditionalLlmProviders);
+        }
+        if (expected is not null)
+        {
+            Assert.Equal(expected, await role.ProcessAsync("system", "user", "m1", CancellationToken.None));
+            return;
+        }
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => role.ProcessAsync("system", "user", "m1", CancellationToken.None));
+        Assert.Equal(PluginRequestFailureKind.EmptyResponse, ex.FailureKind);
+    }
+
+    [Fact]
+    public async Task AdditionalProfile_BlankTemperatureKeepsPreviousOrDefault()
+    {
+        // The settings UI seeds new text fields with "" (see PluginCollectionViewModels.AddItem).
+        using var client = ModelsClient();
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices());
+        var result = await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://example.test", temperature: "")]);
+        Assert.True(result.IsSuccess, result.Message);
+        var item = Assert.Single(await sut.GetItemsAsync("profiles"));
+        Assert.Equal("0.3", item.Values["temperature"]);
+        Assert.True((await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://example.test", id: item.Values["__id"],
+            temperatureMode: "custom", temperature: "0.7")])).IsSuccess);
+        Assert.True((await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://example.test", id: item.Values["__id"],
+            temperatureMode: "custom", temperature: " ")])).IsSuccess);
+        Assert.Equal("0.7", Assert.Single(await sut.GetItemsAsync("profiles")).Values["temperature"]);
+    }
+
+    [Fact]
+    public async Task TextOptions_DefaultsNormalizeAndPersist()
+    {
+        using var client = ModelsClient();
+        var host = new TestPluginHostServices();
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        var defaults = new Dictionary<string, string>
+        {
+            ["textApi"] = "chat-completions", ["reasoningEffort"] = "",
+            ["temperatureMode"] = "provider-default", ["temperature"] = "0.3",
+        };
+        foreach (var (key, value) in defaults)
+            Assert.Equal(value, await sut.GetSettingValueAsync(key));
+        foreach (var key in defaults.Keys.Where(k => k != "temperature"))
+        {
+            await sut.SetSettingValueAsync(key, "unknown");
+            Assert.Equal(defaults[key], await sut.GetSettingValueAsync(key));
+            Assert.Equal(defaults[key], host.GetSetting<string>(key));
+        }
+        await sut.SetSettingValueAsync("textApi", "responses");
+        await sut.SetSettingValueAsync("reasoningEffort", "max");
+        await sut.SetSettingValueAsync("temperatureMode", "custom");
+        await sut.SetSettingValueAsync("temperature", "1.5");
+        var reloaded = new OpenAiCompatiblePlugin(client);
+        await reloaded.ActivateAsync(host);
+        Assert.Equal("responses", await reloaded.GetSettingValueAsync("textApi"));
+        Assert.Equal("max", await reloaded.GetSettingValueAsync("reasoningEffort"));
+        Assert.Equal("custom", await reloaded.GetSettingValueAsync("temperatureMode"));
+        Assert.Equal("1.5", await reloaded.GetSettingValueAsync("temperature"));
+        var fields = Assert.Single(sut.GetCollectionDefinitions()).ItemFields;
+        foreach (var key in defaults.Keys)
+        {
+            var flat = Assert.Single(sut.GetSettingDefinitions(), d => d.Key == key);
+            var collection = Assert.Single(fields, d => d.Key == key);
+            Assert.Equal(key == "temperature" ? PluginSettingKind.Text : PluginSettingKind.Dropdown, flat.Kind);
+            Assert.Equal(flat.Label, collection.Label);
+            Assert.Equal(flat.Description, collection.Description);
+            Assert.Equal(flat.Options, collection.Options);
+        }
+    }
+
+    [Fact]
+    public async Task AdditionalProfile_UnknownTextOptionsLoadWithDefaults()
+    {
+        using var client = ModelsClient();
+        var host = new TestPluginHostServices();
+        host.SetSetting("additionalProfiles", new List<OpenAiCompatibleProfile>
+        {
+            new() { Id = "openai-compatible-test", Name = "P", BaseUrl = "https://example.test",
+                TextApi = "unknown", ReasoningEffort = "unknown", TemperatureMode = "unknown", Temperature = 2.5 },
+        });
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        var saved = Assert.Single(await sut.GetItemsAsync("profiles"));
+        Assert.Equal("chat-completions", saved.Values["textApi"]);
+        Assert.Equal("", saved.Values["reasoningEffort"]);
+        Assert.Equal("provider-default", saved.Values["temperatureMode"]);
+        Assert.Equal("0.3", saved.Values["temperature"]);
+        Assert.Equal(0.3, Assert.Single(host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!).Temperature);
+    }
+
+    private static HttpClient TextOptionsClient(List<(string Path, JsonElement Body)> requests) =>
+        new(new CapturingHandler((request, body) =>
+        {
+            if (request.Method == HttpMethod.Get)
+                return ModelCatalogResponse("m1");
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("Bearer key", request.Headers.Authorization?.ToString());
+            using var doc = JsonDocument.Parse(body!);
+            requests.Add((request.RequestUri!.AbsolutePath, doc.RootElement.Clone()));
+            var responses = request.RequestUri.AbsolutePath.EndsWith("/responses", StringComparison.Ordinal);
+            var streaming = doc.RootElement.TryGetProperty("stream", out var stream) && stream.GetBoolean();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responses ? """{"output_text":"response"}"""
+                    : streaming ? "data: {\"choices\":[{\"delta\":{\"content\":\"chat\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+                    : """{"choices":[{"message":{"content":"chat"}}]}"""),
+            };
+        }));
+
+    private static async Task<List<string>> ProcessTextOptionsAsync(ILlmProviderRole role, bool streaming)
+    {
+        if (!streaming)
+            return [await role.ProcessAsync("system", "user", "m1", CancellationToken.None)];
+        var chunks = new List<string>();
+        await foreach (var chunk in role.ProcessStreamingAsync("system", "user", "m1", CancellationToken.None))
+            chunks.Add(chunk);
+        return chunks;
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task RefreshModelCatalogAsync_DeadlineRetainsCacheAndContinuesToNextProfile(bool defaultTimesOut)
@@ -174,14 +428,22 @@ public sealed class OpenAiCompatiblePluginTests
     [InlineData(true, false, true)]
     [InlineData(false, true, true)]
     [InlineData(true, true, true)]
-    public async Task LlmTimeout_DeadlineAndCallerCancellationHaveDistinctExceptions(bool streaming, bool cancelCaller, bool useDefault)
+    [InlineData(false, false, false, "responses")]
+    [InlineData(false, false, true, "responses")]
+    [InlineData(false, true, false, "responses")]
+    [InlineData(false, true, true, "responses")]
+    [InlineData(true, false, false, "responses")]
+    [InlineData(true, false, true, "responses")]
+    [InlineData(true, true, false, "responses")]
+    [InlineData(true, true, true, "responses")]
+    public async Task LlmTimeout_DeadlineAndCallerCancellationHaveDistinctExceptions(bool streaming, bool cancelCaller, bool useDefault, string textApi = "chat-completions")
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var body = new StalledSseStream("data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n");
         var chunks = new List<string>();
         using var client = new HttpClient(new AsyncHandler(async (_, ct) =>
         {
-            if (streaming)
+            if (streaming && textApi == "chat-completions")
             {
                 // ReSharper disable once AccessToDisposedClosure -- the handler completes before the stream is disposed at test exit.
                 var content = new StreamContent(body);
@@ -198,6 +460,8 @@ public sealed class OpenAiCompatiblePluginTests
         host.Localization = TimeoutLocalization();
         var profiles = host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!;
         profiles[0].LlmRequestTimeoutSeconds = 5;
+        profiles[0].TextApi = textApi;
+        host.SetSetting("textApi", textApi);
         host.SetSetting("additionalProfiles", profiles);
         host.SetSetting("baseUrl", "http://localhost:11434");
         host.SetSetting("selectedLlmModel", "m1");
@@ -208,8 +472,8 @@ public sealed class OpenAiCompatiblePluginTests
         using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var role = useDefault ? sut : sut.AdditionalLlmProviders[0];
         var request = RequestAsync(caller.Token);
-        await (streaming ? body.Stalled.Task : entered.Task).WaitAsync(TimeSpan.FromSeconds(10), guard.Token);
-        if (streaming)
+        await (streaming && textApi == "chat-completions" ? body.Stalled.Task : entered.Task).WaitAsync(TimeSpan.FromSeconds(10), guard.Token);
+        if (streaming && textApi == "chat-completions")
             Assert.Equal(["Hel"], chunks);
         if (cancelCaller)
         {
@@ -509,7 +773,9 @@ public sealed class OpenAiCompatiblePluginTests
 
     private static PluginCollectionItem ProfileItem(
         string name, string baseUrl, string? apiKey = null,
-        string? model = null, string? llmModel = null, string? id = "") =>
+        string? model = null, string? llmModel = null, string? id = "",
+        string textApi = "chat-completions", string reasoningEffort = "",
+        string temperatureMode = "provider-default", string temperature = "0.3") =>
         new(new Dictionary<string, string?>
         {
             ["name"] = name,
@@ -518,6 +784,10 @@ public sealed class OpenAiCompatiblePluginTests
             ["selectedModel"] = model,
             ["selectedLlmModel"] = llmModel,
             ["__id"] = id,
+            ["textApi"] = textApi,
+            ["reasoningEffort"] = reasoningEffort,
+            ["temperatureMode"] = temperatureMode,
+            ["temperature"] = temperature,
         });
 
     [Fact]

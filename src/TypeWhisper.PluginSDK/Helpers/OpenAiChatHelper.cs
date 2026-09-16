@@ -122,6 +122,8 @@ public static class OpenAiChatHelper
     }
 
     /// <summary>Sends a chat completion shaped by <paramref name="options" />.</summary>
+    /// <remarks>Retries once with the alternate output-token parameter when HTTP 400 names both
+    /// max_tokens and max_completion_tokens and an output cap is configured.</remarks>
     /// <returns>The assistant's response content text, with reasoning blocks removed.</returns>
     public static async Task<string> SendChatCompletionAsync(
         HttpClient httpClient,
@@ -134,17 +136,8 @@ public static class OpenAiChatHelper
         CancellationToken ct
     )
     {
-        var requestBody = JsonSerializer.Serialize(
-            BuildRequestBody(model, systemPrompt, userText, options, false), s_requestJsonOptions);
-
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            $"{baseUrl}/v1/chat/completions"
-        );
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
-
-        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(httpClient, request, ct);
+        using var response = await SendWithOutputTokenRetryAsync(
+            httpClient, baseUrl, apiKey, model, systemPrompt, userText, options, false, ct);
         var json = await response.Content.ReadAsStringAsync(ct);
         return ParseChatCompletionResponse(json, options.ProviderName ?? "The provider");
     }
@@ -184,6 +177,8 @@ public static class OpenAiChatHelper
     }
 
     /// <summary>Streaming sibling of the options-based overload; reasoning blocks are filtered out of the deltas.</summary>
+    /// <remarks>Retries the initial send once with the alternate output-token parameter when HTTP 400
+    /// names both max_tokens and max_completion_tokens and an output cap is configured.</remarks>
     public static async IAsyncEnumerable<string> SendChatCompletionStreamingAsync(
         HttpClient httpClient,
         string baseUrl,
@@ -196,19 +191,8 @@ public static class OpenAiChatHelper
         CancellationToken ct
     )
     {
-        var requestBody = JsonSerializer.Serialize(
-            BuildRequestBody(model, systemPrompt, userText, options, true), s_requestJsonOptions);
-
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            $"{baseUrl}/v1/chat/completions"
-        );
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
-        request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
-
-        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
-            httpClient, request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await SendWithOutputTokenRetryAsync(
+            httpClient, baseUrl, apiKey, model, systemPrompt, userText, options, true, ct);
 
         await using var stream = await OpenAiApiHelper.ReadBodyWithErrorHandlingAsync(
             () => response.Content.ReadAsStreamAsync(ct), ct);
@@ -234,6 +218,43 @@ public static class OpenAiChatHelper
 
         if (!producedVisibleText && filter.SawThinkBlock)
             throw new InvalidOperationException(ReasoningOnlyResponseMessage);
+    }
+
+    private static async Task<HttpResponseMessage> SendWithOutputTokenRetryAsync(
+        HttpClient httpClient, string baseUrl, string apiKey, string model,
+        string systemPrompt, string userText, OpenAiChatRequestOptions options,
+        bool streaming, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var body = JsonSerializer.Serialize(
+                BuildRequestBody(model, systemPrompt, userText, options, streaming), s_requestJsonOptions);
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/chat/completions");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            if (streaming)
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+            request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+
+            try
+            {
+                return await OpenAiApiHelper.SendWithErrorHandlingAsync(
+                    httpClient, request,
+                    streaming ? HttpCompletionOption.ResponseHeadersRead : HttpCompletionOption.ResponseContentRead, ct);
+            }
+            catch (PluginRequestException ex) when (attempt == 0
+                && ex.HttpStatusCode == 400
+                && options.MaxOutputTokens is not null
+                && options.MaxOutputTokenParameter is "max_tokens" or "max_completion_tokens"
+                && ex.Message.Contains("max_tokens", StringComparison.OrdinalIgnoreCase)
+                && ex.Message.Contains("max_completion_tokens", StringComparison.OrdinalIgnoreCase))
+            {
+                options = options with
+                {
+                    MaxOutputTokenParameter = options.MaxOutputTokenParameter == "max_tokens"
+                        ? "max_completion_tokens" : "max_tokens",
+                };
+            }
+        }
     }
 
     /// <summary>

@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.Json;
 
-namespace TypeWhisper.Plugin.OpenAi;
+namespace TypeWhisper.Plugins.Shared.OpenAi;
 
 internal static class OpenAiJson
 {

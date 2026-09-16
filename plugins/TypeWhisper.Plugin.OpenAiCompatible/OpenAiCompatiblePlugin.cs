@@ -4,11 +4,13 @@
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.Plugins.Shared.OpenAi;
 
 namespace TypeWhisper.Plugin.OpenAiCompatible;
 
@@ -33,6 +35,15 @@ public sealed class OpenAiCompatiblePlugin
 
     private const string ThinkingModeSettingKey = "thinkingMode";
     private ThinkingMode _thinkingMode;
+
+    private const string TextApiSettingKey = "textApi";
+    private const string ReasoningEffortSettingKey = "reasoningEffort";
+    private const string TemperatureModeSettingKey = "temperatureMode";
+    private const string TemperatureSettingKey = "temperature";
+    private string _textApi = "chat-completions";
+    private string _reasoningEffort = "";
+    private string _temperatureMode = "provider-default";
+    private double _temperature = 0.3;
 
     private const string AdditionalProfilesSettingKey = "additionalProfiles";
     private const string ProfilesCollectionKey = "profiles";
@@ -79,6 +90,10 @@ public sealed class OpenAiCompatiblePlugin
         _host = host;
         _llmRequestTimeoutSeconds = Math.Clamp(host.GetSetting<int?>(LlmRequestTimeoutSettingKey) ?? 300, 5, 3600);
         _thinkingMode = ParseThinkingMode(host.GetSetting<string>(ThinkingModeSettingKey));
+        _textApi = NormalizeTextApi(host.GetSetting<string>(TextApiSettingKey));
+        _reasoningEffort = NormalizeReasoningEffort(host.GetSetting<string>(ReasoningEffortSettingKey));
+        _temperatureMode = NormalizeTemperatureMode(host.GetSetting<string>(TemperatureModeSettingKey));
+        _temperature = NormalizeTemperature(host.GetSetting<double?>(TemperatureSettingKey) ?? 0.3);
         ApiKey = await host.LoadSecretAsync("api-key");
         BaseUrl = host.GetSetting<string>("baseUrl");
         SelectedModelId = host.GetSetting<string>("selectedModel");
@@ -205,6 +220,11 @@ public sealed class OpenAiCompatiblePlugin
         using var timeout = CreateLlmTimeout(_llmRequestTimeoutSeconds, ct);
         try
         {
+            if (_textApi == "responses")
+                return StripThinking(await new OpenAiResponsesClient(_httpClient, BaseUrl!, ApiKey ?? "").ProcessAsync(
+                    systemPrompt, userText, modelId, NullIfWhiteSpace(_reasoningEffort), timeout.Token,
+                    _temperatureMode == "custom" && _reasoningEffort.Length == 0 ? _temperature : null));
+
             return await OpenAiChatHelper.SendChatCompletionAsync(
                 _httpClient,
                 BaseUrl!,
@@ -212,7 +232,7 @@ public sealed class OpenAiCompatiblePlugin
                 modelId,
                 systemPrompt,
                 userText,
-                BuildRequestOptions(BaseUrl!, _thinkingMode),
+                BuildRequestOptions(BaseUrl!, _thinkingMode, _temperatureMode, _temperature),
                 timeout.Token
             );
         }
@@ -229,7 +249,7 @@ public sealed class OpenAiCompatiblePlugin
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
     )
     {
-        if (!_streamResponses)
+        if (!_streamResponses || _textApi == "responses")
         {
             yield return await ProcessAsync(systemPrompt, userText, model, ct);
             yield break;
@@ -250,7 +270,7 @@ public sealed class OpenAiCompatiblePlugin
             modelId,
             systemPrompt,
             userText,
-            BuildRequestOptions(BaseUrl!, _thinkingMode),
+            BuildRequestOptions(BaseUrl!, _thinkingMode, _temperatureMode, _temperature),
             timeout.Token
         );
 
@@ -467,14 +487,22 @@ public sealed class OpenAiCompatiblePlugin
             ),
             BuildLlmRequestTimeoutDefinition(),
             BuildThinkingModeDefinition(),
+            BuildTextApiDefinition(),
+            BuildReasoningEffortDefinition(),
+            BuildTemperatureModeDefinition(),
+            BuildTemperatureDefinition(),
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(
             key switch
             {
-                LlmRequestTimeoutSettingKey => _llmRequestTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                LlmRequestTimeoutSettingKey => _llmRequestTimeoutSeconds.ToString(CultureInfo.InvariantCulture),
                 ThinkingModeSettingKey => FormatThinkingMode(_thinkingMode),
+                TextApiSettingKey => _textApi,
+                ReasoningEffortSettingKey => _reasoningEffort,
+                TemperatureModeSettingKey => _temperatureMode,
+                TemperatureSettingKey => _temperature.ToString(CultureInfo.InvariantCulture),
                 "baseUrl" => BaseUrl,
                 "api-key" => ApiKey,
                 "selectedModel" => SelectedModelId,
@@ -498,6 +526,24 @@ public sealed class OpenAiCompatiblePlugin
                     throw new ArgumentException(Loc.L("Settings.LlmRequestTimeoutInvalid", 5, 3600));
                 _llmRequestTimeoutSeconds = Math.Clamp(seconds, 5, 3600);
                 _host?.SetSetting(LlmRequestTimeoutSettingKey, _llmRequestTimeoutSeconds);
+                break;
+            case TextApiSettingKey:
+                _textApi = NormalizeTextApi(value);
+                _host?.SetSetting(TextApiSettingKey, _textApi);
+                break;
+            case ReasoningEffortSettingKey:
+                _reasoningEffort = NormalizeReasoningEffort(value);
+                _host?.SetSetting(ReasoningEffortSettingKey, _reasoningEffort);
+                break;
+            case TemperatureModeSettingKey:
+                _temperatureMode = NormalizeTemperatureMode(value);
+                _host?.SetSetting(TemperatureModeSettingKey, _temperatureMode);
+                break;
+            case TemperatureSettingKey:
+                if (!TryParseTemperature(value, out var temperature))
+                    throw new ArgumentException(Loc.L("Settings.TemperatureInvalid"));
+                _temperature = temperature;
+                _host?.SetSetting(TemperatureSettingKey, _temperature);
                 break;
             case ThinkingModeSettingKey:
                 _thinkingMode = ParseThinkingMode(value);
@@ -584,7 +630,82 @@ public sealed class OpenAiCompatiblePlugin
             new PluginSettingOption("on", Loc.L("Settings.ThinkingModeOn")),
         ]);
 
-    private static OpenAiChatRequestOptions BuildRequestOptions(string baseUrl, ThinkingMode mode)
+    private static string NormalizeTextApi(string? value) =>
+        value == "responses" ? "responses" : "chat-completions";
+
+    // Compatible servers may inline <think> blocks; the chat path strips them inside OpenAiChatHelper.
+    private static string StripThinking(string text)
+    {
+        var stripped = ThinkingBlockFilter.Strip(text).Trim();
+        if (stripped.Length == 0)
+            throw new PluginRequestException(
+                "The provider returned only reasoning content and no final answer.",
+                PluginRequestFailureKind.EmptyResponse);
+        return stripped;
+    }
+
+    private static string NormalizeReasoningEffort(string? value) => value switch
+    {
+        "low" or "medium" or "high" or "xhigh" or "max" => value,
+        _ => "",
+    };
+
+    private static string NormalizeTemperatureMode(string? value) =>
+        value == "custom" ? "custom" : "provider-default";
+
+    private static double NormalizeTemperature(double value) =>
+        double.IsFinite(value) && value is >= 0 and <= 2 ? value : 0.3;
+
+    private static bool TryParseTemperature(string? value, out double temperature) =>
+        double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out temperature)
+        && double.IsFinite(temperature) && temperature is >= 0 and <= 2;
+
+    private PluginSettingDefinition BuildTextApiDefinition() => new(
+        Key: TextApiSettingKey,
+        Label: Loc.L("Settings.TextApi"),
+        Description: Loc.L("Settings.TextApiDescription"),
+        Kind: PluginSettingKind.Dropdown,
+        Options:
+        [
+            new PluginSettingOption("chat-completions", Loc.L("Settings.TextApiChatCompletions")),
+            new PluginSettingOption("responses", Loc.L("Settings.TextApiResponses")),
+        ]);
+
+    private PluginSettingDefinition BuildReasoningEffortDefinition() => new(
+        Key: ReasoningEffortSettingKey,
+        Label: Loc.L("Settings.ReasoningEffort"),
+        Description: Loc.L("Settings.ReasoningEffortDescription"),
+        Kind: PluginSettingKind.Dropdown,
+        Options:
+        [
+            new PluginSettingOption("", Loc.L("Settings.ReasoningEffortDefault")),
+            new PluginSettingOption("low", Loc.L("Settings.ReasoningEffortLow")),
+            new PluginSettingOption("medium", Loc.L("Settings.ReasoningEffortMedium")),
+            new PluginSettingOption("high", Loc.L("Settings.ReasoningEffortHigh")),
+            new PluginSettingOption("xhigh", Loc.L("Settings.ReasoningEffortXHigh")),
+            new PluginSettingOption("max", Loc.L("Settings.ReasoningEffortMax")),
+        ]);
+
+    private PluginSettingDefinition BuildTemperatureModeDefinition() => new(
+        Key: TemperatureModeSettingKey,
+        Label: Loc.L("Settings.TemperatureMode"),
+        Description: Loc.L("Settings.TemperatureModeDescription"),
+        Kind: PluginSettingKind.Dropdown,
+        Options:
+        [
+            new PluginSettingOption("provider-default", Loc.L("Settings.TemperatureProviderDefault")),
+            new PluginSettingOption("custom", Loc.L("Settings.TemperatureCustom")),
+        ]);
+
+    private PluginSettingDefinition BuildTemperatureDefinition() => new(
+        Key: TemperatureSettingKey,
+        Label: Loc.L("Settings.TemperatureValue"),
+        Description: Loc.L("Settings.TemperatureValueDescription"),
+        Placeholder: "0.3",
+        Kind: PluginSettingKind.Text);
+
+    private static OpenAiChatRequestOptions BuildRequestOptions(
+        string baseUrl, ThinkingMode mode, string temperatureMode, double temperature)
     {
         // The endpoint's context window is unknown (often a small self-hosted model), so keep
         // the fixed output cap; a cut-off answer now surfaces as a truncation error instead.
@@ -592,6 +713,7 @@ public sealed class OpenAiCompatiblePlugin
         {
             ProviderName = "OpenAI Compatible",
             ScaleOutputTokens = false,
+            Temperature = temperatureMode == "custom" ? temperature : null,
         };
 
         if (mode == ThinkingMode.ProviderDefault)
@@ -838,6 +960,10 @@ public sealed class OpenAiCompatiblePlugin
                         Kind: PluginSettingKind.Text),
                     BuildLlmRequestTimeoutDefinition(),
                     BuildThinkingModeDefinition(),
+                    BuildTextApiDefinition(),
+                    BuildReasoningEffortDefinition(),
+                    BuildTemperatureModeDefinition(),
+                    BuildTemperatureDefinition(),
                     new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text),
                 ],
                 ItemLabelFieldKey: "name",
@@ -863,8 +989,12 @@ public sealed class OpenAiCompatiblePlugin
                     ["api-key"] = null,
                     ["selectedModel"] = p.SelectedModelId,
                     ["selectedLlmModel"] = p.SelectedLlmModelId,
-                    [LlmRequestTimeoutSettingKey] = p.LlmRequestTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    [LlmRequestTimeoutSettingKey] = p.LlmRequestTimeoutSeconds.ToString(CultureInfo.InvariantCulture),
                     [ThinkingModeSettingKey] = FormatThinkingMode(ParseThinkingMode(p.ThinkingMode)),
+                    [TextApiSettingKey] = p.TextApi,
+                    [ReasoningEffortSettingKey] = p.ReasoningEffort,
+                    [TemperatureModeSettingKey] = p.TemperatureMode,
+                    [TemperatureSettingKey] = p.Temperature.ToString(CultureInfo.InvariantCulture),
                     ["__id"] = p.Id,
                 }
             ))
@@ -947,6 +1077,11 @@ public sealed class OpenAiCompatiblePlugin
             if (!string.IsNullOrWhiteSpace(timeoutValue) && !int.TryParse(timeoutValue, out timeoutSeconds))
                 return new PluginSettingsValidationResult(false, Loc.L("Settings.LlmRequestTimeoutInvalid", 5, 3600));
 
+            var temperatureValue = Get(item, TemperatureSettingKey);
+            var temperature = prev?.Temperature ?? 0.3;
+            if (!string.IsNullOrWhiteSpace(temperatureValue) && !TryParseTemperature(temperatureValue, out temperature))
+                return new PluginSettingsValidationResult(false, Loc.L("Settings.TemperatureInvalid"));
+
             newProfiles.Add(new OpenAiCompatibleProfile
             {
                 Id = id,
@@ -956,6 +1091,10 @@ public sealed class OpenAiCompatiblePlugin
                 SelectedLlmModelId = selectedLlmModelId,
                 LlmRequestTimeoutSeconds = timeoutSeconds,
                 ThinkingMode = FormatThinkingMode(ParseThinkingMode(Get(item, ThinkingModeSettingKey))),
+                TextApi = NormalizeTextApi(Get(item, TextApiSettingKey)),
+                ReasoningEffort = NormalizeReasoningEffort(Get(item, ReasoningEffortSettingKey)),
+                TemperatureMode = NormalizeTemperatureMode(Get(item, TemperatureModeSettingKey)),
+                Temperature = temperature,
                 FetchedModels = preserveCatalog ? prev!.FetchedModels : [],
             });
         }
@@ -1178,6 +1317,11 @@ public sealed class OpenAiCompatiblePlugin
         using var timeout = CreateLlmTimeout(profile.LlmRequestTimeoutSeconds, ct);
         try
         {
+            if (profile.TextApi == "responses")
+                return StripThinking(await new OpenAiResponsesClient(_httpClient, profile.BaseUrl, GetProfileApiKey(id) ?? "").ProcessAsync(
+                    systemPrompt, userText, modelId, NullIfWhiteSpace(profile.ReasoningEffort), timeout.Token,
+                    profile is { TemperatureMode: "custom", ReasoningEffort.Length: 0 } ? profile.Temperature : null));
+
             return await OpenAiChatHelper.SendChatCompletionAsync(
                 _httpClient,
                 profile.BaseUrl,
@@ -1185,7 +1329,7 @@ public sealed class OpenAiCompatiblePlugin
                 modelId,
                 systemPrompt,
                 userText,
-                BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode)),
+                BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode), profile.TemperatureMode, profile.Temperature),
                 timeout.Token
             );
         }
@@ -1207,13 +1351,13 @@ public sealed class OpenAiCompatiblePlugin
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
     )
     {
-        if (!_streamResponses)
+        var profile = RequireAdditional(id);
+        if (!_streamResponses || profile.TextApi == "responses")
         {
             yield return await ProcessForProfileAsync(id, systemPrompt, userText, model, ct);
             yield break;
         }
 
-        var profile = RequireAdditional(id);
         if (string.IsNullOrEmpty(profile.BaseUrl))
             throw new PluginRequestException(Loc.L("Settings.ServerUrlNotConfigured"), PluginRequestFailureKind.Configuration);
 
@@ -1229,7 +1373,7 @@ public sealed class OpenAiCompatiblePlugin
             modelId,
             systemPrompt,
             userText,
-            BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode)),
+            BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode), profile.TemperatureMode, profile.Temperature),
             timeout.Token
         );
 
@@ -1329,6 +1473,18 @@ public sealed class OpenAiCompatiblePlugin
             profile.Name = string.IsNullOrWhiteSpace(profile.Name) ? "Custom Server" : profile.Name.Trim();
             // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- the annotation states the C# contract; the deserializer that produced this value ignores it.
             profile.BaseUrl = NormalizeBaseUrl(profile.BaseUrl ?? "");
+
+            var textApi = NormalizeTextApi(profile.TextApi);
+            var reasoningEffort = NormalizeReasoningEffort(profile.ReasoningEffort);
+            var temperatureMode = NormalizeTemperatureMode(profile.TemperatureMode);
+            var temperature = NormalizeTemperature(profile.Temperature);
+            // ReSharper disable once CompareOfFloatsByEqualityOperator -- exact stored value; any difference means a repair.
+            repaired |= profile.TextApi != textApi || profile.ReasoningEffort != reasoningEffort
+                || profile.TemperatureMode != temperatureMode || profile.Temperature != temperature;
+            profile.TextApi = textApi;
+            profile.ReasoningEffort = reasoningEffort;
+            profile.TemperatureMode = temperatureMode;
+            profile.Temperature = temperature;
 
             profile.SelectedModelId = NullIfWhiteSpace(profile.SelectedModelId);
             profile.SelectedLlmModelId = NullIfWhiteSpace(profile.SelectedLlmModelId);
@@ -1544,6 +1700,11 @@ public sealed class OpenAiCompatiblePlugin
             )
             && left.LlmRequestTimeoutSeconds == right.LlmRequestTimeoutSeconds
             && ParseThinkingMode(left.ThinkingMode) == ParseThinkingMode(right.ThinkingMode)
+            && string.Equals(left.TextApi, right.TextApi, StringComparison.Ordinal)
+            && string.Equals(left.ReasoningEffort, right.ReasoningEffort, StringComparison.Ordinal)
+            && string.Equals(left.TemperatureMode, right.TemperatureMode, StringComparison.Ordinal)
+            // ReSharper disable once CompareOfFloatsByEqualityOperator -- exact stored values; any difference must invalidate the cached role.
+            && left.Temperature == right.Temperature
             && left.FetchedModels.SequenceEqual(right.FetchedModels);
     }
 
@@ -1685,6 +1846,18 @@ public sealed class OpenAiCompatibleProfile
 
     /// <summary>Thinking mode for this profile ("default", "off", "on"); null means provider default.</summary>
     public string? ThinkingMode { get; init; }
+
+    /// <summary>Text API: "chat-completions" (default) or "responses".</summary>
+    public string TextApi { get; set; } = "chat-completions";
+
+    /// <summary>Responses reasoning effort; empty uses the provider default.</summary>
+    public string ReasoningEffort { get; set; } = "";
+
+    /// <summary>Temperature mode: "provider-default" (omit) or "custom".</summary>
+    public string TemperatureMode { get; set; } = "provider-default";
+
+    /// <summary>Custom temperature from 0 to 2.</summary>
+    public double Temperature { get; set; } = 0.3;
 
     /// <summary>Models fetched from the provider. API keys are never stored here.</summary>
     public List<FetchedModel> FetchedModels { get; set; } = [];

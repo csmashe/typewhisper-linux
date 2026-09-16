@@ -35,7 +35,8 @@
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Linear\TypeWhisper.Plugin.Linear.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Meta\TypeWhisper.Plugin.Meta.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.MicrosoftAi\TypeWhisper.Plugin.MicrosoftAi.csproj"/>
-        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenAi\TypeWhisper.Plugin.OpenAi.csproj"/>
+        <!-- Select the OpenAI copy of the file-linked Responses client in its tests. -->
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenAi\TypeWhisper.Plugin.OpenAi.csproj" Aliases="global,OpenAi"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenAiCompatible\TypeWhisper.Plugin.OpenAiCompatible.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenAiVectorMemory\TypeWhisper.Plugin.OpenAiVectorMemory.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenRouter\TypeWhisper.Plugin.OpenRouter.csproj"/>

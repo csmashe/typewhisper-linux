@@ -6,6 +6,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK.Helpers;
+using TypeWhisper.Plugins.Shared.OpenAi;
 
 namespace TypeWhisper.Plugin.OpenAi;
 

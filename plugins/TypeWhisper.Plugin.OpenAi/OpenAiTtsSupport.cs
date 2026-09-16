@@ -1,6 +1,7 @@
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.Plugins.Shared.OpenAi;
 
 namespace TypeWhisper.Plugin.OpenAi;
 

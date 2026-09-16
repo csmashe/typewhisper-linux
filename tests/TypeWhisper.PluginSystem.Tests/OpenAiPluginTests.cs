@@ -1,3 +1,5 @@
+extern alias OpenAi;
+using OpenAiResponsesClient = OpenAi::TypeWhisper.Plugins.Shared.OpenAi.OpenAiResponsesClient;
 using TypeWhisper.PluginSDK.Helpers;
 using System.Net;
 using System.Net.WebSockets;
@@ -1398,6 +1400,77 @@ public partial class OpenAiPluginTests
     public Task RequestFailures_AreClassified() =>
         ProviderFailureAssertions.VerifyAsync<OpenAiPlugin>();
 
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ResponsesClient_ConstructorsUseConfiguredEndpointAndHeaders(bool explicitEndpoint)
+    {
+        var expectedUri = explicitEndpoint
+            ? "https://example.test/custom/responses?api-version=test"
+            : "https://example.test/v1/responses";
+        using var httpClient = new HttpClient(new CapturingHandler((request, body) =>
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal(expectedUri, request.RequestUri!.AbsoluteUri);
+            if (explicitEndpoint)
+            {
+                Assert.Equal("key", Assert.Single(request.Headers.GetValues("api-key")));
+                Assert.Null(request.Headers.Authorization);
+            }
+            else
+                Assert.Equal("Bearer key", request.Headers.Authorization?.ToString());
+            using var doc = JsonDocument.Parse(body!);
+            Assert.Equal(0.7, doc.RootElement.GetProperty("temperature").GetDouble());
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"output_text":"ok"}"""),
+            });
+        }));
+        var client = explicitEndpoint
+            ? new OpenAiResponsesClient(httpClient, new Uri(expectedUri), new Dictionary<string, string> { ["api-key"] = "key" })
+            : new OpenAiResponsesClient(httpClient, "https://example.test/", "key");
+        Assert.Equal("ok", await client.ProcessAsync("system", "user", "model", null, CancellationToken.None, 0.7));
+    }
+
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("cancelled")]
+    public void ResponsesParser_RejectsFailedOrCancelledOutput(string status)
+    {
+        var ex = Assert.Throws<PluginRequestException>(() => OpenAiResponsesClient.ParseResponse(
+            $$"""{"status":"{{status}}","output_text":"partial"}"""));
+        Assert.Equal(PluginRequestFailureKind.OutputIncomplete, ex.FailureKind);
+    }
+
+    [Fact]
+    public void ResponsesParser_ReadsNestedTextValue()
+    {
+        Assert.Equal("answer", OpenAiResponsesClient.ParseResponse(
+            """{"output":[{"content":[{"type":"text","text":{"value":" answer "}}]}]}"""));
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"output_text\":\" \"}")]
+    [InlineData("{\"output\":[]}")]
+    public void ResponsesParser_ClassifiesEmptyText(string json)
+    {
+        var ex = Assert.Throws<PluginRequestException>(() => OpenAiResponsesClient.ParseResponse(json));
+        Assert.Equal(PluginRequestFailureKind.EmptyResponse, ex.FailureKind);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0.7)]
+    public void ResponsesRequests_OnlyIncludeTemperatureWhenPassed(double? temperature)
+    {
+        var body = OpenAiResponsesClient.CreateRequestBody("model", "system", "user", null, temperature);
+        Assert.Equal(temperature.HasValue, body.ContainsKey("temperature"));
+        if (temperature.HasValue)
+            Assert.Equal(temperature.Value, body["temperature"].GetDouble());
+        Assert.Equal("message", body["input"][0].GetProperty("type").GetString());
+    }
 
     [Fact]
     public void ResponsesParser_RejectsIncompleteTokenLimitedOutput()
