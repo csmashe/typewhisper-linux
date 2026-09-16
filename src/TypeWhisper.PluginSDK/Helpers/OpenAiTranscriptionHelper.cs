@@ -24,7 +24,7 @@ public static class OpenAiTranscriptionHelper
     /// <param name="wavAudio">WAV-encoded audio bytes.</param>
     /// <param name="language">
     ///     Language hint (ISO code). Null, blank, or the <c>"auto"</c> sentinel omits the field
-    ///     so the provider detects the language itself.
+    ///     so the provider detects the language itself. The field is omitted on translation requests.
     /// </param>
     /// <param name="translate">If true, uses the translations endpoint (audio to English).</param>
     /// <param name="responseFormat">
@@ -76,8 +76,10 @@ public static class OpenAiTranscriptionHelper
 
         // "auto" is a sentinel, not a language code: Whisper-compatible endpoints reject it.
         var languageHint = language?.Trim();
+        // Translation targets English; Whisper-style translation endpoints accept no source-language hint.
         if (
-            !string.IsNullOrEmpty(languageHint)
+            !translate
+            && !string.IsNullOrEmpty(languageHint)
             && !languageHint.Equals("auto", StringComparison.OrdinalIgnoreCase)
         )
         {

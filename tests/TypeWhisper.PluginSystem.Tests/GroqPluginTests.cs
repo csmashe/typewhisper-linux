@@ -463,6 +463,77 @@ public class GroqPluginTests
     }
 
     [Fact]
+    public async Task TranscribeAsync_TranslateWithNonTranslatingModel_FailsBeforeUpload()
+    {
+        var requestCount = 0;
+        var handler = new CapturingHandler((_, _) =>
+        {
+            requestCount++;
+            return JsonResponse("""{"text":"ok"}""");
+        });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new GroqPlugin(httpClient);
+        await sut.ActivateAsync(host);
+        sut.SelectModel("whisper-large-v3-turbo");
+
+        var exception = await Assert.ThrowsAsync<PluginRequestException>(
+            () => sut.TranscribeAsync([1, 2, 3], "de", true, null, CancellationToken.None));
+
+        Assert.Equal(PluginRequestFailureKind.InvalidRequest, exception.FailureKind);
+        Assert.Contains("Settings.TranslationUnsupported", exception.Message);
+        Assert.Equal(0, requestCount);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_TranslateWithWhisperLargeV3_OmitsSourceLanguage()
+    {
+        Uri? requestUri = null;
+        string? requestBody = null;
+        var handler = new CapturingHandler((request, body) =>
+        {
+            requestUri = request.RequestUri;
+            requestBody = body;
+            return JsonResponse("""{"text":"ok"}""");
+        });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new GroqPlugin(httpClient);
+        await sut.ActivateAsync(host);
+        sut.SelectModel("whisper-large-v3");
+
+        await sut.TranscribeAsync([1, 2, 3], "de", true, null, CancellationToken.None);
+
+        Assert.Equal("https://api.groq.com/openai/v1/audio/translations", requestUri?.ToString());
+        Assert.NotNull(requestBody);
+        Assert.DoesNotContain("name=language", requestBody);
+        Assert.DoesNotContain("name=\"language\"", requestBody);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_TranscribeSendsSourceLanguage()
+    {
+        Uri? requestUri = null;
+        string? requestBody = null;
+        var handler = new CapturingHandler((request, body) =>
+        {
+            requestUri = request.RequestUri;
+            requestBody = body;
+            return JsonResponse("""{"text":"ok"}""");
+        });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new GroqPlugin(httpClient);
+        await sut.ActivateAsync(host);
+        sut.SelectModel("whisper-large-v3");
+
+        await sut.TranscribeAsync([1, 2, 3], "de", false, null, CancellationToken.None);
+
+        Assert.Equal("https://api.groq.com/openai/v1/audio/transcriptions", requestUri?.ToString());
+        Assert.Contains("name=language\r\n\r\nde\r\n", requestBody);
+    }
+
+    [Fact]
     public async Task TranscribeAsync_ReportsPerSegmentNoSpeechProbability()
     {
         var handler = new CapturingHandler((_, body) =>

@@ -106,6 +106,11 @@ public sealed class GroqPlugin
         }
     }
 
+    private string SelectedModelDisplayName =>
+        s_transcriptionModelEntries.FirstOrDefault(m => m.Id == SelectedModelId)?.DisplayName
+        ?? SelectedModelId
+        ?? "";
+
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
@@ -130,6 +135,11 @@ public sealed class GroqPlugin
         if (!IsConfigured || _selectedApiModelName is null)
             throw new PluginRequestException(
                 "Plugin not configured. API key and model required.", PluginRequestFailureKind.Configuration
+            );
+
+        if (translate && !SupportsTranslation)
+            throw new PluginRequestException(
+                Loc.L("Settings.TranslationUnsupported", SelectedModelDisplayName), PluginRequestFailureKind.InvalidRequest
             );
 
         return await OpenAiTranscriptionHelper.TranscribeAsync(
