@@ -6,7 +6,7 @@
   "Settings.TranscriptionMode": "Transkriptionsmodus",
   "Settings.ModeAutomatic": "Automatisch (Echtzeit mit REST-Fallback)",
   "Settings.ModeRestOnly": "Nur REST (Batch Scribe v2)",
-  "Settings.TranscriptionModeDescription": "Automatisch streamt in Echtzeit, wenn die Live-Transkription es zulässt. Nur REST lädt immer die ganze Aufnahme hoch und umgeht so Echtzeit-Limits.",
+  "Settings.TranscriptionModeDescription": "Automatisch streamt in Echtzeit, wenn die Live-Transkription es zulässt. Nur REST lädt immer die ganze Aufnahme hoch und umgeht so Echtzeit-Limits. Audioereignisse oder eine Sprecherzahl ungleich 1 verwenden die vollständige Aufnahme.",
   "Settings.NoVerbatim": "Füllwörter und Versprecher bereinigen",
   "Settings.NoVerbatimDescription": "Gilt für Echtzeit- und REST-Transkription. Zusammen mit Audio-Ereignissen entscheidet ElevenLabs, welche Markierungen bleiben.",
   "Settings.TagAudioEvents": "Audio-Ereignisse wie [Husten] und [Mausklicks] einfügen",
@@ -15,6 +15,7 @@
   "Settings.SpeakerCountDescription": "0 = automatisch, sonst 1–32. Nur bei REST-Anfragen.",
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
   "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
+  "Settings.ApiKeyUnverified": "API-Schlüssel gespeichert, aber der Sprachzugriff konnte nicht geprüft werden: dem Schlüssel fehlt die Berechtigung user_read. Starte eine Diktierung, um den Speech-to-Text-Zugriff zu bestätigen.",
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
   "Manifest.Name": "ElevenLabs",
   "Manifest.Description": "Cloud-Transkription über ElevenLabs Scribe mit Echtzeit-WebSocket-Streaming"

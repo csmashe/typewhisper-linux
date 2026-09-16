@@ -6,7 +6,7 @@
   "Settings.TranscriptionMode": "Modo de transcripción",
   "Settings.ModeAutomatic": "Automático (tiempo real con respaldo REST)",
   "Settings.ModeRestOnly": "Solo REST (Scribe v2 por lotes)",
-  "Settings.TranscriptionModeDescription": "Automático transmite en tiempo real cuando la transcripción en directo lo permite. Solo REST siempre sube la grabación completa y evita los límites de concurrencia en tiempo real.",
+  "Settings.TranscriptionModeDescription": "Automático transmite en tiempo real cuando la transcripción en directo lo permite. Solo REST siempre sube la grabación completa y evita los límites de concurrencia en tiempo real. Los eventos de audio o un número de hablantes distinto de 1 usan la grabación completa.",
   "Settings.NoVerbatim": "Limpiar muletillas y titubeos",
   "Settings.NoVerbatimDescription": "Se aplica a la transcripción en tiempo real y REST. Combinado con eventos de audio, ElevenLabs decide qué anotaciones se conservan.",
   "Settings.TagAudioEvents": "Incluir eventos de audio como [tos] y [clics de ratón]",
@@ -15,6 +15,7 @@
   "Settings.SpeakerCountDescription": "0 = automático; si no, de 1 a 32. Solo en solicitudes REST.",
   "Settings.EnterApiKey": "Introduce primero una clave de API.",
   "Settings.ApiKeyValid": "La clave de API es válida.",
+  "Settings.ApiKeyUnverified": "Clave de API guardada, pero no se pudo verificar el acceso de voz: a la clave le falta el permiso user_read. Prueba un dictado para confirmar el acceso a Speech-to-Text.",
   "Settings.ApiKeyInvalid": "La clave de API no es válida.",
   "Manifest.Name": "ElevenLabs",
   "Manifest.Description": "Transcripción en la nube mediante ElevenLabs Scribe con streaming por WebSocket en tiempo real"
