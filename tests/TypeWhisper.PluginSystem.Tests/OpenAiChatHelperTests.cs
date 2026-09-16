@@ -357,6 +357,46 @@ public sealed class OpenAiChatHelperTests
         Assert.Contains("'choices[0].message.content'", exception.Message);
     }
 
+    [Theory]
+    [InlineData("""[{"type":"text","text":"Grüße "},{"type":"reasoning","text":"private"},{"type":"text","text":"zurück"}]""", "Grüße zurück")]
+    [InlineData("""[{"type":"text","text":"<think>private</think> Hello"}]""", "Hello")]
+    [InlineData("""[null,42,{}, {"type":"image","text":"private"},{"type":"text","text":42},{"type":"text","text":"visible"}]""", "visible")]
+    [InlineData("[]", "")]
+    public async Task SendChatCompletionAsync_TypedContent_ReturnsOnlyTextParts(string content, string expected)
+    {
+        var result = await SendChatResponseAsync($$$"""{"choices":[{"message":{"content":{{{content}}}}}]}""");
+
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("""{"content":null,"reasoning":"private"}""")]
+    [InlineData("""{"content":null,"reasoning_content":"private"}""")]
+    [InlineData("""{"reasoning":"private"}""")]
+    [InlineData("""{"reasoning_content":"private"}""")]
+    [InlineData("""{"content":[{"type":"text","text":"<think>private</think>"}]}""")]
+    [InlineData("""{"content":[{"type":"reasoning","text":"private"}]}""")]
+    [InlineData("""{"content":[{"type":"text","text":" "}]}""")]
+    public async Task SendChatCompletionAsync_ReasoningWithoutAnswer_ThrowsReasoningOnlyError(string message)
+    {
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            SendChatResponseAsync($$"""{"choices":[{"message":{{message}}}]}"""));
+
+        Assert.Contains("only reasoning content", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("\" \"")]
+    [InlineData("42")]
+    public async Task SendChatCompletionAsync_NullContentWithoutReasoningText_ThrowsProtocolFailure(string reasoning)
+    {
+        var exception = await AssertProtocolFailureAsync(
+            $$$"""{"choices":[{"message":{"content":null,"reasoning":{{{reasoning}}}}}]}""");
+
+        Assert.Contains("'choices[0].message.content' must be a string", exception.Message);
+    }
+
     [Fact]
     public async Task SendChatCompletionAsync_NonStringContent_ThrowsProtocolFailure()
     {
@@ -364,7 +404,7 @@ public sealed class OpenAiChatHelperTests
 
         var exception = await AssertProtocolFailureAsync(json);
 
-        Assert.Contains("'choices[0].message.content'", exception.Message);
+        Assert.Contains("'choices[0].message.content' must be a string", exception.Message);
     }
 
     [Fact]
@@ -392,6 +432,23 @@ public sealed class OpenAiChatHelperTests
             "Hello",
             OpenAiChatHelper.ParseChatCompletionStreamDelta(
                 """{"choices":[{"delta":{"content":"Hello"}}]}"""));
+    }
+
+    [Fact]
+    public void ParseChatCompletionStreamDelta_TypedContent_ReturnsOnlyTextParts()
+    {
+        Assert.Equal("Grüße zurück", OpenAiChatHelper.ParseChatCompletionStreamDelta(
+            """{"choices":[{"delta":{"content":[{"type":"text","text":"Grüße "},{"type":"reasoning","text":"private"},{"type":"text","text":"zurück"}]}}]}"""));
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("""[{"type":"reasoning","text":"private"}]""")]
+    [InlineData("""[{"type":"text","text":""}]""")]
+    public void ParseChatCompletionStreamDelta_ArrayWithoutVisibleText_ReturnsNull(string content)
+    {
+        Assert.Null(OpenAiChatHelper.ParseChatCompletionStreamDelta(
+            $$$"""{"choices":[{"delta":{"content":{{{content}}}}}]}"""));
     }
 
     [Fact]
@@ -453,7 +510,6 @@ public sealed class OpenAiChatHelperTests
     [Theory]
     [InlineData("42")]
     [InlineData("{}")]
-    [InlineData("[]")]
     [InlineData("true")]
     public void ParseChatCompletionStreamDelta_NonStringContent_ThrowsProtocolFailure(
         string contentJson)

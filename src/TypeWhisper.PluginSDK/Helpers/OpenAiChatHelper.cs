@@ -237,8 +237,8 @@ public static class OpenAiChatHelper
     }
 
     /// <summary>
-    ///     Extracts <c>choices[0].delta.content</c> from a single SSE chunk payload,
-    ///     or <c>null</c> for valid contentless frames (role-only, finish).
+    ///     Extracts string content or concatenated text parts from <c>choices[0].delta.content</c>.
+    ///     Returns <c>null</c> for contentless frames or arrays without visible text; ignores reasoning parts.
     ///     Reflection-free via <see cref="JsonDocument" />.
     /// </summary>
     // ReSharper disable once UnusedMember.Global
@@ -249,7 +249,7 @@ public static class OpenAiChatHelper
     }
 
     /// <summary>
-    ///     Extracts a content delta and reports whether <c>choices[0].finish_reason</c>
+    ///     Extracts string content or typed text parts and reports whether <c>choices[0].finish_reason</c>
     ///     carries a valid terminal value. Valid contentless frames return <c>null</c>.
     /// </summary>
     private static string? ParseChatCompletionStreamDelta(
@@ -294,6 +294,12 @@ public static class OpenAiChatHelper
             || content.ValueKind == JsonValueKind.Null)
         {
             return null;
+        }
+
+        if (content.ValueKind == JsonValueKind.Array)
+        {
+            var text = ReadTextParts(content);
+            return text.Length > 0 ? text : null;
         }
 
         if (content.ValueKind != JsonValueKind.String)
@@ -388,7 +394,11 @@ public static class OpenAiChatHelper
         }
     }
 
-    /// <summary>Returns <c>choices[0].message.content</c> from a chat completion JSON response.</summary>
+    /// <summary>
+    ///     Returns string content or concatenated typed text parts from <c>choices[0].message.content</c>,
+    ///     stripping think blocks and ignoring reasoning parts. Missing or null content with non-blank
+    ///     reasoning fields, or parts without visible text, raise the reasoning-only response error.
+    /// </summary>
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once UnusedParameter.Global
     private static string ParseChatCompletionResponse(string json, string providerName)
@@ -422,8 +432,14 @@ public static class OpenAiChatHelper
             );
         }
 
-        if (!message.TryGetProperty("content", out var content)
-            || content.ValueKind != JsonValueKind.String)
+        var hasContent = message.TryGetProperty("content", out var content);
+        if ((!hasContent || content.ValueKind == JsonValueKind.Null)
+            && (HasReasoningText(message, "reasoning") || HasReasoningText(message, "reasoning_content")))
+        {
+            throw new InvalidOperationException(ReasoningOnlyResponseMessage);
+        }
+
+        if (!hasContent || content.ValueKind is not (JsonValueKind.String or JsonValueKind.Array))
         {
             throw CreateInvalidResponseException(
                 json,
@@ -432,12 +448,38 @@ public static class OpenAiChatHelper
             );
         }
 
-        var rawContent = content.GetString() ?? "";
+        var rawContent = content.ValueKind == JsonValueKind.Array
+            ? ReadTextParts(content)
+            : content.GetString() ?? "";
         var stripped = ThinkingBlockFilter.Strip(rawContent);
-        if (rawContent.Length > 0 && string.IsNullOrWhiteSpace(stripped))
+        var hasParts = content.ValueKind == JsonValueKind.Array ? content.GetArrayLength() > 0 : rawContent.Length > 0;
+        if (hasParts && string.IsNullOrWhiteSpace(stripped))
             throw new InvalidOperationException(ReasoningOnlyResponseMessage);
         return stripped.Trim();
     }
+
+    private static string ReadTextParts(JsonElement content)
+    {
+        var text = new StringBuilder();
+        foreach (var part in content.EnumerateArray())
+        {
+            if (part.ValueKind == JsonValueKind.Object
+                && part.TryGetProperty("type", out var type)
+                && type.ValueKind == JsonValueKind.String && type.GetString() == "text"
+                && part.TryGetProperty("text", out var value)
+                && value.ValueKind == JsonValueKind.String)
+            {
+                text.Append(value.GetString());
+            }
+        }
+
+        return text.ToString();
+    }
+
+    private static bool HasReasoningText(JsonElement message, string propertyName) =>
+        message.TryGetProperty(propertyName, out var reasoning)
+        && reasoning.ValueKind == JsonValueKind.String
+        && !string.IsNullOrWhiteSpace(reasoning.GetString());
 
     private static InvalidOperationException CreateInvalidResponseException(
         string json,
