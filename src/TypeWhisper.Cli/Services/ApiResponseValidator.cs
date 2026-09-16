@@ -232,10 +232,104 @@ internal static class ApiResponseValidator
         }
     }
 
+    internal sealed record JsonResponse(JsonElement Root);
+
+    public static ValidationResult<JsonResponse> ValidateHistory(string body) =>
+        ValidateObject(body, "history", ("records", JsonValueKind.Array));
+
+    public static ValidationResult<JsonResponse> ValidateDictationStart(string body) =>
+        ValidateObject(body, "dictation start", ("session_id", JsonValueKind.Number));
+
+    public static ValidationResult<JsonResponse> ValidateDictationStop(string body) =>
+        ValidateObject(body, "dictation stop");
+
+    public static ValidationResult<JsonResponse> ValidateDictationStatus(string body) =>
+        ValidateObject(body, "dictation status", ("state", JsonValueKind.String));
+
+    public static ValidationResult<JsonResponse> ValidateDictationResult(string body) =>
+        ValidateObject(body, "dictation result", ("state", JsonValueKind.String));
+
+    public static ValidationResult<JsonResponse> ValidateModelOperation(string body) =>
+        ValidateObject(body, "model operation", ("status", JsonValueKind.String), ("engine", JsonValueKind.String));
+
+    public static string OptionalString(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()! : "";
+
+    private static ValidationResult<JsonResponse> ValidateObject(
+        string body, string context, params (string Name, JsonValueKind Kind)[] required
+    )
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return Failure<JsonResponse>($"{context} response must be a JSON object");
+            }
+
+            foreach (var (name, kind) in required)
+            {
+                if (!root.TryGetProperty(name, out var value))
+                {
+                    return Failure<JsonResponse>($"{context} response is missing required field '{name}'");
+                }
+
+                // Unloading with nothing loaded returns a null engine.
+                if (name == "engine" && value.ValueKind == JsonValueKind.Null)
+                    continue;
+                if (value.ValueKind != kind)
+                {
+                    return Failure<JsonResponse>($"field '{name}' has an invalid type");
+                }
+
+                if (name == "session_id" && (!value.TryGetInt64(out var id) || id <= 0))
+                {
+                    return Failure<JsonResponse>("field 'session_id' must be a positive integer");
+                }
+            }
+
+            if (context == "history")
+            {
+                foreach (var record in root.GetProperty("records").EnumerateArray())
+                {
+                    if (record.ValueKind != JsonValueKind.Object)
+                    {
+                        return Failure<JsonResponse>("history records must be JSON objects");
+                    }
+
+                    foreach (var name in new[] { "timestamp", "text" })
+                    {
+                        var field = ReadOptionalString(record, name, "history record");
+                        if (field.Error is not null)
+                            return Failure<JsonResponse>(field.Error);
+                    }
+                }
+            }
+            else
+            {
+                foreach (var name in new[] { "text", "error", "message", "model" })
+                {
+                    var field = ReadOptionalString(root, name, context);
+                    if (field.Error is not null)
+                        return Failure<JsonResponse>(field.Error);
+                }
+            }
+
+            return Success(new JsonResponse(root.Clone()));
+        }
+        catch (JsonException)
+        {
+            return Failure<JsonResponse>($"{context} response body is not valid JSON");
+        }
+    }
+
     public static int ProtocolError(string detail)
     {
         return ConsoleOutput.Error(
-            $"Protocol error: {detail}. The TypeWhisper app and typewhisper-cli may be out of sync."
+            $"Protocol error: {detail}. The TypeWhisper app and typewhisper-cli may be out of sync.",
+            ExitCodes.ServerError
         );
     }
 

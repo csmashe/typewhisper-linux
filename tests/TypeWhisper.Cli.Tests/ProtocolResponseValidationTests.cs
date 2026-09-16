@@ -235,7 +235,7 @@ public sealed class ProtocolResponseValidationTests : IDisposable
 
         var result = await CaptureConsoleAsync(() => Program.RunAsync(["status"]));
 
-        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(2, result.ExitCode);
         Assert.Equal("", result.Output);
         Assert.Contains(
             "discovery protocol version 3",
@@ -319,7 +319,7 @@ public sealed class ProtocolResponseValidationTests : IDisposable
         string expectedDetail
     )
     {
-        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(3, result.ExitCode);
         Assert.Equal("", result.Output);
         Assert.Contains("Protocol error:", result.Error, StringComparison.Ordinal);
         Assert.Contains(expectedDetail, result.Error, StringComparison.Ordinal);

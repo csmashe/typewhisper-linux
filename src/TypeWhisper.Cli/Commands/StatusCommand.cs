@@ -30,7 +30,8 @@ internal static class StatusCommand
             if (!response.IsSuccessStatusCode)
             {
                 return ConsoleOutput.Error(
-                    $"Status request failed ({(int)response.StatusCode}): {JsonFormatting.ExtractErrorMessage(body)}"
+                    $"Status request failed ({(int)response.StatusCode}): {JsonFormatting.ExtractErrorMessage(body)}",
+                    ExitCodes.ServerError
                 );
             }
 
@@ -57,7 +58,7 @@ internal static class StatusCommand
         }
         catch (HttpRequestException)
         {
-            return ConsoleOutput.Error("TypeWhisper is not running or API server is disabled.");
+            return ConsoleOutput.Error("TypeWhisper is not running or API server is disabled.", ExitCodes.Unavailable);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -66,12 +67,13 @@ internal static class StatusCommand
         catch (OperationCanceledException)
         {
             return ConsoleOutput.Error(
-                $"The API did not respond within {ConsoleOutput.FormatBudget(requestBudget)}."
+                $"The API did not respond within {ConsoleOutput.FormatBudget(requestBudget)}.",
+                ExitCodes.Unavailable
             );
         }
         catch (JsonException)
         {
-            return ConsoleOutput.Error("Received malformed JSON from the API.");
+            return ConsoleOutput.Error("Received malformed JSON from the API.", ExitCodes.ServerError);
         }
     }
 }
