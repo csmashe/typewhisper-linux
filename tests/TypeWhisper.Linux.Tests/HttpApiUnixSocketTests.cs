@@ -103,6 +103,275 @@ public sealed class HttpApiUnixSocketTests
         translation.VerifyNoOtherCalls();
     }
 
+    [Fact]
+    public async Task EveryCatalogRouteReachesAHandler()
+    {
+        var dictionary = new Mock<IDictionaryService>();
+        dictionary.Setup(service => service.GetEnabledTerms()).Returns([]);
+        dictionary.Setup(service => service.GetCorrections()).Returns([]);
+        using var fixture = new ApiFixture(dictionary: dictionary.Object);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+
+        Assert.Equal(HttpApiRoutes.All.Count, HttpApiRoutes.All.Distinct().Count());
+        foreach (var (method, path) in HttpApiRoutes.All)
+        {
+            Assert.True(HttpApiRoutes.Contains(method, path));
+            using var request = new HttpRequestMessage(new HttpMethod(method), path);
+            using var response = await client.SendAsync(request);
+            Assert.True(response.StatusCode is not (HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed),
+                $"{method} {path}: {response.StatusCode}");
+        }
+    }
+
+    [Fact]
+    public async Task KnownPathRejectsWrongMethodWithAllowAndUnknownPathRemainsNotFound()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var wrongMethod = await client.PutAsync("/v1/status", null);
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, wrongMethod.StatusCode);
+        Assert.Equal("GET", Assert.Single(wrongMethod.Content.Headers.Allow));
+        using var error = JsonDocument.Parse(await wrongMethod.Content.ReadAsStringAsync());
+        Assert.Equal("Method not allowed", error.RootElement.GetProperty("error").GetString());
+        using var unknown = await client.GetAsync("/v1/nope");
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+    }
+
+    [Fact]
+    public async Task CapabilitiesDescribeCatalogAndLimits()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var response = await client.GetAsync("/v1/capabilities");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = json.RootElement;
+        using var statusResponse = await client.GetAsync("/v1/status");
+        using var status = JsonDocument.Parse(await statusResponse.Content.ReadAsStringAsync());
+        Assert.Equal(status.RootElement.GetProperty("api_version").GetString(), root.GetProperty("api_version").GetString());
+        Assert.Equal(HttpApiRoutes.All.Select(route => route.Path).Distinct(),
+            root.GetProperty("endpoints").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(HttpApiRoutes.All, root.GetProperty("routes").EnumerateArray()
+            .Select(route => (route.GetProperty("method").GetString()!, route.GetProperty("path").GetString()!)).ToArray());
+        Assert.Equal(["json", "verbose_json", "text", "srt", "vtt"],
+            root.GetProperty("response_formats").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(HttpApiService.MaxTranscribeRequestBytes, root.GetProperty("max_upload_bytes").GetInt64());
+        Assert.Equal("request-scoped engine/model overrides; await_download supported", root.GetProperty("model_selection").GetString());
+        Assert.True(root.GetProperty("supports_dictation_control").GetBoolean());
+        Assert.True(root.GetProperty("requires_authentication").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("/docs")]
+    [InlineData("/docs/")]
+    public async Task DocsArePublicButStillCheckOriginAndHost(string path)
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: false);
+        using var response = await client.GetAsync(path);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/html", response.Content.Headers.ContentType!.MediaType);
+        Assert.Equal("utf-8", response.Content.Headers.ContentType.CharSet);
+        var html = await response.Content.ReadAsStringAsync();
+        Assert.Contains($"http://127.0.0.1:{fixture.Port}", html);
+        foreach (var route in HttpApiRoutes.Descriptions)
+        {
+            Assert.Contains(route.Path, html);
+            Assert.Contains(route.Description, html);
+        }
+        using var forbiddenOrigin = new HttpRequestMessage(HttpMethod.Get, path);
+        forbiddenOrigin.Headers.Add("Origin", "https://example.com");
+        using var forbidden = await client.SendAsync(forbiddenOrigin);
+        Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+        using var forbiddenHost = new HttpRequestMessage(HttpMethod.Get, path);
+        forbiddenHost.Headers.Host = "example.com";
+        using var hostResponse = await client.SendAsync(forbiddenHost);
+        Assert.Equal(HttpStatusCode.Forbidden, hostResponse.StatusCode);
+        using var status = await client.GetAsync("/v1/status");
+        Assert.Equal(HttpStatusCode.Unauthorized, status.StatusCode);
+    }
+
+    [Fact]
+    public async Task RulesAliasProfilesForListingAndToggling()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Profiles.AddProfile(new Profile { Id = "alias", Name = "Alias", IsEnabled = true });
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        var rules = await client.GetStringAsync("/v1/rules");
+        Assert.Equal(await client.GetStringAsync("/v1/profiles"), rules);
+        using var json = JsonDocument.Parse(rules);
+        Assert.Equal(json.RootElement.GetProperty("rules").GetRawText(), json.RootElement.GetProperty("profiles").GetRawText());
+        Assert.Single(json.RootElement.GetProperty("rules").EnumerateArray());
+        foreach (var path in new[] { "/v1/rules/toggle", "/v1/profiles/toggle" })
+        {
+            using var response = await client.PutAsync(path + "?id=alias", null);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var toggle = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("alias", toggle.RootElement.GetProperty("id").GetString());
+            Assert.Equal("Alias", toggle.RootElement.GetProperty("name").GetString());
+            Assert.Equal(path == "/v1/profiles/toggle", toggle.RootElement.GetProperty("is_enabled").GetBoolean());
+        }
+    }
+
+    [Theory]
+    [InlineData("text", "text/plain", "Hello World")]
+    [InlineData("srt", "application/x-subrip", "00:00:00,200 --> 00:00:01,300")]
+    [InlineData("vtt", "text/vtt", "WEBVTT")]
+    public async Task TranscriptionSupportsTextAndSubtitles(string format, string mediaType, string expected)
+    {
+        using var fixture = CreateSegmentFixture(Mock.Of<ITranslationService>());
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, format, null);
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(mediaType, response.Content.Headers.ContentType!.MediaType);
+        Assert.Equal("utf-8", response.Content.Headers.ContentType.CharSet);
+        var body = await response.Content.ReadAsStringAsync();
+        switch (format)
+        {
+            case "text":
+                Assert.Equal(expected, body);
+                break;
+            case "vtt":
+                Assert.StartsWith(expected, body);
+                break;
+            default:
+                Assert.Contains(expected, body);
+                break;
+        }
+    }
+
+    [Theory]
+    [InlineData("text")]
+    [InlineData("srt")]
+    [InlineData("vtt")]
+    public async Task TranslationRunsForSubtitleSegmentsButNotPlainText(string format)
+    {
+        var translation = CreateTranslationMock();
+        using var fixture = CreateSegmentFixture(translation.Object);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, format, "de");
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("Hallo", body);
+        Assert.Contains("Welt", body);
+        switch (format)
+        {
+            case "srt":
+                Assert.Contains("00:00:00,200 --> 00:00:01,300", body);
+                break;
+            case "vtt":
+                Assert.Contains("00:00:00.200 --> 00:00:01.300", body);
+                break;
+        }
+        translation.Verify(service => service.TranslateSegmentsAsync(
+            It.IsAny<IReadOnlyList<string>>(), "en", "de", null, It.IsAny<CancellationToken>()),
+            format == "text" ? Times.Never() : Times.Once());
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(2, 1)]
+    [InlineData(-1, 1)]
+    [InlineData(double.NaN, 1)]
+    [InlineData(0, double.PositiveInfinity)]
+    [InlineData(1.0001, 1.0002)]
+    public async Task SubtitlesRejectInvalidTimestamps(double start, double end)
+    {
+        using var fixture = CreateSegmentFixture(Mock.Of<ITranslationService>(), [new PluginTranscriptionSegment("Invalid", start, end)]);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        foreach (var format in new[] { "srt", "vtt" })
+        {
+            using var content = CreateSegmentRequest(fixture, format, null);
+            using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+            Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("Subtitle output requires valid segment timestamps.", json.RootElement.GetProperty("error").GetString());
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SubtitlesRequireSegmentsInStartOrder(bool empty)
+    {
+        using var fixture = CreateSegmentFixture(Mock.Of<ITranslationService>(),
+            empty ? [] : [new PluginTranscriptionSegment("First", 1, 2), new PluginTranscriptionSegment("Second", 0, 1)]);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "srt", null);
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SubtitlesNormalizeTextAndRoundTimestamps()
+    {
+        using var fixture = CreateSegmentFixture(Mock.Of<ITranslationService>(),
+            [new PluginTranscriptionSegment("  Héllo\r\nWorld\rAgain  ", 0.2006, 1.3006), new PluginTranscriptionSegment("Tick", 1.3006, 1.3016)]);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "srt", null);
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("00:00:00,201 --> 00:00:01,301", body);
+        // A one-millisecond cue must not collapse to zero duration on export.
+        Assert.Contains("00:00:01,301 --> 00:00:01,302", body);
+        Assert.Contains("Héllo\nWorld\nAgain", body);
+        Assert.DoesNotContain("\r", body);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, null)]
+    [InlineData(true, false)]
+    [InlineData(true, null)]
+    public async Task ApplyCorrectionsControlsPipelineForUploadAndLocalFile(bool upload, bool? applyCorrections)
+    {
+        var pipeline = new Mock<IPostProcessingPipeline>();
+        using var fixture = CreateSegmentFixture(Mock.Of<ITranslationService>(), pipeline: pipeline);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        var payload = new Dictionary<string, object> { ["path"] = fixture.CreateSupportedAudioFile() };
+        if (applyCorrections.HasValue)
+        {
+            payload["apply_corrections"] = applyCorrections.Value;
+        }
+        using HttpContent content = upload
+            ? new ByteArrayContent([1, 2, 3])
+            : new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+        if (upload && applyCorrections.HasValue)
+        {
+            content.Headers.Add("x-apply-corrections", "false");
+        }
+        using var response = await client.PostAsync(upload ? "/v1/transcribe" : "/v1/transcribe/local-file", content);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        pipeline.Verify(service => service.ProcessAsync("Hello World",
+            It.Is<PipelineOptions>(options => options.DictionaryCorrector != null == (applyCorrections ?? true)),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task LocalFileRejectsStringCorrectionBooleanWith400()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent("""{"path":"/tmp/clip.wav","apply_corrections":"false"}""", Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
     private static Mock<ITranslationService> CreateTranslationMock()
     {
         var translation = new Mock<ITranslationService>(MockBehavior.Strict);
@@ -115,16 +384,19 @@ public sealed class HttpApiUnixSocketTests
         return translation;
     }
 
-    private static ApiFixture CreateSegmentFixture(ITranslationService translation)
+    private static ApiFixture CreateSegmentFixture(
+        ITranslationService translation,
+        IReadOnlyList<PluginTranscriptionSegment>? segments = null,
+        Mock<IPostProcessingPipeline>? pipeline = null)
     {
         var dictionary = new Mock<IDictionaryService>();
         dictionary.Setup(service => service.GetEnabledTerms()).Returns([]);
-        var pipeline = new Mock<IPostProcessingPipeline>();
+        pipeline ??= new Mock<IPostProcessingPipeline>();
         pipeline.Setup(service => service.ProcessAsync(
                 "Hello World", It.IsAny<PipelineOptions>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PostProcessingResult { Text = "Hello World" });
         return new ApiFixture(
-            transcriptionEngine: new SegmentedTranscriptionEngine(),
+            transcriptionEngine: new SegmentedTranscriptionEngine(segments),
             dictionary: dictionary.Object,
             pipeline: pipeline.Object,
             translation: translation,
@@ -155,7 +427,7 @@ public sealed class HttpApiUnixSocketTests
         Assert.Equal(0.2f, segments[1].GetProperty("no_speech_probability").GetSingle());
     }
 
-    private sealed class SegmentedTranscriptionEngine : ITranscriptionEngineRole
+    private sealed class SegmentedTranscriptionEngine(IReadOnlyList<PluginTranscriptionSegment>? segments = null) : ITranscriptionEngineRole
     {
         public string PluginId => "test-segments";
         public string ProviderId => "test-segments";
@@ -170,7 +442,7 @@ public sealed class HttpApiUnixSocketTests
         {
             return Task.FromResult(new PluginTranscriptionResult("Hello World", "en", 4)
             {
-                Segments =
+                Segments = segments ??
                 [
                     new PluginTranscriptionSegment("Hello", 0.2, 1.3) { NoSpeechProbability = 0.1f },
                     new PluginTranscriptionSegment("World", 2.1, 3.8) { NoSpeechProbability = 0.2f },
@@ -1026,7 +1298,7 @@ public sealed class HttpApiUnixSocketTests
             );
         }
 
-        private int Port { get; }
+        internal int Port { get; }
 
         internal string SocketPath { get; }
 

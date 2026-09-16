@@ -65,6 +65,7 @@ public class HttpApiRequestParserTests
         Assert.Equal("groq", parsed.Engine);
         Assert.Equal("whisper-large-v3", parsed.Model);
         Assert.True(parsed.AwaitDownload);
+        Assert.Null(parsed.ApplyCorrections);
     }
 
     [Fact]
@@ -103,7 +104,7 @@ public class HttpApiRequestParserTests
 
     [Theory]
     [InlineData("task", "transalte", "transcribe", "translate")]
-    [InlineData("response_format", "xml", "json", "verbose_json")]
+    [InlineData("response_format", "xml", "json", "verbose_json, text, srt, vtt")]
     public void ParseTranscribe_RejectsUnknownMultipartEnum(
         string field,
         string value,
@@ -141,7 +142,7 @@ public class HttpApiRequestParserTests
 
     [Theory]
     [InlineData("x-task", "task", "transalte", "transcribe", "translate")]
-    [InlineData("x-response-format", "response_format", "xml", "json", "verbose_json")]
+    [InlineData("x-response-format", "response_format", "xml", "json", "verbose_json, text, srt, vtt")]
     public void ParseTranscribe_RejectsUnknownRawBodyHeaderEnum(
         string header,
         string field,
@@ -193,6 +194,7 @@ public class HttpApiRequestParserTests
 
         Assert.Equal(TranscriptionTask.Transcribe, parsed.Task);
         Assert.Equal("json", parsed.ResponseFormat);
+        Assert.Null(parsed.ApplyCorrections);
     }
 
     [Fact]
@@ -210,6 +212,7 @@ public class HttpApiRequestParserTests
 
         Assert.Equal(TranscriptionTask.Transcribe, parsed.Task);
         Assert.Equal("json", parsed.ResponseFormat);
+        Assert.Null(parsed.ApplyCorrections);
     }
 
     [Fact]
@@ -368,6 +371,7 @@ public class HttpApiRequestParserTests
         Assert.Equal("groq", parsed.Engine);
         Assert.Equal("whisper-large-v3", parsed.Model);
         Assert.True(parsed.AwaitDownload);
+        Assert.Null(parsed.ApplyCorrections);
     }
 
     [Fact]
@@ -451,6 +455,112 @@ public class HttpApiRequestParserTests
     {
         Assert.Equal(100L * 1024 * 1024, HttpApiService.MaxTranscribeRequestBytes);
         Assert.Equal(1L * 1024 * 1024, HttpApiService.MaxJsonRequestBytes);
+    }
+
+    [Theory]
+    [InlineData("1", true)]
+    [InlineData(" TRUE ", true)]
+    [InlineData("Yes", true)]
+    [InlineData("on", true)]
+    [InlineData("0", false)]
+    [InlineData(" False ", false)]
+    [InlineData("NO", false)]
+    [InlineData("off", false)]
+    [InlineData(null, null)]
+    [InlineData("  ", null)]
+    public void ParseTranscribe_QueryBooleansAcceptAllSpellings(string? value, bool? expected)
+    {
+        var request = new HttpApiRequest("POST", "/v1/transcribe",
+            new NameValueCollection { ["apply_corrections"] = value, ["await_download"] = value },
+            new Dictionary<string, string>(), new byte[] { 1 });
+
+        var parsed = HttpApiRequestParser.ParseTranscribe(request);
+
+        Assert.Equal(expected, parsed.ApplyCorrections);
+        Assert.Equal(expected ?? false, parsed.AwaitDownload);
+    }
+
+    [Theory]
+    [InlineData("apply_corrections")]
+    [InlineData("await_download")]
+    public void ParseTranscribe_RejectsInvalidBoolean(string name)
+    {
+        var request = new HttpApiRequest("POST", "/v1/transcribe",
+            new NameValueCollection { [name] = "garbage" },
+            new Dictionary<string, string>(), new byte[] { 1 });
+
+        var error = Assert.Throws<HttpApiRequestException>(() => HttpApiRequestParser.ParseTranscribe(request));
+
+        Assert.Equal(400, error.StatusCode);
+        Assert.Equal($"Invalid {name} boolean.", error.Message);
+    }
+
+    [Theory]
+    [InlineData(true, null, false)]
+    [InlineData(false, null, false)]
+    [InlineData(true, "off", false)]
+    [InlineData(false, "no", false)]
+    [InlineData(true, "yes", true)]
+    [InlineData(false, "1", true)]
+    public void ParseTranscribe_CorrectionsSourcesMustAgree(bool multipart, string? query, bool conflict)
+    {
+        const string boundary = "BooleanBoundary";
+        var headers = new Dictionary<string, string>();
+        byte[] body;
+        if (multipart)
+        {
+            headers["content-type"] = $"multipart/form-data; boundary={boundary}";
+            body = Multipart(boundary, ("apply_corrections", null, null, "no"u8.ToArray()),
+                ("file", "audio.wav", "audio/wav", [1]));
+        }
+        else
+        {
+            headers["x-apply-corrections"] = "off";
+            body = [1];
+        }
+        var request = new HttpApiRequest("POST", "/v1/transcribe",
+            new NameValueCollection { ["apply_corrections"] = query }, headers, body);
+
+        if (conflict)
+        {
+            var error = Assert.Throws<HttpApiRequestException>(() => HttpApiRequestParser.ParseTranscribe(request));
+            Assert.Equal(400, error.StatusCode);
+            Assert.Equal("apply_corrections was provided more than once", error.Message);
+        }
+        else
+        {
+            Assert.False(HttpApiRequestParser.ParseTranscribe(request).ApplyCorrections);
+        }
+    }
+
+    [Theory]
+    [InlineData("{}", null)]
+    [InlineData("{\"apply_corrections\":false}", false)]
+    [InlineData("{\"apply_corrections\":true}", true)]
+    public void LocalFileCorrectionsRequireJsonBoolean(string json, bool? expected)
+    {
+        var parsed = JsonSerializer.Deserialize<LocalFileTranscribeRequest>(json, s_jsonOptions);
+        Assert.Equal(expected, parsed!.ApplyCorrections);
+    }
+
+    [Theory]
+    [InlineData("{\"apply_corrections\":\"false\"}")]
+    [InlineData("{\"apply_corrections\":0}")]
+    public void LocalFileCorrectionsRejectCoercion(string json)
+    {
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<LocalFileTranscribeRequest>(json, s_jsonOptions));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("verbose_json")]
+    [InlineData("text")]
+    [InlineData("srt")]
+    [InlineData("vtt")]
+    public void ParseTranscriptionOptions_AcceptsResponseFormats(string format)
+    {
+        var parsed = HttpApiRequestParser.ParseTranscriptionOptions(null, $" {format.ToUpperInvariant()} ");
+        Assert.Equal(format, parsed.ResponseFormat);
     }
 
     private static byte[] Multipart(

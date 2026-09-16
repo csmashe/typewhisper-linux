@@ -196,6 +196,8 @@ public sealed partial class HttpApiService : IDisposable
 {
     internal const int MaxConcurrentRequests = 2;
     internal const long MaxTranscribeRequestBytes = 100 * 1024 * 1024;
+    private const string ApiVersion = "1.0";
+    private static readonly string[] s_responseFormats = ["json", "verbose_json", "text", "srt", "vtt"];
     private const int LifecycleRunning = 0;
     private const int LifecycleQuiescing = 1;
     private const int LifecycleDisposed = 2;
@@ -207,7 +209,7 @@ public sealed partial class HttpApiService : IDisposable
 
     private const string AllowedCorsHeaders =
         "Authorization, Content-Type, X-Language, X-Language-Hints, X-Task, X-Target-Language, "
-        + "X-Response-Format, X-Prompt, X-Engine, X-Model";
+        + "X-Response-Format, X-Prompt, X-Engine, X-Model, X-Apply-Corrections";
 
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -1190,7 +1192,8 @@ public sealed partial class HttpApiService : IDisposable
                 return;
             }
 
-            if (!IsAuthorized(request))
+            var isPublicRoute = method == "GET" && path is "/docs" or "/docs/";
+            if (!isPublicRoute && !IsAuthorized(request))
             {
                 response.Headers["WWW-Authenticate"] = "Bearer";
                 // Include CORS so browser clients from allowed loopback origins can read the 401.
@@ -1217,17 +1220,32 @@ public sealed partial class HttpApiService : IDisposable
                 return;
             }
 
-            var (statusCode, body) = (path, method) switch
+            if (!HttpApiRoutes.Contains(method, path))
             {
+                var allowedMethods = HttpApiRoutes.All.Where(route => route.Path == path)
+                    .Select(route => route.Method).ToArray();
+                if (allowedMethods.Length > 0)
+                {
+                    response.Headers["Allow"] = string.Join(", ", allowedMethods);
+                    await WriteJsonAsync(response, 405, Serialize(new { error = "Method not allowed" }), allowedOrigin, ct);
+                    return;
+                }
+            }
+
+            // ReSharper disable once SuggestVarOrType_SimpleTypes -- target-typed switch: the arms mix (int, string) tuples and HttpApiResponse, so var would not compile.
+            HttpApiResponse apiResponse = (path, method) switch
+            {
+                ("/docs" or "/docs/", "GET") => new HttpApiResponse(200, HttpApiDocumentation.Html(_port), "text/html; charset=utf-8"),
                 ("/v1/status", "GET") => HandleStatus(),
+                ("/v1/capabilities", "GET") => HandleCapabilities(),
                 ("/v1/models", "GET") => HandleModels(),
                 ("/v1/transcribe", "POST") => await HandleTranscribeAsync(context, ct),
                 ("/v1/transcribe/local-file", "POST") =>
                     await HandleTranscribeLocalFileAsync(context, ct),
                 ("/v1/history", "GET") => HandleHistorySearch(request),
                 ("/v1/history", "DELETE") => HandleHistoryDelete(request),
-                ("/v1/profiles", "GET") => HandleProfilesList(),
-                ("/v1/profiles/toggle", "PUT") => HandleProfileToggle(request),
+                ("/v1/profiles" or "/v1/rules", "GET") => HandleProfilesList(),
+                ("/v1/profiles/toggle" or "/v1/rules/toggle", "PUT") => HandleProfileToggle(request),
                 ("/v1/dictation/start", "POST") => await HandleDictationStartAsync(),
                 ("/v1/dictation/stop", "POST") => await HandleDictationStopAsync(),
                 ("/v1/dictation/status", "GET") => HandleDictationStatus(),
@@ -1244,7 +1262,7 @@ public sealed partial class HttpApiService : IDisposable
                 _ => (404, Serialize(new { error = "Not found" })),
             };
 
-            await WriteJsonAsync(response, statusCode, body, allowedOrigin, ct);
+            await WriteResponseAsync(response, apiResponse, allowedOrigin, ct);
         }
         catch (HttpApiRequestException ex)
         {
@@ -1324,6 +1342,21 @@ public sealed partial class HttpApiService : IDisposable
         }
     }
 
+    private static (int, string) HandleCapabilities()
+    {
+        return (200, Serialize(new
+        {
+            apiVersion = ApiVersion,
+            endpoints = HttpApiRoutes.All.Select(route => route.Path).Distinct(),
+            routes = HttpApiRoutes.All.Select(route => new { method = route.Method, path = route.Path }),
+            responseFormats = s_responseFormats,
+            maxUploadBytes = MaxTranscribeRequestBytes,
+            modelSelection = "request-scoped engine/model overrides; await_download supported",
+            supportsDictationControl = true,
+            requiresAuthentication = true,
+        }));
+    }
+
     private (int, string) HandleStatus()
     {
         var plugin = _models.ActiveTranscriptionPlugin;
@@ -1341,7 +1374,7 @@ public sealed partial class HttpApiService : IDisposable
                     engine = plugin?.ProviderId,
                     model = activeModel,
                     activeModel = _models.ActiveModelId,
-                    apiVersion = "1.0",
+                    apiVersion = ApiVersion,
                     supportsStreaming = plugin?.SupportsStreaming ?? false,
                     supportsTranslation = plugin?.SupportsTranslation ?? false,
                     acceleration = BuildAccelerationDto(plugin, _settings.Current),
@@ -1386,7 +1419,7 @@ public sealed partial class HttpApiService : IDisposable
         return (200, Serialize(new { models }));
     }
 
-    private async Task<(int, string)> HandleTranscribeAsync(
+    private async Task<HttpApiResponse> HandleTranscribeAsync(
         HttpContext context,
         CancellationToken ct
     )
@@ -1452,7 +1485,8 @@ public sealed partial class HttpApiService : IDisposable
                 transcribeRequest.Prompt,
                 transcribeRequest.Engine,
                 transcribeRequest.Model,
-                transcribeRequest.AwaitDownload
+                transcribeRequest.AwaitDownload,
+                transcribeRequest.ApplyCorrections ?? true
             );
             return new PreparedTranscriptionRequest(tempPath, opts);
         }
@@ -1475,7 +1509,7 @@ public sealed partial class HttpApiService : IDisposable
         }
     }
 
-    private async Task<(int, string)> HandleTranscribeLocalFileAsync(
+    private async Task<HttpApiResponse> HandleTranscribeLocalFileAsync(
         HttpContext context,
         CancellationToken ct
     )
@@ -1573,12 +1607,13 @@ public sealed partial class HttpApiService : IDisposable
             payload.Prompt,
             payload.Engine,
             payload.Model,
-            payload.AwaitDownload
+            payload.AwaitDownload,
+            payload.ApplyCorrections ?? true
         );
         return await RunTranscriptionAsync(payload.Path, opts, ct);
     }
 
-    private async Task<(int, string)> RunTranscriptionAsync(
+    private async Task<HttpApiResponse> RunTranscriptionAsync(
         string audioPath,
         TranscriptionRunOptions opts,
         CancellationToken ct
@@ -1713,7 +1748,7 @@ public sealed partial class HttpApiService : IDisposable
                 VocabularyBooster = settings.VocabularyBoostingEnabled
                     ? _vocabularyBoosting.Apply
                     : null,
-                DictionaryCorrector = _dictionary.ApplyCorrections,
+                DictionaryCorrector = opts.ApplyCorrections ? _dictionary.ApplyCorrections : null,
                 TranscriptionTask = effectiveTask,
                 DetectedLanguage = result.DetectedLanguage,
                 ConfiguredLanguage = configuredLanguage,
@@ -1769,7 +1804,7 @@ public sealed partial class HttpApiService : IDisposable
                         opts.TargetLanguage
                     );
 
-                    if (opts.ResponseFormat.Equals("verbose_json", StringComparison.OrdinalIgnoreCase)
+                    if (opts.ResponseFormat is "verbose_json" or "srt" or "vtt"
                         && result.Segments.Count > 0)
                     {
                         var translated = await _translation.TranslateSegmentsAsync(
@@ -1815,6 +1850,41 @@ public sealed partial class HttpApiService : IDisposable
             {
                 return (501, Serialize(new { error = ex.Message }));
             }
+        }
+
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- each format returns a differently built body; a switch would nest the subtitle validation.
+        if (opts.ResponseFormat == "text")
+        {
+            return new HttpApiResponse(200, finalText, "text/plain; charset=utf-8");
+        }
+
+        if (opts.ResponseFormat is "srt" or "vtt")
+        {
+            var previousStart = double.NegativeInfinity;
+            if (responseSegments.Count == 0)
+            {
+                throw new HttpApiRequestException(422, "Subtitle output requires valid segment timestamps.");
+            }
+
+            var subtitles = new List<TranscriptionSegment>(responseSegments.Count);
+            foreach (var segment in responseSegments)
+            {
+                var start = Math.Round(segment.Start * 1000);
+                var end = Math.Round(segment.End * 1000);
+                if (!double.IsFinite(segment.Start) || !double.IsFinite(segment.End)
+                    || segment.Start < 0 || end <= start || segment.Start < previousStart)
+                {
+                    throw new HttpApiRequestException(422, "Subtitle output requires valid segment timestamps.");
+                }
+
+                previousStart = segment.Start;
+                subtitles.Add(new TranscriptionSegment(
+                    segment.Text.Replace("\r\n", "\n").Replace('\r', '\n').Trim(), start / 1000, end / 1000));
+            }
+
+            return opts.ResponseFormat == "srt"
+                ? new HttpApiResponse(200, SubtitleExporter.ToSrt(subtitles), "application/x-subrip; charset=utf-8")
+                : new HttpApiResponse(200, SubtitleExporter.ToWebVtt(subtitles), "text/vtt; charset=utf-8");
         }
 
         if (opts.ResponseFormat.Equals("verbose_json", StringComparison.OrdinalIgnoreCase))
@@ -1928,9 +1998,9 @@ public sealed partial class HttpApiService : IDisposable
             selectedTask = profile.SelectedTask,
             modelOverride = profile.TranscriptionModelOverride,
             promptActionId = profile.PromptActionId,
-        });
+        }).ToArray();
 
-        return (200, Serialize(new { profiles }));
+        return (200, Serialize(new { rules = profiles, profiles }));
     }
 
     private (int, string) HandleProfileToggle(HttpRequest request)
@@ -1976,7 +2046,7 @@ public sealed partial class HttpApiService : IDisposable
         }
 
         var isEnabled = profile.IsEnabled;
-        return (200, Serialize(new { id, isEnabled }));
+        return (200, Serialize(new { id, name = profile.Name, isEnabled }));
     }
 
     private static (string Reason, string Error) GetProfileToggleValidationFailure(
@@ -2385,7 +2455,7 @@ public sealed partial class HttpApiService : IDisposable
         };
     }
 
-    private static async Task WriteJsonAsync(
+    private static Task WriteJsonAsync(
         HttpResponse response,
         int statusCode,
         string body,
@@ -2393,15 +2463,25 @@ public sealed partial class HttpApiService : IDisposable
         CancellationToken ct
     )
     {
-        response.StatusCode = statusCode;
-        response.ContentType = "application/json";
+        return WriteResponseAsync(response, new HttpApiResponse(statusCode, body), origin, ct);
+    }
+
+    private static async Task WriteResponseAsync(
+        HttpResponse response,
+        HttpApiResponse apiResponse,
+        string? origin,
+        CancellationToken ct
+    )
+    {
+        response.StatusCode = apiResponse.StatusCode;
+        response.ContentType = apiResponse.ContentType;
         if (!string.IsNullOrWhiteSpace(origin))
         {
             response.Headers["Access-Control-Allow-Origin"] = origin;
             response.Headers["Access-Control-Allow-Headers"] = AllowedCorsHeaders;
         }
 
-        var bytes = Encoding.UTF8.GetBytes(body);
+        var bytes = Encoding.UTF8.GetBytes(apiResponse.Body);
         response.ContentLength = bytes.Length;
         await response.Body.WriteAsync(bytes, ct);
     }
@@ -2620,7 +2700,8 @@ public sealed partial class HttpApiService : IDisposable
         string? Prompt,
         string? Engine,
         string? Model,
-        bool AwaitDownload
+        bool AwaitDownload,
+        bool ApplyCorrections
     );
 
     private sealed record PreparedTranscriptionRequest(
