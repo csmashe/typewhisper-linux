@@ -7,6 +7,53 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class OpenAiTranscriptionHelperTests
 {
+    [Theory]
+    [InlineData(true, "de")]
+    [InlineData(true, "en")]
+    [InlineData(false, "de")]
+    public async Task TranscribeAsync_OnlySendsSourceLanguageForTranscription(bool translate, string language)
+    {
+        var handler = new CapturingHandler();
+        using var httpClient = new HttpClient(handler);
+
+        await OpenAiTranscriptionHelper.TranscribeAsync(
+            httpClient, "https://example.test", "test-key", "test-model",
+            [1, 2, 3], language, translate, "json", CancellationToken.None
+        );
+
+        Assert.EndsWith(
+            translate ? "/v1/audio/translations" : "/v1/audio/transcriptions",
+            handler.RequestUri?.ToString()
+        );
+        Assert.NotNull(handler.RequestBody);
+        if (translate)
+        {
+            Assert.DoesNotContain("name=language", handler.RequestBody);
+            Assert.DoesNotContain("name=\"language\"", handler.RequestBody);
+        }
+        else
+        {
+            Assert.Contains("name=language\r\n\r\nde\r\n", handler.RequestBody);
+        }
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_AutoLanguage_OmitsSourceLanguage()
+    {
+        var handler = new CapturingHandler();
+        using var httpClient = new HttpClient(handler);
+
+        await OpenAiTranscriptionHelper.TranscribeAsync(
+            httpClient, "https://example.test", "test-key", "test-model",
+            [1, 2, 3], language: "auto", translate: false, "json", CancellationToken.None
+        );
+
+        Assert.EndsWith("/v1/audio/transcriptions", handler.RequestUri?.ToString());
+        Assert.NotNull(handler.RequestBody);
+        Assert.DoesNotContain("name=language", handler.RequestBody);
+        Assert.DoesNotContain("name=\"language\"", handler.RequestBody);
+    }
+
     [Fact]
     public void ParseTranscriptionResponse_MissingText_ThrowsProtocolFailure()
     {
@@ -306,6 +353,27 @@ public class OpenAiTranscriptionHelperTests
             responseFormat,
             CancellationToken.None
         );
+    }
+
+    private sealed class CapturingHandler : HttpMessageHandler
+    {
+        public Uri? RequestUri { get; private set; }
+        public string? RequestBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            RequestUri = request.RequestUri;
+            RequestBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"text":"ok"}""", Encoding.UTF8, "application/json"),
+            };
+        }
     }
 
     private sealed class JsonResponseHandler(string json) : HttpMessageHandler

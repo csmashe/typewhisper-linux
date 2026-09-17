@@ -108,13 +108,15 @@ internal static class TranscriptionLanguageSelectionInvoker
         // unparsable, duplicate or unsupported extra is dropped rather than failing the run.
         foreach (var hint in languageHints)
         {
-            if (LanguageSelection.TryParse(hint, out var selection)
-                && !selection.IsAutomatic
-                && !hints.Contains(selection.LanguageTag!, StringComparer.OrdinalIgnoreCase)
-                && (role.SupportedLanguages.Count == 0
-                    || role.SupportedLanguages.Contains(selection.LanguageTag!, StringComparer.OrdinalIgnoreCase)))
+            if (!LanguageSelection.TryParse(hint, out var selection) || selection.IsAutomatic)
             {
-                hints.Add(selection.LanguageTag!);
+                continue;
+            }
+
+            var resolved = ResolveSupportedTag(role.SupportedLanguages, selection.LanguageTag!);
+            if (resolved is not null && !hints.Contains(resolved, StringComparer.OrdinalIgnoreCase))
+            {
+                hints.Add(resolved);
             }
         }
 
@@ -153,24 +155,47 @@ internal static class TranscriptionLanguageSelectionInvoker
             );
         }
 
-        if (
-            !languageSelection.IsAutomatic
-            && role.SupportedLanguages is { Count: > 0 } supportedLanguages
-            && !supportedLanguages.Contains(
-                languageSelection.LanguageTag!,
-                StringComparer.OrdinalIgnoreCase
-            )
-        )
+        if (languageSelection.IsAutomatic)
+        {
+            return null;
+        }
+
+        var resolved = ResolveSupportedTag(role.SupportedLanguages, languageSelection.LanguageTag!);
+        if (resolved is null)
         {
             throw new TranscriptionLanguageNotSupportedException(
                 role.ProviderId,
                 role.SelectedModelId,
                 languageSelection,
-                supportedLanguages
+                // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- older plugin builds and loose mocks return null despite the annotation.
+                role.SupportedLanguages ?? []
             );
         }
 
-        return languageSelection.IsAutomatic ? null : languageSelection.LanguageTag;
+        return resolved;
+    }
+
+    /// <summary>Providers that only list base codes get the base; any regional variant keeps the list strict.</summary>
+    // A null list (older plugin builds, loose mocks) means "any language", like the SDK's empty default.
+    internal static string? ResolveSupportedTag(IReadOnlyList<string>? supportedLanguages, string languageTag)
+    {
+        if (supportedLanguages is not { Count: > 0 }
+            || supportedLanguages.Contains(languageTag, StringComparer.OrdinalIgnoreCase))
+        {
+            return languageTag;
+        }
+
+        var separator = languageTag.IndexOf('-');
+        if (separator < 0)
+        {
+            return null;
+        }
+
+        var baseTag = languageTag[..separator];
+        return supportedLanguages.Contains(baseTag, StringComparer.OrdinalIgnoreCase)
+            && !supportedLanguages.Any(tag => tag.Contains('-'))
+                ? baseTag
+                : null;
     }
 }
 
@@ -252,6 +277,8 @@ internal sealed class InvalidLanguageSelectionException(string rawValue)
 
 internal static class LanguageSelectionUiMessage
 {
+    private const int MaxListedLanguages = 12;
+
     public static string From(Exception exception) =>
         exception switch
         {
@@ -275,8 +302,14 @@ internal static class LanguageSelectionUiMessage
                     "LanguageSelection.LanguageNotSupported",
                     unsupported.ProviderId,
                     unsupported.Selection.LanguageTag ?? string.Empty,
-                    string.Join(", ", unsupported.SupportedLanguages)
+                    FormatSupportedLanguages(unsupported.SupportedLanguages)
                 ),
             _ => exception.Message,
         };
+
+    private static string FormatSupportedLanguages(IReadOnlyList<string> languages)
+    {
+        var listed = string.Join(", ", languages.Take(MaxListedLanguages));
+        return languages.Count > MaxListedLanguages ? listed + ", …" : listed;
+    }
 }

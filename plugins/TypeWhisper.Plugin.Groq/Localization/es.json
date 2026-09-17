@@ -13,6 +13,7 @@
   "Settings.ApiKeyValidFetchedModels": "La clave de API es válida. Se obtuvieron {0} modelo(s) de LLM de Groq.",
   "Settings.ApiKeyValidSavedModels": "La clave de API es válida. Se están usando los modelos de LLM guardados o predeterminados.",
   "Settings.ApiKeyNotConfigured": "Clave de API no configurada",
+  "Settings.TranslationUnsupported": "{0} no admite traducción.",
   "Manifest.Name": "Groq",
   "Manifest.Description": "Transcripción Groq Whisper y traducción Llama"
 }

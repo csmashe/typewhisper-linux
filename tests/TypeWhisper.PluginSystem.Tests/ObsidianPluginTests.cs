@@ -57,6 +57,7 @@ public sealed class ObsidianPluginTests : IDisposable
 
         var noteLines = await ReadAllLinesAsync(notePaths);
         Assert.All(inputs, input => Assert.Equal(1, noteLines.Count(line => line == input)));
+        Assert.Empty(Directory.GetFiles(NotesDirectory, "*.tmp"));
     }
 
     [Fact]
@@ -126,6 +127,7 @@ public sealed class ObsidianPluginTests : IDisposable
                     await stream.WriteAsync("partial"u8.ToArray(), ct);
                     throw new IOException("Injected write failure.");
                 },
+                targetStillContained: () => true,
                 CancellationToken.None
             )
         );
@@ -133,6 +135,152 @@ public sealed class ObsidianPluginTests : IDisposable
         Assert.Equal("Injected write failure.", exception.Message);
         Assert.False(File.Exists(notePath));
         Assert.Empty(Directory.EnumerateFiles(NotesDirectory));
+        Assert.Empty(Directory.EnumerateFiles(NotesDirectory, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task IndividualSave_CanceledBeforeCommit_LeavesNoNoteOrTemporaryFile()
+    {
+        Directory.CreateDirectory(NotesDirectory);
+        var notePath = Path.Join(NotesDirectory, "Canceled Note.md");
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            ObsidianPlugin.WriteIndividualNoteAsync(
+                notePath,
+                "complete content",
+                async (stream, _, ct) =>
+                {
+                    await stream.WriteAsync("partial"u8.ToArray(), ct);
+                    throw new OperationCanceledException();
+                },
+                targetStillContained: () => true,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Empty(Directory.EnumerateFiles(NotesDirectory, "*.md"));
+        Assert.Empty(Directory.EnumerateFiles(NotesDirectory, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task IndividualSave_ExistingNote_IsNeverReplacedAndGetsSuffix()
+    {
+        var (sut, _) = await CreatePluginAsync(dailyNoteMode: false);
+        Directory.CreateDirectory(NotesDirectory);
+        var notePath = Path.Join(NotesDirectory, "Fixed Individual Note.md");
+        await File.WriteAllTextAsync(notePath, "keep");
+
+        var firstResult = await sut.ExecuteAsync("first input", EmptyContext(), CancellationToken.None);
+        var secondResult = await sut.ExecuteAsync("second input", EmptyContext(), CancellationToken.None);
+
+        Assert.True(firstResult.Success);
+        Assert.True(secondResult.Success);
+        Assert.Equal("keep", await File.ReadAllTextAsync(notePath));
+        Assert.Contains("first input", await File.ReadAllTextAsync(
+            Path.Join(NotesDirectory, "Fixed Individual Note 2.md")
+        ));
+        Assert.Contains("second input", await File.ReadAllTextAsync(
+            Path.Join(NotesDirectory, "Fixed Individual Note 3.md")
+        ));
+        Assert.Empty(Directory.EnumerateFiles(NotesDirectory, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task IndividualSave_CopyFallback_PublishesAndCleansUp()
+    {
+        Directory.CreateDirectory(NotesDirectory);
+        var notePath = Path.Join(NotesDirectory, "Fallback Note.md");
+        await File.WriteAllTextAsync(notePath, "keep");
+        const string content = "complete fallback content";
+
+        var result = await ObsidianPlugin.WriteIndividualNoteAsync(
+            notePath,
+            content,
+            async (stream, text, ct) => await stream.WriteAsync(Encoding.UTF8.GetBytes(text), ct),
+            targetStillContained: () => true,
+            CancellationToken.None,
+            attemptAtomicPublish: false
+        );
+
+        Assert.Equal(Path.Join(NotesDirectory, "Fallback Note 2.md"), result);
+        Assert.Equal(content, await File.ReadAllTextAsync(result));
+        Assert.Equal("keep", await File.ReadAllTextAsync(notePath));
+        Assert.Empty(Directory.EnumerateFiles(NotesDirectory, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task IndividualSave_NoteFolderSwappedForVaultFolderDuringWrite_LeavesExistingNoteUntouched()
+    {
+        Directory.CreateDirectory(NotesDirectory);
+        var displacedDirectory = Path.Join(_tempDir, "displaced");
+        var notePath = Path.Join(NotesDirectory, "Swapped Note.md");
+
+        await Assert.ThrowsAnyAsync<IOException>(() =>
+            ObsidianPlugin.WriteIndividualNoteAsync(
+                notePath,
+                "complete swapped content",
+                async (stream, text, ct) =>
+                {
+                    await stream.WriteAsync(Encoding.UTF8.GetBytes(text), ct);
+                    Directory.Move(NotesDirectory, displacedDirectory);
+                    Directory.CreateDirectory(NotesDirectory);
+                    await File.WriteAllTextAsync(notePath, "keep", ct);
+                },
+                targetStillContained: () => ObsidianPlugin.IsResolvedTargetContained(
+                    VaultDirectory,
+                    NotesDirectory
+                ),
+                CancellationToken.None
+            )
+        );
+
+        Assert.Equal("keep", await File.ReadAllTextAsync(notePath));
+        Assert.Equal(notePath, Assert.Single(Directory.EnumerateFiles(NotesDirectory)));
+        Assert.Single(Directory.EnumerateFiles(displacedDirectory, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task IndividualSave_NoteFolderReplacedByOutsideLinkDuringWrite_IsNotPublishedOutside()
+    {
+        Directory.CreateDirectory(NotesDirectory);
+        var outsideDirectory = Path.Join(_tempDir, "outside");
+        var displacedDirectory = Path.Join(_tempDir, "displaced");
+        Directory.CreateDirectory(outsideDirectory);
+        var notePath = Path.Join(NotesDirectory, "Moved Note.md");
+        const string content = "complete displaced content";
+
+        try
+        {
+            var exception = await Assert.ThrowsAnyAsync<IOException>(() =>
+                ObsidianPlugin.WriteIndividualNoteAsync(
+                    notePath,
+                    content,
+                    async (stream, text, ct) =>
+                    {
+                        await stream.WriteAsync(Encoding.UTF8.GetBytes(text), ct);
+                        Directory.Move(NotesDirectory, displacedDirectory);
+                        Directory.CreateSymbolicLink(NotesDirectory, outsideDirectory);
+                    },
+                    targetStillContained: () => ObsidianPlugin.IsResolvedTargetContained(
+                        VaultDirectory,
+                        NotesDirectory
+                    ),
+                    CancellationToken.None
+                )
+            );
+
+            Assert.Equal("The note folder changed while the note was being written.", exception.Message);
+            Assert.Empty(Directory.EnumerateFiles(outsideDirectory, "*.md"));
+            Assert.Empty(Directory.EnumerateFiles(outsideDirectory, "*.tmp"));
+            var tempPath = Assert.Single(Directory.EnumerateFiles(displacedDirectory));
+            Assert.Equal(".tmp", Path.GetExtension(tempPath));
+            Assert.Equal(content, await File.ReadAllTextAsync(tempPath));
+        }
+        finally
+        {
+            if (Directory.Exists(NotesDirectory) && new DirectoryInfo(NotesDirectory).LinkTarget is not null)
+                Directory.Delete(NotesDirectory);
+        }
     }
 
     [Fact]
