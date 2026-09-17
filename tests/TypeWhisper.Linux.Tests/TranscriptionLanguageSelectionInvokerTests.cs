@@ -152,6 +152,12 @@ public sealed class TranscriptionLanguageSelectionInvokerTests
         Assert.Equal(expected, TranscriptionLanguageSelectionInvoker.ResolveSupportedTag(supportedLanguages, languageTag));
     }
 
+    [Fact]
+    public void ResolveSupportedTag_NullList_AcceptsAnyTag()
+    {
+        Assert.Equal("de-DE", TranscriptionLanguageSelectionInvoker.ResolveSupportedTag(null, "de-DE"));
+    }
+
     private sealed class FakeRole : ITranscriptionEngineRole
     {
         public string PluginId => "test";

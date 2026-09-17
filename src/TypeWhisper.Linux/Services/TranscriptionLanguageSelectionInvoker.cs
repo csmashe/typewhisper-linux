@@ -167,7 +167,8 @@ internal static class TranscriptionLanguageSelectionInvoker
                 role.ProviderId,
                 role.SelectedModelId,
                 languageSelection,
-                role.SupportedLanguages
+                // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- older plugin builds and loose mocks return null despite the annotation.
+                role.SupportedLanguages ?? []
             );
         }
 
@@ -175,9 +176,10 @@ internal static class TranscriptionLanguageSelectionInvoker
     }
 
     /// <summary>Providers that only list base codes get the base; any regional variant keeps the list strict.</summary>
-    internal static string? ResolveSupportedTag(IReadOnlyList<string> supportedLanguages, string languageTag)
+    // A null list (older plugin builds, loose mocks) means "any language", like the SDK's empty default.
+    internal static string? ResolveSupportedTag(IReadOnlyList<string>? supportedLanguages, string languageTag)
     {
-        if (supportedLanguages.Count == 0
+        if (supportedLanguages is not { Count: > 0 }
             || supportedLanguages.Contains(languageTag, StringComparer.OrdinalIgnoreCase))
         {
             return languageTag;
