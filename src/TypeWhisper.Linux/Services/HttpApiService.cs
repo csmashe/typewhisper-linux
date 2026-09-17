@@ -222,6 +222,7 @@ public sealed partial class HttpApiService : IDisposable
     private readonly AudioFileService _audioFiles;
     private readonly HotkeyService _hotkeys;
     private readonly DictationOrchestrator _dictation;
+    private readonly RecorderService _recorder;
     private readonly IDictionaryService _dictionary;
     private readonly ApiDiscoveryFile _discoveryFile;
     private readonly IHistoryService _history;
@@ -268,6 +269,7 @@ public sealed partial class HttpApiService : IDisposable
         ITranslationService translation,
         DictationOrchestrator dictation,
         DictationSessionResultStore sessionResults,
+        RecorderService recorder,
         ApiDiscoveryFile discoveryFile,
         string? secretProtectionKeyFilePath = null
     )
@@ -285,6 +287,7 @@ public sealed partial class HttpApiService : IDisposable
             translation,
             dictation,
             sessionResults,
+            recorder,
             discoveryFile,
             secretProtectionKeyFilePath,
             null,
@@ -307,6 +310,7 @@ public sealed partial class HttpApiService : IDisposable
         ITranslationService translation,
         DictationOrchestrator dictation,
         DictationSessionResultStore sessionResults,
+        RecorderService recorder,
         ApiDiscoveryFile discoveryFile,
         string? secretProtectionKeyFilePath,
         string? apiSocketPath,
@@ -326,6 +330,7 @@ public sealed partial class HttpApiService : IDisposable
         _translation = translation;
         _dictation = dictation;
         _sessionResults = sessionResults;
+        _recorder = recorder;
         _discoveryFile = discoveryFile;
         _apiSocketPathOverride = apiSocketPath;
         _validateUnixPeer =
@@ -1253,6 +1258,10 @@ public sealed partial class HttpApiService : IDisposable
                 ("/v1/dictation/stop", "POST") => await HandleDictationStopAsync(),
                 ("/v1/dictation/status", "GET") => HandleDictationStatus(),
                 ("/v1/dictation/transcription", "GET") => HandleDictationTranscription(request),
+                ("/v1/recorder/start", "POST") => await HandleRecorderStartAsync(request, ct),
+                ("/v1/recorder/stop", "POST") => await HandleRecorderStopAsync(),
+                ("/v1/recorder/status", "GET") => HandleRecorderStatus(),
+                ("/v1/recorder/session", "GET") => HandleRecorderSession(request),
                 ("/v1/dictionary/terms", "GET") => HandleGetDictionaryTerms(),
                 ("/v1/dictionary/terms", "PUT") => await HandlePutDictionaryTermsAsync(context, ct),
                 ("/v1/dictionary/terms", "DELETE") =>
@@ -1356,6 +1365,7 @@ public sealed partial class HttpApiService : IDisposable
             maxUploadBytes = MaxTranscribeRequestBytes,
             modelSelection = "request-scoped engine/model overrides; await_download supported",
             supportsDictationControl = true,
+            supportsRecorderControl = true,
             requiresAuthentication = true,
         }));
     }
@@ -2254,6 +2264,103 @@ public sealed partial class HttpApiService : IDisposable
                     "Profile hotkey cannot be enabled."
                 ),
         };
+    }
+
+    private async Task<(int, string)> HandleRecorderStartAsync(HttpRequest request, CancellationToken ct)
+    {
+        if (request.Query.Count != 0 || await request.Body.ReadAsync(new byte[1], ct) != 0)
+        {
+            return (400, Serialize(new { error = "This endpoint accepts no parameters" }));
+        }
+
+        if (_recorder.State != RecorderState.Ready)
+        {
+            return (409, Serialize(new { error = "A recorder session is already active" }));
+        }
+
+        try
+        {
+            if (!await _recorder.StartAsync())
+            {
+                return (409, Serialize(new { error = "Failed to start recording" }));
+            }
+
+            return (200, Serialize(new { started = true, id = _recorder.ActiveSessionId, status = "recording" }));
+        }
+        catch (InvalidOperationException)
+        {
+            return (409, Serialize(new { error = "A recorder session is already active" }));
+        }
+        catch
+        {
+            return (500, Serialize(new { error = "Failed to start recording" }));
+        }
+    }
+
+    private async Task<(int, string)> HandleRecorderStopAsync()
+    {
+        if (!_recorder.IsSessionActive)
+        {
+            return (409, Serialize(new { error = "No recorder session is active" }));
+        }
+
+        var id = _recorder.ActiveSessionId;
+        try
+        {
+            var result = await _recorder.StopAsync();
+            if (result is null)
+            {
+                return (409, Serialize(new { error = "No audio captured", id, status = "failed" }));
+            }
+
+            return (200, Serialize(new
+            {
+                stopped = true,
+                id = result.SessionId,
+                status = "completed",
+                outputFile = result.FilePath,
+                durationSeconds = result.Duration.TotalSeconds,
+            }));
+        }
+        catch (InvalidOperationException) when (
+            _recorder.TryGetSession(id!, out var snapshot) && snapshot.Status == "completed")
+        {
+            return (409, Serialize(new { error = "No recorder session is active" }));
+        }
+        catch
+        {
+            return (500, Serialize(new { error = "Failed to save recording", id, status = "failed" }));
+        }
+    }
+
+    private (int, string) HandleRecorderStatus()
+    {
+        return (200, Serialize(new
+        {
+            recording = _recorder.IsSessionActive,
+            state = _recorder.State switch
+            {
+                RecorderState.Recording => "recording",
+                RecorderState.Paused => "paused",
+                RecorderState.Saving => "saving",
+                _ => "idle",
+            },
+            id = _recorder.ActiveSessionId,
+            durationSeconds = _recorder.ActiveDuration.TotalSeconds,
+        }));
+    }
+
+    private (int, string) HandleRecorderSession(HttpRequest request)
+    {
+        if (request.Query.Count != 1 || !request.Query.TryGetValue("id", out var values)
+            || values.Count != 1 || !Guid.TryParse(values[0], out var id))
+        {
+            return (400, Serialize(new { error = "Missing or invalid id" }));
+        }
+
+        return _recorder.TryGetSession(id.ToString(), out var snapshot)
+            ? (200, Serialize(snapshot))
+            : (404, Serialize(new { error = "Recorder session not found" }));
     }
 
     private async Task<(int, string)> HandleDictationStartAsync()

@@ -162,6 +162,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<AudioFileService>();
         services.AddSingleton<IFileTranscriptionProcessor, FileTranscriptionProcessor>();
         services.AddSingleton<AudioPlaybackService>();
+        services.AddSingleton<RecorderService>();
         services.AddSingleton(
             sp => new SessionAudioFileService(TypeWhisperEnvironment.AudioPath, sp.GetRequiredService<IHistoryService>())
         );

@@ -376,11 +376,57 @@ public sealed class AudioRecordingService : IDisposable
         return result;
     }
 
-    internal AudioCaptureSession? TryStartRecording(bool whisperModeEnabled)
+    internal sealed class CaptureReservation(AudioRecordingService owner) : IDisposable
+    {
+        public void Dispose()
+        {
+            lock (owner._captureLock)
+            {
+                if (ReferenceEquals(owner._captureReservation, this))
+                {
+                    owner._captureReservation = null;
+                }
+            }
+        }
+    }
+
+    private CaptureReservation? _captureReservation;
+
+    public bool IsCaptureReserved
+    {
+        get
+        {
+            lock (_captureLock)
+            {
+                return _captureReservation is not null;
+            }
+        }
+    }
+
+    internal CaptureReservation? TryReserveCapture()
     {
         lock (_captureLock)
         {
-            if (_activeCaptureSession is not null || Volatile.Read(ref _disposed) == 1)
+            if (_captureReservation is not null || _activeCaptureSession is not null
+                || Volatile.Read(ref _disposed) == 1)
+            {
+                return null;
+            }
+
+            return _captureReservation = new CaptureReservation(this);
+        }
+    }
+
+    internal AudioCaptureSession? TryStartRecording(
+        bool whisperModeEnabled,
+        CaptureReservation? reservation = null
+    )
+    {
+        lock (_captureLock)
+        {
+            if (_activeCaptureSession is not null || Volatile.Read(ref _disposed) == 1
+                || (_captureReservation is not null && !ReferenceEquals(_captureReservation, reservation))
+                || (reservation is not null && !ReferenceEquals(_captureReservation, reservation)))
             {
                 return null;
             }

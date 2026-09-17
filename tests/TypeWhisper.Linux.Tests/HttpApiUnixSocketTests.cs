@@ -22,6 +22,97 @@ public sealed class HttpApiUnixSocketTests
     private static readonly string[] s_helloWorld = ["Hello", "World"];
 
     [Fact]
+    public async Task RecorderRoutesRoundTripWithFakeCapture()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var start = await client.PostAsync("/v1/recorder/start", null);
+        Assert.Equal(HttpStatusCode.OK, start.StatusCode);
+        using var started = JsonDocument.Parse(await start.Content.ReadAsStringAsync());
+        Assert.Equal("recording", started.RootElement.GetProperty("status").GetString());
+        var id = started.RootElement.GetProperty("id").GetString();
+        Assert.True(Guid.TryParse(id, out _));
+        fixture.Audio.ProcessAudioBufferForTest([0.1f, -0.1f, 0.2f, -0.2f]);
+        using var active = JsonDocument.Parse(await client.GetStringAsync("/v1/recorder/status"));
+        Assert.True(active.RootElement.GetProperty("recording").GetBoolean());
+        Assert.Equal("recording", active.RootElement.GetProperty("state").GetString());
+        using var stop = await client.PostAsync("/v1/recorder/stop", null);
+        Assert.Equal(HttpStatusCode.OK, stop.StatusCode);
+        using var stopped = JsonDocument.Parse(await stop.Content.ReadAsStringAsync());
+        var output = stopped.RootElement.GetProperty("output_file").GetString();
+        Assert.True(File.Exists(output));
+        using var session = JsonDocument.Parse(await client.GetStringAsync($"/v1/recorder/session?id={id}"));
+        Assert.Equal("completed", session.RootElement.GetProperty("status").GetString());
+        Assert.Equal(output, session.RootElement.GetProperty("output_file").GetString());
+        Assert.False(session.RootElement.TryGetProperty("error", out _));
+        using var idle = JsonDocument.Parse(await client.GetStringAsync("/v1/recorder/status"));
+        Assert.False(idle.RootElement.GetProperty("recording").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("POST", "start")]
+    [InlineData("POST", "stop")]
+    [InlineData("GET", "status")]
+    [InlineData("GET", "session")]
+    public async Task RecorderRoutesRequireBearer(string method, string route)
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: false);
+        using var request = new HttpRequestMessage(new HttpMethod(method), $"/v1/recorder/{route}");
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RecorderStartWhileSessionActiveReturns409()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var first = await client.PostAsync("/v1/recorder/start", null);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        using var second = await client.PostAsync("/v1/recorder/start", null);
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+        fixture.Audio.ProcessAudioBufferForTest([0.1f]);
+        using var stop = await client.PostAsync("/v1/recorder/stop", null);
+        Assert.Equal(HttpStatusCode.OK, stop.StatusCode);
+        using var again = await client.PostAsync("/v1/recorder/stop", null);
+        Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("", HttpStatusCode.BadRequest)]
+    [InlineData("?id=invalid", HttpStatusCode.BadRequest)]
+    [InlineData("?id=12345678-1234-1234-1234-123456789abc", HttpStatusCode.NotFound)]
+    [InlineData("?id=12345678-1234-1234-1234-123456789abc&extra=1", HttpStatusCode.BadRequest)]
+    [InlineData("?id=12345678-1234-1234-1234-123456789abc&id=12345678-1234-1234-1234-123456789abc", HttpStatusCode.BadRequest)]
+    public async Task RecorderSessionValidation(string query, HttpStatusCode expected)
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var response = await client.GetAsync("/v1/recorder/session" + query);
+        Assert.Equal(expected, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("?mic=true", "")]
+    [InlineData("", "{}")]
+    [InlineData("", " ")]
+    public async Task RecorderStartRejectsParameters(string query, string body)
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent(body);
+        using var response = await client.PostAsync("/v1/recorder/start" + query, content);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.False(fixture.Recorder.IsSessionActive);
+    }
+
+    [Fact]
     public async Task ModelLoadActivatesWithoutChangingSelection()
     {
         var engine = new DownloadableTranscriptionEngine();
@@ -463,6 +554,7 @@ public sealed class HttpApiUnixSocketTests
                 value.GetProperty("method").GetString() == route.Item1 && value.GetProperty("path").GetString() == route.Item2);
         }
         Assert.True(root.GetProperty("supports_dictation_control").GetBoolean());
+        Assert.True(root.GetProperty("supports_recorder_control").GetBoolean());
         Assert.True(root.GetProperty("requires_authentication").GetBoolean());
     }
 
@@ -1669,6 +1761,8 @@ public sealed class HttpApiUnixSocketTests
             ProcessRunner.Invocations.Clear();
             ProcessRunner.SupervisorInvocations.Clear();
             var audioFiles = new AudioFileService(commands, ProcessRunner);
+            Audio = new AudioRecordingService(_ => { }, () => 0, () => { });
+            Recorder = new RecorderService(Audio, Settings.Object, _tempDirectory);
             Service = new HttpApiService(
                 Models,
                 Settings.Object,
@@ -1683,12 +1777,16 @@ public sealed class HttpApiUnixSocketTests
                 translation!,
                 null!,
                 _sessionResults,
+                Recorder,
                 new ApiDiscoveryFile(),
                 Path.Join(_tempDirectory, "secret-protection.key"),
                 SocketPath,
                 validateUnixPeer
             );
         }
+
+        internal AudioRecordingService Audio { get; }
+        internal RecorderService Recorder { get; }
 
         internal ModelManagerService Models { get; }
 
@@ -1804,6 +1902,8 @@ public sealed class HttpApiUnixSocketTests
         public void Dispose()
         {
             Service.Dispose();
+            Recorder.Dispose();
+            Audio.Dispose();
             _sessionResults.Dispose();
             Models.Dispose();
             _hotkeys.Dispose();

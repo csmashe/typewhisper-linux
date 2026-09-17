@@ -11,6 +11,25 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class AudioRecordingServiceTests
 {
     [Fact]
+    public void TryStartRecording_IsBlockedWhileCaptureIsReserved()
+    {
+        using var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
+        // Not a using: the test disposes twice on purpose to prove release is idempotent.
+        var reservation = audio.TryReserveCapture();
+        Assert.NotNull(reservation);
+        Assert.True(audio.IsCaptureReserved);
+        Assert.Null(audio.TryReserveCapture());
+        Assert.Null(audio.TryStartRecording(false));
+        var session = audio.TryStartRecording(false, reservation);
+        Assert.NotNull(session);
+        audio.StopRecording(session);
+        reservation.Dispose();
+        reservation.Dispose();
+        Assert.False(audio.IsCaptureReserved);
+        Assert.NotNull(audio.TryStartRecording(false));
+    }
+
+    [Fact]
     public void ApplyWhisperModeGain_BoostsQuietAudio()
     {
         var samples = new[] { 0.01f, -0.01f, 0.01f, -0.01f };
