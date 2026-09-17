@@ -141,8 +141,10 @@ public sealed class BundledTranscriptionLanguageConformanceTests
         Assert.Throws<TranscriptionLanguageNotSupportedException>(
             () => sherpa.ToLegacyLanguage(LanguageSelection.Explicit("it"))
         );
-        Assert.Throws<TranscriptionLanguageNotSupportedException>(
-            () => sherpa.ToLegacyLanguage(LanguageSelection.Explicit("en-US"))
+        // Canary lists base codes only, so a regional tag folds to its base.
+        Assert.Equal(
+            "en",
+            sherpa.ToLegacyLanguage(LanguageSelection.Explicit("en-US"))
         );
     }
 
@@ -185,6 +187,19 @@ public sealed class BundledTranscriptionLanguageConformanceTests
             )
         )
         {
+            // Base-only lists fold a regional tag to its base; any regional entry keeps the list strict.
+            var separator = selection.LanguageTag!.IndexOf('-');
+            var baseTag = separator >= 0 ? selection.LanguageTag[..separator] : null;
+            if (
+                baseTag is not null
+                && role.SupportedLanguages.Contains(baseTag, StringComparer.OrdinalIgnoreCase)
+                && !role.SupportedLanguages.Any(tag => tag.Contains('-'))
+            )
+            {
+                Assert.Equal(baseTag, role.ToLegacyLanguage(selection));
+                return;
+            }
+
             Assert.Throws<TranscriptionLanguageNotSupportedException>(
                 () => role.ToLegacyLanguage(selection)
             );

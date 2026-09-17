@@ -1,6 +1,4 @@
 using System.Net;
-using System.Net.Sockets;
-using System.Text;
 using System.Text.Json;
 using TypeWhisper.Cli.Commands;
 using TypeWhisper.Cli.Models;
@@ -278,7 +276,7 @@ public sealed class TranscribeCommandTests : IDisposable
         );
 
         Assert.Null(stub.CallbackException);
-        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(3, result.ExitCode);
         Assert.Contains(
             "Transcription failed (500): stub failure",
             result.Error,
@@ -394,10 +392,167 @@ public sealed class TranscribeCommandTests : IDisposable
         Assert.False(stub.FirstRequest.Task.IsCompleted);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CorrectionsFlagIsOnlySentWhenDisabled(bool disabled)
+    {
+        await using var stub = new UnixHttpStub();
+        var options = CliOptions.Parse(disabled ? ["transcribe", "-", "--no-corrections"] : ["transcribe", "-"]);
+        using var stdin = new MemoryStream("RIFF....WAVEaudio"u8.ToArray());
+        var result = await RunCommandAsync(stub, options, stdin);
+        Assert.Equal(0, result.ExitCode);
+        var request = await stub.FirstRequest.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        using var document = JsonDocument.Parse(request.Body);
+        Assert.Equal(disabled, document.RootElement.TryGetProperty("apply_corrections", out var value));
+        if (disabled) Assert.False(value.GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("text", "exact text without trailing newline")]
+    [InlineData("srt", "1\n00:00:00,200 --> 00:00:01,000\nHello\n\n")]
+    [InlineData("vtt", "WEBVTT\n\n00:00.200 --> 00:01.000\nHello\n")]
+    public async Task RawFormatsAreWrittenUnchanged(string format, string body)
+    {
+        await using var stub = new UnixHttpStub(responseBody: body);
+        using var stdin = new MemoryStream("RIFF....WAVEaudio"u8.ToArray());
+        var result = await RunCommandAsync(stub, CliOptions.Parse(["transcribe", "-", "--response-format", format]), stdin);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(body, result.Output);
+        Assert.Empty(result.Error);
+        var request = await stub.FirstRequest.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        using var document = JsonDocument.Parse(request.Body);
+        Assert.Equal(format, document.RootElement.GetProperty("response_format").GetString());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ImplicitStdinDependsOnRedirection(bool redirected)
+    {
+        string? spool = null;
+        await using var stub = new UnixHttpStub(beforeResponse: async request =>
+        {
+            using var document = JsonDocument.Parse(request.Body);
+            spool = document.RootElement.GetProperty("path").GetString()!;
+            Assert.Equal("RIFF....WAVEaudio"u8.ToArray(), await File.ReadAllBytesAsync(spool));
+        });
+        using var stdin = new MemoryStream("RIFF....WAVEaudio"u8.ToArray());
+        var result = await RunCommandAsync(stub, CliOptions.Parse(["transcribe"]), stdin, () => redirected);
+        Assert.Equal(redirected ? 0 : 1, result.ExitCode);
+        Assert.Null(stub.CallbackException);
+        Assert.Equal(redirected ? 1 : 0, stub.RequestCount);
+        if (redirected)
+        {
+            Assert.NotNull(spool);
+            Assert.False(File.Exists(spool));
+            Assert.Equal("POST /v1/transcribe/local-file HTTP/1.1", (await stub.FirstRequest.Task).RequestLine);
+        }
+        else
+        {
+            Assert.Contains("Provide an audio file or pipe audio to stdin.", result.Error);
+        }
+    }
+
+    [Fact]
+    public async Task UnreadableStdinIsLocalInputError()
+    {
+        await using var stub = new UnixHttpStub();
+        using var stdin = new MemoryStream();
+        // ReSharper disable once DisposeOnUsingVariable -- disposed up front on purpose so the read fails; `using` satisfies CodeQL's disposal check.
+        await stdin.DisposeAsync();
+        var result = await RunCommandAsync(stub, new CliOptions { Positionals = ["-"] }, stdin);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Could not spool stdin", result.Error);
+        Assert.Equal(0, stub.RequestCount);
+    }
+
+    [Fact]
+    public async Task CancellationWhileSpoolingDeletesPrivateFile()
+    {
+        await using var stub = new UnixHttpStub();
+        using var cts = new CancellationTokenSource();
+        await using var stdin = new CancellingStream(cts);
+        var before = Directory.GetFiles(Path.GetTempPath(), "typewhisper-stdin-*").ToHashSet();
+        var result = await RunCommandAsync(stub, new CliOptions { Positionals = ["-"] }, stdin, ct: cts.Token);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Cancelled.", result.Error);
+        Assert.Equal(0, stub.RequestCount);
+        Assert.DoesNotContain(Directory.GetFiles(Path.GetTempPath(), "typewhisper-stdin-*"), path => !before.Contains(path));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InFlightCancellationKeepsCancellationMessage(bool awaitDownload)
+    {
+        using var cts = new CancellationTokenSource();
+        await using var stub = new UnixHttpStub(beforeResponse: _ =>
+        {
+            // ReSharper disable once AccessToDisposedClosure -- the stub is declared after cts, so its DisposeAsync awaits the serve loop (and this callback) before the using disposes cts.
+            cts.Cancel();
+            return Task.CompletedTask;
+        }) { StallResponse = true };
+        using var stdin = new MemoryStream("RIFF....WAVEaudio"u8.ToArray());
+        var result = await RunCommandAsync(stub, new CliOptions
+        {
+            Positionals = ["-"],
+            AwaitDownload = awaitDownload,
+        }, stdin, ct: cts.Token);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Cancelled.", result.Error);
+        Assert.DoesNotContain("timed out", result.Error);
+        using var document = JsonDocument.Parse((await stub.FirstRequest.Task).Body);
+        Assert.False(File.Exists(document.RootElement.GetProperty("path").GetString()));
+    }
+
+    [Fact]
+    public async Task CancellationInterruptsBlockedStdinRead()
+    {
+        await using var stub = new UnixHttpStub();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        await using var stdin = new BlockingStream();
+        // ReSharper disable once MethodSupportsCancellation -- this is the unconditional test backstop; passing cts.Token would abort the wait when it fires instead of letting the command report "Cancelled.".
+        var result = await RunCommandAsync(stub, new CliOptions { Positionals = ["-"] }, stdin, ct: cts.Token)
+            .WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Cancelled.", result.Error);
+        Assert.Equal(0, stub.RequestCount);
+        stdin.Release();
+    }
+
+    // Mimics the console stream: the token is ignored once the read has started.
+    private sealed class BlockingStream : MemoryStream
+    {
+        private readonly SemaphoreSlim _gate = new(0);
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            _gate.Wait(CancellationToken.None);
+            return ValueTask.FromResult(0);
+        }
+
+        public void Release()
+        {
+            _gate.Release();
+        }
+    }
+
+    private sealed class CancellingStream(CancellationTokenSource cts) : MemoryStream("RIFF....WAVEaudio"u8.ToArray())
+    {
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (Position >= 12) cts.Cancel();
+            return base.ReadAsync(buffer, cancellationToken);
+        }
+    }
+
     private static async Task<CommandResult> RunCommandAsync(
         UnixHttpStub stub,
         CliOptions options,
-        Stream stdin
+        Stream stdin,
+        Func<bool>? isInputRedirected = null,
+        CancellationToken ct = default
     )
     {
         var api = new ApiClient(
@@ -413,7 +568,7 @@ public sealed class TranscribeCommandTests : IDisposable
         {
             Console.SetOut(output);
             Console.SetError(error);
-            var exitCode = await TranscribeCommand.RunAsync(api, options, stdin);
+            var exitCode = await TranscribeCommand.RunAsync(api, options, stdin, isInputRedirected: isInputRedirected, ct: ct);
             return new CommandResult(exitCode, output.ToString(), error.ToString());
         }
         finally
@@ -426,240 +581,6 @@ public sealed class TranscribeCommandTests : IDisposable
     }
 
     private sealed record CommandResult(int ExitCode, string Output, string Error);
-
-    private sealed record CapturedRequest(
-        string RequestLine,
-        IReadOnlyDictionary<string, string> Headers,
-        string Body
-    );
-
-    private sealed class UnixHttpStub : IAsyncDisposable
-    {
-        private readonly Func<CapturedRequest, Task>? _beforeResponse;
-        private readonly CancellationTokenSource _cts = new();
-        private readonly Socket _listener =
-            new(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        private readonly byte[] _response;
-        private readonly Task _serveTask;
-        private readonly string _tempDirectory;
-        private int _requestCount;
-
-        internal UnixHttpStub(
-            HttpStatusCode statusCode = HttpStatusCode.OK,
-            string responseBody = """{"text":"ok"}""",
-            Func<CapturedRequest, Task>? beforeResponse = null
-        )
-        {
-            _beforeResponse = beforeResponse;
-            _response = CreateResponse(statusCode, responseBody);
-            _tempDirectory = Path.Join(
-                Path.GetTempPath(),
-                "typewhisper-cli-transcribe-uds-" + Guid.NewGuid().ToString("N")
-            );
-            Directory.CreateDirectory(_tempDirectory);
-            SocketPath = Path.Join(_tempDirectory, "api.sock");
-            _listener.Bind(new UnixDomainSocketEndPoint(SocketPath));
-            _listener.Listen(8);
-            _serveTask = ServeAsync();
-        }
-
-        internal Exception? CallbackException { get; private set; }
-
-        internal TaskCompletionSource<CapturedRequest> FirstRequest { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        internal int RequestCount => Volatile.Read(ref _requestCount);
-
-        internal string SocketPath { get; }
-
-        public async ValueTask DisposeAsync()
-        {
-            // ReSharper disable once MethodHasAsyncOverload -- Cancel() is fine in teardown; there are no cancellation callbacks to defer.
-            _cts.Cancel();
-            _listener.Dispose();
-            try
-            {
-                await _serveTask;
-            }
-            // Teardown faults must not replace whatever the test was actually asserting.
-            catch (EndOfStreamException)
-            {
-                // Expected when the CLI closes before finishing its request.
-            }
-            catch (SocketException ex) when (SocketShutdown.IsShutdownError(ex))
-            {
-                // Expected when the CLI resets the connection during shutdown.
-            }
-            finally
-            {
-                _cts.Dispose();
-                if (Directory.Exists(_tempDirectory))
-                {
-                    Directory.Delete(_tempDirectory, recursive: true);
-                }
-            }
-        }
-
-        private static byte[] CreateResponse(
-            HttpStatusCode statusCode,
-            string responseBody
-        )
-        {
-            var body = Encoding.UTF8.GetBytes(responseBody);
-            var reason = statusCode switch
-            {
-                HttpStatusCode.OK => "OK",
-                HttpStatusCode.InternalServerError => "Internal Server Error",
-                _ => statusCode.ToString(),
-            };
-            var header = Encoding.ASCII.GetBytes(
-                $"HTTP/1.1 {(int)statusCode} {reason}\r\n"
-                    + "Content-Type: application/json\r\n"
-                    + $"Content-Length: {body.Length}\r\n"
-                    + "Connection: close\r\n\r\n"
-            );
-            return [.. header, .. body];
-        }
-
-        private static int FindHeaderEnd(ReadOnlySpan<byte> bytes)
-        {
-            for (var i = 0; i <= bytes.Length - 4; i++)
-            {
-                if (
-                    bytes[i] == '\r'
-                    && bytes[i + 1] == '\n'
-                    && bytes[i + 2] == '\r'
-                    && bytes[i + 3] == '\n'
-                )
-                {
-                    return i;
-                }
-            }
-
-            return -1;
-        }
-
-        private static async Task<CapturedRequest> ReadRequestAsync(
-            Socket connection,
-            CancellationToken cancellationToken
-        )
-        {
-            using var bytes = new MemoryStream();
-            var buffer = new byte[4096];
-            var headerEnd = -1;
-            var contentLength = 0;
-            string[]? headerLines = null;
-
-            while (true)
-            {
-                var read = await connection.ReceiveAsync(
-                    buffer,
-                    SocketFlags.None,
-                    cancellationToken
-                );
-                if (read == 0)
-                {
-                    throw new EndOfStreamException("Client closed before sending the request.");
-                }
-
-                bytes.Write(buffer, 0, read);
-                if (headerEnd < 0)
-                {
-                    headerEnd = FindHeaderEnd(
-                        bytes.GetBuffer().AsSpan(0, checked((int)bytes.Length))
-                    );
-                    if (headerEnd >= 0)
-                    {
-                        var headerText = Encoding.ASCII.GetString(
-                            bytes.GetBuffer(),
-                            0,
-                            headerEnd
-                        );
-                        headerLines = headerText.Split("\r\n");
-                        var lengthHeader = headerLines.Single(line =>
-                            line.StartsWith(
-                                "Content-Length:",
-                                StringComparison.OrdinalIgnoreCase
-                            )
-                        );
-                        contentLength = int.Parse(
-                            lengthHeader[(lengthHeader.IndexOf(':') + 1)..].Trim()
-                        );
-                    }
-                }
-
-                if (
-                    headerEnd >= 0
-                    && bytes.Length >= headerEnd + 4L + contentLength
-                )
-                {
-                    break;
-                }
-            }
-
-            var headers = new Dictionary<string, string>(
-                StringComparer.OrdinalIgnoreCase
-            );
-            foreach (var line in headerLines![1..])
-            {
-                var separator = line.IndexOf(':');
-                headers.Add(line[..separator], line[(separator + 1)..].Trim());
-            }
-
-            return new CapturedRequest(
-                headerLines[0],
-                headers,
-                Encoding.UTF8.GetString(
-                    bytes.GetBuffer(),
-                    headerEnd + 4,
-                    contentLength
-                )
-            );
-        }
-
-        private async Task ServeAsync()
-        {
-            try
-            {
-                while (!_cts.IsCancellationRequested)
-                {
-                    using var connection = await _listener.AcceptAsync(_cts.Token);
-                    var request = await ReadRequestAsync(connection, _cts.Token);
-                    Interlocked.Increment(ref _requestCount);
-                    FirstRequest.TrySetResult(request);
-                    if (_beforeResponse is not null)
-                    {
-                        try
-                        {
-                            await _beforeResponse(request);
-                        }
-                        catch (Exception ex)
-                        {
-                            CallbackException = ex;
-                        }
-                    }
-
-                    var offset = 0;
-                    while (offset < _response.Length)
-                    {
-                        offset += await connection.SendAsync(
-                            _response.AsMemory(offset),
-                            SocketFlags.None,
-                            _cts.Token
-                        );
-                    }
-                }
-            }
-            catch (OperationCanceledException) when (_cts.IsCancellationRequested)
-            {
-                // Expected while ending the accept loop.
-            }
-            catch (ObjectDisposedException) when (_cts.IsCancellationRequested)
-            {
-                // Expected while ending the accept loop.
-            }
-        }
-    }
 
     private sealed class ChunkedReadStream(byte[] contents, int maximumRead) : Stream
     {

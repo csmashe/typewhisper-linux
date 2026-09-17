@@ -27,7 +27,7 @@ public sealed class QuickCommandTimeoutTests
                     .WaitAsync(s_hardTestTimeout)
             );
 
-            Assert.Equal(1, exitCode);
+            Assert.Equal(2, exitCode);
             Assert.Contains("The API did not respond within 0.25 seconds.", error);
             Assert.DoesNotContain("Cancelled.", error);
             Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2));
@@ -53,7 +53,7 @@ public sealed class QuickCommandTimeoutTests
                     .WaitAsync(s_hardTestTimeout)
             );
 
-            Assert.Equal(1, exitCode);
+            Assert.Equal(2, exitCode);
             Assert.Contains("The API did not respond within 0.25 seconds.", error);
             Assert.DoesNotContain("Cancelled.", error);
             Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2));

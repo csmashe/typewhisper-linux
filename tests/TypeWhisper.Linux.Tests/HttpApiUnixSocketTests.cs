@@ -19,6 +19,829 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class HttpApiUnixSocketTests
 {
+    private static readonly string[] s_helloWorld = ["Hello", "World"];
+
+    [Fact]
+    public async Task ModelLoadActivatesWithoutChangingSelection()
+    {
+        var engine = new DownloadableTranscriptionEngine();
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent("""{"engine":"DOWNLOADABLE","model":"other"}""", Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/models/load", content);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var fullId = ModelManagerService.GetPluginModelId(engine.PluginId, "other");
+        Assert.Equal("ready", json.RootElement.GetProperty("status").GetString());
+        Assert.Equal(engine.ProviderId, json.RootElement.GetProperty("engine").GetString());
+        Assert.Equal("other", json.RootElement.GetProperty("model").GetString());
+        Assert.Equal(fullId, json.RootElement.GetProperty("fullId").GetString());
+        Assert.Equal(1, engine.LoadCount);
+        using var statusResponse = await client.GetAsync("/v1/status");
+        using var status = JsonDocument.Parse(await statusResponse.Content.ReadAsStringAsync());
+        Assert.Equal(fullId, status.RootElement.GetProperty("active_model").GetString());
+        using var modelsResponse = await client.GetAsync("/v1/models");
+        using var models = JsonDocument.Parse(await modelsResponse.Content.ReadAsStringAsync());
+        Assert.Equal("test", Assert.Single(models.RootElement.GetProperty("models").EnumerateArray(),
+            model => model.GetProperty("selected").GetBoolean()).GetProperty("id").GetString());
+    }
+
+    [Theory]
+    [InlineData("", HttpStatusCode.BadRequest)]
+    [InlineData("{", HttpStatusCode.BadRequest)]
+    [InlineData("{}", HttpStatusCode.BadRequest)]
+    [InlineData("{\"engine\":\"\"}", HttpStatusCode.BadRequest)]
+    [InlineData("[]", HttpStatusCode.BadRequest)]
+    [InlineData("null", HttpStatusCode.BadRequest)]
+    [InlineData("{\"engine\":123}", HttpStatusCode.BadRequest)]
+    [InlineData("{\"engine\":\"downloadable\",\"model\":false}", HttpStatusCode.BadRequest)]
+    [InlineData("{\"engine\":\"downloadable\",\"engine\":\"downloadable\"}", HttpStatusCode.BadRequest)]
+    [InlineData("{\"engine\":\"missing\"}", HttpStatusCode.NotFound)]
+    [InlineData("{\"engine\":\"downloadable\",\"model\":\"missing\"}", HttpStatusCode.NotFound)]
+    public async Task ModelLoadRejectsInvalidRequests(string body, HttpStatusCode expected)
+    {
+        var engine = new DownloadableTranscriptionEngine();
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/models/load", content);
+        Assert.Equal(expected, response.StatusCode);
+        Assert.Equal(0, engine.LoadCount);
+    }
+
+    [Theory]
+    [InlineData("", HttpStatusCode.Conflict, 0)]
+    [InlineData("?await_download=YES", HttpStatusCode.OK, 1)]
+    [InlineData("?await_download=invalid", HttpStatusCode.BadRequest, 0)]
+    public async Task ModelLoadOnlyDownloadsWhenRequested(string query, HttpStatusCode expected, int downloads)
+    {
+        var engine = new DownloadableTranscriptionEngine { Downloaded = false };
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent("""{"engine":"downloadable"}""", Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/models/load" + query, content);
+        Assert.Equal(expected, response.StatusCode);
+        Assert.Equal(downloads, engine.DownloadCount);
+        Assert.Equal(downloads, engine.LoadCount);
+        if (expected == HttpStatusCode.Conflict)
+        {
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("Model is not downloaded", json.RootElement.GetProperty("error").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task ModelUnloadThenDeleteRemovesOnlyUnloadedFiles()
+    {
+        var engine = new DownloadableTranscriptionEngine();
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent("""{"engine":"downloadable","model":"other"}""", Encoding.UTF8, "application/json");
+        using var load = await client.PostAsync("/v1/models/load", content);
+        Assert.Equal(HttpStatusCode.OK, load.StatusCode);
+        using var loadedDelete = await client.DeleteAsync("/v1/models?engine=downloadable&model=other");
+        Assert.Equal(HttpStatusCode.Conflict, loadedDelete.StatusCode);
+        using var error = JsonDocument.Parse(await loadedDelete.Content.ReadAsStringAsync());
+        Assert.Equal("Unload the model first", error.RootElement.GetProperty("error").GetString());
+        Assert.Equal(0, engine.UnloadCount);
+        Assert.Equal(0, engine.DeleteCount);
+        using var unload = await client.PostAsync("/v1/models/unload", null);
+        Assert.Equal(HttpStatusCode.OK, unload.StatusCode);
+        using var unloaded = JsonDocument.Parse(await unload.Content.ReadAsStringAsync());
+        Assert.Equal("unloaded", unloaded.RootElement.GetProperty("status").GetString());
+        Assert.Equal("other", unloaded.RootElement.GetProperty("model").GetString());
+        Assert.Equal(engine.ProviderId, unloaded.RootElement.GetProperty("engine").GetString());
+        Assert.Equal(1, engine.UnloadCount);
+        Assert.Null(fixture.Models.ActiveModelId);
+        using var delete = await client.DeleteAsync("/v1/models?engine=downloadable&model=other");
+        Assert.Equal(HttpStatusCode.OK, delete.StatusCode);
+        using var deleted = JsonDocument.Parse(await delete.Content.ReadAsStringAsync());
+        Assert.Equal("deleted", deleted.RootElement.GetProperty("status").GetString());
+        Assert.Equal("other", deleted.RootElement.GetProperty("model").GetString());
+        Assert.Equal(engine.ProviderId, deleted.RootElement.GetProperty("engine").GetString());
+        Assert.Equal(1, engine.DeleteCount);
+    }
+
+    [Theory]
+    [InlineData("", HttpStatusCode.OK)]
+    [InlineData("{}", HttpStatusCode.OK)]
+    [InlineData("{\"engine\":\"downloadable\"}", HttpStatusCode.OK)]
+    [InlineData("{\"engine\":\"missing\"}", HttpStatusCode.NotFound)]
+    [InlineData("[]", HttpStatusCode.BadRequest)]
+    [InlineData("{\"engine\":\"downloadable\",\"engine\":\"downloadable\"}", HttpStatusCode.BadRequest)]
+    public async Task ModelUnloadWhenNothingLoaded(string body, HttpStatusCode expected)
+    {
+        using var fixture = new ApiFixture(transcriptionEngine: new DownloadableTranscriptionEngine());
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/models/unload", content);
+        Assert.Equal(expected, response.StatusCode);
+        if (expected == HttpStatusCode.OK)
+        {
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("model").ValueKind);
+            Assert.Equal("unloaded", json.RootElement.GetProperty("status").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task ModelUnloadRejectsDifferentEngine()
+    {
+        var engine = new DownloadableTranscriptionEngine();
+        var other = new SegmentedTranscriptionEngine();
+        using var fixture = new ApiFixture(transcriptionEngines: [engine, other]);
+        await fixture.Models.LoadModelAsync(ModelManagerService.GetPluginModelId(engine.PluginId, "test"));
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent(JsonSerializer.Serialize(new { engine = other.ProviderId }), Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/models/unload", content);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("That engine has no loaded model", json.RootElement.GetProperty("error").GetString());
+        Assert.Equal(0, engine.UnloadCount);
+    }
+
+    [Theory]
+    [InlineData("?engine=downloadable&model=test", true, HttpStatusCode.Conflict, "The selected model cannot be deleted")]
+    [InlineData("?engine=downloadable&model=other", false, HttpStatusCode.NotFound, "Downloaded model not found")]
+    [InlineData("?engine=downloadable", true, HttpStatusCode.BadRequest, "Both 'engine' and 'model' are required.")]
+    [InlineData("?model=other", true, HttpStatusCode.BadRequest, "Both 'engine' and 'model' are required.")]
+    [InlineData("?engine=missing&model=other", true, HttpStatusCode.NotFound, "Unknown engine: missing")]
+    [InlineData("?engine=downloadable&model=missing", true, HttpStatusCode.NotFound, "Unknown model for engine downloadable: missing")]
+    public async Task ModelDeleteRejectsProtectedOrMissingModels(string query, bool downloaded, HttpStatusCode expected, string message)
+    {
+        var engine = new DownloadableTranscriptionEngine { Downloaded = downloaded };
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var response = await client.DeleteAsync("/v1/models" + query);
+        Assert.Equal(expected, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(message, json.RootElement.GetProperty("error").GetString());
+        Assert.Equal(0, engine.DeleteCount);
+    }
+
+    [Theory]
+    [InlineData("POST", "/v1/models/load")]
+    [InlineData("POST", "/v1/models/unload")]
+    [InlineData("DELETE", "/v1/models?engine=downloadable&model=other")]
+    public async Task ModelOperationsReturnBusyWhileTranscriptionLeaseIsHeld(string method, string path)
+    {
+        var engine = new DownloadableTranscriptionEngine();
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        await using (await fixture.Models.AcquireTranscriptionAsync())
+        {
+            using var request = new HttpRequestMessage(new HttpMethod(method), path);
+            request.Content = new StringContent("""{"engine":"downloadable"}""", Encoding.UTF8, "application/json");
+            using var response = await client.SendAsync(request).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("A transcription or model operation is in progress", json.RootElement.GetProperty("error").GetString());
+        }
+        Assert.Equal(1, engine.LoadCount);
+        Assert.Equal(0, engine.UnloadCount);
+        Assert.Equal(0, engine.DeleteCount);
+    }
+
+    [Fact]
+    public async Task ModelUnloadReportsFailedTeardownAndKeepsModelActive()
+    {
+        var engine = new DownloadableTranscriptionEngine { UnloadFails = true };
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        var fullId = ModelManagerService.GetPluginModelId(engine.PluginId, "other");
+        await fixture.Models.LoadModelAsync(fullId);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var response = await client.PostAsync("/v1/models/unload", null);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("This engine cannot unload the model", json.RootElement.GetProperty("error").GetString());
+        Assert.Equal(1, engine.UnloadCount);
+        Assert.Equal(fullId, fixture.Models.ActiveModelId);
+    }
+
+    [Fact]
+    public async Task ModelDeleteReportsFilesLeftBehind()
+    {
+        var engine = new DownloadableTranscriptionEngine { DeleteFails = true };
+        using var fixture = new ApiFixture(transcriptionEngine: engine);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var response = await client.DeleteAsync("/v1/models?engine=downloadable&model=other");
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("Model files could not be deleted", json.RootElement.GetProperty("error").GetString());
+        Assert.Equal(1, engine.DeleteCount);
+        Assert.True(fixture.Models.IsDownloaded(ModelManagerService.GetPluginModelId(engine.PluginId, "other")));
+    }
+
+    [Fact]
+    public async Task ModelDeleteRejectsEngineWithoutFileManagement()
+    {
+        var engine = new SegmentedTranscriptionEngine();
+        using var fixture = new ApiFixture(transcriptionEngines: [engine]);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var response = await client.DeleteAsync($"/v1/models?engine={engine.ProviderId}&model=test");
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("This engine does not support deleting model files", json.RootElement.GetProperty("error").GetString());
+    }
+
+    [Theory]
+    [InlineData("/v1/models/load")]
+    [InlineData("/v1/models/unload")]
+    public async Task ModelRequestsRespectJsonBodyLimit(string path)
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent(new string(' ', (int)HttpApiService.MaxJsonRequestBytes + 1), Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync(path, content);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+    }
+
+    private sealed class DownloadableTranscriptionEngine : ITranscriptionEngineRole
+    {
+        public string PluginId => "test.downloadable";
+        public string ProviderId => "downloadable";
+        public string ProviderDisplayName => "Downloadable";
+        public bool IsConfigured => true;
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels => [new("test", "Test"), new("other", "Other")];
+        public string SelectedModelId => "test";
+        public bool SupportsTranslation => false;
+        public bool SupportsModelDownload => true;
+        public bool Downloaded { get; set; } = true;
+        public bool UnloadFails { get; init; }
+        public bool DeleteFails { get; init; }
+        public int LoadCount { get; private set; }
+        public int UnloadCount { get; private set; }
+        public int DeleteCount { get; private set; }
+        public int DownloadCount { get; private set; }
+        public void SelectModel(string modelId) { }
+        public bool IsModelDownloaded(string modelId) => Downloaded;
+        public Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
+        {
+            DownloadCount++;
+            Downloaded = true;
+            return Task.CompletedTask;
+        }
+        public Task LoadModelAsync(string modelId, CancellationToken ct)
+        {
+            LoadCount++;
+            return Task.CompletedTask;
+        }
+        public Task UnloadModelAsync()
+        {
+            UnloadCount++;
+            return UnloadFails ? Task.FromException(new InvalidOperationException("teardown failed")) : Task.CompletedTask;
+        }
+        public Task DeleteModelAsync(string modelId, CancellationToken ct)
+        {
+            DeleteCount++;
+            // DeleteFails mirrors plugins that swallow filesystem errors and leave the file behind.
+            if (!DeleteFails)
+            {
+                Downloaded = false;
+            }
+            return Task.CompletedTask;
+        }
+        public Task<PluginTranscriptionResult> TranscribeAsync(
+            byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct) =>
+            Task.FromResult(new PluginTranscriptionResult("test", "en", 1));
+    }
+
+    [Fact]
+    public async Task VerboseTranslationPreservesSegmentTimingsAndReportsTargetLanguage()
+    {
+        var translation = CreateTranslationMock();
+        using var fixture = CreateSegmentFixture(translation.Object);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "verbose_json", "de");
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("Hallo Welt", json.RootElement.GetProperty("text").GetString());
+        Assert.Equal("de", json.RootElement.GetProperty("language").GetString());
+        AssertSegments(json.RootElement, "Hallo", "Welt");
+        translation.Verify(service => service.TranslateSegmentsAsync(
+            It.Is<IReadOnlyList<string>>(texts => texts.SequenceEqual(s_helloWorld)),
+            "en", "de", null, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task SegmentTranslationMismatchReturnsBadGateway()
+    {
+        var translation = CreateTranslationMock();
+        translation.Setup(service => service.TranslateSegmentsAsync(
+                It.IsAny<IReadOnlyList<string>>(), "en", "de", null, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new SegmentTranslationMismatchException());
+        using var fixture = CreateSegmentFixture(translation.Object);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "verbose_json", "de");
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Single(json.RootElement.EnumerateObject());
+        Assert.Equal(
+            "Translation did not preserve the subtitle segments. Retry with another LLM model.",
+            json.RootElement.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task JsonTranslationDoesNotTranslateSegments()
+    {
+        var translation = CreateTranslationMock();
+        using var fixture = CreateSegmentFixture(translation.Object);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "json", "de");
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("Hallo Welt", json.RootElement.GetProperty("text").GetString());
+        Assert.Equal("de", json.RootElement.GetProperty("language").GetString());
+        translation.Verify(service => service.TranslateSegmentsAsync(
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<LlmCallCapture?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task WithoutTargetLanguageSegmentsAndDetectedLanguageAreUntouched()
+    {
+        var translation = new Mock<ITranslationService>(MockBehavior.Strict);
+        using var fixture = CreateSegmentFixture(translation.Object);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "verbose_json", null);
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("Hello World", json.RootElement.GetProperty("text").GetString());
+        Assert.Equal("en", json.RootElement.GetProperty("language").GetString());
+        AssertSegments(json.RootElement, "Hello", "World");
+        translation.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task EveryCatalogRouteReachesAHandler()
+    {
+        var dictionary = new Mock<IDictionaryService>();
+        dictionary.Setup(service => service.GetEnabledTerms()).Returns([]);
+        dictionary.Setup(service => service.GetCorrections()).Returns([]);
+        using var fixture = new ApiFixture(dictionary: dictionary.Object);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+
+        Assert.Equal(HttpApiRoutes.All.Count, HttpApiRoutes.All.Distinct().Count());
+        foreach (var (method, path) in HttpApiRoutes.All)
+        {
+            Assert.True(HttpApiRoutes.Contains(method, path));
+            using var request = new HttpRequestMessage(new HttpMethod(method), path);
+            using var response = await client.SendAsync(request);
+            Assert.True(response.StatusCode is not (HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed),
+                $"{method} {path}: {response.StatusCode}");
+        }
+    }
+
+    [Fact]
+    public async Task KnownPathRejectsWrongMethodWithAllowAndUnknownPathRemainsNotFound()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var wrongMethod = await client.PutAsync("/v1/status", null);
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, wrongMethod.StatusCode);
+        Assert.Equal("GET", Assert.Single(wrongMethod.Content.Headers.Allow));
+        using var error = JsonDocument.Parse(await wrongMethod.Content.ReadAsStringAsync());
+        Assert.Equal("Method not allowed", error.RootElement.GetProperty("error").GetString());
+        using var unknown = await client.GetAsync("/v1/nope");
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+    }
+
+    [Fact]
+    public async Task CapabilitiesDescribeCatalogAndLimits()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var response = await client.GetAsync("/v1/capabilities");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = json.RootElement;
+        using var statusResponse = await client.GetAsync("/v1/status");
+        using var status = JsonDocument.Parse(await statusResponse.Content.ReadAsStringAsync());
+        Assert.Equal(status.RootElement.GetProperty("api_version").GetString(), root.GetProperty("api_version").GetString());
+        Assert.Equal(HttpApiRoutes.All.Select(route => route.Path).Distinct(),
+            root.GetProperty("endpoints").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(HttpApiRoutes.All, root.GetProperty("routes").EnumerateArray()
+            .Select(route => (route.GetProperty("method").GetString()!, route.GetProperty("path").GetString()!)).ToArray());
+        Assert.Equal(["json", "verbose_json", "text", "srt", "vtt"],
+            root.GetProperty("response_formats").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(HttpApiService.MaxTranscribeRequestBytes, root.GetProperty("max_upload_bytes").GetInt64());
+        Assert.Equal("request-scoped engine/model overrides; await_download supported", root.GetProperty("model_selection").GetString());
+        foreach (var route in new[] { ("POST", "/v1/models/load"), ("POST", "/v1/models/unload"), ("DELETE", "/v1/models") })
+        {
+            Assert.Contains(root.GetProperty("routes").EnumerateArray(), value =>
+                value.GetProperty("method").GetString() == route.Item1 && value.GetProperty("path").GetString() == route.Item2);
+        }
+        Assert.True(root.GetProperty("supports_dictation_control").GetBoolean());
+        Assert.True(root.GetProperty("requires_authentication").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("/docs")]
+    [InlineData("/docs/")]
+    public async Task DocsArePublicButStillCheckOriginAndHost(string path)
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: false);
+        using var response = await client.GetAsync(path);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/html", response.Content.Headers.ContentType!.MediaType);
+        Assert.Equal("utf-8", response.Content.Headers.ContentType.CharSet);
+        var html = await response.Content.ReadAsStringAsync();
+        Assert.Contains($"http://127.0.0.1:{fixture.Port}", html);
+        foreach (var route in HttpApiRoutes.Descriptions)
+        {
+            Assert.Contains(route.Path, html);
+            Assert.Contains(route.Description, html);
+        }
+        using var forbiddenOrigin = new HttpRequestMessage(HttpMethod.Get, path);
+        forbiddenOrigin.Headers.Add("Origin", "https://example.com");
+        using var forbidden = await client.SendAsync(forbiddenOrigin);
+        Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+        using var forbiddenHost = new HttpRequestMessage(HttpMethod.Get, path);
+        forbiddenHost.Headers.Host = "example.com";
+        using var hostResponse = await client.SendAsync(forbiddenHost);
+        Assert.Equal(HttpStatusCode.Forbidden, hostResponse.StatusCode);
+        using var status = await client.GetAsync("/v1/status");
+        Assert.Equal(HttpStatusCode.Unauthorized, status.StatusCode);
+    }
+
+    [Fact]
+    public async Task RulesAliasProfilesForListingAndToggling()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Profiles.AddProfile(new Profile { Id = "alias", Name = "Alias", IsEnabled = true });
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        var rules = await client.GetStringAsync("/v1/rules");
+        Assert.Equal(await client.GetStringAsync("/v1/profiles"), rules);
+        using var json = JsonDocument.Parse(rules);
+        Assert.Equal(json.RootElement.GetProperty("rules").GetRawText(), json.RootElement.GetProperty("profiles").GetRawText());
+        Assert.Single(json.RootElement.GetProperty("rules").EnumerateArray());
+        foreach (var path in new[] { "/v1/rules/toggle", "/v1/profiles/toggle" })
+        {
+            using var response = await client.PutAsync(path + "?id=alias", null);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var toggle = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("alias", toggle.RootElement.GetProperty("id").GetString());
+            Assert.Equal("Alias", toggle.RootElement.GetProperty("name").GetString());
+            Assert.Equal(path == "/v1/profiles/toggle", toggle.RootElement.GetProperty("is_enabled").GetBoolean());
+        }
+    }
+
+    [Theory]
+    [InlineData("text", "text/plain", "Hello World")]
+    [InlineData("srt", "application/x-subrip", "00:00:00,200 --> 00:00:01,300")]
+    [InlineData("vtt", "text/vtt", "WEBVTT")]
+    public async Task TranscriptionSupportsTextAndSubtitles(string format, string mediaType, string expected)
+    {
+        using var fixture = CreateSegmentFixture(Mock.Of<ITranslationService>());
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, format, null);
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(mediaType, response.Content.Headers.ContentType!.MediaType);
+        Assert.Equal("utf-8", response.Content.Headers.ContentType.CharSet);
+        var body = await response.Content.ReadAsStringAsync();
+        switch (format)
+        {
+            case "text":
+                Assert.Equal(expected, body);
+                break;
+            case "vtt":
+                Assert.StartsWith(expected, body);
+                break;
+            default:
+                Assert.Contains(expected, body);
+                break;
+        }
+    }
+
+    [Theory]
+    [InlineData("text")]
+    [InlineData("srt")]
+    [InlineData("vtt")]
+    public async Task TranslationRunsForSubtitleSegmentsButNotPlainText(string format)
+    {
+        var translation = CreateTranslationMock();
+        using var fixture = CreateSegmentFixture(translation.Object);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, format, "de");
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("Hallo", body);
+        Assert.Contains("Welt", body);
+        switch (format)
+        {
+            case "srt":
+                Assert.Contains("00:00:00,200 --> 00:00:01,300", body);
+                break;
+            case "vtt":
+                Assert.Contains("00:00:00.200 --> 00:00:01.300", body);
+                break;
+        }
+        translation.Verify(service => service.TranslateSegmentsAsync(
+            It.IsAny<IReadOnlyList<string>>(), "en", "de", null, It.IsAny<CancellationToken>()),
+            format == "text" ? Times.Never() : Times.Once());
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(2, 1)]
+    [InlineData(-1, 1)]
+    [InlineData(double.NaN, 1)]
+    [InlineData(0, double.PositiveInfinity)]
+    [InlineData(1.0001, 1.0002)]
+    public async Task SubtitlesRejectInvalidTimestamps(double start, double end)
+    {
+        using var fixture = CreateSegmentFixture(Mock.Of<ITranslationService>(), [new PluginTranscriptionSegment("Invalid", start, end)]);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        foreach (var format in new[] { "srt", "vtt" })
+        {
+            using var content = CreateSegmentRequest(fixture, format, null);
+            using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+            Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("Subtitle output requires valid segment timestamps.", json.RootElement.GetProperty("error").GetString());
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SubtitlesRequireSegmentsInStartOrder(bool empty)
+    {
+        using var fixture = CreateSegmentFixture(Mock.Of<ITranslationService>(),
+            empty ? [] : [new PluginTranscriptionSegment("First", 1, 2), new PluginTranscriptionSegment("Second", 0, 1)]);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "srt", null);
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SubtitlesNormalizeTextAndRoundTimestamps()
+    {
+        using var fixture = CreateSegmentFixture(Mock.Of<ITranslationService>(),
+            [new PluginTranscriptionSegment("  Héllo\r\nWorld\rAgain  ", 0.2006, 1.3006), new PluginTranscriptionSegment("Tick", 1.3006, 1.3016)]);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "srt", null);
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("00:00:00,201 --> 00:00:01,301", body);
+        // A one-millisecond cue must not collapse to zero duration on export.
+        Assert.Contains("00:00:01,301 --> 00:00:01,302", body);
+        Assert.Contains("Héllo\nWorld\nAgain", body);
+        Assert.DoesNotContain("\r", body);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, null)]
+    [InlineData(true, false)]
+    [InlineData(true, null)]
+    public async Task ApplyCorrectionsControlsPipelineForUploadAndLocalFile(bool upload, bool? applyCorrections)
+    {
+        var pipeline = new Mock<IPostProcessingPipeline>();
+        using var fixture = CreateSegmentFixture(Mock.Of<ITranslationService>(), pipeline: pipeline);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        var payload = new Dictionary<string, object> { ["path"] = fixture.CreateSupportedAudioFile() };
+        if (applyCorrections.HasValue)
+        {
+            payload["apply_corrections"] = applyCorrections.Value;
+        }
+        using HttpContent content = upload
+            ? new ByteArrayContent([1, 2, 3])
+            : new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+        if (upload && applyCorrections.HasValue)
+        {
+            content.Headers.Add("x-apply-corrections", "false");
+        }
+        using var response = await client.PostAsync(upload ? "/v1/transcribe" : "/v1/transcribe/local-file", content);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        pipeline.Verify(service => service.ProcessAsync("Hello World",
+            It.Is<PipelineOptions>(options => options.DictionaryCorrector != null == (applyCorrections ?? true)),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task LocalFileRejectsStringCorrectionBooleanWith400()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = new StringContent("""{"path":"/tmp/clip.wav","apply_corrections":"false"}""", Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task VerboseSegmentsRespectApplyCorrections(bool applyCorrections)
+    {
+        var dictionary = CreateCorrectingDictionaryMock();
+        using var fixture = CreateSegmentFixture(Mock.Of<ITranslationService>(), dictionary: dictionary);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "verbose_json", null, applyCorrections);
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        AssertSegments(json.RootElement, applyCorrections ? "Hallo" : "Hello", "World");
+        dictionary.Verify(service => service.PreviewCorrections("Hello"),
+            applyCorrections ? Times.Once() : Times.Never());
+        dictionary.Verify(service => service.PreviewCorrections("World"),
+            applyCorrections ? Times.Once() : Times.Never());
+        dictionary.Verify(service => service.PreviewCorrections(It.IsAny<string>()),
+            Times.Exactly(applyCorrections ? 2 : 0));
+        dictionary.Verify(service => service.ApplyCorrections(It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task SrtSegmentsContainDictionaryCorrections()
+    {
+        using var fixture = CreateSegmentFixture(Mock.Of<ITranslationService>(), dictionary: CreateCorrectingDictionaryMock());
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "srt", null);
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("00:00:00,200 --> 00:00:01,300\nHallo\n", body);
+        Assert.DoesNotContain("Hello", body);
+    }
+
+    [Fact]
+    public async Task VerboseTranslationReceivesCorrectedSegments()
+    {
+        var correctedTexts = new[] { "Hallo", "World" };
+        var translation = new Mock<ITranslationService>(MockBehavior.Strict);
+        translation.Setup(service => service.TranslateAsync(
+                "Hello World", "en", "de", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Hallo Welt");
+        translation.Setup(service => service.TranslateSegmentsAsync(
+                It.Is<IReadOnlyList<string>>(texts => texts.SequenceEqual(correctedTexts)),
+                "en", "de", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(["Hallo", "Welt"]);
+        using var fixture = CreateSegmentFixture(translation.Object, dictionary: CreateCorrectingDictionaryMock());
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "verbose_json", "de");
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        AssertSegments(json.RootElement, "Hallo", "Welt");
+        translation.Verify(service => service.TranslateSegmentsAsync(
+            It.Is<IReadOnlyList<string>>(texts => texts.SequenceEqual(correctedTexts)),
+            "en", "de", null, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    private static Mock<IDictionaryService> CreateCorrectingDictionaryMock()
+    {
+        var dictionary = new Mock<IDictionaryService>(MockBehavior.Strict);
+        dictionary.Setup(service => service.PreviewCorrections(It.IsAny<string>()))
+            .Returns((string text) => text.Replace("Hello", "Hallo"));
+        return dictionary;
+    }
+
+    private static Mock<ITranslationService> CreateTranslationMock()
+    {
+        var translation = new Mock<ITranslationService>(MockBehavior.Strict);
+        translation.Setup(service => service.TranslateAsync(
+                "Hello World", "en", "de", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Hallo Welt");
+        translation.Setup(service => service.TranslateSegmentsAsync(
+                It.IsAny<IReadOnlyList<string>>(), "en", "de", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(["Hallo", "Welt"]);
+        return translation;
+    }
+
+    private static ApiFixture CreateSegmentFixture(
+        ITranslationService translation,
+        IReadOnlyList<PluginTranscriptionSegment>? segments = null,
+        Mock<IPostProcessingPipeline>? pipeline = null,
+        Mock<IDictionaryService>? dictionary = null)
+    {
+        if (dictionary is null)
+        {
+            dictionary = new Mock<IDictionaryService>();
+            dictionary.Setup(service => service.PreviewCorrections(It.IsAny<string>()))
+                .Returns((string text) => text);
+        }
+        dictionary.Setup(service => service.GetEnabledTerms()).Returns([]);
+        pipeline ??= new Mock<IPostProcessingPipeline>();
+        pipeline.Setup(service => service.ProcessAsync(
+                "Hello World", It.IsAny<PipelineOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PostProcessingResult { Text = "Hello World" });
+        return new ApiFixture(
+            transcriptionEngine: new SegmentedTranscriptionEngine(segments),
+            dictionary: dictionary.Object,
+            pipeline: pipeline.Object,
+            translation: translation,
+            audioProbeResult: new ProcessRunOutcome(
+                ProcessRunStatus.Exited, 0, [0, 1, 2, 3], [], ProcessOutputStatus.Complete, null));
+    }
+
+    private static StringContent CreateSegmentRequest(ApiFixture fixture, string format, string? target, bool? applyCorrections = null)
+    {
+        var payload = new Dictionary<string, object?>
+        {
+            ["path"] = fixture.CreateSupportedAudioFile(),
+            ["response_format"] = format,
+            ["target_language"] = target,
+        };
+        if (applyCorrections.HasValue)
+            payload["apply_corrections"] = applyCorrections.Value;
+        return new StringContent(
+            JsonSerializer.Serialize(payload),
+            Encoding.UTF8,
+            "application/json");
+    }
+
+    private static void AssertSegments(JsonElement response, string firstText, string secondText)
+    {
+        var segments = response.GetProperty("segments").EnumerateArray().ToList();
+        Assert.Equal(2, segments.Count);
+        Assert.Equal(firstText, segments[0].GetProperty("text").GetString());
+        Assert.Equal(0.2, segments[0].GetProperty("start").GetDouble());
+        Assert.Equal(1.3, segments[0].GetProperty("end").GetDouble());
+        Assert.Equal(0.1f, segments[0].GetProperty("no_speech_probability").GetSingle());
+        Assert.Equal(secondText, segments[1].GetProperty("text").GetString());
+        Assert.Equal(2.1, segments[1].GetProperty("start").GetDouble());
+        Assert.Equal(3.8, segments[1].GetProperty("end").GetDouble());
+        Assert.Equal(0.2f, segments[1].GetProperty("no_speech_probability").GetSingle());
+    }
+
+    private sealed class SegmentedTranscriptionEngine(IReadOnlyList<PluginTranscriptionSegment>? segments = null) : ITranscriptionEngineRole
+    {
+        public string PluginId => "test-segments";
+        public string ProviderId => "test-segments";
+        public string ProviderDisplayName => "Test segments";
+        public bool IsConfigured => true;
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels => [new("test", "Test")];
+        public string SelectedModelId => "test";
+        public bool SupportsTranslation => false;
+        public void SelectModel(string modelId) { }
+        public Task<PluginTranscriptionResult> TranscribeAsync(
+            byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        {
+            return Task.FromResult(new PluginTranscriptionResult("Hello World", "en", 4)
+            {
+                Segments = segments ??
+                [
+                    new PluginTranscriptionSegment("Hello", 0.2, 1.3) { NoSpeechProbability = 0.1f },
+                    new PluginTranscriptionSegment("World", 2.1, 3.8) { NoSpeechProbability = 0.2f },
+                ],
+            });
+        }
+    }
+
     [Fact]
     public async Task LocalFileEndpointClipsDictionaryPromptToEngineBudget()
     {
@@ -777,7 +1600,7 @@ public sealed class HttpApiUnixSocketTests
         private readonly string _tempDirectory =
             TestPaths.CreateTempDirectory("TypeWhisper.HttpApiUnixSocketTests");
         private readonly HotkeyService _hotkeys = TestShortcutBackend.CreateHotkeyService();
-        private readonly ModelManagerService _models;
+        
         private readonly DictationSessionResultStore _sessionResults = new();
         private AppSettings _current;
 
@@ -788,7 +1611,9 @@ public sealed class HttpApiUnixSocketTests
             bool ffmpegAvailable = true,
             ITranscriptionEngineRole? transcriptionEngine = null,
             IDictionaryService? dictionary = null,
-            IPostProcessingPipeline? pipeline = null
+            IPostProcessingPipeline? pipeline = null,
+            ITranslationService? translation = null,
+            IReadOnlyList<ITranscriptionEngineRole>? transcriptionEngines = null
         )
         {
             Port = GetFreeTcpPort();
@@ -821,8 +1646,8 @@ public sealed class HttpApiUnixSocketTests
                     return _current;
                 });
 
-            _models = new ModelManagerService(
-                TestPluginManagerFactory.Create(transcriptionEngines: transcriptionEngine is null ? null : [transcriptionEngine]),
+            Models = new ModelManagerService(
+                TestPluginManagerFactory.Create(transcriptionEngines: transcriptionEngines ?? (transcriptionEngine is null ? null : [transcriptionEngine])),
                 Settings.Object
             );
             var historyService = history ?? new Mock<IHistoryService>();
@@ -845,7 +1670,7 @@ public sealed class HttpApiUnixSocketTests
             ProcessRunner.SupervisorInvocations.Clear();
             var audioFiles = new AudioFileService(commands, ProcessRunner);
             Service = new HttpApiService(
-                _models,
+                Models,
                 Settings.Object,
                 audioFiles,
                 historyService.Object,
@@ -855,7 +1680,7 @@ public sealed class HttpApiUnixSocketTests
                 dictionary!,
                 null!,
                 pipeline!,
-                null!,
+                translation!,
                 null!,
                 _sessionResults,
                 new ApiDiscoveryFile(),
@@ -865,7 +1690,9 @@ public sealed class HttpApiUnixSocketTests
             );
         }
 
-        private int Port { get; }
+        internal ModelManagerService Models { get; }
+
+        internal int Port { get; }
 
         internal string SocketPath { get; }
 
@@ -978,7 +1805,7 @@ public sealed class HttpApiUnixSocketTests
         {
             Service.Dispose();
             _sessionResults.Dispose();
-            _models.Dispose();
+            Models.Dispose();
             _hotkeys.Dispose();
             Environment.SetEnvironmentVariable(
                 "XDG_CONFIG_HOME",

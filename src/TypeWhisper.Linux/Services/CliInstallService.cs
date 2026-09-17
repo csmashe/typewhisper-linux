@@ -181,6 +181,8 @@ public sealed class CliInstallService
             "typewhisper-cli --help",
             "typewhisper-cli status",
             "typewhisper-cli models",
+            "typewhisper-cli last",
+            "typewhisper-cli history --limit 20",
             "typewhisper-cli transcribe recording.wav",
             "typewhisper-cli transcribe recording.wav --language de --json",
         ];

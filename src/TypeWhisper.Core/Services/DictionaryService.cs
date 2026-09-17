@@ -24,11 +24,11 @@ public sealed partial class DictionaryService : IDictionaryService
 
     private readonly AtomicJsonStore<ImmutableArray<DictionaryEntry>> _store;
 
-    // A correction's pattern is a pure function of its original text, case sensitivity, and regex mode, so
-    // this needs no invalidation when entries change — an edited original just maps to a new key.
+    // A correction's pattern is a pure function of its original text, case sensitivity, regex mode,
+    // and trailing-period handling, so edits that affect the pattern map to a new key.
     // Reusing the instances keeps the dictation path off Regex's static cache, which holds only
     // 15 patterns and thrashes once a user has more corrections than that.
-    private readonly ConcurrentDictionary<(string Original, bool CaseSensitive, bool IsRegex), Regex>
+    private readonly ConcurrentDictionary<(string Original, bool CaseSensitive, bool IsRegex, bool SwallowTrailingPeriod), Regex>
         _correctionPatterns = new();
 
     public DictionaryService(string filePath)
@@ -182,12 +182,16 @@ public sealed partial class DictionaryService : IDictionaryService
             // MatchEvaluator overload: prevents "$1"/"$&" in user replacements from being
             // interpreted as regex substitution tokens; also counts each match individually.
             var replacement = entry.ExpandEscapes ? ExpandReplacementEscapes(entry.Replacement!) : entry.Replacement!;
+            var swallowTrailingPeriod = !entry.IsRegex
+                && replacement.Length > 0
+                && (replacement.Contains('\r') || replacement.Contains('\n'))
+                && replacement.All(char.IsWhiteSpace);
             var matchCount = 0;
             string replaced;
             // A broken or slow rule must not prevent the remaining corrections from running.
             try
             {
-                replaced = GetCorrectionRegex(entry.Original, entry.CaseSensitive, entry.IsRegex).Replace(
+                replaced = GetCorrectionRegex(entry.Original, entry.CaseSensitive, entry.IsRegex, swallowTrailingPeriod).Replace(
                     text,
                     _ =>
                     {
@@ -271,7 +275,7 @@ public sealed partial class DictionaryService : IDictionaryService
         return builder.ToString();
     }
 
-    private Regex GetCorrectionRegex(string original, bool caseSensitive, bool isRegex)
+    private Regex GetCorrectionRegex(string original, bool caseSensitive, bool isRegex, bool swallowTrailingPeriod)
     {
         // Bounded only against a pathological session that edits thousands of distinct originals;
         // a clear costs nothing but a rebuild on next use.
@@ -281,10 +285,10 @@ public sealed partial class DictionaryService : IDictionaryService
         }
 
         return _correctionPatterns.GetOrAdd(
-            (original, caseSensitive, isRegex),
+            (original, caseSensitive, isRegex, swallowTrailingPeriod),
             static key =>
             {
-                var (text, isCaseSensitive, useRegex) = key;
+                var (text, isCaseSensitive, useRegex, swallowPeriod) = key;
                 if (useRegex)
                 {
                     return new Regex(
@@ -304,11 +308,14 @@ public sealed partial class DictionaryService : IDictionaryService
                 var suffix = char.IsLetterOrDigit(lastChar) || lastChar == '_'
                     ? @"\b"
                     : @"(?=\W|$)";
+                // ASR punctuates a final spoken layout command; the period belongs to the command.
+                // \z rather than $: the text may already end in CRLF or several line breaks.
+                var optionalPeriodGroup = swallowPeriod ? @"(?:[ \t]*\.[ \t]*(?=[\r\n]*\z))?" : string.Empty;
                 // CultureInvariant to match the culture-free OrdinalIgnoreCase pre-filter, and
                 // because a cached instance would otherwise pin the culture current when it was
                 // built (Turkish dotless-i being the classic divergence).
                 return new Regex(
-                    prefix + Regex.Escape(text) + suffix,
+                    prefix + Regex.Escape(text) + suffix + optionalPeriodGroup,
                     isCaseSensitive
                         ? RegexOptions.None
                         : RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,

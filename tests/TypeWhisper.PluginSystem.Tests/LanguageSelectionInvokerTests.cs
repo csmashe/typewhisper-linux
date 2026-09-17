@@ -112,7 +112,7 @@ public sealed class LanguageSelectionInvokerTests
     }
 
     [Fact]
-    public async Task SupportedLanguageMatch_IsCaseInsensitiveButRequiresTheExactTag()
+    public async Task SupportedLanguageMatch_IsCaseInsensitiveAndFoldsRegionalTagsForBaseOnlyLists()
     {
         var role = new RecordingRole(
             LanguageSelectionSupport.Supported,
@@ -127,6 +127,29 @@ public sealed class LanguageSelectionInvokerTests
             null,
             CancellationToken.None
         );
+        Assert.Equal(1, role.CallCount);
+        Assert.Equal("en", role.ReceivedLanguage);
+
+        await role.TranscribeAsync(
+            [],
+            LanguageSelection.Explicit("en-US"),
+            false,
+            null,
+            CancellationToken.None
+        );
+        Assert.Equal(2, role.CallCount);
+        Assert.Equal("en", role.ReceivedLanguage);
+    }
+
+    [Fact]
+    public async Task SupportedLanguageMatch_StaysStrictWhenListHasRegionalTags()
+    {
+        var role = new RecordingRole(
+            LanguageSelectionSupport.Supported,
+            LanguageSelectionSupport.Supported,
+            ["en", "en-GB"]
+        );
+
         await Assert.ThrowsAsync<TranscriptionLanguageNotSupportedException>(
             () =>
                 role.TranscribeAsync(
@@ -138,8 +161,7 @@ public sealed class LanguageSelectionInvokerTests
                 )
         );
 
-        Assert.Equal(1, role.CallCount);
-        Assert.Equal("en", role.ReceivedLanguage);
+        Assert.Equal(0, role.CallCount);
     }
 
     [Fact]

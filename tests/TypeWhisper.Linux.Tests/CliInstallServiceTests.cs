@@ -771,6 +771,8 @@ public sealed class CliInstallServiceTests : IDisposable
     public void Examples_include_linux_bearer_token_setup()
     {
         var cli = CliInstallService.BuildCliExamples(9876);
+        Assert.Contains("typewhisper-cli last", cli);
+        Assert.Contains("typewhisper-cli history --limit 20", cli);
         var curl = CliInstallService.BuildCurlExamples(9876);
 
         Assert.Contains(

@@ -5,6 +5,7 @@
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -18,6 +19,8 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
 {
     private const int MaxIndividualNotePathAttempts = 10_000;
     private const int UnixFileExistsError = 17;
+    private const int AtFdCwd = -100;
+    private const uint RenameNoReplace = 1;
     private const int WindowsFileExistsError = 80;
     private const int WindowsAlreadyExistsError = 183;
 
@@ -123,13 +126,25 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
         }
         else
         {
-            // No link check needed: FileMode.CreateNew below refuses an existing link
-            // rather than following it.
+            // CreateNew stages the note; publication never replaces an existing name,
+            // so an existing link at the final name is never followed.
             filename = BuildFilename(filenameTemplate, context, now) + ".md";
             filePath = Path.Join(targetDir, filename);
 
             var content = BuildNoteContent(input, context, now);
-            filePath = await WriteIndividualNoteAsync(filePath, content, ct);
+            try
+            {
+                filePath = await WriteIndividualNoteAsync(
+                    filePath,
+                    content,
+                    () => IsResolvedTargetContained(vaultRoot, targetDir),
+                    ct
+                );
+            }
+            catch (NoteTargetMovedException)
+            {
+                return new ActionResult(false, Loc.L("Settings.SubfolderOutsideVault"));
+            }
             filename = Path.GetFileName(filePath);
         }
 
@@ -169,7 +184,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
         }
     }
 
-    private static bool IsResolvedTargetContained(string vaultRoot, string target)
+    internal static bool IsResolvedTargetContained(string vaultRoot, string target)
     {
         try
         {
@@ -346,65 +361,178 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
     private static Task<string> WriteIndividualNoteAsync(
         string filePath,
         string content,
+        Func<bool> targetStillContained,
         CancellationToken ct
     ) =>
-        WriteIndividualNoteAsync(filePath, content, WriteUtf8TextAsync, ct);
+        WriteIndividualNoteAsync(filePath, content, WriteUtf8TextAsync, targetStillContained, ct);
 
     internal static async Task<string> WriteIndividualNoteAsync(
         string filePath,
         string content,
         Func<FileStream, string, CancellationToken, Task> writeAsync,
-        CancellationToken ct
+        Func<bool> targetStillContained,
+        CancellationToken ct,
+        bool attemptAtomicPublish = true
     )
     {
         var dir = Path.GetDirectoryName(filePath)!;
         var nameWithoutExt = Path.GetFileNameWithoutExtension(filePath);
         var ext = Path.GetExtension(filePath);
+        var tempPath = Path.Join(dir, ".typewhisper-" + Guid.NewGuid().ToString("N") + ".tmp");
 
-        for (var attempt = 0; attempt < MaxIndividualNotePathAttempts; attempt++)
+        try
         {
-            var candidate = attempt == 0
-                ? filePath
-                : Path.Join(dir, $"{nameWithoutExt} {attempt + 1}{ext}");
-            FileStream claimedStream;
+            await using (var stream = new FileStream(
+                tempPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 4096,
+                FileOptions.Asynchronous
+            ))
+            {
+                await writeAsync(stream, content, ct);
+                await stream.FlushAsync(ct);
+                stream.Flush(flushToDisk: true);
+            }
 
+            if (!targetStillContained())
+                throw new NoteTargetMovedException();
+
+            for (var attempt = 0; attempt < MaxIndividualNotePathAttempts; attempt++)
+            {
+                var candidate = attempt == 0
+                    ? filePath
+                    : Path.Join(dir, $"{nameWithoutExt} {attempt + 1}{ext}");
+                ct.ThrowIfCancellationRequested();
+                if (PublishNoReplace(tempPath, candidate, attemptAtomicPublish))
+                    return candidate;
+            }
+
+            throw new IOException(
+                $"Could not create a unique Obsidian note after {MaxIndividualNotePathAttempts} attempts."
+            );
+        }
+        finally
+        {
+            if (targetStillContained() && File.Exists(tempPath))
+                TryDeleteOwnedFile(tempPath);
+        }
+    }
+
+    private static bool PublishNoReplace(string tempPath, string destination, bool attemptAtomicPublish)
+    {
+        if (OperatingSystem.IsWindows())
+        {
             try
             {
-                claimedStream = new FileStream(
-                    candidate,
-                    FileMode.CreateNew,
-                    FileAccess.Write,
-                    FileShare.None,
-                    bufferSize: 4096,
-                    FileOptions.Asynchronous
-                );
+                File.Move(tempPath, destination, overwrite: false);
+                return true;
             }
             catch (IOException ex) when (IsCreateNewCollision(ex))
             {
-                continue;
-            }
-
-            try
-            {
-                await using (claimedStream)
-                {
-                    await writeAsync(claimedStream, content, ct);
-                    await claimedStream.FlushAsync(ct);
-                }
-
-                return candidate;
-            }
-            catch
-            {
-                TryDeleteOwnedFile(candidate);
-                throw;
+                return false;
             }
         }
 
-        throw new IOException(
-            $"Could not create a unique Obsidian note after {MaxIndividualNotePathAttempts} attempts."
-        );
+        // Unlike File.Move on Unix, link and RENAME_NOREPLACE publish the complete
+        // file and fail atomically with EEXIST instead of replacing an existing name.
+        if (!attemptAtomicPublish)
+            return CopyNoReplace(tempPath, destination);
+
+        var outcome = TryLink(tempPath, destination);
+        if (outcome == PublishOutcome.Unsupported)
+            outcome = TryRenameNoReplace(tempPath, destination);
+        return outcome == PublishOutcome.Unsupported
+            ? CopyNoReplace(tempPath, destination)
+            : outcome == PublishOutcome.Published;
     }
+
+    private static PublishOutcome TryLink(string tempPath, string destination)
+    {
+        if (Link(tempPath, destination) != 0)
+            return Marshal.GetLastPInvokeError() == UnixFileExistsError
+                ? PublishOutcome.Collision
+                : PublishOutcome.Unsupported;
+
+        TryDeleteOwnedFile(tempPath);
+        return PublishOutcome.Published;
+    }
+
+    private static PublishOutcome TryRenameNoReplace(string tempPath, string destination)
+    {
+        try
+        {
+            if (RenameAt2(AtFdCwd, tempPath, AtFdCwd, destination, RenameNoReplace) == 0)
+                return PublishOutcome.Published;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // glibc older than 2.28 has no renameat2 wrapper.
+            return PublishOutcome.Unsupported;
+        }
+
+        return Marshal.GetLastPInvokeError() == UnixFileExistsError
+            ? PublishOutcome.Collision
+            : PublishOutcome.Unsupported;
+    }
+
+    // Last resort for filesystems that refuse both primitives (NFS, some FUSE mounts):
+    // O_EXCL still claims the name atomically, but the content lands afterwards.
+    private static bool CopyNoReplace(string tempPath, string destination)
+    {
+        using var source = new FileStream(tempPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        FileStream target;
+        try
+        {
+            target = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        }
+        catch (IOException ex) when (IsCreateNewCollision(ex))
+        {
+            return false;
+        }
+
+        try
+        {
+            using (target)
+            {
+                source.CopyTo(target);
+                target.Flush(flushToDisk: true);
+            }
+        }
+        catch
+        {
+            TryDeleteOwnedFile(destination);
+            throw;
+        }
+
+        TryDeleteOwnedFile(tempPath);
+        return true;
+    }
+
+    private enum PublishOutcome
+    {
+        Published,
+        Collision,
+        Unsupported,
+    }
+
+#pragma warning disable SYSLIB1054, CA2101
+    [DllImport("libc", EntryPoint = "link", SetLastError = true, CharSet = CharSet.Ansi)]
+    private static extern int Link(string existingPath, string newPath);
+
+    [DllImport("libc", EntryPoint = "renameat2", SetLastError = true, CharSet = CharSet.Ansi)]
+    private static extern int RenameAt2(
+        int oldDirFd,
+        string oldPath,
+        int newDirFd,
+        string newPath,
+        uint flags
+    );
+#pragma warning restore SYSLIB1054, CA2101
+
+    private sealed class NoteTargetMovedException()
+        : IOException("The note folder changed while the note was being written.");
 
     internal static string GetDailyNoteLockPath(string pluginDataDirectory, string notePath)
     {

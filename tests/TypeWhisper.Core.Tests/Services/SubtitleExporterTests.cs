@@ -32,6 +32,15 @@ public sealed class SubtitleExporterTests
     }
 
     [Fact]
+    public void Export_RoundsToNearestMillisecond()
+    {
+        var segments = new List<TranscriptionSegment> { new("short cue", 0.042, 0.043) };
+
+        Assert.Contains("00:00:00,042 --> 00:00:00,043", SubtitleExporter.ToSrt(segments));
+        Assert.Contains("00:00:00.042 --> 00:00:00.043", SubtitleExporter.ToWebVtt(segments));
+    }
+
+    [Fact]
     public void ToSrt_SegmentUnder24Hours_FormatsNormally()
     {
         var segments = new List<TranscriptionSegment>

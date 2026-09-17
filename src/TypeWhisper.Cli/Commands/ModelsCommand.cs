@@ -1,4 +1,6 @@
+using System.Text;
 using System.Text.Json;
+using TypeWhisper.Cli.Models;
 using TypeWhisper.Cli.Output;
 using TypeWhisper.Cli.Services;
 
@@ -8,6 +10,59 @@ namespace TypeWhisper.Cli.Commands;
 internal static class ModelsCommand
 {
     private static readonly TimeSpan s_defaultBudget = TimeSpan.FromSeconds(10);
+
+    // Loading may first provision the CUDA runtime or download the model.
+    private static readonly TimeSpan s_loadBudget = TimeSpan.FromMinutes(15);
+
+    public static Task<int> RunAsync(
+        ApiClient api, CliOptions options, CancellationToken ct, TimeSpan? budget = null
+    )
+    {
+        if (options.Action is null or "list")
+        {
+            return RunAsync(api, options.Json, ct, budget);
+        }
+
+        HttpRequestMessage request;
+        if (options.Action == "delete")
+        {
+            request = new HttpRequestMessage(HttpMethod.Delete,
+                $"{api.BaseUrl}/v1/models?engine={Uri.EscapeDataString(options.Engine!.Trim())}&model={Uri.EscapeDataString(options.Model!.Trim())}");
+        }
+        else
+        {
+            using var buffer = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(buffer))
+            {
+                writer.WriteStartObject();
+                if (!string.IsNullOrWhiteSpace(options.Engine))
+                    writer.WriteString("engine", options.Engine.Trim());
+                if (options.Action == "load" && !string.IsNullOrWhiteSpace(options.Model))
+                    writer.WriteString("model", options.Model.Trim());
+                writer.WriteEndObject();
+            }
+
+            request = new HttpRequestMessage(HttpMethod.Post, $"{api.BaseUrl}/v1/models/{options.Action}")
+            {
+                Content = new StringContent(Encoding.UTF8.GetString(buffer.ToArray()), Encoding.UTF8, "application/json"),
+            };
+        }
+
+        var requestBudget = budget ?? (options.Action == "load" ? s_loadBudget : null);
+        return QuickApiCommand.RunAsync(api, request, requestBudget, body =>
+        {
+            var validation = ApiResponseValidator.ValidateModelOperation(body);
+            if (validation.Error is not null)
+            {
+                return ApiResponseValidator.ProtocolError(validation.Error);
+            }
+
+            var root = validation.Value!.Root;
+            Console.WriteLine(options.Json ? JsonFormatting.PrettyJson(body)
+                : $"{ApiResponseValidator.OptionalString(root, "status")}: {ApiResponseValidator.OptionalString(root, "engine")} {ApiResponseValidator.OptionalString(root, "model")}".Trim());
+            return ExitCodes.Success;
+        }, ct);
+    }
 
     public static async Task<int> RunAsync(
         ApiClient api,
@@ -30,7 +85,8 @@ internal static class ModelsCommand
             if (!response.IsSuccessStatusCode)
             {
                 return ConsoleOutput.Error(
-                    $"Models request failed ({(int)response.StatusCode}): {JsonFormatting.ExtractErrorMessage(body)}"
+                    $"Models request failed ({(int)response.StatusCode}): {JsonFormatting.ExtractErrorMessage(body)}",
+                    ExitCodes.ServerError
                 );
             }
 
@@ -74,7 +130,7 @@ internal static class ModelsCommand
         }
         catch (HttpRequestException)
         {
-            return ConsoleOutput.Error("TypeWhisper is not running or API server is disabled.");
+            return ConsoleOutput.Error("TypeWhisper is not running or API server is disabled.", ExitCodes.Unavailable);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -83,12 +139,13 @@ internal static class ModelsCommand
         catch (OperationCanceledException)
         {
             return ConsoleOutput.Error(
-                $"The API did not respond within {ConsoleOutput.FormatBudget(requestBudget)}."
+                $"The API did not respond within {ConsoleOutput.FormatBudget(requestBudget)}.",
+                ExitCodes.Unavailable
             );
         }
         catch (JsonException)
         {
-            return ConsoleOutput.Error("Received malformed JSON from the API.");
+            return ConsoleOutput.Error("Received malformed JSON from the API.", ExitCodes.ServerError);
         }
     }
 }

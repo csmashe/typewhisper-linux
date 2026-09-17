@@ -12,6 +12,10 @@ using Timer = System.Timers.Timer;
 
 namespace TypeWhisper.Linux.Services;
 
+public enum ModelDeleteOutcome { Deleted, Busy, Loaded, Failed }
+
+public enum ModelUnloadOutcome { Unloaded, NothingLoaded, OtherEngine, Busy, Failed }
+
 public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 {
     private readonly SystemCommandAvailabilityService? _commands;
@@ -278,6 +282,32 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
+    /// <summary>Loads a model without waiting for another operation; returns false when busy.</summary>
+    public async Task<bool> TryLoadModelAsync(string modelId, CancellationToken ct)
+    {
+        if (!await _modelLock.WaitAsync(0, ct))
+        {
+            return false;
+        }
+
+        try
+        {
+            await LoadModelCoreAsync(modelId, ct);
+            return true;
+        }
+        finally
+        {
+            try
+            {
+                ScheduleAutoUnload();
+            }
+            finally
+            {
+                _modelLock.Release();
+            }
+        }
+    }
+
     /// <summary>
     ///     Fire-and-forget unload. Mirrors <see cref="DeleteModel" />: callers on
     ///     non-blockable threads (the auto-unload timer, app shutdown) use this so
@@ -294,6 +324,67 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         try
         {
             await UnloadModelCoreAsync();
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+    }
+
+    /// <summary>Downloads (if needed) and loads a model without waiting; returns false when busy.</summary>
+    public async Task<bool> TryDownloadAndLoadModelAsync(string modelId, CancellationToken ct)
+    {
+        if (!await _modelLock.WaitAsync(0, ct))
+        {
+            return false;
+        }
+
+        try
+        {
+            await DownloadAndLoadModelCoreAsync(modelId, ct);
+            return true;
+        }
+        finally
+        {
+            try
+            {
+                ScheduleAutoUnload();
+            }
+            finally
+            {
+                _modelLock.Release();
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Unloads the active model without waiting, or only <paramref name="engine" />'s model when
+    ///     given. The engine check runs under the lock so a concurrent load cannot swap the target.
+    /// </summary>
+    public async Task<(ModelUnloadOutcome Outcome, string? ModelId)> TryUnloadModelAsync(
+        ITranscriptionEngineRole? engine = null)
+    {
+        if (!await _modelLock.WaitAsync(0))
+        {
+            return (ModelUnloadOutcome.Busy, null);
+        }
+
+        try
+        {
+            var modelId = ActiveModelId;
+            if (modelId is null)
+            {
+                return (ModelUnloadOutcome.NothingLoaded, null);
+            }
+
+            if (engine is not null && !ReferenceEquals(engine, ActiveTranscriptionPlugin))
+            {
+                return (ModelUnloadOutcome.OtherEngine, modelId);
+            }
+
+            await UnloadModelCoreAsync();
+            // UnloadModelCoreAsync keeps ActiveModelId when the plugin's teardown fails.
+            return (ActiveModelId is null ? ModelUnloadOutcome.Unloaded : ModelUnloadOutcome.Failed, modelId);
         }
         finally
         {
@@ -359,6 +450,37 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         try
         {
             await DeleteModelCoreAsync(modelId, cancellationToken);
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+    }
+
+    /// <summary>Deletes a model without waiting, reporting busy or loaded without unloading it.</summary>
+    public async Task<ModelDeleteOutcome> TryDeleteModelAsync(string modelId, CancellationToken ct)
+    {
+        if (!await _modelLock.WaitAsync(0, ct))
+        {
+            return ModelDeleteOutcome.Busy;
+        }
+
+        try
+        {
+            if (ActiveModelId == modelId)
+            {
+                return ModelDeleteOutcome.Loaded;
+            }
+
+            await DeleteModelCoreAsync(modelId, ct);
+            if (!IsDownloaded(modelId))
+            {
+                return ModelDeleteOutcome.Deleted;
+            }
+
+            // The plugin swallowed a filesystem failure; let GetStatus re-derive from disk.
+            ClearStatus(modelId);
+            return ModelDeleteOutcome.Failed;
         }
         finally
         {
