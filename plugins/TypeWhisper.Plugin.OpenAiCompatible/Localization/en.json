@@ -54,5 +54,12 @@
   "Settings.TemperatureCustom": "Custom",
   "Settings.TemperatureValue": "Temperature value",
   "Settings.TemperatureValueDescription": "From 0 to 2. Lower values give more consistent results. Used only with the custom temperature mode.",
-  "Settings.TemperatureInvalid": "Enter a temperature from 0 to 2 using a decimal point."
+  "Settings.TemperatureInvalid": "Enter a temperature from 0 to 2 using a decimal point.",
+  "Settings.ApiVersion": "API version (optional)",
+  "Settings.ApiVersionDescription": "Leave empty unless your server requires a version. Azure deployment-scoped endpoints need a dated version such as 2025-03-01-preview.",
+  "Settings.BatchEndpoint": "Transcription endpoint",
+  "Settings.BatchEndpointDescription": "Standard uses /v1/audio/transcriptions. Deployment-scoped uses /deployments/{model}/audio/transcriptions and needs a dated API version.",
+  "Settings.BatchEndpointStandard": "Standard v1",
+  "Settings.BatchEndpointDeployment": "Deployment-scoped",
+  "Settings.ApiVersionRequired": "Deployment-scoped transcription requires a dated API version, such as 2025-03-01-preview."
 }

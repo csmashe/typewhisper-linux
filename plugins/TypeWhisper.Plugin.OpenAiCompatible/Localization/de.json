@@ -54,5 +54,12 @@
   "Settings.TemperatureCustom": "Benutzerdefiniert",
   "Settings.TemperatureValue": "Temperaturwert",
   "Settings.TemperatureValueDescription": "Von 0 bis 2. Niedrigere Werte liefern konsistentere Ergebnisse. Wird nur im benutzerdefinierten Temperaturmodus verwendet.",
-  "Settings.TemperatureInvalid": "Geben Sie eine Temperatur von 0 bis 2 mit einem Punkt als Dezimaltrennzeichen ein."
+  "Settings.TemperatureInvalid": "Geben Sie eine Temperatur von 0 bis 2 mit einem Punkt als Dezimaltrennzeichen ein.",
+  "Settings.ApiVersion": "API-Version (optional)",
+  "Settings.ApiVersionDescription": "Leer lassen, sofern Ihr Server keine Version benötigt. Azure-Endpunkte für einzelne Bereitstellungen benötigen eine datierte Version wie 2025-03-01-preview.",
+  "Settings.BatchEndpoint": "Transkriptionsendpunkt",
+  "Settings.BatchEndpointDescription": "Standard verwendet /v1/audio/transcriptions. Bereitstellungsspezifisch verwendet /deployments/{model}/audio/transcriptions und benötigt eine datierte API-Version.",
+  "Settings.BatchEndpointStandard": "Standard v1",
+  "Settings.BatchEndpointDeployment": "Bereitstellungsspezifisch",
+  "Settings.ApiVersionRequired": "Bereitstellungsspezifische Transkription erfordert eine datierte API-Version, zum Beispiel 2025-03-01-preview."
 }

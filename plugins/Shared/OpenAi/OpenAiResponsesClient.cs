@@ -20,6 +20,7 @@ internal sealed class OpenAiResponsesClient
         _headers = headers;
     }
 
+    // ReSharper disable once UnusedMember.Global -- used by the OpenAI plugin; this file is linked into both plugins.
     public OpenAiResponsesClient(HttpClient httpClient, string baseUrl, string apiKey)
         : this(httpClient, new Uri(baseUrl.TrimEnd('/') + "/v1/responses"),
             new Dictionary<string, string> { ["Authorization"] = $"Bearer {apiKey}" })

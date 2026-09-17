@@ -54,5 +54,12 @@
   "Settings.TemperatureCustom": "Personalizada",
   "Settings.TemperatureValue": "Valor de temperatura",
   "Settings.TemperatureValueDescription": "De 0 a 2. Los valores más bajos producen resultados más consistentes. Solo se usa con el modo de temperatura personalizada.",
-  "Settings.TemperatureInvalid": "Introduce una temperatura de 0 a 2 usando un punto decimal."
+  "Settings.TemperatureInvalid": "Introduce una temperatura de 0 a 2 usando un punto decimal.",
+  "Settings.ApiVersion": "Versión de la API (opcional)",
+  "Settings.ApiVersionDescription": "Déjalo vacío a menos que tu servidor requiera una versión. Los puntos de conexión de Azure específicos de una implementación necesitan una versión con fecha, como 2025-03-01-preview.",
+  "Settings.BatchEndpoint": "Punto de conexión de transcripción",
+  "Settings.BatchEndpointDescription": "Estándar usa /v1/audio/transcriptions. Específico de una implementación usa /deployments/{model}/audio/transcriptions y necesita una versión de la API con fecha.",
+  "Settings.BatchEndpointStandard": "Estándar v1",
+  "Settings.BatchEndpointDeployment": "Específico de una implementación",
+  "Settings.ApiVersionRequired": "La transcripción específica de una implementación requiere una versión de la API con fecha, como 2025-03-01-preview."
 }

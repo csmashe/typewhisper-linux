@@ -5,7 +5,6 @@
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
 using System.Globalization;
-using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
@@ -35,6 +34,11 @@ public sealed class OpenAiCompatiblePlugin
 
     private const string ThinkingModeSettingKey = "thinkingMode";
     private ThinkingMode _thinkingMode;
+
+    private const string ApiVersionSettingKey = "apiVersion";
+    private const string BatchEndpointSettingKey = "batchEndpoint";
+    private string _apiVersion = "";
+    private string _batchEndpoint = "standard";
 
     private const string TextApiSettingKey = "textApi";
     private const string ReasoningEffortSettingKey = "reasoningEffort";
@@ -90,6 +94,8 @@ public sealed class OpenAiCompatiblePlugin
         _host = host;
         _llmRequestTimeoutSeconds = Math.Clamp(host.GetSetting<int?>(LlmRequestTimeoutSettingKey) ?? 300, 5, 3600);
         _thinkingMode = ParseThinkingMode(host.GetSetting<string>(ThinkingModeSettingKey));
+        _apiVersion = (host.GetSetting<string>(ApiVersionSettingKey) ?? "").Trim();
+        _batchEndpoint = NormalizeBatchEndpoint(host.GetSetting<string>(BatchEndpointSettingKey));
         _textApi = NormalizeTextApi(host.GetSetting<string>(TextApiSettingKey));
         _reasoningEffort = NormalizeReasoningEffort(host.GetSetting<string>(ReasoningEffortSettingKey));
         _temperatureMode = NormalizeTemperatureMode(host.GetSetting<string>(TemperatureModeSettingKey));
@@ -172,6 +178,7 @@ public sealed class OpenAiCompatiblePlugin
         if (string.IsNullOrEmpty(SelectedModelId))
             throw new PluginRequestException(Loc.L("Settings.NoTranscriptionModelSelected"), PluginRequestFailureKind.Configuration);
 
+        var endpoint = BatchUri(BaseUrl!, _apiVersion, _batchEndpoint, SelectedModelId!, translate);
         return await RunNonLlmRequestAsync(token => OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
             BaseUrl!,
@@ -180,9 +187,11 @@ public sealed class OpenAiCompatiblePlugin
             wavAudio,
             language,
             translate,
-            "verbose_json",
-            token,
-            prompt
+            _batchEndpoint == "deployment-scoped" || _apiVersion.Length > 0 ? "json" : "verbose_json",
+            prompt,
+            endpointOverride: endpoint,
+            requestHeaders: AuthenticationHeaders(endpoint, ApiKey),
+            ct: token
         ), ct);
     }
 
@@ -221,7 +230,7 @@ public sealed class OpenAiCompatiblePlugin
         try
         {
             if (_textApi == "responses")
-                return StripThinking(await new OpenAiResponsesClient(_httpClient, BaseUrl!, ApiKey ?? "").ProcessAsync(
+                return StripThinking(await CreateResponsesClient(BaseUrl!, _apiVersion, ApiKey).ProcessAsync(
                     systemPrompt, userText, modelId, NullIfWhiteSpace(_reasoningEffort), timeout.Token,
                     _temperatureMode == "custom" && _reasoningEffort.Length == 0 ? _temperature : null));
 
@@ -232,7 +241,7 @@ public sealed class OpenAiCompatiblePlugin
                 modelId,
                 systemPrompt,
                 userText,
-                BuildRequestOptions(BaseUrl!, _thinkingMode, _temperatureMode, _temperature),
+                BuildRequestOptions(BaseUrl!, _thinkingMode, _temperatureMode, _temperature, _apiVersion, ApiKey),
                 timeout.Token
             );
         }
@@ -270,7 +279,7 @@ public sealed class OpenAiCompatiblePlugin
             modelId,
             systemPrompt,
             userText,
-            BuildRequestOptions(BaseUrl!, _thinkingMode, _temperatureMode, _temperature),
+            BuildRequestOptions(BaseUrl!, _thinkingMode, _temperatureMode, _temperature, _apiVersion, ApiKey),
             timeout.Token
         );
 
@@ -408,7 +417,7 @@ public sealed class OpenAiCompatiblePlugin
     internal async Task<List<FetchedModel>?> FetchModelsAsync(CancellationToken ct = default)
     {
         var connection = CaptureDefaultConnection();
-        return await FetchModelsForAsync(connection.BaseUrl, connection.ApiKey, ct);
+        return await FetchModelsForAsync(connection.BaseUrl, connection.ApiKey, connection.ApiVersion, ct);
     }
 
     internal async Task<bool> ValidateConnectionAsync(CancellationToken ct = default)
@@ -420,9 +429,10 @@ public sealed class OpenAiCompatiblePlugin
         timeout.CancelAfter(_nonLlmTimeout);
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
-            if (!string.IsNullOrEmpty(ApiKey))
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
+            var endpoint = RequestUri(BaseUrl, _apiVersion, "/v1/models");
+            using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
+            foreach (var (name, value) in AuthenticationHeaders(endpoint, ApiKey))
+                request.Headers.TryAddWithoutValidation(name, value);
 
             using var response = await _httpClient.SendAsync(request, timeout.Token);
             return response.IsSuccessStatusCode;
@@ -487,6 +497,8 @@ public sealed class OpenAiCompatiblePlugin
             ),
             BuildLlmRequestTimeoutDefinition(),
             BuildThinkingModeDefinition(),
+            BuildApiVersionDefinition(),
+            BuildBatchEndpointDefinition(),
             BuildTextApiDefinition(),
             BuildReasoningEffortDefinition(),
             BuildTemperatureModeDefinition(),
@@ -499,6 +511,8 @@ public sealed class OpenAiCompatiblePlugin
             {
                 LlmRequestTimeoutSettingKey => _llmRequestTimeoutSeconds.ToString(CultureInfo.InvariantCulture),
                 ThinkingModeSettingKey => FormatThinkingMode(_thinkingMode),
+                ApiVersionSettingKey => _apiVersion,
+                BatchEndpointSettingKey => _batchEndpoint,
                 TextApiSettingKey => _textApi,
                 ReasoningEffortSettingKey => _reasoningEffort,
                 TemperatureModeSettingKey => _temperatureMode,
@@ -526,6 +540,10 @@ public sealed class OpenAiCompatiblePlugin
                     throw new ArgumentException(Loc.L("Settings.LlmRequestTimeoutInvalid", 5, 3600));
                 _llmRequestTimeoutSeconds = Math.Clamp(seconds, 5, 3600);
                 _host?.SetSetting(LlmRequestTimeoutSettingKey, _llmRequestTimeoutSeconds);
+                break;
+            case ApiVersionSettingKey:
+            case BatchEndpointSettingKey:
+                SetEndpointOption(key, value);
                 break;
             case TextApiSettingKey:
                 _textApi = NormalizeTextApi(value);
@@ -630,6 +648,97 @@ public sealed class OpenAiCompatiblePlugin
             new PluginSettingOption("on", Loc.L("Settings.ThinkingModeOn")),
         ]);
 
+    internal static Uri RequestUri(string baseUrl, string apiVersion, string path)
+    {
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            throw new PluginRequestException("Base URL must be an absolute http:// or https:// URL.", PluginRequestFailureKind.Configuration);
+
+        var endpoint = baseUrl.TrimEnd('/') + "/" + path.TrimStart('/');
+        var version = apiVersion.Trim();
+        if (version.Length > 0)
+            endpoint += "?api-version=" + Uri.EscapeDataString(version);
+        return new Uri(endpoint);
+    }
+
+    internal static bool IsDatedApiVersion(string apiVersion) =>
+        apiVersion.Length >= 10
+        && DateOnly.TryParseExact(apiVersion.AsSpan(0, 10), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _);
+
+    internal static Uri BatchUri(string baseUrl, string apiVersion, string batchEndpoint, string modelId, bool translate)
+    {
+        var route = translate ? "translations" : "transcriptions";
+        if (batchEndpoint != "deployment-scoped")
+            return RequestUri(baseUrl, apiVersion, $"/v1/audio/{route}");
+        if (!IsDatedApiVersion(apiVersion))
+            throw new PluginRequestException(
+                "Deployment-scoped transcription requires a dated API version, such as 2025-03-01-preview.",
+                PluginRequestFailureKind.Configuration);
+        return RequestUri(baseUrl, apiVersion, $"/deployments/{Uri.EscapeDataString(modelId)}/audio/{route}");
+    }
+
+    internal static IReadOnlyDictionary<string, string> AuthenticationHeaders(Uri uri, string? key)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(key))
+            return headers;
+        headers["Authorization"] = $"Bearer {key}";
+        if (uri.Host.EndsWith(".openai.azure.com", StringComparison.OrdinalIgnoreCase)
+            || uri.Host.EndsWith(".openai.azure.us", StringComparison.OrdinalIgnoreCase)
+            || uri.Host.EndsWith(".services.ai.azure.com", StringComparison.OrdinalIgnoreCase))
+            headers["api-key"] = key;
+        return headers;
+    }
+
+    private OpenAiResponsesClient CreateResponsesClient(string baseUrl, string apiVersion, string? apiKey)
+    {
+        var endpoint = RequestUri(baseUrl, apiVersion, "/v1/responses");
+        return new OpenAiResponsesClient(_httpClient, endpoint, AuthenticationHeaders(endpoint, apiKey));
+    }
+
+    private static string NormalizeBatchEndpoint(string? value) =>
+        value == "deployment-scoped" ? "deployment-scoped" : "standard";
+
+    private void SetEndpointOption(string key, string? value)
+    {
+        lock (_defaultConnectionLock)
+        {
+            var apiVersion = key == ApiVersionSettingKey ? (value ?? "").Trim() : _apiVersion;
+            var batchEndpoint = key == BatchEndpointSettingKey ? NormalizeBatchEndpoint(value) : _batchEndpoint;
+            // The host saves apiVersion before batchEndpoint, so the pair is checked once the
+            // later field arrives; ValidateAsync and BatchUri still catch a stale partial state.
+            if (key == BatchEndpointSettingKey && batchEndpoint == "deployment-scoped" && !IsDatedApiVersion(apiVersion))
+                throw new ArgumentException(Loc.L("Settings.ApiVersionRequired"));
+            var changed = apiVersion != _apiVersion || batchEndpoint != _batchEndpoint;
+            _apiVersion = apiVersion;
+            _batchEndpoint = batchEndpoint;
+            if (changed)
+            {
+                _defaultConnectionRevision++;
+                SetFetchedModels([], notifyCapabilitiesChanged: false);
+            }
+            _host?.SetSetting(key, key == ApiVersionSettingKey ? _apiVersion : _batchEndpoint);
+        }
+        _host?.NotifyCapabilitiesChanged();
+    }
+
+    private PluginSettingDefinition BuildApiVersionDefinition() => new(
+        Key: ApiVersionSettingKey,
+        Label: Loc.L("Settings.ApiVersion"),
+        Description: Loc.L("Settings.ApiVersionDescription"),
+        Kind: PluginSettingKind.Text);
+
+    private PluginSettingDefinition BuildBatchEndpointDefinition() => new(
+        Key: BatchEndpointSettingKey,
+        Label: Loc.L("Settings.BatchEndpoint"),
+        Description: Loc.L("Settings.BatchEndpointDescription"),
+        Kind: PluginSettingKind.Dropdown,
+        Options:
+        [
+            new PluginSettingOption("standard", Loc.L("Settings.BatchEndpointStandard")),
+            new PluginSettingOption("deployment-scoped", Loc.L("Settings.BatchEndpointDeployment")),
+        ]);
+
     private static string NormalizeTextApi(string? value) =>
         value == "responses" ? "responses" : "chat-completions";
 
@@ -705,12 +814,15 @@ public sealed class OpenAiCompatiblePlugin
         Kind: PluginSettingKind.Text);
 
     private static OpenAiChatRequestOptions BuildRequestOptions(
-        string baseUrl, ThinkingMode mode, string temperatureMode, double temperature)
+        string baseUrl, ThinkingMode mode, string temperatureMode, double temperature, string apiVersion, string? apiKey)
     {
         // The endpoint's context window is unknown (often a small self-hosted model), so keep
         // the fixed output cap; a cut-off answer now surfaces as a truncation error instead.
+        var endpoint = RequestUri(baseUrl, apiVersion, "/v1/chat/completions");
         var baseOptions = new OpenAiChatRequestOptions
         {
+            RequestUri = endpoint,
+            RequestHeaders = AuthenticationHeaders(endpoint, apiKey),
             ProviderName = "OpenAI Compatible",
             ScaleOutputTokens = false,
             Temperature = temperatureMode == "custom" ? temperature : null,
@@ -746,7 +858,10 @@ public sealed class OpenAiCompatiblePlugin
         if (string.IsNullOrWhiteSpace(connection.BaseUrl))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterBaseUrl"));
 
-        var models = await FetchModelsForAsync(connection.BaseUrl, connection.ApiKey, ct);
+        if (connection.BatchEndpoint == "deployment-scoped" && !IsDatedApiVersion(connection.ApiVersion))
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiVersionRequired"));
+
+        var models = await FetchModelsForAsync(connection.BaseUrl, connection.ApiKey, connection.ApiVersion, ct);
         var isCurrent = TryApplyDefaultCatalog(
             connection,
             models,
@@ -774,7 +889,7 @@ public sealed class OpenAiCompatiblePlugin
         var connection = CaptureDefaultConnection();
         if (!string.IsNullOrEmpty(connection.BaseUrl))
         {
-            var models = await FetchModelsBestEffortAsync(connection.BaseUrl, connection.ApiKey, ct);
+            var models = await FetchModelsBestEffortAsync(connection.BaseUrl, connection.ApiKey, connection.ApiVersion, ct);
             TryApplyDefaultCatalog(connection, models, onlyIfChanged: true, out var applied);
             changed = applied;
         }
@@ -785,7 +900,7 @@ public sealed class OpenAiCompatiblePlugin
         var changedProfileIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var profile in _additionalProfiles.Where(p => !string.IsNullOrEmpty(p.BaseUrl)))
         {
-            var models = await FetchModelsBestEffortAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
+            var models = await FetchModelsBestEffortAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), profile.ApiVersion, ct);
             if (models is null || !ProfileCatalogStateChanged(profile, models))
                 continue;
 
@@ -816,7 +931,7 @@ public sealed class OpenAiCompatiblePlugin
     {
         lock (_defaultConnectionLock)
         {
-            return new DefaultConnectionSnapshot(BaseUrl, ApiKey, _defaultConnectionRevision);
+            return new DefaultConnectionSnapshot(BaseUrl, ApiKey, _apiVersion, _batchEndpoint, _defaultConnectionRevision);
         }
     }
 
@@ -960,6 +1075,8 @@ public sealed class OpenAiCompatiblePlugin
                         Kind: PluginSettingKind.Text),
                     BuildLlmRequestTimeoutDefinition(),
                     BuildThinkingModeDefinition(),
+                    BuildApiVersionDefinition(),
+                    BuildBatchEndpointDefinition(),
                     BuildTextApiDefinition(),
                     BuildReasoningEffortDefinition(),
                     BuildTemperatureModeDefinition(),
@@ -991,6 +1108,8 @@ public sealed class OpenAiCompatiblePlugin
                     ["selectedLlmModel"] = p.SelectedLlmModelId,
                     [LlmRequestTimeoutSettingKey] = p.LlmRequestTimeoutSeconds.ToString(CultureInfo.InvariantCulture),
                     [ThinkingModeSettingKey] = FormatThinkingMode(ParseThinkingMode(p.ThinkingMode)),
+                    [ApiVersionSettingKey] = p.ApiVersion,
+                    [BatchEndpointSettingKey] = p.BatchEndpoint,
                     [TextApiSettingKey] = p.TextApi,
                     [ReasoningEffortSettingKey] = p.ReasoningEffort,
                     [TemperatureModeSettingKey] = p.TemperatureMode,
@@ -1034,6 +1153,11 @@ public sealed class OpenAiCompatiblePlugin
                     false, $"Profile '{label}': base URL must be an absolute http:// or https:// URL.");
             }
 
+            var apiVersion = (Get(item, ApiVersionSettingKey) ?? "").Trim();
+            var batchEndpoint = NormalizeBatchEndpoint(Get(item, BatchEndpointSettingKey));
+            if (batchEndpoint == "deployment-scoped" && !IsDatedApiVersion(apiVersion))
+                return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiVersionRequired"));
+
             var id = NormalizeProfileId(Get(item, "__id"), seenIds);
 
             var submittedKey = Get(item, "api-key");
@@ -1063,7 +1187,9 @@ public sealed class OpenAiCompatiblePlugin
             var hadProfile = previousById.TryGetValue(id, out var prev);
             var endpointChanged = hadProfile
                 && (keyChanged
-                    || !string.Equals(prev!.BaseUrl, baseUrl, StringComparison.Ordinal));
+                    || !string.Equals(prev!.BaseUrl, baseUrl, StringComparison.Ordinal)
+                    || !string.Equals(prev.ApiVersion, apiVersion, StringComparison.Ordinal)
+                    || !string.Equals(prev.BatchEndpoint, batchEndpoint, StringComparison.Ordinal));
             var preserveCatalog = hadProfile && !endpointChanged;
             var selectedModelId = endpointChanged
                 ? null
@@ -1087,6 +1213,8 @@ public sealed class OpenAiCompatiblePlugin
                 Id = id,
                 Name = name.Length == 0 ? "Custom Server" : name,
                 BaseUrl = baseUrl,
+                ApiVersion = apiVersion,
+                BatchEndpoint = batchEndpoint,
                 SelectedModelId = selectedModelId,
                 SelectedLlmModelId = selectedLlmModelId,
                 LlmRequestTimeoutSeconds = timeoutSeconds,
@@ -1161,7 +1289,7 @@ public sealed class OpenAiCompatiblePlugin
         // existing catalog and is skipped.
         foreach (var profile in _additionalProfiles.Where(p => p.FetchedModels.Count == 0))
         {
-            var models = await FetchModelsBestEffortAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
+            var models = await FetchModelsBestEffortAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), profile.ApiVersion, ct);
             if (models is not null)
                 ApplyProfileCatalog(profile, models);
         }
@@ -1284,6 +1412,7 @@ public sealed class OpenAiCompatiblePlugin
         if (string.IsNullOrEmpty(profile.SelectedModelId))
             throw new PluginRequestException(Loc.L("Settings.NoTranscriptionModelSelected"), PluginRequestFailureKind.Configuration);
 
+        var endpoint = BatchUri(profile.BaseUrl, profile.ApiVersion, profile.BatchEndpoint, profile.SelectedModelId!, translate);
         return await RunNonLlmRequestAsync(token => OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
             profile.BaseUrl,
@@ -1292,9 +1421,11 @@ public sealed class OpenAiCompatiblePlugin
             wavAudio,
             language,
             translate,
-            "verbose_json",
-            token,
-            prompt
+            profile.BatchEndpoint == "deployment-scoped" || profile.ApiVersion.Length > 0 ? "json" : "verbose_json",
+            prompt,
+            endpointOverride: endpoint,
+            requestHeaders: AuthenticationHeaders(endpoint, GetProfileApiKey(id)),
+            ct: token
         ), ct);
     }
 
@@ -1318,7 +1449,7 @@ public sealed class OpenAiCompatiblePlugin
         try
         {
             if (profile.TextApi == "responses")
-                return StripThinking(await new OpenAiResponsesClient(_httpClient, profile.BaseUrl, GetProfileApiKey(id) ?? "").ProcessAsync(
+                return StripThinking(await CreateResponsesClient(profile.BaseUrl, profile.ApiVersion, GetProfileApiKey(id)).ProcessAsync(
                     systemPrompt, userText, modelId, NullIfWhiteSpace(profile.ReasoningEffort), timeout.Token,
                     profile is { TemperatureMode: "custom", ReasoningEffort.Length: 0 } ? profile.Temperature : null));
 
@@ -1329,7 +1460,7 @@ public sealed class OpenAiCompatiblePlugin
                 modelId,
                 systemPrompt,
                 userText,
-                BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode), profile.TemperatureMode, profile.Temperature),
+                BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode), profile.TemperatureMode, profile.Temperature, profile.ApiVersion, GetProfileApiKey(id)),
                 timeout.Token
             );
         }
@@ -1373,7 +1504,7 @@ public sealed class OpenAiCompatiblePlugin
             modelId,
             systemPrompt,
             userText,
-            BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode), profile.TemperatureMode, profile.Temperature),
+            BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode), profile.TemperatureMode, profile.Temperature, profile.ApiVersion, GetProfileApiKey(id)),
             timeout.Token
         );
 
@@ -1474,6 +1605,13 @@ public sealed class OpenAiCompatiblePlugin
             // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- the annotation states the C# contract; the deserializer that produced this value ignores it.
             profile.BaseUrl = NormalizeBaseUrl(profile.BaseUrl ?? "");
 
+            // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- the deserializer that produced this value ignores the annotation.
+            var apiVersion = (profile.ApiVersion ?? "").Trim();
+            var batchEndpoint = NormalizeBatchEndpoint(profile.BatchEndpoint);
+            repaired |= profile.ApiVersion != apiVersion || profile.BatchEndpoint != batchEndpoint;
+            profile.ApiVersion = apiVersion;
+            profile.BatchEndpoint = batchEndpoint;
+
             var textApi = NormalizeTextApi(profile.TextApi);
             var reasoningEffort = NormalizeReasoningEffort(profile.ReasoningEffort);
             var temperatureMode = NormalizeTemperatureMode(profile.TemperatureMode);
@@ -1569,11 +1707,11 @@ public sealed class OpenAiCompatiblePlugin
     }
 
     private async Task<List<FetchedModel>?> FetchModelsBestEffortAsync(
-        string? baseUrl, string? apiKey, CancellationToken ct)
+        string? baseUrl, string? apiKey, string apiVersion, CancellationToken ct)
     {
         try
         {
-            return await FetchModelsForAsync(baseUrl, apiKey, ct);
+            return await FetchModelsForAsync(baseUrl, apiKey, apiVersion, ct);
         }
         catch (TimeoutException ex)
         {
@@ -1586,6 +1724,7 @@ public sealed class OpenAiCompatiblePlugin
     private async Task<List<FetchedModel>?> FetchModelsForAsync(
         string? baseUrl,
         string? apiKey,
+        string apiVersion,
         CancellationToken ct
     )
     {
@@ -1596,9 +1735,10 @@ public sealed class OpenAiCompatiblePlugin
         timeout.CancelAfter(_nonLlmTimeout);
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/v1/models");
-            if (!string.IsNullOrEmpty(apiKey))
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            var endpoint = RequestUri(baseUrl, apiVersion, "/v1/models");
+            using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
+            foreach (var (name, value) in AuthenticationHeaders(endpoint, apiKey))
+                request.Headers.TryAddWithoutValidation(name, value);
 
             using var response = await _httpClient.SendAsync(request, timeout.Token);
             if (!response.IsSuccessStatusCode)
@@ -1700,6 +1840,8 @@ public sealed class OpenAiCompatiblePlugin
             )
             && left.LlmRequestTimeoutSeconds == right.LlmRequestTimeoutSeconds
             && ParseThinkingMode(left.ThinkingMode) == ParseThinkingMode(right.ThinkingMode)
+            && string.Equals(left.ApiVersion, right.ApiVersion, StringComparison.Ordinal)
+            && string.Equals(left.BatchEndpoint, right.BatchEndpoint, StringComparison.Ordinal)
             && string.Equals(left.TextApi, right.TextApi, StringComparison.Ordinal)
             && string.Equals(left.ReasoningEffort, right.ReasoningEffort, StringComparison.Ordinal)
             && string.Equals(left.TemperatureMode, right.TemperatureMode, StringComparison.Ordinal)
@@ -1763,6 +1905,8 @@ public sealed class OpenAiCompatiblePlugin
     private readonly record struct DefaultConnectionSnapshot(
         string? BaseUrl,
         string? ApiKey,
+        string ApiVersion,
+        string BatchEndpoint,
         long Revision
     );
 
@@ -1830,6 +1974,12 @@ public sealed class OpenAiCompatibleProfile
 
     /// <summary>Base server URL without a trailing /v1 suffix.</summary>
     public string BaseUrl { get; set; } = "";
+
+    /// <summary>Optional API version query parameter.</summary>
+    public string ApiVersion { get; set; } = "";
+
+    /// <summary>Batch route: "standard" or "deployment-scoped".</summary>
+    public string BatchEndpoint { get; set; } = "standard";
 
     /// <summary>Optional default transcription model ID.</summary>
     public string? SelectedModelId { get; set; }

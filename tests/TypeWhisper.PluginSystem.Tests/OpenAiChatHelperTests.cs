@@ -12,6 +12,28 @@ public sealed class OpenAiChatHelperTests
     private const string TokenParameterError = "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.";
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task RequestOverrides_ArePreservedOnRetry(bool streaming, bool overrideAuthorization)
+    {
+        var headers = new Dictionary<string, string> { ["api-key"] = "azure-key" };
+        if (overrideAuthorization)
+            headers["authorization"] = "Basic supplied";
+        var endpoint = new Uri("https://foo.openai.azure.com/custom/chat?api-version=2025-03-01-preview");
+        using var handler = new TokenRetryHandler(TokenParameterError, streaming,
+            expectedEndpoint: endpoint, expectedHeaders: headers);
+        using var client = new HttpClient(handler);
+        Assert.Equal("ok", await SendWithOptionsAsync(client, new OpenAiChatRequestOptions
+        {
+            RequestUri = endpoint,
+            RequestHeaders = headers,
+        }, streaming));
+        Assert.Equal(2, handler.Bodies.Count);
+    }
+
+    [Theory]
     [InlineData(false, "max_tokens", "max_completion_tokens")]
     [InlineData(true, "max_tokens", "max_completion_tokens")]
     [InlineData(false, "max_completion_tokens", "max_tokens")]
@@ -72,7 +94,8 @@ public sealed class OpenAiChatHelperTests
         return string.Concat(chunks);
     }
 
-    private sealed class TokenRetryHandler(string message, bool streaming, bool alwaysFail = false, int status = 400)
+    private sealed class TokenRetryHandler(string message, bool streaming, bool alwaysFail = false, int status = 400,
+        Uri? expectedEndpoint = null, IReadOnlyDictionary<string, string>? expectedHeaders = null)
         : HttpMessageHandler
     {
         public List<JsonElement> Bodies { get; } = [];
@@ -81,8 +104,12 @@ public sealed class OpenAiChatHelperTests
         {
             using var doc = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
             Bodies.Add(doc.RootElement.Clone());
-            Assert.Equal("Bearer key", request.Headers.Authorization?.ToString());
-            Assert.Equal("/v1/chat/completions", request.RequestUri!.AbsolutePath);
+            Assert.Equal(expectedHeaders?.GetValueOrDefault("authorization") ?? "Bearer key",
+                Assert.Single(request.Headers.GetValues("Authorization")));
+            Assert.Equal(expectedEndpoint ?? new Uri("https://example.test/v1/chat/completions"), request.RequestUri);
+            if (expectedHeaders is not null)
+                foreach (var (name, value) in expectedHeaders)
+                    Assert.Equal(value, Assert.Single(request.Headers.GetValues(name)));
             if (Bodies.Count == 1 || alwaysFail)
                 return new HttpResponseMessage((HttpStatusCode)status)
                 {

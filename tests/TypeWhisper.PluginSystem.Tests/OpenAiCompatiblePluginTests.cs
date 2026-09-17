@@ -11,6 +11,261 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public sealed class OpenAiCompatiblePluginTests
 {
+    [Fact]
+    public void RequestUri_AppendsVersionAndRejectsNonHttpBaseUrl()
+    {
+        Assert.Equal("https://x/v1/models?api-version=2025-03-01-preview",
+            OpenAiCompatiblePlugin.RequestUri("https://x/", "2025-03-01-preview", "/v1/models").AbsoluteUri);
+        Assert.Equal("https://x/v1/models?api-version=a%20b%26c",
+            OpenAiCompatiblePlugin.RequestUri("https://x", " a b&c ", "v1/models").AbsoluteUri);
+        Assert.Equal("https://x/v1/models",
+            OpenAiCompatiblePlugin.RequestUri("https://x", "", "v1/models").AbsoluteUri);
+        foreach (var url in new[] { "ftp://x", "relative" })
+            Assert.Equal(PluginRequestFailureKind.Configuration,
+                Assert.Throws<PluginRequestException>(() => OpenAiCompatiblePlugin.RequestUri(url, "", "v1/models")).FailureKind);
+    }
+
+    [Theory]
+    [InlineData("standard", "", false, "/v1/audio/transcriptions")]
+    [InlineData("standard", "", true, "/v1/audio/translations")]
+    [InlineData("deployment-scoped", "2025-03-01-preview", false, "/deployments/my%2Fmodel%20id/audio/transcriptions?api-version=2025-03-01-preview")]
+    [InlineData("deployment-scoped", "2025-03-01-preview", true, "/deployments/my%2Fmodel%20id/audio/translations?api-version=2025-03-01-preview")]
+    public void BatchUri_SelectsRoute(string batch, string version, bool translate, string expected)
+    {
+        Assert.Equal("https://x" + expected,
+            OpenAiCompatiblePlugin.BatchUri("https://x", version, batch, "my/model id", translate).AbsoluteUri);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("preview")]
+    [InlineData("v2025-03-01")]
+    [InlineData("2025-3-1")]
+    public void BatchUri_RequiresDatedVersion(string version)
+    {
+        Assert.False(OpenAiCompatiblePlugin.IsDatedApiVersion(version));
+        var error = Assert.Throws<PluginRequestException>(() =>
+            OpenAiCompatiblePlugin.BatchUri("https://x", version, "deployment-scoped", "whisper", false));
+        Assert.Equal(PluginRequestFailureKind.Configuration, error.FailureKind);
+        Assert.Equal("Deployment-scoped transcription requires a dated API version, such as 2025-03-01-preview.", error.Message);
+    }
+
+    [Theory]
+    [InlineData("2025-03-01")]
+    [InlineData("2025-03-01-preview")]
+    public void IsDatedApiVersion_AcceptsDatePrefix(string version) =>
+        Assert.True(OpenAiCompatiblePlugin.IsDatedApiVersion(version));
+
+    [Theory]
+    [InlineData("https://api.openai.com", false)]
+    [InlineData("https://foo.openai.azure.com", true)]
+    [InlineData("https://FOO.OPENAI.AZURE.US", true)]
+    [InlineData("https://foo.services.ai.azure.com", true)]
+    [InlineData("https://foo.openai.azure.com.example.test", false)]
+    public void AuthenticationHeaders_UsesAzureSuffixes(string url, bool azure)
+    {
+        var headers = OpenAiCompatiblePlugin.AuthenticationHeaders(new Uri(url), "key");
+        Assert.Equal("Bearer key", headers["Authorization"]);
+        Assert.Equal(azure ? 2 : 1, headers.Count);
+        if (azure)
+            Assert.Equal("key", headers["api-key"]);
+        foreach (var blank in new[] { null, "", "  " })
+            Assert.Empty(OpenAiCompatiblePlugin.AuthenticationHeaders(new Uri(url), blank));
+    }
+
+    [Theory]
+    [InlineData(false, "deployment-scoped", "2025-03-01-preview", false)]
+    [InlineData(true, "deployment-scoped", "2025-03-01-preview", false)]
+    [InlineData(false, "deployment-scoped", "2025-03-01-preview", true)]
+    [InlineData(true, "deployment-scoped", "2025-03-01-preview", true)]
+    [InlineData(false, "standard", "2025-03-01-preview", false)]
+    [InlineData(true, "standard", "2025-03-01-preview", false)]
+    [InlineData(false, "standard", "", false)]
+    [InlineData(true, "standard", "", false)]
+    public async Task BatchRequests_UseEndpointOptions(bool profile, string batch, string version, bool translate)
+    {
+        var postCount = 0;
+        using var client = new HttpClient(new AsyncHandler(async (request, ct) =>
+        {
+            if (request.Method == HttpMethod.Get)
+                return ModelCatalogResponse("whisper");
+            postCount++;
+            Assert.Equal(OpenAiCompatiblePlugin.BatchUri("https://foo.openai.azure.com", version, batch, "whisper", translate), request.RequestUri);
+            Assert.Equal("Bearer key", Assert.Single(request.Headers.GetValues("Authorization")));
+            Assert.Equal("key", Assert.Single(request.Headers.GetValues("api-key")));
+            var content = Assert.IsType<MultipartFormDataContent>(request.Content);
+            var format = content.Single(part => part.Headers.ContentDisposition!.Name!.Trim('"') == "response_format");
+            Assert.Equal(batch == "deployment-scoped" || version.Length > 0 ? "json" : "verbose_json",
+                await format.ReadAsStringAsync(ct));
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"text":"ok"}""") };
+        }));
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "https://foo.openai.azure.com");
+        host.SetSetting("apiVersion", version);
+        host.SetSetting("batchEndpoint", batch);
+        host.SetSetting("selectedModel", "whisper");
+        host.Secrets["api-key"] = "key";
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        ITranscriptionEngineRole role = sut;
+        if (profile)
+        {
+            Assert.True((await sut.SetItemsAsync("profiles", [ProfileItem("Azure", "https://foo.openai.azure.com",
+                apiKey: "key", model: "whisper", apiVersion: version, batchEndpoint: batch)])).IsSuccess);
+            role = Assert.Single(sut.AdditionalTranscriptionEngines);
+        }
+        var result = await role.TranscribeAsync([], null, translate, null, CancellationToken.None);
+        Assert.Equal("ok", result.Text);
+        Assert.Empty(result.Segments);
+        Assert.Equal(1, postCount);
+    }
+
+    [Theory]
+    [InlineData(false, "chat-completions", false)]
+    [InlineData(true, "chat-completions", false)]
+    [InlineData(false, "chat-completions", true)]
+    [InlineData(true, "chat-completions", true)]
+    [InlineData(false, "responses", false)]
+    [InlineData(true, "responses", false)]
+    [InlineData(false, "responses", true)]
+    [InlineData(true, "responses", true)]
+    public async Task VersionedRequests_UseAzureHeadersForTextAndModels(bool profile, string api, bool streaming)
+    {
+        var paths = new List<string>();
+        using var client = new HttpClient(new CapturingHandler((request, _) =>
+        {
+            Assert.Equal("?api-version=2025-03-01-preview", request.RequestUri!.Query);
+            Assert.Equal("Bearer key", Assert.Single(request.Headers.GetValues("Authorization")));
+            Assert.Equal("key", Assert.Single(request.Headers.GetValues("api-key")));
+            paths.Add(request.RequestUri.AbsolutePath);
+            if (request.Method == HttpMethod.Get)
+                return ModelCatalogResponse("m1");
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(api == "responses" ? """{"output_text":"ok"}"""
+                    : streaming ? "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+                    : """{"choices":[{"message":{"content":"ok"}}]}"""),
+            };
+        }));
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "https://foo.openai.azure.com");
+        host.SetSetting("apiVersion", " 2025-03-01-preview ");
+        host.SetSetting("textApi", api);
+        host.Secrets["api-key"] = "key";
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        ILlmProviderRole role = sut;
+        if (profile)
+        {
+            Assert.True((await sut.SetItemsAsync("profiles", [ProfileItem("Azure", "https://foo.openai.azure.com",
+                apiKey: "key", llmModel: "m1", apiVersion: " 2025-03-01-preview ", textApi: api)])).IsSuccess);
+            role = Assert.Single(sut.AdditionalLlmProviders);
+        }
+        else
+        {
+            Assert.True(await sut.ValidateConnectionAsync());
+            Assert.NotNull(await sut.FetchModelsAsync());
+            Assert.True((await sut.ValidateAsync())!.IsSuccess);
+        }
+        Assert.Equal(["ok"], await ProcessTextOptionsAsync(role, streaming));
+        Assert.Contains("/v1/models", paths);
+        Assert.Equal(api == "responses" ? "/v1/responses" : "/v1/chat/completions", paths[^1]);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("preview")]
+    public async Task DeploymentSetting_RejectsMissingDateWithLocalizedMessage(string version)
+    {
+        using var client = ModelsClient();
+        var host = new TestPluginHostServices { Localization = TimeoutLocalization() };
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        await sut.SetSettingValueAsync("apiVersion", version);
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => sut.SetSettingValueAsync("batchEndpoint", "deployment-scoped"));
+        Assert.Equal(host.Localization.GetString("Settings.ApiVersionRequired"), error.Message);
+        Assert.Equal("standard", await sut.GetSettingValueAsync("batchEndpoint"));
+        var result = await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://x", batchEndpoint: "deployment-scoped", apiVersion: version)]);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(error.Message, result.Message);
+        Assert.Empty(await sut.GetItemsAsync("profiles"));
+    }
+
+    [Fact]
+    public async Task DeploymentSetting_SwitchingToStandardWhileClearingVersionSaves()
+    {
+        using var client = ModelsClient();
+        var host = new TestPluginHostServices { Localization = TimeoutLocalization() };
+        host.SetSetting("apiVersion", "2025-03-01-preview");
+        host.SetSetting("batchEndpoint", "deployment-scoped");
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        // Form order: the cleared version arrives while the old route is still deployment-scoped.
+        await sut.SetSettingValueAsync("apiVersion", "");
+        await sut.SetSettingValueAsync("batchEndpoint", "standard");
+        Assert.Equal("", await sut.GetSettingValueAsync("apiVersion"));
+        Assert.Equal("standard", await sut.GetSettingValueAsync("batchEndpoint"));
+        Assert.Equal("standard", host.GetSetting<string>("batchEndpoint"));
+    }
+
+    [Theory]
+    [InlineData("apiVersion", "2025-04-01-preview")]
+    [InlineData("batchEndpoint", "deployment-scoped")]
+    public async Task DefaultEndpoint_ChangingRouteClearsModels(string key, string value)
+    {
+        using var client = ModelsClient();
+        var host = CachedDefaultHost();
+        host.SetSetting("apiVersion", "2025-03-01-preview");
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        await sut.SetSettingValueAsync("apiVersion", " 2025-03-01-preview ");
+        await sut.SetSettingValueAsync("batchEndpoint", "standard");
+        Assert.Single(sut.FetchedModels);
+        await sut.SetSettingValueAsync(key, value);
+        Assert.Empty(sut.FetchedModels);
+        Assert.Null(sut.SelectedModelId);
+        Assert.Null(sut.SelectedLlmModelId);
+        Assert.Equal(value, host.GetSetting<string>(key));
+        Assert.Equal(value, await sut.GetSettingValueAsync(key));
+    }
+
+    [Theory]
+    [InlineData("apiVersion", "2025-04-01-preview", true)]
+    [InlineData("batchEndpoint", "deployment-scoped", true)]
+    [InlineData("apiVersion", "2025-04-01-preview", false)]
+    [InlineData("batchEndpoint", "deployment-scoped", false)]
+    public async Task ProfileRouteOptions_RoundTripAndInvalidateRoleAndCatalog(string key, string value, bool hasCatalog)
+    {
+        using var client = new HttpClient(new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)));
+        var host = CachedProfileHost();
+        var profiles = host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!;
+        profiles[0].ApiVersion = "2025-03-01-preview";
+        if (!hasCatalog)
+        {
+            profiles[0].FetchedModels = [];
+            profiles[0].SelectedModelId = null;
+            profiles[0].SelectedLlmModelId = null;
+        }
+        host.SetSetting("additionalProfiles", profiles);
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        var oldRole = Assert.Single(sut.AdditionalLlmProviders);
+        var item = Assert.Single(await sut.GetItemsAsync("profiles"));
+        var values = item.Values.ToDictionary(pair => pair.Key, pair => pair.Value);
+        values[key] = value;
+        Assert.True((await sut.SetItemsAsync("profiles", [new PluginCollectionItem(values)])).IsSuccess);
+        Assert.NotSame(oldRole, Assert.Single(sut.AdditionalLlmProviders));
+        var saved = Assert.Single(host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!);
+        Assert.Empty(saved.FetchedModels);
+        Assert.Null(saved.SelectedModelId);
+        Assert.Null(saved.SelectedLlmModelId);
+        using var reloaded = new OpenAiCompatiblePlugin(client);
+        await reloaded.ActivateAsync(host);
+        var roundTrip = Assert.Single(await reloaded.GetItemsAsync("profiles"));
+        Assert.Equal(values["apiVersion"], roundTrip.Values["apiVersion"]);
+        Assert.Equal(values["batchEndpoint"], roundTrip.Values["batchEndpoint"]);
+    }
+
     [Theory]
     [InlineData("responses", "high", "custom", 0.7, null, false)]
     [InlineData("responses", "", "custom", 0.7, 0.7, false)]
@@ -775,7 +1030,8 @@ public sealed class OpenAiCompatiblePluginTests
         string name, string baseUrl, string? apiKey = null,
         string? model = null, string? llmModel = null, string? id = "",
         string textApi = "chat-completions", string reasoningEffort = "",
-        string temperatureMode = "provider-default", string temperature = "0.3") =>
+        string temperatureMode = "provider-default", string temperature = "0.3",
+        string apiVersion = "", string batchEndpoint = "standard") =>
         new(new Dictionary<string, string?>
         {
             ["name"] = name,
@@ -784,6 +1040,8 @@ public sealed class OpenAiCompatiblePluginTests
             ["selectedModel"] = model,
             ["selectedLlmModel"] = llmModel,
             ["__id"] = id,
+            ["apiVersion"] = apiVersion,
+            ["batchEndpoint"] = batchEndpoint,
             ["textApi"] = textApi,
             ["reasoningEffort"] = reasoningEffort,
             ["temperatureMode"] = temperatureMode,
@@ -2146,8 +2404,11 @@ public sealed class OpenAiCompatiblePluginTests
         }
     }
 
-    [Fact]
-    public async Task ValidateAsync_EndpointAba_DiscardsStaleResponse()
+    [Theory]
+    [InlineData("baseUrl", "http://localhost:9999", "http://localhost:11434")]
+    [InlineData("apiVersion", "2025-04-01-preview", "2025-03-01-preview")]
+    [InlineData("batchEndpoint", "deployment-scoped", "standard")]
+    public async Task ValidateAsync_EndpointAba_DiscardsStaleResponse(string key, string changed, string original)
     {
         var originalRequestStarted = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -2172,6 +2433,7 @@ public sealed class OpenAiCompatiblePluginTests
             return ModelCatalogResponse("fresh-a-model");
         });
         var host = CachedDefaultHost();
+        host.SetSetting("apiVersion", "2025-03-01-preview");
         using var httpClient = new HttpClient(handler);
         var sut = new OpenAiCompatiblePlugin(httpClient);
         await sut.ActivateAsync(host);
@@ -2180,8 +2442,8 @@ public sealed class OpenAiCompatiblePluginTests
         await originalRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
         try
         {
-            await sut.SetSettingValueAsync("baseUrl", "http://localhost:9999");
-            await sut.SetSettingValueAsync("baseUrl", "http://localhost:11434");
+            await sut.SetSettingValueAsync(key, changed);
+            await sut.SetSettingValueAsync(key, original);
             await sut.RefreshModelCatalogAsync().WaitAsync(TimeSpan.FromSeconds(30));
 
             releaseOriginalRequest.TrySetResult(true);

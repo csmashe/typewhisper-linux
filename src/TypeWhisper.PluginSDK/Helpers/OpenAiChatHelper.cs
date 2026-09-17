@@ -229,8 +229,12 @@ public static class OpenAiChatHelper
         {
             var body = JsonSerializer.Serialize(
                 BuildRequestBody(model, systemPrompt, userText, options, streaming), s_requestJsonOptions);
-            using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/chat/completions");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            using var request = new HttpRequestMessage(HttpMethod.Post, options.RequestUri ?? new Uri($"{baseUrl}/v1/chat/completions", UriKind.RelativeOrAbsolute));
+            if (options.RequestHeaders?.Keys.Any(name => name.Equals("Authorization", StringComparison.OrdinalIgnoreCase)) != true)
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            if (options.RequestHeaders is not null)
+                foreach (var (name, value) in options.RequestHeaders)
+                    request.Headers.TryAddWithoutValidation(name, value);
             if (streaming)
                 request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
             request.Content = new StringContent(body, Encoding.UTF8, "application/json");

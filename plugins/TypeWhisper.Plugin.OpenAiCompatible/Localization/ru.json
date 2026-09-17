@@ -54,5 +54,12 @@
   "Settings.TemperatureCustom": "Пользовательская",
   "Settings.TemperatureValue": "Значение температуры",
   "Settings.TemperatureValueDescription": "От 0 до 2. Более низкие значения дают более стабильные результаты. Используется только в пользовательском режиме температуры.",
-  "Settings.TemperatureInvalid": "Введите температуру от 0 до 2, используя точку в качестве десятичного разделителя."
+  "Settings.TemperatureInvalid": "Введите температуру от 0 до 2, используя точку в качестве десятичного разделителя.",
+  "Settings.ApiVersion": "Версия API (необязательно)",
+  "Settings.ApiVersionDescription": "Оставьте поле пустым, если сервер не требует указания версии. Конечным точкам Azure для отдельных развёртываний нужна версия с датой, например 2025-03-01-preview.",
+  "Settings.BatchEndpoint": "Конечная точка транскрипции",
+  "Settings.BatchEndpointDescription": "Стандартная использует /v1/audio/transcriptions. Для отдельного развёртывания используется /deployments/{model}/audio/transcriptions и требуется версия API с датой.",
+  "Settings.BatchEndpointStandard": "Стандартная v1",
+  "Settings.BatchEndpointDeployment": "Для отдельного развёртывания",
+  "Settings.ApiVersionRequired": "Для транскрипции в отдельном развёртывании требуется версия API с датой, например 2025-03-01-preview."
 }
