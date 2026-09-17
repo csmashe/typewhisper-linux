@@ -21,17 +21,25 @@ internal static partial class TranscribeCommand
     private const UnixFileMode PrivateFileMode =
         UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
-    public static Task<int> RunAsync(ApiClient api, CliOptions options)
+    public static Task<int> RunAsync(ApiClient api, CliOptions options, CancellationToken ct = default)
     {
-        return RunAsync(api, options, Console.OpenStandardInput());
+        return RunAsync(api, options, Console.OpenStandardInput(), ct: ct);
     }
 
     internal static async Task<int> RunAsync(
         ApiClient api,
         CliOptions options,
-        Stream stdin
+        Stream stdin,
+        TimeSpan? budget = null,
+        Func<bool>? isInputRedirected = null,
+        CancellationToken ct = default
     )
     {
+        if (options is { Json: true, IsRawResponse: true })
+        {
+            return ConsoleOutput.Error("--json cannot be combined with a non-JSON --response-format.");
+        }
+
         if (!string.IsNullOrEmpty(options.Language) && options.LanguageHints.Count > 0)
         {
             return ConsoleOutput.Error("--language and --language-hint cannot be used together.");
@@ -53,18 +61,29 @@ internal static partial class TranscribeCommand
         var file = options.Positionals.FirstOrDefault();
         if (string.IsNullOrWhiteSpace(file))
         {
-            return ConsoleOutput.Error("Usage: typewhisper-cli transcribe <file|->");
+            if (!(isInputRedirected?.Invoke() ?? Console.IsInputRedirected))
+            {
+                return ConsoleOutput.Error("Provide an audio file or pipe audio to stdin.");
+            }
+
+            file = "-";
         }
 
+        var requestBudget = budget ?? (options.AwaitDownload
+            ? TimeSpan.FromMinutes(15)
+            : TimeSpan.FromMinutes(5));
+        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        requestCts.CancelAfter(requestBudget);
         string? spoolPath = null;
         try
         {
+            requestCts.Token.ThrowIfCancellationRequested();
             string localPath;
             if (file == "-")
             {
                 try
                 {
-                    spoolPath = await SpoolStdinAsync(stdin);
+                    spoolPath = await SpoolStdinAsync(stdin, requestCts.Token);
                     if (spoolPath is null)
                     {
                         // Multipart already 400s empty bodies; local-file has no such
@@ -74,7 +93,7 @@ internal static partial class TranscribeCommand
 
                     localPath = spoolPath;
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ObjectDisposedException)
                 {
                     return ConsoleOutput.Error($"Could not spool stdin: {ex.Message}");
                 }
@@ -101,7 +120,8 @@ internal static partial class TranscribeCommand
                 Clean(options.Prompt),
                 Clean(options.Engine),
                 Clean(options.Model),
-                options.AwaitDownload
+                options.AwaitDownload,
+                options.NoCorrections ? false : null
             );
             using var content = new StringContent(
                 JsonSerializer.Serialize(
@@ -111,36 +131,25 @@ internal static partial class TranscribeCommand
                 Encoding.UTF8,
                 "application/json"
             );
-            var requestBudget = options.AwaitDownload
-                ? TimeSpan.FromMinutes(15)
-                : TimeSpan.FromMinutes(5);
-            using var requestCts = new CancellationTokenSource(requestBudget);
-
-            HttpResponseMessage response;
-            string body;
-            try
-            {
-                response = await api.TranscribeHttp.PostAsync(
-                    $"{api.BaseUrl}/v1/transcribe/local-file",
-                    content,
-                    requestCts.Token
-                );
-                body = await response.Content.ReadAsStringAsync(requestCts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                return ConsoleOutput.Error(
-                    options.AwaitDownload
-                        ? "Transcription timed out while waiting for model download."
-                        : "Transcription timed out."
-                );
-            }
+            using var response = await api.TranscribeHttp.PostAsync(
+                $"{api.BaseUrl}/v1/transcribe/local-file",
+                content,
+                requestCts.Token
+            );
+            var body = await response.Content.ReadAsStringAsync(requestCts.Token);
 
             if (!response.IsSuccessStatusCode)
             {
                 return ConsoleOutput.Error(
-                    $"Transcription failed ({(int)response.StatusCode}): {JsonFormatting.ExtractErrorMessage(body)}"
+                    $"Transcription failed ({(int)response.StatusCode}): {JsonFormatting.ExtractErrorMessage(body)}",
+                    ExitCodes.ServerError
                 );
+            }
+
+            if (options.IsRawResponse)
+            {
+                Console.Write(body);
+                return ExitCodes.Success;
             }
 
             var validation = ApiResponseValidator.ValidateTranscribe(body);
@@ -160,7 +169,24 @@ internal static partial class TranscribeCommand
         }
         catch (HttpRequestException)
         {
-            return ConsoleOutput.Error("TypeWhisper is not running or API server is disabled.");
+            return ConsoleOutput.Error("TypeWhisper is not running or API server is disabled.", ExitCodes.Unavailable);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return ConsoleOutput.Error("Cancelled.");
+        }
+        catch (OperationCanceledException)
+        {
+            return ConsoleOutput.Error(
+                options.AwaitDownload
+                    ? "Transcription timed out while waiting for model download."
+                    : "Transcription timed out.",
+                ExitCodes.Unavailable
+            );
+        }
+        catch (JsonException)
+        {
+            return ApiResponseValidator.ProtocolError("transcription response body is not valid JSON");
         }
         finally
         {
@@ -197,7 +223,7 @@ internal static partial class TranscribeCommand
     ///     Spools stdin to a private temp file, returning <c>null</c> when stdin was
     ///     empty so the caller can report it without creating the file.
     /// </summary>
-    private static async Task<string?> SpoolStdinAsync(Stream stdin)
+    private static async Task<string?> SpoolStdinAsync(Stream stdin, CancellationToken ct)
     {
         // A pipe may satisfy a read with fewer bytes than were asked for, so fill
         // the whole sniff window before detecting; otherwise a short first read
@@ -206,7 +232,7 @@ internal static partial class TranscribeCommand
         var headLength = 0;
         while (headLength < head.Length)
         {
-            var headRead = await stdin.ReadAsync(head.AsMemory(headLength));
+            var headRead = await ReadStdinAsync(stdin, head.AsMemory(headLength), ct);
             if (headRead == 0)
             {
                 break;
@@ -248,15 +274,15 @@ internal static partial class TranscribeCommand
                 spoolPath,
                 spoolOptions
             );
-            await spool.WriteAsync(head.AsMemory(0, headLength));
+            await spool.WriteAsync(head.AsMemory(0, headLength), ct);
 
             // The local-file route has no audio-body limit, so stream until EOF and
             // let available temporary storage be the natural bound.
             var chunk = new byte[81920];
             int read;
-            while ((read = await stdin.ReadAsync(chunk)) > 0)
+            while ((read = await ReadStdinAsync(stdin, chunk, ct)) > 0)
             {
-                await spool.WriteAsync(chunk.AsMemory(0, read));
+                await spool.WriteAsync(chunk.AsMemory(0, read), ct);
             }
 
             return spoolPath;
@@ -268,8 +294,14 @@ internal static partial class TranscribeCommand
         }
     }
 
-    // Every property is read reflectively by JsonSerializer when the request body is
-    // written, which ReSharper cannot see.
+    // Console stdin only checks the token before its blocking read, so read on the
+    // pool and abandon the read when cancelled or out of budget.
+    private static Task<int> ReadStdinAsync(Stream stdin, Memory<byte> buffer, CancellationToken ct)
+    {
+        return Task.Run(() => stdin.ReadAsync(buffer, ct).AsTask(), ct).WaitAsync(ct);
+    }
+
+    // Properties are read by the source-generated serializer.
     // ReSharper disable NotAccessedPositionalProperty.Local
     private sealed record LocalFileTranscribeRequest(
         string Path,
@@ -281,7 +313,8 @@ internal static partial class TranscribeCommand
         string? Prompt,
         string? Engine,
         string? Model,
-        bool AwaitDownload
+        bool AwaitDownload,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ApplyCorrections
     );
     // ReSharper restore NotAccessedPositionalProperty.Local
 

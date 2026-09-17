@@ -239,8 +239,9 @@ run_cli_probe() {
 
   # Exact code: a bare "not zero" also accepts timeout kills (124, or 137 once
   # --kill-after has to SIGKILL a CLI that hung after printing the error).
-  [ "$status" -eq 1 ] \
-    || fail "'$executable status' exited with status $status; expected 1."
+  # The CLI reports an unreachable API with exit code 2 (1 is usage, 3 a server error).
+  [ "$status" -eq 2 ] \
+    || fail "'$executable status' exited with status $status; expected 2."
   grep -Fq "TypeWhisper API socket not found" "$stderr_file" \
     || fail "'$executable status' did not report the expected missing API socket."
 }

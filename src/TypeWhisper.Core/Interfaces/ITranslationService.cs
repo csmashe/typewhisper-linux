@@ -22,4 +22,19 @@ public interface ITranslationService
         LlmCallCapture? capture = null,
         CancellationToken ct = default
     );
+
+    /// <summary>
+    ///     Translates each text independently with neighbouring context, preserving count
+    ///     and order. Returns the input when the languages match.
+    /// </summary>
+    /// <exception cref="TypeWhisper.Core.Services.SegmentTranslationMismatchException">
+    ///     An LLM reply cannot be aligned with the input segments.
+    /// </exception>
+    Task<IReadOnlyList<string>> TranslateSegmentsAsync(
+        IReadOnlyList<string> texts,
+        string sourceLang,
+        string targetLang,
+        LlmCallCapture? capture = null,
+        CancellationToken ct = default
+    );
 }

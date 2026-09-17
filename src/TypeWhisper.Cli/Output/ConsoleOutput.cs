@@ -7,10 +7,10 @@ namespace TypeWhisper.Cli.Output;
 /// </summary>
 internal static class ConsoleOutput
 {
-    public static int Error(string message)
+    public static int Error(string message, int exitCode = ExitCodes.Usage)
     {
         Console.Error.WriteLine($"Error: {message}");
-        return 1;
+        return exitCode;
     }
 
     public static string Pad(string value, int width)

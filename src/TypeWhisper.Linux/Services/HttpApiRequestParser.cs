@@ -37,7 +37,8 @@ internal sealed record TranscribeApiRequest(
     string? Prompt,
     string? Engine,
     string? Model,
-    bool AwaitDownload
+    bool AwaitDownload,
+    bool? ApplyCorrections
 );
 
 internal sealed record MultipartPart(
@@ -57,7 +58,8 @@ internal sealed record LocalFileTranscribeRequest(
     string? Prompt,
     string? Engine,
     string? Model,
-    bool AwaitDownload
+    bool AwaitDownload,
+    bool? ApplyCorrections
 );
 
 internal sealed record CorrectionUpsertRequest(
@@ -174,6 +176,7 @@ internal static class HttpApiRequestParser
         string? prompt;
         string? engine;
         string? model;
+        bool? applyCorrections;
 
         if (contentType.Contains("multipart/form-data", StringComparison.OrdinalIgnoreCase))
         {
@@ -202,6 +205,7 @@ internal static class HttpApiRequestParser
             prompt = Field(parts, "prompt");
             engine = Field(parts, "engine");
             model = Field(parts, "model");
+            applyCorrections = ParseBooleanOption(Field(parts, "apply_corrections"), "apply_corrections");
         }
         else if (request.Body.Length > 0)
         {
@@ -222,6 +226,7 @@ internal static class HttpApiRequestParser
             prompt = Clean(Header(request.Headers, "x-prompt"));
             engine = Clean(Header(request.Headers, "x-engine"));
             model = Clean(Header(request.Headers, "x-model"));
+            applyCorrections = ParseBooleanOption(Header(request.Headers, "x-apply-corrections"), "apply_corrections");
         }
         else
         {
@@ -243,13 +248,14 @@ internal static class HttpApiRequestParser
             );
         }
 
-        var awaitDownload =
-            string.Equals(request.QueryString["await_download"], "1", StringComparison.Ordinal)
-            || string.Equals(
-                request.QueryString["await_download"],
-                "true",
-                StringComparison.OrdinalIgnoreCase
-            );
+        var awaitDownload = ParseBooleanOption(request.QueryString["await_download"], "await_download") ?? false;
+        var queryCorrections = ParseBooleanOption(request.QueryString["apply_corrections"], "apply_corrections");
+        if (applyCorrections.HasValue && queryCorrections.HasValue && applyCorrections != queryCorrections)
+        {
+            throw new HttpApiRequestException(400, "apply_corrections was provided more than once");
+        }
+
+        applyCorrections ??= queryCorrections;
 
         return new TranscribeApiRequest(
             audioData,
@@ -262,7 +268,8 @@ internal static class HttpApiRequestParser
             prompt,
             engine,
             model,
-            awaitDownload
+            awaitDownload,
+            applyCorrections
         );
     }
 
@@ -479,6 +486,17 @@ internal static class HttpApiRequestParser
         return string.IsNullOrWhiteSpace(cleaned) ? null : cleaned;
     }
 
+    internal static bool? ParseBooleanOption(string? value, string name)
+    {
+        return value?.Trim().ToLowerInvariant() switch
+        {
+            null or "" => null,
+            "1" or "true" or "yes" or "on" => true,
+            "0" or "false" or "no" or "off" => false,
+            _ => throw new HttpApiRequestException(400, $"Invalid {name} boolean."),
+        };
+    }
+
     internal static (TranscriptionTask Task, string ResponseFormat) ParseTranscriptionOptions(
         string? task,
         string? responseFormat
@@ -500,9 +518,12 @@ internal static class HttpApiRequestParser
         {
             null or "json" => "json",
             "verbose_json" => "verbose_json",
+            "text" => "text",
+            "srt" => "srt",
+            "vtt" => "vtt",
             _ => throw new HttpApiRequestException(
                 400,
-                $"Invalid response_format '{cleanedResponseFormat}'. Allowed values: json, verbose_json."
+                $"Invalid response_format '{cleanedResponseFormat}'. Allowed values: json, verbose_json, text, srt, vtt."
             ),
         };
 

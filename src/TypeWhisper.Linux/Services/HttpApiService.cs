@@ -196,6 +196,8 @@ public sealed partial class HttpApiService : IDisposable
 {
     internal const int MaxConcurrentRequests = 2;
     internal const long MaxTranscribeRequestBytes = 100 * 1024 * 1024;
+    private const string ApiVersion = "1.0";
+    private static readonly string[] s_responseFormats = ["json", "verbose_json", "text", "srt", "vtt"];
     private const int LifecycleRunning = 0;
     private const int LifecycleQuiescing = 1;
     private const int LifecycleDisposed = 2;
@@ -207,7 +209,7 @@ public sealed partial class HttpApiService : IDisposable
 
     private const string AllowedCorsHeaders =
         "Authorization, Content-Type, X-Language, X-Language-Hints, X-Task, X-Target-Language, "
-        + "X-Response-Format, X-Prompt, X-Engine, X-Model";
+        + "X-Response-Format, X-Prompt, X-Engine, X-Model, X-Apply-Corrections";
 
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -1190,7 +1192,8 @@ public sealed partial class HttpApiService : IDisposable
                 return;
             }
 
-            if (!IsAuthorized(request))
+            var isPublicRoute = method == "GET" && path is "/docs" or "/docs/";
+            if (!isPublicRoute && !IsAuthorized(request))
             {
                 response.Headers["WWW-Authenticate"] = "Bearer";
                 // Include CORS so browser clients from allowed loopback origins can read the 401.
@@ -1217,17 +1220,35 @@ public sealed partial class HttpApiService : IDisposable
                 return;
             }
 
-            var (statusCode, body) = (path, method) switch
+            if (!HttpApiRoutes.Contains(method, path))
             {
+                var allowedMethods = HttpApiRoutes.All.Where(route => route.Path == path)
+                    .Select(route => route.Method).ToArray();
+                if (allowedMethods.Length > 0)
+                {
+                    response.Headers["Allow"] = string.Join(", ", allowedMethods);
+                    await WriteJsonAsync(response, 405, Serialize(new { error = "Method not allowed" }), allowedOrigin, ct);
+                    return;
+                }
+            }
+
+            // ReSharper disable once SuggestVarOrType_SimpleTypes -- target-typed switch: the arms mix (int, string) tuples and HttpApiResponse, so var would not compile.
+            HttpApiResponse apiResponse = (path, method) switch
+            {
+                ("/docs" or "/docs/", "GET") => new HttpApiResponse(200, HttpApiDocumentation.Html(_port), "text/html; charset=utf-8"),
                 ("/v1/status", "GET") => HandleStatus(),
+                ("/v1/capabilities", "GET") => HandleCapabilities(),
                 ("/v1/models", "GET") => HandleModels(),
+                ("/v1/models/load", "POST") => await HandleModelLoadAsync(context, ct),
+                ("/v1/models/unload", "POST") => await HandleModelUnloadAsync(context, ct),
+                ("/v1/models", "DELETE") => await HandleModelDeleteAsync(request, ct),
                 ("/v1/transcribe", "POST") => await HandleTranscribeAsync(context, ct),
                 ("/v1/transcribe/local-file", "POST") =>
                     await HandleTranscribeLocalFileAsync(context, ct),
                 ("/v1/history", "GET") => HandleHistorySearch(request),
                 ("/v1/history", "DELETE") => HandleHistoryDelete(request),
-                ("/v1/profiles", "GET") => HandleProfilesList(),
-                ("/v1/profiles/toggle", "PUT") => HandleProfileToggle(request),
+                ("/v1/profiles" or "/v1/rules", "GET") => HandleProfilesList(),
+                ("/v1/profiles/toggle" or "/v1/rules/toggle", "PUT") => HandleProfileToggle(request),
                 ("/v1/dictation/start", "POST") => await HandleDictationStartAsync(),
                 ("/v1/dictation/stop", "POST") => await HandleDictationStopAsync(),
                 ("/v1/dictation/status", "GET") => HandleDictationStatus(),
@@ -1244,7 +1265,7 @@ public sealed partial class HttpApiService : IDisposable
                 _ => (404, Serialize(new { error = "Not found" })),
             };
 
-            await WriteJsonAsync(response, statusCode, body, allowedOrigin, ct);
+            await WriteResponseAsync(response, apiResponse, allowedOrigin, ct);
         }
         catch (HttpApiRequestException ex)
         {
@@ -1324,6 +1345,21 @@ public sealed partial class HttpApiService : IDisposable
         }
     }
 
+    private static (int, string) HandleCapabilities()
+    {
+        return (200, Serialize(new
+        {
+            apiVersion = ApiVersion,
+            endpoints = HttpApiRoutes.All.Select(route => route.Path).Distinct(),
+            routes = HttpApiRoutes.All.Select(route => new { method = route.Method, path = route.Path }),
+            responseFormats = s_responseFormats,
+            maxUploadBytes = MaxTranscribeRequestBytes,
+            modelSelection = "request-scoped engine/model overrides; await_download supported",
+            supportsDictationControl = true,
+            requiresAuthentication = true,
+        }));
+    }
+
     private (int, string) HandleStatus()
     {
         var plugin = _models.ActiveTranscriptionPlugin;
@@ -1341,7 +1377,7 @@ public sealed partial class HttpApiService : IDisposable
                     engine = plugin?.ProviderId,
                     model = activeModel,
                     activeModel = _models.ActiveModelId,
-                    apiVersion = "1.0",
+                    apiVersion = ApiVersion,
                     supportsStreaming = plugin?.SupportsStreaming ?? false,
                     supportsTranslation = plugin?.SupportsTranslation ?? false,
                     acceleration = BuildAccelerationDto(plugin, _settings.Current),
@@ -1386,7 +1422,176 @@ public sealed partial class HttpApiService : IDisposable
         return (200, Serialize(new { models }));
     }
 
-    private async Task<(int, string)> HandleTranscribeAsync(
+    private const string ModelOperationBusy = "A transcription or model operation is in progress";
+
+    private static async Task<(string? Engine, string? Model)> ReadModelRequestAsync(
+        HttpContext context, bool requireEngine, CancellationToken ct)
+    {
+        var request = await HttpApiRequestParser.FromHttpContextAsync(context, MaxJsonRequestBytes, ct);
+        if (!requireEngine && request.Body.IsEmpty)
+        {
+            return (null, null);
+        }
+
+        const string expectedJson = "Expected JSON with 'engine' and optional 'model'.";
+        string? engine = null;
+        string? model = null;
+        try
+        {
+            using var document = JsonDocument.Parse(request.Body);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                throw new HttpApiRequestException(400, expectedJson);
+            }
+
+            var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (!keys.Add(property.Name))
+                {
+                    throw new HttpApiRequestException(400, expectedJson);
+                }
+
+                if (property.Name.Equals("engine", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (property.Value.ValueKind != JsonValueKind.String)
+                    {
+                        throw new HttpApiRequestException(400, expectedJson);
+                    }
+
+                    engine = property.Value.GetString()?.Trim();
+                    if (string.IsNullOrWhiteSpace(engine))
+                    {
+                        throw new HttpApiRequestException(400, "'engine' is required.");
+                    }
+                }
+                else if (property.Name.Equals("model", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (property.Value.ValueKind != JsonValueKind.String)
+                    {
+                        throw new HttpApiRequestException(400, expectedJson);
+                    }
+
+                    model = property.Value.GetString()?.Trim();
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            throw new HttpApiRequestException(400, expectedJson);
+        }
+
+        if (requireEngine && string.IsNullOrWhiteSpace(engine))
+        {
+            throw new HttpApiRequestException(400, "'engine' is required.");
+        }
+
+        return (engine, model);
+    }
+
+    private async Task<HttpApiResponse> HandleModelLoadAsync(HttpContext context, CancellationToken ct)
+    {
+        var (engine, model) = await ReadModelRequestAsync(context, requireEngine: true, ct);
+        var awaitDownload = HttpApiRequestParser.ParseBooleanOption(
+            context.Request.Query["await_download"].FirstOrDefault(), "await_download") ?? false;
+        var id = ResolveRequestedModelId(engine, model)!;
+        var plugin = _models.GetTranscriptionPlugin(id)
+            ?? throw new HttpApiRequestException(404, $"Unknown model: {id}");
+        var downloaded = _models.IsDownloaded(id);
+        if (!downloaded && !awaitDownload)
+        {
+            return (409, Serialize(new { error = "Model is not downloaded" }));
+        }
+
+        // Download under the model lock with status tracking, like the transcribe route's await_download.
+        var loaded = downloaded
+            ? await _models.TryLoadModelAsync(id, ct)
+            : await _models.TryDownloadAndLoadModelAsync(id, ct);
+        if (!loaded)
+        {
+            return (409, Serialize(new { error = ModelOperationBusy }));
+        }
+
+        return (200, Serialize(new Dictionary<string, object?>
+        {
+            ["engine"] = plugin.ProviderId,
+            ["model"] = ModelManagerService.ParsePluginModelId(id).ModelId,
+            ["fullId"] = id,
+            ["status"] = "ready",
+        }));
+    }
+
+    private async Task<HttpApiResponse> HandleModelUnloadAsync(HttpContext context, CancellationToken ct)
+    {
+        var (engine, _) = await ReadModelRequestAsync(context, requireEngine: false, ct);
+        var requestedPlugin = engine is null ? null : _models.PluginManager.TranscriptionEngines.FirstOrDefault(
+            candidate => string.Equals(candidate.ProviderId, engine, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(candidate.PluginId, engine, StringComparison.OrdinalIgnoreCase));
+        if (engine is not null && requestedPlugin is null)
+        {
+            return (404, Serialize(new { error = $"Unknown engine: {engine}" }));
+        }
+
+        var (outcome, id) = await _models.TryUnloadModelAsync(requestedPlugin);
+        return outcome switch
+        {
+            ModelUnloadOutcome.Busy => (409, Serialize(new { error = ModelOperationBusy })),
+            ModelUnloadOutcome.NothingLoaded => (200, Serialize(
+                new { engine = requestedPlugin?.ProviderId, model = (string?)null, status = "unloaded" })),
+            ModelUnloadOutcome.OtherEngine => (409, Serialize(new { error = "That engine has no loaded model" })),
+            ModelUnloadOutcome.Failed => (409, Serialize(new { error = "This engine cannot unload the model" })),
+            _ => (200, Serialize(new
+            {
+                engine = _models.GetTranscriptionPlugin(id)?.ProviderId,
+                model = ModelManagerService.ParsePluginModelId(id!).ModelId,
+                status = "unloaded",
+            })),
+        };
+    }
+
+    private async Task<HttpApiResponse> HandleModelDeleteAsync(HttpRequest request, CancellationToken ct)
+    {
+        var engine = request.Query["engine"].FirstOrDefault()?.Trim();
+        var model = request.Query["model"].FirstOrDefault()?.Trim();
+        if (string.IsNullOrWhiteSpace(engine) || string.IsNullOrWhiteSpace(model))
+        {
+            return (400, Serialize(new { error = "Both 'engine' and 'model' are required." }));
+        }
+
+        var id = ResolveRequestedModelId(engine, model)!;
+        if (_settings.Current.SelectedModelId == id)
+        {
+            return (409, Serialize(new { error = "The selected model cannot be deleted" }));
+        }
+
+        var plugin = _models.GetTranscriptionPlugin(id)
+            ?? throw new HttpApiRequestException(404, $"Unknown model: {id}");
+        if (!plugin.SupportsModelDownload)
+        {
+            return (409, Serialize(new { error = "This engine does not support deleting model files" }));
+        }
+
+        if (!_models.IsDownloaded(id))
+        {
+            return (404, Serialize(new { error = "Downloaded model not found" }));
+        }
+
+        var outcome = await _models.TryDeleteModelAsync(id, ct);
+        return outcome switch
+        {
+            ModelDeleteOutcome.Busy => (409, Serialize(new { error = ModelOperationBusy })),
+            ModelDeleteOutcome.Loaded => (409, Serialize(new { error = "Unload the model first" })),
+            ModelDeleteOutcome.Failed => (500, Serialize(new { error = "Model files could not be deleted" })),
+            _ => (200, Serialize(new
+            {
+                engine = plugin.ProviderId,
+                model = ModelManagerService.ParsePluginModelId(id).ModelId,
+                status = "deleted",
+            })),
+        };
+    }
+
+    private async Task<HttpApiResponse> HandleTranscribeAsync(
         HttpContext context,
         CancellationToken ct
     )
@@ -1452,7 +1657,8 @@ public sealed partial class HttpApiService : IDisposable
                 transcribeRequest.Prompt,
                 transcribeRequest.Engine,
                 transcribeRequest.Model,
-                transcribeRequest.AwaitDownload
+                transcribeRequest.AwaitDownload,
+                transcribeRequest.ApplyCorrections ?? true
             );
             return new PreparedTranscriptionRequest(tempPath, opts);
         }
@@ -1475,7 +1681,7 @@ public sealed partial class HttpApiService : IDisposable
         }
     }
 
-    private async Task<(int, string)> HandleTranscribeLocalFileAsync(
+    private async Task<HttpApiResponse> HandleTranscribeLocalFileAsync(
         HttpContext context,
         CancellationToken ct
     )
@@ -1573,12 +1779,13 @@ public sealed partial class HttpApiService : IDisposable
             payload.Prompt,
             payload.Engine,
             payload.Model,
-            payload.AwaitDownload
+            payload.AwaitDownload,
+            payload.ApplyCorrections ?? true
         );
         return await RunTranscriptionAsync(payload.Path, opts, ct);
     }
 
-    private async Task<(int, string)> RunTranscriptionAsync(
+    private async Task<HttpApiResponse> RunTranscriptionAsync(
         string audioPath,
         TranscriptionRunOptions opts,
         CancellationToken ct
@@ -1713,7 +1920,7 @@ public sealed partial class HttpApiService : IDisposable
                 VocabularyBooster = settings.VocabularyBoostingEnabled
                     ? _vocabularyBoosting.Apply
                     : null,
-                DictionaryCorrector = _dictionary.ApplyCorrections,
+                DictionaryCorrector = opts.ApplyCorrections ? _dictionary.ApplyCorrections : null,
                 TranscriptionTask = effectiveTask,
                 DetectedLanguage = result.DetectedLanguage,
                 ConfiguredLanguage = configuredLanguage,
@@ -1728,11 +1935,22 @@ public sealed partial class HttpApiService : IDisposable
         );
 
         var finalText = processed.Text;
+        var sourceLanguage = result.DetectedLanguage ?? configuredLanguage ?? "en";
+        var outputLanguage = !string.IsNullOrWhiteSpace(opts.TargetLanguage)
+            && sourceLanguage != opts.TargetLanguage
+                ? opts.TargetLanguage
+                : result.DetectedLanguage;
+        var responseSegments = result.Segments;
+        if (opts.ApplyCorrections && result.Segments.Count > 0)
+        {
+            // Preview avoids double-counting dictionary usage already recorded by the full-text pass.
+            responseSegments = result.Segments.Select(segment =>
+                segment with { Text = _dictionary.PreviewCorrections(segment.Text) }).ToList();
+        }
         if (!string.IsNullOrWhiteSpace(opts.TargetLanguage))
         {
             try
             {
-                var sourceLanguage = result.DetectedLanguage ?? configuredLanguage ?? "en";
                 finalText = await _translation.TranslateAsync(
                     finalText,
                     sourceLanguage,
@@ -1763,16 +1981,88 @@ public sealed partial class HttpApiService : IDisposable
                         opts.LanguageHints,
                         opts.TargetLanguage
                     );
+
+                    if (opts.ResponseFormat is "verbose_json" or "srt" or "vtt"
+                        && responseSegments.Count > 0)
+                    {
+                        var translated = await _translation.TranslateSegmentsAsync(
+                            responseSegments.Select(s => s.Text).ToList(),
+                            sourceLanguage,
+                            opts.TargetLanguage,
+                            ct: ct
+                        );
+                        responseSegments = responseSegments.Select((segment, index) =>
+                        {
+                            var text = EnglishOutputNormalizationService.NormalizeText(
+                                translated[index],
+                                settings.EnglishOutputVariant,
+                                effectiveTask,
+                                result.DetectedLanguage,
+                                configuredLanguage,
+                                opts.LanguageHints,
+                                translationTarget: opts.TargetLanguage
+                            );
+                            text = GermanOutputNormalizationService.NormalizeText(
+                                text,
+                                settings.GermanOutputVariant,
+                                effectiveTask,
+                                result.DetectedLanguage,
+                                configuredLanguage,
+                                opts.LanguageHints,
+                                translationTarget: opts.TargetLanguage
+                            );
+                            return segment with { Text = text };
+                        }).ToList();
+                    }
                 }
             }
             catch (NotSupportedException ex)
             {
                 return (501, Serialize(new { error = ex.Message }));
             }
+            catch (SegmentTranslationMismatchException ex)
+            {
+                return (502, Serialize(new { error = ex.Message }));
+            }
             catch (InvalidOperationException ex)
             {
                 return (501, Serialize(new { error = ex.Message }));
             }
+        }
+
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- each format returns a differently built body; a switch would nest the subtitle validation.
+        if (opts.ResponseFormat == "text")
+        {
+            return new HttpApiResponse(200, finalText, "text/plain; charset=utf-8");
+        }
+
+        if (opts.ResponseFormat is "srt" or "vtt")
+        {
+            var previousStart = double.NegativeInfinity;
+            if (responseSegments.Count == 0)
+            {
+                throw new HttpApiRequestException(422, "Subtitle output requires valid segment timestamps.");
+            }
+
+            var subtitles = new List<TranscriptionSegment>(responseSegments.Count);
+            foreach (var segment in responseSegments)
+            {
+                var start = Math.Round(segment.Start * 1000);
+                var end = Math.Round(segment.End * 1000);
+                if (!double.IsFinite(segment.Start) || !double.IsFinite(segment.End)
+                    || segment.Start < 0 || end <= start || segment.Start < previousStart)
+                {
+                    throw new HttpApiRequestException(422, "Subtitle output requires valid segment timestamps.");
+                }
+
+                previousStart = segment.Start;
+                subtitles.Add(new TranscriptionSegment(
+                    segment.Text.Replace("\r\n", "\n").Replace('\r', '\n').Trim(), start / 1000, end / 1000));
+            }
+
+            return opts.ResponseFormat == "srt"
+                ? new HttpApiResponse(200, SubtitleExporter.ToSrt(subtitles), "application/x-subrip; charset=utf-8")
+                : new HttpApiResponse(200, SubtitleExporter.ToWebVtt(subtitles), "text/vtt; charset=utf-8");
         }
 
         if (opts.ResponseFormat.Equals("verbose_json", StringComparison.OrdinalIgnoreCase))
@@ -1783,12 +2073,12 @@ public sealed partial class HttpApiService : IDisposable
                     new
                     {
                         text = finalText,
-                        language = result.DetectedLanguage,
+                        language = outputLanguage,
                         duration = result.DurationSeconds,
                         noSpeechProbability = result.NoSpeechProbability,
                         engine = engineProviderId,
                         model = selectedModelId,
-                        segments = result.Segments.Select(segment => new
+                        segments = responseSegments.Select(segment => new
                         {
                             text = segment.Text,
                             start = segment.Start,
@@ -1806,7 +2096,7 @@ public sealed partial class HttpApiService : IDisposable
                 new
                 {
                     text = finalText,
-                    language = result.DetectedLanguage,
+                    language = outputLanguage,
                     duration = result.DurationSeconds,
                     noSpeechProbability = result.NoSpeechProbability,
                     engine = engineProviderId,
@@ -1886,9 +2176,9 @@ public sealed partial class HttpApiService : IDisposable
             selectedTask = profile.SelectedTask,
             modelOverride = profile.TranscriptionModelOverride,
             promptActionId = profile.PromptActionId,
-        });
+        }).ToArray();
 
-        return (200, Serialize(new { profiles }));
+        return (200, Serialize(new { rules = profiles, profiles }));
     }
 
     private (int, string) HandleProfileToggle(HttpRequest request)
@@ -1934,7 +2224,7 @@ public sealed partial class HttpApiService : IDisposable
         }
 
         var isEnabled = profile.IsEnabled;
-        return (200, Serialize(new { id, isEnabled }));
+        return (200, Serialize(new { id, name = profile.Name, isEnabled }));
     }
 
     private static (string Reason, string Error) GetProfileToggleValidationFailure(
@@ -2343,7 +2633,7 @@ public sealed partial class HttpApiService : IDisposable
         };
     }
 
-    private static async Task WriteJsonAsync(
+    private static Task WriteJsonAsync(
         HttpResponse response,
         int statusCode,
         string body,
@@ -2351,15 +2641,25 @@ public sealed partial class HttpApiService : IDisposable
         CancellationToken ct
     )
     {
-        response.StatusCode = statusCode;
-        response.ContentType = "application/json";
+        return WriteResponseAsync(response, new HttpApiResponse(statusCode, body), origin, ct);
+    }
+
+    private static async Task WriteResponseAsync(
+        HttpResponse response,
+        HttpApiResponse apiResponse,
+        string? origin,
+        CancellationToken ct
+    )
+    {
+        response.StatusCode = apiResponse.StatusCode;
+        response.ContentType = apiResponse.ContentType;
         if (!string.IsNullOrWhiteSpace(origin))
         {
             response.Headers["Access-Control-Allow-Origin"] = origin;
             response.Headers["Access-Control-Allow-Headers"] = AllowedCorsHeaders;
         }
 
-        var bytes = Encoding.UTF8.GetBytes(body);
+        var bytes = Encoding.UTF8.GetBytes(apiResponse.Body);
         response.ContentLength = bytes.Length;
         await response.Body.WriteAsync(bytes, ct);
     }
@@ -2578,7 +2878,8 @@ public sealed partial class HttpApiService : IDisposable
         string? Prompt,
         string? Engine,
         string? Model,
-        bool AwaitDownload
+        bool AwaitDownload,
+        bool ApplyCorrections
     );
 
     private sealed record PreparedTranscriptionRequest(

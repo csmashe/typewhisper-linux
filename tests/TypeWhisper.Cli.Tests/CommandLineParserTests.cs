@@ -17,6 +17,7 @@ public class CommandLineParserTests
             { "--engine", ["--engine", "groq"] },
             { "--model", ["--model", "whisper-large-v3"] },
             { "--await-download", ["--await-download"] },
+            { "--no-corrections", ["--no-corrections"] },
         };
 
     [Fact]
@@ -93,14 +94,12 @@ public class CommandLineParserTests
     }
 
     [Fact]
-    public void Transcribe_RequiresExactlyOneOperand()
+    public void Transcribe_AllowsImplicitStdin()
     {
         var options = CliOptions.Parse(["transcribe"]);
 
-        Assert.Equal(
-            "Command 'transcribe' requires exactly one file operand.",
-            options.ErrorMessage
-        );
+        Assert.Null(options.ErrorMessage);
+        Assert.Empty(options.Positionals);
     }
 
     [Fact]
@@ -177,7 +176,7 @@ public class CommandLineParserTests
         ]);
 
         Assert.Equal(
-            "Invalid value 'xml' for --response-format. Allowed values: json, verbose_json.",
+            "Invalid value 'xml' for --response-format. Allowed values: json, verbose_json, text, srt, vtt.",
             options.ErrorMessage
         );
     }

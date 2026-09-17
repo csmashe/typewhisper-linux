@@ -45,13 +45,17 @@ public static class SubtitleExporter
 
     private static string FormatSrtTime(double seconds)
     {
-        var ts = TimeSpan.FromSeconds(seconds);
+        var ts = ToMilliseconds(seconds);
         return $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2},{ts.Milliseconds:D3}";
     }
 
     private static string FormatVttTime(double seconds)
     {
-        var ts = TimeSpan.FromSeconds(seconds);
+        var ts = ToMilliseconds(seconds);
         return $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}.{ts.Milliseconds:D3}";
     }
+
+    // TimeSpan.FromSeconds truncates ticks, so 0.043 would print as 042.
+    private static TimeSpan ToMilliseconds(double seconds) =>
+        TimeSpan.FromMilliseconds(Math.Round(seconds * 1000));
 }

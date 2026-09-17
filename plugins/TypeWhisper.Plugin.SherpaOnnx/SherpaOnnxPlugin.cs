@@ -657,6 +657,10 @@ public sealed class SherpaOnnxPlugin
             );
     }
 
+    // Idle/API unload. _sync makes it wait for an in-flight decode, so hop off the caller's
+    // thread like ConfigureComputeBackendAsync does.
+    public Task UnloadModelAsync() => Task.Run(UnloadRecognizer);
+
     public Task<PluginTranscriptionResult> TranscribeAsync(
         byte[] wavAudio,
         string? language,
@@ -777,6 +781,9 @@ public sealed class SherpaOnnxPlugin
         _host = host;
         InitializeCudaDependencies(host);
     }
+
+    // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- test seam over the lock-guarded field; the plugin keeps the field.
+    internal string? LoadedModelIdForTests => _loadedModelId;
 
     internal string? CudaRuntimeCacheRootForTests =>
         _cudaProvisioner is null
