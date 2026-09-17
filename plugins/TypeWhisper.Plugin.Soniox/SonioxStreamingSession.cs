@@ -74,7 +74,7 @@ internal sealed class SonioxStreamingSession : IStreamingSession, IStreamingSess
         return JsonSerializer.Serialize(config);
     }
 
-    internal readonly record struct SonioxToken(string Text, bool IsFinal);
+    internal readonly record struct SonioxToken(string Text, bool IsFinal, string? Language = null);
 
     internal sealed record SonioxMessage(
         IReadOnlyList<SonioxToken> Tokens,
@@ -85,7 +85,9 @@ internal sealed class SonioxStreamingSession : IStreamingSession, IStreamingSess
     internal readonly record struct SonioxAggregateUpdate(
         string PreviewText,
         bool Finished,
-        string FinalText
+        string FinalText,
+        string? PreviewLanguage,
+        string? FinalLanguage
     );
 
     internal static SonioxMessage ParseMessage(string json)
@@ -134,7 +136,12 @@ internal sealed class SonioxStreamingSession : IStreamingSession, IStreamingSess
                     var isFinal =
                         token.TryGetProperty("is_final", out var finalElement)
                         && finalElement.ValueKind == JsonValueKind.True;
-                    tokens.Add(new SonioxToken(text, isFinal));
+                    var language =
+                        token.TryGetProperty("language", out var languageElement)
+                        && languageElement.ValueKind == JsonValueKind.String
+                            ? languageElement.GetString()
+                            : null;
+                    tokens.Add(new SonioxToken(text, isFinal, language));
                 }
             }
 
@@ -261,7 +268,10 @@ internal sealed class SonioxWebSocketAdapter(
                         new StreamingTranscriptEvent(
                             update.FinalText,
                             IsFinal: true
-                        ),
+                        )
+                        {
+                            DetectedLanguage = update.FinalLanguage,
+                        },
                     ];
             return new WebSocketInboundResult(
                 transcripts,
@@ -276,7 +286,10 @@ internal sealed class SonioxWebSocketAdapter(
                     new StreamingTranscriptEvent(
                         update.PreviewText,
                         IsFinal: false
-                    ),
+                    )
+                    {
+                        DetectedLanguage = update.PreviewLanguage,
+                    },
                 ]
             );
     }
@@ -285,6 +298,7 @@ internal sealed class SonioxWebSocketAdapter(
 internal sealed class SonioxTranscriptAggregator
 {
     private readonly StringBuilder _final = new();
+    private readonly HashSet<string> _finalLanguages = new(StringComparer.OrdinalIgnoreCase);
 
     public string FinalText => _final.ToString().Trim();
 
@@ -293,8 +307,17 @@ internal sealed class SonioxTranscriptAggregator
     )
     {
         var provisional = new StringBuilder();
+        var previewLanguages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var token in message.Tokens)
         {
+            if (!string.IsNullOrWhiteSpace(token.Language))
+            {
+                var language = token.Language.Trim();
+                previewLanguages.Add(language);
+                if (token.IsFinal)
+                    _finalLanguages.Add(language);
+            }
+
             if (IsControlToken(token.Text))
                 continue;
             if (token.IsFinal)
@@ -307,7 +330,9 @@ internal sealed class SonioxTranscriptAggregator
         return new SonioxStreamingSession.SonioxAggregateUpdate(
             preview,
             message.Finished,
-            FinalText
+            FinalText,
+            previewLanguages.Count == 1 ? previewLanguages.Single() : null,
+            _finalLanguages.Count == 1 ? _finalLanguages.Single() : null
         );
     }
 

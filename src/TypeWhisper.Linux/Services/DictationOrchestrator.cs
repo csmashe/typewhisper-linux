@@ -43,6 +43,7 @@ internal sealed record RecordingContext(
 
     public OverlayPresentationToken? OverlayToken { get; init; }
     public string? TranscriptionTaskUsed { get; init; }
+    public string? StreamingDetectedLanguage { get; init; }
 
     /// <summary>
     ///     Per-run sink for LLM prompt provenance. Null when capture is disabled
@@ -1728,7 +1729,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                         var streamingCancelToken = snapshotCts?.Token ?? CancellationToken.None;
                         var streamingFinalizeOperation =
                             _telemetry.Child(recordingContext.SessionId, "streaming.finalize");
-                        var (streamingFinalText, streamingFaulted) =
+                        var (streamingFinalText, streamingFaulted, streamingDetectedLanguage) =
                             await TeardownStreamingSessionAsync(
                                 stoppedStreamingCoordinator,
                                 stoppedStreamingStartupCts,
@@ -1742,6 +1743,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                         {
                             StreamingFinalText = streamingFinalText,
                             StreamingFaulted = streamingFaulted,
+                            StreamingDetectedLanguage = streamingDetectedLanguage,
                         };
                     }
 
@@ -1978,13 +1980,19 @@ public sealed partial class DictationOrchestrator : IDisposable
     }
 
     // Only an engine with native hints streams over several languages; any other engine received
-    // just the primary. Such a stream reports no language.
+    // just the primary.
     internal static bool StreamedSeveralLanguages(bool engineSupportsLanguageHints, int hintCount) =>
         engineSupportsLanguageHints && hintCount > 1;
 
+    internal static string? ResolveStreamingResultLanguage(
+        string? streamingDetectedLanguage,
+        bool streamedSeveralLanguages,
+        string? configuredLanguage
+    ) => streamingDetectedLanguage ?? (streamedSeveralLanguages ? null : configuredLanguage);
+
     // Streaming text stands in for the batch call only when it was produced for this engine,
     // language selection and hint list, no translation task is requested and — since a stream
-    // over several languages reports no language, which the translation step needs to decide
+    // over several languages may report no language, which the translation step needs to decide
     // whether the text already is the target — no translation target is set for such a stream.
     internal static bool CanReuseStreamingText(
         string? streamingFinalText,
@@ -2240,7 +2248,11 @@ public sealed partial class DictationOrchestrator : IDisposable
                     // the redundant batch call.
                     result = new PluginTranscriptionResult(
                         context.StreamingFinalText!,
-                        streamedSeveralLanguages ? null : configuredLanguage,
+                        ResolveStreamingResultLanguage(
+                            context.StreamingDetectedLanguage,
+                            streamedSeveralLanguages,
+                            configuredLanguage
+                        ),
                         DurationSeconds: duration
                     );
                     if (streamedSeveralLanguages)
@@ -4794,7 +4806,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         });
     }
 
-    private static async Task<(string? FinalText, bool Faulted)> TeardownStreamingSessionAsync(
+    private static async Task<(string? FinalText, bool Faulted, string? DetectedLanguage)> TeardownStreamingSessionAsync(
         StreamingTranscriptionCoordinator? coordinator,
         CancellationTokenSource? startupCts,
         bool finalize,
@@ -4823,7 +4835,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         if (coordinator is null)
         {
             startupCts?.Dispose();
-            return (null, false);
+            return (null, false, null);
         }
 
         string? finalText = null;
@@ -4849,9 +4861,10 @@ public sealed partial class DictationOrchestrator : IDisposable
             }
         }
 
+        var detectedLanguage = coordinator.DetectedLanguage;
         await coordinator.DisposeAsync();
         startupCts?.Dispose();
-        return (finalText, coordinator.Faulted || finalizeThrew);
+        return (finalText, coordinator.Faulted || finalizeThrew, detectedLanguage);
     }
 
     private async Task<string> StopPartialTranscriptionSessionAsync()
