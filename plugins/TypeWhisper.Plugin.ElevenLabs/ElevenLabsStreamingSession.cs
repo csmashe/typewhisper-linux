@@ -3,6 +3,7 @@
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
 using System.Net.WebSockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -12,7 +13,12 @@ namespace TypeWhisper.Plugin.ElevenLabs;
 
 internal sealed class ElevenLabsStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
-    internal const int MinimumBufferedChunkBytes = 3200;
+    internal const int MinimumBufferedChunkBytes = 3200; // 100 ms at 32,000 B/s.
+    internal const int MaximumChunkBytes = 32000; // 1 s at 32,000 B/s.
+    internal const int CommitAfterUncommittedBytes = 640000; // 20 s at 32,000 B/s.
+    internal const int QuietBytesForCommit = 6400; // 200 ms at 32,000 B/s.
+    internal const int QuietSampleAmplitude = 250; // PCM16 amplitude ceiling for the 200 ms quiet run.
+    internal const int MaximumUncommittedBytes = 1024000; // 32 s at 32,000 B/s.
 
     private readonly WebSocketSessionPump _pump;
 
@@ -69,7 +75,7 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession, IStreaming
         {
             $"model_id={Uri.EscapeDataString(realtimeModelId)}",
             "audio_format=pcm_16000",
-            "commit_strategy=vad",
+            "commit_strategy=manual",
             "include_timestamps=true",
             "include_language_detection=true",
             $"no_verbatim={(noVerbatim ? "true" : "false")}",
@@ -270,6 +276,9 @@ internal sealed class ElevenLabsWebSocketAdapter(
 ) : IWebSocketSessionAdapter
 {
     private readonly MemoryStream _audioBuffer = new();
+    private int _uncommittedBytes;
+    private int _quietBytes;
+    private int _pendingCommits; // Commits not yet answered by a committed transcript.
     private int _finalCommitPending;
     private string? _lastCommittedText;
     private string? _lastCommittedMessageType;
@@ -327,18 +336,71 @@ internal sealed class ElevenLabsWebSocketAdapter(
             );
         }
 
-        var chunk = _audioBuffer.ToArray();
-        _audioBuffer.SetLength(0);
-        return ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
-            [CreateAudioMessage(chunk, commit: false)]
-        );
+        var messages = new List<WebSocketOutboundMessage>();
+        var bufferedAudio = _audioBuffer.GetBuffer();
+        var offset = 0;
+        while (_audioBuffer.Length - offset >= ElevenLabsStreamingSession.MinimumBufferedChunkBytes)
+        {
+            var count = Math.Min(
+                ElevenLabsStreamingSession.MaximumChunkBytes,
+                (int)_audioBuffer.Length - offset
+            );
+            // Provider VAD split words mid-utterance. Commit at a pause after 20 s;
+            // fail before its ~36 s auto-commit so the host retries the whole recording.
+            var commit = false;
+            var samples = MemoryMarshal.Cast<byte, short>(bufferedAudio.AsSpan(offset, count & ~1));
+            for (var index = 0; index < samples.Length; index++)
+            {
+                _quietBytes = Math.Abs((int)samples[index]) <= ElevenLabsStreamingSession.QuietSampleAmplitude
+                    ? Math.Min(ElevenLabsStreamingSession.QuietBytesForCommit, _quietBytes + 2)
+                    : 0;
+                if (_quietBytes < ElevenLabsStreamingSession.QuietBytesForCommit)
+                    continue;
+
+                // Cut the message at the pause so detection does not depend on chunk alignment.
+                var scanned = (index + 1) * 2;
+                if (_uncommittedBytes + scanned < ElevenLabsStreamingSession.CommitAfterUncommittedBytes)
+                    continue;
+
+                count = scanned;
+                commit = true;
+                break;
+            }
+
+            _uncommittedBytes += count;
+            if (!commit && _uncommittedBytes >= ElevenLabsStreamingSession.MaximumUncommittedBytes)
+            {
+                throw new IOException(
+                    "ElevenLabs live transcription needs a pause after 32 s of continuous speech; retrying with the complete recording."
+                );
+            }
+
+            messages.Add(CreateAudioMessage(bufferedAudio.AsSpan(offset, count).ToArray(), commit));
+            offset += count;
+            if (!commit)
+                continue;
+
+            Interlocked.Increment(ref _pendingCommits);
+            _uncommittedBytes = 0;
+            _quietBytes = 0;
+        }
+
+        var remaining = (int)_audioBuffer.Length - offset;
+        bufferedAudio.AsSpan(offset, remaining).CopyTo(bufferedAudio);
+        _audioBuffer.SetLength(remaining);
+        _audioBuffer.Position = remaining;
+        return ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(messages);
     }
 
     public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct)
     {
+        // Count the tail before flagging finalize so a periodic ack racing in cannot see zero pending.
+        Interlocked.Increment(ref _pendingCommits);
         Volatile.Write(ref _finalCommitPending, 1);
         var chunk = _audioBuffer.Length == 0 ? [] : _audioBuffer.ToArray();
         _audioBuffer.SetLength(0);
+        _uncommittedBytes = 0;
+        _quietBytes = 0;
         return ValueTask.FromResult(
             new WebSocketFinalizePlan(
                 [CreateAudioMessage(chunk, commit: true)]
@@ -373,37 +435,49 @@ internal sealed class ElevenLabsWebSocketAdapter(
         }
 
         IReadOnlyList<StreamingTranscriptEvent> transcripts = [];
-        if (parsed && transcript is not null)
+        var acknowledgedCommit = false;
+        if (committed)
         {
+            // Both variants of one commit carry the same text (empty for a silent commit);
+            // only the first counts as the acknowledgement and is surfaced.
+            var text = transcript?.Text ?? "";
             var duplicateVariant =
-                committed
-                && string.Equals(
-                    transcript.Text,
-                    _lastCommittedText,
-                    StringComparison.Ordinal
-                )
+                string.Equals(text, _lastCommittedText, StringComparison.Ordinal)
                 && !string.Equals(
                     messageType,
                     _lastCommittedMessageType,
                     StringComparison.Ordinal
                 );
-            if (!duplicateVariant)
-                transcripts = [transcript];
-
             if (duplicateVariant)
             {
                 _lastCommittedText = null;
                 _lastCommittedMessageType = null;
             }
-            else if (committed)
+            else
             {
-                _lastCommittedText = transcript.Text;
+                _lastCommittedText = text;
                 _lastCommittedMessageType = messageType;
+                acknowledgedCommit = true;
+                if (transcript is not null)
+                    transcripts = [transcript];
             }
         }
+        else if (parsed && transcript is not null)
+        {
+            transcripts = [transcript];
+        }
 
+        // Only the receive loop decrements, so a read-then-decrement cannot go below zero.
+        if (acknowledgedCommit && Volatile.Read(ref _pendingCommits) > 0)
+            Interlocked.Decrement(ref _pendingCommits);
+
+        // A late ack for a periodic commit must not end the session before the tail is transcribed.
+        // Read the flag before the count: finalize writes the count first, so a set flag
+        // guarantees the tail is already counted.
         var signals =
-            committed && Volatile.Read(ref _finalCommitPending) != 0
+            committed
+            && Volatile.Read(ref _finalCommitPending) != 0
+            && Volatile.Read(ref _pendingCommits) == 0
                 ? WebSocketSessionSignal.Terminal
                 : WebSocketSessionSignal.None;
         return new WebSocketInboundResult(transcripts, signals);

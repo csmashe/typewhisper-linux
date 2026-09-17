@@ -272,7 +272,7 @@ public class ElevenLabsPluginTests
     }
 
     [Fact]
-    public void BuildRealtimeUri_UsesScribeRealtimeAndVad()
+    public void BuildRealtimeUri_UsesScribeRealtimeAndManualCommits()
     {
         var uri = ElevenLabsStreamingSession
             .BuildRealtimeUri("scribe_v2_realtime", "de", noVerbatim: true)
@@ -281,7 +281,8 @@ public class ElevenLabsPluginTests
         Assert.StartsWith("wss://api.elevenlabs.io/v1/speech-to-text/realtime?", uri);
         Assert.Contains("model_id=scribe_v2_realtime", uri);
         Assert.Contains("audio_format=pcm_16000", uri);
-        Assert.Contains("commit_strategy=vad", uri);
+        Assert.Contains("commit_strategy=manual", uri);
+        Assert.DoesNotContain("vad", uri);
         Assert.Contains("include_timestamps=true", uri);
         Assert.Contains("include_language_detection=true", uri);
         Assert.Contains("no_verbatim=true", uri);
