@@ -79,13 +79,15 @@ public class GroqPluginTests
     }
 
     [Fact]
-    public void ExplicitRegionalTag_IsRejectedBeforeUpload()
+    public void ExplicitRegionalTag_FoldsToBaseCodeBeforeUpload()
     {
         using var groq = new GroqPlugin();
 
-        Assert.Throws<TranscriptionLanguageNotSupportedException>(() =>
-            groq.ToLegacyLanguage(LanguageSelection.Explicit("de-DE")));
+        // Groq lists base codes only, so regional tags fold; unknown bases still throw.
+        Assert.Equal("de", groq.ToLegacyLanguage(LanguageSelection.Explicit("de-DE")));
         Assert.Equal("de", groq.ToLegacyLanguage(LanguageSelection.Explicit("de")));
+        Assert.Throws<TranscriptionLanguageNotSupportedException>(() =>
+            groq.ToLegacyLanguage(LanguageSelection.Explicit("xx-YY")));
         Assert.Null(groq.ToLegacyLanguage(LanguageSelection.Automatic));
     }
 

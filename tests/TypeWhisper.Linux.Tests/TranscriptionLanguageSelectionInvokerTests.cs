@@ -83,6 +83,75 @@ public sealed class TranscriptionLanguageSelectionInvokerTests
             role.TranscribeAsync([], LanguageSelection.Explicit("fr"), ["de", "en"], false, null, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task TranscribeAsync_BaseOnlyLanguages_FoldsRegionalPrimaryToSingleLanguage()
+    {
+        var role = new FakeRole { SupportedLanguages = ["de", "en"] };
+        await role.TranscribeAsync([], LanguageSelection.Explicit("de-DE"), ["de-DE"], false, null, CancellationToken.None);
+        Assert.Equal("de", role.LastLanguage);
+        Assert.Equal(1, role.SingleCalls);
+        Assert.Null(role.LastHints);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_BaseOnlyLanguages_FoldsAndDeduplicatesHints()
+    {
+        var role = new FakeRole { SupportedLanguages = ["de", "en"] };
+        await role.TranscribeAsync([], LanguageSelection.Explicit("de-DE"), ["de-DE", "en-GB", "de"], false, null, CancellationToken.None);
+        Assert.Equal(["de", "en"], role.LastHints);
+        Assert.Equal(0, role.SingleCalls);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_MixedLanguages_RejectsUnsupportedRegionalPrimary()
+    {
+        var role = new FakeRole { SupportedLanguages = ["de", "de-CH", "en", "en-US"] };
+        var exception = await Assert.ThrowsAsync<TranscriptionLanguageNotSupportedException>(() =>
+            role.TranscribeAsync([], LanguageSelection.Explicit("de-DE"), false, null, CancellationToken.None));
+        Assert.Equal(
+            "Transcription provider 'test' model 'test' does not support language 'de-DE'. Supported languages: de, de-CH, en, en-US.",
+            exception.Message);
+        Assert.Equal(0, role.SingleCalls);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_MixedLanguages_PreservesSupportedRegionalPrimary()
+    {
+        var role = new FakeRole { SupportedLanguages = ["de", "de-CH"] };
+        await role.TranscribeAsync([], LanguageSelection.Explicit("de-CH"), false, null, CancellationToken.None);
+        Assert.Equal("de-CH", role.LastLanguage);
+        Assert.Equal(1, role.SingleCalls);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_EmptyLanguages_PreservesRegionalPrimary()
+    {
+        var role = new FakeRole();
+        await role.TranscribeAsync([], LanguageSelection.Explicit("de-DE"), false, null, CancellationToken.None);
+        Assert.Equal("de-DE", role.LastLanguage);
+        Assert.Equal(1, role.SingleCalls);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_BaseOnlyLanguages_FoldsRegionalExtraHint()
+    {
+        var role = new FakeRole { SupportedLanguages = ["de", "fr"] };
+        await role.TranscribeAsync([], LanguageSelection.Explicit("de"), ["fr-FR"], false, null, CancellationToken.None);
+        Assert.Equal(["de", "fr"], role.LastHints);
+        Assert.Equal(0, role.SingleCalls);
+    }
+
+    [Theory]
+    [InlineData(new[] { "de-ch" }, "de-CH", "de-CH")]
+    [InlineData(new[] { "de" }, "de-DE", "de")]
+    [InlineData(new[] { "de", "en-US" }, "de-DE", null)]
+    [InlineData(new[] { "en" }, "de-DE", null)]
+    [InlineData(new string[] { }, "xx-YY", "xx-YY")]
+    public void ResolveSupportedTag_RespectsProviderList(string[] supportedLanguages, string languageTag, string? expected)
+    {
+        Assert.Equal(expected, TranscriptionLanguageSelectionInvoker.ResolveSupportedTag(supportedLanguages, languageTag));
+    }
+
     private sealed class FakeRole : ITranscriptionEngineRole
     {
         public string PluginId => "test";
