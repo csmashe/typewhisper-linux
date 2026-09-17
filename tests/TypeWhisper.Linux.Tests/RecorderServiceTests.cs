@@ -195,9 +195,16 @@ public sealed class RecorderServiceTests : IDisposable
     {
         using var audio = Audio();
         var recorder = new RecorderService(audio, Settings(), _directory);
-        Assert.True(await recorder.StartAsync());
-        Assert.True(audio.IsRecording);
-        recorder.Dispose();
+        try
+        {
+            Assert.True(await recorder.StartAsync());
+            Assert.True(audio.IsRecording);
+        }
+        finally
+        {
+            recorder.Dispose();
+        }
+
         Assert.False(audio.IsRecording);
         Assert.False(audio.IsCaptureReserved);
         var session = audio.TryStartRecording(false);
