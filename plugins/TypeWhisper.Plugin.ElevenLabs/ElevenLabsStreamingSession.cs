@@ -157,6 +157,14 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession, IStreaming
                 return false;
             }
 
+            var detectedLanguage =
+                root.TryGetProperty("language_code", out var languageElement)
+                && languageElement.ValueKind == JsonValueKind.String
+                    ? languageElement.GetString()?.Trim()
+                    : null;
+            if (string.IsNullOrWhiteSpace(detectedLanguage))
+                detectedLanguage = null;
+
             // ReSharper disable once ConvertIfStatementToSwitchStatement -- the middle
             // arm (IsErrorMessageType) is a predicate call, so only the tail could
             // become a switch; splitting would read worse.
@@ -171,7 +179,10 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession, IStreaming
                 if (string.IsNullOrWhiteSpace(text))
                     return false;
 
-                transcriptEvent = new StreamingTranscriptEvent(text, IsFinal: false);
+                transcriptEvent = new StreamingTranscriptEvent(text, IsFinal: false)
+                {
+                    DetectedLanguage = detectedLanguage,
+                };
                 return true;
             }
 
@@ -191,7 +202,10 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession, IStreaming
                 if (string.IsNullOrWhiteSpace(text))
                     return false;
 
-                transcriptEvent = new StreamingTranscriptEvent(text, IsFinal: true);
+                transcriptEvent = new StreamingTranscriptEvent(text, IsFinal: true)
+                {
+                    DetectedLanguage = detectedLanguage,
+                };
                 return true;
             }
         }
