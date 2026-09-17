@@ -209,7 +209,7 @@ public sealed class RecorderServiceTests : IDisposable
         Assert.False(audio.IsCaptureReserved);
         var session = audio.TryStartRecording(false);
         Assert.NotNull(session);
-        audio.StopRecording(session);
+        await audio.StopRecordingAsync(session);
     }
 
     private sealed class ManualTimeProvider : TimeProvider

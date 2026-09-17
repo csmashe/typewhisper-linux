@@ -222,6 +222,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<PromptPaletteService>();
         services.AddSingleton<TransformSelectionService>();
         services.AddSingleton<RecentTranscriptionsService>();
+        services.AddSingleton<LastTranscriptionReadbackService>();
         services.AddSingleton<MemoryService>();
         services.AddSingleton<BundledPluginDeployer>();
         services.AddSingleton<HistoryRetentionCoordinator>();

@@ -12,6 +12,102 @@ public sealed class SpeechFeedbackServiceTests
     private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(2);
 
     [Fact]
+    public async Task Reservation_stops_active_manual_readback()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var session = new ControlledPlaybackSession(completeOnStop: true);
+        var provider = new ControlledTtsProvider(session);
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            TestPluginManagerFactory.Create(),
+            provider
+        );
+        sut.ReadBack("read me", "de");
+        await session.HandlerAttached.Task.WaitAsync(s_testGuard);
+
+        using var reservation = sut.ReserveStartupFeedback();
+        await reservation.StopPriorPlaybackAsync().WaitAsync(s_testGuard);
+
+        Assert.Equal(1, session.StopCount);
+        Assert.False(session.IsActive);
+    }
+
+    [Fact]
+    public async Task StartReadBack_handle_stops_only_its_own_request()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var firstSession = new ControlledPlaybackSession();
+        var secondSession = new ControlledPlaybackSession();
+        var provider = new ControlledTtsProvider(firstSession, secondSession);
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            TestPluginManagerFactory.Create(),
+            provider
+        );
+        var first = Assert.IsType<IManualReadback>(sut.StartReadBack("first", "de"), exactMatch: false);
+        await firstSession.HandlerAttached.Task.WaitAsync(s_testGuard);
+        var second = Assert.IsType<IManualReadback>(sut.StartReadBack("second", "es"), exactMatch: false);
+        await secondSession.HandlerAttached.Task.WaitAsync(s_testGuard);
+        await first.Completion.WaitAsync(s_testGuard);
+
+        Assert.False(first.IsActive);
+        Assert.Equal(1, firstSession.StopCount);
+        first.Stop();
+        Assert.True(second.IsActive);
+        Assert.Equal(0, secondSession.StopCount);
+
+        second.Stop();
+        Assert.False(second.IsActive);
+        Assert.True(second.Completion.IsCompletedSuccessfully);
+        await secondSession.StopCalled.Task.WaitAsync(s_testGuard);
+        Assert.Equal(1, secondSession.StopCount);
+        second.Stop();
+        Assert.Equal(1, secondSession.StopCount);
+    }
+
+    [Fact]
+    public async Task StartReadBack_completion_task_completes_when_session_completes()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var session = new ControlledPlaybackSession();
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            TestPluginManagerFactory.Create(),
+            new ControlledTtsProvider(session)
+        );
+        var handle = Assert.IsType<IManualReadback>(sut.StartReadBack("read me", null), exactMatch: false);
+        Assert.True(handle.IsActive);
+        Assert.False(handle.Completion.IsCompleted);
+        await session.HandlerAttached.Task.WaitAsync(s_testGuard);
+
+        session.Complete();
+        await handle.Completion.WaitAsync(s_testGuard);
+        Assert.False(handle.IsActive);
+    }
+
+    [Fact]
+    public void StartReadBack_rejects_blank_reserved_and_disposed_requests()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var provider = new ControlledTtsProvider();
+        // Not a using: the test disposes explicitly to check the disposed path.
+        var sut = new SpeechFeedbackService(
+            settings.Object,
+            TestPluginManagerFactory.Create(),
+            provider
+        );
+        Assert.Null(sut.StartReadBack(" ", null));
+        using (sut.ReserveStartupFeedback())
+        {
+            Assert.Null(sut.StartReadBack("reserved", null));
+        }
+
+        sut.Dispose();
+        Assert.Null(sut.StartReadBack("disposed", null));
+        Assert.Empty(provider.Requests);
+    }
+
+    [Fact]
     public void AvailableProviders_includes_system_and_plugin_tts()
     {
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
@@ -1234,7 +1330,7 @@ public sealed class SpeechFeedbackServiceTests
         }
     }
 
-    private sealed class ControlledTtsProvider : ITtsProviderPlugin
+    internal sealed class ControlledTtsProvider : ITtsProviderPlugin
     {
         private readonly bool _blockCancellationCallback;
         private readonly bool _controlResponses;
@@ -1369,7 +1465,7 @@ public sealed class SpeechFeedbackServiceTests
         public void Dispose() { }
     }
 
-    private sealed class ControlledProviderCall(
+    internal sealed class ControlledProviderCall(
         TtsSpeakRequest request,
         CancellationToken cancellationToken
     )
@@ -1386,7 +1482,7 @@ public sealed class SpeechFeedbackServiceTests
         }
     }
 
-    private sealed class ControlledPlaybackSession(
+    internal sealed class ControlledPlaybackSession(
         bool completeOnStop = false,
         Action? onStop = null,
         bool blockStop = false
