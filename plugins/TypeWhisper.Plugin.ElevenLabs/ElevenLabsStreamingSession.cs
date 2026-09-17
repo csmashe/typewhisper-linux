@@ -341,14 +341,15 @@ internal sealed class ElevenLabsWebSocketAdapter(
         var offset = 0;
         while (_audioBuffer.Length - offset >= ElevenLabsStreamingSession.MinimumBufferedChunkBytes)
         {
+            // Whole samples only; an odd trailing byte waits for its other half or the tail.
             var count = Math.Min(
                 ElevenLabsStreamingSession.MaximumChunkBytes,
                 (int)_audioBuffer.Length - offset
-            );
+            ) & ~1;
             // Provider VAD split words mid-utterance. Commit at a pause after 20 s;
             // fail before its ~36 s auto-commit so the host retries the whole recording.
             var commit = false;
-            var samples = MemoryMarshal.Cast<byte, short>(bufferedAudio.AsSpan(offset, count & ~1));
+            var samples = MemoryMarshal.Cast<byte, short>(bufferedAudio.AsSpan(offset, count));
             for (var index = 0; index < samples.Length; index++)
             {
                 _quietBytes = Math.Abs((int)samples[index]) <= ElevenLabsStreamingSession.QuietSampleAmplitude

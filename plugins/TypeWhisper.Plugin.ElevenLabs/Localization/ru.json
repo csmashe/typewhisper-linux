@@ -17,6 +17,7 @@
   "Settings.ApiKeyValid": "API-ключ действителен.",
   "Settings.ApiKeyUnverified": "Ключ API сохранён, но доступ к распознаванию речи проверить не удалось: у ключа нет разрешения user_read. Попробуйте диктовку, чтобы подтвердить доступ к Speech-to-Text.",
   "Settings.ApiKeyInvalid": "API-ключ недействителен.",
+  "Settings.ApiKeyUnavailable": "Не удалось связаться с ElevenLabs для проверки ключа API. Проверьте подключение и повторите попытку.",
   "Manifest.Name": "ElevenLabs",
   "Manifest.Description": "Облачная транскрипция через ElevenLabs Scribe с потоковой передачей WebSocket в реальном времени"
 }

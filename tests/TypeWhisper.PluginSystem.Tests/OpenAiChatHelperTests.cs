@@ -40,7 +40,8 @@ public sealed class OpenAiChatHelperTests
     [InlineData(true, "max_completion_tokens", "max_tokens")]
     public async Task OutputTokenRetry_SwitchesParameterOnce(bool streaming, string original, string alternate)
     {
-        using var handler = new TokenRetryHandler(TokenParameterError.ToUpperInvariant(), streaming);
+        var error = $"Unsupported parameter: '{original}' is not supported with this model. Use '{alternate}' instead.";
+        using var handler = new TokenRetryHandler(error.ToUpperInvariant(), streaming);
         using var client = new HttpClient(handler);
         var options = new OpenAiChatRequestOptions { MaxOutputTokenParameter = original, Temperature = null };
         Assert.Equal("ok", await SendWithOptionsAsync(client, options, streaming));

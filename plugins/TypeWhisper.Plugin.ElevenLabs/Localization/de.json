@@ -17,6 +17,7 @@
   "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
   "Settings.ApiKeyUnverified": "API-Schlüssel gespeichert, aber der Sprachzugriff konnte nicht geprüft werden: dem Schlüssel fehlt die Berechtigung user_read. Starte eine Diktierung, um den Speech-to-Text-Zugriff zu bestätigen.",
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
+  "Settings.ApiKeyUnavailable": "ElevenLabs war zur Prüfung des API-Schlüssels nicht erreichbar. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
   "Manifest.Name": "ElevenLabs",
   "Manifest.Description": "Cloud-Transkription über ElevenLabs Scribe mit Echtzeit-WebSocket-Streaming"
 }

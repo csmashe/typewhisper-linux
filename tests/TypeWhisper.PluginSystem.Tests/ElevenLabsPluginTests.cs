@@ -153,7 +153,8 @@ public class ElevenLabsPluginTests
         false, "Settings.ApiKeyInvalid")]
     [InlineData(HttpStatusCode.InternalServerError,
         """{"detail":{"status":"missing_permissions","message":"The API key you used is missing the permission user_read to execute this operation."}}""",
-        false, "Settings.ApiKeyInvalid")]
+        false, "Settings.ApiKeyUnavailable")]
+    [InlineData(HttpStatusCode.TooManyRequests, """{"detail":"rate limited"}""", false, "Settings.ApiKeyUnavailable")]
     public async Task ValidateAsync_ReportsUnverifiedForUserReadRestrictedKey(
         HttpStatusCode statusCode, string body, bool expectedSuccess, string expectedMessage)
     {
@@ -173,13 +174,47 @@ public class ElevenLabsPluginTests
         Assert.Equal(expectedMessage, result.Message);
     }
 
-    [Fact]
-    public async Task ValidateApiKeyAsync_ReturnsInvalidOnRequestFailure()
+    [Theory]
+    [InlineData(typeof(HttpRequestException))]
+    [InlineData(typeof(TaskCanceledException))]
+    [InlineData(typeof(IOException))]
+    public async Task ValidateApiKeyAsync_ReturnsUnavailableOnTransportFailure(Type exceptionType)
     {
-        using var httpClient = new HttpClient(new CapturingHandler((_, _) => throw new HttpRequestException("Request failed")));
+        using var httpClient = new HttpClient(new CapturingHandler((_, _) =>
+            throw (Exception)Activator.CreateInstance(exceptionType, "Request failed")!));
         using var sut = new ElevenLabsPlugin(httpClient);
 
-        Assert.Equal(ApiKeyCheck.Invalid, await sut.ValidateApiKeyAsync("eleven-key"));
+        Assert.Equal(ApiKeyCheck.Unavailable, await sut.ValidateApiKeyAsync("eleven-key"));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests, ApiKeyCheck.Unavailable)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, ApiKeyCheck.Unavailable)]
+    [InlineData(HttpStatusCode.Unauthorized, ApiKeyCheck.Invalid)]
+    [InlineData(HttpStatusCode.Forbidden, ApiKeyCheck.Invalid)]
+    [InlineData(HttpStatusCode.NotFound, ApiKeyCheck.Invalid)]
+    internal async Task ValidateApiKeyAsync_MapsStatusCodes(HttpStatusCode statusCode, ApiKeyCheck expected)
+    {
+        using var httpClient = new HttpClient(new CapturingHandler((_, _) =>
+        {
+            var response = JsonResponse("""{"detail":"no"}""");
+            response.StatusCode = statusCode;
+            return response;
+        }));
+        using var sut = new ElevenLabsPlugin(httpClient);
+
+        Assert.Equal(expected, await sut.ValidateApiKeyAsync("eleven-key"));
+    }
+
+    [Fact]
+    public async Task ValidateApiKeyAsync_PropagatesCallerCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        using var httpClient = new HttpClient(new CapturingHandler((_, _) => throw new TaskCanceledException("cancelled")));
+        using var sut = new ElevenLabsPlugin(httpClient);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sut.ValidateApiKeyAsync("eleven-key", cts.Token));
     }
 
     [Theory]

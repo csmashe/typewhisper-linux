@@ -253,10 +253,19 @@ public sealed class ElevenLabsManualCommitTests
         await pump.SendAudioAsync(audio, CancellationToken.None).WaitAsync(s_timeout);
         var messages = transport.DrainSent().Select(ParseAudio).ToArray();
 
-        int[] expectedLengths = [32000, 32000, 32000, byteCount - 96000];
+        var sentBytes = byteCount - byteCount % 2;
+        int[] expectedLengths = [32000, 32000, 32000, sentBytes - 96000];
         Assert.Equal(expectedLengths, messages.Select(message => message.Audio.Length));
-        Assert.Equal(audio, messages.SelectMany(message => message.Audio).ToArray());
+        Assert.Equal(audio[..sentBytes], messages.SelectMany(message => message.Audio).ToArray());
         Assert.All(messages, message => Assert.False(message.Commit));
+
+        // An odd trailing byte stays buffered until the tail commit carries it.
+        var finalize = pump.FinalizeAsync(CancellationToken.None);
+        var tail = ParseAudio(await transport.NextSentAsync().WaitAsync(s_timeout));
+        Assert.True(tail.Commit);
+        Assert.Equal(audio[sentBytes..], tail.Audio);
+        transport.EnqueueText("""{"message_type":"committed_transcript","text":"tail"}""");
+        await finalize.WaitAsync(s_timeout);
     }
 
     private static Task<WebSocketSessionPump> StartAsync(ScriptedWebSocketTransport transport) =>

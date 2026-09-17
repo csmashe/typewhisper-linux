@@ -15,7 +15,7 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.Plugin.ElevenLabs;
 
 internal enum ElevenLabsTranscriptionMode { Automatic, RestOnly }
-internal enum ApiKeyCheck { Valid, Invalid, Unverified }
+internal enum ApiKeyCheck { Valid, Invalid, Unverified, Unavailable }
 
 public sealed class ElevenLabsPlugin
     : ITranscriptionEnginePlugin,
@@ -325,14 +325,23 @@ public sealed class ElevenLabsPlugin
             if (response.IsSuccessStatusCode)
                 return ApiKeyCheck.Valid;
 
-            return response.StatusCode == HttpStatusCode.Unauthorized
-                && IsUserReadPermissionOnly(await response.Content.ReadAsStringAsync(ct))
-                ? ApiKeyCheck.Unverified
-                : ApiKeyCheck.Invalid;
+            // Rate limits and server errors say nothing about the key itself.
+            return response.StatusCode switch
+            {
+                HttpStatusCode.Unauthorized when IsUserReadPermissionOnly(await response.Content.ReadAsStringAsync(ct))
+                    => ApiKeyCheck.Unverified,
+                HttpStatusCode.TooManyRequests or >= HttpStatusCode.InternalServerError => ApiKeyCheck.Unavailable,
+                _ => ApiKeyCheck.Invalid,
+            };
         }
-        catch
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            return ApiKeyCheck.Invalid;
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or IOException)
+        {
+            // Transport failure or client timeout: the key was never checked.
+            return ApiKeyCheck.Unavailable;
         }
     }
 
@@ -577,6 +586,7 @@ public sealed class ElevenLabsPlugin
         {
             ApiKeyCheck.Valid => new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid")),
             ApiKeyCheck.Unverified => new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyUnverified")),
+            ApiKeyCheck.Unavailable => new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyUnavailable")),
             _ => new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid")),
         };
     }

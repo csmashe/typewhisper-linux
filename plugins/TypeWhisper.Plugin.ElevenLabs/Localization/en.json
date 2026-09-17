@@ -17,6 +17,7 @@
   "Settings.ApiKeyValid": "API key is valid.",
   "Settings.ApiKeyUnverified": "API key saved, but speech access could not be verified: the key lacks the user_read permission. Try a dictation to confirm Speech-to-Text access.",
   "Settings.ApiKeyInvalid": "API key is invalid.",
+  "Settings.ApiKeyUnavailable": "Could not reach ElevenLabs to verify the API key. Check your connection and try again.",
   "Manifest.Name": "ElevenLabs",
   "Manifest.Description": "Cloud transcription via ElevenLabs Scribe with real-time WebSocket streaming"
 }

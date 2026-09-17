@@ -17,6 +17,7 @@
   "Settings.ApiKeyValid": "La clave de API es válida.",
   "Settings.ApiKeyUnverified": "Clave de API guardada, pero no se pudo verificar el acceso de voz: a la clave le falta el permiso user_read. Prueba un dictado para confirmar el acceso a Speech-to-Text.",
   "Settings.ApiKeyInvalid": "La clave de API no es válida.",
+  "Settings.ApiKeyUnavailable": "No se pudo conectar con ElevenLabs para verificar la clave de API. Comprueba tu conexión e inténtalo de nuevo.",
   "Manifest.Name": "ElevenLabs",
   "Manifest.Description": "Transcripción en la nube mediante ElevenLabs Scribe con streaming por WebSocket en tiempo real"
 }
